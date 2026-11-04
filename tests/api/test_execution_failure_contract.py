@@ -321,7 +321,8 @@ def test_retired_progress_value_does_not_interrupt_slow_response(
     provider = OpenAIChatProvider(
         make_provider_config(api_key="test", base_url="https://provider.invalid/v1"),
         profile=OpenAIChatProfile(
-            OpenAIChatRequestPolicy("TEST", ReasoningReplayMode.DISABLED), NO_REASONING
+            OpenAIChatRequestPolicy("TEST", ReasoningReplayMode.REASONING_CONTENT),
+            NO_REASONING,
         ),
         admission=immediate_admission(),
         client=sdk,
@@ -406,7 +407,8 @@ def test_sdk_stream_invalid_request_preserves_public_error_semantics(
     provider = OpenAIChatProvider(
         make_provider_config(api_key="test", base_url="https://provider.invalid/v1"),
         profile=OpenAIChatProfile(
-            OpenAIChatRequestPolicy("TEST", ReasoningReplayMode.DISABLED), NO_REASONING
+            OpenAIChatRequestPolicy("TEST", ReasoningReplayMode.REASONING_CONTENT),
+            NO_REASONING,
         ),
         admission=immediate_admission(max_attempts=3),
         client=sdk,

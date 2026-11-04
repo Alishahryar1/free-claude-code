@@ -22,7 +22,7 @@ from tests.api.test_response_streams import _serve
 from tests.api.test_tool_call_buffer import _response
 from tests.api.test_tool_call_buffer_transports import _tools
 from tests.application.test_execution import _routed_request, _target
-from tests.providers.support import make_provider_config
+from tests.providers.support import make_provider_config, without_empty_reasoning
 from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
 
@@ -98,7 +98,7 @@ async def test_exhausted_model_continues_on_next_candidate(source, target, wire)
     assert_completed(events, wire)
     assert public_text(events, wire) == "Hello there. Done."
     body = second_bodies[0]
-    history = body.get("messages", body.get("input"))
+    history = without_empty_reasoning(body.get("messages", body.get("input")))
     assert len(history) == 3
     assert "Hello there. " in str(history[-2])
     assert body["tools"]
@@ -199,7 +199,7 @@ async def test_each_model_receives_the_latest_prefix_and_its_own_budget(wire):
         (second_bodies[1], "One two "),
         (third_bodies[0], "One two three "),
     ]:
-        history = body.get("messages", body.get("input"))
+        history = without_empty_reasoning(body.get("messages", body.get("input")))
         assert len(history) == 3
         assert expected in str(history[-2])
     events = parse_sse_text(raw)
@@ -244,7 +244,11 @@ async def test_permanent_rejection_advances_without_erasing_incoming_prefix(
         ) as (third, third_bodies, _),
     ):
         raw = await delivered_candidates([first, second, third], wire)
-    assert [len(first_bodies), len(second_bodies), len(third_bodies)] == [1, 1, 1]
+    assert [len(first_bodies), len(second_bodies), len(third_bodies)] == [
+        1,
+        2 if status == 400 else 1,
+        1,
+    ]
     assert "Hello " in str(third_bodies[0]["messages"][-2])
     assert_completed(parse_sse_text(raw), wire)
     assert public_text(parse_sse_text(raw), wire) == "Hello world."

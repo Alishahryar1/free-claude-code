@@ -7,7 +7,7 @@ from dataclasses import replace
 import pytest
 
 from free_claude_code.core.history_replay import (
-    HistoryScope,
+    HistoryMode,
     ReplayOrigin,
     ReplayRecord,
     encode_replay,
@@ -93,7 +93,7 @@ def test_native_continuation_carriers_project_and_replace_as_one_suffix(protocol
     )
     assert json.dumps(second).count(encode_replay(record)) == 1
     projected = prepare_history(
-        second, replace(source, protocol=protocol), scope=HistoryScope.ALL
+        second, replace(source, protocol=protocol), scope=HistoryMode.ALL
     )
     assert json.dumps(projected).count("retained native thought") == 1
     assert "First second" in json.dumps(projected)

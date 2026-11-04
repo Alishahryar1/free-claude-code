@@ -17,6 +17,7 @@ from free_claude_code.providers.google_openai import (
     VertexReasoningEncoder,
     validate_google_extra_body,
 )
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.http import maybe_await_aclose
 from free_claude_code.providers.model_listing import (
     ModelListResponseError,
@@ -50,6 +51,7 @@ class VertexProvider(GoogleOpenAIProvider):
         project_id: str,
         location: str,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         access_token_provider: GoogleAccessTokenProvider | None = None,
     ) -> None:
         self._project_id = project_id.strip()
@@ -72,6 +74,7 @@ class VertexProvider(GoogleOpenAIProvider):
             replace(config, base_url=base_url),
             profile=_PROFILE,
             admission=admission,
+            history_cache=history_cache,
             api_key_provider=self._access_token_provider,
             default_headers={"x-goog-user-project": self._project_id},
         )

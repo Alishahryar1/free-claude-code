@@ -12,6 +12,7 @@ from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.core.stream_recovery import ContinuationSeed
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,8 +35,13 @@ class ProviderConfig:
 class BaseProvider(ABC):
     """Base class for all providers. Extend this to add your own."""
 
-    def __init__(self, config: ProviderConfig):
+    def __init__(
+        self, config: ProviderConfig, *, history_cache: HistoryModeCache | None = None
+    ):
         self._config = config
+        self._history_cache = (
+            history_cache if history_cache is not None else HistoryModeCache()
+        )
 
     @abstractmethod
     async def cleanup(self) -> None:

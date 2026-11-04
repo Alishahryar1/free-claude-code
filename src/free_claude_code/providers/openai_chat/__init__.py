@@ -2,6 +2,7 @@
 
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 
 from .base_url import openai_v1_base_url
 from .behavior import OpenAIChatBehavior
@@ -34,6 +35,7 @@ def create_openai_chat_provider(
     provider_id: str,
     config: ProviderConfig,
     admission: ProviderAdmissionController,
+    history_cache: HistoryModeCache | None = None,
 ) -> OpenAIChatProvider:
     """Construct one profile-driven provider."""
     profile = OPENAI_CHAT_PROFILES.get(provider_id)
@@ -43,6 +45,7 @@ def create_openai_chat_provider(
         config,
         profile=profile,
         admission=admission,
+        history_cache=history_cache,
         default_headers=(
             {"User-Agent": profile.user_agent} if profile.user_agent else None
         ),

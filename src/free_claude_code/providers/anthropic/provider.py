@@ -40,6 +40,7 @@ from free_claude_code.providers.anthropic_messages.transport import (
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.history_replay import replay_origin
 from free_claude_code.providers.http import maybe_await_aclose
 from free_claude_code.providers.model_listing import ModelListResponseError
@@ -105,10 +106,11 @@ class AnthropicProvider(BaseProvider):
         config: ProviderConfig,
         *,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         workspace_id: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        super().__init__(config)
+        super().__init__(config, history_cache=history_cache)
         self._admission = admission
         self._snapshot = HttpEndpoint(
             base_url=config.base_url,
@@ -191,6 +193,7 @@ class AnthropicProvider(BaseProvider):
         return AnthropicMessagesTransport(
             client=self._http,
             admission=self._admission,
+            history_cache=self._history_cache,
             provider_name="anthropic",
             replay_scope="anthropic",
             read_timeout_s=self._config.http_read_timeout,
@@ -222,6 +225,7 @@ class AnthropicProvider(BaseProvider):
             return stream_native_messages(
                 self._http,
                 self._admission,
+                history_cache=self._history_cache,
                 base_url=self._snapshot.base_url,
                 headers={**self._snapshot.headers, **headers},
                 body=body,

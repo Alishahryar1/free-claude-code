@@ -17,8 +17,8 @@ from free_claude_code.core.gemini.response import (
     GeminiResponseAccumulator,
 )
 from free_claude_code.core.history_replay import (
+    HistoryMode,
     HistoryReplayError,
-    HistoryScope,
     ReplayOrigin,
     ReplayRecord,
     decode_replay,
@@ -102,7 +102,7 @@ def test_only_exact_single_bundle_echo_is_suppressed(protocol, echo):
     original = source.model_dump(mode="json")
     prepared = build(source, protocol).body
     final = prepare_history(
-        prepared, replace(ORIGIN, protocol=protocol), scope=HistoryScope.ALL
+        prepared, replace(ORIGIN, protocol=protocol), scope=HistoryMode.ALL
     )
     wire = json.dumps(final)
     assert wire.count("answer") == 1

@@ -8,6 +8,7 @@ from loguru import logger
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.diagnostics import extract_upstream_error_detail
 from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -16,6 +17,7 @@ from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.endpoint_types import EndpointContext
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
     OpenAIChatBehavior,
@@ -27,6 +29,7 @@ from free_claude_code.providers.openai_chat import (
 
 from .caching import mistral_affinity_headers
 from .reasoning import (
+    apply_mistral_history_shape,
     apply_mistral_reasoning_request_shape,
     clone_body_without_mistral_reasoning,
     is_mistral_reasoning_rejection,
@@ -69,9 +72,16 @@ class MistralChatBehavior(OpenAIChatBehavior):
         apply_mistral_reasoning_request_shape(body, reasoning=reasoning)
         return body
 
+    def prepare_history_body(self, body, origin):
+        apply_mistral_history_shape(body)
+        return body
+
     def retry_request_body(self, error: Exception, body: dict) -> dict | None:
         """Retry once without Mistral reasoning fields when a model rejects them."""
-        if not is_mistral_reasoning_rejection(error):
+        detail = extract_upstream_error_detail(error)
+        if not is_mistral_reasoning_rejection(error) or "reasoning_effort" not in (
+            detail.body_text or detail.exception_text or ""
+        ):
             return None
         retry_body = clone_body_without_mistral_reasoning(body)
         if retry_body is None:
@@ -89,12 +99,17 @@ class MistralProvider(OpenAIChatProvider):
     """Mistral API using ``https://api.mistral.ai/v1/chat/completions``."""
 
     def __init__(
-        self, config: ProviderConfig, *, admission: ProviderAdmissionController
+        self,
+        config: ProviderConfig,
+        *,
+        admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
     ):
         super().__init__(
             config,
             behavior=MistralChatBehavior(_PROFILE),
             admission=admission,
+            history_cache=history_cache,
         )
 
     def stream_messages(

@@ -228,6 +228,27 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
             elif part.text is not None:
                 if part.thought and suppress_echo:
                     continue
+                if part.thought and role == "assistant":
+                    if destination == "responses":
+                        items.append(
+                            {
+                                "type": "reasoning",
+                                "content": [
+                                    {"type": "reasoning_text", "text": part.text}
+                                ],
+                                "summary": [],
+                            }
+                        )
+                    elif destination == "messages":
+                        _append(
+                            items, role, {"type": "thinking", "thinking": part.text}
+                        )
+                    else:
+                        if not items or items[-1].get("role") != "assistant":
+                            items.append({"role": "assistant", "content": []})
+                        previous = items[-1].get("reasoning_content", "")
+                        items[-1]["reasoning_content"] = str(previous) + part.text
+                    continue
                 kind = "output_text" if role == "assistant" else "input_text"
                 _append(
                     items,

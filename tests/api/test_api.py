@@ -232,7 +232,7 @@ def test_create_message_rejects_unportable_image_as_invalid_request() -> None:
             profile=OpenAIChatProfile(
                 OpenAIChatRequestPolicy(
                     provider_name="TEST_CHAT",
-                    reasoning_replay=ReasoningReplayMode.DISABLED,
+                    reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
                 ),
                 NO_REASONING,
             ),

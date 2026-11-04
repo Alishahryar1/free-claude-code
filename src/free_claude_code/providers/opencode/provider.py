@@ -20,6 +20,7 @@ from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.endpoint_types import EndpointContext
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.http import close_provider_stream
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -84,9 +85,10 @@ class OpenCodeProvider(BaseProvider):
         *,
         profile: OpenCodeProfile,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         catalog_client: httpx.AsyncClient | None = None,
     ) -> None:
-        super().__init__(config)
+        super().__init__(config, history_cache=history_cache)
         self._client = create_chat_client(
             config,
             base_url=profile.chat_profile.base_url(config.base_url).rstrip("/"),
@@ -96,6 +98,7 @@ class OpenCodeProvider(BaseProvider):
         self._chat = OpenAIChatTransport(
             client=self._client,
             admission=admission,
+            history_cache=self._history_cache,
             behavior=OpenAIChatBehavior(profile.chat_profile),
             read_timeout_s=config.http_read_timeout,
             log_raw_sse_events=config.log_raw_sse_events,
@@ -112,6 +115,7 @@ class OpenCodeProvider(BaseProvider):
         self._responses = OpenAIResponsesTransport(
             client=self._client,
             admission=admission,
+            history_cache=self._history_cache,
             provider_name=profile.provider_name,
             read_timeout_s=config.http_read_timeout,
             log_raw_sse_events=config.log_raw_sse_events,
@@ -379,6 +383,7 @@ def create_opencode_provider(
     provider_id: str,
     config: ProviderConfig,
     admission: ProviderAdmissionController,
+    history_cache: HistoryModeCache | None = None,
     *,
     catalog_client: httpx.AsyncClient | None = None,
 ) -> OpenCodeProvider:
@@ -390,6 +395,7 @@ def create_opencode_provider(
         config,
         profile=profile,
         admission=admission,
+        history_cache=history_cache,
         catalog_client=catalog_client,
     )
 

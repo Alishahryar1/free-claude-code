@@ -34,7 +34,11 @@ from free_claude_code.providers.openai_chat.stream_output import (
 )
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 from tests.core.openai_responses.test_client_tool_discovery import AGENTS, SEARCH
-from tests.providers.support import REASONING_ON, immediate_admission
+from tests.providers.support import (
+    REASONING_ON,
+    immediate_admission,
+    without_empty_reasoning,
+)
 
 
 @pytest.mark.asyncio
@@ -262,7 +266,10 @@ async def test_default_transport_keeps_native_tool_capabilities() -> None:
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         payload = json.loads(request.content)
-        assert payload["tools"] == tools and payload["input"] == history
+        assert (
+            payload["tools"] == tools
+            and without_empty_reasoning(payload["input"]) == history
+        )
         return httpx2.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -466,7 +473,7 @@ async def test_chat_custom_history_replays_with_native_wire_compatible_ids(
         model="example", input="edit", tools=[{"type": "custom", "name": "edit"}]
     )
     prepared = build_responses_chat_request(
-        request, reasoning_replay=ReasoningReplayMode.DISABLED
+        request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
     )
     writer = ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=1)
     frames = writer.start_events()
@@ -516,7 +523,7 @@ async def test_chat_custom_history_replays_with_native_wire_compatible_ids(
     finally:
         await client.close()
     assert len(captured) == 1
-    history = captured[0]["input"]
+    history = without_empty_reasoning(captured[0]["input"])
     assert isinstance(history, list)
     call, result = history
     assert call["type"] == expected_type
@@ -914,7 +921,7 @@ async def test_interrupted_discovery_can_continue_through_native_transport() -> 
                 },
             ]
         elif len(bodies) == 2:
-            assert body["input"] == [user, sibling, retry]
+            assert without_empty_reasoning(body["input"]) == [user, sibling, retry]
             complete = {
                 **call,
                 "call_id": "retry_search",

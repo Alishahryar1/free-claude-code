@@ -36,7 +36,7 @@ def _transport(client: AsyncOpenAI) -> OpenAIChatTransport:
         ),
         behavior=OpenAIChatBehavior(
             OpenAIChatProfile(
-                OpenAIChatRequestPolicy("TEST", ReasoningReplayMode.DISABLED),
+                OpenAIChatRequestPolicy("TEST", ReasoningReplayMode.REASONING_CONTENT),
                 NO_REASONING,
             )
         ),

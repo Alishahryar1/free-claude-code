@@ -77,7 +77,7 @@ async def test_changed_endpoint_cannot_inherit_catalog_but_rename_can():
         await release.wait()
         return frozenset()
 
-    def blocked(settings, admission_registry):
+    def blocked(settings, admission_registry, history_cache=None):
         runtime = factory(settings, admission_registry)
         assert isinstance(runtime, FakeRuntime)
         runtime.provider.list_model_infos.side_effect = wait

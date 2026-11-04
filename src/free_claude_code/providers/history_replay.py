@@ -12,15 +12,18 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.core.anthropic.models import Message, MessagesRequest
 from free_claude_code.core.diagnostics import extract_upstream_error_detail
 from free_claude_code.core.history_replay import (
+    HistoryPath,
     HistoryProtocol,
     HistoryReplayError,
     ReplayOrigin,
+    ReplayRecord,
     decode_replay,
+    encode_replay,
     is_replay,
     readable_reasoning,
     resolve_messages_replay,
 )
-from free_claude_code.core.json_types import JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from .endpoint_types import HttpEndpoint
 
@@ -121,7 +124,12 @@ def replay_origin(
 
 
 def history_retry_body(
-    error: Exception, body: Mapping[str, Any], protocol: HistoryProtocol
+    error: Exception,
+    body: Mapping[str, Any],
+    protocol: HistoryProtocol,
+    *,
+    source: Mapping[str, Any] | None = None,
+    source_paths: Mapping[HistoryPath, HistoryPath] | None = None,
 ) -> dict[str, Any] | None:
     """Repair one explicitly rejected historical record on an independent copy."""
     detail = extract_upstream_error_detail(error)
@@ -161,16 +169,46 @@ def history_retry_body(
         if matched is None:
             continue
         path, original = matched
-        result = deepcopy(dict(body))
+        if source is not None:
+            mapped = source_paths.get(path) if source_paths is not None else None
+            if mapped is None:
+                continue
+            path = mapped
+        result = deepcopy(dict(source if source is not None else body))
         parent: Any = result
         for key in path[:-1]:
             parent = parent[key]
+        source_parent = parent
+        source_key = path[-1]
+        target_key = source_key
+        replay = None
+        carrier_key = None
+        holder = None
+        stored = parent[source_key]
+        if isinstance(stored, dict):
+            for field in ("data", "signature", "encrypted_content"):
+                carrier = stored.get(field)
+                if isinstance(carrier, str) and is_replay(carrier):
+                    candidate = decode_replay(carrier)
+                    native = deepcopy(candidate.native)
+                    details = native.get("reasoning_details")
+                    if (
+                        protocol == "chat"
+                        and isinstance(details, list)
+                        and original in details
+                    ):
+                        replay, carrier_key, holder = candidate, field, native
+                        parent, target_key = cast(Any, details), details.index(original)
+                    elif native == original:
+                        replay, carrier_key, holder = candidate, field, {"item": native}
+                        parent, target_key = cast(Any, holder), "item"
+                    break
         if invalid_id:
             value = original.get("id")
             if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9_-]+", value):
                 continue
             corrected = "rs_" + hashlib.sha256(value.encode()).hexdigest()[:24]
-            parent[path[-1]]["id"] = corrected
+            parent[target_key]["id"] = corrected
             for item in result.get("input", []):
                 if (
                     isinstance(item, dict)
@@ -188,19 +226,34 @@ def history_retry_body(
                 )
             )
             if protocol == "responses" and context:
-                parent[path[-1]] = {"role": "assistant", "content": context}
+                parent[target_key] = {"role": "assistant", "content": context}
             elif protocol == "messages" and context:
-                parent[path[-1]] = {"type": "text", "text": context}
+                parent[target_key] = {"type": "text", "text": context}
             else:
-                del parent[path[-1]]
+                del parent[target_key]
                 if protocol == "chat":
                     assistant = result["messages"][path[1]]
                     if context:
                         assistant["content"] = (
                             (assistant.get("content") or "") + "\n\n" + context
                         )
-                    if not parent:
+                    if not parent and replay is None:
                         assistant.pop("reasoning_details", None)
+        if replay is not None and holder is not None and carrier_key is not None:
+            if target_key == "item":
+                replacement = holder.get("item")
+                if replacement is None:
+                    del source_parent[source_key]
+                elif invalid_id:
+                    stored[carrier_key] = encode_replay(
+                        ReplayRecord(replay.origin, cast(JsonObject, replacement))
+                    )
+                else:
+                    source_parent[source_key] = replacement
+            else:
+                stored[carrier_key] = encode_replay(
+                    ReplayRecord(replay.origin, cast(JsonObject, holder))
+                )
         return result
     return None
 

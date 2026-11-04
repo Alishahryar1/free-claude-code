@@ -36,6 +36,7 @@ from free_claude_code.providers.anthropic_messages.transport import (
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.endpoint_types import HttpEndpoint
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.model_listing import (
     extract_openai_model_infos,
     model_infos_from_ids,
@@ -96,10 +97,11 @@ class CustomProvider(BaseProvider):
         *,
         definition: CustomProviderDefinition,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         openai_transport: httpx2.AsyncBaseTransport | None = None,
         messages_transport: httpx.AsyncBaseTransport | None = None,
     ):
-        super().__init__(config)
+        super().__init__(config, history_cache=history_cache)
         self._definition = definition
         self._admission = admission
         self._snapshot = HttpEndpoint(
@@ -141,6 +143,7 @@ class CustomProvider(BaseProvider):
             self._messages = AnthropicMessagesTransport(
                 client=self._http,
                 admission=admission,
+                history_cache=self._history_cache,
                 provider_name=definition.provider_id,
                 replay_scope=definition.provider_id,
                 read_timeout_s=config.http_read_timeout,
@@ -169,6 +172,7 @@ class CustomProvider(BaseProvider):
                 self._chat = OpenAIChatTransport(
                     client=self._sdk,
                     admission=admission,
+                    history_cache=self._history_cache,
                     behavior=OpenAIChatBehavior(profile),
                     read_timeout_s=config.http_read_timeout,
                     log_raw_sse_events=config.log_raw_sse_events,
@@ -179,6 +183,7 @@ class CustomProvider(BaseProvider):
                 self._responses = OpenAIResponsesTransport(
                     client=self._sdk,
                     admission=admission,
+                    history_cache=self._history_cache,
                     provider_name=definition.provider_id,
                     read_timeout_s=config.http_read_timeout,
                     log_raw_sse_events=config.log_raw_sse_events,

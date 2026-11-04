@@ -87,7 +87,7 @@ def test_build_request_body_basic(groq_provider):
     assert "max_completion_tokens" in body
 
 
-def test_build_request_body_replays_reasoning_as_tagged_content(groq_provider):
+def test_build_request_body_replays_reasoning_in_native_field(groq_provider):
     request = make_request(
         messages=[
             {"role": "user", "content": "Inspect the file."},
@@ -122,18 +122,19 @@ def test_build_request_body_replays_reasoning_as_tagged_content(groq_provider):
     assistant = next(
         message for message in body["messages"] if message["role"] == "assistant"
     )
-    assert assistant["content"] == (
-        "<think>\nI need to read it first.\n</think>\n\nI will inspect the file."
-    )
+    assert assistant["content"] == "I will inspect the file."
+    assert assistant["reasoning_content"] == "I need to read it first."
     assert assistant["tool_calls"][0]["id"] == "toolu_1"
     assert body["messages"][-1] == {
         "role": "tool",
         "tool_call_id": "toolu_1",
         "content": "print('hello')",
     }
+    assert assistant["reasoning_content"] == "I need to read it first."
     assert all(
-        "reasoning_content" not in message and "reasoning" not in message
+        "reasoning_content" not in message
         for message in body["messages"]
+        if message["role"] != "assistant"
     )
 
 

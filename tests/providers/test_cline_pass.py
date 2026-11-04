@@ -240,7 +240,7 @@ def test_build_request_body_adds_no_undocumented_reasoning_control_or_default_ca
         assert field not in body
 
 
-def test_build_request_body_replays_only_opaque_reasoning_details(
+def test_build_request_body_preserves_readable_and_native_reasoning(
     cline_pass_provider: OpenAIChatProvider,
 ) -> None:
     detail: JsonObject = {
@@ -273,9 +273,9 @@ def test_build_request_body_replays_only_opaque_reasoning_details(
         message for message in body["messages"] if message["role"] == "assistant"
     )
 
-    assert assistant["content"] == "Need a tool.\n\nI will inspect it."
+    assert assistant["content"] == "I will inspect it."
     assert assistant["reasoning_details"] == [detail]
-    assert "reasoning" not in assistant
+    assert assistant["reasoning"] == "Need a tool."
     assert "reasoning_content" not in assistant
     assert (
         cline_pass_provider._profile.reasoning_delta(

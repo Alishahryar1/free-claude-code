@@ -96,7 +96,7 @@ def test_build_request_body_basic(cerebras_provider):
     assert "max_completion_tokens" in body
 
 
-def test_build_request_body_replays_reasoning_as_tagged_content(cerebras_provider):
+def test_build_request_body_replays_reasoning_in_native_field(cerebras_provider):
     body = cerebras_provider._chat._build_request_body(
         make_reasoning_tool_history_request()
     )
@@ -104,9 +104,8 @@ def test_build_request_body_replays_reasoning_as_tagged_content(cerebras_provide
     assistant = next(
         message for message in body["messages"] if message["role"] == "assistant"
     )
-    assert assistant["content"] == (
-        "<think>\nI need to read it first.\n</think>\n\nI will inspect the file."
-    )
+    assert assistant["content"] == "I will inspect the file."
+    assert assistant["reasoning"] == "I need to read it first."
     assert assistant["tool_calls"][0]["id"] == "toolu_1"
     assert body["messages"][-1] == {
         "role": "tool",
@@ -114,8 +113,9 @@ def test_build_request_body_replays_reasoning_as_tagged_content(cerebras_provide
         "content": "print('hello')",
     }
     assert all(
-        "reasoning_content" not in message and "reasoning" not in message
+        "reasoning" not in message
         for message in body["messages"]
+        if message["role"] != "assistant"
     )
 
 
@@ -135,9 +135,8 @@ def test_replay_is_independent_of_current_turn_reasoning_control():
     assistant = next(
         message for message in body["messages"] if message["role"] == "assistant"
     )
-    assert assistant["content"] == (
-        "<think>\nI need to read it first.\n</think>\n\nI will inspect the file."
-    )
+    assert assistant["content"] == "I will inspect the file."
+    assert assistant["reasoning"] == "I need to read it first."
     assert assistant["tool_calls"][0]["id"] == "toolu_1"
     assert body["reasoning_effort"] == "none"
 

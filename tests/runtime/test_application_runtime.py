@@ -41,7 +41,9 @@ from tests.providers.support import make_provider_config
 
 
 class TrackingRuntime(ProviderRuntime):
-    def __init__(self, settings: Settings, admission_registry) -> None:
+    def __init__(
+        self, settings: Settings, admission_registry, history_cache=None
+    ) -> None:
         super().__init__(settings, admission_registry)
         self.cleanup_calls = 0
 
@@ -111,7 +113,9 @@ class TrackingFactory:
         self.fail = False
         self.events: list[str] = []
 
-    def __call__(self, settings: Settings, admission_registry) -> ProviderRuntime:
+    def __call__(
+        self, settings: Settings, admission_registry, history_cache=None
+    ) -> ProviderRuntime:
         self.events.append(f"construct:{settings.model}")
         if self.fail:
             raise RuntimeError("candidate failed")
@@ -240,10 +244,13 @@ def _runtime_with_admin_provider(
     )
     manager = ProviderRuntimeManager(
         settings,
-        runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
-            snapshot,
-            admission_registry,
-            {("nvidia_nim", 1): provider},
+        runtime_factory=lambda snapshot, admission_registry, history_cache=None: (
+            ProviderRuntime(
+                snapshot,
+                admission_registry,
+                None,
+                {("nvidia_nim", 1): provider},
+            )
         ),
     )
     return ApplicationRuntime(

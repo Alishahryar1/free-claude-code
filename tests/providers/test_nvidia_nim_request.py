@@ -18,7 +18,6 @@ from free_claude_code.providers.nvidia_nim.request_options import (
 )
 from free_claude_code.providers.nvidia_nim.retry import (
     clone_body_without_chat_template,
-    clone_body_without_reasoning_content,
 )
 from free_claude_code.providers.nvidia_nim.tool_schema import (
     NIM_TOOL_ARGUMENT_ALIASES_KEY,
@@ -663,27 +662,3 @@ class TestBuildRequestBody:
         assert assistant["reasoning_content"] == "secret"
         assert assistant["content"] == "answer"
         assert "<think>" not in assistant["content"]
-
-    def test_clone_body_without_reasoning_content(self):
-        body = {
-            "model": "test",
-            "messages": [
-                {"role": "user", "content": "hi"},
-                {
-                    "role": "assistant",
-                    "content": "answer",
-                    "reasoning_content": "secret",
-                },
-            ],
-        }
-
-        cloned = clone_body_without_reasoning_content(body)
-
-        assert cloned is not None
-        assert "reasoning_content" not in cloned["messages"][1]
-        assert body["messages"][1]["reasoning_content"] == "secret"
-
-    def test_clone_body_without_reasoning_content_returns_none_when_unchanged(self):
-        body = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
-
-        assert clone_body_without_reasoning_content(body) is None

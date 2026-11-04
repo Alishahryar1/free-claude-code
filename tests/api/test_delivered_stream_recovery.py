@@ -20,7 +20,11 @@ from tests.api.support import create_test_app, provider_manager_for_app
 from tests.api.test_hidden_stream_retries import delivered, partial_tool
 from tests.api.test_tool_call_buffer import _response
 from tests.api.test_tool_call_buffer_transports import _tools
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    without_empty_reasoning,
+)
 from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _events_for, _harness
@@ -306,7 +310,9 @@ async def test_repeated_interruption_uses_latest_prefix_and_one_budget(protocol,
     assert_completed(events, wire)
     assert public_text(events, wire) == "One two three."
     assert len(bodies) == 3
-    history = bodies[-1].get("messages", bodies[-1].get("input"))
+    history = without_empty_reasoning(
+        bodies[-1].get("messages", bodies[-1].get("input"))
+    )
     assert len(history) == 3
     assert "One two " in str(history)
 
@@ -713,7 +719,7 @@ def test_http_recovery_then_real_harness_tool_result_has_no_private_history():
         assert second.status_code == 200
         assert second.json()["content"][0]["text"] == "result received"
     assert len(sent) == 3
-    assert sent[2]["messages"] == history
+    assert without_empty_reasoning(sent[2]["messages"]) == history
     assert "previous provider stream" not in str(sent[2])
     assert all(wire.closed for wire in wires)
     assert provider_manager_for_app(app)._current.active_leases == 0

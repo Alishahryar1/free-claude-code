@@ -35,6 +35,9 @@ def apply_mistral_reasoning_request_shape(
     else:
         body.pop("reasoning_effort", None)
 
+
+def apply_mistral_history_shape(body: dict[str, Any]) -> None:
+    """Encode the already projected scalar, including an empty included slot."""
     messages = body.get("messages")
     if not isinstance(messages, list):
         return
@@ -42,8 +45,8 @@ def apply_mistral_reasoning_request_shape(
     for message in messages:
         if not isinstance(message, dict) or message.get("role") != "assistant":
             continue
-        replayed_reasoning = _clean_text(message.pop("reasoning_content", None))
-        if replayed_reasoning:
+        replayed_reasoning = message.pop("reasoning_content", None)
+        if isinstance(replayed_reasoning, str):
             message["content"] = _content_with_prepended_thinking(
                 message.get("content"), replayed_reasoning
             )
@@ -55,19 +58,6 @@ def clone_body_without_mistral_reasoning(
     """Return a body clone with Mistral reasoning fields removed."""
     cloned = deepcopy(body)
     removed = cloned.pop("reasoning_effort", None) is not None
-
-    messages = cloned.get("messages")
-    if isinstance(messages, list):
-        for message in messages:
-            if not isinstance(message, dict):
-                continue
-            if message.pop("reasoning_content", None) is not None:
-                removed = True
-            content = message.get("content")
-            stripped_content, content_removed = _strip_mistral_thinking_content(content)
-            if content_removed:
-                message["content"] = stripped_content
-                removed = True
 
     if not removed:
         return None
@@ -183,33 +173,6 @@ def _content_with_prepended_thinking(
     chunks = [_thinking_chunk(reasoning)]
     chunks.extend(_content_to_mistral_text_chunks(content))
     return chunks
-
-
-def _strip_mistral_thinking_content(content: Any) -> tuple[Any, bool]:
-    if not _is_sequence(content):
-        return content, False
-
-    text_parts: list[str] = []
-    kept_chunks: list[Any] = []
-    removed = False
-    can_collapse_to_text = True
-
-    for chunk in content:
-        chunk_type = _chunk_type(chunk)
-        if _is_thinking_chunk_type(chunk_type):
-            removed = True
-            continue
-        if chunk_type == "text":
-            text = _chunk_text(chunk)
-            if text:
-                text_parts.append(text)
-            continue
-        kept_chunks.append(chunk)
-        can_collapse_to_text = False
-
-    if can_collapse_to_text:
-        return "".join(text_parts), removed
-    return kept_chunks, removed
 
 
 def _content_to_mistral_text_chunks(content: Any) -> list[dict[str, Any]]:

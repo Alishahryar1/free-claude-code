@@ -30,7 +30,11 @@ from tests.application.test_execution import (
     _routed_request,
     _target,
 )
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    without_empty_reasoning,
+)
 from tests.providers.test_anthropic_messages_transport import Endpoint, _events
 from tests.providers.test_anthropic_messages_transport import (
     _transport as messages_transport,
@@ -324,7 +328,11 @@ async def test_old_raw_thinking_recovers_named_rejections_within_budget(max_atte
 
     def responder(bodies):
         body = bodies[-1]
-        items = [x for x in body["input"] if x.get("type") == "reasoning"]
+        items = [
+            x
+            for x in without_empty_reasoning(body["input"])
+            if x.get("type") == "reasoning"
+        ]
         for item in items:
             assert "content" not in item
         for text in ("Keep first context", "Keep second context", "Keep answer"):
@@ -457,7 +465,7 @@ async def test_legacy_responses_id_then_cipher_rejection_recovers_without_changi
         assert len(bodies) == 3
         assert ":" not in bodies[1]["input"][0]["id"]
         assert bodies[1]["input"][0]["encrypted_content"] == "opaque-original"
-        assert bodies[2]["input"][0] == {
+        assert without_empty_reasoning(bodies[2]["input"])[0] == {
             "role": "assistant",
             "content": "Find 17.",
         }

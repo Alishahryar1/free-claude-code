@@ -1,14 +1,13 @@
 """DeepSeek provider implementation (OpenAI-compatible Chat Completions)."""
 
-from collections.abc import Mapping
 from typing import Any
 
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.core.anthropic.models import MessagesRequest
-from free_claude_code.core.history_replay import HistoryScope
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
     OpenAIChatBehavior,
@@ -26,7 +25,6 @@ from .compat import (
 _PROFILE = OpenAIChatProfile(
     DEEPSEEK_REQUEST_POLICY,
     NO_REASONING,
-    history_scope=HistoryScope.ALL,
 )
 
 
@@ -53,9 +51,6 @@ def _deepseek_cache_partition(
 
 class DeepSeekChatBehavior(OpenAIChatBehavior):
     """DeepSeek Chat adaptation without HTTP ownership."""
-
-    def history_scope(self, body: Mapping[str, Any]) -> HistoryScope:
-        return HistoryScope.ALL if body.get("tools") else HistoryScope.UNKNOWN
 
     @property
     def reasoning_off_fields(self) -> tuple[tuple[str, ...], ...]:
@@ -108,10 +103,15 @@ class DeepSeekProvider(OpenAIChatProvider):
     """DeepSeek using ``https://api.deepseek.com`` Chat Completions."""
 
     def __init__(
-        self, config: ProviderConfig, *, admission: ProviderAdmissionController
+        self,
+        config: ProviderConfig,
+        *,
+        admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
     ):
         super().__init__(
             config,
             behavior=DeepSeekChatBehavior(_PROFILE),
             admission=admission,
+            history_cache=history_cache,
         )

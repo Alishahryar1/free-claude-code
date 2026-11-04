@@ -26,6 +26,7 @@ from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.failure_policy import (
     context_window_exceeded_provider_failure,
 )
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.openai_chat import (
     NamedEffortReasoning,
     OpenAIChatProfile,
@@ -38,7 +39,7 @@ from .tokens import estimate_prepared_input_tokens
 _PROFILE = OpenAIChatProfile(
     OpenAIChatRequestPolicy(
         provider_name="LMSTUDIO",
-        reasoning_replay=ReasoningReplayMode.DISABLED,
+        reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
     ),
     NamedEffortReasoning(
         (
@@ -67,12 +68,17 @@ class LMStudioProvider(OpenAIChatProvider):
     _CONTEXT_CACHE_TTL_S = 30.0
 
     def __init__(
-        self, config: ProviderConfig, *, admission: ProviderAdmissionController
+        self,
+        config: ProviderConfig,
+        *,
+        admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
     ):
         super().__init__(
             config,
             profile=_PROFILE,
             admission=admission,
+            history_cache=history_cache,
             validate_prepared_body=self._validate_context_budget,
         )
         self._loaded_context_cache: tuple[float, int | None] | None = None

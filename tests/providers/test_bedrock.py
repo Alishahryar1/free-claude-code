@@ -86,7 +86,7 @@ def test_request_uses_portable_chat_fields_without_invented_reasoning() -> None:
     assert "thinking" not in body
 
 
-def test_reasoning_history_replays_as_portable_think_tags() -> None:
+def test_reasoning_history_replays_in_native_field() -> None:
     request = make_messages_request(
         BEDROCK_MODEL,
         messages=[
@@ -121,11 +121,10 @@ def test_reasoning_history_replays_as_portable_think_tags() -> None:
         message for message in body["messages"] if message["role"] == "assistant"
     )
 
-    assert assistant["content"] == (
-        "<think>\nInspect the repository.\n</think>\n\nI found the file."
-    )
+    assert assistant["content"] == "I found the file."
+    assert assistant["reasoning_content"] == "Inspect the repository."
     assert assistant["tool_calls"][0]["id"] == "call_1"
-    assert "reasoning_content" not in assistant
+    assert assistant["reasoning_content"] == "Inspect the repository."
     assert "reasoning" not in assistant
 
 

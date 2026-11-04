@@ -10,12 +10,14 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.core.async_tasks import run_sync_owned
 from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.base import BaseProvider
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 
 if TYPE_CHECKING:
     from .factory import ProviderFactory
 
 type ProviderConstructor = Callable[
-    [str, Settings, ProviderAdmissionRegistry, int], Awaitable[BaseProvider]
+    [str, Settings, ProviderAdmissionRegistry, int, HistoryModeCache],
+    Awaitable[BaseProvider],
 ]
 type ProviderLoader = Callable[[], ProviderFactory]
 type ProviderClientKey = tuple[str, int]
@@ -26,7 +28,9 @@ def _load_constructor(
     provider_loaders: Mapping[str, ProviderLoader],
     settings: Settings,
     api_key_number: int,
-) -> Callable[[Settings, ProviderAdmissionRegistry], BaseProvider]:
+) -> Callable[
+    [Settings, ProviderAdmissionRegistry, HistoryModeCache | None], BaseProvider
+]:
     from .factory import prepare_provider
 
     return prepare_provider(
@@ -44,6 +48,7 @@ async def create_provider(
     settings: Settings,
     admission_registry: ProviderAdmissionRegistry,
     api_key_number: int = 1,
+    history_cache: HistoryModeCache | None = None,
     *,
     provider_loaders: Mapping[str, ProviderLoader] | None = None,
 ) -> BaseProvider:
@@ -56,7 +61,7 @@ async def create_provider(
             api_key_number,
         )
     )
-    return constructor(settings, admission_registry)
+    return constructor(settings, admission_registry, history_cache)
 
 
 class ProviderRuntime:
@@ -66,11 +71,15 @@ class ProviderRuntime:
         self,
         settings: Settings,
         admission_registry: ProviderAdmissionRegistry,
+        history_cache: HistoryModeCache | None = None,
         providers: MutableMapping[ProviderClientKey, BaseProvider] | None = None,
         *,
         provider_constructor: ProviderConstructor = create_provider,
     ) -> None:
         self.settings = settings
+        self._history_cache = (
+            history_cache if history_cache is not None else HistoryModeCache()
+        )
         self._admission_registry = admission_registry
         self._providers = providers if providers is not None else {}
         self._provider_constructor = provider_constructor
@@ -108,7 +117,11 @@ class ProviderRuntime:
     async def _construct(self, key: ProviderClientKey) -> BaseProvider:
         provider_id, api_key_number = key
         provider = await self._provider_constructor(
-            provider_id, self.settings, self._admission_registry, api_key_number
+            provider_id,
+            self.settings,
+            self._admission_registry,
+            api_key_number,
+            self._history_cache,
         )
         self._providers[key] = provider
         return provider

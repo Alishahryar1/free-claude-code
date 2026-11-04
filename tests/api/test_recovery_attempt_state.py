@@ -15,6 +15,7 @@ from tests.api.test_delivered_stream_recovery import (
     text_events,
 )
 from tests.api.test_hidden_stream_retries import delivered
+from tests.providers.support import without_empty_reasoning
 from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _events_for, _harness, _saved_reply
@@ -251,10 +252,12 @@ async def test_native_messages_repeated_continuation_replaces_only_private_tail(
         assert_completed(parse_sse_text(result), "messages")
         assert public_text(parse_sse_text(result), "messages") == "Hello world again."
         assert len(bodies) == 3
-        assert bodies[-1]["messages"][:-2] == initial["messages"]
-        assert bodies[-1]["messages"][-2] == {
+        assert (
+            without_empty_reasoning(bodies[-1]["messages"][:-2]) == initial["messages"]
+        )
+        assert without_empty_reasoning(bodies[-1]["messages"][-2]) == {
             "role": "assistant",
-            "content": "Hello world ",
+            "content": [{"type": "text", "text": "Hello world "}],
         }
         assert all(wire.closed for wire in wires)
     finally:

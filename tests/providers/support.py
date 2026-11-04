@@ -2,6 +2,7 @@
 
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
+from typing import Any
 
 import httpx2
 from openai import AsyncOpenAI
@@ -142,3 +143,34 @@ def reasoning_for(request: MessagesRequest) -> ReasoningPolicy:
     """Resolve provider-test input through the production client boundary."""
 
     return client_reasoning_policy(request)
+
+
+def without_empty_reasoning(value: Any) -> Any:
+    """Compare unrelated wire contracts without negotiated empty placeholders.
+
+    Populated reasoning and all other request fields remain observable. Projection
+    tests assert the empty representations themselves.
+    """
+    empty_items = (
+        {"type": "thinking", "thinking": ""},
+        {
+            "type": "reasoning",
+            "content": [{"type": "reasoning_text", "text": ""}],
+            "summary": [],
+        },
+    )
+    if isinstance(value, list):
+        return [
+            without_empty_reasoning(item) for item in value if item not in empty_items
+        ]
+    if isinstance(value, dict):
+        return {
+            key: without_empty_reasoning(item)
+            for key, item in value.items()
+            if not (
+                value.get("role") == "assistant"
+                and key in {"reasoning_content", "reasoning"}
+                and item == ""
+            )
+        }
+    return value

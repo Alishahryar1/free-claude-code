@@ -50,7 +50,7 @@ async def test_executor_converts_chat_request_once(wire):
                 api_key="test", base_url="https://provider.invalid/v1"
             ),
             profile=OpenAIChatProfile(
-                OpenAIChatRequestPolicy("TEST", ReasoningReplayMode.DISABLED),
+                OpenAIChatRequestPolicy("TEST", ReasoningReplayMode.REASONING_CONTENT),
                 NO_REASONING,
             ),
             admission=immediate_admission(),

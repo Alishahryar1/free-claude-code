@@ -27,7 +27,7 @@ def output(request) -> ChatStreamOutput:
         )
     prepared = build_responses_chat_request(
         OpenAIResponsesRequest(model="test-model", input="hello"),
-        reasoning_replay=ReasoningReplayMode.DISABLED,
+        reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
     )
     return ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=1)
 

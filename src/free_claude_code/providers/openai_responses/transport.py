@@ -20,9 +20,6 @@ from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.gemini import GeminiConversionError, GeminiRequest
 from free_claude_code.core.gemini.request import build_gemini_responses_request
 from free_claude_code.core.gemini.responses_stream import GeminiResponsesStream
-from free_claude_code.core.history_replay import (
-    prepare_history,
-)
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -60,6 +57,10 @@ from free_claude_code.providers.failure_policy import (
     is_retryable_stream_error,
     provider_authentication_status,
     reports_context_window_incomplete,
+)
+from free_claude_code.providers.history_negotiation import (
+    HistoryModeCache,
+    resolve_history_overrides,
 )
 from free_claude_code.providers.history_replay import (
     normalize_messages_history,
@@ -106,6 +107,7 @@ class OpenAIResponsesTransport:
         *,
         client: AsyncOpenAI,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         provider_name: str,
         read_timeout_s: float,
         log_raw_sse_events: bool,
@@ -125,6 +127,9 @@ class OpenAIResponsesTransport:
         self._omitted_request_fields = omitted_request_fields
         self._tool_policy = tool_policy
         self._admission = admission
+        self._history_cache = (
+            history_cache if history_cache is not None else HistoryModeCache()
+        )
         self._provider_name = provider_name
         self._read_timeout_s = read_timeout_s
         self._log_raw_sse_events = log_raw_sse_events
@@ -421,6 +426,7 @@ class OpenAIResponsesTransport:
                     if endpoint is not None
                     else self._client
                 )
+                body = resolve_history_overrides(body)
                 origin = replay_origin(
                     self._provider_name,
                     "responses",
@@ -428,7 +434,9 @@ class OpenAIResponsesTransport:
                     client=client,
                     endpoint=endpoint.snapshot if endpoint is not None else None,
                 )
-                sent_body = prepare_history(body, origin)
+                sent_body = corrections.prepare_history(
+                    body, origin, self._history_cache
+                )
                 presenter = presenter_factory(
                     operation_kind is ProviderOperationKind.GENERATION, origin
                 )
@@ -502,6 +510,7 @@ class OpenAIResponsesTransport:
                                     # cannot retain a consistent public identity.
                                     stream_failure.payload = None
                             raise stream_failure
+                        corrections.accepted_history()
                         if context_exceeded:
                             raise context_window_exceeded_provider_failure()
                         if adapt_event is not None:

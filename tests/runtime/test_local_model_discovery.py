@@ -47,9 +47,10 @@ def manager_for(settings=None, providers=None, **kwargs):
     }
     return ProviderRuntimeManager(
         settings,
-        runtime_factory=lambda snapshot, registry: ProviderRuntime(
+        runtime_factory=lambda snapshot, registry, history_cache=None: ProviderRuntime(
             snapshot,
             registry,
+            None,
             {(name, 1): value for name, value in all_providers.items()},
         ),
         **kwargs,

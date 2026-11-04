@@ -24,6 +24,7 @@ from free_claude_code.providers.admission import (
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.failure_policy import provider_authentication_status
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.http import ProviderAttemptScope
 from free_claude_code.providers.model_listing import (
     optional_input_modalities,
@@ -53,9 +54,10 @@ class OpenAICodexProvider(BaseProvider):
         *,
         auth: OpenAIAuthManager,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
-        super().__init__(config)
+        super().__init__(config, history_cache=history_cache)
         self._auth = auth
         self._admission = admission
         self._client_headers = {
@@ -83,6 +85,7 @@ class OpenAICodexProvider(BaseProvider):
         self._responses = OpenAIResponsesTransport(
             client=self._client,
             admission=admission,
+            history_cache=self._history_cache,
             provider_name="OpenAI",
             read_timeout_s=config.http_read_timeout,
             log_raw_sse_events=config.log_raw_sse_events,

@@ -6,7 +6,7 @@ from typing import Any
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.usage import anthropic_input_usage_fields
 from free_claude_code.core.failures import ExecutionFailure
-from free_claude_code.core.history_replay import HistoryScope, ReplayOrigin
+from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningPolicy,
@@ -64,9 +64,6 @@ class OpenAIChatBehavior:
     ) -> dict[str, Any]:
         """Apply provider behavior that is independent of client protocol."""
         return body
-
-    def history_scope(self, body: Mapping[str, Any]) -> HistoryScope:
-        return self.profile.history_scope
 
     def prepare_history_body(
         self, body: dict[str, Any], origin: ReplayOrigin

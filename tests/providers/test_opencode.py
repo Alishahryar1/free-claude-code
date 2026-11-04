@@ -30,6 +30,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     text_content,
 )
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.history_replay import ReplayOrigin, prepare_history
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import (
@@ -55,6 +56,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     reasoning_for,
+    without_empty_reasoning,
 )
 
 
@@ -862,7 +864,7 @@ async def test_codex_custom_tool_round_trip_uses_opencode_function_tools() -> No
     first = json.loads(wire_requests[0].content)
     assert first["tools"][0]["type"] == "function"
     assert first["tools"][1] == {"type": "web_search", "external_web_access": False}
-    replay = json.loads(wire_requests[1].content)["input"]
+    replay = without_empty_reasoning(json.loads(wire_requests[1].content)["input"])
     assert replay[0]["type"] == "function_call"
     assert json.loads(replay[0]["arguments"]) == {"input": patch_text}
     assert replay[1] == {
@@ -945,6 +947,7 @@ async def test_discovered_custom_tools_survive_sdk_calls_and_replay(
             assert "namespace" not in tool
             for field in ("allowed_callers", "extension"):
                 assert tool[field] == expected_tool[field]
+        body["input"] = without_empty_reasoning(body["input"])
         if len(body["input"]) > 2:
             assert body["input"][2]["type"] == "function_call"
             assert body["input"][2]["name"] == tool["name"]
@@ -1388,7 +1391,12 @@ async def test_tool_only_history_sends_empty_reasoning_content_on_wire(
     )
 
     body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
-    wire = await capture_openai_chat_wire_body(body)
+    wire = await capture_openai_chat_wire_body(
+        prepare_history(
+            body,
+            ReplayOrigin(provider._opencode_profile.provider_name, "chat", "", "", "m"),
+        )
+    )
 
     assistant = wire["messages"][0]
     assert assistant["content"] == ""

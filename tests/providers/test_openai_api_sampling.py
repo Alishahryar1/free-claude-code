@@ -18,6 +18,7 @@ from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.openai_api.provider import OpenAIAPIProvider
+from tests.providers.support import without_empty_reasoning
 from tests.providers.test_openai_api_provider import (
     _collect,
     _complete_stream,
@@ -383,7 +384,9 @@ async def test_history_and_sampling_corrections_preserve_each_other(history_firs
             }
         else:
             expected.pop("temperature")
-        assert bodies[index + 1] == expected
+        assert without_empty_reasoning(bodies[index + 1]) == without_empty_reasoning(
+            expected
+        )
     assert request.model_dump() == original
 
 

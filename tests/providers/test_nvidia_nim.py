@@ -205,7 +205,7 @@ async def test_argument_aliases_survive_request_corrections(wire, correction):
     assert all(NIM_TOOL_ARGUMENT_ALIASES_KEY not in body for body in bodies)
     if correction == "reasoning_content":
         assert "reasoning_content" not in bodies[-1]["messages"][0]
-        assert json.dumps(bodies[-1]).count("Need the tool.") == 1
+        assert "Need the tool." not in json.dumps(bodies[-1])
     assert request.model_dump() == original
 
 
@@ -1300,7 +1300,7 @@ async def test_stream_messages_retries_without_reasoning_content(nim_provider):
     second_call = mock_create.await_args_list[1].kwargs
     assert first_call["messages"][0]["reasoning_content"] == "Need the tool."
     assert "reasoning_content" not in second_call["messages"][0]
-    assert "Need the tool." in second_call["messages"][0]["content"]
+    assert "Need the tool." not in json.dumps(second_call)
     assert second_call["messages"][0]["tool_calls"][0]["id"] == "toolu_reasoning"
     assert any("Recovered" in event for event in events)
     assert any("message_stop" in event for event in events)

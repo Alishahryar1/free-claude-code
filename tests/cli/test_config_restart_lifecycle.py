@@ -50,8 +50,8 @@ def test_harness_waits_through_owner_apply_restart(
     def build(settings, restart_callback):
         manager = ProviderRuntimeManager(
             settings,
-            runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
-                snapshot, admission_registry, {}
+            runtime_factory=lambda snapshot, admission_registry, history_cache=None: (
+                ProviderRuntime(snapshot, admission_registry, None, {})
             ),
         )
         monkeypatch.setattr(manager, "start_model_list_refresh", lambda: None)
@@ -223,8 +223,8 @@ def test_supervised_http_apply_finishes_and_reconnects(monkeypatch, stop_during_
     def build(settings, restart_callback):
         manager = ProviderRuntimeManager(
             settings,
-            runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
-                snapshot, admission_registry, {}
+            runtime_factory=lambda snapshot, admission_registry, history_cache=None: (
+                ProviderRuntime(snapshot, admission_registry, None, {})
             ),
         )
         monkeypatch.setattr(manager, "start_model_list_refresh", lambda: None)

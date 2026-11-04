@@ -2028,14 +2028,18 @@ class TestStreamingExceptionHandling:
             provider._client.chat.completions,
             "create",
             new_callable=AsyncMock,
-            side_effect=[original, _make_context_length_bad_request()],
+            side_effect=[
+                original,
+                _make_context_length_bad_request(),
+                _make_context_length_bad_request(),
+            ],
         ) as create:
             events, failure = await _collect_stream_and_error(
                 provider,
                 _make_request(),
             )
 
-        assert create.await_count == 2
+        assert create.await_count == 3
         assert failure.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED
         assert failure.retryable is False
         assert not any(

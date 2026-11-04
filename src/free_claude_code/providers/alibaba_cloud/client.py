@@ -11,6 +11,7 @@ from free_claude_code.providers.admission import (
     ProviderOperationKind,
 )
 from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -49,9 +50,16 @@ class AlibabaCloudProvider(OpenAIChatProvider):
         config: ProviderConfig,
         *,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         client: AsyncOpenAI | None = None,
     ) -> None:
-        super().__init__(config, profile=_PROFILE, admission=admission, client=client)
+        super().__init__(
+            config,
+            profile=_PROFILE,
+            admission=admission,
+            history_cache=history_cache,
+            client=client,
+        )
 
     async def _list_models_payload(self) -> Any:
         # An absolute URL avoids the OpenAI SDK appending to /compatible-mode/v1.

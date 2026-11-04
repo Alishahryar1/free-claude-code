@@ -147,7 +147,7 @@ def test_build_request_body_keeps_max_tokens(huggingface_provider):
     mock_convert.assert_called_once()
     assert (
         mock_convert.call_args.kwargs["reasoning_replay"]
-        is ReasoningReplayMode.DISABLED
+        is ReasoningReplayMode.REASONING_CONTENT
     )
     assert body["messages"][0].get("name") == "alice"
     assert body["max_tokens"] == 42
@@ -187,7 +187,7 @@ def test_build_request_body_leaves_reasoning_control_to_selected_upstream(
     assert "extra_body" not in body
 
 
-def test_build_request_body_does_not_replay_prior_thinking_blocks(
+def test_build_request_body_keeps_prior_thinking_in_native_field(
     huggingface_provider,
 ):
     req = make_request(
@@ -208,14 +208,15 @@ def test_build_request_body_does_not_replay_prior_thinking_blocks(
     assert body["messages"] == [
         {
             "role": "assistant",
-            "content": "hidden prior thought\n\nvisible answer",
+            "content": "visible answer",
+            "reasoning_content": "hidden prior thought",
         }
     ]
-    assert "reasoning_content" not in body["messages"][0]
+    assert body["messages"][0]["reasoning_content"] == "hidden prior thought"
     assert "hidden prior thought" in str(body)
 
 
-def test_build_request_body_does_not_replay_top_level_reasoning_content(
+def test_build_request_body_keeps_top_level_reasoning_in_native_field(
     huggingface_provider,
 ):
     req = make_request(
@@ -234,7 +235,8 @@ def test_build_request_body_does_not_replay_top_level_reasoning_content(
     assert body["messages"] == [
         {
             "role": "assistant",
-            "content": "hidden prior reasoning\n\nvisible answer",
+            "content": "visible answer",
+            "reasoning_content": "hidden prior reasoning",
         }
     ]
     assert "hidden prior reasoning" in str(body)
