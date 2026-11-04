@@ -5,7 +5,13 @@ from typing import Any, cast
 
 import pytest
 
-from free_claude_code.core.history_replay import ReplayOrigin, prepare_history
+from free_claude_code.core.history_replay import (
+    HistoryMode,
+    ReplayOrigin,
+    ReplayRecord,
+    encode_replay,
+    prepare_history,
+)
 
 
 def origin(protocol="chat"):
@@ -54,6 +60,77 @@ def test_empty_placeholder_uses_destination_native_field(field):
         reasoning_field=field,
     )
     assert result["messages"] == [{"role": "assistant", "content": "Answer", field: ""}]
+
+
+@pytest.mark.parametrize("field", ["reasoning_content", "reasoning"])
+@pytest.mark.parametrize("explicit_empty", [False, True])
+@pytest.mark.parametrize("mode", list(HistoryMode))
+def test_discarded_protected_history_does_not_remove_included_empty_slot(
+    field, explicit_empty, mode
+):
+    carrier = encode_replay(
+        ReplayRecord(
+            origin("responses"),
+            {"type": "reasoning", "encrypted_content": "opaque", "summary": []},
+        )
+    )
+    assistant = {
+        "role": "assistant",
+        "content": "Answer",
+        "reasoning_details": [{"type": "reasoning.encrypted", "data": carrier}],
+        **({field: ""} if explicit_empty else {}),
+    }
+    source = {"messages": [{"role": "user", "content": "Question"}, assistant]}
+    original = deepcopy(source)
+    result = prepare_history(
+        source,
+        origin(),
+        scope=mode,
+        reasoning_field=field,
+        structured_details=False,
+    )
+    assert result["messages"] == [
+        {"role": "user", "content": "Question"},
+        {
+            "role": "assistant",
+            "content": "Answer",
+            **({field: ""} if mode is not HistoryMode.NONE else {}),
+        },
+    ]
+    assert source == original
+
+
+@pytest.mark.parametrize("explicit_empty", [False, True])
+@pytest.mark.parametrize("mode", list(HistoryMode))
+def test_retained_native_details_preserve_explicit_empty_without_inventing_it(
+    explicit_empty, mode
+):
+    details = [{"type": "reasoning.encrypted", "data": "opaque"}]
+    source = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "Answer",
+                "reasoning_details": details,
+                **({"reasoning_content": ""} if explicit_empty else {}),
+            }
+        ]
+    }
+    original = deepcopy(source)
+    result = prepare_history(source, origin(), scope=mode)
+    assert result["messages"] == [
+        {
+            "role": "assistant",
+            "content": "Answer",
+            "reasoning_details": details,
+            **(
+                {"reasoning_content": ""}
+                if explicit_empty and mode is not HistoryMode.NONE
+                else {}
+            ),
+        }
+    ]
+    assert source == original
 
 
 def test_user_and_tool_result_messages_never_get_placeholders():

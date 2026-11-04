@@ -1,5 +1,6 @@
 """One history policy applies to initial requests, continuation, and fallback."""
 
+import asyncio
 from copy import deepcopy
 
 import pytest
@@ -12,9 +13,12 @@ from tests.api.test_delivered_stream_recovery import (
     public_text,
     text_events,
 )
-from tests.api.test_hidden_stream_retries import delivered
+from tests.api.test_hidden_stream_retries import delivered, executed
+from tests.api.test_initial_stream_holdback import GatedBody, encode
 from tests.api.test_midstream_model_fallback import delivered_candidates
 from tests.api.test_recovery_reasoning import followed_by_text, reasoning_events
+from tests.api.test_response_streams import _serve
+from tests.api.test_tool_call_buffer import _response
 from tests.providers.test_history_transports import _harness
 
 
@@ -140,6 +144,76 @@ def completed_thinking_and_text(field, suffix=""):
             event["output_index"] = 1
     text[-1]["response"]["output"].insert(0, reasoning[-1]["response"]["output"][0])
     return [*reasoning[:-1], *text[1:]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("field", ["content", "summary"])
+async def test_matched_thinking_releases_answer_before_upstream_completes(wire, field):
+    first = followed_by_text(reasoning_events(field=field, closed=False), "Hello ")
+    second = completed_thinking_and_text(field)
+    gated = GatedBody(
+        encode("responses", second[:-1]), encode("responses", second[-1:])
+    )
+    visible = asyncio.Event()
+    sent = []
+
+    async def capture(message):
+        data = message.get("body", b"")
+        sent.append(data)
+        if b"world." in data:
+            visible.set()
+
+    async with _harness(
+        "responses",
+        lambda bodies: (200, first if len(bodies) == 1 else gated),
+        max_attempts=2,
+    ) as (send, bodies, _):
+
+        async def serve():
+            source = send(wire, [{"role": "user", "content": "hello"}])
+            response = await _response(wire, executed(source, wire))
+            await _serve(response, send=capture)
+
+        serving = asyncio.create_task(serve())
+        wait_visible = asyncio.create_task(visible.wait())
+        try:
+            await asyncio.wait_for(gated.waiting.wait(), 2)
+            done, _ = await asyncio.wait({wait_visible, serving}, timeout=1)
+            assert wait_visible in done, "Answer is still waiting for upstream"
+            assert not gated.release.is_set()
+            assert not serving.done()
+            assert len(bodies) == 2
+        finally:
+            gated.release.set()
+            wait_visible.cancel()
+            await asyncio.gather(wait_visible, return_exceptions=True)
+            await asyncio.wait_for(serving, 2)
+
+    events = parse_sse_text(b"".join(sent).decode())
+    assert public_text(events, wire) == "Hello world."
+    assert_completed(events, wire)
+    assert gated.close_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("field", ["content", "summary"])
+async def test_second_cutoff_retains_answer_after_matched_thinking(wire, field):
+    first = followed_by_text(reasoning_events(field=field, closed=False), "Hello ")
+    async with _harness(
+        "responses",
+        lambda bodies: (
+            200,
+            first if len(bodies) == 1 else completed_thinking_and_text(field)[:-1],
+        ),
+        max_attempts=2,
+    ) as (send, bodies, _):
+        raw = await delivered(send(wire, [{"role": "user", "content": "hello"}]), wire)
+    events = parse_sse_text(raw)
+    assert len(bodies) == 2
+    assert events[-1].event in {"error", "response.failed"}
+    assert public_text(events, wire) == "Hello world."
 
 
 @pytest.mark.asyncio

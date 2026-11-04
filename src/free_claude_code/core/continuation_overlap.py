@@ -144,7 +144,7 @@ class ContinuationOverlap:
             candidate += part.text[: len(self._expected) + 1 - len(candidate)]
             if not part.closed or len(candidate) > len(self._expected):
                 break
-        if terminal or candidate not in self._expected:
+        if terminal or candidate == self._expected or candidate not in self._expected:
             self._resolve(candidate, candidates)
             frames, self._frames = self._frames, []
             self._frame_bytes = 0

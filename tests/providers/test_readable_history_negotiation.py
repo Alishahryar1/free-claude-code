@@ -8,20 +8,25 @@ from typing import Any, cast
 import httpx
 import pytest
 
+from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.history_replay import (
     HistoryMode,
     ReplayOrigin,
+    ReplayRecord,
+    encode_replay,
 )
+from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.anthropic_messages.passthrough import (
     stream_native_messages,
 )
+from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.history_negotiation import (
     HistoryModeCache,
     HistoryNegotiation,
     resolve_history_overrides,
 )
-from tests.providers.support import immediate_admission
+from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_history_transports import _events_for, _harness, _saved_reply
 
 
@@ -44,6 +49,101 @@ def readable_history():
             ],
         },
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("foreign_carrier", [False, True])
+async def test_deepseek_tool_history_keeps_empty_reasoning_after_native_filtering(
+    foreign_carrier,
+):
+    opaque = "cipher"
+    if foreign_carrier:
+        opaque = encode_replay(
+            ReplayRecord(
+                ReplayOrigin(
+                    "OPENAI_API", "responses", "https://openai.test/v1", "", "model"
+                ),
+                {
+                    "type": "reasoning",
+                    "id": "rs_a",
+                    "summary": [{"type": "summary_text", "text": "Use search"}],
+                    "encrypted_content": "cipher",
+                },
+            )
+        )
+    request = MessagesRequest.model_validate(
+        {
+            "model": "deepseek-reasoner",
+            "messages": [
+                {"role": "user", "content": "Question"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "redacted_thinking", "data": opaque},
+                        {
+                            "type": "tool_use",
+                            "id": "call_1",
+                            "name": "search",
+                            "input": {},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_1",
+                            "content": "Result",
+                        }
+                    ],
+                },
+            ],
+            "tools": [
+                {"name": "search", "input_schema": {"type": "object", "properties": {}}}
+            ],
+        }
+    )
+    original = request.model_dump()
+
+    def reply(bodies):
+        assistant = next(m for m in bodies[-1]["messages"] if m["role"] == "assistant")
+        if "reasoning_content" not in assistant:
+            return 400, {
+                "message": "Missing reasoning_content in assistant tool history"
+            }
+        return 200, _events_for("chat")
+
+    async with _harness(
+        "chat",
+        reply,
+        chat_provider_factory=lambda: DeepSeekProvider(
+            make_provider_config(api_key="a", base_url="https://provider.test/v1"),
+            admission=immediate_admission(),
+        ),
+    ) as (_, bodies, provider):
+        await _saved_reply(
+            provider.stream_messages(
+                request,
+                input_tokens=0,
+                request_id="test",
+                response_model="public",
+                reasoning=ReasoningPolicy.on(),
+            ),
+            "messages",
+        )
+    assert len(bodies) == 1
+    assistant = next(m for m in bodies[0]["messages"] if m["role"] == "assistant")
+    assert assistant["reasoning_content"] == ""
+    assert "reasoning_details" not in assistant
+    assert assistant["tool_calls"] == [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "search", "arguments": "{}"},
+        }
+    ]
+    assert request.model_dump() == original
 
 
 @pytest.mark.asyncio

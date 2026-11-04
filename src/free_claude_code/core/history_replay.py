@@ -759,7 +759,6 @@ def _prepare_chat_content(
     full: list[str] = []
     represented: set[str] = set()
     native_full: list[str] = []
-    has_protected = False
     if isinstance(details, list):
         for index, detail in enumerate(details):
             if not isinstance(detail, dict):
@@ -770,7 +769,6 @@ def _prepare_chat_content(
             if record is None:
                 native_full.extend(text for text, summary in parts if not summary)
             protected = protected_reasoning(detail)
-            has_protected |= protected
             if protected:
                 represented.update(text for text, _ in parts)
                 represented.update(
@@ -843,5 +841,7 @@ def _prepare_chat_content(
         ]
     if restored:
         message["reasoning_details"] = restored
-    if full or (include and not has_protected and not restored):
+    if full or (
+        include and ("" in scalar or not (restored or message.get("extra_content")))
+    ):
         message[reasoning_field] = "\n".join(full)
