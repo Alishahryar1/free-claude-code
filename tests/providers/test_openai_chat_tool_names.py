@@ -11,7 +11,7 @@ from free_claude_code.providers.openai_chat.request_policy import (
 
 _POLICY = OpenAIChatRequestPolicy(
     provider_name="TEST",
-    reasoning_replay=ReasoningReplayMode.THINK_TAGS,
+    reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
 )
 
 
@@ -135,7 +135,7 @@ def test_chat_encoding_does_not_rewrite_unrelated_name_fields() -> None:
     request.extra_body = {"metadata": {"name": original}}
     policy = OpenAIChatRequestPolicy(
         provider_name="TEST",
-        reasoning_replay=ReasoningReplayMode.THINK_TAGS,
+        reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
         include_extra_body=True,
     )
     snapshot = deepcopy(request.extra_body)

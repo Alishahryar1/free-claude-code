@@ -21,6 +21,7 @@ from free_claude_code.providers.admission import (
     ProviderOperationKind,
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.model_listing import extract_openai_model_infos
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 
@@ -70,9 +71,10 @@ class OpenAIAPIProvider(BaseProvider):
         config: ProviderConfig,
         *,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
-        super().__init__(config)
+        super().__init__(config, history_cache=history_cache)
         if not config.api_key:
             raise ValueError("OpenAI API requires an API key")
         timeout = httpx2.Timeout(
@@ -97,6 +99,7 @@ class OpenAIAPIProvider(BaseProvider):
         self._responses = OpenAIResponsesTransport(
             client=self._client,
             admission=admission,
+            history_cache=self._history_cache,
             provider_name="OpenAI API",
             read_timeout_s=config.http_read_timeout,
             log_raw_sse_events=config.log_raw_sse_events,

@@ -107,7 +107,8 @@ def test_replay_is_independent_of_current_turn_reasoning_control(
 
     body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
 
-    assert body["messages"][1]["content"] == ("<think>\nprivate\n</think>\n\nvisible")
+    assert body["messages"][1]["content"] == "visible"
+    assert body["messages"][1]["reasoning_content"] == "private"
     assert body["extra_body"]["thinking_budget_tokens"] == 0
 
 

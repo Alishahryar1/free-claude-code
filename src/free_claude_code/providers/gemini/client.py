@@ -8,6 +8,7 @@ from free_claude_code.providers.google_openai import (
     GoogleOpenAIProvider,
     validate_google_extra_body,
 )
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.openai_chat import (
     OpenAIChatProfile,
     OpenAIChatRequestPolicy,
@@ -33,10 +34,15 @@ class GeminiProvider(GoogleOpenAIProvider):
     """Gemini API using ``https://generativelanguage.googleapis.com/v1beta/openai/``."""
 
     def __init__(
-        self, config: ProviderConfig, *, admission: ProviderAdmissionController
+        self,
+        config: ProviderConfig,
+        *,
+        admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
     ):
         super().__init__(
             config,
             profile=_PROFILE,
             admission=admission,
+            history_cache=history_cache,
         )

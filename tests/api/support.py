@@ -86,13 +86,16 @@ def create_test_app(
     else:
         manager = ApiTestRuntime(
             settings,
-            runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
-                snapshot,
-                admission_registry,
-                {
-                    (provider_id, 1): provider
-                    for provider_id, provider in providers.items()
-                },
+            runtime_factory=lambda snapshot, admission_registry, history_cache=None: (
+                ProviderRuntime(
+                    snapshot,
+                    admission_registry,
+                    None,
+                    {
+                        (provider_id, 1): provider
+                        for provider_id, provider in providers.items()
+                    },
+                )
             ),
             connected_provider_ids=connected_provider_ids,
         )

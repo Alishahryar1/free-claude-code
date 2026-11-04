@@ -11,6 +11,7 @@ from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.reasoning import ReasoningEffort
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.model_listing import extract_tool_capable_model_infos
 from free_claude_code.providers.openai_chat import (
     OpenAIChatBehavior,
@@ -90,12 +91,17 @@ class OpenRouterProvider(OpenAIChatProvider):
     """OpenRouter provider using the OpenAI-compatible Chat Completions API."""
 
     def __init__(
-        self, config: ProviderConfig, *, admission: ProviderAdmissionController
+        self,
+        config: ProviderConfig,
+        *,
+        admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
     ):
         super().__init__(
             config,
             behavior=OpenRouterChatBehavior(_PROFILE),
             admission=admission,
+            history_cache=history_cache,
         )
 
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:

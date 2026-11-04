@@ -451,7 +451,7 @@ async def test_native_first_alias_preserves_later_signed_details(
     ]
     assert json.dumps(saved).count("Alpha.") == 1
     assert json.dumps(saved).count("Beta.") == 1
-    assert "Alpha.Beta." not in json.dumps(saved)
+    assert json.dumps(saved).count("Alpha.Beta.") == 1
     assert json.dumps(bodies[-1]).count("Alpha.") == 1
     assert json.dumps(bodies[-1]).count("Beta.") == 1
 
@@ -492,13 +492,13 @@ async def test_identical_signed_details_keep_independent_ownership(wire):
             send(wire, [*saved, {"role": "user", "content": "next"}]), wire
         )
     assert bodies[-1]["messages"][0]["reasoning_details"] == [
-        {"type": "reasoning.text", "text": "Same.", "signature": "a"},
-        {"type": "reasoning.text", "text": "Same.", "signature": "b"},
+        {"type": "reasoning.text", "text": "Same.", "signature": "a", "index": 0},
+        {"type": "reasoning.text", "text": "Same.", "signature": "b", "index": 1},
     ]
 
 
 @pytest.mark.parametrize("typed", [False, True])
-def test_typed_reasoning_streams_while_native_fallback_waits(typed):
+def test_first_readable_representation_streams_without_waiting(typed):
     output = AnthropicChatStreamOutput(
         message_id="msg_test", model="test", input_tokens=1
     )
@@ -517,7 +517,7 @@ def test_typed_reasoning_streams_while_native_fallback_waits(typed):
             native_reasoning="Plan.",
         )
     )
-    assert ("Plan." in "".join(early)) == typed
+    assert "Plan." in "".join(early)
     answer = [*output.ensure_text_block(), output.emit_text_delta("Answer.")]
     assert "Answer." in "".join(answer)
     complete = output.finish_success(

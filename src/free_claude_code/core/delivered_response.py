@@ -8,10 +8,10 @@ import simplejson
 from .gemini.response import gemini_parts
 from .history_replay import (
     readable_reasoning,
-    unencrypted_responses_replay,
+    unprotected_replay,
 )
 from .openai_responses import is_client_search
-from .stream_recovery import RECOVERY_RETENTION_BYTES, DeliveredPrefix
+from .stream_recovery import RECOVERY_RETENTION_BYTES, ContinuationSeed, DeliveredPrefix
 from .token_estimation import estimate_text_tokens
 
 CLIENT_CALL_TYPES = frozenset(
@@ -133,8 +133,7 @@ class DeliveredResponse:
             text += block.get("text", "") + block.get("thinking", "")
             if (
                 block.get("type") == "redacted_thinking"
-                and (record := unencrypted_responses_replay(block.get("data")))
-                is not None
+                and (record := unprotected_replay(block.get("data"))) is not None
             ):
                 text += "".join(text for text, _ in readable_reasoning(record.native))
         if count_progress and (
@@ -253,7 +252,7 @@ class DeliveredResponse:
                     if block.get("type") == "redacted_thinking"
                     else block.get("signature")
                 )
-                if unencrypted_responses_replay(value) is None:
+                if unprotected_replay(value) is None:
                     self.unsafe_reason = "opaque_reasoning"
         elif kind == "content_block_delta":
             delta = data.get("delta", {})
@@ -274,7 +273,7 @@ class DeliveredResponse:
                 block["signature"] = block.get("signature", "") + delta.get(
                     "signature", ""
                 )
-                if unencrypted_responses_replay(block["signature"]) is None:
+                if unprotected_replay(block["signature"]) is None:
                     self.unsafe_reason = "opaque_delta"
             else:
                 self.unsafe_reason = "opaque_delta"
@@ -308,7 +307,7 @@ class DeliveredResponse:
                 self.unsafe_reason = "native_content"
             if (
                 item.get("encrypted_content")
-                and unencrypted_responses_replay(item["encrypted_content"]) is None
+                and unprotected_replay(item["encrypted_content"]) is None
             ):
                 self.unsafe_reason = "opaque_reasoning"
             if any(part.get("type") == "refusal" for part in item.get("content") or []):
@@ -438,9 +437,7 @@ class DeliveredResponse:
                 elif kind == "thinking":
                     thinking.append(item.get("thinking", ""))
                 elif kind == "redacted_thinking":
-                    if (
-                        record := unencrypted_responses_replay(item.get("data"))
-                    ) is not None:
+                    if (record := unprotected_replay(item.get("data"))) is not None:
                         thinking.extend(
                             text for text, _ in readable_reasoning(record.native)
                         )
@@ -449,12 +446,12 @@ class DeliveredResponse:
             elif kind == "message":
                 text.extend(part.get("text", "") for part in item.get("content") or [])
             elif kind == "reasoning":
+                record = unprotected_replay(item.get("encrypted_content"))
                 thinking.extend(
-                    part.get("text", "")
-                    for part in [
-                        *(item.get("summary") or []),
-                        *(item.get("content") or []),
-                    ]
+                    value
+                    for value, _ in readable_reasoning(
+                        record.native if record else item
+                    )
                 )
             elif client_call(item) and index in self.closed:
                 has_calls = True
@@ -467,6 +464,9 @@ class DeliveredResponse:
             self.can_handoff,
             unsafe_reason,
             retained_bytes=self._bytes,
+            continuation=ContinuationSeed(
+                self.wire_api, tuple(item for _, item in sorted(self.items.items()))
+            ),
         )
 
     def output_tokens(self, output: list[dict[str, Any]] | None = None) -> int:

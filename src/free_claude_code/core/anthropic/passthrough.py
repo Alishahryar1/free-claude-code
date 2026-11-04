@@ -8,6 +8,8 @@ from free_claude_code.core.history_replay import (
     ReplayOrigin,
     decode_replay,
     is_replay,
+    protected_reasoning,
+    resolve_messages_replay,
 )
 from free_claude_code.core.json_types import JsonObject
 
@@ -55,6 +57,8 @@ def restore_native_history(body: JsonObject, origin: ReplayOrigin) -> JsonObject
         content = message.get("content")
         if not isinstance(content, list):
             continue
+        content = resolve_messages_replay(content)
+        message["content"] = content
         for index, block in enumerate(content):
             if not isinstance(block, dict):
                 continue
@@ -65,6 +69,9 @@ def restore_native_history(body: JsonObject, origin: ReplayOrigin) -> JsonObject
             if not isinstance(value, str) or not is_replay(value):
                 continue
             record = decode_replay(value)
+            if not protected_reasoning(record.native):
+                # Keep readable identity until the shared destination projection.
+                continue
             if not origin.accepts(record.origin):
                 raise NativeMessagesError(
                     "Native Messages cannot replay history from a different provider or model."

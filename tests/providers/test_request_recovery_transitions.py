@@ -295,8 +295,17 @@ async def test_hidden_normal_stop_prevents_request_corrections(
                 )
             )
             if isinstance(response, StreamingResponse):
-                await _serve(response)
-            if stopped:
+                sent = await _serve(response)
+                if stopped:
+                    result = b"".join(
+                        message.get("body", b"") for message in sent
+                    ).decode()
+                    assert error["message"] in result
+                    assert parse_sse_text(result)[-1].event in {
+                        "error",
+                        "response.failed",
+                    }
+            elif stopped:
                 assert response.status_code >= 400
                 assert error["message"] in bytes(response.body).decode()
             else:

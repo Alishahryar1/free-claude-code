@@ -21,6 +21,7 @@ from tests.api.test_delivered_stream_recovery import (
 from tests.api.test_hidden_stream_retries import delivered
 from tests.api.test_midstream_model_fallback import delivered_candidates
 from tests.api.test_tool_call_buffer_transports import _tools
+from tests.providers.support import without_empty_reasoning
 from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _harness
@@ -75,8 +76,11 @@ def test_native_fallback_closes_source_preserves_options_and_filters_candidates(
         response = client.post("/v1/messages", json=request)
     assert response.status_code == 200
     assert [body["model"] for body in bodies] == ["primary", "backup"]
-    assert bodies[1]["messages"][:-2] == request["messages"]
-    assert bodies[1]["messages"][-2] == {"role": "assistant", "content": "Hello "}
+    assert without_empty_reasoning(bodies[1]["messages"][:-2]) == request["messages"]
+    assert without_empty_reasoning(bodies[1]["messages"][-2]) == {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello "}],
+    }
     for key in ("tools", "thinking", "max_tokens", "future_option"):
         assert bodies[1][key] == request[key]
     assert all(wire.closed for wire in wires)

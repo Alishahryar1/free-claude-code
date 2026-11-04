@@ -24,6 +24,7 @@ from free_claude_code.providers.anthropic_messages.transport import (
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.endpoint_types import EndpointContext, HttpEndpoint
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.http import close_provider_stream
 from free_claude_code.providers.openai_chat import (
     OpenAIChatBehavior,
@@ -77,10 +78,11 @@ class GitHubCopilotProvider(BaseProvider):
         *,
         auth: CopilotAuthManager,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         messages_transport: httpx.AsyncBaseTransport | None = None,
         openai_transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
-        super().__init__(config)
+        super().__init__(config, history_cache=history_cache)
         self._auth = auth
         self._admission = admission
         self._messages_pool = messages_transport or httpx.AsyncHTTPTransport(
@@ -102,6 +104,7 @@ class GitHubCopilotProvider(BaseProvider):
         self._responses = OpenAIResponsesTransport(
             client=self._client,
             admission=admission,
+            history_cache=self._history_cache,
             provider_name=PROVIDER_NAME,
             read_timeout_s=config.http_read_timeout,
             log_raw_sse_events=config.log_raw_sse_events,
@@ -209,6 +212,7 @@ class GitHubCopilotProvider(BaseProvider):
                 log_raw_sse_events=self._config.log_raw_sse_events,
                 log_api_error_tracebacks=self._config.log_api_error_tracebacks,
                 admission=self._admission,
+                history_cache=self._history_cache,
                 client=self._client,
                 endpoint_transport=self._openai_pool,
             )
@@ -246,6 +250,7 @@ class GitHubCopilotProvider(BaseProvider):
                         native = AnthropicMessagesTransport(
                             client=http,
                             admission=self._admission,
+                            history_cache=self._history_cache,
                             provider_name=PROVIDER_NAME,
                             replay_scope=REPLAY_SCOPE,
                             read_timeout_s=self._config.http_read_timeout,

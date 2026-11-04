@@ -1,22 +1,20 @@
 """Same-provider continuation using evidence from the public delivery boundary."""
 
-from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Any
 
+from free_claude_code.core.continuation_request import (
+    ContinuationRequest,
+    UpstreamProtocol,
+)
 from free_claude_code.core.delivered_response import (
     client_call,
     is_structured_text_format,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.core.history_replay import (
-    ReplayRecord,
-    encode_replay,
-    readable_reasoning,
-)
+from free_claude_code.core.history_replay import protected_reasoning
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_recovery import (
-    ContinuationSeed,
     RecoveryAction,
     SourceRecoverySnapshot,
     StreamFailureContext,
@@ -25,8 +23,6 @@ from free_claude_code.core.stream_recovery import (
 from free_claude_code.core.trace import trace_event
 
 from .admission import ProviderExecution
-
-type UpstreamProtocol = Literal["chat", "messages", "responses"]
 
 
 class SourceRecoveryState:
@@ -95,7 +91,20 @@ class SourceRecoveryState:
         if protocol == "chat":
             for choice in payload.get("choices", []):
                 delta = choice.get("delta") or {}
-                if delta.get("reasoning_details") or delta.get("audio"):
+                details = delta.get("reasoning_details")
+                if delta.get("audio") or (
+                    details
+                    and (
+                        not isinstance(details, list)
+                        or any(
+                            not isinstance(detail, dict)
+                            or detail.get("type")
+                            not in {"reasoning.text", "reasoning.summary"}
+                            or protected_reasoning(detail)
+                            for detail in details
+                        )
+                    )
+                ):
                     self.unsafe_reason = "native_content"
                     self._handoff_blocked = True
         elif protocol == "messages":
@@ -195,93 +204,6 @@ class PublicRecovery:
     body: dict[str, Any] | None = None
 
 
-class ContinuationRequest:
-    """Replace our private history suffix while retaining accepted corrections."""
-
-    def __init__(self, protocol: UpstreamProtocol) -> None:
-        self.protocol = protocol
-        self._injected_rows = 0
-
-    def build(
-        self,
-        body: dict[str, Any],
-        text: str,
-        thinking: str,
-        *,
-        replay_records: tuple[ReplayRecord, ...] = (),
-    ) -> dict[str, Any]:
-        result = deepcopy(body)
-        responses = self.protocol == "responses"
-        field = "input" if responses else "messages"
-        history = result.get(field, [])
-        if responses and isinstance(history, str):
-            history = [{"role": "user", "content": history}]
-        if self._injected_rows:
-            # Request corrections preserve these trailing plain-text turns.
-            history = history[: -self._injected_rows]
-        if replay_records and thinking == "".join(
-            text
-            for record in replay_records
-            for text, _ in readable_reasoning(record.native)
-        ):
-            thinking = ""
-        tail = continuation_tail(
-            ContinuationSeed(text, thinking), tools=bool(result.get("tools"))
-        )
-        if responses:
-            tail = [
-                {
-                    "role": row["role"],
-                    "content": [
-                        {
-                            "type": "output_text"
-                            if row["role"] == "assistant"
-                            else "input_text",
-                            "text": row["content"],
-                        }
-                    ],
-                }
-                for row in tail
-            ]
-        if replay_records:
-            carriers = [encode_replay(record) for record in replay_records]
-            if responses:
-                tail = [
-                    {"type": "reasoning", "encrypted_content": carrier}
-                    for carrier in carriers
-                ] + tail
-            else:
-                if tail[0]["role"] != "assistant":
-                    tail.insert(0, {"role": "assistant", "content": ""})
-                if self.protocol == "chat":
-                    tail[0]["reasoning_details"] = [
-                        {"type": "reasoning.encrypted", "data": carrier}
-                        for carrier in carriers
-                    ]
-                else:
-                    tail[0]["content"] = [
-                        *(
-                            {"type": "redacted_thinking", "data": carrier}
-                            for carrier in carriers
-                        ),
-                        {"type": "text", "text": tail[0]["content"]},
-                    ]
-        result[field] = [*history, *tail]
-        self._injected_rows = len(tail)
-        return result
-
-
-def continuation_tail(seed: ContinuationSeed, *, tools: bool) -> list[dict[str, Any]]:
-    """Materialize the same private context for construction and estimation."""
-    instruction = "The previous provider stream was interrupted. Continue the assistant response exactly where it stopped. Do not repeat text already written."
-    if tools:
-        instruction += " No tool calls from this interrupted assistant turn were delivered or executed. Any unfinished calls were discarded. Emit the required tool calls using the provided tools."
-    if seed.thinking:
-        instruction = f"{seed.thinking}\n\n{instruction}"
-    tail = [{"role": "assistant", "content": seed.text}] if seed.text else []
-    return [*tail, {"role": "user", "content": instruction}]
-
-
 def public_stream_failure(
     failure: ExecutionFailure,
     *,
@@ -370,9 +292,7 @@ def public_recovery(
     seed = assessment.seed
     if seed is None:
         return None
-    replacement = request.build(
-        body, seed.text, seed.thinking, replay_records=seed.replay_records
-    )
+    replacement = request.build(body, seed)
     delivery.begin_continuation()
     trace_event(
         stage="provider",

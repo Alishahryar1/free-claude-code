@@ -196,6 +196,32 @@ def _messages_writer():
     return output, reasoning
 
 
+def test_native_thinking_streams_before_late_structured_alias():
+    output, reasoning = _messages_writer()
+    early = list(reasoning.events({}, output, native_reasoning="Plan."))
+    parsed = parse_sse_text("".join(early))
+    assert any(
+        event.data.get("delta", {}).get("thinking") == "Plan." for event in parsed
+    )
+    late = list(
+        reasoning.events(
+            {
+                "reasoning_details": [
+                    {"type": "reasoning.text", "text": "Plan.", "index": 0}
+                ]
+            },
+            output,
+            native_reasoning=None,
+        )
+    )
+    late.extend(reasoning.finish(output))
+    parsed = parse_sse_text("".join([*early, *late]))
+    assert (
+        "".join(event.data.get("delta", {}).get("thinking", "") for event in parsed)
+        == "Plan."
+    )
+
+
 def _readable(reasoning, output, text="Plan.", data="first"):
     return list(
         reasoning.events(

@@ -61,7 +61,7 @@ async def catalog_runtime():
 
     manager = ProviderRuntimeManager(
         settings,
-        runtime_factory=lambda settings, registry: ProviderRuntime(
+        runtime_factory=lambda settings, registry, history_cache=None: ProviderRuntime(
             settings, registry, provider_constructor=construct
         ),
     )

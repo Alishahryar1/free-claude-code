@@ -53,7 +53,9 @@ class RuntimeFactory:
         self.runtimes: list[FakeRuntime] = []
         self.error: Exception | None = None
 
-    def __call__(self, settings: Settings, admission_registry) -> ProviderRuntime:
+    def __call__(
+        self, settings: Settings, admission_registry, history_cache=None
+    ) -> ProviderRuntime:
         if self.error is not None:
             raise self.error
         runtime = FakeRuntime(settings)
@@ -181,7 +183,7 @@ async def test_custom_tail_edit_preserves_metadata_and_first_key_change_evicts_i
     async def held_models():
         await asyncio.Event().wait()
 
-    def factory(config, registry):
+    def factory(config, registry, history_cache=None):
         runtime = FakeRuntime(config)
         runtime.provider.list_model_infos = AsyncMock(side_effect=held_models)
         return runtime

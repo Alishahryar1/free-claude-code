@@ -4,9 +4,11 @@ from free_claude_code.core.anthropic.streaming import (
     ToolSchema,
     accept_tool_json_repair,
     continuation_suffix,
+    make_tool_repair_body,
+)
+from free_claude_code.core.continuation_request import (
     make_response_recovery_body,
     make_text_recovery_body,
-    make_tool_repair_body,
 )
 
 

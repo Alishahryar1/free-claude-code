@@ -12,6 +12,7 @@ from free_claude_code.api.response_streams import (
     anthropic_sse_streaming_response,
     openai_responses_sse_streaming_response,
 )
+from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.providers.anthropic_messages.passthrough import (
     stream_native_messages,
 )
@@ -167,7 +168,16 @@ async def test_stopped_first_responses_event_releases_admission(wire, terminal):
         transport._event_adapter_factory = lambda: adapter
         history = [{"role": "user", "content": "hi"}]
         failed = await _response(send(wire, history), wire)
-        assert failed.status_code == 502 and len(bodies) == 1
+        if wire == "messages":
+            assert failed.status_code == 200
+            sent = await _serve(failed)
+            output = parse_sse_text(
+                b"".join(item.get("body", b"") for item in sent).decode()
+            )
+            assert output[-1].event == "error"
+        else:
+            assert failed.status_code == 502
+        assert len(bodies) == 1
         recovered = await asyncio.wait_for(
             _response(send(wire, history), wire), timeout=1
         )

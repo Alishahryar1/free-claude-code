@@ -18,12 +18,15 @@ from free_claude_code.api.response_streams import (
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.gemini.replay import decode_bundle
 from free_claude_code.core.gemini.response import GeminiOutput, gemini_parts
+from free_claude_code.core.history_replay import readable_reasoning
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.deepseek.client import _PROFILE, DeepSeekChatBehavior
 from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_delivered_stream_recovery import text_events
+from tests.api.test_recovery_reasoning import followed_by_text, reasoning_events
 from tests.api.test_response_streams import _serve
+from tests.api.test_unified_thinking_recovery import completed_thinking_and_text
 from tests.providers.test_anthropic_messages_transport import (
     Endpoint,
     Wire,
@@ -33,7 +36,178 @@ from tests.providers.test_anthropic_messages_transport import (
 )
 from tests.providers.test_gemini_review_regressions import TOOLS, transport
 from tests.providers.test_gemini_transport import chat_response, collect, gemini_request
-from tests.providers.test_history_transports import _harness
+from tests.providers.test_history_transports import _events_for, _harness
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["content", "summary"])
+@pytest.mark.parametrize("closed", [False, True])
+@pytest.mark.parametrize("suffix", ["", " Act"])
+@pytest.mark.parametrize("interrupt_again", [False, True])
+async def test_gemini_followup_replays_only_delivered_thinking_after_overlap(
+    field, closed, suffix, interrupt_again
+):
+    reasoning = reasoning_events(field=field, closed=closed)
+    first = followed_by_text(reasoning[:-1] if closed else reasoning, "Hello ")
+
+    def reply(bodies):
+        return 200, (
+            first
+            if len(bodies) == 1
+            else completed_thinking_and_text(field, suffix)[:-1]
+            if interrupt_again and len(bodies) == 2
+            else completed_thinking_and_text(field, suffix)
+            if len(bodies) == 2
+            else text_events("responses", "Next")
+        )
+
+    async with _harness(
+        "responses", reply, max_attempts=3 if interrupt_again else 2
+    ) as (_, bodies, adapter):
+
+        async def send(request):
+            response = await gemini_sse_streaming_response(
+                adapter.stream_gemini(
+                    request,
+                    input_tokens=0,
+                    request_id="gemini-overlap-replay",
+                    response_model="public",
+                    reasoning=ReasoningPolicy.provider_default(),
+                ),
+                request_id="gemini-overlap-replay",
+                pre_start_error_response=lambda error: JSONResponse(
+                    status_code=502, content={"error": str(error)}
+                ),
+            )
+            assert isinstance(response, ManagedStreamingResponse)
+            try:
+                result, _ = await collect(response.body_iterator)
+                return result
+            finally:
+                await response.aclose()
+
+        value = await send(
+            gemini_request(
+                generationConfig={"thinkingConfig": {"includeThoughts": True}}
+            )
+        )
+        content = value["candidates"][0]["content"]
+        visible = "".join(
+            part.get("text", "") for part in content["parts"] if part.get("thought")
+        )
+        assert visible == "Find 17." + suffix
+        await send(
+            gemini_request(
+                contents=[content, {"role": "user", "parts": [{"text": "Next"}]}]
+            )
+        )
+    replayed = "".join(
+        text
+        for item in bodies[-1]["input"]
+        if item.get("type") == "reasoning"
+        for text, _ in readable_reasoning(item)
+    )
+    assert replayed == visible
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native_first", [False, True])
+async def test_gemini_open_chat_group_survives_cutoff_and_overlap(native_first):
+    def reply(bodies):
+        if len(bodies) > 2:
+            return 200, text_events("chat", "Next")
+        thought = "Plan" if len(bodies) == 1 else "PlanAct"
+        scalar = {"reasoning_content": thought}
+        detail = {
+            "reasoning_details": [
+                {"type": "reasoning.text", "text": thought, "index": 0}
+            ]
+        }
+        deltas = [scalar, detail] if native_first else [detail, scalar]
+        if len(bodies) == 2:
+            deltas.append({"content": "Answer"})
+        template = _events_for("chat")[0]
+        events = [
+            {
+                **template,
+                "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+            }
+            for delta in deltas
+        ]
+        if len(bodies) == 2:
+            events.extend(text_events("chat", "", complete=True)[-1:])
+        return 200, events
+
+    async with _harness("chat", reply, max_attempts=2) as (_, bodies, adapter):
+        request = gemini_request(
+            generationConfig={"thinkingConfig": {"includeThoughts": True}}
+        )
+        response = await gemini_sse_streaming_response(
+            adapter.stream_gemini(
+                request,
+                input_tokens=0,
+                request_id="open-chat",
+                response_model="public",
+                reasoning=ReasoningPolicy.on(),
+            ),
+            request_id="open-chat",
+            pre_start_error_response=lambda error: JSONResponse(
+                status_code=502, content={"error": str(error)}
+            ),
+        )
+        assert isinstance(response, ManagedStreamingResponse)
+        try:
+            value, _ = await collect(response.body_iterator)
+        finally:
+            await response.aclose()
+        content = value["candidates"][0]["content"]
+        assert (
+            "".join(
+                part.get("text", "") for part in content["parts"] if part.get("thought")
+            )
+            == "PlanAct"
+        )
+        bundle = decode_bundle(
+            next(
+                part["thoughtSignature"]
+                for part in content["parts"]
+                if "thoughtSignature" in part
+            )
+        )
+        assert bundle is not None
+        assert (
+            "".join(
+                text
+                for record in bundle.records
+                for text, _ in readable_reasoning(record.native)
+            )
+            == "PlanAct"
+        )
+        followup = gemini_request(
+            contents=[content, {"role": "user", "parts": [{"text": "Next"}]}]
+        )
+        await collect(
+            adapter.stream_gemini(
+                followup,
+                input_tokens=0,
+                request_id="chat-followup",
+                response_model="public",
+                reasoning=ReasoningPolicy.on(),
+            )
+        )
+    replayed = "".join(
+        text
+        for message in bodies[-1]["messages"]
+        if message.get("role") == "assistant"
+        for text, _ in readable_reasoning(
+            {
+                key: value
+                for key, value in message.items()
+                if key in {"reasoning_content", "reasoning", "reasoning_details"}
+            }
+        )
+    )
+    assert replayed.count("Plan") == replayed.count("Act") == 1
 
 
 @pytest.mark.asyncio

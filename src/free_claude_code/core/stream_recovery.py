@@ -3,8 +3,14 @@
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 
-from .history_replay import ReplayRecord
+from .history_replay import (
+    AssociatedReplayRecord,
+    ReplayRecord,
+    readable_reasoning,
+    unprotected_replay,
+)
 from .json_types import JsonObject
 
 RECOVERY_RETENTION_BYTES = 1_048_576
@@ -20,13 +26,54 @@ class DeliveredPrefix:
     unsafe_reason: str | None
     replay_records: tuple[ReplayRecord, ...] = ()
     retained_bytes: int = 0
+    continuation: ContinuationSeed | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ContinuationSeed:
-    text: str
-    thinking: str
-    replay_records: tuple[ReplayRecord, ...] = ()
+    """A snapshot of delivered output in the client's own protocol."""
+
+    wire_api: Literal["messages", "responses", "gemini"]
+    items: tuple[JsonObject, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "items", deepcopy(self.items))
+
+    def readable_text(self, channel: Literal["text", "thinking", "summary"]) -> str:
+        """Read replay prefixes, including explicitly retained late summary aliases."""
+        values: list[str] = []
+        for item in self.items:
+            if self.wire_api == "messages":
+                if channel != "summary" and item.get("type") == channel:
+                    values.append(str(item.get(channel) or ""))
+            elif self.wire_api == "gemini":
+                if channel != "summary" and bool(item.get("thought")) == (
+                    channel == "thinking"
+                ):
+                    values.append(str(item.get("text") or ""))
+            elif item.get("type") == ("message" if channel == "text" else "reasoning"):
+                record = unprotected_replay(item.get("encrypted_content"))
+                if (
+                    channel == "summary"
+                    and isinstance(record, AssociatedReplayRecord)
+                    and record.origin.protocol == "chat"
+                ):
+                    # A scalar was already displayed when its summary type arrived.
+                    values.extend(
+                        text
+                        for text, summary in readable_reasoning(record.native)
+                        if summary
+                    )
+                    continue
+                field = "summary" if channel == "summary" else "content"
+                parts = item.get(field)
+                if isinstance(parts, list):
+                    values.extend(
+                        str(part.get("text") or "")
+                        for part in parts
+                        if isinstance(part, dict)
+                    )
+        return "".join(values)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,8 +152,10 @@ def assess_recovery(
         return RecoveryAssessment(RecoveryAction.STOP, reason=reason or "unsafe_prefix")
     if not (prefix.text or prefix.thinking):
         return RecoveryAssessment(RecoveryAction.STOP, reason="empty_prefix")
+    if prefix.continuation is None:
+        return RecoveryAssessment(RecoveryAction.STOP, reason="missing_native_prefix")
     return RecoveryAssessment(
         RecoveryAction.CONTINUE,
-        ContinuationSeed(prefix.text, prefix.thinking, prefix.replay_records),
+        prefix.continuation,
         reason="portable_prefix",
     )

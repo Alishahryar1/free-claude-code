@@ -33,7 +33,7 @@ def _responses_output(
     request: OpenAIResponsesRequest, *, input_tokens: int
 ) -> ResponsesChatStreamOutput:
     prepared = build_responses_chat_request(
-        request, reasoning_replay=ReasoningReplayMode.DISABLED
+        request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
     )
     return ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=input_tokens)
 

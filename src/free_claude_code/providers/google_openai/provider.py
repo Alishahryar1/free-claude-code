@@ -8,6 +8,7 @@ from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.openai_chat import (
     ChatStreamOutput,
     OpenAIAsyncCredentialProvider,
@@ -105,6 +106,7 @@ class GoogleOpenAIProvider(OpenAIChatProvider):
         *,
         profile: OpenAIChatProfile,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         api_key_provider: OpenAIAsyncCredentialProvider | None = None,
         default_headers: Mapping[str, str] | None = None,
     ) -> None:
@@ -112,6 +114,7 @@ class GoogleOpenAIProvider(OpenAIChatProvider):
             config,
             behavior=GoogleChatBehavior(profile),
             admission=admission,
+            history_cache=history_cache,
             api_key_provider=api_key_provider,
             default_headers=default_headers,
         )

@@ -10,7 +10,7 @@ from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.conversion import AnthropicToOpenAIConverter
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.history_replay import (
-    HistoryScope,
+    HistoryMode,
     ReplayOrigin,
     prepare_history,
 )
@@ -22,7 +22,11 @@ from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.deepseek.client import DeepSeekProvider
 from free_claude_code.providers.deepseek.compat import finalize_deepseek_chat_body
 from free_claude_code.providers.open_router import OpenRouterProvider
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    without_empty_reasoning,
+)
 
 
 def _chat(items):
@@ -314,9 +318,11 @@ def test_image_tool_result_does_not_start_a_new_user_turn():
     body = prepare_history(
         {"messages": messages},
         ReplayOrigin("a", "chat", "", "", "m"),
-        scope=HistoryScope.TOOL_CONTINUATION,
+        scope=HistoryMode.CURRENT,
     )
-    assert body["messages"] == messages
+    assert without_empty_reasoning(body["messages"]) == without_empty_reasoning(
+        messages
+    )
 
 
 def test_messages_interleaved_reasoning_belongs_to_the_tool_group():
@@ -453,7 +459,7 @@ def test_destination_without_native_reasoning_keeps_readable_context(wire):
                     {"role": "assistant", "content": "17"},
                 ],
             ),
-            reasoning_replay=ReasoningReplayMode.DISABLED,
+            reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
         ).body
     else:
         request = MessagesRequest.model_validate(
@@ -472,7 +478,7 @@ def test_destination_without_native_reasoning_keeps_readable_context(wire):
         )
         body = {
             "messages": AnthropicToOpenAIConverter.convert_messages(
-                request.messages, reasoning_replay=ReasoningReplayMode.DISABLED
+                request.messages, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
             )
         }
     rendered = json.dumps(body)

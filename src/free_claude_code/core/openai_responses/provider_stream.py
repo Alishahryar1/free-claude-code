@@ -12,6 +12,8 @@ from free_claude_code.core.history_replay import (
 )
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
+from free_claude_code.core.readable_replay import ReadableReplay
+from free_claude_code.core.stream_delivery import current_stream_delivery
 
 
 class ResponsesStreamFailure(RuntimeError):
@@ -49,6 +51,8 @@ class _ReasoningState:
     block_index: int | None = None
     parts: dict[tuple[str, int], str] = field(default_factory=dict)
     stopped: bool = False
+    replay: ReadableReplay = field(default_factory=ReadableReplay)
+    public_length: int = 0
 
     def text(self, field_name: str) -> str:
         return "".join(
@@ -83,6 +87,7 @@ class ResponsesProviderStream:
         self._tool_names = tool_names or OpenAIToolNameCodec.from_names(())
         self._tools: dict[str, _ToolState] = {}
         self._reasoning: dict[str, _ReasoningState] = {}
+        self._delivery = current_stream_delivery()
 
     def start(self) -> list[str]:
         """Return the Anthropic message_start event."""
@@ -144,6 +149,9 @@ class ResponsesProviderStream:
         field_name = "summary" if summary else "content"
         key = (field_name, _integer(data.get(field_name + "_index")) or 0)
         events = self._ensure_reasoning_started(state, completed=False)
+        self._reasoning_span(
+            state, field_name, key[1], len(state.parts.get(key, "")), len(delta)
+        )
         state.parts[key] = state.parts.get(key, "") + delta
         assert state.block_index is not None
         events.append(
@@ -151,6 +159,20 @@ class ResponsesProviderStream:
         )
         self.generated_output = True
         return events
+
+    def _reasoning_span(
+        self, state: _ReasoningState, name: str, index: int, start: int, length: int
+    ) -> None:
+        if self._delivery is not None and self._delivery.continuing:
+            assert state.block_index is not None
+            state.replay.add(
+                (name, index, "text"),
+                start,
+                state.block_index,
+                state.public_length,
+                length,
+            )
+        state.public_length += length
 
     def _ensure_reasoning_started(
         self, state: _ReasoningState, *, completed: bool
@@ -191,6 +213,9 @@ class ResponsesProviderStream:
                         self._ensure_reasoning_started(state, completed=completed)
                     )
                     assert state.block_index is not None
+                    self._reasoning_span(
+                        state, field_name, index, len(previous), len(remaining)
+                    )
                     events.append(
                         self.ledger.content_block_delta(
                             state.block_index, "thinking_delta", remaining
@@ -265,9 +290,26 @@ class ResponsesProviderStream:
             return events
         if item_type == "reasoning":
             encrypted = item.get("encrypted_content")
-            carrier = encode_replay(ReplayRecord(self._origin, cast(JsonObject, item)))
             events = self._item_readable(item, completed=True)
             state = self._reasoning[item_id]
+            full = [
+                ("content", index, "text")
+                for index, part in enumerate(item.get("content") or [])
+                if isinstance(part.get("text"), str)
+            ]
+            summaries = [
+                ("summary", index, "text")
+                for index, part in enumerate(item.get("summary") or [])
+                if isinstance(part.get("text"), str)
+            ]
+            state.replay.alias(item, summaries, full)
+            state.replay.alias(item, full, summaries)
+            record = ReplayRecord(self._origin, cast(JsonObject, item))
+            carrier = (
+                self._delivery.replay_carrier(record, state.replay)
+                if self._delivery is not None and self._delivery.continuing
+                else encode_replay(record)
+            )
             if (
                 state.block_index is None
                 and isinstance(encrypted, str)

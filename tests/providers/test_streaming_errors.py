@@ -15,9 +15,11 @@ from free_claude_code.core.anthropic.stream_contracts import (
     parse_sse_text,
 )
 from free_claude_code.core.anthropic.streaming import (
+    tool_schemas_by_name,
+)
+from free_claude_code.core.continuation_request import (
     make_response_recovery_body,
     make_text_recovery_body,
-    tool_schemas_by_name,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -2028,14 +2030,18 @@ class TestStreamingExceptionHandling:
             provider._client.chat.completions,
             "create",
             new_callable=AsyncMock,
-            side_effect=[original, _make_context_length_bad_request()],
+            side_effect=[
+                original,
+                _make_context_length_bad_request(),
+                _make_context_length_bad_request(),
+            ],
         ) as create:
             events, failure = await _collect_stream_and_error(
                 provider,
                 _make_request(),
             )
 
-        assert create.await_count == 2
+        assert create.await_count == 3
         assert failure.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED
         assert failure.retryable is False
         assert not any(
@@ -2300,10 +2306,11 @@ class TestStreamingExceptionHandling:
         assert recovery_body["messages"][-2] == {
             "role": "assistant",
             "content": "visible answer",
+            "reasoning_content": "hidden reasoning",
         }
         recovery_prompt = recovery_body["messages"][-1]
         assert recovery_prompt["role"] == "user"
-        assert "hidden reasoning" in recovery_prompt["content"]
+        assert "hidden reasoning" not in recovery_prompt["content"]
         assert "reasoning_content" not in recovery_prompt
 
     def test_tool_protocol_recovery_body_retains_tool_contract(self):
@@ -2324,7 +2331,7 @@ class TestStreamingExceptionHandling:
 
     @pytest.mark.asyncio
     async def test_openai_text_recovery_passes_thinking_context(self):
-        """OpenAI-chat recovery call sites seed emitted thinking in the prompt."""
+        """OpenAI-chat recovery preserves emitted thinking as reasoning."""
         runner = _make_stream_runner(
             _make_provider(), request=_make_request(), request_id="req_recovery"
         )
@@ -2357,7 +2364,8 @@ class TestStreamingExceptionHandling:
         assert events is not None
         assert mock_collect.await_args is not None
         recovery_body = mock_collect.await_args.args[0]
-        assert "hidden reasoning" in recovery_body["messages"][-1]["content"]
+        assert "hidden reasoning" not in recovery_body["messages"][-1]["content"]
+        assert recovery_body["messages"][-2]["reasoning_content"] == "hidden reasoning"
         assert mock_collect.await_args.kwargs["include_reasoning"] is True
 
     @pytest.mark.asyncio

@@ -13,6 +13,18 @@ from free_claude_code.providers.stream_recovery import (
 )
 
 
+def test_public_stream_has_no_initial_readable_output_delay():
+    delivery = StreamDeliveryState()
+    controller = RecoveryController(delivery)
+    assert controller.push("first readable delta") == ["first readable delta"]
+    assert controller.remaining_delay is None
+    assert not controller.has_buffered
+    assert not controller.committed
+    delivery.release_content()
+    assert controller.committed
+    assert controller.flush() == []
+
+
 def test_exhausted_hidden_group_cannot_fall_through_to_salvage():
     controller = RecoveryController(StreamDeliveryState())
     controller.push("hidden")

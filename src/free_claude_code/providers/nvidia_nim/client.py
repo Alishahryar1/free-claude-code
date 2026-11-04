@@ -19,6 +19,7 @@ from free_claude_code.providers.failure_policy import (
     context_window_exceeded_provider_failure,
     overloaded_provider_failure,
 )
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
     OpenAIChatBehavior,
@@ -34,7 +35,6 @@ from .request_options import (
 )
 from .retry import (
     clone_body_without_chat_template,
-    clone_body_without_reasoning_content,
 )
 from .tool_schema import (
     body_without_nim_tool_argument_aliases,
@@ -115,15 +115,6 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
             logger.warning("NIM_STREAM: retrying without chat_template after 400 error")
             return retry_body
 
-        if "reasoning_content" in error_text:
-            retry_body = clone_body_without_reasoning_content(body)
-            if retry_body is None:
-                return None
-            logger.warning(
-                "NIM_STREAM: retrying without reasoning_content after 400 error"
-            )
-            return retry_body
-
         return None
 
     def failure_override(self, error: Exception) -> ExecutionFailure | None:
@@ -151,11 +142,13 @@ class NvidiaNimProvider(OpenAIChatProvider):
         config: ProviderConfig,
         *,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
     ):
         super().__init__(
             config,
             behavior=NvidiaNimChatBehavior(),
             admission=admission,
+            history_cache=history_cache,
         )
 
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:

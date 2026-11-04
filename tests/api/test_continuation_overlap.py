@@ -12,6 +12,7 @@ from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_delivered_stream_recovery import public_text, text_events
 from tests.api.test_hidden_stream_retries import delivered
 from tests.api.test_tool_call_buffer import _frames, _response
+from tests.providers.support import assistant_history_text
 from tests.providers.test_history_transports import _harness
 
 
@@ -442,9 +443,7 @@ async def test_snapshot_text_is_published_once_before_another_interruption(
             send("responses", [{"role": "user", "content": "greet"}]), "responses"
         )
     assert len(bodies) == 3
-    assert bodies[2]["input"][-2]["content"] == [
-        {"type": "output_text", "text": "Hello world."}
-    ]
+    assert assistant_history_text(bodies[2]["input"]) == "Hello world."
     events = parse_sse_text(raw)
     assert events[-1].event == "response.completed"
     assert response_text(events[-1]) == "Hello world. Finished."

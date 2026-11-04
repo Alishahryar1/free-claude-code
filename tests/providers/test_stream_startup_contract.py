@@ -19,7 +19,7 @@ class RecordingChatBehavior(OpenAIChatBehavior):
     def __init__(self) -> None:
         super().__init__(
             OpenAIChatProfile(
-                OpenAIChatRequestPolicy("TEST", ReasoningReplayMode.DISABLED),
+                OpenAIChatRequestPolicy("TEST", ReasoningReplayMode.REASONING_CONTENT),
                 NO_REASONING,
             )
         )

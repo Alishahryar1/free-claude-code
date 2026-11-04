@@ -24,6 +24,7 @@ from free_claude_code.providers.admission import (
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.endpoint_types import EndpointContext
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.model_listing import (
     extract_openai_model_infos,
     merge_model_list_pages,
@@ -47,13 +48,14 @@ class OpenAIChatProvider(BaseProvider):
         profile: OpenAIChatProfile | None = None,
         behavior: OpenAIChatBehavior | None = None,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         default_headers: Mapping[str, str] | None = None,
         api_key_provider: OpenAIAsyncCredentialProvider | None = None,
         client: AsyncOpenAI | None = None,
         endpoint_transport: httpx2.AsyncBaseTransport | None = None,
         validate_prepared_body: PreparedBodyValidator | None = None,
     ) -> None:
-        super().__init__(config)
+        super().__init__(config, history_cache=history_cache)
         if behavior is None:
             if profile is None:
                 raise ValueError("A Chat profile or behavior is required")
@@ -77,6 +79,7 @@ class OpenAIChatProvider(BaseProvider):
         self._chat = OpenAIChatTransport(
             client=self._client,
             admission=admission,
+            history_cache=self._history_cache,
             behavior=behavior,
             read_timeout_s=config.http_read_timeout,
             log_raw_sse_events=config.log_raw_sse_events,

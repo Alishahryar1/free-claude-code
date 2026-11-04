@@ -1,7 +1,7 @@
 """Map continuation events into an existing public response lifecycle."""
 
 from copy import deepcopy
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4, uuid5
 
 from .continuation_overlap import ContinuationOverlap
@@ -12,6 +12,7 @@ from .delivered_response import (
 )
 from .failures import ExecutionFailure, FailureKind
 from .gemini.response import gemini_finished
+from .readable_replay import ReasoningKey
 
 
 class ContinuationStream:
@@ -24,8 +25,8 @@ class ContinuationStream:
         self._offset = 0
         self._namespace = uuid4()
         self._boundary: list[dict[str, Any]] = []
-        self._expected = ""
-        self._overlap = ContinuationOverlap("")
+        self._expected: dict[Literal["text", "thinking", "summary"], str] = {}
+        self._overlaps: list[ContinuationOverlap] = []
         self._initial_progress = 0
         self._prefix_items: list[dict[str, Any]] = []
 
@@ -33,12 +34,46 @@ class ContinuationStream:
     def made_progress(self) -> bool:
         return self.delivered.progress > self._initial_progress
 
+    def retained_reasoning(self, key: ReasoningKey) -> tuple[int, int] | None:
+        if self.handoff:
+            return None
+        if self.delivered.wire_api == "gemini":
+            length = len(self.delivered.snapshot().thinking)
+            return (
+                (
+                    self._overlaps[1].removed_prefix(("gemini", 0)),
+                    length - len(self._expected["thinking"]),
+                )
+                if self.active
+                else (0, length)
+            )
+        index, channel = (key, "thinking") if isinstance(key, int) else key
+        item = self.delivered.items.get(
+            index + (self._offset if self.active else 0), {}
+        )
+        if self.delivered.wire_api == "responses":
+            field = "summary" if channel == "summary" else "content"
+            length = sum(len(part.get("text", "")) for part in item.get(field) or [])
+        else:
+            length = len(item.get("thinking", ""))
+        removed = (
+            self._overlaps[2 if channel == "summary" else 1].removed_prefix((index, 0))
+            if self.active
+            else 0
+        )
+        return removed, length
+
     def begin(self, *, handoff: bool) -> None:
         self.active = True
         self.handoff = handoff
         self._offset = max(self.delivered.items, default=-1) + 1
         self._boundary = self.delivered.closing_events()
-        self._expected = self.delivered.snapshot().text
+        prefix = self.delivered.snapshot().continuation
+        assert prefix is not None
+        self._expected = {
+            channel: prefix.readable_text(channel)
+            for channel in ("text", "thinking", "summary")
+        }
         self.restart_attempt()
         finalized = deepcopy(self.delivered.items)
         for event in self._boundary:
@@ -49,7 +84,10 @@ class ContinuationStream:
     def restart_attempt(self) -> None:
         """Replace an invisible attempt without losing its finalized prefix."""
         self._namespace = uuid4()
-        self._overlap = ContinuationOverlap(self._expected)
+        self._overlaps = [
+            ContinuationOverlap(expected, channel=channel)
+            for channel, expected in self._expected.items()
+        ]
         self._initial_progress = self.delivered.progress
 
     def boundary(self) -> list[dict[str, Any]]:
@@ -86,7 +124,10 @@ class ContinuationStream:
             "response.in_progress",
         }:
             return []
-        events = [deepcopy(payload)] if self.handoff else self._overlap.feed(payload)
+        events = [deepcopy(payload)]
+        if not self.handoff:
+            for overlap in self._overlaps:
+                events = [ready for event in events for ready in overlap.feed(event)]
         return [self._map(event) for event in events]
 
     def _map(self, data: dict[str, Any]) -> dict[str, Any]:

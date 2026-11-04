@@ -22,7 +22,11 @@ from tests.api.test_response_streams import _serve
 from tests.api.test_tool_call_buffer import _response
 from tests.api.test_tool_call_buffer_transports import _tools
 from tests.application.test_execution import _routed_request, _target
-from tests.providers.support import make_provider_config
+from tests.providers.support import (
+    assistant_history_text,
+    make_provider_config,
+    without_empty_reasoning,
+)
 from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
 
@@ -35,8 +39,9 @@ def release_provider_events(monkeypatch):
     )
 
 
-async def delivered_candidates(senders, wire, *, tools=None):
-    history = [{"role": "user", "content": "greet"}]
+async def delivered_candidates(senders, wire, *, tools=None, history=None):
+    if history is None:
+        history = [{"role": "user", "content": "greet"}]
 
     async def open_candidate(index, candidate, continuation=None):
         return senders[index](
@@ -71,6 +76,61 @@ async def delivered_candidates(senders, wire, *, tools=None):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize(
+    "case",
+    ["full", "summary", "summary_empty_text", "text_empty_part", "summary_whitespace"],
+)
+async def test_messages_fallback_accepts_partial_output_slots(wire, case):
+    prefix = (
+        "Half"
+        if case == "text_empty_part"
+        else "   "
+        if case == "summary_whitespace"
+        else ""
+    )
+    if case == "text_empty_part":
+        first = text_events("responses", prefix, complete=False)
+        first.append({**first[2], "content_index": 1})
+    else:
+        first = reasoning_events(
+            field="content" if case == "full" else "summary", closed=False
+        )
+        if case in {"summary_empty_text", "summary_whitespace"}:
+            tail = text_events("responses", prefix, complete=False)[1:]
+            for event in tail:
+                event["output_index"] = 1
+            first.extend(tail)
+    first = [{**event, "sequence_number": index} for index, event in enumerate(first)]
+    async with (
+        _harness("responses", lambda _: (200, first), max_attempts=1) as (
+            primary,
+            _,
+            _,
+        ),
+        _harness(
+            "messages",
+            lambda _: (200, text_events("messages", "Recovered.")),
+            max_attempts=1,
+        ) as (fallback, bodies, _),
+    ):
+        raw = await delivered_candidates([primary, fallback], wire)
+    events = parse_sse_text(raw)
+    assert len(bodies) == 1
+    assert_completed(events, wire)
+    assert public_text(events, wire) == prefix + "Recovered."
+    for message in bodies[0]["messages"]:
+        if message.get("role") == "assistant":
+            assert all(
+                block.get("text") != ""
+                for block in message["content"]
+                if block.get("type") == "text"
+            )
+    if wire == "responses" and case != "full":
+        assert "Find 17." not in str(bodies[0]["messages"])
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("target", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
@@ -98,9 +158,10 @@ async def test_exhausted_model_continues_on_next_candidate(source, target, wire)
     assert_completed(events, wire)
     assert public_text(events, wire) == "Hello there. Done."
     body = second_bodies[0]
-    history = body.get("messages", body.get("input"))
-    assert len(history) == 3
-    assert "Hello there. " in str(history[-2])
+    history = without_empty_reasoning(body.get("messages", body.get("input")))
+    assert history[0]["role"] == "user" and "greet" in str(history[0]["content"])
+    assert assistant_history_text(history) == "Hello there. "
+    assert sum(row.get("role") == "user" for row in history) == 2
     assert body["tools"]
     if wire == "responses":
         assert (
@@ -136,7 +197,10 @@ async def test_fallback_preserves_readable_reasoning_without_a_heading(target, w
     history = bodies[0].get("messages", bodies[0].get("input"))
     content = history[-1]["content"]
     instruction = content if isinstance(content, str) else content[0]["text"]
-    assert instruction.split("\n\n", 1)[0] == "Find 17."
+    assert "Find 17." not in instruction
+    assert ("Find 17." in str(history[:-1])) is not (
+        wire == "responses" and target == "messages"
+    )
     events = parse_sse_text(raw)
     assert_completed(events, wire)
     assert public_text(events, wire) == "Hello world."
@@ -199,9 +263,9 @@ async def test_each_model_receives_the_latest_prefix_and_its_own_budget(wire):
         (second_bodies[1], "One two "),
         (third_bodies[0], "One two three "),
     ]:
-        history = body.get("messages", body.get("input"))
-        assert len(history) == 3
-        assert expected in str(history[-2])
+        history = without_empty_reasoning(body.get("messages", body.get("input")))
+        assert sum(row.get("role") == "user" for row in history) == 2
+        assert assistant_history_text(history) == expected
     events = parse_sse_text(raw)
     assert_completed(events, wire)
     assert public_text(events, wire) == "One two three four."
@@ -244,7 +308,11 @@ async def test_permanent_rejection_advances_without_erasing_incoming_prefix(
         ) as (third, third_bodies, _),
     ):
         raw = await delivered_candidates([first, second, third], wire)
-    assert [len(first_bodies), len(second_bodies), len(third_bodies)] == [1, 1, 1]
+    assert [len(first_bodies), len(second_bodies), len(third_bodies)] == [
+        1,
+        2 if status == 400 else 1,
+        1,
+    ]
     assert "Hello " in str(third_bodies[0]["messages"][-2])
     assert_completed(parse_sse_text(raw), wire)
     assert public_text(parse_sse_text(raw), wire) == "Hello world."

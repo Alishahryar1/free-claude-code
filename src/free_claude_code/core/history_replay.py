@@ -21,12 +21,17 @@ class HistoryReplayError(ValueError):
     """A persisted replay record cannot be safely decoded or projected."""
 
 
-class HistoryScope(StrEnum):
-    """Documented readable reasoning reuse, separate from its wire encoding."""
+class HistoryMode(StrEnum):
+    """Acceptance-tested retention of independently editable reasoning."""
 
-    UNKNOWN = "unknown"
-    TOOL_CONTINUATION = "tool_continuation"
     ALL = "all"
+    CURRENT = "current"
+    NONE = "none"
+
+    def includes(self, index: int, last_user: int) -> bool:
+        return self is HistoryMode.ALL or (
+            self is HistoryMode.CURRENT and index > last_user
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,7 +284,7 @@ def readable_reasoning(item: Mapping[str, JsonValue]) -> list[tuple[str, bool]]:
                 for part in parts
                 if isinstance(part, dict) and isinstance(part.get("text"), str)
             )
-            if text and text not in {value for value, _ in fields}:
+            if text:
                 fields.append((text, key == "summary"))
     if fields:
         return fields
@@ -327,15 +332,15 @@ def has_readable_replay(value: object) -> bool:
     )
 
 
-def unencrypted_responses_replay(value: object) -> ReplayRecord | None:
-    """Identify local Responses carriers without native encrypted reasoning."""
+def unprotected_replay(value: object) -> ReplayRecord | None:
+    """Identify local carriers whose native records contain editable reasoning."""
     if not isinstance(value, str) or not is_replay(value):
         return None
     try:
         record = decode_replay(value)
     except HistoryReplayError:
         return None
-    if record.origin.protocol != "responses" or record.native.get("encrypted_content"):
+    if protected_reasoning(record.native):
         return None
     return record
 
@@ -427,103 +432,121 @@ def responses_reasoning_blocks(item: Mapping[str, JsonValue]) -> list[JsonValue]
         if record is not None and readable_reasoning(record.native):
             return blocks
     blocks.extend(
-        {"type": "text", "text": text} for text, _ in readable_reasoning(item)
+        {"type": "thinking", "thinking": text}
+        for text, summary in readable_reasoning(item)
+        if not summary
     )
     return blocks
+
+
+type HistoryPath = tuple[str | int, ...]
+
+
+def protected_reasoning(item: Mapping[str, JsonValue]) -> bool:
+    """Local carriers do not turn unsigned readable data into protected state."""
+    record = _record(item, "encrypted_content", "signature", "data")
+    if record is not None:
+        return protected_reasoning(record.native)
+    if item.get("encrypted_content") or item.get("signature"):
+        return True
+    if item.get("type") in {"redacted_thinking", "reasoning.encrypted"} and item.get(
+        "data"
+    ):
+        return True
+    if item.get("extra_content"):
+        return True
+    details = item.get("reasoning_details")
+    return isinstance(details, list) and any(
+        isinstance(detail, dict) and protected_reasoning(detail) for detail in details
+    )
+
+
+def normalize_history_source(
+    body: Mapping[str, JsonValue], protocol: HistoryProtocol
+) -> JsonObject:
+    """Own the input shape used by both projection paths and corrections."""
+    result = deepcopy(dict(body))
+    if protocol == "responses" and isinstance(result.get("input"), dict):
+        result["input"] = [result["input"]]
+    return result
 
 
 def prepare_history(
     body: Mapping[str, JsonValue],
     destination: ReplayOrigin,
     *,
-    scope: HistoryScope = HistoryScope.TOOL_CONTINUATION,
+    scope: HistoryMode = HistoryMode.ALL,
     reasoning_field: str = "reasoning_content",
     structured_details: bool = True,
+    source_paths: dict[HistoryPath, HistoryPath] | None = None,
+    continuation: bool = False,
 ) -> JsonObject:
-    """Project a fresh wire copy. The caller's native transcript stays intact."""
-    result = deepcopy(dict(body))
+    """Restore native records and project readable history on a fresh wire copy.
+
+    Source paths identify original records for precise corrections after filtering.
+    They are request-local metadata, never fields in the outgoing JSON.
+    """
+    result = normalize_history_source(body, destination.protocol)
+    paths = source_paths if source_paths is not None else {}
+    paths.clear()
     if destination.protocol == "responses":
-        items = result.get("input")
-        if isinstance(items, dict):
-            items = [items]
-        if not isinstance(items, list):
-            return result
-        projected: list[JsonValue] = []
-        for item in items:
-            if not isinstance(item, dict) or item.get("type") != "reasoning":
-                projected.append(item)
-                continue
-            record = _record(item, "encrypted_content")
-            if record is not None and destination.accepts(record.origin):
-                projected.append(record.native)
-                if not readable_reasoning(record.native):
-                    projected.extend(
-                        _context_item(text) for text, _ in readable_reasoning(item)
-                    )
-                continue
-            if record is None and item.get("encrypted_content"):
-                projected.append(
-                    item
-                )  # Older history: try native before precise recovery.
-                continue
-            for text, _ in _replay_readable(item, record):
-                projected.append(_context_item(text))
-        result["input"] = projected
+        _prepare_response_history(result, destination, scope, paths, continuation)
         return result
     messages = result.get("messages")
     if not isinstance(messages, list):
         return result
-    last_user = max(
-        (
-            index
-            for index, msg in enumerate(messages)
-            if isinstance(msg, dict)
-            and msg.get("role") == "user"
-            and not _tool_result_message(msg)
-        ),
-        default=-1,
-    )
+    last_user = _last_user(messages[:-1] if continuation else messages)
+    projected: list[JsonValue] = []
     for index, message in enumerate(messages):
+        output_index = len(projected)
+        source_path = ("messages", index)
+        output_path = ("messages", output_index)
         if not isinstance(message, dict) or message.get("role") != "assistant":
+            projected.append(message)
+            paths[output_path] = source_path
             continue
+        include = scope.includes(index, last_user)
         if destination.protocol == "messages":
-            _prepare_messages_content(message, destination)
+            _prepare_messages_content(
+                message, destination, include, output_path, source_path, paths
+            )
         else:
             _prepare_chat_content(
                 message,
                 destination,
-                native_text=scope == HistoryScope.ALL
-                or (
-                    scope == HistoryScope.TOOL_CONTINUATION
-                    and index > last_user
-                    and any(
-                        isinstance(later, dict) and later.get("role") == "tool"
-                        for later in messages[index + 1 :]
-                    )
-                ),
-                reasoning_field=reasoning_field,
-                structured_details=structured_details,
+                include,
+                reasoning_field,
+                structured_details,
+                output_path,
+                source_path,
+                paths,
             )
-    result["messages"] = [
-        message
-        for message in messages
-        if not (
-            isinstance(message, dict)
-            and message.get("role") == "assistant"
-            and message.get("content") == []
+        if (
+            message.get("content") == []
             and not any(
                 message.get(key)
-                for key in (
-                    "tool_calls",
-                    "reasoning_details",
-                    "reasoning_content",
-                    "reasoning",
-                    "extra_content",
-                )
+                for key in ("tool_calls", "reasoning_details", "extra_content")
             )
-        )
-    ]
+            and not any(key in message for key in ("reasoning_content", "reasoning"))
+        ):
+            continue
+        paths[output_path] = source_path
+        projected.append(message)
+    result["messages"] = projected
     return result
+
+
+def _last_user(messages: Sequence[JsonValue]) -> int:
+    return max(
+        (
+            index
+            for index, message in enumerate(messages)
+            if isinstance(message, dict)
+            and message.get("role") == "user"
+            and not _tool_result_message(message)
+        ),
+        default=-1,
+    )
 
 
 def _tool_result_message(message: JsonObject) -> bool:
@@ -540,35 +563,169 @@ def _tool_result_message(message: JsonObject) -> bool:
     )
 
 
-def _prepare_messages_content(message: JsonObject, destination: ReplayOrigin) -> None:
+def _unsigned_response(parts: list[tuple[str, bool]]) -> JsonObject:
+    return {
+        "type": "reasoning",
+        "content": [
+            {"type": "reasoning_text", "text": text}
+            for text, summary in parts
+            if not summary
+        ],
+        "summary": [
+            {"type": "summary_text", "text": text} for text, summary in parts if summary
+        ],
+    }
+
+
+def _response_assistant(item: JsonValue) -> bool:
+    return isinstance(item, dict) and (
+        item.get("role") == "assistant"
+        or item.get("type") in {"reasoning", "function_call", "custom_tool_call"}
+    )
+
+
+def _prepare_response_history(
+    body: JsonObject,
+    destination: ReplayOrigin,
+    scope: HistoryMode,
+    paths: dict[HistoryPath, HistoryPath],
+    continuation: bool,
+) -> None:
+    items = body.get("input")
+    if isinstance(items, dict):
+        items = [items]
+    if not isinstance(items, list):
+        return
+    last_user = _last_user(items[:-1] if continuation else items)
+    projected: list[JsonValue] = []
+    index = 0
+    while index < len(items):
+        if not _response_assistant(items[index]):
+            paths[("input", len(projected))] = ("input", index)
+            projected.append(items[index])
+            index += 1
+            continue
+        end = index + 1
+        while end < len(items) and _response_assistant(items[end]):
+            end += 1
+        group = items[index:end]
+        has_reasoning = any(
+            isinstance(item, dict) and item.get("type") == "reasoning" for item in group
+        )
+        include = scope.includes(index, last_user)
+        if include and not has_reasoning:
+            projected.append(_unsigned_response([("", False)]))
+        for source_index in range(index, end):
+            item = items[source_index]
+            assert isinstance(item, dict)
+            values: list[JsonValue] = []
+            if item.get("type") != "reasoning":
+                values.append(item)
+            else:
+                record = _record(item, "encrypted_content")
+                protected = protected_reasoning(item)
+                if protected:
+                    # Preserve the pre-existing opaque compatibility contract.
+                    if record is not None and destination.accepts(record.origin):
+                        values.append(record.native)
+                        if not readable_reasoning(record.native):
+                            values.extend(
+                                _context_item(text)
+                                for text, _ in readable_reasoning(item)
+                            )
+                    elif record is None:
+                        values.append(item)
+                    else:
+                        values.extend(
+                            _context_item(text)
+                            for text, _ in _replay_readable(item, record)
+                        )
+                elif include:
+                    if record is None:
+                        values.append(item)
+                    elif record.origin.protocol == "responses":
+                        values.append(record.native)
+                    else:
+                        values.append(
+                            _unsigned_response(readable_reasoning(record.native))
+                        )
+            for value in values:
+                paths[("input", len(projected))] = ("input", source_index)
+                projected.append(value)
+        index = end
+    body["input"] = projected
+
+
+def _prepare_messages_content(
+    message: JsonObject,
+    destination: ReplayOrigin,
+    include: bool,
+    output_path: HistoryPath,
+    source_path: HistoryPath,
+    paths: dict[HistoryPath, HistoryPath],
+) -> None:
     content = message.get("content")
+    if isinstance(content, str):
+        if include:
+            message["content"] = [
+                {"type": "thinking", "thinking": ""},
+                {"type": "text", "text": content},
+            ]
+        return
     if not isinstance(content, list):
         return
     blocks: list[JsonValue] = []
-    for block in content:
+    has_reasoning = False
+    for index, block in enumerate(content):
+        values: list[JsonValue] = []
         if not isinstance(block, dict) or block.get("type") not in {
             "thinking",
             "redacted_thinking",
         }:
-            blocks.append(block)
-            continue
-        record = _record(block, "signature", "data")
-        if record is not None and destination.accepts(record.origin):
-            blocks.append(record.native)
-            if not readable_reasoning(record.native):
-                blocks.extend(
-                    {"type": "text", "text": text}
-                    for text, _ in readable_reasoning(block)
-                )
-        elif record is None and (block.get("signature") or block.get("data")):
-            blocks.append(block)
+            values.append(block)
         else:
-            for text, _ in _replay_readable(block, record):
-                blocks.append({"type": "text", "text": text})
+            record = _record(block, "signature", "data")
+            if protected_reasoning(block):
+                has_reasoning = True
+                if record is not None and destination.accepts(record.origin):
+                    values.append(record.native)
+                    if not readable_reasoning(record.native):
+                        values.extend(
+                            {"type": "text", "text": text}
+                            for text, _ in readable_reasoning(block)
+                        )
+                elif record is None:
+                    values.append(block)
+                else:
+                    values.extend(
+                        {"type": "text", "text": text}
+                        for text, _ in _replay_readable(block, record)
+                    )
+            elif include:
+                if record is None and block.get("type") == "thinking":
+                    values.append(block)
+                else:
+                    values.extend(
+                        {"type": "thinking", "thinking": text}
+                        for text, summary in _replay_readable(block, record)
+                        if not summary
+                    )
+                has_reasoning |= bool(values)
+        for value in values:
+            paths[(*output_path, "content", len(blocks))] = (
+                *source_path,
+                "content",
+                index,
+            )
+            blocks.append(value)
+    if include and not has_reasoning:
+        # Append so existing block paths are stable. No fabricated signature.
+        blocks.append({"type": "thinking", "thinking": ""})
     message["content"] = blocks
 
 
 def _append_context(message: JsonObject, text: str) -> None:
+    """Legacy fallback only for protected foreign native state."""
     if not text:
         return
     content = message.get("content")
@@ -585,69 +742,106 @@ def _append_context(message: JsonObject, text: str) -> None:
 def _prepare_chat_content(
     message: JsonObject,
     destination: ReplayOrigin,
-    *,
-    native_text: bool,
+    include: bool,
     reasoning_field: str,
     structured_details: bool,
+    output_path: HistoryPath,
+    source_path: HistoryPath,
+    paths: dict[HistoryPath, HistoryPath],
 ) -> None:
-    had_reasoning_content = "reasoning_content" in message
-    details = message.get("reasoning_details")
+    scalar = [
+        text
+        for key in ("reasoning_content", "reasoning")
+        if isinstance(text := message.pop(key, None), str)
+    ]
+    details = message.pop("reasoning_details", None)
     restored: list[JsonValue] = []
-    original_reasoning = message.get("reasoning_content", message.get("reasoning"))
+    full: list[str] = []
+    represented: set[str] = set()
+    native_full: list[str] = []
     if isinstance(details, list):
-        for detail in details:
+        for index, detail in enumerate(details):
             if not isinstance(detail, dict):
                 continue
             record = _record(detail, "data", "signature")
+            native = record.native if record else {"reasoning_details": [detail]}
+            parts = readable_reasoning(native)
+            if record is None:
+                native_full.extend(text for text, summary in parts if not summary)
+            protected = protected_reasoning(detail)
+            if protected:
+                represented.update(text for text, _ in parts)
+                represented.update(
+                    (
+                        "".join(text for text, _ in parts),
+                        "\n\n".join(text for text, _ in parts),
+                    )
+                )
             if record is not None and destination.accepts(record.origin):
                 extra = record.native.get("extra_content")
                 if isinstance(extra, dict):
                     message["extra_content"] = deepcopy(extra)
-            if record is None and structured_details:
-                restored.append(detail)
-                continue
-            elif (
-                record is not None
-                and destination.accepts(record.origin)
-                and structured_details
-            ):
-                native = record.native.get("reasoning_details")
-                if isinstance(native, list):
-                    restored.extend(native)
-                parts = readable_reasoning(record.native)
-                native_parts = readable_reasoning({"reasoning_details": native})
-                parts = [part for part in parts if part not in native_parts]
-            else:
-                parts = readable_reasoning(
-                    record.native if record else {"reasoning_details": [detail]}
-                )
-            for text, summary in parts:
-                existing = message.get("reasoning_content", message.get("reasoning"))
-                if text != original_reasoning:
-                    if (
-                        native_text
-                        and not summary
-                        and reasoning_field in {"reasoning_content", "reasoning"}
-                    ):
-                        message[reasoning_field] = (
-                            f"{existing}\n{text}"
-                            if isinstance(existing, str) and existing
-                            else text
-                        )
-                    else:
+            values: list[JsonValue] = []
+            if protected:
+                if structured_details and (
+                    record is None or destination.accepts(record.origin)
+                ):
+                    native_details = native.get("reasoning_details")
+                    if isinstance(native_details, list):
+                        values.extend(native_details)
+                    native_parts = readable_reasoning(
+                        {"reasoning_details": native_details}
+                    )
+                    for text, summary in parts:
+                        if (text, summary) not in native_parts:
+                            if summary:
+                                _append_context(message, text)
+                            else:
+                                full.append(text)
+                else:
+                    # Native foreign reasoning retains its existing fallback.
+                    for text, _ in parts:
                         _append_context(message, text)
+            elif include:
+                if structured_details:
+                    native_details = native.get("reasoning_details")
+                    if isinstance(native_details, list):
+                        values.extend(native_details)
+                    else:
+                        values.extend(
+                            {"type": "reasoning.summary", "summary": text}
+                            for text, summary in parts
+                            if summary
+                        )
+                    encoded = readable_reasoning({"reasoning_details": values})
+                    full.extend(
+                        text
+                        for text, summary in parts
+                        if not summary and (text, summary) not in encoded
+                    )
+                else:
+                    full.extend(text for text, summary in parts if not summary)
+            for value in values:
+                paths[(*output_path, "reasoning_details", len(restored))] = (
+                    *source_path,
+                    "reasoning_details",
+                    index,
+                )
+                restored.append(value)
+    if include:
+        # Raw Chat details and scalar fields are alternate forms of this message.
+        # A replay carrier may instead represent an independent source record.
+        represented.update(native_full)
+        represented.update(
+            separator.join(native_full) for separator in ("", "\n", "\n\n")
+        )
+        full = [
+            *dict.fromkeys(text for text in scalar if text and text not in represented),
+            *full,
+        ]
     if restored:
         message["reasoning_details"] = restored
-    else:
-        message.pop("reasoning_details", None)
-    if not native_text:
-        for key in ("reasoning_content", "reasoning"):
-            text = message.pop(key, None)
-            if isinstance(text, str) and text:
-                _append_context(message, text)
-    if (
-        had_reasoning_content
-        and reasoning_field == "reasoning_content"
-        and message.get("tool_calls")
+    if full or (
+        include and ("" in scalar or not (restored or message.get("extra_content")))
     ):
-        message.setdefault("reasoning_content", "")
+        message[reasoning_field] = "\n".join(full)

@@ -19,7 +19,7 @@ async def test_workspace_replacement_retires_http_and_capabilities_with_lease():
     owners = []
     requests = []
 
-    def factory(settings, registry):
+    def factory(settings, registry, history_cache=None):
         def handle(request):
             requests.append(request)
             if settings.anthropic_workspace_id == "new":
@@ -38,7 +38,7 @@ async def test_workspace_replacement_retires_http_and_capabilities_with_lease():
             transport=httpx.MockTransport(handle),
         )
         owners.append(owner)
-        return ProviderRuntime(settings, registry, {("anthropic", 1): owner})
+        return ProviderRuntime(settings, registry, None, {("anthropic", 1): owner})
 
     async def commit():
         return None

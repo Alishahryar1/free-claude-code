@@ -489,7 +489,7 @@ const CUSTOM_LABELS = {
 async function openCustomProviderDialog(providerId = null) {
   if (!await refreshProviderConfig()) return;
   const provider = state.config.custom_providers.find((item) => item.provider_id === providerId) || {
-    display_name: "", base_url: "", api_keys: { revision: null, entries: [] }, api_format: "openai_chat", reasoning_format: "provider_default", reasoning_history_format: "disabled", model_ids: [],
+    display_name: "", base_url: "", api_keys: { revision: null, entries: [] }, api_format: "openai_chat", reasoning_format: "provider_default", reasoning_history_format: "reasoning_content", model_ids: [],
   };
   state.providerId = providerId || "__custom_new__";
   state.customProvider = provider;
@@ -506,12 +506,12 @@ async function openCustomProviderDialog(providerId = null) {
     ["api_keys", "API keys", "api_key_list", [], "Key 1 is used. Leave the list empty for endpoints that do not require a key."],
     ["api_format", "API format", "select", [["openai_chat", "Chat Completions"], ["openai_responses", "Responses"], ["anthropic_messages", "Anthropic Messages"]], "Select the API exposed by your endpoint."],
     ["reasoning_format", "Reasoning format", "select", formats.map((value) => [value, CUSTOM_LABELS[value]]), "How FCC sends reasoning controls. Provider default leaves computation to the upstream."],
-    ["reasoning_history_format", "Reasoning history format", "select", [["disabled", "Text context"], ["reasoning_content", "reasoning_content"], ["reasoning", "reasoning"], ["think_tags", "Think tags"]], "How previous reasoning is sent to a Chat Completions endpoint."],
+    ["reasoning_history_format", "Reasoning history format", "select", [["reasoning_content", "reasoning_content"], ["reasoning", "reasoning"]], "How previous reasoning is sent to a Chat Completions endpoint."],
     ["model_ids", "Model IDs", "textarea", [], "Optional, one upstream model ID per line. Leave empty to discover models automatically."],
   ];
   for (const [key, label, type, options, description] of definitions) {
     fields.appendChild(renderField({ key, label, type, options: options.map(([value, label]) => ({value, label})), description,
-      value: key === "model_ids" ? provider.model_ids.join("\n") : provider[key], nullable: key === "api_keys", secret: key === "api_keys",
+      value: key === "model_ids" ? provider.model_ids.join("\n") : key === "reasoning_history_format" && provider.api_format !== "openai_chat" ? "reasoning_content" : provider[key], nullable: key === "api_keys", secret: key === "api_keys",
       configured: key === "api_keys" && !!provider.api_keys?.entries.length, locked: !!state.config.custom_providers_locked, source: state.config.custom_providers_locked ? "process" : "managed_env" }));
   }
   const format = byId("field-api_format");
@@ -524,7 +524,6 @@ async function openCustomProviderDialog(providerId = null) {
     reasoning.replaceChildren(...allowed.map((value) => option(value, CUSTOM_LABELS[value])));
     reasoning.value = allowed.includes(previous) ? previous : "provider_default";
     history.closest(".field").hidden = format.value !== "openai_chat";
-    if (format.value !== "openai_chat") history.value = "disabled";
     updateDirtyState();
   });
   const actions = byId("providerDialogActions");
@@ -1594,6 +1593,9 @@ async function apply(providerId = null, customAction = null) {
   }
   let mutation = null;
   if (custom) {
+    const selectedFormat = values.api_format || custom.api_format;
+    if (selectedFormat !== "openai_chat") values.reasoning_history_format = "disabled";
+    else if ("api_format" in values) values.reasoning_history_format = byId("field-reasoning_history_format").value;
     if ("model_ids" in values) values.model_ids = values.model_ids.split(/\r?\n/).map((id) => id.trim()).filter(Boolean);
     mutation = { action, values: action === "delete" ? {} : values };
     if (custom.provider_id) mutation.provider_id = custom.provider_id;

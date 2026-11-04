@@ -61,7 +61,7 @@ class _UsageTestProvider(OpenAIChatProvider):
                 OpenAIChatProfile(
                     OpenAIChatRequestPolicy(
                         provider_name="USAGE_TEST",
-                        reasoning_replay=ReasoningReplayMode.DISABLED,
+                        reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
                     ),
                     NO_REASONING,
                 )

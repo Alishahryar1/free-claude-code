@@ -289,7 +289,11 @@ def admin_base_url(
     }
 
     async def fixture_provider(
-        provider_id: str, _settings: Settings, _admission_registry, _api_key_number
+        provider_id: str,
+        _settings: Settings,
+        _admission_registry,
+        _api_key_number,
+        _history_cache=None,
     ) -> BaseProvider:
         if provider_id not in providers:
             raise AssertionError(f"Missing browser fixture provider: {provider_id}")
@@ -297,11 +301,17 @@ def admin_base_url(
 
     manager = ProviderRuntimeManager(
         get_settings(),
-        runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
-            snapshot,
-            admission_registry,
-            {(provider_id, 1): provider for provider_id, provider in providers.items()},
-            provider_constructor=fixture_provider,
+        runtime_factory=lambda snapshot, admission_registry, history_cache=None: (
+            ProviderRuntime(
+                snapshot,
+                admission_registry,
+                None,
+                {
+                    (provider_id, 1): provider
+                    for provider_id, provider in providers.items()
+                },
+                provider_constructor=fixture_provider,
+            )
         ),
     )
     runtime = ApplicationRuntime(

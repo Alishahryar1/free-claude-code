@@ -23,7 +23,11 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatRequestPolicy,
 )
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    without_empty_reasoning,
+)
 
 
 def _messages_request() -> MessagesRequest:
@@ -278,7 +282,7 @@ async def test_chat_upstream_accepts_both_ingress_protocols_directly() -> None:
             profile=OpenAIChatProfile(
                 OpenAIChatRequestPolicy(
                     provider_name="MATRIX_CHAT",
-                    reasoning_replay=ReasoningReplayMode.DISABLED,
+                    reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
                 ),
                 NO_REASONING,
             ),
@@ -419,7 +423,7 @@ async def test_image_tool_output_remains_visual_across_all_protocol_cells() -> N
             profile=OpenAIChatProfile(
                 OpenAIChatRequestPolicy(
                     provider_name="MATRIX_CHAT",
-                    reasoning_replay=ReasoningReplayMode.DISABLED,
+                    reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
                 ),
                 NO_REASONING,
             ),
@@ -491,7 +495,7 @@ async def test_image_tool_output_remains_visual_across_all_protocol_cells() -> N
             for part in message["content"]
         )
 
-    assert messages_responses["input"][1] == {
+    assert without_empty_reasoning(messages_responses["input"])[1] == {
         "type": "function_call_output",
         "call_id": "call_image",
         "output": [
@@ -499,4 +503,7 @@ async def test_image_tool_output_remains_visual_across_all_protocol_cells() -> N
             {"type": "input_image", "image_url": image_url},
         ],
     }
-    assert responses_responses["input"] == _image_responses_request().input
+    assert (
+        without_empty_reasoning(responses_responses["input"])
+        == _image_responses_request().input
+    )

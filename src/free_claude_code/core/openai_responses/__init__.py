@@ -19,7 +19,11 @@ from .ids import (
     new_reasoning_item_id,
     new_response_id,
 )
-from .messages_request import ResponsesMessagesRequest, build_responses_messages_request
+from .messages_request import (
+    ResponsesMessagesRequest,
+    build_responses_messages_request,
+    build_responses_messages_suffix,
+)
 from .messages_stream import AnthropicToResponsesStream
 from .models import OpenAIResponsesRequest
 from .native import NativeResponsesRelay, build_native_responses_request
@@ -73,6 +77,7 @@ __all__ = [
     "build_native_responses_request",
     "build_responses_chat_request",
     "build_responses_messages_request",
+    "build_responses_messages_suffix",
     "build_responses_provider_request",
     "committed_response_failure_frame",
     "estimate_responses_input_tokens",

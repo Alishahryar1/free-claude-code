@@ -18,6 +18,7 @@ from free_claude_code.providers.admission import (
 from tests.api.support import create_test_app, provider_manager_for_app
 from tests.api.test_native_token_count import count_body
 from tests.api.test_request_lifetime import _http_scope
+from tests.providers.support import without_empty_reasoning
 from tests.providers.test_anthropic_messages_transport import Wire, _events, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 
@@ -172,7 +173,7 @@ async def test_leading_ping_timeout_or_disconnect_releases_all_resources(disconn
                 sent.append(message)
 
             await asyncio.wait_for(app(scope, receive, send), 2)
-            assert sent == []
+            assert without_empty_reasoning(sent) == []
         else:
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app), base_url="http://test"
@@ -279,7 +280,7 @@ def test_count_generate_and_continue_native_tool_history_with_recovery():
     assert continued.status_code == 200, continued.text
     assert continued.json()["content"] == [result_block]
     assert continued.json()["model"] == body["model"]
-    assert sent == [
+    assert without_empty_reasoning(sent) == [
         {**body, "model": "primary"},
         {**body, "model": "primary"},
         {**continuation, "model": "primary"},

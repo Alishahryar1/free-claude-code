@@ -339,12 +339,13 @@ def _content(value: JsonValue, *, images: bool, empty: bool = False) -> list[Jso
 
 
 class _MessagesInput:
-    def __init__(self, tools: _ToolScope) -> None:
+    def __init__(self, tools: _ToolScope, *, assistant_fragment: bool = False) -> None:
         self.messages: list[JsonObject] = []
         self.system: list[JsonValue] = []
         self._tools = tools
         self._calls: dict[str, Literal["function", "custom"]] = {}
         self._pending: set[str] = set()
+        self._assistant_fragment = assistant_fragment
 
     def _append(
         self,
@@ -353,6 +354,8 @@ class _MessagesInput:
         *,
         result: bool = False,
     ) -> None:
+        if self._assistant_fragment and role == "assistant" and not parts:
+            return
         if (
             self._pending
             and not result
@@ -394,7 +397,11 @@ class _MessagesInput:
             elif role in ("user", "assistant"):
                 self._append(
                     "user" if role == "user" else "assistant",
-                    _content(value.get("content"), images=role == "user"),
+                    _content(
+                        value.get("content"),
+                        images=role == "user",
+                        empty=self._assistant_fragment and role == "assistant",
+                    ),
                 )
             else:
                 raise ResponsesConversionError("Unsupported Responses message role.")
@@ -498,10 +505,19 @@ class _MessagesInput:
             raise ResponsesConversionError(
                 "Responses history has unresolved tool calls."
             )
-        if not self.messages:
-            raise ResponsesConversionError(
-                "Messages upstream requires conversational input."
-            )
+
+
+def build_responses_messages_suffix(items: list[JsonValue]) -> list[JsonObject]:
+    """Convert delivered assistant fragments, which may contain only a summary."""
+    builder = _MessagesInput(_ToolScope(None, items), assistant_fragment=True)
+    for item in items:
+        builder.add(item)
+    builder.finish()
+    try:
+        validate_messages_json({"messages": builder.messages})
+    except NativeMessagesError as exc:
+        raise ResponsesConversionError(str(exc)) from exc
+    return builder.messages
 
 
 def _output_format(value: JsonValue) -> JsonObject | None:
@@ -594,6 +610,10 @@ def build_responses_messages_request(
     for item in items:
         builder.add(item)
     builder.finish()
+    if not builder.messages:
+        raise ResponsesConversionError(
+            "Messages upstream requires conversational input."
+        )
     body: JsonObject = {"messages": builder.messages}
     if builder.system:
         body["system"] = builder.system

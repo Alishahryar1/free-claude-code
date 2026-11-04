@@ -8,8 +8,8 @@ import pytest
 
 from free_claude_code.core.history_replay import (
     AssociatedReplayRecord,
+    HistoryMode,
     HistoryReplayError,
-    HistoryScope,
     ReplayOrigin,
     ReplayRecord,
     decode_replay,
@@ -189,9 +189,12 @@ def test_chat_replay_keeps_full_text_and_summary_meaning(native_text):
     original = deepcopy(body)
     result = cast(
         dict[str, Any],
-        prepare_history(body, _origin("b", "chat"), scope=HistoryScope.ALL),
+        prepare_history(body, _origin("b", "chat"), scope=HistoryMode.ALL),
     )["messages"][0]
-    assert result["content"] == "answer\n\nShort summary."
+    assert result["content"] == "answer"
+    assert result["reasoning_details"] == [
+        {"type": "reasoning.summary", "summary": "Short summary.", "index": 0}
+    ]
     if native_text == "Short summary.":
         assert "reasoning_content" not in result
     else:
@@ -217,7 +220,8 @@ def test_plain_reasoning_context_preserves_original_text_and_history(thinking):
     assert result["messages"] == [
         {
             "role": "assistant",
-            "content": "Answer." + (f"\n\n{thinking}" if thinking else ""),
+            "content": "Answer.",
+            "reasoning_content": thinking,
         },
         {"role": "user", "content": "Continue."},
     ]

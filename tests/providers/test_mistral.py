@@ -10,6 +10,7 @@ from httpx2 import Request, Response
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import MISTRAL_DEFAULT_BASE
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.providers.mistral import MistralProvider
 from tests.providers.request_factory import make_messages_request
@@ -163,6 +164,10 @@ def test_build_request_body_replays_prior_thinking_as_mistral_chunks(
 
     body = mistral_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
 
+    assert body["messages"][0]["reasoning_content"] == "Need the tool."
+    body = mistral_provider._behavior.prepare_history_body(
+        body, ReplayOrigin("MISTRAL", "chat", "", "", "model")
+    )
     assistant = body["messages"][0]
     assert "reasoning_content" not in assistant
     assert assistant["content"] == [
@@ -241,6 +246,10 @@ def test_reasoning_off_keeps_replay_separate_from_new_turn_compute():
     body = provider._chat._build_request_body(req, reasoning=REASONING_OFF)
 
     assert body["reasoning_effort"] == "none"
+    assert body["messages"][0]["reasoning_content"] == "Hidden."
+    body = provider._behavior.prepare_history_body(
+        body, ReplayOrigin("MISTRAL", "chat", "", "", "model")
+    )
     assert body["messages"][0]["content"] == [
         {
             "type": "thinking",
@@ -647,7 +656,7 @@ async def test_stream_messages_retries_without_mistral_reasoning_on_rejection(
     assert first_call["reasoning_effort"] == "high"
     assert first_call["messages"][0]["content"][0]["type"] == "thinking"
     assert "reasoning_effort" not in second_call
-    assert second_call["messages"][0]["content"] == ""
+    assert second_call["messages"] == first_call["messages"]
     assert second_call["messages"][0]["tool_calls"][0]["id"] == "toolu_reasoning"
     assert any("Recovered" in event for event in events)
     assert any("message_stop" in event for event in events)
@@ -713,7 +722,7 @@ async def test_stream_messages_reasoning_retry_preserves_visible_text_and_tools(
         ]
 
     second_call = mock_create.await_args_list[1].kwargs
-    assert second_call["messages"][0]["content"] == "Visible history."
+    assert second_call["messages"] == mock_create.await_args_list[0].kwargs["messages"]
     assert second_call["messages"][0]["tool_calls"][0]["id"] == "toolu_reasoning"
     assert any("Recovered" in event for event in events)
 
@@ -788,16 +797,7 @@ async def test_stream_messages_retries_when_model_disables_reasoning_input(
     async def mock_stream():
         yield mock_chunk
 
-    error = _StatusError(
-        "Reasoning input is not enabled for this model",
-        status_code=400,
-        body={
-            "object": "error",
-            "message": "Reasoning input is not enabled for this model",
-            "type": "invalid_request_invalid_args",
-            "code": "3051",
-        },
-    )
+    error = _make_bad_request_error("Reasoning input is not enabled for this model")
 
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock

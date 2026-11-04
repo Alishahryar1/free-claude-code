@@ -23,7 +23,7 @@ from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.gemini.messages_stream import GeminiMessagesStream
 from free_claude_code.core.gemini.request import build_gemini_messages_request
-from free_claude_code.core.history_replay import ReplayOrigin, prepare_history
+from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import (
     AnthropicToResponsesStream,
@@ -56,6 +56,10 @@ from free_claude_code.providers.failure_policy import (
     RetryableProviderProtocolError,
     classify_provider_failure,
     is_retryable_stream_error,
+)
+from free_claude_code.providers.history_negotiation import (
+    HistoryModeCache,
+    resolve_history_overrides,
 )
 from free_claude_code.providers.history_replay import (
     normalize_messages_history,
@@ -107,6 +111,7 @@ class AnthropicMessagesTransport:
         *,
         client: httpx.AsyncClient,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         provider_name: str,
         replay_scope: str,
         read_timeout_s: float,
@@ -114,6 +119,9 @@ class AnthropicMessagesTransport:
     ) -> None:
         self._client = client
         self._admission = admission
+        self._history_cache = (
+            history_cache if history_cache is not None else HistoryModeCache()
+        )
         self._provider_name = provider_name
         self._replay_scope = replay_scope
         self._read_timeout_s = read_timeout_s
@@ -345,12 +353,7 @@ class AnthropicMessagesTransport:
         continuation_request = ContinuationRequest("messages")
         operation_kind = ProviderOperationKind.GENERATION
         if continuation is not None:
-            body = continuation_request.build(
-                body,
-                continuation.text,
-                continuation.thinking,
-                replay_records=continuation.replay_records,
-            )
+            body = continuation_request.build(body, continuation)
             operation_kind = ProviderOperationKind.CONTINUATION
         source: SourceRecoveryState | None = None
         while execution.can_attempt:
@@ -368,13 +371,19 @@ class AnthropicMessagesTransport:
                     request_id=execution.request_id,
                 )
                 endpoint = await request_endpoint.resolve()
+                body = resolve_history_overrides(body)
                 origin = replay_origin(
                     self._replay_scope,
                     "messages",
                     str(body["model"]),
                     endpoint=endpoint,
                 )
-                sent_body = prepare_history(body, origin)
+                sent_body = corrections.prepare_history(
+                    body,
+                    origin,
+                    self._history_cache,
+                    continuation=operation_kind is ProviderOperationKind.CONTINUATION,
+                )
                 presenter = presenter_factory(origin)
                 headers = httpx.Headers(
                     {
@@ -431,8 +440,10 @@ class AnthropicMessagesTransport:
                                 is ProviderOperationKind.CONTINUATION,
                             )
                             output = presenter.feed(event_type, payload)
-                            if event_type != "ping" and not attempt.accepted:
-                                await attempt.accept()
+                            if event_type != "ping":
+                                corrections.accepted_history()
+                                if not attempt.accepted:
+                                    await attempt.accept()
                             for event in (
                                 (output,) if isinstance(output, str) else output
                             ):

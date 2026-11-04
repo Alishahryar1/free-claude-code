@@ -55,7 +55,11 @@ from free_claude_code.providers.openai_responses.transport import (
     OpenAIResponsesTransport,
 )
 from tests.providers.copilot_support import FakeRuntime, FakeSession
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    continuation_seed,
+    immediate_admission,
+    make_provider_config,
+)
 from tests.providers.test_anthropic_messages_transport import _events as messages_events
 from tests.providers.test_anthropic_messages_transport import _sse as messages_sse
 from tests.providers.test_openai_responses_transport import (
@@ -106,7 +110,7 @@ async def test_conversion_runs_once_under_current_account_lease(
             assert "ok" in await collect(
                 harness.stream(
                     responses,
-                    continuation=ContinuationSeed("Prefix text", "Prior reasoning")
+                    continuation=continuation_seed("Prefix text", "Prior reasoning")
                     if seeded
                     else None,
                 )
@@ -116,7 +120,8 @@ async def test_conversion_runs_once_under_current_account_lease(
             body = json.loads(harness.seen[0].content)
             history = body.get("messages", body.get("input"))
             assert "Prefix text" in str(history[-2])
-            assert "Prior reasoning" in str(history[-1])
+            assert "Prior reasoning" in str(history[:-1])
+            assert "Prior reasoning" not in str(history[-1])
         assert harness.provider._active == 0
     finally:
         await harness.close()

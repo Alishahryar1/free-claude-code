@@ -18,6 +18,7 @@ from free_claude_code.core.reasoning import (
 )
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.openai_chat import (
     NamedEffortReasoning,
     OpenAIChatBehavior,
@@ -40,7 +41,7 @@ _GROQ_EFFORTS = (
 )
 _REQUEST_POLICY = OpenAIChatRequestPolicy(
     provider_name="GROQ",
-    reasoning_replay=ReasoningReplayMode.THINK_TAGS,
+    reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
     include_extra_body=True,
     extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
     max_tokens_field="max_completion_tokens",
@@ -182,9 +183,18 @@ class GroqProvider(OpenAIChatProvider):
     """Groq API with model-agnostic reasoning-vocabulary learning."""
 
     def __init__(
-        self, config: ProviderConfig, *, admission: ProviderAdmissionController
+        self,
+        config: ProviderConfig,
+        *,
+        admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
     ) -> None:
-        super().__init__(config, behavior=GroqChatBehavior(), admission=admission)
+        super().__init__(
+            config,
+            behavior=GroqChatBehavior(),
+            admission=admission,
+            history_cache=history_cache,
+        )
 
 
 def _parse_reasoning_vocabulary(error: Exception) -> frozenset[str] | None:
