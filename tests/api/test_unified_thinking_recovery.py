@@ -4,7 +4,9 @@ from copy import deepcopy
 
 import pytest
 
+from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.history_replay import readable_reasoning
 from tests.api.test_delivered_stream_recovery import (
     assert_completed,
     public_text,
@@ -117,3 +119,74 @@ async def test_repeated_thinking_alone_does_not_complete_a_continuation(wire, fi
     events = parse_sse_text(output)
     assert events[-1].event in {"error", "response.failed"}
     assert "without adding output" in output
+
+
+def completed_thinking_and_text(field, suffix=""):
+    reasoning = reasoning_events(field=field)
+    for event in reasoning:
+        if isinstance(event.get("delta"), str):
+            event["delta"] = "Find 17." + suffix
+        items = (
+            [event["item"]]
+            if "item" in event
+            else event.get("response", {}).get("output", [])
+        )
+        for item in items:
+            for part in item.get(field) or []:
+                part["text"] = "Find 17." + suffix
+    text = text_events("responses", "world.")
+    for event in text:
+        if "output_index" in event:
+            event["output_index"] = 1
+    text[-1]["response"]["output"].insert(0, reasoning[-1]["response"]["output"][0])
+    return [*reasoning[:-1], *text[1:]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("field", ["content", "summary"])
+@pytest.mark.parametrize("suffix", ["", " Act"])
+async def test_followup_does_not_restore_thinking_removed_by_overlap(
+    wire, field, suffix
+):
+    first = followed_by_text(reasoning_events(field=field, closed=False), "Hello ")
+
+    def reply(bodies):
+        return 200, (
+            first
+            if len(bodies) == 1
+            else completed_thinking_and_text(field, suffix)
+            if len(bodies) == 2
+            else text_events("responses", "Next")
+        )
+
+    async with _harness("responses", reply, max_attempts=2) as (send, bodies, _):
+        raw = await delivered(send(wire, [{"role": "user", "content": "Think"}]), wire)
+        events = parse_sse_text(raw)
+        assert_completed(events, wire)
+        if wire == "messages":
+
+            async def stream():
+                yield raw
+
+            message, error, stopped = await aggregate_anthropic_sse_to_message(stream())
+            assert error is None and stopped
+            visible = "".join(block.get("thinking", "") for block in message["content"])
+            saved = [{"role": "assistant", "content": deepcopy(message["content"])}]
+        else:
+            saved = events[-1].data["response"]["output"]
+            visible = "".join(
+                text
+                for item in saved
+                if item.get("type") == "reasoning"
+                for text, _ in readable_reasoning(item)
+            )
+        assert visible == "Find 17." + suffix
+        await delivered(send(wire, [*saved, {"role": "user", "content": "Next"}]), wire)
+    replayed = "".join(
+        text
+        for item in bodies[-1]["input"]
+        if item.get("type") == "reasoning"
+        for text, _ in readable_reasoning(item)
+    )
+    assert replayed == visible

@@ -3,7 +3,7 @@
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -101,6 +101,16 @@ class ChatStreamOutput(ABC):
     def capture_reasoning_record(self, native: JsonObject) -> bool:
         """Allow a native carrier to retain a complete source reasoning record."""
         return False
+
+    def map_reasoning_span(
+        self, path: tuple[str | int, ...], start: int, length: int
+    ) -> None:
+        """Let native-carrier outputs associate readable deltas with source fields."""
+        return None
+
+    def bind_reasoning_record(self, reader: Callable[[], JsonObject]) -> None:
+        """Expose observed unsigned state to outputs retaining native replay."""
+        return None
 
     @property
     def committed_output(self) -> bool:

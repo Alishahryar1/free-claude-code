@@ -758,6 +758,7 @@ def _prepare_chat_content(
     restored: list[JsonValue] = []
     full: list[str] = []
     represented: set[str] = set()
+    native_full: list[str] = []
     has_protected = False
     if isinstance(details, list):
         for index, detail in enumerate(details):
@@ -766,6 +767,8 @@ def _prepare_chat_content(
             record = _record(detail, "data", "signature")
             native = record.native if record else {"reasoning_details": [detail]}
             parts = readable_reasoning(native)
+            if record is None:
+                native_full.extend(text for text, summary in parts if not summary)
             protected = protected_reasoning(detail)
             has_protected |= protected
             if protected:
@@ -828,6 +831,12 @@ def _prepare_chat_content(
                 )
                 restored.append(value)
     if include:
+        # Raw Chat details and scalar fields are alternate forms of this message.
+        # A replay carrier may instead represent an independent source record.
+        represented.update(native_full)
+        represented.update(
+            separator.join(native_full) for separator in ("", "\n", "\n\n")
+        )
         full = [
             *dict.fromkeys(text for text in scalar if text and text not in represented),
             *full,

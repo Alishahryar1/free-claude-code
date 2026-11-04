@@ -101,6 +101,19 @@ class ContinuationRequest:
             # A partially published item is local context, not a stored item lookup.
             for item in items:
                 item.pop("status", None)
+                if self.protocol == "chat" and item.get("type") == "message":
+                    parts = cast(list[dict[str, Any]], item.get("content") or [])
+                    text = "".join(
+                        str(part.get("text") or "")
+                        for part in parts
+                        if part.get("type") == "output_text"
+                    )
+                    content = [
+                        part for part in parts if part.get("type") != "output_text"
+                    ]
+                    if text:
+                        content.append({"type": "output_text", "text": text})
+                    item["content"] = content
             if self.protocol == "responses":
                 return items
             request = OpenAIResponsesRequest(model=model, input=items)

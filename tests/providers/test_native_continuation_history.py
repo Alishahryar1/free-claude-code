@@ -104,6 +104,25 @@ def test_native_suffix_preserves_response_summary_meaning_and_input():
     assert "Summary" not in str(source["input"][-1])
 
 
+def test_response_continuation_preserves_delivered_part_text():
+    item: JsonObject = {
+        "type": "message",
+        "role": "assistant",
+        "content": [
+            {"type": "output_text", "text": "pri"},
+            {"type": "output_text", "text": "nt("},
+        ],
+    }
+    before = deepcopy(item)
+    seed = ContinuationSeed("responses", (item,))
+    sent = ContinuationRequest("chat").build(
+        {"model": "model", "messages": [{"role": "user", "content": "Code"}]},
+        seed,
+    )
+    assert sent["messages"][-2]["content"] == seed.readable_text("text") == "print("
+    assert item == before
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses"])
 async def test_fallback_prefix_follows_effective_sdk_history_override(protocol):

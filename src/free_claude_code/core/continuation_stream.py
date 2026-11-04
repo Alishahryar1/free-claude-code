@@ -33,6 +33,28 @@ class ContinuationStream:
     def made_progress(self) -> bool:
         return self.delivered.progress > self._initial_progress
 
+    def retained_reasoning(self, key: int) -> tuple[int, int] | None:
+        if self.handoff:
+            return None
+        if not self.active:
+            return 0, len(
+                self.delivered.snapshot().thinking
+            ) if self.delivered.wire_api == "gemini" else len(
+                self.delivered.items.get(key, {}).get("thinking", "")
+            )
+        overlap = self._overlaps[1]
+        if self.delivered.wire_api == "gemini":
+            removed = overlap.removed_prefix(("gemini", 0))
+            length = len(self.delivered.snapshot().thinking) - len(
+                self._expected["thinking"]
+            )
+        else:
+            removed = overlap.removed_prefix((key, 0))
+            length = len(
+                self.delivered.items.get(key + self._offset, {}).get("thinking", "")
+            )
+        return removed, length
+
     def begin(self, *, handoff: bool) -> None:
         self.active = True
         self.handoff = handoff

@@ -5,10 +5,13 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import replace
+from hashlib import sha256
 from typing import Literal
 
 from .gemini.replay import ReplayBundle, encode_bundle
-from .history_replay import ReplayRecord, encode_replay, readable_reasoning
+from .history_replay import ReplayRecord, encode_replay
+from .json_types import JsonObject
+from .readable_replay import ReadableReplay, RetainedReasoning
 from .stream_recovery import RECOVERY_RETENTION_BYTES, DeliveredPrefix
 
 
@@ -25,6 +28,54 @@ class StreamDeliveryState:
         self._committed_replay: tuple[ReplayRecord, ...] = ()
         self._replay_bytes = 0
         self.replay_exhausted = False
+        self.continuing = False
+        self.reasoning_retained: RetainedReasoning = lambda _key: None
+        self._carrier_projections: dict[str, Callable[[], str]] = {}
+        self._coverage_source: Callable[[], int] | None = None
+        self.committed_thought_coverage = 0
+
+    @property
+    def public_thinking(self) -> str:
+        prefix = self._prefix_reader() if self._prefix_reader is not None else None
+        return prefix.thinking if prefix is not None else ""
+
+    def replay_carrier(self, record: ReplayRecord, projection: ReadableReplay) -> str:
+        value = encode_replay(record)
+        self.bind_carrier(
+            value,
+            lambda: encode_replay(projection.project(record, self.reasoning_retained)),
+        )
+        return value
+
+    def bind_carrier(self, value: str, project: Callable[[], str]) -> None:
+        self._carrier_projections[value] = project
+
+    def project_carriers(self, payload: JsonObject) -> bool:
+        changed = False
+        pending: list[object] = [payload]
+        while pending:
+            value = pending.pop()
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if (
+                        key
+                        in {
+                            "signature",
+                            "data",
+                            "encrypted_content",
+                            "thoughtSignature",
+                        }
+                        and isinstance(item, str)
+                        and item in self._carrier_projections
+                    ):
+                        projected = self._carrier_projections[item]()
+                        changed |= item != projected
+                        value[key] = projected
+                    elif isinstance(item, dict | list):
+                        pending.append(item)
+            elif isinstance(value, list):
+                pending.extend(value)
+        return changed
 
     @property
     def content_released(self) -> bool:
@@ -54,33 +105,24 @@ class StreamDeliveryState:
         records = () if limited else self._committed_replay + current
         continuation = prefix.continuation
         if records and continuation is not None and continuation.wire_api == "gemini":
-            covered = "".join(
-                text
-                for record in records
-                for text, _ in readable_reasoning(record.native)
+            coverage = (
+                self._coverage_source()
+                if self._attempt_content_released and self._coverage_source is not None
+                else self.committed_thought_coverage
             )
-            # Completed metadata can precede Gemini's final public bundle. Use
-            # it once in the native suffix, removing only its proven prefix echo.
-            # An unmatched visible thought remains authoritative for recovery.
-            if not prefix.thinking or prefix.thinking.startswith(covered):
-                remaining = len(covered) if prefix.thinking else 0
-                parts = []
-                for item in deepcopy(continuation.items):
-                    if (
-                        remaining
-                        and item.get("thought")
-                        and isinstance(text := item.get("text"), str)
-                    ):
-                        size = min(len(text), remaining)
-                        item["text"] = text[size:]
-                        remaining -= size
-                        if not item["text"] and set(item) <= {"thought", "text"}:
-                            continue
-                    parts.append(item)
+            if not prefix.thinking or coverage == len(prefix.thinking):
+                parts = deepcopy(list(continuation.items))
                 parts.append(
                     {
                         "thoughtSignature": encode_bundle(
-                            ReplayBundle("continuation", records, ())
+                            ReplayBundle(
+                                "continuation",
+                                records,
+                                (),
+                                sha256(prefix.thinking.encode("utf-8")).hexdigest()
+                                if prefix.thinking
+                                else None,
+                            )
                         )
                     }
                 )
@@ -99,10 +141,13 @@ class StreamDeliveryState:
         return self._committed_replay
 
     def bind_replay_source(
-        self, reader: Callable[[], tuple[ReplayRecord, ...]]
+        self,
+        reader: Callable[[], tuple[ReplayRecord, ...]],
+        coverage: Callable[[], int] | None = None,
     ) -> None:
         """Expose completed native records without publishing an invisible attempt."""
         self._replay_source = reader
+        self._coverage_source = coverage
 
     def _visible_replay(self) -> tuple[ReplayRecord, ...]:
         return (
@@ -117,6 +162,10 @@ class StreamDeliveryState:
             self._replay_source = None
             self._committed_replay = ()
             self._replay_bytes = 0
+            self._coverage_source = None
+            self.committed_thought_coverage = 0
+            self._carrier_projections.clear()
+            self.reasoning_retained = lambda _key: None
 
     def release_content(self, *, synthetic: bool = False) -> None:
         self._content_released = True
@@ -125,6 +174,8 @@ class StreamDeliveryState:
 
     def begin_attempt(self) -> None:
         records = self._visible_replay()
+        if self._attempt_content_released and self._coverage_source is not None:
+            self.committed_thought_coverage = self._coverage_source()
         self._replay_bytes += sum(len(encode_replay(record)) for record in records)
         if self._replay_bytes > RECOVERY_RETENTION_BYTES:
             self.replay_exhausted = True
@@ -132,11 +183,14 @@ class StreamDeliveryState:
         elif not self.replay_exhausted:
             self._committed_replay += records
         self._replay_source = None
+        self._coverage_source = None
+        self._carrier_projections.clear()
         self._attempt_revision += 1
         self._attempt_content_released = False
 
     def begin_continuation(self, *, handoff: bool = False) -> None:
         self.transition = "handoff" if handoff else "continue"
+        self.continuing = not handoff
 
 
 _delivery: ContextVar[StreamDeliveryState | None] = ContextVar(

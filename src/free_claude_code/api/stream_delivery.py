@@ -68,6 +68,7 @@ class PublicResponseStream(AsyncIterator[str]):
         self._tools = ToolCallBuffer(wire_api)
         self._delivered = DeliveredResponse(wire_api)
         self._continuation = ContinuationStream(self._delivered)
+        state.reasoning_retained = self._continuation.retained_reasoning
         state.bind_prefix(self._delivered.snapshot)
         self._published_starts: set[str] = set()
         self._seen_starts: set[str] = set()
@@ -124,6 +125,7 @@ class PublicResponseStream(AsyncIterator[str]):
         payload = frame_data(frame)
         if payload is None:
             return frame
+        replay_changed = self.state.project_carriers(payload)
         kind = payload.get("type")
         if kind == "response.failed":
             response = payload.get("response")
@@ -151,7 +153,7 @@ class PublicResponseStream(AsyncIterator[str]):
             else:
                 return frame
         elif not self._continuation.active or kind in {"error", "response.error"}:
-            return frame
+            return replace_frame_data(frame, payload) if replay_changed else frame
         else:
             payload = self._continuation.finalize(payload)
         return replace_frame_data(frame, payload)

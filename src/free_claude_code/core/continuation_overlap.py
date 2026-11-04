@@ -55,6 +55,10 @@ class ContinuationOverlap:
         self._frame_bytes = 0
         self._frontier: tuple[int, int] | None = None
 
+    def removed_prefix(self, key: PartKey) -> int:
+        part = self._parts.get(key)
+        return part.removed if part is not None else 0
+
     def feed(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         data = deepcopy(payload)
         block = data.get("content_block", {})

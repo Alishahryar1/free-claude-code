@@ -62,7 +62,7 @@ def normalize_messages_history(request: MessagesRequest) -> MessagesRequest:
             if message.reasoning_content is not None:
                 if isinstance(blocks, str):
                     blocks = [{"type": "text", "text": blocks}] if blocks else []
-                represented: set[str] = set()
+                full: list[str] = []
                 for block in blocks:
                     if not isinstance(block, dict):
                         continue
@@ -70,10 +70,15 @@ def normalize_messages_history(request: MessagesRequest) -> MessagesRequest:
                     carrier = block.get("signature", block.get("data"))
                     if isinstance(carrier, str) and is_replay(carrier):
                         native = decode_replay(carrier).native
-                    represented.update(
+                    full.extend(
                         text
                         for text, summary in readable_reasoning(native)
                         if not summary
+                    )
+                represented = set(full)
+                if full:
+                    represented.update(
+                        separator.join(full) for separator in ("", "\n", "\n\n")
                     )
                 if message.reasoning_content not in represented:
                     blocks.insert(

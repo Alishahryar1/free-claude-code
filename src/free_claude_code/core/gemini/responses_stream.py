@@ -5,9 +5,10 @@ from typing import Any
 from uuid import uuid4
 
 from ..failures import ExecutionFailure
-from ..history_replay import ReplayOrigin, ReplayRecord
+from ..history_replay import ReplayOrigin, ReplayRecord, protected_reasoning
 from ..json_types import JsonObject
 from ..openai_tool_names import OpenAIToolNameCodec
+from ..readable_replay import ReadableReplay
 from .response import GeminiOutput, conversion_failure, function_arguments
 
 
@@ -37,7 +38,44 @@ class GeminiResponsesStream:
         self._arguments: dict[int, str] = {}
         self._calls: dict[int, dict[str, Any]] = {}
         self._reasoning: dict[int, JsonObject] = {}
+        self._replay: dict[int, ReadableReplay] = {}
         self._refusal = False
+        self._output.bind_partial_records(self._partial_records)
+
+    def _partial_records(self) -> list[tuple[ReplayRecord, ReadableReplay]]:
+        result = []
+        for index, item in self._items.items():
+            if (
+                item.get("type") != "reasoning"
+                or index in self._reasoning
+                or protected_reasoning(item)
+            ):
+                continue
+            native = deepcopy(item)
+            native.pop("status", None)
+            native["content"], native["summary"] = [], []
+            for (source, field, position), text in self._text.items():
+                if source != index:
+                    continue
+                parts = native[field]
+                while len(parts) <= position:
+                    parts.append(
+                        {
+                            "type": "summary_text"
+                            if field == "summary"
+                            else "reasoning_text",
+                            "text": "",
+                        }
+                    )
+                parts[position]["text"] = text
+            if any(native.get(field) for field in ("content", "summary")):
+                result.append(
+                    (
+                        ReplayRecord(self._origin, native),
+                        self._replay.setdefault(index, ReadableReplay()),
+                    )
+                )
+        return result
 
     @property
     def completed(self) -> bool:
@@ -51,7 +89,11 @@ class GeminiResponsesStream:
             [
                 ReplayRecord(self._origin, record)
                 for _, record in sorted(self._reasoning.items())
-            ]
+            ],
+            [
+                self._replay.setdefault(index, ReadableReplay())
+                for index in sorted(self._reasoning)
+            ],
         )
         return self._output.handoff()
 
@@ -89,6 +131,13 @@ class GeminiResponsesStream:
             if not isinstance(value, str):
                 raise conversion_failure("Responses text delta must be a string")
             key = (index, field, position)
+            if thought:
+                self._output.map_thought(
+                    self._replay.setdefault(index, ReadableReplay()),
+                    (field, position, "text"),
+                    len(self._text.get(key, "")),
+                    len(value),
+                )
             self._text[key] = self._text.get(key, "") + value
             return self._output.part(
                 {"text": value, **({"thought": True} if thought else {})}
@@ -195,6 +244,13 @@ class GeminiResponsesStream:
             raise conversion_failure("Responses snapshot changed streamed text")
         self._text[key] = text
         suffix = text[len(previous) :]
+        if suffix and thought:
+            self._output.map_thought(
+                self._replay.setdefault(index, ReadableReplay()),
+                (field, position, "text"),
+                len(previous),
+                len(suffix),
+            )
         return (
             self._output.part(
                 {"text": suffix, **({"thought": True} if thought else {})}
@@ -237,7 +293,11 @@ class GeminiResponsesStream:
                     [
                         ReplayRecord(self._origin, record)
                         for _, record in sorted(self._reasoning.items())
-                    ]
+                    ],
+                    [
+                        self._replay.setdefault(index, ReadableReplay())
+                        for index in sorted(self._reasoning)
+                    ],
                 )
             return events
         if kind != "function_call":
