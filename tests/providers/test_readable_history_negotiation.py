@@ -21,12 +21,18 @@ from free_claude_code.providers.anthropic_messages.passthrough import (
     stream_native_messages,
 )
 from free_claude_code.providers.deepseek import DeepSeekProvider
+from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.history_negotiation import (
     HistoryModeCache,
     HistoryNegotiation,
     resolve_history_overrides,
 )
 from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.test_anthropic_messages_transport import (
+    _events,
+    _sse,
+    _transport,
+)
 from tests.providers.test_history_transports import _events_for, _harness, _saved_reply
 
 
@@ -275,6 +281,113 @@ def cache_source():
             {"role": "assistant", "content": "Answer", "reasoning_content": "New"},
         ],
     }
+
+
+@pytest.mark.parametrize("dimension", ["endpoint", "model"])
+def test_destination_change_restarts_mode_order_and_seen_shapes(dimension):
+    cache = HistoryModeCache()
+    origin = cache_origin()
+    state = HistoryNegotiation(cache, origin)
+    source = cache_source()
+    state.prepare(source, origin)
+    assert state.rejected() is not None
+    state.prepare(source, origin)
+    assert state.mode is HistoryMode.CURRENT
+
+    target = replace(
+        origin,
+        **{dimension: "https://new.test/v1" if dimension == "endpoint" else "new"},
+    )
+    target_key = (target.provider, target.endpoint, target.protocol, target.model)
+    cache.update(target_key, 0, HistoryMode.NONE)
+    source = {**source, "model": target.model}
+    wire = state.prepare(source, target)
+    assert "Old" not in json.dumps(wire) and "New" not in json.dumps(wire)
+    assert state.mode is HistoryMode.NONE
+    assert state.rejected() is not None
+    wire = state.prepare(source, target)
+    assert "Old" in json.dumps(wire) and "New" in json.dumps(wire)
+    assert state.mode is HistoryMode.ALL
+    state.accepted()
+    assert cache.read(target_key).mode is HistoryMode.ALL
+
+
+def test_credential_refresh_at_same_destination_keeps_negotiation_progress():
+    state = HistoryNegotiation(HistoryModeCache(), cache_origin())
+    state.prepare(cache_source(), cache_origin())
+    assert state.rejected() is not None
+    refreshed = replace(cache_origin(), connection="refreshed")
+    wire = state.prepare(cache_source(), refreshed)
+    assert "Old" not in json.dumps(wire) and "New" in json.dumps(wire)
+    assert state.mode is HistoryMode.CURRENT
+    assert state.rejected() is not None
+    wire = state.prepare(cache_source(), refreshed)
+    assert "New" not in json.dumps(wire)
+    assert state.rejected() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_status", [200, 400])
+async def test_auth_refresh_uses_new_endpoint_mode_with_same_attempt_budget(new_status):
+    class Endpoint:
+        fresh = False
+
+        async def endpoint(self, *, force_refresh=False):
+            self.fresh |= force_refresh
+            return HttpEndpoint(
+                "https://new.test/v1" if self.fresh else "https://old.test/v1",
+                {},
+                "token",
+            )
+
+    bodies = []
+
+    def reply(request):
+        bodies.append((request.url.host, json.loads(request.content)))
+        if request.url.host == "old.test":
+            return httpx.Response(
+                401,
+                json={"error": {"type": "authentication_error", "message": "expired"}},
+            )
+        if new_status == 400:
+            return httpx.Response(400, json={"error": {"message": "Rejected"}})
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=_sse(*_events()),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
+        adapter = _transport(client)
+        for endpoint, mode in [("old", HistoryMode.NONE), ("new", HistoryMode.ALL)]:
+            adapter._history_cache.update(
+                ("test/messages", f"https://{endpoint}.test/v1", "messages", "route"),
+                0,
+                mode,
+            )
+        stream = adapter.stream_messages(
+            MessagesRequest.model_validate(
+                {"model": "route", "messages": readable_history()}
+            ),
+            endpoint_context=Endpoint(),
+            reasoning=ReasoningPolicy.provider_default(),
+        )
+        if new_status == 400:
+            with pytest.raises(ExecutionFailure):
+                await _saved_reply(stream, "messages")
+        else:
+            await _saved_reply(stream, "messages")
+            assert (
+                adapter._history_cache.read(
+                    ("test/messages", "https://new.test/v1", "messages", "route")
+                ).mode
+                is HistoryMode.ALL
+            )
+    assert [host for host, _ in bodies] == ["old.test", "new.test"]
+    assert "Old" not in json.dumps(bodies[0][1]) and "New" not in json.dumps(
+        bodies[0][1]
+    )
+    assert "Old" in json.dumps(bodies[1][1]) and "New" in json.dumps(bodies[1][1])
 
 
 def test_late_cold_completion_cannot_replace_newer_suggestion():

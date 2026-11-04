@@ -56,6 +56,8 @@ class ContinuationOverlap:
         self._frontier: tuple[int, int] | None = None
 
     def removed_prefix(self, key: PartKey) -> int:
+        if isinstance(key[0], int):
+            key = (self._ids.get(key[0], key[0]), key[1])
         part = self._parts.get(key)
         return part.removed if part is not None else 0
 

@@ -79,8 +79,16 @@ class HistoryNegotiation:
 
     def __init__(self, cache: HistoryModeCache, origin: ReplayOrigin) -> None:
         self._cache = cache
-        self._key = (origin.provider, origin.endpoint, origin.protocol, origin.model)
-        suggestion = cache.read(self._key)
+        self.paths: dict[HistoryPath, HistoryPath] = {}
+        self._source: JsonObject = {}
+        self._render: (
+            Callable[[HistoryMode, dict[HistoryPath, HistoryPath]], JsonObject] | None
+        ) = None
+        self._start((origin.provider, origin.endpoint, origin.protocol, origin.model))
+
+    def _start(self, key: HistoryKey) -> None:
+        self._key = key
+        suggestion = self._cache.read(key)
         self._revision: int | None = suggestion.revision
         self._cached_mode = suggestion.mode
         self._order = list(
@@ -92,11 +100,6 @@ class HistoryNegotiation:
             )
         )
         self.mode = self._order.pop(0)
-        self.paths: dict[HistoryPath, HistoryPath] = {}
-        self._source: JsonObject = {}
-        self._render: (
-            Callable[[HistoryMode, dict[HistoryPath, HistoryPath]], JsonObject] | None
-        ) = None
         self._seen: list[JsonObject] = []
         self._learnable = False
         self._accepted = False
@@ -129,11 +132,7 @@ class HistoryNegotiation:
                         )
         key = (origin.provider, origin.endpoint, origin.protocol, origin.model)
         if key != self._key:
-            self._key = key
-            suggestion = self._cache.read(key)
-            self._revision = suggestion.revision
-            self._cached_mode = suggestion.mode
-            self._accepted = False
+            self._start(key)
 
         def render(
             mode: HistoryMode, paths: dict[HistoryPath, HistoryPath]

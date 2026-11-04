@@ -6,6 +6,13 @@ from typing import Any
 import pytest
 
 from free_claude_code.core.continuation_overlap import ContinuationOverlap
+from free_claude_code.core.continuation_stream import ContinuationStream
+from free_claude_code.core.delivered_response import DeliveredResponse
+from free_claude_code.core.history_replay import (
+    AssociatedReplayRecord,
+    ReplayOrigin,
+    encode_replay,
+)
 
 
 @pytest.mark.parametrize("wire", ["messages", "gemini", "responses"])
@@ -101,3 +108,43 @@ def test_summary_overlap_does_not_consume_equal_full_reasoning():
     }
     result = overlap.feed(summary)
     assert result[0]["delta"] == " more"
+
+
+@pytest.mark.parametrize("summary", [False, True])
+def test_completed_scalar_alias_can_be_repeated_as_its_native_summary(summary):
+    delivered = DeliveredResponse("responses")
+    carrier = encode_replay(
+        AssociatedReplayRecord(
+            ReplayOrigin("provider", "chat", "https://provider.test", "key", "model"),
+            {
+                "reasoning_content": "Plan",
+                "reasoning_details": [{"type": "reasoning.summary", "summary": "Plan"}],
+            },
+            "alias-record",
+            "anchor",
+        )
+    )
+    delivered.observe(
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {
+                "type": "reasoning",
+                "id": "rs_first",
+                "content": [{"type": "reasoning_text", "text": "Plan"}],
+                "summary": [],
+                "encrypted_content": carrier,
+            },
+        }
+    )
+    continuation = ContinuationStream(delivered)
+    continuation.begin(handoff=False)
+    kind = (
+        "response.reasoning_summary_text.delta"
+        if summary
+        else "response.reasoning_text.delta"
+    )
+    events = continuation.prepare(
+        {"type": kind, "item_id": "rs_next", "output_index": 0, "delta": "Plan more"}
+    )
+    assert [event["delta"] for event in events if event["type"] == kind] == [" more"]

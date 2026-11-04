@@ -52,8 +52,16 @@ class GeminiChatStreamOutput(ChatStreamOutput):
         return True
 
     def map_reasoning_span(
-        self, path: tuple[str | int, ...], start: int, length: int
+        self,
+        path: tuple[str | int, ...],
+        start: int,
+        length: int,
+        *,
+        replay: ReadableReplay,
+        source: int = 0,
+        summary: bool = False,
     ) -> None:
+        self._replay = replay
         self._gemini.map_thought(self._replay, path, start, length)
 
     def bind_reasoning_record(self, reader: Callable[[], JsonObject]) -> None:

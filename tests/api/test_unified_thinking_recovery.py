@@ -19,7 +19,8 @@ from tests.api.test_midstream_model_fallback import delivered_candidates
 from tests.api.test_recovery_reasoning import followed_by_text, reasoning_events
 from tests.api.test_response_streams import _serve
 from tests.api.test_tool_call_buffer import _response
-from tests.providers.test_history_transports import _harness
+from tests.api.test_tool_call_buffer_transports import _tools
+from tests.providers.test_history_transports import _chat_reasoning_events, _harness
 
 
 def history():
@@ -264,3 +265,188 @@ async def test_followup_does_not_restore_thinking_removed_by_overlap(
         for text, _ in readable_reasoning(item)
     )
     assert replayed == visible
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_late_summary_alias_replays_only_thinking_delivered_after_overlap(wire):
+    def reply(bodies):
+        if len(bodies) > 2:
+            return 200, text_events("chat", "Next")
+        text = "Plan" if len(bodies) == 1 else "PlanAct"
+        events = _chat_reasoning_events(
+            [
+                {"reasoning_content": text},
+                {
+                    "reasoning_details": [
+                        {"type": "reasoning.summary", "summary": text, "index": 0}
+                    ]
+                },
+            ]
+        )
+        return 200, events[:-1] if len(bodies) == 1 else events
+
+    async with _harness("chat", reply, max_attempts=2) as (send, bodies, _):
+        raw = await delivered(send(wire, [{"role": "user", "content": "hello"}]), wire)
+        events = parse_sse_text(raw)
+        assert_completed(events, wire)
+        if wire == "messages":
+
+            async def stream():
+                yield raw
+
+            message, error, stopped = await aggregate_anthropic_sse_to_message(stream())
+            assert error is None and stopped
+            saved = [{"role": "assistant", "content": message["content"]}]
+            visible = "".join(block.get("thinking", "") for block in message["content"])
+        else:
+            saved = events[-1].data["response"]["output"]
+            visible = "".join(
+                part["text"]
+                for item in saved
+                if item.get("type") == "reasoning"
+                for part in item.get("content") or []
+            )
+        assert visible == "PlanAct"
+        await delivered(send(wire, [*saved, {"role": "user", "content": "Next"}]), wire)
+    replayed = [
+        part
+        for message in bodies[-1]["messages"]
+        for part in readable_reasoning(message)
+    ]
+    assert replayed == [("Plan", False), ("Act", True)]
+
+
+@pytest.mark.asyncio
+async def test_completed_alias_can_resume_as_typed_summary_without_repeating_it():
+    summary = {
+        "reasoning_details": [
+            {"type": "reasoning.summary", "summary": "Plan", "index": 0}
+        ]
+    }
+    first = _chat_reasoning_events(
+        [
+            {"reasoning_content": "Plan"},
+            summary,
+            {"content": "Hello "},
+            {"reasoning_content": "Extra"},
+        ]
+    )[:-1]
+    second = _chat_reasoning_events([summary])
+    second[-1]["choices"][0]["delta"] = {"content": "world."}
+    async with _harness(
+        "chat",
+        lambda bodies: (200, first if len(bodies) == 1 else second),
+        max_attempts=2,
+    ) as (send, bodies, _):
+        raw = await delivered(
+            send("responses", [{"role": "user", "content": "hello"}]), "responses"
+        )
+    events = parse_sse_text(raw)
+    assert len(bodies) == 2
+    assert_completed(events, "responses")
+    assert public_text(events, "responses") == "Hello world."
+    assert (
+        "".join(
+            part["text"]
+            for item in events[-1].data["response"]["output"]
+            if item.get("type") == "reasoning"
+            for field in ("content", "summary")
+            for part in item.get(field) or []
+        )
+        == "PlanExtra"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_equal_late_alias_records_held_by_tool_gate_keep_independent_ranges(wire):
+    scalar = {"reasoning_content": "Plan"}
+    typed = {
+        "reasoning_details": [
+            {"type": "reasoning.summary", "summary": "Plan", "index": 0}
+        ]
+    }
+
+    def reply(bodies):
+        if len(bodies) == 1:
+            return 200, _chat_reasoning_events([scalar, typed])[:-1]
+        if len(bodies) > 2:
+            return 200, text_events("chat", "Next")
+        return 200, _chat_reasoning_events(
+            [
+                {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_read",
+                            "type": "function",
+                            "function": {"name": "read", "arguments": "{"},
+                        }
+                    ]
+                },
+                scalar,
+                typed,
+                {"content": "A"},
+                scalar,
+                typed,
+                {"content": "B"},
+                {"tool_calls": [{"index": 0, "function": {"arguments": "}"}}]},
+            ]
+        )
+
+    async with _harness("chat", reply, max_attempts=2) as (send, bodies, _):
+        raw = await delivered(
+            send(wire, [{"role": "user", "content": "hello"}], tools=_tools(wire)),
+            wire,
+        )
+        events = parse_sse_text(raw)
+        assert_completed(events, wire)
+        if wire == "messages":
+
+            async def stream():
+                yield raw
+
+            message, error, stopped = await aggregate_anthropic_sse_to_message(stream())
+            assert error is None and stopped
+            saved = [{"role": "assistant", "content": message["content"]}]
+            visible = "".join(block.get("thinking", "") for block in message["content"])
+        else:
+            saved = events[-1].data["response"]["output"]
+            visible = "".join(
+                part["text"]
+                for item in saved
+                if item.get("type") == "reasoning"
+                for part in item.get("content") or []
+            )
+        assert visible == "PlanPlan"
+        result = (
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_read",
+                        "content": "Result",
+                    }
+                ],
+            }
+            if wire == "messages"
+            else {
+                "type": "function_call_output",
+                "call_id": "call_read",
+                "output": "Result",
+            }
+        )
+        await delivered(
+            send(wire, [*saved, result, {"role": "user", "content": "Next"}]), wire
+        )
+    replayed = [
+        part
+        for message in bodies[-1]["messages"]
+        for part in readable_reasoning(message)
+    ]
+    assert [(text.strip(), summary) for text, summary in replayed] == [
+        ("Plan", False),
+        ("Plan", True),
+    ]

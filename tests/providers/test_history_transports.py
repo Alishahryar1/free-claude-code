@@ -19,6 +19,7 @@ from free_claude_code.core.history_replay import (
     ReplayRecord,
     decode_replay,
     encode_replay,
+    readable_reasoning,
     resolve_messages_replay,
 )
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -977,6 +978,50 @@ async def test_chat_summary_fragments_remain_readable_in_native_fields(wire, enc
         await _saved_reply(source(wire, history), wire)
         assert json.dumps(sent[-1]).count("Short summary.") == 1
         assert json.dumps(sent[-1]).count("opaque-only") == int(encrypted)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("independent_signed", [False, True])
+async def test_scalar_first_summary_keeps_its_type_without_capturing_other_records(
+    wire, independent_signed
+):
+    details = [
+        {"type": "reasoning.summary", "summary": "Short summary.", "index": 0},
+        {
+            "type": "reasoning.text",
+            "text": "Independent thought.",
+            "index": 1,
+            **({"signature": "independent-signature"} if independent_signed else {}),
+        },
+        {"type": "reasoning.summary", "summary": "Another summary.", "index": 2},
+    ]
+    events = _chat_reasoning_events(
+        [{"reasoning_content": "Short summary."}, {"reasoning_details": details}]
+    )
+    async with _harness("chat", lambda _: (200, events)) as (send, bodies, _):
+        saved = await _saved_reply(
+            send(wire, [{"role": "user", "content": "hello"}]), wire
+        )
+        history = [*saved, {"role": "user", "content": "next"}]
+        original = deepcopy(history)
+        await _saved_reply(send(wire, history), wire)
+    parts = [
+        part
+        for message in bodies[-1]["messages"]
+        for part in readable_reasoning(message)
+    ]
+    assert sorted(parts) == sorted(
+        [
+            ("Short summary.", True),
+            ("Another summary.", True),
+            ("Independent thought.", False),
+        ]
+    )
+    assert json.dumps(bodies[-1]).count("independent-signature") == int(
+        independent_signed
+    )
+    assert history == original
 
 
 @pytest.mark.asyncio

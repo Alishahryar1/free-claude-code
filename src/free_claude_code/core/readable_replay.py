@@ -3,21 +3,22 @@
 from collections.abc import Callable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, Literal
 
 from .failures import ExecutionFailure, FailureKind
 from .history_replay import ReplayRecord, protected_reasoning
 from .stream_recovery import RECOVERY_RETENTION_BYTES
 
 type NativePath = tuple[str | int, ...]
-type RetainedReasoning = Callable[[int], tuple[int, int] | None]
+type ReasoningKey = int | tuple[int, Literal["thinking", "summary"]]
+type RetainedReasoning = Callable[[ReasoningKey], tuple[int, int] | None]
 
 
 @dataclass(frozen=True, slots=True)
 class _Span:
     path: NativePath
     native_start: int
-    public_key: int
+    public_key: ReasoningKey
     public_start: int
     length: int
 
@@ -34,7 +35,7 @@ class ReadableReplay:
         self,
         path: NativePath,
         native_start: int,
-        public_key: int,
+        public_key: ReasoningKey,
         public_start: int,
         length: int,
     ) -> None:
@@ -129,6 +130,9 @@ class ReadableReplay:
                 and isinstance(detail.get("summary", detail.get("text")), str)
             ]
             for scalar in scalars:
+                for path in paths:
+                    self.alias(native, [path], [scalar])
+                    self.alias(native, [scalar], [path])
                 self.alias(native, [scalar], paths)
                 self.alias(native, paths, [scalar])
 

@@ -12,6 +12,7 @@ from .delivered_response import (
 )
 from .failures import ExecutionFailure, FailureKind
 from .gemini.response import gemini_finished
+from .readable_replay import ReasoningKey
 
 
 class ContinuationStream:
@@ -33,26 +34,33 @@ class ContinuationStream:
     def made_progress(self) -> bool:
         return self.delivered.progress > self._initial_progress
 
-    def retained_reasoning(self, key: int) -> tuple[int, int] | None:
+    def retained_reasoning(self, key: ReasoningKey) -> tuple[int, int] | None:
         if self.handoff:
             return None
-        if not self.active:
-            return 0, len(
-                self.delivered.snapshot().thinking
-            ) if self.delivered.wire_api == "gemini" else len(
-                self.delivered.items.get(key, {}).get("thinking", "")
-            )
-        overlap = self._overlaps[1]
         if self.delivered.wire_api == "gemini":
-            removed = overlap.removed_prefix(("gemini", 0))
-            length = len(self.delivered.snapshot().thinking) - len(
-                self._expected["thinking"]
+            length = len(self.delivered.snapshot().thinking)
+            return (
+                (
+                    self._overlaps[1].removed_prefix(("gemini", 0)),
+                    length - len(self._expected["thinking"]),
+                )
+                if self.active
+                else (0, length)
             )
+        index, channel = (key, "thinking") if isinstance(key, int) else key
+        item = self.delivered.items.get(
+            index + (self._offset if self.active else 0), {}
+        )
+        if self.delivered.wire_api == "responses":
+            field = "summary" if channel == "summary" else "content"
+            length = sum(len(part.get("text", "")) for part in item.get(field) or [])
         else:
-            removed = overlap.removed_prefix((key, 0))
-            length = len(
-                self.delivered.items.get(key + self._offset, {}).get("thinking", "")
-            )
+            length = len(item.get("thinking", ""))
+        removed = (
+            self._overlaps[2 if channel == "summary" else 1].removed_prefix((index, 0))
+            if self.active
+            else 0
+        )
         return removed, length
 
     def begin(self, *, handoff: bool) -> None:

@@ -32,6 +32,7 @@ from free_claude_code.core.openai_responses import (
     reasoning_output_item,
     tool_item,
 )
+from free_claude_code.core.readable_replay import ReadableReplay
 from free_claude_code.core.token_estimation import estimate_text_tokens
 
 
@@ -103,7 +104,14 @@ class ChatStreamOutput(ABC):
         return False
 
     def map_reasoning_span(
-        self, path: tuple[str | int, ...], start: int, length: int
+        self,
+        path: tuple[str | int, ...],
+        start: int,
+        length: int,
+        *,
+        replay: ReadableReplay,
+        source: int = 0,
+        summary: bool = False,
     ) -> None:
         """Let native-carrier outputs associate readable deltas with source fields."""
         return None
@@ -431,6 +439,25 @@ class AnthropicChatStreamOutput(ChatStreamOutput):
             log_raw_events=log_raw_events,
         )
         self._reasoning_indices: dict[int, int] = {}
+        self._reasoning_lengths: dict[int, int] = {}
+
+    def map_reasoning_span(
+        self,
+        path: tuple[str | int, ...],
+        start: int,
+        length: int,
+        *,
+        replay: ReadableReplay,
+        source: int = 0,
+        summary: bool = False,
+    ) -> None:
+        replay.add(
+            path,
+            start,
+            self._reasoning_indices[source],
+            self._reasoning_lengths[source],
+            length,
+        )
 
     def close_unclosed_blocks(self) -> list[str]:
         events = self.flush_reasoning_replay(completed=False)
@@ -438,6 +465,7 @@ class AnthropicChatStreamOutput(ChatStreamOutput):
         self._text_started = False
         self._open_reasoning_sources.clear()
         self._reasoning_indices.clear()
+        self._reasoning_lengths.clear()
         for state in self.tool_states.values():
             state.open = False
         return events
@@ -448,11 +476,13 @@ class AnthropicChatStreamOutput(ChatStreamOutput):
     def _start_reasoning_block(self, source: int) -> list[str]:
         index = self._ledger.blocks.allocate_index()
         self._reasoning_indices[source] = index
+        self._reasoning_lengths[source] = 0
         return [self._ledger.content_block_start(index, "thinking")]
 
     def _emit_reasoning_delta(
         self, content: str, *, summary: bool = False, source: int = 0
     ) -> str:
+        self._reasoning_lengths[source] += len(content)
         return self._ledger.content_block_delta(
             self._reasoning_indices[source], "thinking_delta", content
         )
@@ -472,6 +502,7 @@ class AnthropicChatStreamOutput(ChatStreamOutput):
         ]
 
     def _stop_reasoning_block(self, source: int) -> list[str]:
+        self._reasoning_lengths.pop(source)
         return [self._ledger.content_block_stop(self._reasoning_indices.pop(source))]
 
     def _start_text_block(self) -> list[str]:
@@ -544,6 +575,26 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
         self._usage: dict[str, object] | None = None
         self._conversion_failure: ExecutionFailure | None = None
         self._started = False
+
+    def map_reasoning_span(
+        self,
+        path: tuple[str | int, ...],
+        start: int,
+        length: int,
+        *,
+        replay: ReadableReplay,
+        source: int = 0,
+        summary: bool = False,
+    ) -> None:
+        state = self._reasoning_states[source]
+        parts = state.summary_parts if summary else state.text_parts
+        replay.add(
+            path,
+            start,
+            (state.output_index, "summary" if summary else "thinking"),
+            sum(len(part) for part in parts),
+            length,
+        )
 
     def _response_payload(
         self,

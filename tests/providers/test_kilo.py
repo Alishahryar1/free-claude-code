@@ -277,12 +277,31 @@ async def test_stream_uses_reasoning_field_without_duplicating_plain_details(
     events = parse_sse_text(event_text)
     assert thinking_content(events) == "plan "
     assert text_content(events) == "done"
-    records = [
-        event.data["content_block"]["data"]
-        for event in events
-        if event.event == "content_block_start"
-        and event.data["content_block"]["type"] == "redacted_thinking"
-    ]
+    from free_claude_code.core.history_replay import decode_replay, is_replay
+
+    records = []
+    for event in events:
+        block = event.data.get("content_block", {})
+        delta = event.data.get("delta", {})
+        value = (
+            block.get("data")
+            if block.get("type") == "redacted_thinking"
+            else delta.get("signature")
+            if delta.get("type") == "signature_delta"
+            else None
+        )
+        if is_replay(value):
+            assert isinstance(value, str)
+            details = decode_replay(value).native["reasoning_details"]
+            assert isinstance(details, list)
+            records.extend(
+                detail["data"]
+                for detail in details
+                if isinstance(detail, dict)
+                and detail.get("type") == "reasoning.encrypted"
+            )
+        elif value is not None:
+            records.append(value)
     assert records == [encrypted["data"]]
     assert stream.closed
 
