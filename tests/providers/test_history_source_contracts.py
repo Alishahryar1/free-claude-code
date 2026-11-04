@@ -9,6 +9,7 @@ import pytest
 from free_claude_code.core.anthropic.conversion import AnthropicToOpenAIConverter
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.history_replay import (
+    HistoryMode,
     ReplayOrigin,
     ReplayRecord,
     encode_replay,
@@ -17,6 +18,7 @@ from free_claude_code.core.history_replay import (
 from free_claude_code.providers.history_negotiation import (
     HistoryModeCache,
     HistoryNegotiation,
+    resolve_history_overrides,
 )
 from free_claude_code.providers.history_replay import (
     history_retry_body,
@@ -174,13 +176,24 @@ def test_aggregate_scalar_alias_keeps_each_native_part_once(separator):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scalar", ["reasoning_content", "reasoning"])
-async def test_sdk_history_override_keeps_scalar_detail_alias_once(scalar):
+@pytest.mark.parametrize("carrier", [False, True])
+async def test_sdk_history_override_keeps_scalar_detail_alias_once(scalar, carrier):
     from free_claude_code.core.reasoning import ReasoningPolicy
     from free_claude_code.providers.deepseek import DeepSeekProvider
     from tests.api.test_delivered_stream_recovery import text_events
     from tests.providers.support import immediate_admission, make_provider_config
     from tests.providers.test_history_transports import _harness, _saved_reply
 
+    detail = {"type": "reasoning.text", "text": "Plan"}
+    if carrier:
+        detail = {
+            "type": "reasoning.encrypted",
+            "data": encode_replay(
+                ReplayRecord(
+                    origin(), {"reasoning_content": "Plan", "reasoning_details": []}
+                )
+            ),
+        }
     request = MessagesRequest.model_validate(
         {
             "model": "requested",
@@ -192,9 +205,7 @@ async def test_sdk_history_override_keeps_scalar_detail_alias_once(scalar):
                         "role": "assistant",
                         "content": "Answer",
                         scalar: "Plan",
-                        "reasoning_details": [
-                            {"type": "reasoning.text", "text": "Plan"}
-                        ],
+                        "reasoning_details": [detail],
                     },
                 ]
             },
@@ -221,3 +232,94 @@ async def test_sdk_history_override_keeps_scalar_detail_alias_once(scalar):
         )
     assert bodies[0]["messages"][-1]["reasoning_content"] == "Plan"
     assert request.model_dump() == before
+
+
+@pytest.mark.parametrize("mode", list(HistoryMode))
+@pytest.mark.parametrize(
+    "scalar,thoughts,expected",
+    [
+        ("Plan", ["Plan"], "Plan"),
+        ("Independent", ["Plan"], "Independent\nPlan"),
+        ("Plan", ["Plan", "Plan"], "Plan\nPlan"),
+        ("PlanAct", ["Plan", "Act"], "Plan\nAct"),
+        ("Plan\nAct", ["Plan", "Act"], "Plan\nAct"),
+        ("Plan\n\nAct", ["Plan", "Act"], "Plan\nAct"),
+    ],
+)
+def test_sdk_carrier_aliases_preserve_records_across_history_modes(
+    mode, scalar, thoughts, expected
+):
+    assistant = {
+        "role": "assistant",
+        "content": "Answer",
+        "reasoning_content": scalar,
+        "reasoning_details": [
+            {
+                "type": "reasoning.encrypted",
+                "data": encode_replay(
+                    ReplayRecord(origin(), {"reasoning_content": text})
+                ),
+            }
+            for text in thoughts
+        ],
+    }
+    source = {
+        "messages": [{"role": "user", "content": "Ignored"}],
+        "extra_body": {
+            "temperature": 0.4,
+            "messages": [
+                {"role": "user", "content": "Question"},
+                assistant,
+                {"role": "user", "content": "Next"},
+                deepcopy(assistant),
+            ],
+        },
+    }
+    before = deepcopy(source)
+    resolved = cast(dict[str, Any], resolve_history_overrides(source))
+    wire = cast(dict[str, Any], prepare_history(resolved, origin(), scope=mode))
+    assert [
+        m.get("reasoning_content") for m in wire["messages"] if m["role"] == "assistant"
+    ] == [
+        expected if mode is HistoryMode.ALL else None,
+        expected if mode is not HistoryMode.NONE else None,
+    ]
+    assert (
+        resolved["messages"][1]["reasoning_details"] == assistant["reasoning_details"]
+    )
+    assert wire["extra_body"] == {"temperature": 0.4}
+    assert source == before
+
+
+def test_sdk_summary_carrier_does_not_absorb_independent_full_thinking():
+    detail = {"type": "reasoning.summary", "summary": "Plan"}
+    source = {
+        "extra_body": {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "Answer",
+                    "reasoning_content": "Plan",
+                    "reasoning_details": [
+                        {
+                            "type": "reasoning.encrypted",
+                            "data": encode_replay(
+                                ReplayRecord(origin(), {"reasoning_details": [detail]})
+                            ),
+                        }
+                    ],
+                }
+            ],
+        },
+    }
+    before = deepcopy(source)
+    wire = prepare_history(resolve_history_overrides(source), origin())
+    assert wire["messages"] == [
+        {
+            "role": "assistant",
+            "content": "Answer",
+            "reasoning_content": "Plan",
+            "reasoning_details": [detail],
+        }
+    ]
+    assert source == before

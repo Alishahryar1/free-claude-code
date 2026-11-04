@@ -9,8 +9,11 @@ from free_claude_code.core.history_replay import (
     HistoryMode,
     HistoryPath,
     ReplayOrigin,
+    decode_replay,
+    is_replay,
     normalize_history_source,
     prepare_history,
+    readable_reasoning,
     resolve_messages_replay,
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue
@@ -50,12 +53,44 @@ def resolve_history_overrides(body: Mapping[str, Any]) -> JsonObject:
     result = deepcopy(dict(body))
     extra = result.get("extra_body")
     if isinstance(extra, dict):
+        messages = extra.get("messages")
+        if isinstance(messages, list):
+            _normalize_chat_override(messages)
         for key in ("model", "messages", "input"):
             if key in extra:
                 result[key] = extra.pop(key)
         if not extra:
             result.pop("extra_body", None)
     return result
+
+
+def _normalize_chat_override(messages: list[JsonValue]) -> None:
+    """Resolve raw scalar copies before conversion provenance is lost."""
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        details = message.get("reasoning_details")
+        if not isinstance(details, list):
+            continue
+        full: list[str] = []
+        for detail in details:
+            if not isinstance(detail, dict):
+                continue
+            native: JsonObject = {"reasoning_details": [detail]}
+            for key in ("data", "signature"):
+                carrier = detail.get(key)
+                if isinstance(carrier, str) and is_replay(carrier):
+                    native = decode_replay(carrier).native
+                    break
+            full.extend(
+                text for text, summary in readable_reasoning(native) if not summary
+            )
+        represented = set(full)
+        if full:
+            represented.update(separator.join(full) for separator in ("", "\n", "\n\n"))
+        for key in ("reasoning_content", "reasoning"):
+            if isinstance(text := message.get(key), str) and text in represented:
+                message.pop(key)
 
 
 def effective_body(body: Mapping[str, Any]) -> JsonObject:
