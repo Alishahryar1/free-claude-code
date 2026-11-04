@@ -7,7 +7,12 @@ from hashlib import sha256
 from typing import Literal, cast
 
 from ..anthropic.native import NativeMessagesOptions
-from ..history_replay import ReplayRecord, encode_replay
+from ..history_replay import (
+    ReplayRecord,
+    encode_replay,
+    protected_reasoning,
+    readable_reasoning,
+)
 from ..json_types import JsonObject, JsonValue
 from ..openai_chat import (
     ChatToolResultImages,
@@ -58,10 +63,33 @@ def _image(image: InlineData, destination: Destination) -> JsonObject:
     return {"type": "image_url", "image_url": {"url": image.url()}}
 
 
+def _thought(items: list[JsonObject], text: str, destination: Destination) -> None:
+    if destination == "messages":
+        _append(items, "assistant", {"type": "thinking", "thinking": text})
+    elif destination == "responses":
+        items.append(
+            {
+                "type": "reasoning",
+                "content": [{"type": "reasoning_text", "text": text}],
+                "summary": [],
+            }
+        )
+    else:
+        if not items or items[-1].get("role") != "assistant":
+            items.append({"role": "assistant", "content": []})
+        items[-1]["reasoning_content"] = (
+            str(items[-1].get("reasoning_content", "")) + text
+        )
+
+
 def _reasoning(
     items: list[JsonObject], records: list[ReplayRecord], destination: Destination
 ) -> None:
     for record in records:
+        if not protected_reasoning(record.native):
+            for text, _ in readable_reasoning(record.native):
+                _thought(items, text, destination)
+            continue
         carrier = encode_replay(record)
         if destination == "messages":
             _append(items, "assistant", {"type": "redacted_thinking", "data": carrier})
@@ -117,13 +145,24 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
             else "user"
         )
         records = [record for bundle in turn.replay for record in bundle.records]
-        suppress_echo = False
-        if len(turn.replay) == 1 and (digest := turn.replay[0].thought_echo_sha256):
-            echoed = sha256()
-            for part in content.parts:
-                if part.thought and part.text is not None:
-                    echoed.update(part.text.encode("utf-8"))
-            suppress_echo = echoed.hexdigest() == digest.lower()
+        echoed = "".join(part.text or "" for part in content.parts if part.thought)
+        spans: list[tuple[int, int]] = []
+        if len(turn.replay) == 1:
+            bundle = turn.replay[0]
+            if (
+                bundle.thought_echo_sha256
+                and sha256(echoed.encode("utf-8")).hexdigest()
+                == bundle.thought_echo_sha256.lower()
+            ):
+                if bundle.protected_echo is None:
+                    spans = [(0, len(echoed))]
+                else:
+                    spans = [(start, end) for _, start, end in bundle.protected_echo]
+                    if any(end > len(echoed) for _, end in spans):
+                        raise GeminiConversionError(
+                            "Protected echo exceeds thought text"
+                        )
+        thought_offset = 0
         call_replay.extend(record for bundle in turn.replay for record in bundle.calls)
         if records:
             if role != "assistant":
@@ -226,28 +265,25 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
                     )
                 _append(items, role, _image(part.inline_data, destination))
             elif part.text is not None:
-                if part.thought and suppress_echo:
-                    continue
                 if part.thought and role == "assistant":
-                    if destination == "responses":
-                        items.append(
-                            {
-                                "type": "reasoning",
-                                "content": [
-                                    {"type": "reasoning_text", "text": part.text}
-                                ],
-                                "summary": [],
-                            }
+                    text = part.text
+                    end = thought_offset + len(text)
+                    cursor = thought_offset
+                    remaining = []
+                    for left, right in spans:
+                        if right <= cursor or left >= end:
+                            continue
+                        remaining.append(
+                            text[
+                                cursor - thought_offset : max(cursor, left)
+                                - thought_offset
+                            ]
                         )
-                    elif destination == "messages":
-                        _append(
-                            items, role, {"type": "thinking", "thinking": part.text}
-                        )
-                    else:
-                        if not items or items[-1].get("role") != "assistant":
-                            items.append({"role": "assistant", "content": []})
-                        previous = items[-1].get("reasoning_content", "")
-                        items[-1]["reasoning_content"] = str(previous) + part.text
+                        cursor = min(right, end)
+                    remaining.append(text[cursor - thought_offset :])
+                    thought_offset = end
+                    if visible := "".join(remaining):
+                        _thought(items, visible, destination)
                     continue
                 kind = "output_text" if role == "assistant" else "input_text"
                 _append(

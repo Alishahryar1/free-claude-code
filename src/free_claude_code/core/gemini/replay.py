@@ -15,11 +15,13 @@ from ..history_replay import (
     ReplayRecord,
     decode_replay,
     encode_replay,
+    protected_reasoning,
 )
 from ..json_types import JsonObject
 from .errors import GeminiConversionError
 
 _PREFIX = b"fcc:gemini-replay:v1:"
+_PROTECTED_PREFIX = b"fcc:gemini-replay:v2:"
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +37,7 @@ class ReplayBundle:
     records: tuple[ReplayRecord, ...] = ()
     calls: tuple[CallReplay, ...] = ()
     thought_echo_sha256: str | None = None
+    protected_echo: tuple[tuple[int, int, int], ...] | None = None
 
 
 def encode_bundle(bundle: ReplayBundle) -> str:
@@ -45,10 +48,13 @@ def encode_bundle(bundle: ReplayBundle) -> str:
     }
     if bundle.thought_echo_sha256 is not None:
         payload["thought_echo_sha256"] = bundle.thought_echo_sha256
+    if bundle.protected_echo is not None:
+        payload["protected_echo"] = bundle.protected_echo
     raw = json.dumps(
         payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
     )
-    return base64.b64encode(_PREFIX + raw.encode()).decode("ascii")
+    prefix = _PROTECTED_PREFIX if bundle.protected_echo is not None else _PREFIX
+    return base64.b64encode(prefix + raw.encode()).decode("ascii")
 
 
 def decode_bundle(signature: str) -> ReplayBundle | None:
@@ -56,10 +62,16 @@ def decode_bundle(signature: str) -> ReplayBundle | None:
         raw = base64.b64decode(
             signature + "=" * (-len(signature) % 4), altchars=b"-_", validate=True
         )
-        if not raw.startswith(_PREFIX):
+        protected = raw.startswith(_PROTECTED_PREFIX)
+        if not protected and not raw.startswith(_PREFIX):
             return None
-        value = json.loads(raw[len(_PREFIX) :])
-        if not isinstance(value, dict) or set(value) - {"thought_echo_sha256"} != {
+        value = json.loads(raw[len(_PROTECTED_PREFIX if protected else _PREFIX) :])
+        allowed = (
+            {"thought_echo_sha256", "protected_echo"}
+            if protected
+            else {"thought_echo_sha256"}
+        )
+        if not isinstance(value, dict) or set(value) - allowed != {
             "response_id",
             "records",
             "calls",
@@ -80,10 +92,43 @@ def decode_bundle(signature: str) -> ReplayBundle | None:
         if any(not isinstance(record, str) for record in value["records"]):
             raise ValueError("Invalid reasoning record")
         records = tuple(decode_replay(record) for record in value["records"])
+        echo = None
+        if protected:
+            if any(not protected_reasoning(record.native) for record in records):
+                raise ValueError("Unsigned protected replay record")
+            ranges = value.get("protected_echo")
+            if not isinstance(ranges, list):
+                raise ValueError("Missing protected echo ranges")
+            echo = []
+            previous_end = 0
+            for span in ranges:
+                if (
+                    not isinstance(span, list)
+                    or len(span) != 3
+                    or any(type(n) is not int for n in span)
+                ):
+                    raise ValueError("Invalid protected echo range")
+                record_index, start, end = span
+                if (
+                    not 0 <= record_index < len(records)
+                    or start < previous_end
+                    or end <= start
+                ):
+                    raise ValueError("Invalid protected echo range")
+                echo.append((record_index, start, end))
+                previous_end = end
+            if echo and digest is None:
+                raise ValueError("Missing protected echo digest")
         calls = tuple(_call_record(item) for item in value["calls"])
         if len({call.call_id for call in calls}) != len(calls):
             raise ValueError("Duplicate call metadata")
-        return ReplayBundle(value["response_id"], records, calls, digest)
+        return ReplayBundle(
+            value["response_id"],
+            records,
+            calls,
+            digest,
+            tuple(echo) if echo is not None else None,
+        )
     except (
         ValueError,
         TypeError,

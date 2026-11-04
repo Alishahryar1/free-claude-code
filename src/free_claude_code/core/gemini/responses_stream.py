@@ -5,10 +5,9 @@ from typing import Any
 from uuid import uuid4
 
 from ..failures import ExecutionFailure
-from ..history_replay import ReplayOrigin, ReplayRecord, protected_reasoning
+from ..history_replay import ReplayOrigin, ReplayRecord
 from ..json_types import JsonObject
 from ..openai_tool_names import OpenAIToolNameCodec
-from ..readable_replay import ReadableReplay
 from .response import GeminiOutput, conversion_failure, function_arguments
 
 
@@ -37,45 +36,7 @@ class GeminiResponsesStream:
         self._text: dict[tuple[int, str, int], str] = {}
         self._arguments: dict[int, str] = {}
         self._calls: dict[int, dict[str, Any]] = {}
-        self._reasoning: dict[int, JsonObject] = {}
-        self._replay: dict[int, ReadableReplay] = {}
         self._refusal = False
-        self._output.bind_partial_records(self._partial_records)
-
-    def _partial_records(self) -> list[tuple[ReplayRecord, ReadableReplay]]:
-        result = []
-        for index, item in self._items.items():
-            if (
-                item.get("type") != "reasoning"
-                or index in self._reasoning
-                or protected_reasoning(item)
-            ):
-                continue
-            native = deepcopy(item)
-            native.pop("status", None)
-            native["content"], native["summary"] = [], []
-            for (source, field, position), text in self._text.items():
-                if source != index:
-                    continue
-                parts = native[field]
-                while len(parts) <= position:
-                    parts.append(
-                        {
-                            "type": "summary_text"
-                            if field == "summary"
-                            else "reasoning_text",
-                            "text": "",
-                        }
-                    )
-                parts[position]["text"] = text
-            if any(native.get(field) for field in ("content", "summary")):
-                result.append(
-                    (
-                        ReplayRecord(self._origin, native),
-                        self._replay.setdefault(index, ReadableReplay()),
-                    )
-                )
-        return result
 
     @property
     def completed(self) -> bool:
@@ -85,16 +46,6 @@ class GeminiResponsesStream:
         return []
 
     def handoff(self) -> list[str]:
-        self._output.replace_records(
-            [
-                ReplayRecord(self._origin, record)
-                for _, record in sorted(self._reasoning.items())
-            ],
-            [
-                self._replay.setdefault(index, ReadableReplay())
-                for index in sorted(self._reasoning)
-            ],
-        )
         return self._output.handoff()
 
     def feed(self, event_type: str, payload: JsonObject) -> list[str]:
@@ -113,7 +64,7 @@ class GeminiResponsesStream:
             item = data.get("item")
             if not isinstance(item, dict):
                 raise conversion_failure("Responses output item is missing")
-            self._items[index] = deepcopy(item)
+            self._items[index] = {"id": item.get("id"), "type": item.get("type")}
             return self._item(index, item, complete=False)
         if event_type in {
             "response.output_text.delta",
@@ -131,16 +82,10 @@ class GeminiResponsesStream:
             if not isinstance(value, str):
                 raise conversion_failure("Responses text delta must be a string")
             key = (index, field, position)
-            if thought:
-                self._output.map_thought(
-                    self._replay.setdefault(index, ReadableReplay()),
-                    (field, position, "text"),
-                    len(self._text.get(key, "")),
-                    len(value),
-                )
             self._text[key] = self._text.get(key, "") + value
             return self._output.part(
-                {"text": value, **({"thought": True} if thought else {})}
+                {"text": value, **({"thought": True} if thought else {})},
+                source=index if thought else None,
             )
         if event_type == "response.function_call_arguments.delta":
             value = data.get("delta")
@@ -195,7 +140,7 @@ class GeminiResponsesStream:
             item = data.get("item")
             if not isinstance(item, dict):
                 raise conversion_failure("Responses completed item is missing")
-            self._items[index] = deepcopy(item)
+            self._items[index] = {"id": item.get("id"), "type": item.get("type")}
             return self._item(index, item, complete=True)
         if event_type in {"response.completed", "response.incomplete"}:
             response = data.get("response", {})
@@ -221,7 +166,13 @@ class GeminiResponsesStream:
             events.extend(
                 self._output.finish(
                     reason,
-                    _usage(response.get("usage"), has_reasoning=bool(self._reasoning)),
+                    _usage(
+                        response.get("usage"),
+                        has_reasoning=any(
+                            item.get("type") == "reasoning"
+                            for item in self._items.values()
+                        ),
+                    ),
                 )
             )
             return events
@@ -244,16 +195,10 @@ class GeminiResponsesStream:
             raise conversion_failure("Responses snapshot changed streamed text")
         self._text[key] = text
         suffix = text[len(previous) :]
-        if suffix and thought:
-            self._output.map_thought(
-                self._replay.setdefault(index, ReadableReplay()),
-                (field, position, "text"),
-                len(previous),
-                len(suffix),
-            )
         return (
             self._output.part(
-                {"text": suffix, **({"thought": True} if thought else {})}
+                {"text": suffix, **({"thought": True} if thought else {})},
+                source=index if thought else None,
             )
             if suffix
             else []
@@ -288,16 +233,8 @@ class GeminiResponsesStream:
                 for position, part in enumerate(item.get(field) or []):
                     events.extend(self._part(index, field, position, part))
             if complete and kind == "reasoning":
-                self._reasoning[index] = deepcopy(item)
-                self._output.replace_records(
-                    [
-                        ReplayRecord(self._origin, record)
-                        for _, record in sorted(self._reasoning.items())
-                    ],
-                    [
-                        self._replay.setdefault(index, ReadableReplay())
-                        for index in sorted(self._reasoning)
-                    ],
+                self._output.capture(
+                    ReplayRecord(self._origin, deepcopy(item)), source=index
                 )
             return events
         if kind != "function_call":

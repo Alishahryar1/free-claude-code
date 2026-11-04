@@ -314,7 +314,7 @@ async def test_late_summary_alias_replays_only_thinking_delivered_after_overlap(
         for message in bodies[-1]["messages"]
         for part in readable_reasoning(message)
     ]
-    assert replayed == [("Plan", False), ("Act", True)]
+    assert "".join(text for text, _ in replayed).replace("\n", "") == "PlanAct"
 
 
 @pytest.mark.asyncio
@@ -446,10 +446,7 @@ async def test_equal_late_alias_records_held_by_tool_gate_keep_independent_range
         for message in bodies[-1]["messages"]
         for part in readable_reasoning(message)
     ]
-    assert [(text.strip(), summary) for text, summary in replayed] == [
-        ("Plan", False),
-        ("Plan", True),
-    ]
+    assert "".join(text for text, _ in replayed).replace("\n", "") == "PlanPlan"
 
 
 @pytest.mark.asyncio

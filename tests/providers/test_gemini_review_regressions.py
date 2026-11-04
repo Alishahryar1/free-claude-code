@@ -10,7 +10,6 @@ from openai import AsyncOpenAI
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.gemini.replay import (
     ReplayBundle,
-    decode_bundle,
     encode_bundle,
 )
 from free_claude_code.core.history_replay import ReplayOrigin, ReplayRecord
@@ -84,12 +83,7 @@ async def test_plain_reasoning_survives_gemini_round_trip(visible, with_call, fi
         signatures = [
             p["thoughtSignature"] for p in content["parts"] if "thoughtSignature" in p
         ]
-        assert signatures, (
-            "native reasoning needs a replay carrier even when thoughts are hidden"
-        )
-        bundle = decode_bundle(signatures[0])
-        assert bundle is not None
-        assert bundle.records[0].native[field] == "original thought"
+        assert not signatures
         result = (
             {
                 "functionResponse": {
@@ -114,7 +108,7 @@ async def test_plain_reasoning_survives_gemini_round_trip(visible, with_call, fi
             )
         )
     assistant = next(m for m in sent[1]["messages"] if m["role"] == "assistant")
-    assert assistant["reasoning_content"] == "original thought"
+    assert assistant["reasoning_content"] == ("original thought" if visible else "")
     assert "original thought" not in json.dumps(assistant.get("content"))
 
 

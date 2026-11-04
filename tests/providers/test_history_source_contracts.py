@@ -318,8 +318,7 @@ def test_sdk_summary_carrier_does_not_absorb_independent_full_thinking():
         {
             "role": "assistant",
             "content": "Answer",
-            "reasoning_content": "Plan",
-            "reasoning_details": [detail],
+            "reasoning_content": "Plan\nPlan",
         }
     ]
     assert source == before

@@ -12,6 +12,7 @@ from free_claude_code.core.history_replay import (
     readable_reasoning,
     reasoning_detail,
     tool_history_context,
+    unprotected_replay,
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_chat import (
@@ -301,6 +302,13 @@ class _ResponsesChatInputBuilder:
         details: list[JsonValue] = []
         for item in self._pending_reasoning.take():
             encrypted = encrypted_reasoning_from_item(item)
+            unsigned = unprotected_replay(encrypted)
+            if unsigned is not None or not encrypted:
+                for text, _ in readable_reasoning(
+                    unsigned.native if unsigned else item
+                ):
+                    _apply_reasoning_text(message, text, self._reasoning_replay)
+                continue
             if encrypted and has_readable_replay(encrypted):
                 details.extend(reasoning_detail(encrypted))
                 continue

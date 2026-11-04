@@ -10,8 +10,10 @@ from free_claude_code.core.history_replay import (
     HistoryReplayError,
     has_readable_replay,
     is_replay,
+    readable_reasoning,
     reasoning_detail,
     tool_history_context,
+    unprotected_replay,
     validate_hosted_tool_history,
 )
 from free_claude_code.core.json_types import JsonObject
@@ -634,6 +636,19 @@ class AnthropicToOpenAIConverter:
         details: list[Any] = []
         for block in content:
             block_type = get_block_type(block)
+            carrier = (
+                get_block_attr(block, "signature", None)
+                if block_type == "thinking"
+                else get_block_attr(block, "data", None)
+                if block_type == "redacted_thinking"
+                else None
+            )
+            if record := unprotected_replay(carrier):
+                thinking_seen = True
+                thinking_parts.extend(
+                    text for text, _ in readable_reasoning(record.native)
+                )
+                continue
             if block_type == "text":
                 content_parts.append(get_block_attr(block, "text", ""))
             elif block_type == "thinking":

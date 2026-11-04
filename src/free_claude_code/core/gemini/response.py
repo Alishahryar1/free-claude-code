@@ -1,16 +1,20 @@
 """Gemini response serialization and non-streaming aggregation."""
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from copy import deepcopy
 from hashlib import sha256
 from typing import Any
 
 from ..failures import ExecutionFailure, FailureKind
-from ..history_replay import ReplayRecord, readable_reasoning
+from ..history_replay import (
+    ReplayRecord,
+    encode_replay,
+    protected_reasoning,
+    readable_reasoning,
+)
 from ..json_types import JsonObject
-from ..readable_replay import ReadableReplay
-from ..stream_delivery import current_stream_delivery
+from ..stream_recovery import RECOVERY_RETENTION_BYTES
 from .errors import gemini_error_payload
 from .replay import CallReplay, ReplayBundle, encode_bundle
 
@@ -62,106 +66,48 @@ class GeminiOutput:
         self.records: list[ReplayRecord] = []
         self.calls: list[CallReplay] = []
         self.completed = False
-        self._delivery = current_stream_delivery()
         self._thought_digest = sha256()
-        self._has_thoughts = False
-        self.thought_offset = 0
-        self._projections: dict[int, ReadableReplay] = {}
-        self._partial_records: Callable[
-            [], list[tuple[ReplayRecord, ReadableReplay]]
-        ] = lambda: []
-        self._prefix_thought_length = (
-            len(self._delivery.public_thinking) if self._delivery is not None else 0
-        )
+        self._thought_length = 0
+        self._ranges: dict[int, list[tuple[int, int]]] = {}
+        self._record_sources: dict[int, int] = {}
+        self._record_sizes: dict[int, int] = {}
+        self._retained_bytes = 0
 
-    def bind_partial_records(
-        self, reader: Callable[[], list[tuple[ReplayRecord, ReadableReplay]]]
-    ) -> None:
-        self._partial_records = reader
+    def _retain(self, size: int) -> None:
+        self._retained_bytes += size
+        if self._retained_bytes > RECOVERY_RETENTION_BYTES:
+            raise conversion_failure(
+                "Protected reasoning exceeded the continuation retention limit."
+            )
 
-    def capture(
-        self, record: ReplayRecord, projection: ReadableReplay | None = None
-    ) -> None:
-        self.records.append(record)
-        if projection is not None:
-            self._projections[id(record)] = projection
-        self._bind_replay()
+    def capture(self, record: ReplayRecord, *, source: int | None = None) -> None:
+        if source is not None and not readable_reasoning(record.native):
+            self._retain(-24 * len(self._ranges.pop(source, ())))
+        if not protected_reasoning(record.native):
+            if source is not None:
+                self._retain(-24 * len(self._ranges.pop(source, ())))
+            return
+        size = len(encode_replay(record).encode("utf-8"))
+        index = self._record_sources.get(source) if source is not None else None
+        if index is None:
+            index = len(self.records)
+            if source is not None:
+                self._record_sources[source] = index
+            self.records.append(record)
+        else:
+            self.records[index] = record
+        self._retain(size - self._record_sizes.get(index, 0))
+        self._record_sizes[index] = size
 
-    def replace_records(
-        self,
-        records: list[ReplayRecord],
-        projections: list[ReadableReplay] | None = None,
-    ) -> None:
-        self.records = records
-        self._projections = (
-            {
-                id(record): projection
-                for record, projection in zip(records, projections, strict=True)
-            }
-            if projections is not None
-            else {}
-        )
-        self._bind_replay()
-
-    def _bind_replay(self) -> None:
-        if self._delivery is not None:
-            self._delivery.bind_replay_source(self._current_records, self._coverage)
-
-    def map_thought(
-        self,
-        projection: ReadableReplay,
-        path: tuple[str | int, ...],
-        start: int,
-        length: int,
-    ) -> None:
-        if self.include_thoughts and self._delivery is not None:
-            self._bind_replay()
-            projection.add(path, start, -1, self.thought_offset, length)
-
-    def _sources(self) -> list[tuple[ReplayRecord, ReadableReplay | None]]:
-        partial = self._partial_records() if self.include_thoughts else []
-        return [
-            *((record, self._projections.get(id(record))) for record in self.records),
-            *partial,
-        ]
-
-    def _current_records(self) -> tuple[ReplayRecord, ...]:
-        return tuple(
-            projection.project(record, self._delivery.reasoning_retained)
-            if projection is not None and self._delivery is not None
-            else record
-            for record, projection in self._sources()
-        )
-
-    def _coverage(self) -> int:
-        if (
-            self._delivery is None
-            or self._delivery.committed_thought_coverage != self._prefix_thought_length
-        ):
-            return -1
-        length = len(self._delivery.public_thinking) - self._prefix_thought_length
-        removed, _ = self._delivery.reasoning_retained(-1) or (0, length)
-        ranges = sorted(
-            span
-            for _, projection in self._sources()
-            if projection is not None
-            for span in projection.coverage(removed, length)
-        )
-        covered = 0
-        for start, end in ranges:
-            if start > covered:
-                return -1
-            covered = max(covered, end)
-        return self._prefix_thought_length + length if covered == length else -1
-
-    def _records(self) -> tuple[ReplayRecord, ...]:
-        if self._delivery is not None:
-            if self._delivery.replay_exhausted:
-                raise conversion_failure(
-                    "Completed reasoning exceeded the continuation retention limit."
+    def capture_call(self, record: CallReplay) -> None:
+        self._retain(
+            len(
+                encode_bundle(
+                    ReplayBundle(self.response_id, calls=(record,), protected_echo=())
                 )
-            return self._delivery.committed_replay + self._current_records()
-        return self._current_records()
+            )
+        )
+        self.calls.append(record)
 
     def payload(self, candidate: JsonObject) -> JsonObject:
         return {
@@ -170,15 +116,22 @@ class GeminiOutput:
             "candidates": [{"index": 0, **candidate}],
         }
 
-    def part(self, part: JsonObject) -> list[str]:
+    def part(self, part: JsonObject, *, source: int | None = None) -> list[str]:
         if self.completed or (
             part.get("thought") is True and not self.include_thoughts
         ):
             return []
         if part.get("thought") is True and isinstance(text := part.get("text"), str):
             self._thought_digest.update(text.encode("utf-8"))
-            self._has_thoughts = True
-            self.thought_offset += len(text)
+            start = self._thought_length
+            self._thought_length += len(text)
+            if source is not None and text:
+                spans = self._ranges.setdefault(source, [])
+                if spans and spans[-1][1] == start:
+                    spans[-1] = (spans[-1][0], self._thought_length)
+                else:
+                    self._retain(24)
+                    spans.append((start, self._thought_length))
         return [
             gemini_frame(self.payload({"content": {"role": "model", "parts": [part]}}))
         ]
@@ -187,7 +140,7 @@ class GeminiOutput:
         if self.completed:
             return []
         candidate: JsonObject = {"finishReason": reason}
-        if self._records() or self.calls:
+        if self.records or self.calls:
             candidate["content"] = {
                 "role": "model",
                 "parts": [{"thoughtSignature": self._encoded_bundle()}],
@@ -200,40 +153,29 @@ class GeminiOutput:
 
     def handoff(self) -> list[str]:
         """Release completed source metadata before the public owner's tool handoff."""
-        if not (self._records() or self.calls) or self.completed:
+        if not (self.records or self.calls) or self.completed:
             return []
         return self.part({"thoughtSignature": self._encoded_bundle()})
 
     def _encoded_bundle(self) -> str:
-        value = encode_bundle(self._bundle())
-        if self._delivery is not None:
-            self._delivery.bind_carrier(value, lambda: encode_bundle(self._bundle()))
-        return value
-
-    def _bundle(self) -> ReplayBundle:
-        records = self._records()
-        covered = sha256()
-        for record in records:
-            for text, _ in readable_reasoning(record.native):
-                covered.update(text.encode("utf-8"))
-        public = self._delivery.public_thinking if self._delivery is not None else None
-        digest = (
-            sha256(public.encode("utf-8")).hexdigest()
-            if public is not None
-            else self._thought_digest.hexdigest()
-        )
-        return ReplayBundle(
-            self.response_id,
-            records,
-            tuple(self.calls),
-            digest
-            if self.include_thoughts
-            and (bool(public) if public is not None else self._has_thoughts)
-            and (
-                covered.hexdigest() == digest
-                or (public is not None and self._coverage() == len(public))
+        spans = tuple(
+            sorted(
+                (
+                    (index, start, end)
+                    for source, index in self._record_sources.items()
+                    for start, end in self._ranges.get(source, ())
+                ),
+                key=lambda span: span[1],
             )
-            else None,
+        )
+        return encode_bundle(
+            ReplayBundle(
+                self.response_id,
+                tuple(self.records),
+                tuple(self.calls),
+                self._thought_digest.hexdigest() if spans else None,
+                spans,
+            )
         )
 
     def failure(self, status_code: int, message: str) -> list[str]:

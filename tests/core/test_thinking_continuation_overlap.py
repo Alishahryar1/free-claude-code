@@ -89,8 +89,8 @@ def test_thinking_overlap_retains_only_new_characters(wire, parts):
     assert source == before
 
 
-def test_summary_overlap_does_not_consume_equal_full_reasoning():
-    overlap = ContinuationOverlap("Plan", channel="summary")
+def test_thinking_overlap_preserves_independent_equal_parts():
+    overlap = ContinuationOverlap("Plan", channel="thinking")
     full = {
         "type": "response.reasoning_text.delta",
         "item_id": "rs",
@@ -98,7 +98,7 @@ def test_summary_overlap_does_not_consume_equal_full_reasoning():
         "content_index": 0,
         "delta": "Plan",
     }
-    assert overlap.feed(full) == [full]
+    assert overlap.feed(full) == []
     summary = {
         "type": "response.reasoning_summary_text.delta",
         "item_id": "rs",
@@ -107,7 +107,47 @@ def test_summary_overlap_does_not_consume_equal_full_reasoning():
         "delta": "Plan more",
     }
     result = overlap.feed(summary)
-    assert result[0]["delta"] == " more"
+    assert result[0]["delta"] == "Plan more"
+
+
+def test_summary_replay_can_be_followed_by_independent_full_text_in_same_item():
+    overlap = ContinuationOverlap("Plan", channel="thinking")
+    assert (
+        overlap.feed(
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "item_id": "rs",
+                "output_index": 0,
+                "summary_index": 0,
+                "delta": "Plan",
+            }
+        )
+        == []
+    )
+    full = {
+        "type": "response.reasoning_text.delta",
+        "item_id": "rs",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": "Details",
+    }
+    assert overlap.feed(full) == [full]
+    terminal = {
+        "type": "response.completed",
+        "response": {
+            "output": [
+                {
+                    "id": "rs",
+                    "type": "reasoning",
+                    "content": [{"type": "reasoning_text", "text": "Details"}],
+                    "summary": [{"type": "summary_text", "text": "Plan"}],
+                }
+            ]
+        },
+    }
+    output = overlap.feed(terminal)[0]["response"]["output"][0]
+    assert output["content"] == [{"type": "reasoning_text", "text": "Details"}]
+    assert output["summary"] == [{"type": "summary_text", "text": ""}]
 
 
 @pytest.mark.parametrize("summary", [False, True])

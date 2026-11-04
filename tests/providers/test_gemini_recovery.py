@@ -167,22 +167,7 @@ async def test_gemini_open_chat_group_survives_cutoff_and_overlap(native_first):
             )
             == "PlanAct"
         )
-        bundle = decode_bundle(
-            next(
-                part["thoughtSignature"]
-                for part in content["parts"]
-                if "thoughtSignature" in part
-            )
-        )
-        assert bundle is not None
-        assert (
-            "".join(
-                text
-                for record in bundle.records
-                for text, _ in readable_reasoning(record.native)
-            )
-            == "PlanAct"
-        )
+        assert all("thoughtSignature" not in part for part in content["parts"])
         followup = gemini_request(
             contents=[content, {"role": "user", "parts": [{"text": "Next"}]}]
         )
@@ -213,7 +198,7 @@ async def test_gemini_open_chat_group_survives_cutoff_and_overlap(native_first):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("visible", [False, True])
 @pytest.mark.parametrize("invisible_retry", [False, True])
-async def test_public_continuation_preserves_completed_native_reasoning(
+async def test_public_continuation_uses_delivered_thinking_without_native_copies(
     visible, invisible_retry
 ):
     sent = []
@@ -261,23 +246,22 @@ async def test_public_continuation_preserves_completed_native_reasoning(
             await response.aclose()
     assert len(sent) == (3 if invisible_retry else 2)
     for body in sent[1:]:
-        assert "original thought" in json.dumps(body)
+        assert ("original thought" in json.dumps(body)) is visible
     signatures = [
         part["thoughtSignature"]
         for part in value["candidates"][0]["content"]["parts"]
         if "thoughtSignature" in part
     ]
-    assert len(signatures) == 1
-    bundle = decode_bundle(signatures[0])
-    assert bundle is not None
-    assert [record.native for record in bundle.records] == [
-        {"reasoning_content": "original thought"},
-        {"reasoning_content": "replacement thought"},
-    ]
+    assert not signatures
+    assert "".join(
+        part.get("text", "")
+        for part in value["candidates"][0]["content"]["parts"]
+        if part.get("thought")
+    ) == ("original thoughtreplacement thought" if visible else "")
 
 
 @pytest.mark.asyncio
-async def test_large_native_reasoning_prevents_unsafe_public_continuation():
+async def test_large_delivered_reasoning_prevents_unsafe_public_continuation():
     sent = []
 
     def reply(request):
@@ -298,7 +282,11 @@ async def test_large_native_reasoning_prevents_unsafe_public_continuation():
     ) as client:
         adapter = transport(client, DeepSeekChatBehavior(_PROFILE))
         response = await gemini_sse_streaming_response(
-            adapter.stream_gemini(gemini_request()),
+            adapter.stream_gemini(
+                gemini_request(
+                    generationConfig={"thinkingConfig": {"includeThoughts": True}}
+                )
+            ),
             request_id="native-retention",
             pre_start_error_response=lambda error: JSONResponse(
                 status_code=502, content={"error": str(error)}
@@ -368,13 +356,12 @@ async def test_public_continuation_retains_unencrypted_responses_reasoning(visib
         finally:
             await response.aclose()
     assert len(bodies) == 2
-    assert "original summary" in json.dumps(bodies[1])
-    bundle = decode_bundle(
-        value["candidates"][0]["content"]["parts"][-1]["thoughtSignature"]
+    assert ("original summary" in json.dumps(bodies[1])) is visible
+    parts = value["candidates"][0]["content"]["parts"]
+    assert all("thoughtSignature" not in part for part in parts)
+    assert "".join(part.get("text", "") for part in parts if part.get("thought")) == (
+        "original summary" if visible else ""
     )
-    assert bundle is not None and len(bundle.records) == 1
-    assert bundle.records[0].origin.protocol == "responses"
-    assert bundle.records[0].native["id"] == "reasoning-source"
 
 
 @pytest.mark.asyncio

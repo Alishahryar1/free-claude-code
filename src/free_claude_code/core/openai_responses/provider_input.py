@@ -22,7 +22,9 @@ from free_claude_code.core.history_replay import (
     HistoryReplayError,
     has_readable_replay,
     is_replay,
+    readable_reasoning,
     tool_history_context,
+    unprotected_replay,
     validate_hosted_tool_history,
 )
 from free_claude_code.core.json_types import JsonObject
@@ -226,6 +228,26 @@ def _assistant_items(
             )
             continue
         flush_text()
+        carrier = (
+            get_block_attr(block, "signature", None)
+            if kind == "thinking"
+            else get_block_attr(block, "data", None)
+            if kind == "redacted_thinking"
+            else None
+        )
+        if record := unprotected_replay(carrier):
+            items.append(
+                {
+                    "id": new_reasoning_item_id(),
+                    "type": "reasoning",
+                    "summary": [],
+                    "content": [
+                        {"type": "reasoning_text", "text": text}
+                        for text, _ in readable_reasoning(record.native)
+                    ],
+                }
+            )
+            continue
         if kind == "thinking":
             signature = get_block_attr(block, "signature", None)
             item: dict[str, Any] = {
