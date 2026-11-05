@@ -123,6 +123,7 @@ from .request_policy import (
     apply_openai_chat_body_policy,
 )
 from .stream_output import (
+    ORDINARY_REASONING_SOURCE,
     AnthropicChatStreamOutput,
     ChatStreamOutput,
     ChatStreamUsage,
@@ -342,8 +343,12 @@ class _OpenAIChatStreamAssembler:
                 if part.type == ContentType.THINKING:
                     if not self._output_reasoning:
                         continue
-                    yield from self._output.ensure_reasoning_block()
-                    yield self._output.emit_reasoning_delta(part.content)
+                    yield from self._output.ensure_reasoning_block(
+                        source=ORDINARY_REASONING_SOURCE
+                    )
+                    yield self._output.emit_reasoning_delta(
+                        part.content, source=ORDINARY_REASONING_SOURCE
+                    )
                 else:
                     yield from _iter_visible_text_events(self._output, part.content)
 
@@ -391,8 +396,12 @@ class _OpenAIChatStreamAssembler:
         if remaining:
             if remaining.type == ContentType.THINKING:
                 if self._output_reasoning:
-                    yield from self._output.ensure_reasoning_block()
-                    yield self._output.emit_reasoning_delta(remaining.content)
+                    yield from self._output.ensure_reasoning_block(
+                        source=ORDINARY_REASONING_SOURCE
+                    )
+                    yield self._output.emit_reasoning_delta(
+                        remaining.content, source=ORDINARY_REASONING_SOURCE
+                    )
             else:
                 yield from _iter_visible_text_events(self._output, remaining.content)
 
@@ -1762,8 +1771,14 @@ class _OpenAIChatStreamRunner:
         if recovered.native_reasoning:
             output.capture_reasoning_record(recovered.native_reasoning)
         if thinking_suffix:
-            events.extend(output.ensure_reasoning_block())
-            events.append(output.emit_reasoning_delta(thinking_suffix))
+            events.extend(
+                output.ensure_reasoning_block(source=ORDINARY_REASONING_SOURCE)
+            )
+            events.append(
+                output.emit_reasoning_delta(
+                    thinking_suffix, source=ORDINARY_REASONING_SOURCE
+                )
+            )
         if text_suffix:
             events.extend(output.ensure_text_block())
             events.append(output.emit_text_delta(text_suffix))

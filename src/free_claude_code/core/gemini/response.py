@@ -82,10 +82,10 @@ class GeminiOutput:
 
     def capture(self, record: ReplayRecord, *, source: int | None = None) -> None:
         if source is not None and not readable_reasoning(record.native):
-            self._retain(-24 * len(self._ranges.pop(source, ())))
+            self.discard(source)
         if not protected_reasoning(record.native):
             if source is not None:
-                self._retain(-24 * len(self._ranges.pop(source, ())))
+                self.discard(source)
             return
         size = len(encode_replay(record).encode("utf-8"))
         index = self._record_sources.get(source) if source is not None else None
@@ -98,6 +98,10 @@ class GeminiOutput:
             self.records[index] = record
         self._retain(size - self._record_sizes.get(index, 0))
         self._record_sizes[index] = size
+
+    def discard(self, source: int) -> None:
+        """Release provisional echo ownership for an unsigned or abandoned record."""
+        self._retain(-24 * len(self._ranges.pop(source, ())))
 
     def capture_call(self, record: CallReplay) -> None:
         self._retain(

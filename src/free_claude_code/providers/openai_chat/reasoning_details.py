@@ -18,6 +18,7 @@ from .stream_output import ChatStreamOutput
 
 @dataclass(slots=True)
 class _ReasoningGroup:
+    replay_owner: int
     details: list[dict[str, Any]] = field(default_factory=list)
     slots: dict[tuple[object, object], int] = field(default_factory=dict)
     native_parts: list[str] = field(default_factory=list)
@@ -36,6 +37,7 @@ class StructuredReasoningStream:
     def __init__(self, *, structured_details: bool = True) -> None:
         self._group: _ReasoningGroup | None = None
         self._structured_details = structured_details
+        self._next_replay_owner = 0
 
     @property
     def active(self) -> bool:
@@ -78,7 +80,10 @@ class StructuredReasoningStream:
                 for detail in details
             )
         ):
-            self._group = _ReasoningGroup(output_reasoning=output_reasoning)
+            self._group = _ReasoningGroup(
+                self._next_replay_owner, output_reasoning=output_reasoning
+            )
+            self._next_replay_owner += 1
         group = self._group
         if group is None:
             return
@@ -100,7 +105,9 @@ class StructuredReasoningStream:
             group.native_fields.setdefault(native_field, []).append(native_reasoning)
             if group.native_primary and output_reasoning and native_reasoning:
                 yield from output.ensure_reasoning_block()
-                yield output.emit_reasoning_delta(native_reasoning)
+                yield output.emit_reasoning_delta(
+                    native_reasoning, replay_owner=group.replay_owner
+                )
                 key = ("native", 0)
                 group.visible_parts[key] = (
                     group.visible_parts.get(key, "") + native_reasoning
@@ -153,7 +160,9 @@ class StructuredReasoningStream:
             source = _output_source(group, key)
             group.output_sources[key] = source
             yield from output.ensure_reasoning_block(source=source)
-            yield output.emit_reasoning_delta(text, summary=summary, source=source)
+            yield output.emit_reasoning_delta(
+                text, summary=summary, source=source, replay_owner=group.replay_owner
+            )
             group.visible_parts[key] = group.visible_parts.get(key, "") + text
 
     def _remaining_readable(
@@ -204,7 +213,12 @@ class StructuredReasoningStream:
             source = _output_source(group, key)
             group.output_sources[key] = source
             yield from output.begin_reasoning_record(source=source)
-            yield output.emit_reasoning_delta(remaining, summary=summary, source=source)
+            yield output.emit_reasoning_delta(
+                remaining,
+                summary=summary,
+                source=source,
+                replay_owner=group.replay_owner,
+            )
 
     def finish(
         self, output: ChatStreamOutput, *, completed: bool = True
@@ -213,8 +227,8 @@ class StructuredReasoningStream:
         if group is not None:
             yield from self._remaining_readable(output, group)
             native = _native_record(group)
-            captured = (
-                completed and bool(native) and output.capture_reasoning_record(native)
+            captured = bool(native) and output.capture_reasoning_record(
+                native, replay_owner=group.replay_owner, completed=completed
             )
             captured_zero = bool(
                 completed
@@ -246,6 +260,16 @@ class StructuredReasoningStream:
                     and not (captured_zero and source == 0)
                     else []
                 )
+                if opaque and output.replay_origin is not None:
+                    # Preserve this source boundary through history conversion.
+                    # An independent ordinary thought may have identical text.
+                    opaque = [
+                        encode_replay(
+                            ReplayRecord(
+                                output.replay_origin, {"reasoning_details": [detail]}
+                            )
+                        )
+                    ]
                 if (
                     group.output_reasoning
                     and detail.get("text") == ""
@@ -253,7 +277,9 @@ class StructuredReasoningStream:
                     and key not in group.output_sources
                 ):
                     yield from output.begin_reasoning_record(source=source)
-                    yield output.emit_reasoning_delta("", source=source)
+                    yield output.emit_reasoning_delta(
+                        "", source=source, replay_owner=group.replay_owner
+                    )
                 yield from output.complete_reasoning_record(opaque, source=source)
             yield from output.complete_reasoning_record(
                 [

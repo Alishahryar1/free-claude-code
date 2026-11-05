@@ -34,6 +34,9 @@ from free_claude_code.core.openai_responses import (
 )
 from free_claude_code.core.token_estimation import estimate_text_tokens
 
+# Native scalar/detail sources use nonnegative indices within their group.
+ORDINARY_REASONING_SOURCE = -1
+
 
 class ReasoningReplayLifecycle(Protocol):
     @property
@@ -98,8 +101,14 @@ class ChatStreamOutput(ABC):
         self._content_started = False
         self._terminal = False
 
-    def capture_reasoning_record(self, native: JsonObject) -> bool:
-        """Allow a native carrier to retain a complete source reasoning record."""
+    def capture_reasoning_record(
+        self,
+        native: JsonObject,
+        *,
+        replay_owner: int | None = None,
+        completed: bool = True,
+    ) -> bool:
+        """Finalize native replay ownership, discarding incomplete records."""
         return False
 
     @property
@@ -128,10 +137,17 @@ class ChatStreamOutput(ABC):
         return events
 
     def emit_reasoning_delta(
-        self, content: str, *, summary: bool = False, source: int = 0
+        self,
+        content: str,
+        *,
+        summary: bool = False,
+        source: int = 0,
+        replay_owner: int | None = None,
     ) -> str:
         self._reasoning_parts.append(content)
-        return self._emit_reasoning_delta(content, summary=summary, source=source)
+        return self._emit_reasoning_delta(
+            content, summary=summary, source=source, replay_owner=replay_owner
+        )
 
     def begin_reasoning_record(self, *, source: int = 0) -> list[str]:
         if source in self._open_reasoning_sources:
@@ -361,7 +377,12 @@ class ChatStreamOutput(ABC):
 
     @abstractmethod
     def _emit_reasoning_delta(
-        self, content: str, *, summary: bool = False, source: int = 0
+        self,
+        content: str,
+        *,
+        summary: bool = False,
+        source: int = 0,
+        replay_owner: int | None = None,
     ) -> str: ...
 
     @abstractmethod
@@ -441,7 +462,12 @@ class AnthropicChatStreamOutput(ChatStreamOutput):
         return [self._ledger.content_block_start(index, "thinking")]
 
     def _emit_reasoning_delta(
-        self, content: str, *, summary: bool = False, source: int = 0
+        self,
+        content: str,
+        *,
+        summary: bool = False,
+        source: int = 0,
+        replay_owner: int | None = None,
     ) -> str:
         return self._ledger.content_block_delta(
             self._reasoning_indices[source], "thinking_delta", content
@@ -594,7 +620,12 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
         ]
 
     def _emit_reasoning_delta(
-        self, content: str, *, summary: bool = False, source: int = 0
+        self,
+        content: str,
+        *,
+        summary: bool = False,
+        source: int = 0,
+        replay_owner: int | None = None,
     ) -> str:
         state = self._reasoning_states.get(source)
         if state is None:

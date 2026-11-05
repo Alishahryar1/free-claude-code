@@ -36,14 +36,22 @@ class GeminiChatStreamOutput(ChatStreamOutput):
             response_id, model, include_thoughts=include_thoughts
         )
         self._tool_names = tool_names
-        self._group = 0
 
-    def capture_reasoning_record(self, native: JsonObject) -> bool:
+    def capture_reasoning_record(
+        self,
+        native: JsonObject,
+        *,
+        replay_owner: int | None = None,
+        completed: bool = True,
+    ) -> bool:
+        if not completed:
+            if replay_owner is not None:
+                self._gemini.discard(replay_owner)
+            return True
         assert self.replay_origin is not None
         self._gemini.capture(
-            ReplayRecord(self.replay_origin, deepcopy(native)), source=self._group
+            ReplayRecord(self.replay_origin, deepcopy(native)), source=replay_owner
         )
-        self._group += 1
         return True
 
     def _start_events(self) -> list[str]:
@@ -53,10 +61,15 @@ class GeminiChatStreamOutput(ChatStreamOutput):
         return []
 
     def _emit_reasoning_delta(
-        self, content: str, *, summary: bool = False, source: int = 0
+        self,
+        content: str,
+        *,
+        summary: bool = False,
+        source: int = 0,
+        replay_owner: int | None = None,
     ) -> str:
         return "".join(
-            self._gemini.part({"text": content, "thought": True}, source=self._group)
+            self._gemini.part({"text": content, "thought": True}, source=replay_owner)
         )
 
     def _emit_opaque_reasoning(self, data: str) -> list[str]:
