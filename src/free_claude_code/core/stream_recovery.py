@@ -5,12 +5,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
-from .history_replay import (
-    AssociatedReplayRecord,
-    ReplayRecord,
-    readable_reasoning,
-    unprotected_replay,
-)
 from .json_types import JsonObject
 
 RECOVERY_RETENTION_BYTES = 1_048_576
@@ -24,7 +18,6 @@ class DeliveredPrefix:
     eligible: bool
     can_handoff: bool
     unsafe_reason: str | None
-    replay_records: tuple[ReplayRecord, ...] = ()
     retained_bytes: int = 0
     continuation: ContinuationSeed | None = None
 
@@ -39,40 +32,27 @@ class ContinuationSeed:
     def __post_init__(self) -> None:
         object.__setattr__(self, "items", deepcopy(self.items))
 
-    def readable_text(self, channel: Literal["text", "thinking", "summary"]) -> str:
-        """Read replay prefixes, including explicitly retained late summary aliases."""
+    def readable_text(self, channel: Literal["text", "thinking"]) -> str:
+        """Read the ordinary text already delivered in the client protocol."""
         values: list[str] = []
         for item in self.items:
             if self.wire_api == "messages":
-                if channel != "summary" and item.get("type") == channel:
+                if item.get("type") == channel:
                     values.append(str(item.get(channel) or ""))
             elif self.wire_api == "gemini":
-                if channel != "summary" and bool(item.get("thought")) == (
-                    channel == "thinking"
-                ):
+                if bool(item.get("thought")) == (channel == "thinking"):
                     values.append(str(item.get("text") or ""))
             elif item.get("type") == ("message" if channel == "text" else "reasoning"):
-                record = unprotected_replay(item.get("encrypted_content"))
-                if (
-                    channel == "summary"
-                    and isinstance(record, AssociatedReplayRecord)
-                    and record.origin.protocol == "chat"
+                for field in (
+                    ("content",) if channel == "text" else ("content", "summary")
                 ):
-                    # A scalar was already displayed when its summary type arrived.
-                    values.extend(
-                        text
-                        for text, summary in readable_reasoning(record.native)
-                        if summary
-                    )
-                    continue
-                field = "summary" if channel == "summary" else "content"
-                parts = item.get(field)
-                if isinstance(parts, list):
-                    values.extend(
-                        str(part.get("text") or "")
-                        for part in parts
-                        if isinstance(part, dict)
-                    )
+                    parts = item.get(field)
+                    if isinstance(parts, list):
+                        values.extend(
+                            str(part.get("text") or "")
+                            for part in parts
+                            if isinstance(part, dict)
+                        )
         return "".join(values)
 
 

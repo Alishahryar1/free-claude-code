@@ -2,6 +2,7 @@
 
 import asyncio
 from copy import deepcopy
+from typing import Any
 
 import pytest
 
@@ -218,6 +219,112 @@ async def test_second_cutoff_retains_answer_after_matched_thinking(wire, field):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("second_cutoff", [False, True])
+async def test_interleaved_thinking_continuation_keeps_new_part_and_answer(
+    second_cutoff,
+):
+    def upstream(*, continued, complete):
+        template = reasoning_events()
+        item: dict[str, Any] = {
+            "type": "reasoning",
+            "id": "rs_mixed",
+            "content": [],
+            "summary": [],
+        }
+        events = [
+            template[0],
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": deepcopy(item),
+            },
+        ]
+        parts = [("content", "Plan"), ("summary", "Act")]
+        if continued:
+            parts.append(("content", "Details"))
+        for field, text in parts:
+            index = len(item[field])
+            item[field].append(
+                {
+                    "type": "summary_text" if field == "summary" else "reasoning_text",
+                    "text": text,
+                }
+            )
+            kind = (
+                "response.reasoning_summary_text"
+                if field == "summary"
+                else "response.reasoning_text"
+            )
+            identity = {
+                "output_index": 0,
+                "item_id": item["id"],
+                f"{field}_index": index,
+            }
+            events.extend(
+                [
+                    {"type": f"{kind}.delta", **identity, "delta": text},
+                    {"type": f"{kind}.done", **identity, "text": text},
+                ]
+            )
+        events.append(
+            {"type": "response.output_item.done", "output_index": 0, "item": item}
+        )
+        tail = text_events("responses", "world." if continued else "Hello ")
+        for event in tail:
+            if "output_index" in event:
+                event["output_index"] = 1
+        tail[-1]["response"]["output"].insert(0, deepcopy(item))
+        events.extend(tail[1:] if complete else tail[1:-1])
+        return [
+            {**event, "sequence_number": sequence}
+            for sequence, event in enumerate(events)
+        ]
+
+    async with _harness(
+        "responses",
+        lambda bodies: (
+            200,
+            upstream(
+                continued=len(bodies) > 1,
+                complete=len(bodies) > 1 and not second_cutoff,
+            ),
+        ),
+        max_attempts=2,
+    ) as (send, bodies, _):
+        raw = await delivered(
+            send("responses", [{"role": "user", "content": "Think"}]), "responses"
+        )
+    events = parse_sse_text(raw)
+    assert len(bodies) == 2
+    assert (
+        "".join(
+            event.data["delta"]
+            for event in events
+            if event.event
+            in {
+                "response.reasoning_text.delta",
+                "response.reasoning_summary_text.delta",
+            }
+        )
+        == "PlanActDetails"
+    )
+    assert public_text(events, "responses") == "Hello world."
+    if second_cutoff:
+        assert events[-1].event == "response.failed"
+    else:
+        assert_completed(events, "responses")
+    snapshot = events[-1].data["response"]["output"]
+    assert [
+        part["text"]
+        for item in snapshot
+        if item["type"] == "reasoning"
+        for field in ("content", "summary")
+        for part in item.get(field) or []
+        if part["text"]
+    ] == ["Plan", "Act", "Details"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("field", ["content", "summary"])
 @pytest.mark.parametrize("suffix", ["", " Act"])
@@ -314,7 +421,7 @@ async def test_late_summary_alias_replays_only_thinking_delivered_after_overlap(
         for message in bodies[-1]["messages"]
         for part in readable_reasoning(message)
     ]
-    assert replayed == [("Plan", False), ("Act", True)]
+    assert "".join(text for text, _ in replayed).replace("\n", "") == "PlanAct"
 
 
 @pytest.mark.asyncio
@@ -446,10 +553,7 @@ async def test_equal_late_alias_records_held_by_tool_gate_keep_independent_range
         for message in bodies[-1]["messages"]
         for part in readable_reasoning(message)
     ]
-    assert [(text.strip(), summary) for text, summary in replayed] == [
-        ("Plan", False),
-        ("Plan", True),
-    ]
+    assert "".join(text for text, _ in replayed).replace("\n", "") == "PlanPlan"
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from copy import deepcopy
+from typing import cast
 from uuid import uuid4
 
 from ..anthropic.native_stream import NativeMessagesStreamState
@@ -61,14 +62,20 @@ class GeminiMessagesStream:
             if kind == "text" and content.get("text"):
                 return self._output.part({"text": content["text"]})
             if kind == "thinking" and content.get("thinking"):
-                return self._output.part({"text": content["thinking"], "thought": True})
+                return self._output.part(
+                    {"text": content["thinking"], "thought": True},
+                    source=cast(int, payload["index"]),
+                )
         elif event_type == "content_block_delta":
             delta = payload.get("delta")
             assert isinstance(delta, Mapping)
             if delta.get("type") == "text_delta":
                 return self._output.part({"text": delta["text"]})
             if delta.get("type") == "thinking_delta":
-                return self._output.part({"text": delta["thinking"], "thought": True})
+                return self._output.part(
+                    {"text": delta["thinking"], "thought": True},
+                    source=cast(int, payload["index"]),
+                )
             if delta.get("type") == "citations_delta":
                 raise conversion_failure(
                     "Gemini cannot represent upstream native citations"
@@ -76,7 +83,10 @@ class GeminiMessagesStream:
         if block is not None:
             if block.body.get("type") in {"thinking", "redacted_thinking"}:
                 self._has_reasoning = True
-                self._output.capture(ReplayRecord(self._origin, deepcopy(block.body)))
+                self._output.capture(
+                    ReplayRecord(self._origin, deepcopy(block.body)),
+                    source=cast(int, payload["index"]),
+                )
             elif block.body.get("type") == "tool_use":
                 name = self._names.decode(str(block.body["name"]))
                 if name not in self._declared:

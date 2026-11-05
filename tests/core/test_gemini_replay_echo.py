@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import replace
+from hashlib import sha256
 
 import pytest
 
@@ -32,18 +33,20 @@ ORIGIN = ReplayOrigin("provider", "chat", "https://source.invalid", "account", "
 
 
 def generated():
-    output = GeminiOutput("response", "model", include_thoughts=True)
-    output.records.append(ReplayRecord(ORIGIN, {"reasoning_content": "native thought"}))
-    frames = [
-        *output.part({"text": "native ", "thought": True}),
-        *output.part({"text": "thought", "thought": True}),
-        *output.part({"text": "answer"}),
-        *output.finish("STOP"),
+    # Persisted v1 fixture, written before unsigned replay emission was removed.
+    return [
+        {"text": "native thought", "thought": True},
+        {"text": "answer"},
+        {
+            "thoughtSignature": encode_bundle(
+                ReplayBundle(
+                    "response",
+                    (ReplayRecord(ORIGIN, {"reasoning_content": "native thought"}),),
+                    thought_echo_sha256=sha256(b"native thought").hexdigest(),
+                )
+            )
+        },
     ]
-    aggregate = GeminiResponseAccumulator()
-    for event in parse_sse_text("".join(frames)):
-        aggregate.feed(event.data)
-    return aggregate.result()["candidates"][0]["content"]["parts"]
 
 
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
@@ -178,12 +181,12 @@ def test_native_aggregate_alias_does_not_duplicate_structured_full_text():
 @pytest.mark.parametrize("native", [False, True])
 def test_echo_digest_requires_replay_coverage_of_all_thought_text(native):
     output = GeminiOutput("response", "model", include_thoughts=True)
-    output.calls.append(
+    output.capture_call(
         CallReplay(ORIGIN, "call", {"google": {"thought_signature": "opaque"}})
     )
     frames = []
     if native:
-        output.records.append(ReplayRecord(ORIGIN, {"reasoning_content": "native"}))
+        output.capture(ReplayRecord(ORIGIN, {"reasoning_content": "native"}))
         frames.extend(output.part({"text": "native", "thought": True}))
     frames.extend(output.part({"text": "parsed thought", "thought": True}))
     frames.extend(

@@ -242,18 +242,15 @@ def test_native_records_stay_exact_in_all_modes(mode):
     assert ("Editable" in str(projected)) == (mode == "all")
 
 
-def test_unsigned_response_summary_is_omitted_for_messages_without_prose():
+def test_unsigned_response_summary_is_messages_thinking_without_prose():
     from free_claude_code.core.history_replay import responses_reasoning_blocks
 
-    assert (
-        responses_reasoning_blocks(
-            {
-                "type": "reasoning",
-                "summary": [{"type": "summary_text", "text": "Summary"}],
-            }
-        )
-        == []
-    )
+    assert responses_reasoning_blocks(
+        {
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "Summary"}],
+        }
+    ) == [{"type": "thinking", "thinking": "Summary"}]
 
 
 def test_native_messages_readable_foreign_carrier_reaches_shared_projection():

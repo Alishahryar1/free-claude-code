@@ -91,6 +91,8 @@ class SourceRecoveryState:
         if protocol == "chat":
             for choice in payload.get("choices", []):
                 delta = choice.get("delta") or {}
+                if protected_reasoning({"extra_content": delta.get("extra_content")}):
+                    self.unsafe_reason = "native_content"
                 details = delta.get("reasoning_details")
                 if delta.get("audio") or (
                     details

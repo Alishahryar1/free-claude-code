@@ -1,6 +1,7 @@
 """Direct Gemini ingress through the real upstream transport adapters."""
 
 import json
+from copy import deepcopy
 
 import httpx
 import httpx2
@@ -12,6 +13,7 @@ from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.gemini.replay import decode_bundle
 from free_claude_code.core.gemini.response import GeminiResponseAccumulator
+from free_claude_code.core.history_replay import readable_reasoning
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.gemini.client import _PROFILE as GOOGLE_PROFILE
 from free_claude_code.providers.google_openai.provider import GoogleChatBehavior
@@ -29,7 +31,7 @@ from tests.providers.test_anthropic_messages_transport import (
 from tests.providers.test_anthropic_messages_transport import (
     _transport as messages_transport,
 )
-from tests.providers.test_history_transports import _harness
+from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
 from tests.providers.test_openai_chat_transport import _transport
 from tests.providers.test_openai_responses_transport import (
@@ -288,6 +290,142 @@ async def test_responses_gemini_text_complete_call_and_late_reasoning_replay():
     assert bundle is not None and bundle.records[0].native == reasoning
     assert "usageMetadata" not in value
     assert sent[0]["input"][0]["role"] == "user"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", ["response.completed", "response.incomplete"])
+@pytest.mark.parametrize("visible", [False, True])
+@pytest.mark.parametrize("first_only_at_terminal", [False, True])
+async def test_responses_gemini_replay_uses_output_order_not_completion_order(
+    terminal, visible, first_only_at_terminal
+):
+    first = {
+        "type": "reasoning",
+        "id": "rs_first",
+        "summary": [{"type": "summary_text", "text": "Alpha"}],
+        "encrypted_content": "cipher-first",
+    }
+    second = {
+        "type": "reasoning",
+        "id": "rs_second",
+        "summary": [{"type": "summary_text", "text": "Beta"}],
+        "encrypted_content": "cipher-second",
+    }
+    ordinary = {
+        "type": "reasoning",
+        "id": "rs_ordinary",
+        "summary": [{"type": "summary_text", "text": "Independent"}],
+    }
+    response = deepcopy(_events_for("responses")[-1]["response"])
+    response.update(output=[first, ordinary, second], usage=None)
+    if terminal == "response.incomplete":
+        response.update(
+            status="incomplete", incomplete_details={"reason": "max_output_tokens"}
+        )
+    events = [
+        {"type": "response.output_item.done", "output_index": 2, "item": second},
+        {"type": "response.output_item.done", "output_index": 1, "item": ordinary},
+    ]
+    if not first_only_at_terminal:
+        events.append(
+            {"type": "response.output_item.done", "output_index": 0, "item": first}
+        )
+    events.append({"type": terminal, "response": response})
+    async with _harness("responses", lambda _: (200, events)) as (_, bodies, adapter):
+
+        async def send(request):
+            return await collect(
+                adapter.stream_gemini(
+                    request,
+                    input_tokens=0,
+                    request_id="ordered-replay",
+                    response_model="public",
+                    reasoning=ReasoningPolicy.provider_default(),
+                )
+            )
+
+        value, _ = await send(
+            gemini_request(
+                generationConfig={"thinkingConfig": {"includeThoughts": visible}}
+            )
+        )
+        content = value["candidates"][0]["content"]
+        bundle = decode_bundle(content["parts"][-1]["thoughtSignature"])
+        assert bundle is not None
+        assert [record.native for record in bundle.records] == [first, second]
+        if visible:
+            assert (
+                "".join(p.get("text", "") for p in content["parts"] if p.get("thought"))
+                == "BetaIndependentAlpha"
+            )
+            assert bundle.protected_echo == ((1, 0, 4), (0, 15, 20))
+        await send(
+            gemini_request(
+                contents=[content, {"role": "user", "parts": [{"text": "next"}]}]
+            )
+        )
+    assert len(bodies) == 2
+    native = [item for item in bodies[-1]["input"] if item.get("encrypted_content")]
+    assert native == [first, second]
+    unsigned = [
+        item
+        for item in bodies[-1]["input"]
+        if item.get("type") == "reasoning" and not item.get("encrypted_content")
+    ]
+    assert "".join(
+        text for item in unsigned for text, _ in readable_reasoning(item)
+    ) == ("Independent" if visible else "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("visible", [False, True])
+@pytest.mark.parametrize(
+    "kind,breakdown,expected",
+    [
+        ("none", None, {"candidatesTokenCount": 20}),
+        ("unsigned", None, {}),
+        ("protected", None, {}),
+        ("unsigned", 7, {"candidatesTokenCount": 13, "thoughtsTokenCount": 7}),
+        ("protected", 0, {"candidatesTokenCount": 20, "thoughtsTokenCount": 0}),
+    ],
+)
+async def test_responses_gemini_usage_accounts_for_terminal_only_reasoning(
+    visible, kind, breakdown, expected
+):
+    item = {
+        "type": "reasoning",
+        "id": "rs_terminal",
+        "summary": [{"type": "summary_text", "text": "Think"}],
+    }
+    if kind == "protected":
+        item["encrypted_content"] = "cipher"
+    response = deepcopy(_events_for("responses")[-1]["response"])
+    response.update(
+        output=[] if kind == "none" else [item],
+        usage={"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
+    )
+    if breakdown is not None:
+        response["usage"]["output_tokens_details"] = {"reasoning_tokens": breakdown}
+    async with _harness(
+        "responses",
+        lambda _: (200, [{"type": "response.completed", "response": response}]),
+    ) as (_, _, adapter):
+        value, _ = await collect(
+            adapter.stream_gemini(
+                gemini_request(
+                    generationConfig={"thinkingConfig": {"includeThoughts": visible}}
+                ),
+                input_tokens=0,
+                request_id="terminal-usage",
+                response_model="public",
+                reasoning=ReasoningPolicy.provider_default(),
+            )
+        )
+    assert value["usageMetadata"] == {
+        "promptTokenCount": 10,
+        "totalTokenCount": 30,
+        **expected,
+    }
 
 
 @pytest.mark.asyncio

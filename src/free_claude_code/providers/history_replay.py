@@ -86,7 +86,10 @@ def normalize_messages_history(request: MessagesRequest) -> MessagesRequest:
                     )
                 body["reasoning_content"] = None
             body["content"] = blocks
-            messages.append(Message.model_validate(body))
+            normalized = normalize_history_source({"messages": [body]}, "messages")
+            messages.append(
+                Message.model_validate(cast(list[JsonValue], normalized["messages"])[0])
+            )
     except HistoryReplayError as error:
         raise InvalidRequestError(str(error)) from error
     return request.model_copy(update={"messages": messages})

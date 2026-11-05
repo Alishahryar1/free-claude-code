@@ -112,21 +112,20 @@ def test_messages_suffix_accepts_summary_only_and_incomplete_text(parts):
     builder = ContinuationRequest("messages")
     first = builder.build(source, seed)
     assert source == original and seed.items == original_items
-    assert "Summary" not in str(first)
+    assert "Summary" in str(first)
     assistant = [
         message for message in first["messages"] if message["role"] == "assistant"
     ]
     expected = [text for text in parts or [] if text]
-    assert assistant == (
-        [
-            {
-                "role": "assistant",
-                "content": [{"type": "text", "text": text} for text in expected],
-            }
-        ]
-        if expected
-        else []
-    )
+    assert assistant == [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "Summary"},
+                *[{"type": "text", "text": text} for text in expected],
+            ],
+        }
+    ]
     second = builder.build(first, continuation_seed("Recovered"))
     assert second["messages"][:-2] == original["messages"]
     assert assistant_history_text(second["messages"]) == "Recovered"
@@ -159,7 +158,9 @@ def test_native_continuation_carriers_project_and_replace_as_one_suffix(protocol
             ),
         ),
     )
-    assert json.dumps(second).count(encode_replay(record)) == 1
+    assert json.dumps(second).count("retained native thought") == (
+        0 if protocol == "messages" else 1
+    )
     projected = prepare_history(
         second, replace(source, protocol=protocol), scope=HistoryMode.ALL
     )

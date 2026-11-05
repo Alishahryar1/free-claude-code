@@ -400,10 +400,7 @@ async def test_buffered_recovery_metadata_uses_replacement_credentials():
             "GEMINI", "chat", "model", client=client.with_options(api_key="key-2")
         )
         assert requests == ["Bearer key-1", "Bearer key-2"]
-        assert bundle.records[0].origin == source
-        assert bundle.records[0].native == {"reasoning_content": "original thought"}
-        assert bundle.records[1].origin == replacement
-        assert bundle.records[1].native == {"reasoning_content": "replacement thought"}
+        assert bundle.records == ()
         assert bundle.calls[0].origin == replacement
         assert (
             replacement,

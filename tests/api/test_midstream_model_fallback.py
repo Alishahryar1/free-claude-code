@@ -126,8 +126,7 @@ async def test_messages_fallback_accepts_partial_output_slots(wire, case):
                 for block in message["content"]
                 if block.get("type") == "text"
             )
-    if wire == "responses" and case != "full":
-        assert "Find 17." not in str(bodies[0]["messages"])
+    assert ("Find 17." in str(bodies[0]["messages"])) is (case != "text_empty_part")
 
 
 @pytest.mark.asyncio
@@ -198,9 +197,7 @@ async def test_fallback_preserves_readable_reasoning_without_a_heading(target, w
     content = history[-1]["content"]
     instruction = content if isinstance(content, str) else content[0]["text"]
     assert "Find 17." not in instruction
-    assert ("Find 17." in str(history[:-1])) is not (
-        wire == "responses" and target == "messages"
-    )
+    assert "Find 17." in str(history[:-1])
     events = parse_sse_text(raw)
     assert_completed(events, wire)
     assert public_text(events, wire) == "Hello world."

@@ -342,9 +342,25 @@ async def test_chat_signed_details_keep_their_own_text_on_replay(
             for item in saved
             if item["type"] == "reasoning"
         ]
-    assert pairs == [("Alpha.", "sig-alpha"), ("Beta.", "sig-beta")]
+    assert [text for text, _ in pairs] == ["Alpha.", "Beta."]
+    native = [decode_replay(carrier).native for _, carrier in pairs]
+    expected = [
+        {
+            "type": "reasoning.text",
+            "text": "Alpha.",
+            "signature": "sig-alpha",
+            "index": 0,
+        },
+        {
+            "type": "reasoning.text",
+            "text": "Beta.",
+            "signature": "sig-beta",
+            "index": 1,
+        },
+    ]
+    assert native == [{"reasoning_details": [detail]} for detail in expected]
     details = bodies[-1]["messages"][0]["reasoning_details"]
-    assert [(detail["text"], detail.get("signature")) for detail in details] == pairs
+    assert details == expected
     assert json.dumps(bodies[-1]).count("Alpha.") == 1
     assert json.dumps(bodies[-1]).count("Beta.") == 1
 
@@ -378,18 +394,25 @@ async def test_chat_explicit_signed_empty_text_retains_its_kind(wire):
             send(wire, [*saved, {"role": "user", "content": "next"}]), wire
         )
     if wire == "messages":
-        assert {
-            "type": "thinking",
-            "thinking": "",
-            "signature": "empty-signature",
-        } in saved[0]["content"]
+        reasoning = next(
+            block for block in saved[0]["content"] if block["type"] == "thinking"
+        )
+        assert reasoning["thinking"] == ""
+        carrier = reasoning["signature"]
     else:
         reasoning = next(item for item in saved if item["type"] == "reasoning")
         assert reasoning["content"] == [{"type": "reasoning_text", "text": ""}]
-        assert reasoning["encrypted_content"] == "empty-signature"
-    assert bodies[-1]["messages"][0]["reasoning_details"] == [
-        {"type": "reasoning.text", "text": "", "signature": "empty-signature"}
+        carrier = reasoning["encrypted_content"]
+    expected = [
+        {
+            "type": "reasoning.text",
+            "text": "",
+            "signature": "empty-signature",
+            "index": 0,
+        }
     ]
+    assert decode_replay(carrier).native == {"reasoning_details": expected}
+    assert bodies[-1]["messages"][0]["reasoning_details"] == expected
 
 
 @pytest.mark.asyncio

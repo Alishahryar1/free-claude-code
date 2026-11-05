@@ -100,12 +100,6 @@ def _build(
     [
         [
             {
-                "type": "reasoning",
-                "summary": [{"type": "summary_text", "text": "Summary"}],
-            }
-        ],
-        [
-            {
                 "type": "message",
                 "role": "assistant",
                 "content": [{"type": "output_text", "text": ""}],

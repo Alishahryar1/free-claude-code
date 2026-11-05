@@ -12,7 +12,6 @@ from .delivered_response import (
 )
 from .failures import ExecutionFailure, FailureKind
 from .gemini.response import gemini_finished
-from .readable_replay import ReasoningKey
 
 
 class ContinuationStream:
@@ -25,7 +24,7 @@ class ContinuationStream:
         self._offset = 0
         self._namespace = uuid4()
         self._boundary: list[dict[str, Any]] = []
-        self._expected: dict[Literal["text", "thinking", "summary"], str] = {}
+        self._expected: dict[Literal["text", "thinking"], str] = {}
         self._overlaps: list[ContinuationOverlap] = []
         self._initial_progress = 0
         self._prefix_items: list[dict[str, Any]] = []
@@ -33,35 +32,6 @@ class ContinuationStream:
     @property
     def made_progress(self) -> bool:
         return self.delivered.progress > self._initial_progress
-
-    def retained_reasoning(self, key: ReasoningKey) -> tuple[int, int] | None:
-        if self.handoff:
-            return None
-        if self.delivered.wire_api == "gemini":
-            length = len(self.delivered.snapshot().thinking)
-            return (
-                (
-                    self._overlaps[1].removed_prefix(("gemini", 0)),
-                    length - len(self._expected["thinking"]),
-                )
-                if self.active
-                else (0, length)
-            )
-        index, channel = (key, "thinking") if isinstance(key, int) else key
-        item = self.delivered.items.get(
-            index + (self._offset if self.active else 0), {}
-        )
-        if self.delivered.wire_api == "responses":
-            field = "summary" if channel == "summary" else "content"
-            length = sum(len(part.get("text", "")) for part in item.get(field) or [])
-        else:
-            length = len(item.get("thinking", ""))
-        removed = (
-            self._overlaps[2 if channel == "summary" else 1].removed_prefix((index, 0))
-            if self.active
-            else 0
-        )
-        return removed, length
 
     def begin(self, *, handoff: bool) -> None:
         self.active = True
@@ -71,8 +41,7 @@ class ContinuationStream:
         prefix = self.delivered.snapshot().continuation
         assert prefix is not None
         self._expected = {
-            channel: prefix.readable_text(channel)
-            for channel in ("text", "thinking", "summary")
+            channel: prefix.readable_text(channel) for channel in ("text", "thinking")
         }
         self.restart_attempt()
         finalized = deepcopy(self.delivered.items)

@@ -406,6 +406,11 @@ def responses_reasoning_blocks(item: Mapping[str, JsonValue]) -> list[JsonValue]
     carrier = item.get("encrypted_content")
     if isinstance(carrier, str) and carrier:
         record = _record(item, "encrypted_content")
+        if record is not None and not protected_reasoning(record.native):
+            return [
+                {"type": "thinking", "thinking": text}
+                for text, _ in _replay_readable(item, record)
+            ]
         if record is None:
             readable = readable_reasoning(item)
             if readable or item.get("content"):
@@ -432,9 +437,7 @@ def responses_reasoning_blocks(item: Mapping[str, JsonValue]) -> list[JsonValue]
         if record is not None and readable_reasoning(record.native):
             return blocks
     blocks.extend(
-        {"type": "thinking", "thinking": text}
-        for text, summary in readable_reasoning(item)
-        if not summary
+        {"type": "thinking", "thinking": text} for text, _ in readable_reasoning(item)
     )
     return blocks
 
@@ -468,6 +471,32 @@ def normalize_history_source(
     result = deepcopy(dict(body))
     if protocol == "responses" and isinstance(result.get("input"), dict):
         result["input"] = [result["input"]]
+    if protocol == "messages" and isinstance(messages := result.get("messages"), list):
+        for message in messages:
+            if (
+                isinstance(message, dict)
+                and message.get("role") == "assistant"
+                and isinstance(content := message.get("content"), list)
+            ):
+                blocks: list[JsonValue] = []
+                for block in resolve_messages_replay(content):
+                    record = (
+                        _record(block, "signature", "data")
+                        if isinstance(block, dict)
+                        else None
+                    )
+                    if (
+                        isinstance(block, dict)
+                        and record is not None
+                        and not protected_reasoning(record.native)
+                    ):
+                        blocks.extend(
+                            {"type": "thinking", "thinking": text}
+                            for text, _ in _replay_readable(block, record)
+                        )
+                    else:
+                        blocks.append(block)
+                message["content"] = blocks
     return result
 
 
@@ -566,14 +595,8 @@ def _tool_result_message(message: JsonObject) -> bool:
 def _unsigned_response(parts: list[tuple[str, bool]]) -> JsonObject:
     return {
         "type": "reasoning",
-        "content": [
-            {"type": "reasoning_text", "text": text}
-            for text, summary in parts
-            if not summary
-        ],
-        "summary": [
-            {"type": "summary_text", "text": text} for text, summary in parts if summary
-        ],
+        "content": [{"type": "reasoning_text", "text": text} for text, _ in parts],
+        "summary": [],
     }
 
 
@@ -643,8 +666,6 @@ def _prepare_response_history(
                 elif include:
                     if record is None:
                         values.append(item)
-                    elif record.origin.protocol == "responses":
-                        values.append(record.native)
                     else:
                         values.append(
                             _unsigned_response(readable_reasoning(record.native))
@@ -707,8 +728,7 @@ def _prepare_messages_content(
                 else:
                     values.extend(
                         {"type": "thinking", "thinking": text}
-                        for text, summary in _replay_readable(block, record)
-                        if not summary
+                        for text, _ in _replay_readable(block, record)
                     )
                 has_reasoning |= bool(values)
         for value in values:
@@ -767,9 +787,9 @@ def _prepare_chat_content(
             native = record.native if record else {"reasoning_details": [detail]}
             parts = readable_reasoning(native)
             if record is None:
-                native_full.extend(text for text, summary in parts if not summary)
+                native_full.extend(text for text, _ in parts)
             protected = protected_reasoning(detail)
-            if protected:
+            if protected and record is None:
                 represented.update(text for text, _ in parts)
                 represented.update(
                     (
@@ -803,24 +823,7 @@ def _prepare_chat_content(
                     for text, _ in parts:
                         _append_context(message, text)
             elif include:
-                if structured_details:
-                    native_details = native.get("reasoning_details")
-                    if isinstance(native_details, list):
-                        values.extend(native_details)
-                    else:
-                        values.extend(
-                            {"type": "reasoning.summary", "summary": text}
-                            for text, summary in parts
-                            if summary
-                        )
-                    encoded = readable_reasoning({"reasoning_details": values})
-                    full.extend(
-                        text
-                        for text, summary in parts
-                        if not summary and (text, summary) not in encoded
-                    )
-                else:
-                    full.extend(text for text, summary in parts if not summary)
+                full.extend(text for text, _ in parts)
             for value in values:
                 paths[(*output_path, "reasoning_details", len(restored))] = (
                     *source_path,

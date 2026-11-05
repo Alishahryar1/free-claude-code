@@ -277,7 +277,7 @@ def test_deepseek_off_to_on_preserves_effort_and_all_available_history(wire):
     assert request.model_dump() == original
 
 
-def test_summary_keeps_its_classification_when_destination_supports_details():
+def test_summary_uses_the_destination_readable_thinking_field():
     messages = _chat(
         [
             {"role": "user", "content": "first"},
@@ -291,10 +291,8 @@ def test_summary_keeps_its_classification_when_destination_supports_details():
             {"role": "user", "content": "continue"},
         ]
     )
-    assert "reasoning_content" not in messages[1]
-    assert messages[1]["reasoning_details"] == [
-        {"type": "reasoning.summary", "summary": "A summary, not the hidden chain."}
-    ]
+    assert messages[1]["reasoning_content"] == "A summary, not the hidden chain."
+    assert "reasoning_details" not in messages[1]
 
 
 def test_image_tool_result_does_not_start_a_new_user_turn():
