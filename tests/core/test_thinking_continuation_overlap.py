@@ -8,6 +8,7 @@ import pytest
 from free_claude_code.core.continuation_overlap import ContinuationOverlap
 from free_claude_code.core.continuation_stream import ContinuationStream
 from free_claude_code.core.delivered_response import DeliveredResponse
+from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.history_replay import (
     AssociatedReplayRecord,
     ReplayOrigin,
@@ -148,6 +149,129 @@ def test_summary_replay_can_be_followed_by_independent_full_text_in_same_item():
     output = overlap.feed(terminal)[0]["response"]["output"][0]
     assert output["content"] == [{"type": "reasoning_text", "text": "Details"}]
     assert output["summary"] == [{"type": "summary_text", "text": ""}]
+
+
+def reasoning_part(field, index, text, *, done=False):
+    return {
+        "type": f"response.reasoning{'_summary' if field == 'summary' else ''}_text.{'done' if done else 'delta'}",
+        "item_id": "rs",
+        "output_index": 0,
+        f"{field}_index": index,
+        "text" if done else "delta": text,
+    }
+
+
+@pytest.mark.parametrize("summary_first", [False, True])
+@pytest.mark.parametrize("new_summary_first", [False, True])
+@pytest.mark.parametrize("terminal", ["response.completed", "response.incomplete"])
+def test_replayed_thinking_accepts_later_parts_in_either_array(
+    summary_first, new_summary_first, terminal
+):
+    overlap = ContinuationOverlap("PlanAct", channel="thinking")
+    prefix = [("content", "Plan"), ("summary", "Act")]
+    if summary_first:
+        prefix.reverse()
+    for field, text in prefix:
+        overlap.feed(reasoning_part(field, 0, text))
+        overlap.feed(reasoning_part(field, 0, text, done=True))
+    suffix = [("content", "Details"), ("summary", "Notes")]
+    if new_summary_first:
+        suffix.reverse()
+    for field, text in suffix:
+        delta = reasoning_part(field, 1, text)
+        assert overlap.feed(delta) == [delta]
+        done = reasoning_part(field, 1, text, done=True)
+        assert overlap.feed(done) == [done]
+    item: dict[str, Any] = {
+        "type": "reasoning",
+        "id": "rs",
+        "content": [
+            {"type": "reasoning_text", "text": "Plan"},
+            {"type": "reasoning_text", "text": "Details"},
+        ],
+        "summary": [
+            {"type": "summary_text", "text": "Act"},
+            {"type": "summary_text", "text": "Notes"},
+        ],
+    }
+    expected = deepcopy(item)
+    expected["content"][0]["text"] = ""
+    expected["summary"][0]["text"] = ""
+    assert (
+        overlap.feed(
+            {"type": "response.output_item.done", "output_index": 0, "item": item}
+        )[0]["item"]
+        == expected
+    )
+    assert overlap.feed({"type": terminal, "response": {"output": [item]}})[0][
+        "response"
+    ]["output"] == [expected]
+
+
+@pytest.mark.parametrize("field", ["content", "summary"])
+@pytest.mark.parametrize("change", ["changed", "missing", "inserted", "earlier-item"])
+def test_interleaved_thinking_still_rejects_rewritten_prefix(field, change):
+    overlap = ContinuationOverlap("PlanAct", channel="thinking")
+    for source, text in [("content", "Plan"), ("summary", "Act")]:
+        overlap.feed(reasoning_part(source, 0, text))
+        overlap.feed(reasoning_part(source, 0, text, done=True))
+    item: dict[str, Any] = {
+        "type": "reasoning",
+        "id": "rs",
+        "content": [{"type": "reasoning_text", "text": "Plan"}],
+        "summary": [{"type": "summary_text", "text": "Act"}],
+    }
+    output = [item]
+    if change == "changed":
+        item[field][0]["text"] = "Rewritten"
+    elif change == "missing":
+        item[field] = []
+    elif change == "inserted":
+        item[field].insert(0, {"type": item[field][0]["type"], "text": "Earlier"})
+    else:
+        output.insert(0, {**deepcopy(item), "id": "earlier"})
+    with pytest.raises(ExecutionFailure, match="already observed output prefix"):
+        overlap.feed({"type": "response.completed", "response": {"output": output}})
+
+
+@pytest.mark.parametrize("field", ["content", "summary"])
+@pytest.mark.parametrize("snapshot", [False, True])
+def test_new_thinking_part_cannot_precede_a_later_matched_item(field, snapshot):
+    overlap = ContinuationOverlap("PlanAct", channel="thinking")
+    for index, text in enumerate(("Plan", "Act")):
+        identity = {"item_id": f"rs_{index}", "output_index": index}
+        overlap.feed({**reasoning_part("content", 0, text), **identity})
+        overlap.feed({**reasoning_part("content", 0, text, done=True), **identity})
+    extra = {
+        "type": "summary_text" if field == "summary" else "reasoning_text",
+        "text": "Earlier",
+    }
+    first: dict[str, Any] = {
+        "type": "reasoning",
+        "id": "rs_0",
+        "content": [{"type": "reasoning_text", "text": "Plan"}],
+        "summary": [],
+    }
+    first[field].append(extra)
+    terminal = {
+        "type": "response.completed",
+        "response": {
+            "output": [
+                first,
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "content": [{"type": "reasoning_text", "text": "Act"}],
+                },
+            ]
+        },
+    }
+    delta = {
+        **reasoning_part(field, 1 if field == "content" else 0, "Earlier"),
+        "item_id": "rs_0",
+    }
+    with pytest.raises(ExecutionFailure, match="already observed output prefix"):
+        overlap.feed(terminal if snapshot else delta)
 
 
 @pytest.mark.parametrize("summary", [False, True])

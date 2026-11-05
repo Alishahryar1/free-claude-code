@@ -303,12 +303,7 @@ class ContinuationOverlap:
         value = text.value.get(text.field, "")
         part = self._parts.get(text.key)
         if part is None:
-            if (
-                value
-                and self._frontier is not None
-                and text.order < self._frontier
-                and not self._new_reasoning_field(text.key)
-            ):
+            if value and self._precedes_prefix(text):
                 self._inconsistent()
             return
         text.part = part
@@ -324,23 +319,42 @@ class ContinuationOverlap:
                 self._inconsistent()
             part.seen = max(part.seen, len(value))
 
-    def _new_reasoning_field(self, key: PartKey) -> bool:
-        # Responses content and summary arrays have independent part indices.
-        return (
-            self._channel == "thinking"
-            and any(k[0] == key[0] for k in self._parts)
-            and not any(k[0] == key[0] and k[1] % 2 == key[1] % 2 for k in self._parts)
-        )
+    def _precedes_prefix(self, text: _Text) -> bool:
+        if len(text.order) == 3:
+            # Responses arrays advance independently within the same item.
+            keys = [key for key in self._parts if key[0] == text.key[0]]
+            if keys:
+                if text.key[0] != next(reversed(self._parts))[0]:
+                    return True
+                return any(
+                    key[1] % 2 == text.key[1] % 2 and text.key[1] < key[1]
+                    for key in keys
+                )
+        return self._frontier is not None and text.order < self._frontier
 
     def _check_terminal_order(self, texts: list[_Text]) -> None:
         keys = list(self._parts)
-        observed = [
-            text.key
-            for text in texts
-            if text.value.get(text.field) and not self._new_reasoning_field(text.key)
-        ]
-        if observed[: len(keys)] != keys:
+        observed = [text.key for text in texts if text.value.get(text.field)]
+        items = list(dict.fromkeys(key[0] for key in keys))
+        observed_items = list(dict.fromkeys(key[0] for key in observed))
+        if observed_items[: len(items)] != items:
             self._inconsistent()
+        for identity in items[:-1]:
+            if [key for key in observed if key[0] == identity] != [
+                key for key in keys if key[0] == identity
+            ]:
+                self._inconsistent()
+        # A final snapshot groups arrays rather than preserving event arrival
+        # order. Require each array's matched prefix, allowing its later parts.
+        for identity, array in {(key[0], key[1] % 2) for key in keys}:
+            expected = [
+                key for key in keys if key[0] == identity and key[1] % 2 == array
+            ]
+            actual = [
+                key for key in observed if key[0] == identity and key[1] % 2 == array
+            ]
+            if actual[: len(expected)] != expected:
+                self._inconsistent()
         # Terminal positions may have shifted when the tool gate removed an item.
         for text in texts:
             if text.key not in self._parts:
