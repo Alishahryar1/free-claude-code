@@ -430,6 +430,76 @@ async def test_messages_handoff_keeps_completed_reasoning_replay_and_calls():
 
 
 @pytest.mark.asyncio
+async def test_responses_handoff_keeps_source_order_and_echo_ownership(monkeypatch):
+    monkeypatch.setattr(
+        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
+        lambda: RecoveryHoldbackBuffer(max_bytes=1),
+    )
+    first = {
+        "type": "reasoning",
+        "id": "rs_first",
+        "summary": [{"type": "summary_text", "text": "Alpha"}],
+        "encrypted_content": "first",
+    }
+    second = {
+        "type": "reasoning",
+        "id": "rs_second",
+        "summary": [{"type": "summary_text", "text": "Beta"}],
+        "encrypted_content": "second",
+    }
+    call = {
+        "type": "function_call",
+        "id": "fc",
+        "call_id": "call_read",
+        "name": "read",
+        "arguments": "{}",
+        "status": "completed",
+    }
+    events = [
+        {"type": "response.output_item.done", "output_index": index, "item": item}
+        for index, item in [(1, second), (0, first), (2, call)]
+    ]
+    async with _harness("responses", lambda _: (200, events), max_attempts=1) as (
+        _,
+        bodies,
+        adapter,
+    ):
+        response = await gemini_sse_streaming_response(
+            adapter.stream_gemini(
+                gemini_request(
+                    generationConfig={"thinkingConfig": {"includeThoughts": True}},
+                    tools=[{"functionDeclarations": [{"name": "read"}]}],
+                ),
+                input_tokens=0,
+                request_id="ordered-handoff",
+                response_model="public",
+                reasoning=ReasoningPolicy.provider_default(),
+            ),
+            request_id="ordered-handoff",
+            pre_start_error_response=lambda error: JSONResponse(
+                status_code=502, content={"error": str(error)}
+            ),
+        )
+        assert isinstance(response, ManagedStreamingResponse)
+        try:
+            value, _ = await collect(response.body_iterator)
+        finally:
+            await response.aclose()
+    assert len(bodies) == 1
+    parts = value["candidates"][0]["content"]["parts"]
+    bundle = decode_bundle(
+        next(part["thoughtSignature"] for part in parts if "thoughtSignature" in part)
+    )
+    assert bundle is not None
+    assert [record.native for record in bundle.records] == [first, second]
+    assert bundle.protected_echo == ((1, 0, 4), (0, 4, 9))
+    assert [part["functionCall"]["id"] for part in parts if "functionCall" in part] == [
+        "call_read"
+    ]
+    assert "usageMetadata" not in value
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("stage", ["hidden", "portable", "structured", "retention"])
 async def test_gemini_recovery_uses_published_evidence(protocol, stage, monkeypatch):

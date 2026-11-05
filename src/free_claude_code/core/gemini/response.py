@@ -103,6 +103,23 @@ class GeminiOutput:
         """Release provisional echo ownership for an unsigned or abandoned record."""
         self._retain(-24 * len(self._ranges.pop(source, ())))
 
+    def order_records(self, sources: list[int]) -> None:
+        """Publish source-ordered records with their echo references kept intact."""
+        order = [
+            self._record_sources[source]
+            for source in sources
+            if source in self._record_sources
+        ]
+        assert len(order) == len(self.records)
+        positions = {old: new for new, old in enumerate(order)}
+        self.records = [self.records[index] for index in order]
+        self._record_sources = {
+            source: positions[index] for source, index in self._record_sources.items()
+        }
+        self._record_sizes = {
+            positions[index]: size for index, size in self._record_sizes.items()
+        }
+
     def capture_call(self, record: CallReplay) -> None:
         self._retain(
             len(

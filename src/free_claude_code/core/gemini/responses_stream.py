@@ -46,6 +46,7 @@ class GeminiResponsesStream:
         return []
 
     def handoff(self) -> list[str]:
+        self._output.order_records(sorted(self._items))
         return self._output.handoff()
 
     def feed(self, event_type: str, payload: JsonObject) -> list[str]:
@@ -64,7 +65,6 @@ class GeminiResponsesStream:
             item = data.get("item")
             if not isinstance(item, dict):
                 raise conversion_failure("Responses output item is missing")
-            self._items[index] = {"id": item.get("id"), "type": item.get("type")}
             return self._item(index, item, complete=False)
         if event_type in {
             "response.output_text.delta",
@@ -140,7 +140,6 @@ class GeminiResponsesStream:
             item = data.get("item")
             if not isinstance(item, dict):
                 raise conversion_failure("Responses completed item is missing")
-            self._items[index] = {"id": item.get("id"), "type": item.get("type")}
             return self._item(index, item, complete=True)
         if event_type in {"response.completed", "response.incomplete"}:
             response = data.get("response", {})
@@ -155,6 +154,7 @@ class GeminiResponsesStream:
                     position,
                 )
                 events.extend(self._item(index, item, complete=True))
+            self._output.order_records(sorted(self._items))
             reason = "SAFETY" if self._refusal else "STOP"
             if event_type == "response.incomplete":
                 incomplete = (response.get("incomplete_details") or {}).get("reason")
@@ -227,6 +227,7 @@ class GeminiResponsesStream:
 
     def _item(self, index: int, item: dict[str, Any], *, complete: bool) -> list[str]:
         kind = item.get("type")
+        self._items[index] = {"id": item.get("id"), "type": kind}
         events: list[str] = []
         if kind in {"message", "reasoning"}:
             for field in ("summary", "content"):
