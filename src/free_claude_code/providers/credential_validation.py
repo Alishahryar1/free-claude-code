@@ -115,6 +115,13 @@ _PROBES = (
         _list_field("models"),
     ),
     _Probe("nebius", "/models", _MODELS, _AUTH_401),
+    # Runcrate's /models is public, so the key is checked against the billing API.
+    _Probe(
+        "runcrate",
+        "https://www.runcrate.ai/api/v1/billing/balance",
+        lambda p: isinstance(_field(_field(p, "data"), "creditsBalance"), int | float),
+        _AUTH_401,
+    ),
     _Probe("scaleway", "/models", _MODELS, _AUTH_401),
     _Probe("opper", "/models", _MODELS, _AUTH_401),
     _Probe(
