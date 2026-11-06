@@ -80,11 +80,13 @@ class CopilotLease:
         owner: _EndpointOwner,
         model: CopilotModel,
         egress: CopilotEgress,
+        resolved_model: str | None = None,
     ) -> None:
         self._broker = broker
         self._owner = owner
         self.model = model
         self.egress = egress
+        self.resolved_model = resolved_model
         self._released = False
 
     async def endpoint(self, *, force_refresh: bool = False) -> HttpEndpoint:
@@ -99,6 +101,8 @@ class CopilotLease:
             raise CopilotUnavailable(
                 "Copilot changed this model's upstream protocol. Retry the request to use its new endpoint."
             )
+        if snapshot.resolved_model is not None:
+            self.resolved_model = snapshot.resolved_model
         return replace(snapshot.http, account_id=f"{identity.host}/{identity.login}")
 
     def release(self) -> None:
@@ -171,8 +175,17 @@ class CopilotBroker:
         return await asyncio.shield(task)
 
     def validate_model(self, model_id: str) -> CopilotModel:
-        model = self._models.get(model_id)
+        normalized = model_id.strip()
+        if normalized.casefold().startswith("github_copilot/"):
+            normalized = normalized[len("github_copilot/") :].strip()
+        if normalized.casefold() == "auto":
+            normalized = "auto"
+        model = self._models.get(normalized)
         if model is None:
+            if normalized == "auto":
+                raise InvalidRequestError(
+                    "Choose a concrete model from the connected Copilot account."
+                )
             raise InvalidRequestError(
                 "This model is not available from the connected Copilot account. Refresh the model list."
             )
@@ -202,18 +215,21 @@ class CopilotBroker:
             if self._closing:
                 raise CopilotUnavailable("Copilot connection is closing.")
             model = self.validate_model(model_id)
+            effective_model_id = model.info.model_id
             self._leases += 1
-            owner = self._owners.get(model_id)
+            owner = self._owners.get(effective_model_id)
             if owner is None:
-                owner = _EndpointOwner(self._runtime, model_id)
-                self._owners[model_id] = owner
+                owner = _EndpointOwner(self._runtime, effective_model_id)
+                self._owners[effective_model_id] = owner
         lease = None
         try:
             await self.validate_identity()
             endpoint = await owner.endpoint(force_refresh=False)
             await self.validate_identity()
-            self.validate_model(model_id)
-            lease = CopilotLease(self, owner, model, endpoint.egress)
+            self.validate_model(effective_model_id)
+            lease = CopilotLease(
+                self, owner, model, endpoint.egress, endpoint.resolved_model
+            )
             yield lease
         finally:
             if lease is not None:

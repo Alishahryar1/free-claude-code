@@ -818,3 +818,104 @@ async def test_gh_cli_enterprise_profile_is_supported(client: MagicMock) -> None
     assert identity.host == "github.enterprise.example"
     assert "octocat" in identity.display
     await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_discovery_synthesizes_auto_model_when_no_named_models_enabled(
+    client: MagicMock,
+) -> None:
+    def model(name: str, policy: str) -> Model:
+        return Model.from_dict(
+            {
+                "id": name,
+                "name": name,
+                "capabilities": {
+                    "supports": {
+                        "vision": True,
+                        "adaptive_thinking": "optional",
+                        "reasoningEffort": True,
+                    },
+                    "limits": {
+                        "max_output_tokens": 64,
+                        "max_context_window_tokens": 200,
+                    },
+                },
+                "policy": {"state": policy},
+                "supportedReasoningEfforts": ["low", "high"],
+            }
+        )
+
+    runtime = sdk.SdkRuntime()
+    await runtime.start()
+
+    client.rpc.models.list = AsyncMock(
+        return_value=SimpleNamespace(
+            models=[model("Auto", "enabled"), model("disabled", "disabled")]
+        )
+    )
+    result = await runtime.models()
+    assert len(result) == 1
+    assert result[0].info.model_id == "auto"
+    assert result[0].info.max_output_tokens == 64
+
+    client.rpc.models.list = AsyncMock(return_value=SimpleNamespace(models=[]))
+    fallback = await runtime.models()
+    assert len(fallback) == 1
+    assert fallback[0].info.model_id == "auto"
+    assert fallback[0].messages.supports_vision is True
+
+    client.rpc.models.list = AsyncMock(
+        return_value=SimpleNamespace(models=[model("auto", "disabled")])
+    )
+    assert await runtime.models() == ()
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_auto_session_endpoint_omits_model_id_and_extracts_resolved_model(
+    client: MagicMock,
+) -> None:
+    resolved_endpoint = ProviderEndpoint.from_dict(
+        {
+            "type": "openai",
+            "wireApi": "completions",
+            "baseUrl": "https://upstream.invalid/",
+            "headers": {},
+            "sessionToken": {
+                "header": "Authorization",
+                "token": "Bearer session-secret",
+                "model": "mai-code-1.1-flash",
+            },
+        }
+    )
+    literal_auto_endpoint = ProviderEndpoint.from_dict(
+        {
+            "type": "openai",
+            "wireApi": "completions",
+            "baseUrl": "https://upstream.invalid/",
+            "headers": {},
+            "sessionToken": {
+                "header": "Authorization",
+                "token": "Bearer session-secret",
+                "model": "Auto",
+            },
+        }
+    )
+    resolve = AsyncMock(side_effect=[resolved_endpoint, literal_auto_endpoint])
+    client.create_session.return_value.rpc.provider.get_endpoint = resolve
+
+    runtime = sdk.SdkRuntime()
+    await runtime.start()
+    session = await runtime.session("auto")
+
+    first = await session.endpoint()
+    assert first.egress is CopilotEgress.RESPONSES
+    assert first.resolved_model == "mai-code-1.1-flash"
+    assert resolve.await_args_list[0].args[0].model_id is None
+
+    second = await session.endpoint()
+    assert second.egress is CopilotEgress.RESPONSES
+    assert second.resolved_model is None
+    assert resolve.await_args_list[1].args[0].model_id is None
+
+    await runtime.close()

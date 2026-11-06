@@ -124,7 +124,7 @@ class GitHubCopilotProvider(BaseProvider):
             raise ExecutionFailure(
                 FailureKind.UNAVAILABLE, 503, "Copilot provider is closing.", False
             )
-        if not model.strip() or model.strip().casefold() == "auto":
+        if not model.strip():
             raise InvalidRequestError(
                 "Choose a concrete model from the connected Copilot account."
             )
@@ -257,6 +257,27 @@ class GitHubCopilotProvider(BaseProvider):
             self._active += 1
         try:
             async with self._auth.lease(request.model) as lease:
+                effective_model = lease.resolved_model or lease.model.info.model_id
+                update: dict[str, object] = {}
+                if request.model != effective_model:
+                    update["model"] = effective_model
+                if lease.model.info.model_id.casefold() == "auto":
+                    # The `auto` router advertises no reasoning capabilities; strip
+                    # client-supplied thinking / effort controls so request_policy
+                    # does not reject the turn before reaching Copilot.
+                    if getattr(request, "thinking", None) is not None:
+                        update["thinking"] = None
+                    output_config = getattr(request, "output_config", None)
+                    if isinstance(output_config, Mapping) and "effort" in output_config:
+                        cleaned = {
+                            k: v for k, v in output_config.items() if k != "effort"
+                        }
+                        update["output_config"] = cleaned or None
+                    if getattr(request, "reasoning", None) is not None:
+                        update["reasoning"] = None
+                    reasoning = ReasoningPolicy()
+                if update:
+                    request = request.model_copy(update=update)
                 selected: AsyncIterator[str] | None = None
                 http: httpx.AsyncClient | None = None
                 try:
