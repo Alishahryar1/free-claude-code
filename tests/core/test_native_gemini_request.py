@@ -106,3 +106,19 @@ def test_messages_strict_tool_guarantee_is_rejected_for_gemini():
     )
     with pytest.raises(ValueError, match="strict"):
         messages_to_gemini(request)
+
+
+def test_messages_noop_context_management_keeps_claude_code_compatible():
+    from free_claude_code.core.anthropic.models import MessagesRequest
+    from free_claude_code.core.gemini.native_request import messages_to_gemini
+
+    request = MessagesRequest(
+        model="model",
+        messages=[{"role": "user", "content": "hello"}],
+        context_management={
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+    )
+    result = messages_to_gemini(request)
+    assert result["contents"] == [{"role": "user", "parts": [{"text": "hello"}]}]
+    assert "context_management" not in result

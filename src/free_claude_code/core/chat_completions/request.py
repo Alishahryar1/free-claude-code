@@ -52,7 +52,15 @@ class ChatRequest(BaseModel):
             raise ValueError("Unsupported Chat tool_choice")
         if isinstance(choice, dict):
             chosen = choice.get(str(choice.get("type")))
-            if (
+            if choice.get("type") == "allowed_tools":
+                if (
+                    not isinstance(chosen, dict)
+                    or chosen.get("mode") not in ("auto", "required")
+                    or not isinstance(allowed := chosen.get("tools"), list)
+                    or any(not isinstance(tool, dict) for tool in allowed)
+                ):
+                    raise ValueError("allowed_tools requires a mode and tool list")
+            elif (
                 not isinstance(chosen, dict)
                 or not isinstance(chosen.get("name"), str)
                 or not chosen["name"]
@@ -153,6 +161,11 @@ def translated_body(request: ChatRequest, *, supported: set[str]) -> dict[str, A
     ]
     if set(request.stream_options or {}) - {"include_usage"}:
         unsupported.append("stream_options")
+    if (
+        isinstance(request.tool_choice, dict)
+        and request.tool_choice.get("type") != "function"
+    ):
+        unsupported.append("tool_choice")
     if body.get("n") not in (None, 1):
         unsupported.append("n")
     if unsupported:

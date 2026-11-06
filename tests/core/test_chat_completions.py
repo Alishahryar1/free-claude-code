@@ -11,6 +11,7 @@ from free_claude_code.core.chat_completions.request import (
     chat_messages_body,
     chat_responses_body,
 )
+from free_claude_code.core.gemini.native_request import chat_to_gemini
 
 
 def test_chat_preserves_native_fields_and_nulls():
@@ -132,3 +133,22 @@ def test_nullable_chat_assistant_fields_are_absent_in_translation(destination):
         ],
     )
     assert destination(request)
+
+
+@pytest.mark.parametrize(
+    "destination", [chat_messages_body, chat_responses_body, chat_to_gemini]
+)
+def test_allowed_tools_rejects_unsupported_translation_clearly(destination):
+    request = ChatRequest(
+        model="model",
+        messages=[{"role": "user", "content": "hello"}],
+        tool_choice={
+            "type": "allowed_tools",
+            "allowed_tools": {
+                "mode": "auto",
+                "tools": [{"type": "function", "function": {"name": "read"}}],
+            },
+        },
+    )
+    with pytest.raises(ChatConversionError, match="tool_choice"):
+        destination(request)

@@ -5,7 +5,10 @@ from typing import Any
 
 from ..anthropic.image_sources import portable_anthropic_image_url
 from ..anthropic.models import MessagesRequest
-from ..anthropic.request_serialization import dump_messages_request
+from ..anthropic.request_serialization import (
+    dump_messages_request,
+    is_noop_context_management,
+)
 from ..chat_completions.request import (
     ChatRequest,
     content_parts,
@@ -314,14 +317,13 @@ def chat_to_gemini(request: ChatRequest) -> JsonObject:
 
 def messages_to_gemini(request: MessagesRequest) -> JsonObject:
     body = dump_messages_request(request)
-    if (
-        request.model_extra
-        or body.get("mcp_servers")
-        or body.get("extra_body")
-        or body.get("context_management")
-    ):
+    unsupported = set(request.model_extra or {})
+    unsupported.update(key for key in ("mcp_servers", "extra_body") if body.get(key))
+    if not is_noop_context_management(request.context_management):
+        unsupported.add("context_management")
+    if unsupported:
         raise GeminiConversionError(
-            "Native Gemini cannot represent Messages extensions"
+            f"Native Gemini cannot represent Messages fields: {sorted(unsupported)}"
         )
     contents: list[dict[str, Any]] = []
     system: list[dict[str, Any]] = []

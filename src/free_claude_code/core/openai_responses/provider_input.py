@@ -11,6 +11,7 @@ from free_claude_code.core.anthropic.image_sources import (
 )
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.request_serialization import (
+    is_noop_context_management,
     serialize_tool_result_content,
 )
 from free_claude_code.core.anthropic.tool_results import (
@@ -126,7 +127,7 @@ def _validate_supported_request(request: MessagesRequest) -> None:
         unsupported.append("stop_sequences")
     if request.top_k is not None:
         unsupported.append("top_k")
-    if not _is_noop_context_management(request.context_management):
+    if not is_noop_context_management(request.context_management):
         unsupported.append("context_management")
     unsupported.extend(_unsupported_output_config_paths(request.output_config))
     if request.mcp_servers:
@@ -146,25 +147,6 @@ def _unsupported_output_config_paths(
     if not output_config:
         return []
     return [f"output_config.{key}" for key in sorted(output_config) if key != "effort"]
-
-
-def _is_noop_context_management(
-    context_management: dict[str, Any] | None,
-) -> bool:
-    if not context_management:
-        return True
-    if set(context_management) != {"edits"}:
-        return False
-    edits = context_management["edits"]
-    return isinstance(edits, list) and all(
-        isinstance(edit, dict)
-        and edit
-        == {
-            "type": "clear_thinking_20251015",
-            "keep": "all",
-        }
-        for edit in edits
-    )
 
 
 def _system_text(request: MessagesRequest) -> list[str]:

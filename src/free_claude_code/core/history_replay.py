@@ -933,6 +933,8 @@ def _prepare_chat_content(
 def _visible_gemini_parts(
     parts: list[dict[str, Any]], *, thoughts: bool
 ) -> list[dict[str, Any]]:
+    from .gemini.models import Part
+
     result: list[dict[str, Any]] = []
     # Chat groups thinking, answer text, and calls into separate fields. Compare
     # each channel in order, then restore the original native ordering verbatim.
@@ -940,12 +942,23 @@ def _visible_gemini_parts(
         parts, key=lambda part: 0 if part.get("thought") else 1 if "text" in part else 2
     )
     for part in ordered:
-        value = {
-            key: deepcopy(item)
-            for key, item in part.items()
-            if key != "thoughtSignature"
-        }
-        if not value or (value.get("thought") and not thoughts):
+        if not any(
+            key in part
+            for key in ("text", "functionCall", "inlineData", "functionResponse")
+        ):
+            continue
+        # ProtoJSON nulls and omitted optional fields have the same meaning.
+        # Normalize only this comparison copy, never the signed native record.
+        value = Part.model_validate(part).model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        )
+        value.pop("thoughtSignature", None)
+        if not value.get("thought"):
+            value.pop("thought", None)
+        if not any(
+            key in value
+            for key in ("text", "functionCall", "inlineData", "functionResponse")
+        ) or (value.get("thought") and not thoughts):
             continue
         if value.get("text") == "":
             continue
