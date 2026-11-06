@@ -15,9 +15,9 @@ from free_claude_code.core.gemini.replay import decode_bundle
 from free_claude_code.core.gemini.response import GeminiResponseAccumulator
 from free_claude_code.core.history_replay import readable_reasoning
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.providers.gemini.client import _PROFILE as GOOGLE_PROFILE
 from free_claude_code.providers.google_openai.provider import GoogleChatBehavior
 from free_claude_code.providers.openai_chat import OpenAIChatTransport
+from free_claude_code.providers.vertex.client import _PROFILE as GOOGLE_PROFILE
 from tests.providers.support import immediate_admission
 from tests.providers.test_anthropic_messages_transport import (
     Endpoint,

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
+from .history_replay import readable_reasoning
 from .json_types import JsonObject
 
 RECOVERY_RETENTION_BYTES = 1_048_576
@@ -26,7 +27,7 @@ class DeliveredPrefix:
 class ContinuationSeed:
     """A snapshot of delivered output in the client's own protocol."""
 
-    wire_api: Literal["messages", "responses", "gemini"]
+    wire_api: Literal["messages", "responses", "gemini", "chat"]
     items: tuple[JsonObject, ...]
 
     def __post_init__(self) -> None:
@@ -36,7 +37,12 @@ class ContinuationSeed:
         """Read the ordinary text already delivered in the client protocol."""
         values: list[str] = []
         for item in self.items:
-            if self.wire_api == "messages":
+            if self.wire_api == "chat":
+                if channel == "text":
+                    values.append(str(item.get("content") or ""))
+                else:
+                    values.extend(text for text, _ in readable_reasoning(item))
+            elif self.wire_api == "messages":
                 if item.get("type") == channel:
                     values.append(str(item.get(channel) or ""))
             elif self.wire_api == "gemini":

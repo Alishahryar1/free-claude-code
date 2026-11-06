@@ -63,6 +63,17 @@ def create_app(services: ApiServices) -> FastAPI:
 
     @app.exception_handler(HTTPException)
     async def public_http_error_handler(request: Request, exc: HTTPException):
+        if generation_api(request.url.path) == "chat":
+            return JSONResponse(
+                status_code=exc.status_code,
+                headers=exc.headers,
+                content=openai_error_payload(
+                    message=str(exc.detail),
+                    error_type="authentication_error"
+                    if exc.status_code == 401
+                    else "invalid_request_error",
+                ),
+            )
         if generation_api(request.url.path) == "gemini":
             return JSONResponse(
                 status_code=exc.status_code,
@@ -114,13 +125,18 @@ def create_app(services: ApiServices) -> FastAPI:
             message_summary=message_summary,
             tool_names=tool_names,
         )
-        if generation_api(request.url.path) == "gemini":
+        if generation_api(request.url.path) in {"gemini", "chat"}:
             message = "; ".join(
                 f"{'.'.join(map(str, error['loc']))}: {error['msg']}"
                 for error in exc.errors()
             )
             return JSONResponse(
-                status_code=400, content=gemini_error_payload(400, message)
+                status_code=400,
+                content=gemini_error_payload(400, message)
+                if generation_api(request.url.path) == "gemini"
+                else openai_error_payload(
+                    message=message, error_type="invalid_request_error"
+                ),
             )
         if request.url.path == "/admin/api/config/apply":
             return JSONResponse(
@@ -168,7 +184,7 @@ def create_app(services: ApiServices) -> FastAPI:
             message = safe_exception_message(exc)
             if generation_api(request.url.path) == "gemini":
                 content = gemini_error_payload(500, message)
-            elif request.url.path == "/v1/responses":
+            elif generation_api(request.url.path) in {"responses", "chat"}:
                 content = openai_error_payload(message=message, error_type="api_error")
             else:
                 content = anthropic_error_payload(

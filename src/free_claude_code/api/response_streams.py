@@ -22,6 +22,7 @@ from free_claude_code.core.anthropic.streaming import (
     anthropic_terminal_failure_frame,
 )
 from free_claude_code.core.async_iterators import try_close_async_iterator
+from free_claude_code.core.chat_completions.response import chat_frame
 from free_claude_code.core.diagnostics import safe_exception_message
 from free_claude_code.core.failures import find_execution_failure
 from free_claude_code.core.gemini import gemini_error_payload
@@ -29,6 +30,7 @@ from free_claude_code.core.gemini.response import gemini_frame
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
     committed_response_failure_frame,
+    openai_error_payload,
     openai_error_type_for_failure,
 )
 from free_claude_code.core.request_outcomes import (
@@ -46,7 +48,7 @@ PreStartErrorResponse = Callable[[BaseException], Response]
 TerminalFrameEmitter = Callable[[str, str, BaseException], str]
 TerminalFailureObserver = Callable[[BaseException], None]
 ReleaseResponseResource = Callable[[], Awaitable[None]]
-WireApi = Literal["messages", "responses", "gemini"]
+WireApi = Literal["messages", "responses", "gemini", "chat"]
 
 
 class EmptyStreamError(RuntimeError):
@@ -423,6 +425,45 @@ async def gemini_sse_streaming_response(
     return await _first_chunk_streaming_response(
         body,
         wire_api="gemini",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        pre_start_error_response=pre_start_error_response,
+        terminal_frame=terminal_frame,
+        terminal_failure_observer=terminal_observer,
+    )
+
+
+async def chat_sse_streaming_response(
+    body: AsyncIterator[str],
+    *,
+    pre_start_error_response: PreStartErrorResponse,
+    request_id: str,
+) -> Response:
+    def terminal_frame(_first: str, _latest: str, error: BaseException) -> str:
+        failure = find_execution_failure(error)
+        return chat_frame(
+            openai_error_payload(
+                message=safe_exception_message(failure or error),
+                error_type=openai_error_type_for_failure(failure)
+                if failure
+                else "api_error",
+            )
+        )
+
+    def terminal_observer(error: BaseException) -> None:
+        failure = find_execution_failure(error)
+        trace_terminal_execution_error(
+            wire_api="chat",
+            request_id=request_id,
+            status_code=failure.status_code if failure else 500,
+            error_type=openai_error_type_for_failure(failure)
+            if failure
+            else "api_error",
+            error=error,
+        )
+
+    return await _first_chunk_streaming_response(
+        body,
+        wire_api="chat",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         pre_start_error_response=pre_start_error_response,
         terminal_frame=terminal_frame,

@@ -19,6 +19,11 @@ from free_claude_code.core.anthropic.native import (
     build_native_messages_request,
 )
 from free_claude_code.core.anthropic.native_stream import NativeMessagesRelay
+from free_claude_code.core.chat_completions.messages_stream import ChatMessagesStream
+from free_claude_code.core.chat_completions.request import (
+    ChatRequest,
+    chat_messages_body,
+)
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.gemini.messages_stream import GeminiMessagesStream
@@ -266,6 +271,41 @@ class AnthropicMessagesTransport:
                 tool_names=prepared.tool_names,
                 declared_names=frozenset(prepared.tool_schemas),
                 reserved_tool_ids=prepared.reserved_tool_ids,
+            ),
+        )
+
+    def stream_chat(
+        self,
+        request: ChatRequest,
+        *,
+        endpoint_context: EndpointContext,
+        input_tokens: int = 0,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[str]:
+        try:
+            translated = MessagesRequest.model_validate(chat_messages_body(request))
+            prepared = self._messages_body(
+                translated, reasoning, self._effective_capabilities(model_info), False
+            )
+            reserved = request.reserved_tool_ids()
+        except ValueError as error:
+            raise InvalidRequestError(str(error)) from error
+        return self._stream(
+            prepared.body,
+            betas=prepared.betas,
+            endpoint_context=endpoint_context,
+            request_id=request_id,
+            continuation=continuation,
+            presenter_factory=lambda origin: ChatMessagesStream(
+                model=response_model or request.model,
+                origin=origin,
+                reserved_tool_ids=reserved,
+                include_usage=request.include_usage,
+                include_thoughts=reasoning.output_enabled,
             ),
         )
 

@@ -126,6 +126,7 @@ class RequestCorrections:
         structured_details: bool = True,
         finalize: Callable[[JsonObject], JsonObject] | None = None,
         continuation: bool = False,
+        native_chat: bool = False,
     ) -> JsonObject:
         if self.history is None:
             self.history = HistoryNegotiation(cache, origin)
@@ -136,6 +137,7 @@ class RequestCorrections:
             structured_details=structured_details,
             finalize=finalize,
             continuation=continuation,
+            native_chat=native_chat,
         )
 
     def accepted_history(self) -> None:

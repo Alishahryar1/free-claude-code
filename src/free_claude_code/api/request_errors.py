@@ -27,7 +27,7 @@ from free_claude_code.core.request_outcomes import (
     record_request_failure,
 )
 
-WireApi = Literal["messages", "responses", "gemini"]
+WireApi = Literal["messages", "responses", "gemini", "chat"]
 
 
 def require_non_empty_messages(messages: Sequence[object]) -> None:
@@ -48,7 +48,7 @@ def ordinary_application_error_response(
             status_code=error.status_code,
             content=gemini_error_payload(error.status_code, error.message),
         )
-    if wire_api == "responses":
+    if wire_api in {"responses", "chat"}:
         return JSONResponse(
             status_code=error.status_code,
             content=openai_error_payload(

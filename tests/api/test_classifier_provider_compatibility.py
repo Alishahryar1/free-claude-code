@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx as native_httpx
 import httpx2 as httpx
 import pytest
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -21,6 +22,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     thinking_content,
 )
 from free_claude_code.core.reasoning import ReasoningCapability
+from free_claude_code.providers.gemini import GeminiProvider
 from free_claude_code.providers.open_router import OpenRouterProvider
 from tests.api.model_fallback_support import (
     ControlledFallbackProvider,
@@ -31,6 +33,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
 )
+from tests.providers.test_gemini import _sse
 from tests.web_tools_support import StubWebToolsClient
 
 
@@ -85,6 +88,83 @@ def classifier_request():
             "stream": False,
         }
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("capability", "off", "limit"),
+    [
+        ("none", False, 64),
+        ("optional", True, 64),
+        ("required", False, None),
+        ("unknown", True, None),
+    ],
+)
+@pytest.mark.parametrize("rejection", [None, "mandatory", "field", "unrelated"])
+async def test_native_gemini_classifier_preserves_reasoning_preparation(
+    capability, off, limit, rejection
+):
+    bodies = []
+
+    def reply(request):
+        body = json.loads(request.content)
+        bodies.append(body)
+        config = body["generationConfig"]
+        if config["thinkingConfig"].get("thinkingBudget") == 0 and rejection:
+            error = {
+                "mandatory": {"message": "Thinking cannot be disabled"},
+                "field": {
+                    "message": "Value is not supported",
+                    "param": "generationConfig.thinkingConfig.thinkingBudget",
+                },
+                "unrelated": {"message": "Invalid tool schema", "param": "tools"},
+            }[rejection]
+            return native_httpx.Response(400, json={"error": error})
+        return _sse(
+            [
+                {"text": "Private classifier reasoning", "thought": True},
+                {"text": "<severity>0</severity>"},
+            ]
+        )
+
+    provider = GeminiProvider(
+        make_provider_config("test", "https://gemini.invalid/v1beta"),
+        admission=immediate_admission(),
+        transport=native_httpx.MockTransport(reply),
+    )
+    try:
+        response = await MessagesHandler(
+            Settings(),
+            provider_resolver=AsyncMock(return_value=provider),
+            model_info_lookup=lambda *_: ProviderModelInfo(
+                "models/gemini-2.5-flash",
+                reasoning_capability=ReasoningCapability(capability),
+            ),
+            web_tools=StubWebToolsClient(),
+        ).create(
+            classifier_request().model_copy(
+                update={"model": "gemini/models/gemini-2.5-flash"}
+            )
+        )
+        assert isinstance(response, JSONResponse)
+        if off and rejection == "unrelated":
+            assert response.status_code >= 400
+            assert len(bodies) == 1
+        else:
+            assert response.status_code == 200
+            assert json.loads(bytes(response.body))["content"] == [
+                {"type": "text", "text": "<severity>0</severity>"}
+            ]
+            assert len(bodies) == (2 if off and rejection else 1)
+        config = bodies[0]["generationConfig"]
+        assert config.get("maxOutputTokens") == limit
+        assert (config["thinkingConfig"].get("thinkingBudget") == 0) is off
+        if len(bodies) == 2:
+            retried = bodies[1]["generationConfig"]
+            assert "maxOutputTokens" not in retried
+            assert "thinkingBudget" not in retried["thinkingConfig"]
+    finally:
+        await provider.cleanup()
 
 
 @pytest.mark.asyncio

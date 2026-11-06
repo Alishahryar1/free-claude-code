@@ -23,13 +23,14 @@ from free_claude_code.core.openai_responses.provider_stream import (
     ResponsesProviderStream,
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.providers.gemini import GeminiProvider
+from free_claude_code.providers.google_openai import GoogleOpenAIProvider
 from free_claude_code.providers.openai_chat.reasoning_details import (
     StructuredReasoningStream,
 )
 from free_claude_code.providers.openai_chat.stream_output import (
     AnthropicChatStreamOutput,
 )
+from free_claude_code.providers.vertex.client import _PROFILE as GOOGLE_PROFILE
 from tests.api.test_hidden_stream_retries import delivered
 from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_history_transports import (
@@ -201,10 +202,11 @@ async def test_google_message_signature_round_trips_in_its_native_field(
         upstream.reverse()
 
     def factory():
-        return GeminiProvider(
+        return GoogleOpenAIProvider(
             make_provider_config(
                 api_key="test-key", base_url="https://provider.invalid/v1"
             ),
+            profile=GOOGLE_PROFILE,
             admission=immediate_admission(),
         )
 
@@ -256,10 +258,11 @@ async def test_interrupted_opaque_only_state_keeps_hidden_retry_eligible(
             await asyncio.sleep(0.9)
 
     def factory():
-        return GeminiProvider(
+        return GoogleOpenAIProvider(
             make_provider_config(
                 api_key="test-key", base_url="https://provider.invalid/v1"
             ),
+            profile=GOOGLE_PROFILE,
             admission=immediate_admission(max_attempts=2),
         )
 

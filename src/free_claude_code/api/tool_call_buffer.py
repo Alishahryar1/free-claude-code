@@ -1,9 +1,10 @@
 """Withhold incomplete client tool calls at the public SSE delivery boundary."""
 
 from collections.abc import Mapping
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.chat_completions.response import chat_failure
 from free_claude_code.core.json_types import JsonValue
 from free_claude_code.core.openai_responses import is_client_search
 
@@ -47,7 +48,9 @@ def _client_call(item: Mapping[str, object]) -> bool:
 class ToolCallBuffer:
     """Select complete groups in source order, without owning public delivery."""
 
-    def __init__(self, wire_api: Literal["messages", "responses", "gemini"]) -> None:
+    def __init__(
+        self, wire_api: Literal["messages", "responses", "gemini", "chat"]
+    ) -> None:
         self._wire_api = wire_api
         self._frames: list[str] = []
         self._calls: set[CallKey] = set()
@@ -56,8 +59,11 @@ class ToolCallBuffer:
         self._discarded: set[CallKey] = set()
         self._ids: dict[str, CallKey] = {}
         self._indices: dict[int, CallKey] = {}
+        self._chat_calls: dict[str, dict[str, Any]] = {}
 
     def feed(self, frame: str) -> list[str]:
+        if self._wire_api == "chat":
+            return self._chat(frame)
         if self._wire_api == "gemini":
             # Gemini presenters release only complete, object-valued calls.
             return [frame]
@@ -113,6 +119,48 @@ class ToolCallBuffer:
                     self._discard_group()
             if isinstance(data.get("response"), Mapping):
                 frame = self._filter_snapshot(frame)
+        return self._publish(frame)
+
+    def _chat(self, frame: str) -> list[str]:
+        data = frame_data(frame)
+        if data is None:
+            if frame.strip() == "data: [DONE]" and self._pending:
+                self._discard_group()
+                raise chat_failure("Chat stream ended with incomplete tool calls")
+            return self._publish(frame)
+        if "error" in data:
+            self._discard_group()
+            self._chat_calls.clear()
+            return [frame]
+        for choice in data.get("choices", []):
+            choice_index = choice["index"]
+            for call in (choice.get("delta") or {}).get("tool_calls") or []:
+                key = f"{choice_index}:{call['index']}"
+                self._begin_call(key)
+                target = self._chat_calls.setdefault(key, {})
+                for field, value in call.items():
+                    if value is None:
+                        continue
+                    if field in {"function", "custom"}:
+                        dest = target.setdefault(field, {})
+                        for name, text in value.items():
+                            if text is not None:
+                                dest[name] = dest.get(name, "") + text
+                    else:
+                        target[field] = value
+            if choice.get("finish_reason") is not None:
+                for key in tuple(self._chat_calls):
+                    if not key.startswith(f"{choice_index}:"):
+                        continue
+                    call = self._chat_calls.pop(key)
+                    function = call.get("function") or call.get("custom") or {}
+                    valid = bool(call.get("id") and function.get("name"))
+                    if not valid:
+                        self._discard_group()
+                        raise chat_failure(
+                            "Chat returned an incomplete or invalid tool call"
+                        )
+                    self._pending.discard(key)
         return self._publish(frame)
 
     def _begin_call(self, key: CallKey) -> None:

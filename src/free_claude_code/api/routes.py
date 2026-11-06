@@ -25,6 +25,7 @@ from free_claude_code.core.anthropic.native import (
     validate_messages_json,
 )
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
+from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -39,6 +40,7 @@ from .dependencies import (
     resolve_provider,
 )
 from .handlers import MessagesHandler, ResponsesHandler, TokenCountHandler
+from .handlers.chat import ChatHandler
 from .handlers.gemini import GeminiHandler
 from .model_catalog import (
     ModelCatalogView,
@@ -130,6 +132,37 @@ def _provider_resolver(lease: RequestRuntimeLease) -> ProviderResolver:
     return lambda provider_type, api_key_number: resolve_provider(
         provider_type, api_key_number, lease=lease
     )
+
+
+@router.post("/v1/chat/completions")
+async def create_chat_completion(
+    request: Request,
+    request_data: ChatRequest,
+    services: ApiServices = Depends(get_services),
+    _auth=Depends(require_proxy_auth),
+):
+    lease = await services.requests.acquire()
+    try:
+        await lease.wait_for_token_estimation()
+        handler = ChatHandler(
+            lease.settings,
+            _provider_resolver(lease),
+            generation_id=lease.generation_id,
+            request_headers=request.headers,
+            model_info_lookup=lease.model_info,
+        )
+        response = await handler.create(
+            request_data, request_id=get_request_id(request)
+        )
+    except BaseException:
+        await lease.release()
+        raise
+    return await bind_response_lifetime(response, lease.release)
+
+
+@router.api_route("/v1/chat/completions", methods=["HEAD", "OPTIONS"])
+async def probe_chat(_auth=Depends(require_proxy_auth)):
+    return _probe_response("POST, HEAD, OPTIONS")
 
 
 async def _create_messages_response(

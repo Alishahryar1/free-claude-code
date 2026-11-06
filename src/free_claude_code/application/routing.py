@@ -23,6 +23,7 @@ from free_claude_code.core.anthropic import (
     TokenCountRequest,
 )
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
+from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.gateway_model_ids import (
     DESKTOP_MODEL_PREFIX,
     DESKTOP_NO_THINKING_PREFIX,
@@ -34,6 +35,7 @@ from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.trace import trace_event
 
 from .reasoning import (
+    resolve_chat_reasoning_policy,
     resolve_gemini_reasoning_policy,
     resolve_reasoning_policy,
     resolve_responses_reasoning_policy,
@@ -103,6 +105,13 @@ class RoutedResponsesRequest:
 @dataclass(frozen=True, slots=True)
 class RoutedGeminiRequest:
     request: GeminiRequest
+    resolved: ResolvedModelRoute
+    reasoning: ReasoningPolicy
+
+
+@dataclass(frozen=True, slots=True)
+class RoutedChatRequest:
+    request: ChatRequest
     resolved: ResolvedModelRoute
     reasoning: ReasoningPolicy
 
@@ -387,6 +396,18 @@ class ModelRouter:
             ),
             resolved=resolved,
             reasoning=resolve_gemini_reasoning_policy(
+                request, resolved.reasoning_preference
+            ),
+        )
+
+    def resolve_chat_request(self, request: ChatRequest) -> RoutedChatRequest:
+        resolved = self.resolve(request.model)
+        return RoutedChatRequest(
+            request=request.model_copy(
+                update={"model": resolved.primary.provider_model}, deep=True
+            ),
+            resolved=resolved,
+            reasoning=resolve_chat_reasoning_policy(
                 request, resolved.reasoning_preference
             ),
         )

@@ -14,9 +14,9 @@ from free_claude_code.core.gemini.replay import (
 )
 from free_claude_code.core.history_replay import ReplayOrigin, ReplayRecord
 from free_claude_code.providers.deepseek.client import _PROFILE, DeepSeekChatBehavior
-from free_claude_code.providers.gemini.client import _PROFILE as GOOGLE_PROFILE
 from free_claude_code.providers.google_openai.provider import GoogleChatBehavior
 from free_claude_code.providers.openai_chat import OpenAIChatTransport
+from free_claude_code.providers.vertex.client import _PROFILE as GOOGLE_PROFILE
 from tests.providers.support import immediate_admission
 from tests.providers.test_gemini_transport import chat_response, collect, gemini_request
 from tests.providers.test_lmstudio import (

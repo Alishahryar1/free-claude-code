@@ -11,7 +11,7 @@ from .delivered_response import (
     responses_text_constraint,
 )
 from .failures import ExecutionFailure, FailureKind
-from .gemini.response import gemini_finished
+from .gemini.response import gemini_finished, gemini_parts
 
 
 class ContinuationStream:
@@ -93,6 +93,32 @@ class ContinuationStream:
             "response.in_progress",
         }:
             return []
+        if self.delivered.wire_api == "chat":
+            for choice in payload.get("choices", []):
+                delta = choice.get("delta") or {}
+                if (
+                    choice.get("logprobs") is not None
+                    or choice.get("index") != 0
+                    or any(
+                        key
+                        not in {
+                            "role",
+                            "content",
+                            "reasoning",
+                            "reasoning_content",
+                            "reasoning_details",
+                            "tool_calls",
+                        }
+                        and value is not None
+                        for key, value in delta.items()
+                    )
+                ):
+                    raise ExecutionFailure(
+                        kind=FailureKind.UPSTREAM,
+                        status_code=502,
+                        message="Chat continuation returned an unsupported native output contract.",
+                        retryable=False,
+                    )
         events = [deepcopy(payload)]
         if not self.handoff:
             for overlap in self._overlaps:
@@ -100,6 +126,15 @@ class ContinuationStream:
         return [self._map(event) for event in events]
 
     def _map(self, data: dict[str, Any]) -> dict[str, Any]:
+        if self.delivered.wire_api == "chat":
+            for key in ("id", "model", "created"):
+                if key in self.delivered.header and key in data:
+                    data[key] = self.delivered.header[key]
+            for choice in data.get("choices", []):
+                for detail in (choice.get("delta") or {}).get("reasoning_details", []):
+                    if isinstance(detail.get("id"), str):
+                        detail["id"] = self._item_id(detail["id"])
+            return data
         if self.delivered.wire_api == "gemini":
             for key in ("responseId", "modelVersion"):
                 if key in self.delivered.header:
@@ -132,8 +167,45 @@ class ContinuationStream:
         """Finish the response only after preceding frames have been published."""
         if not self.active:
             return data
+        if self.delivered.wire_api == "chat":
+            if (
+                any(
+                    choice.get("finish_reason") is not None
+                    for choice in data.get("choices", [])
+                )
+                and not self.made_progress
+                and not any(
+                    any(
+                        (choice.get("delta") or {}).get(key)
+                        for key in (
+                            "content",
+                            "reasoning",
+                            "reasoning_content",
+                            "reasoning_details",
+                            "tool_calls",
+                        )
+                    )
+                    for choice in data.get("choices", [])
+                )
+            ):
+                raise ExecutionFailure(
+                    kind=FailureKind.UPSTREAM,
+                    status_code=502,
+                    message="The provider continuation completed without adding output.",
+                    retryable=False,
+                )
+            data.pop("usage", None)
+            return data
         if self.delivered.wire_api == "gemini":
-            if gemini_finished(data) and not self.handoff and not self.made_progress:
+            if (
+                gemini_finished(data)
+                and not self.handoff
+                and not self.made_progress
+                and not any(
+                    part.get("text") or part.get("functionCall")
+                    for part in gemini_parts(data)
+                )
+            ):
                 raise ExecutionFailure(
                     kind=FailureKind.UPSTREAM,
                     status_code=502,

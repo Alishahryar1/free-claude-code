@@ -148,6 +148,7 @@ class HistoryNegotiation:
         structured_details: bool = True,
         finalize: Callable[[JsonObject], JsonObject] | None = None,
         continuation: bool = False,
+        native_chat: bool = False,
     ) -> JsonObject:
         self._source = normalize_history_source(
             resolve_history_overrides(body), origin.protocol
@@ -180,6 +181,7 @@ class HistoryNegotiation:
                 structured_details=structured_details,
                 source_paths=paths,
                 continuation=continuation,
+                native_chat=native_chat,
             )
             return finalize(projected) if finalize is not None else projected
 

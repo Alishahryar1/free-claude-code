@@ -12,6 +12,7 @@ from typing import Any, cast
 import httpx2
 from loguru import logger
 from openai import AsyncOpenAI
+from openai.types.chat.completion_create_params import CompletionCreateParamsStreaming
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
@@ -30,6 +31,8 @@ from free_claude_code.core.anthropic.streaming import (
     parse_complete_tool_input,
     tool_schemas_by_name,
 )
+from free_claude_code.core.chat_completions.request import ChatRequest
+from free_claude_code.core.chat_completions.response import NativeChatRelay
 from free_claude_code.core.continuation_request import (
     make_response_recovery_body,
     make_text_recovery_body,
@@ -116,6 +119,7 @@ from free_claude_code.providers.stream_recovery import (
 
 from .behavior import OpenAIChatBehavior
 from .gemini_output import GeminiChatStreamOutput
+from .native_output import NativeChatStreamOutput
 from .output_cap import clamp_output_tokens, parse_output_token_cap
 from .profiles import OpenAIChatProfile
 from .reasoning_details import StructuredReasoningStream
@@ -468,6 +472,70 @@ class _OpenAIChatStreamAssembler:
         self._completed = True
 
 
+class _NativeChatStreamAssembler(_OpenAIChatStreamAssembler):
+    """Use the existing attempt owner without translating native Chat chunks."""
+
+    def __init__(self, *, choices: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        assert isinstance(self._output, NativeChatStreamOutput)
+        self._output.reasoning_replay = None
+        self._relay = NativeChatRelay(self._output.chat.model, choices=choices)
+        self._generated = False
+
+    @property
+    def generated_output(self) -> bool:
+        return self._generated
+
+    @property
+    def complete_tool_salvageable(self) -> bool:
+        return False
+
+    @property
+    def normal_stop_seen(self) -> bool:
+        return self._relay.normal_stop_seen
+
+    def observe_upstream_chunk(self, chunk: Any) -> None:
+        pass
+
+    def start_events(self) -> Iterator[str]:
+        self._started = True
+        return iter(())
+
+    def feed(self, chunk: Any) -> Iterator[str]:
+        payload = chunk.model_dump(mode="json", exclude_unset=True)
+        if getattr(chunk, "usage", None) is not None:
+            self._usage_info = chunk.usage
+        for choice in payload.get("choices", []):
+            if choice.get("finish_reason") is not None:
+                self._finish_reason = choice["finish_reason"]
+            delta = choice.get("delta") or {}
+            self._generated |= any(
+                value for key, value in delta.items() if key != "role"
+            )
+        yield self._relay.feed(payload)
+
+    def finish_upstream(self) -> Iterator[str]:
+        if not self._relay.normal_stop_seen:
+            raise TruncatedProviderStreamError(
+                "Native Chat stream ended before all choices completed"
+            )
+        self._upstream_finished = True
+        return iter(())
+
+    def prepare_completion(self, *, pad_empty: bool) -> Iterator[str]:
+        provider_input = usage_int(self._usage_info, "prompt_tokens")
+        self._completion = _OpenAIChatCompletion(
+            self._finish_reason,
+            usage_int(self._usage_info, "completion_tokens") or 0,
+            provider_input if provider_input is not None else self._output.input_tokens,
+            provider_input,
+        )
+        return iter(())
+
+    def terminal_events(self, *, usage: ChatStreamUsage) -> Iterator[str]:
+        yield from self._relay.finish()
+
+
 class OpenAIChatTransport:
     """Execute Chat requests while borrowing provider-owned HTTP resources."""
 
@@ -615,6 +683,7 @@ class OpenAIChatTransport:
         on_event: Callable[[Any], None] | None = None,
         on_origin: Callable[[ReplayOrigin], None] | None = None,
         call_replay: tuple[CallReplay, ...] = (),
+        native_chat: bool = False,
     ) -> tuple[Any, dict, ProviderAttempt, dict]:
         """Create a streaming chat completion with bounded request fallbacks."""
         execution = request_recovery.execution
@@ -631,7 +700,11 @@ class OpenAIChatTransport:
             try:
                 create_body = cast(
                     dict[str, Any],
-                    resolve_history_overrides(self._behavior.prepare_create_body(body)),
+                    resolve_history_overrides(
+                        body
+                        if native_chat
+                        else self._behavior.prepare_create_body(body)
+                    ),
                 )
                 client = self._client
                 if endpoint is not None:
@@ -673,6 +746,7 @@ class OpenAIChatTransport:
                         self._history_cache,
                         reasoning_field=self._profile.request_policy.reasoning_replay.value,
                         structured_details=self._profile.structured_reasoning_details,
+                        native_chat=native_chat,
                         continuation=operation_kind
                         is ProviderOperationKind.CONTINUATION,
                         finalize=lambda projected, origin=origin: (
@@ -702,6 +776,24 @@ class OpenAIChatTransport:
                     if on_event is not None:
                         on_event(event)
 
+                if native_chat:
+                    sdk_fields = CompletionCreateParamsStreaming.__annotations__
+                    extras = {
+                        key: value
+                        for key, value in create_body.items()
+                        if key not in sdk_fields
+                        and key not in {"extra_body", "extra_headers"}
+                    }
+                    create_body = {
+                        key: value
+                        for key, value in create_body.items()
+                        if key in sdk_fields or key in {"extra_body", "extra_headers"}
+                    }
+                    if extras:
+                        create_body["extra_body"] = {
+                            **extras,
+                            **create_body.get("extra_body", {}),
+                        }
                 stream = OpenAIStreamAdapter(
                     await client.chat.completions.create(
                         **create_body,
@@ -709,7 +801,8 @@ class OpenAIChatTransport:
                     ),
                     on_event=observed,
                 )
-                stream = self._behavior.normalize_stream(stream, body)
+                if not native_chat:
+                    stream = self._behavior.normalize_stream(stream, body)
                 retain_attempt = True
                 return stream, body, attempt, create_body
             except asyncio.CancelledError:
@@ -829,6 +922,63 @@ class OpenAIChatTransport:
             cap,
         )
         return clamped
+
+    def stream_chat(
+        self,
+        request: ChatRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        model_info: ProviderModelInfo | None = None,
+        endpoint_context: EndpointContext | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[str]:
+        raw = request.body()
+        raw.pop("stream", None)
+        if not request.stream:
+            raw["stream_options"] = {
+                **(request.stream_options or {}),
+                "include_usage": True,
+            }
+        # Ingress is JSON wire data, not SDK kwargs. A literal extra_body or
+        # extra_headers extension must stay in the JSON rather than overriding
+        # request fields or HTTP headers inside the SDK.
+        sdk_fields = CompletionCreateParamsStreaming.__annotations__
+        body = {key: value for key, value in raw.items() if key in sdk_fields}
+        extensions = {key: value for key, value in raw.items() if key not in sdk_fields}
+        if extensions:
+            body["extra_body"] = extensions
+        # Explicit routing overrides have priority. Otherwise native controls stay
+        # exactly as supplied, including vendor extensions and explicit nulls.
+        if reasoning != DEFAULT_REASONING_POLICY:
+            self._profile.apply_reasoning_to_body(body, reasoning)
+        validate_history(body)
+        public_model = response_model or request.model
+        options = body.get("stream_options") or {}
+        return _OpenAIChatStreamRunner(
+            self,
+            body=body,
+            tool_names=OpenAIToolNameCodec.from_names(()),
+            tool_schemas={},
+            reserved_tool_ids=frozenset(),
+            output_factory=lambda: NativeChatStreamOutput(
+                model=public_model,
+                input_tokens=input_tokens,
+                include_usage=isinstance(options, dict)
+                and bool(options.get("include_usage")),
+            ),
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=public_model,
+            reasoning=reasoning,
+            endpoint_context=endpoint_context,
+            extra_headers=extra_headers,
+            continuation=continuation,
+            native_chat=True,
+        ).run()
 
     def stream_messages(
         self,
@@ -1009,8 +1159,10 @@ class _OpenAIChatStreamRunner:
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
         call_replay: tuple[CallReplay, ...] = (),
+        native_chat: bool = False,
     ) -> None:
         self._transport = transport
+        self._native_chat = native_chat
         self._body = body
         self._continuation = continuation
         self._call_replay = call_replay
@@ -1088,7 +1240,8 @@ class _OpenAIChatStreamRunner:
         if self._continuation is not None:
             body = continuation_request.build(body, self._continuation)
             operation_kind = ProviderOperationKind.CONTINUATION
-        request_stream_usage(body)
+        if not self._native_chat:
+            request_stream_usage(body)
         output_reasoning = self._reasoning.output_enabled
         corrections = RequestCorrections("chat", self._reasoning_correction)
         trace_event(
@@ -1117,6 +1270,13 @@ class _OpenAIChatStreamRunner:
                 operation_kind: ProviderOperationKind = operation_kind,
             ) -> None:
                 assembler.observe_upstream_chunk(chunk)
+                if self._native_chat:
+                    source.observe(
+                        "chat",
+                        chunk.model_dump(mode="json", exclude_unset=True),
+                        continuing=operation_kind is ProviderOperationKind.CONTINUATION,
+                    )
+                    return
                 source.observe(
                     "chat",
                     {
@@ -1162,6 +1322,7 @@ class _OpenAIChatStreamRunner:
                     on_event=observe_chunk,
                     on_origin=partial(setattr, assembler.output, "replay_origin"),
                     call_replay=self._call_replay,
+                    native_chat=self._native_chat,
                 )
                 scope = ProviderAttemptScope(
                     attempt,
@@ -1434,6 +1595,7 @@ class _OpenAIChatStreamRunner:
         if (
             decision.action == RecoveryFailureAction.MIDSTREAM_RECOVERY
             and execution.delivery is None
+            and not self._native_chat
         ):
             if scope is not None:
                 await scope.aclose(active_error=error)
@@ -1900,7 +2062,12 @@ class _OpenAIChatStreamRunner:
                 tool_call_id, extra_content, origin=output.replay_origin
             )
 
-        return _OpenAIChatStreamAssembler(
+        assembler_type = (
+            partial(_NativeChatStreamAssembler, choices=int(self._body.get("n") or 1))
+            if self._native_chat
+            else _OpenAIChatStreamAssembler
+        )
+        return assembler_type(
             output=output,
             profile=self._transport._profile,
             provider_name=self._transport._provider_name,
