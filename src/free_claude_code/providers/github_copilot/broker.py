@@ -172,7 +172,18 @@ class CopilotBroker:
 
     def validate_model(self, model_id: str) -> CopilotModel:
         model = self._models.get(model_id)
+        if model is None and model_id.startswith("github_copilot/"):
+            model = self._models.get(model_id.removeprefix("github_copilot/"))
+        if model is None and model_id.strip().casefold() in {
+            "auto",
+            "github_copilot/auto",
+        }:
+            model = self._models.get("auto")
         if model is None:
+            if model_id.strip().casefold() in {"auto", "github_copilot/auto"}:
+                raise InvalidRequestError(
+                    "Choose a concrete model from the connected Copilot account."
+                )
             raise InvalidRequestError(
                 "This model is not available from the connected Copilot account. Refresh the model list."
             )
@@ -202,17 +213,18 @@ class CopilotBroker:
             if self._closing:
                 raise CopilotUnavailable("Copilot connection is closing.")
             model = self.validate_model(model_id)
+            effective_model_id = model.info.model_id
             self._leases += 1
-            owner = self._owners.get(model_id)
+            owner = self._owners.get(effective_model_id)
             if owner is None:
-                owner = _EndpointOwner(self._runtime, model_id)
-                self._owners[model_id] = owner
+                owner = _EndpointOwner(self._runtime, effective_model_id)
+                self._owners[effective_model_id] = owner
         lease = None
         try:
             await self.validate_identity()
             endpoint = await owner.endpoint(force_refresh=False)
             await self.validate_identity()
-            self.validate_model(model_id)
+            self.validate_model(effective_model_id)
             lease = CopilotLease(self, owner, model, endpoint.egress)
             yield lease
         finally:

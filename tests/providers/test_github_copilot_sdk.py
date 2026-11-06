@@ -10,6 +10,7 @@ import pytest
 from copilot import CopilotClient, CopilotSession
 from copilot.rpc import Model, PermissionDecisionReject, ProviderEndpoint
 
+from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.providers.github_copilot import native_cli, sdk
 from free_claude_code.providers.github_copilot.types import (
     CopilotEgress,
@@ -402,6 +403,149 @@ async def test_discovery_is_uncached_and_filters_auto_and_disabled_models(
 
 
 @pytest.mark.asyncio
+async def test_discovery_exposes_auto_with_conservative_defaults_when_model_list_empty(
+    client: MagicMock,
+) -> None:
+    client.rpc.models.list = AsyncMock(return_value=SimpleNamespace(models=[]))
+    runtime = sdk.SdkRuntime()
+    await runtime.start()
+    result = await runtime.models()
+    assert len(result) == 1
+    item = result[0]
+    assert item.info.model_id == "auto"
+    assert item.info.input_modalities == frozenset({ModelInputModality.TEXT})
+    assert item.info.supports_thinking is None
+    assert item.info.context_window_tokens is None
+    assert item.info.max_output_tokens is None
+    assert item.supported_efforts is None
+    assert item.default_effort is None
+    assert item.messages.max_output_tokens is None
+    assert item.messages.adaptive_thinking is None
+    assert item.messages.supports_output_effort is None
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_discovery_exposes_auto_preserving_metadata_when_only_auto_model_listed(
+    client: MagicMock,
+) -> None:
+    def model(name: str, policy: str) -> Model:
+        return Model.from_dict(
+            {
+                "id": name,
+                "name": name,
+                "capabilities": {
+                    "supports": {
+                        "vision": True,
+                        "adaptive_thinking": "required",
+                        "reasoningEffort": True,
+                    },
+                    "limits": {
+                        "max_output_tokens": 42,
+                        "max_context_window_tokens": 100,
+                    },
+                },
+                "policy": {"state": policy},
+                "supportedReasoningEfforts": ["low", "high"],
+            }
+        )
+
+    client.rpc.models.list = AsyncMock(
+        return_value=SimpleNamespace(
+            models=[
+                model("Auto", "enabled"),
+                model("disabled", "disabled"),
+            ]
+        )
+    )
+    runtime = sdk.SdkRuntime()
+    await runtime.start()
+    result = await runtime.models()
+    assert len(result) == 1
+    assert result[0].info.model_id == "auto"
+    assert result[0].messages.adaptive_thinking == "required"
+    assert result[0].info.max_output_tokens == 42
+    assert result[0].info.context_window_tokens == 100
+    assert result[0].info.input_modalities == frozenset(
+        {ModelInputModality.TEXT, ModelInputModality.IMAGE}
+    )
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_discovery_exposes_auto_when_only_disabled_named_models_listed(
+    client: MagicMock,
+) -> None:
+    def model(name: str, policy: str) -> Model:
+        return Model.from_dict(
+            {
+                "id": name,
+                "name": name,
+                "capabilities": {},
+                "policy": {"state": policy},
+            }
+        )
+
+    client.rpc.models.list = AsyncMock(
+        return_value=SimpleNamespace(
+            models=[
+                model("gpt-4o", "disabled"),
+                model("claude-3.5-sonnet", "disabled"),
+            ]
+        )
+    )
+    runtime = sdk.SdkRuntime()
+    await runtime.start()
+    result = await runtime.models()
+    assert len(result) == 1
+    assert result[0].info.model_id == "auto"
+    assert result[0].info.input_modalities == frozenset({ModelInputModality.TEXT})
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_discovery_returns_empty_when_auto_model_is_explicitly_disabled(
+    client: MagicMock,
+) -> None:
+    raw = Model.from_dict(
+        {
+            "id": "auto",
+            "name": "auto",
+            "capabilities": {},
+            "policy": {"state": "disabled"},
+        }
+    )
+    client.rpc.models.list = AsyncMock(return_value=SimpleNamespace(models=[raw]))
+    runtime = sdk.SdkRuntime()
+    await runtime.start()
+    result = await runtime.models()
+    assert result == ()
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_discovery_auto_model_handles_missing_capabilities_safely(
+    client: MagicMock,
+) -> None:
+    raw = Model.from_dict(
+        {
+            "id": "auto",
+            "name": "auto",
+            "capabilities": {},
+            "policy": {"state": "enabled"},
+        }
+    )
+    client.rpc.models.list = AsyncMock(return_value=SimpleNamespace(models=[raw]))
+    runtime = sdk.SdkRuntime()
+    await runtime.start()
+    result = await runtime.models()
+    assert len(result) == 1
+    assert result[0].info.model_id == "auto"
+    assert result[0].info.input_modalities == frozenset({ModelInputModality.TEXT})
+    await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_inert_constructor_preserves_native_profile_and_disables_overrides(
     client: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -639,6 +783,43 @@ def test_endpoint_rejects_invalid_rotating_session_token(token: dict[str, str]) 
     )
     with pytest.raises(CopilotUnavailable, match="session"):
         sdk._endpoint(endpoint, "model")
+
+
+@pytest.mark.parametrize(
+    "token_model",
+    ["auto", "Auto", "gpt-4o", "claude-3.5-sonnet", None],
+)
+def test_endpoint_accepts_session_token_for_auto_model(token_model: str | None) -> None:
+    token: dict[str, object] = {"header": "X-Session", "token": "secret"}
+    if token_model is not None:
+        token["model"] = token_model
+    endpoint = ProviderEndpoint.from_dict(
+        {
+            "type": "openai",
+            "baseUrl": "https://upstream.invalid",
+            "headers": {},
+            "sessionToken": token,
+        }
+    )
+    result = sdk._endpoint(endpoint, "auto")
+    assert result.http.headers["x-session"] == "secret"
+
+
+def test_endpoint_accepts_case_insensitive_session_token_model() -> None:
+    endpoint = ProviderEndpoint.from_dict(
+        {
+            "type": "openai",
+            "baseUrl": "https://upstream.invalid",
+            "headers": {},
+            "sessionToken": {
+                "header": "X-Session",
+                "token": "secret",
+                "model": "Model-Name",
+            },
+        }
+    )
+    result = sdk._endpoint(endpoint, "model-name")
+    assert result.http.headers["x-session"] == "secret"
 
 
 @pytest.mark.parametrize(
