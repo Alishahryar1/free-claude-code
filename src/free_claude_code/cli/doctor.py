@@ -6,6 +6,7 @@ import sys
 from collections.abc import Sequence
 
 from free_claude_code.runtime.diagnostics import collect_report
+from free_claude_code.runtime.termux_diagnostics import collect_termux_diagnostics
 
 from .clipboard import ClipboardUnavailable, copy_text
 
@@ -20,7 +21,20 @@ def main(argv: Sequence[str] | None = None) -> None:
         action="store_true",
         help="Disconnect recognized FCC editor/app integrations before uninstalling.",
     )
+    parser.add_argument(
+        "--termux",
+        action="store_true",
+        help="Run Termux and Android ARM64 compatibility diagnostics.",
+    )
     args = parser.parse_args(argv)
+    if args.termux and args.disconnect_integrations:
+        parser.error("--termux cannot be combined with --disconnect-integrations")
+    if args.termux:
+        report = collect_termux_diagnostics()
+        sys.stdout.write(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
+        if report["summary"] == "FAIL":
+            raise SystemExit(1)
+        return
     if args.disconnect_integrations:
         from free_claude_code.harnesses.integration_cleanup import (
             IntegrationCleanupError,

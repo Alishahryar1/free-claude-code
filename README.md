@@ -72,6 +72,23 @@ Windows PowerShell:
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1")))
 ```
 
+#### Termux on Android ARM64
+
+FCC has a separate native Termux installer. Download it to a file before running
+it; do not pipe a remote installer directly into a shell:
+
+```sh
+pkg install curl
+curl -fsSLo "$TMPDIR/fcc-install-termux.sh" \
+  "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install-termux.sh"
+sh "$TMPDIR/fcc-install-termux.sh"
+```
+
+The installer uses Termux's Python and uv, builds dependencies in a private
+environment, and does not install external coding agents. See the
+[Termux guide](docs/TERMUX.md) for requirements, diagnostics, limitations, and
+the current verification status.
+
 When prompted, choose at least one coding agent and optionally enable [RTK](https://github.com/rtk-ai/rtk) + [Headroom](https://github.com/headroomlabs-ai/headroom) token optimization for supported agents.
 
 ### 2. Start FCC

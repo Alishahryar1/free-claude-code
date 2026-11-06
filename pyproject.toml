@@ -9,18 +9,19 @@ description = "Local proxy connecting coding agents to OpenAI-compatible AI prov
 readme = "README.md"
 license = "AGPL-3.0-only"
 license-files = ["LICENSE"]
-requires-python = "==3.14.10"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "packaging>=26.3",
     "anyio>=4.15.1",
-    "fastapi[standard]>=0.141.1",
+    "fastapi[standard]>=0.141.1; 'android' not in platform_release",
+    "fastapi>=0.141.1; 'android' in platform_release",
     "uvicorn>=0.54.0",
     "httpx[socks]>=0.28.1",
     "httpx2[socks]>=2.7.0,<3",
     "markdown-it-py>=4.2.0",
     "pydantic>=2.14.1",
     "python-dotenv>=1.2.4",
-    "tiktoken>=0.13.0",
+    "tiktoken>=0.13.0; 'android' not in platform_release",
     "python-telegram-bot>=22.8",
     "discord.py>=2.7.1",
     "openai>=3.37.0",
@@ -35,9 +36,7 @@ dependencies = [
     "Pillow>=13.0.0; sys_platform == 'win32' or sys_platform == 'darwin'",
     "github-copilot-sdk>=1.0.26",
     "simplejson>=4.2.0",
-    "grpcio>=1.84.1",
-    "grpcio-tools>=1.81.1",
-    "nvidia-riva-client>=2.26.0",
+    "nvidia-riva-client>=2.26.0; 'android' not in platform_release",
     "pyperclip>=1.11.0",
     "sqlalchemy>=2.1.6",
     "ruamel-yaml>=0.19.1",
