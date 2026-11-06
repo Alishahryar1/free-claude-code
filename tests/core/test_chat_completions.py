@@ -113,3 +113,22 @@ def test_cross_protocol_stream_options_cannot_be_silently_discarded(destination)
     )
     with pytest.raises(ChatConversionError, match="stream_options"):
         destination(request)
+
+
+@pytest.mark.parametrize("destination", [chat_messages_body, chat_responses_body])
+def test_nullable_chat_assistant_fields_are_absent_in_translation(destination):
+    request = ChatRequest(
+        model="model",
+        messages=[
+            {
+                "role": "assistant",
+                "content": "answer",
+                "tool_calls": None,
+                "function_call": None,
+                "refusal": None,
+                "audio": None,
+            },
+            {"role": "user", "content": "next"},
+        ],
+    )
+    assert destination(request)

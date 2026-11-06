@@ -77,3 +77,27 @@ def test_native_gemini_json_preserves_metadata_and_late_usage():
     accumulator.feed({"usageMetadata": {"totalTokenCount": 12}})
     assert accumulator.result()["native_extension"] == {"kept": True}
     assert accumulator.result()["usageMetadata"] == {"totalTokenCount": 12}
+
+
+def test_native_legacy_function_arguments_accumulate_without_replacement():
+    accumulator = ChatResponseAccumulator()
+    for call in [{"name": "read", "arguments": '{"pa'}, {"arguments": 'th":"kept"}'}]:
+        accumulator.feed(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"function_call": call},
+                        "finish_reason": None,
+                    }
+                ]
+            }
+        )
+    accumulator.feed(
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "function_call"}]}
+    )
+    accumulator.finish()
+    assert accumulator.result()["choices"][0]["message"]["function_call"] == {
+        "name": "read",
+        "arguments": '{"path":"kept"}',
+    }

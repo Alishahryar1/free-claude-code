@@ -168,3 +168,43 @@ def test_unsupported_native_gemini_controls_fail_before_inference(path, body):
         response = client.post(path, json=body)
     assert response.status_code == 400, response.text
     assert not calls
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"responseMimeType": "application/json"},
+        {"responseFormat": {"text": {"mimeType": "APPLICATION_JSON"}}},
+    ],
+)
+def test_native_gemini_structured_output_never_continues_partial_json(
+    config, monkeypatch
+):
+    monkeypatch.setattr(
+        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
+        lambda: RecoveryHoldbackBuffer(max_bytes=1),
+    )
+    bodies = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        events = native_text(
+            '{"x":' if len(bodies) == 1 else '{"y":1}', len(bodies) > 1
+        )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+        )
+
+    with TestClient(matrix_app("gemini", reply)) as client:
+        response = client.post(
+            "/v1beta/models/public:streamGenerateContent?alt=sse",
+            json={
+                "contents": [{"role": "user", "parts": [{"text": "json"}]}],
+                "generationConfig": config,
+            },
+        )
+    assert len(bodies) == 1
+    assert '"error"' in response.text
+    assert '"finishReason": "STOP"' not in response.text

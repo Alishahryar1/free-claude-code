@@ -209,15 +209,14 @@ class ChatResponseAccumulator:
                     for call in value:
                         index = call["index"]
                         while len(calls) <= index:
-                            calls.append({"function": {"name": "", "arguments": ""}})
+                            calls.append({})
                         dest = calls[index]
                         for field, item in call.items():
-                            if field == "function":
+                            if field in {"function", "custom"}:
+                                tool = dest.setdefault(field, {})
                                 for name, text in item.items():
                                     if text is not None:
-                                        dest["function"][name] = (
-                                            dest["function"].get(name, "") + text
-                                        )
+                                        tool[name] = tool.get(name, "") + text
                             elif field != "index" and item is not None:
                                 dest[field] = deepcopy(item)
                 elif isinstance(value, str) and key != "role":
@@ -227,7 +226,12 @@ class ChatResponseAccumulator:
                 elif isinstance(value, dict):
                     existing = message.setdefault(key, {})
                     for name, item in value.items():
-                        if isinstance(item, str) and name in {"data", "transcript"}:
+                        if isinstance(item, str) and (
+                            name in {"data", "transcript"}
+                            or (
+                                key == "function_call" and name in {"name", "arguments"}
+                            )
+                        ):
                             existing[name] = existing.get(name, "") + item
                         else:
                             existing[name] = deepcopy(item)

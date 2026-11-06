@@ -1,6 +1,7 @@
 """The Chat endpoint uses each upstream through the real HTTP boundary."""
 
 import json
+from typing import Any
 
 import httpx
 import httpx2
@@ -147,3 +148,69 @@ def test_chat_malformed_fields_fail_before_provider_execution(changes):
         )
     assert response.status_code == 400, response.text
     assert response.json()["error"]["type"] == "invalid_request_error"
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_native_custom_tool_fragments_survive_public_chat_response(streaming):
+    from tests.api.test_four_protocol_matrix import matrix_app, response_value
+
+    chunks = [
+        {
+            "index": 0,
+            "id": "call_custom",
+            "type": "custom",
+            "custom": {"name": "code_exec", "input": "print("},
+        },
+        {"index": 0, "custom": {"input": "1)"}},
+    ]
+
+    def reply(_):
+        events: list[dict[str, Any]] = [
+            {
+                "id": "chatcmpl-a",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "backend",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"tool_calls": [chunk]},
+                        "finish_reason": None,
+                    }
+                ],
+            }
+            for chunk in chunks
+        ]
+        events.append(
+            {
+                "id": "chatcmpl-a",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "backend",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+            }
+        )
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+        )
+
+    with TestClient(matrix_app("chat", reply)) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "public",
+                "messages": [{"role": "user", "content": "run"}],
+                "stream": streaming,
+                "tools": [{"type": "custom", "custom": {"name": "code_exec"}}],
+            },
+        )
+        value = response_value(response, "chat", streaming)
+    assert value["choices"][0]["message"]["tool_calls"] == [
+        {
+            "id": "call_custom",
+            "type": "custom",
+            "custom": {"name": "code_exec", "input": "print(1)"},
+        }
+    ]

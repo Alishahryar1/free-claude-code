@@ -253,8 +253,15 @@ def public_stream_failure(
 def _structured_output(body: dict[str, Any], protocol: UpstreamProtocol) -> bool:
     if protocol == "gemini":
         config = body.get("generationConfig") or {}
-        return config.get("responseMimeType") == "application/json" or bool(
-            config.get("responseSchema") or config.get("responseJsonSchema")
+        text = (config.get("responseFormat") or {}).get("text") or {}
+        return (
+            config.get("responseMimeType") == "application/json"
+            or text.get("mimeType") == "APPLICATION_JSON"
+            or bool(
+                config.get("responseSchema")
+                or config.get("responseJsonSchema")
+                or text.get("schema")
+            )
         )
     if protocol == "chat":
         extra = body.get("extra_body") or {}

@@ -121,10 +121,15 @@ def apply_reasoning(
         thinking.pop("thinkingLevel", None)
         thinking["thinkingBudget"] = policy.budget_tokens
     elif policy.effort is not None:
-        thinking.pop("thinkingBudget", None)
-        thinking["thinkingLevel"] = {"xhigh": "HIGH", "max": "HIGH"}.get(
-            policy.effort.value, policy.effort.value.upper()
-        )
+        # Gemini 2.5 exposes budgets rather than the later thinking-level API.
+        if str(body["model"]).removeprefix("models/").startswith("gemini-2.5-"):
+            thinking.pop("thinkingLevel", None)
+            thinking["thinkingBudget"] = policy.numeric_budget_tokens
+        else:
+            thinking.pop("thinkingBudget", None)
+            thinking["thinkingLevel"] = {"xhigh": "HIGH", "max": "HIGH"}.get(
+                policy.effort.value, policy.effort.value.upper()
+            )
 
 
 def _tool_config(choice: Any, *, responses: bool = False) -> dict[str, Any]:
@@ -358,9 +363,14 @@ def messages_to_gemini(request: MessagesRequest) -> JsonObject:
                 call_id = str(block["tool_use_id"])
                 if call_id not in calls:
                     raise GeminiConversionError("Orphaned tool result")
-                output = content_parts(block.get("content"))
-                text = "\n".join(
-                    part["text"] for part in output if part.get("type") == "text"
+                value = block.get("content")
+                output = [] if isinstance(value, dict) else content_parts(value)
+                text = (
+                    deepcopy(value)
+                    if isinstance(value, dict)
+                    else "\n".join(
+                        part["text"] for part in output if part.get("type") == "text"
+                    )
                 )
                 result: dict[str, Any] = {
                     "id": call_id,
@@ -410,6 +420,10 @@ def messages_to_gemini(request: MessagesRequest) -> JsonObject:
     if body.get("tools"):
         declarations = []
         for tool in body["tools"]:
+            if tool.get("strict"):
+                raise GeminiConversionError(
+                    "Native Gemini cannot enforce strict function tools"
+                )
             if tool.get("type"):
                 raise GeminiConversionError(
                     "Native Gemini cannot execute provider-hosted tools"
@@ -428,7 +442,7 @@ def messages_to_gemini(request: MessagesRequest) -> JsonObject:
                 }
             )
         result["tools"] = [{"functionDeclarations": declarations}]
-    if choice := body.get("tool_choice"):
+    if body.get("tools") and (choice := body.get("tool_choice")):
         if choice.get("disable_parallel_tool_use"):
             raise GeminiConversionError(
                 "Native Gemini cannot enforce disable_parallel_tool_use"
