@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from free_claude_code.core.chat_completions.response import (
     ChatResponseAccumulator,
     NativeChatRelay,
@@ -101,3 +103,49 @@ def test_native_legacy_function_arguments_accumulate_without_replacement():
         "name": "read",
         "arguments": '{"path":"kept"}',
     }
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        [
+            {"type": "reasoning.summary", "id": "first", "index": 0, "summary": "one"},
+            {"type": "reasoning.summary", "id": "second", "index": 0, "summary": "two"},
+        ],
+        [
+            {"type": "reasoning.encrypted", "id": "same", "index": 0, "data": "one"},
+            {"type": "reasoning.encrypted", "id": "same", "index": 0, "data": "two"},
+        ],
+        [
+            {
+                "type": "reasoning.text",
+                "id": "same",
+                "text": "one",
+                "signature": "first",
+            },
+            {
+                "type": "reasoning.text",
+                "id": "same",
+                "text": "two",
+                "signature": "second",
+            },
+        ],
+    ],
+)
+def test_distinct_native_reasoning_records_keep_their_boundaries(details):
+    accumulator = ChatResponseAccumulator()
+    for detail in details:
+        accumulator.feed(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"reasoning_details": [detail]},
+                        "finish_reason": None,
+                    }
+                ]
+            }
+        )
+    accumulator.feed({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
+    accumulator.finish()
+    assert accumulator.result()["choices"][0]["message"]["reasoning_details"] == details

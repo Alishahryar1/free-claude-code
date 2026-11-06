@@ -1,6 +1,7 @@
 """Chat clients retain upstream tools and protected history through real HTTP."""
 
 import json
+from typing import Any
 
 import pytest
 
@@ -169,3 +170,133 @@ async def test_chat_round_trip_keeps_multiple_summary_parts():
         )
         await collect(transport.stream_chat(request, **kwargs))
     assert native in bodies[-1]["input"]
+
+
+@pytest.mark.asyncio
+async def test_chat_refusal_round_trip_preserves_responses_refusal_part():
+    from tests.providers.test_openai_responses_transport import _completed_response
+
+    item = {
+        "type": "message",
+        "id": "msg_refusal",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "refusal", "refusal": "I cannot help with that."}],
+    }
+    completed = _completed_response(model="m")
+    completed["output"] = [item]
+    events: list[dict[str, Any]] = [
+        {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {**completed, "status": "in_progress", "output": []},
+        },
+        {
+            "type": "response.output_item.done",
+            "sequence_number": 1,
+            "output_index": 0,
+            "item": item,
+        },
+        {"type": "response.completed", "sequence_number": 2, "response": completed},
+    ]
+    async with _harness("responses", lambda _: (200, events)) as (_, bodies, transport):
+        request = ChatRequest(
+            model="m", messages=[{"role": "user", "content": "hello"}]
+        )
+        kwargs = {
+            "input_tokens": 0,
+            "request_id": None,
+            "response_model": "public",
+            "reasoning": ReasoningPolicy(),
+        }
+        first = await collect(transport.stream_chat(request, **kwargs))
+        message = first["choices"][0]["message"]
+        assert message["refusal"] == item["content"][0]["refusal"]
+        await collect(
+            transport.stream_chat(
+                request.model_copy(
+                    update={
+                        "messages": [
+                            *request.messages,
+                            message,
+                            {"role": "user", "content": "An allowed topic"},
+                        ]
+                    }
+                ),
+                **kwargs,
+            )
+        )
+    assistant = next(
+        value for value in bodies[-1]["input"] if value.get("role") == "assistant"
+    )
+    assert assistant["content"] == item["content"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "field"), [("reasoning.text", "text"), ("reasoning.summary", "summary")]
+)
+async def test_native_chat_json_reassembles_readable_reasoning_but_keeps_opaque_boundaries(
+    kind, field
+):
+    opaque = [
+        {"type": "reasoning.encrypted", "index": 0, "id": "a", "data": "first"},
+        {"type": "reasoning.encrypted", "index": 0, "id": "b", "data": "second"},
+    ]
+    details = [
+        {"type": kind, "index": 0, "id": "readable", field: "Check "},
+        {"type": kind, "index": 0, "id": "readable", field: "the file."},
+        *opaque,
+    ]
+    events: list[dict[str, Any]] = [
+        {
+            "id": "completion",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "m",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"reasoning_details": [detail]},
+                    "finish_reason": None,
+                }
+            ],
+        }
+        for detail in details
+    ]
+    events.append(
+        {
+            "id": "completion",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "m",
+            "choices": [
+                {"index": 0, "delta": {"content": "answer"}, "finish_reason": "stop"}
+            ],
+        }
+    )
+    async with _harness("chat", lambda _: (200, events)) as (_, bodies, transport):
+        request = ChatRequest(
+            model="m", messages=[{"role": "user", "content": "hello"}], stream=False
+        )
+        first = await collect(transport.stream_chat(request))
+        message = first["choices"][0]["message"]
+        expected = [
+            {"type": kind, "index": 0, "id": "readable", field: "Check the file."},
+            *opaque,
+        ]
+        assert message["reasoning_details"] == expected
+        await collect(
+            transport.stream_chat(
+                request.model_copy(
+                    update={
+                        "messages": [
+                            *request.messages,
+                            message,
+                            {"role": "user", "content": "next"},
+                        ]
+                    }
+                )
+            )
+        )
+    assert bodies[-1]["messages"][1]["reasoning_details"] == expected

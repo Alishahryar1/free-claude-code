@@ -240,6 +240,8 @@ def chat_to_gemini(request: ChatRequest) -> JsonObject:
                         "Unsupported protected reasoning detail"
                     )
         parts.extend(_text_parts(message.get("content")))
+        if message.get("refusal"):
+            parts.append({"text": message["refusal"]})
         for call in function_calls(message):
             name, call_id = call["function"]["name"], call["id"]
             if call_id in calls:

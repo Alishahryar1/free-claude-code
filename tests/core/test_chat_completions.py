@@ -152,3 +152,21 @@ def test_allowed_tools_rejects_unsupported_translation_clearly(destination):
     )
     with pytest.raises(ChatConversionError, match="tool_choice"):
         destination(request)
+
+
+@pytest.mark.parametrize("destination", [chat_messages_body, chat_to_gemini])
+def test_refusal_history_keeps_its_text_across_other_protocols(destination):
+    request = ChatRequest(
+        model="model",
+        messages=[
+            {"role": "assistant", "content": None, "refusal": "I cannot do that."},
+            {"role": "user", "content": "A different task"},
+        ],
+    )
+    result = cast(dict[str, Any], destination(request))
+    if destination is chat_messages_body:
+        assert result["messages"][0]["content"] == [
+            {"type": "text", "text": "I cannot do that."}
+        ]
+    else:
+        assert result["contents"][0]["parts"] == [{"text": "I cannot do that."}]

@@ -85,6 +85,11 @@ class ChatRequest(BaseModel):
                 "function",
             }:
                 raise ValueError("Unsupported Chat message role")
+            refusal = message.get("refusal")
+            if refusal is not None and (
+                message.get("role") != "assistant" or not isinstance(refusal, str)
+            ):
+                raise ValueError("Refusal history requires an assistant string")
             content = message.get("content")
             if content is not None and not isinstance(content, (str, list)):
                 raise ValueError("Chat content must be a string, array or null")
@@ -223,6 +228,7 @@ def validate_message_fields(message: dict[str, Any]) -> None:
         "reasoning_content",
         "reasoning",
         "reasoning_details",
+        "refusal",
     }
     if unsupported:
         raise ChatConversionError(
@@ -371,6 +377,8 @@ def chat_messages_body(request: ChatRequest) -> JsonObject:
             system.extend(parts)
             continue
         parts = _messages_content(message.get("content"))
+        if message.get("refusal"):
+            parts.append({"type": "text", "text": message["refusal"]})
         if role == "tool":
             parts = [
                 {
@@ -520,6 +528,8 @@ def chat_responses_body(request: ChatRequest) -> JsonObject:
         if role == "assistant":
             items.extend(_reasoning_items(message))
         parts = _responses_content(message.get("content"), role=role)
+        if message.get("refusal"):
+            parts.append({"type": "refusal", "refusal": message["refusal"]})
         if parts:
             items.append({"role": role, "content": parts})
         items.extend(

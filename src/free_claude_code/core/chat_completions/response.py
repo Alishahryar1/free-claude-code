@@ -45,7 +45,7 @@ class ChatOutput:
         return [chat_frame(payload)]
 
     def start(self) -> list[str]:
-        return self.delta({"role": "assistant", "content": ""})
+        return self.delta({"role": "assistant"})
 
     def text(self, text: str) -> list[str]:
         return self.delta({"content": text})
@@ -219,6 +219,40 @@ class ChatResponseAccumulator:
                                         tool[name] = tool.get(name, "") + text
                             elif field != "index" and item is not None:
                                 dest[field] = deepcopy(item)
+                elif key == "reasoning_details":
+                    details = message.setdefault(key, [])
+                    for detail in value:
+                        field = {
+                            "reasoning.text": "text",
+                            "reasoning.summary": "summary",
+                        }.get(detail.get("type"))
+                        previous = details[-1] if details else {}
+                        if (
+                            field is not None
+                            and previous.get("type") == detail.get("type")
+                            and isinstance(previous.get(field), str)
+                            and isinstance(detail.get(field), str)
+                            and not previous.get("signature")
+                            and not detail.get("signature")
+                            and all(
+                                name not in previous
+                                or name not in detail
+                                or previous[name] == detail[name]
+                                for name in ("id", "index", "format")
+                            )
+                        ):
+                            previous[field] += detail[field]
+                            previous.update(
+                                {
+                                    name: deepcopy(part)
+                                    for name, part in detail.items()
+                                    if name != field
+                                }
+                            )
+                        else:
+                            # Encrypted records are complete opaque objects, even
+                            # when a provider repeats an index across blocks.
+                            details.append(deepcopy(detail))
                 elif isinstance(value, str) and key != "role":
                     message[key] = (message.get(key) or "") + value
                 elif isinstance(value, list):
