@@ -23,7 +23,11 @@ from free_claude_code.core.openai_responses import (
     ResponsesToolAdapter,
     ResponsesToolPolicy,
 )
-from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.reasoning import (
+    DEFAULT_REASONING_POLICY,
+    ReasoningControl,
+    ReasoningPolicy,
+)
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -36,6 +40,10 @@ from free_claude_code.providers.openai_chat import (
     AnthropicChatStreamOutput,
     NativeChatStreamOutput,
     ResponsesChatStreamOutput,
+)
+from free_claude_code.providers.reasoning_compatibility import (
+    ReasoningCorrection,
+    prepare_messages_reasoning,
 )
 
 from .transport import GeminiTransport
@@ -138,11 +146,31 @@ class GeminiProvider(BaseProvider):
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
+        prepared, wire_reasoning = prepare_messages_reasoning(
+            request,
+            reasoning,
+            model_info=model_info,
+            # Native zero-budget disabling is supported by the 2.5 Flash family.
+            can_disable=request.model.removeprefix("models/").startswith(
+                "gemini-2.5-flash"
+            ),
+            normal_max_tokens=None,
+        )
         try:
-            body = messages_to_gemini(request)
-            apply_reasoning(body, reasoning, native=False)
+            body = messages_to_gemini(prepared)
+            apply_reasoning(body, wire_reasoning, native=False)
         except ValueError as error:
             raise InvalidRequestError(str(error)) from error
+        correction = (
+            ReasoningCorrection(
+                (("generationConfig", "thinkingConfig", "thinkingBudget"),),
+                ("generationConfig", "maxOutputTokens"),
+                None,
+            )
+            if reasoning.control is ReasoningControl.PREFER_OFF
+            and wire_reasoning.control is ReasoningControl.OFF
+            else None
+        )
         public_model = response_model or request.model
         message_id = f"msg_{uuid4().hex}"
         return self._gemini.stream(
@@ -151,6 +179,7 @@ class GeminiProvider(BaseProvider):
             request_id=request_id,
             response_model=public_model,
             include_thoughts=reasoning.output_enabled,
+            reasoning_correction=correction,
             output_factory=lambda: AnthropicChatStreamOutput(
                 message_id=message_id,
                 model=public_model,

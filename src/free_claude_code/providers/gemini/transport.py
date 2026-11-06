@@ -36,6 +36,7 @@ from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.history_replay import replay_origin
 from free_claude_code.providers.http import ProviderAttemptScope, maybe_await_aclose
 from free_claude_code.providers.openai_chat import ChatStreamOutput
+from free_claude_code.providers.reasoning_compatibility import ReasoningCorrection
 from free_claude_code.providers.request_recovery import (
     RequestCorrections,
     RequestRecovery,
@@ -81,6 +82,7 @@ class GeminiTransport:
         response_model: str,
         output_factory: Callable[[], ChatStreamOutput | None],
         include_thoughts: bool = True,
+        reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[str]:
         execution = self._admission.start_execution(
@@ -93,6 +95,7 @@ class GeminiTransport:
             response_model=response_model,
             output_factory=output_factory,
             include_thoughts=include_thoughts,
+            reasoning_correction=reasoning_correction,
             continuation=continuation,
         )
         try:
@@ -118,6 +121,7 @@ class GeminiTransport:
         response_model: str,
         output_factory: Callable[[], ChatStreamOutput | None],
         include_thoughts: bool,
+        reasoning_correction: ReasoningCorrection | None,
         continuation: ContinuationSeed | None,
     ) -> AsyncIterator[str]:
         recovery = RecoveryController(execution.delivery)
@@ -125,7 +129,7 @@ class GeminiTransport:
         request_recovery = RequestRecovery(
             execution, endpoint=endpoint, stream=recovery
         )
-        corrections = RequestCorrections("gemini")
+        corrections = RequestCorrections("gemini", reasoning=reasoning_correction)
         continuation_request = ContinuationRequest("gemini")
         operation = ProviderOperationKind.GENERATION
         if continuation is not None:
@@ -269,6 +273,7 @@ class GeminiTransport:
                             body,
                             sent_body=sent_body,
                             reasoning_error=error,
+                            reasoning_sent_body=sent_body,
                         ),
                     )
                     if corrected is not None:

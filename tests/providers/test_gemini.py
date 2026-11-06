@@ -274,6 +274,44 @@ async def test_native_signed_tool_round_trip_keeps_original_parts_and_ids(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model", ["models/gemini-2.5-pro", "models/gemini-3.5-flash-lite", "unknown-model"]
+)
+async def test_prefer_off_uses_normal_allowance_without_unavailable_disable_control(
+    model,
+):
+    bodies = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        return _sse([{"text": "verdict"}])
+
+    provider = GeminiProvider(
+        make_provider_config(api_key="key", base_url=GEMINI_DEFAULT_BASE),
+        admission=immediate_admission(),
+        transport=httpx.MockTransport(reply),
+    )
+    try:
+        await _collect(
+            "messages",
+            provider.stream_messages(
+                MessagesRequest(
+                    model=model,
+                    messages=[{"role": "user", "content": "classify"}],
+                    max_tokens=64,
+                ),
+                reasoning=ReasoningPolicy.prefer_off(),
+            ),
+        )
+        assert len(bodies) == 1
+        config = bodies[0]["generationConfig"]
+        assert "maxOutputTokens" not in config
+        assert "thinkingBudget" not in config["thinkingConfig"]
+    finally:
+        await provider.cleanup()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses", "chat"])
 async def test_explicit_off_hides_native_thoughts_but_keeps_signed_replay(wire):
     provider = GeminiProvider(
@@ -297,6 +335,37 @@ async def test_explicit_off_hides_native_thoughts_but_keeps_signed_replay(wire):
         )
         assert "hidden thought" not in json.dumps(result)
         assert "fcc:history:" in json.dumps(result)
+    finally:
+        await provider.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_explicit_off_rejection_does_not_relax_caller_control():
+    from free_claude_code.core.failures import ExecutionFailure
+
+    bodies = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            400, json={"error": {"message": "Thinking cannot be disabled"}}
+        )
+
+    provider = GeminiProvider(
+        make_provider_config(api_key="key", base_url=GEMINI_DEFAULT_BASE),
+        admission=immediate_admission(),
+        transport=httpx.MockTransport(reply),
+    )
+    try:
+        with pytest.raises(ExecutionFailure):
+            await _collect(
+                "messages",
+                provider.stream_messages(
+                    _request("messages"), reasoning=ReasoningPolicy.off()
+                ),
+            )
+        assert len(bodies) == 1
+        assert bodies[0]["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 0
     finally:
         await provider.cleanup()
 

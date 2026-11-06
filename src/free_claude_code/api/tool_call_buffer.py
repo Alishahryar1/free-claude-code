@@ -134,7 +134,7 @@ class ToolCallBuffer:
             return [frame]
         for choice in data.get("choices", []):
             choice_index = choice["index"]
-            for call in (choice.get("delta") or {}).get("tool_calls", []):
+            for call in (choice.get("delta") or {}).get("tool_calls") or []:
                 key = f"{choice_index}:{call['index']}"
                 self._begin_call(key)
                 target = self._chat_calls.setdefault(key, {})

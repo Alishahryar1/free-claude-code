@@ -205,7 +205,9 @@ class ChatResponseAccumulator:
                 if value is None:
                     message.setdefault(key, None)
                 elif key == "tool_calls":
-                    calls = message.setdefault("tool_calls", [])
+                    if message.get("tool_calls") is None:
+                        message["tool_calls"] = []
+                    calls = message["tool_calls"]
                     for call in value:
                         index = call["index"]
                         while len(calls) <= index:

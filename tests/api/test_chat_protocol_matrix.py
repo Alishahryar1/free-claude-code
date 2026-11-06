@@ -162,6 +162,71 @@ def test_chat_validation_and_auth_errors_use_openai_shape():
         assert invalid.json()["error"]["type"] == "invalid_request_error"
 
 
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("with_tool", [False, True])
+def test_native_chat_null_tool_delta_preserves_text_and_later_calls(
+    streaming, with_tool
+):
+    from tests.api.test_four_protocol_matrix import matrix_app, response_value
+
+    call = {
+        "index": 0,
+        "id": "call_read",
+        "type": "function",
+        "function": {"name": "read", "arguments": "{}"},
+    }
+    deltas = [
+        {"role": "assistant", "content": "hello", "tool_calls": None},
+        {"tool_calls": [call]} if with_tool else {"tool_calls": None},
+    ]
+
+    def reply(_):
+        events = [
+            {
+                "id": "chatcmpl-a",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "backend",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": delta,
+                        "finish_reason": ("tool_calls" if with_tool else "stop")
+                        if index == 1
+                        else None,
+                    }
+                ],
+            }
+            for index, delta in enumerate(deltas)
+        ]
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+        )
+
+    with TestClient(matrix_app("chat", reply)) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "public",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": streaming,
+            },
+        )
+        value = response_value(response, "chat", streaming)
+    message = value["choices"][0]["message"]
+    assert message["content"] == "hello"
+    assert message["tool_calls"] == (
+        [{key: item for key, item in call.items() if key != "index"}]
+        if with_tool
+        else None
+    )
+    if streaming:
+        first = json.loads(response.text.splitlines()[0][6:])
+        assert first["choices"][0]["delta"]["tool_calls"] is None
+
+
 @pytest.mark.parametrize(
     "changes",
     [
