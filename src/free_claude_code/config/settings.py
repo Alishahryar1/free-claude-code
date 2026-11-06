@@ -332,6 +332,11 @@ class Settings(BaseModel):
         default=(), validation_alias="SILICONFLOW_API_KEY"
     )
 
+    # ==================== ModelScope (OpenAI-compatible) ====================
+    modelscope_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="MODELSCOPE_API_KEY"
+    )
+
     # ==================== Nebius Token Factory (OpenAI-compatible) ====================
     nebius_api_keys: ApiKeyList = Field(default=(), validation_alias="NEBIUS_API_KEY")
 
@@ -453,6 +458,9 @@ class Settings(BaseModel):
     )
     siliconflow_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="SILICONFLOW_PROXY"
+    )
+    modelscope_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="MODELSCOPE_PROXY"
     )
     nebius_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="NEBIUS_PROXY"

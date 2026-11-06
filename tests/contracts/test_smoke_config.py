@@ -60,6 +60,7 @@ def _settings(**overrides):
         "together_api_keys": "",
         "deepinfra_api_keys": "",
         "siliconflow_api_keys": "",
+        "modelscope_api_keys": "",
         "nebius_api_keys": "",
         "scw_secret_keys": "",
         "opper_api_keys": "",
@@ -654,6 +655,23 @@ def test_siliconflow_provider_smoke_uses_documented_chat_model(monkeypatch) -> N
 
     assert [model.provider for model in models] == ["siliconflow"]
     assert models[0].full_model == "siliconflow/Qwen/Qwen3-32B"
+    assert models[0].source == "provider_default"
+
+
+def test_modelscope_provider_smoke_uses_documented_chat_model(monkeypatch) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_MODELSCOPE", raising=False)
+    config = _smoke_config(
+        settings=_settings(
+            model="ollama/llama3.1",
+            ollama_base_url="",
+            modelscope_api_keys="modelscope-key",
+        )
+    )
+
+    models = config.provider_smoke_models()
+
+    assert [model.provider for model in models] == ["modelscope"]
+    assert models[0].full_model == "modelscope/Qwen/Qwen3.8-27B"
     assert models[0].source == "provider_default"
 
 
