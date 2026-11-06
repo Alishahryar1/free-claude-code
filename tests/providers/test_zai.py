@@ -137,6 +137,58 @@ def test_build_request_body_replays_prior_reasoning_content(zai_provider):
     assert "extra_body" not in body
 
 
+def _deferred_tool_request(tool: dict) -> MessagesRequest:
+    return MessagesRequest.model_validate(
+        {
+            "model": "glm-5.2",
+            "messages": [
+                {"role": "user", "content": "Hello"},
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "Session context"},
+                        {
+                            "type": "tool_addition",
+                            "tool": tool,
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                    ],
+                },
+            ],
+            "tools": [
+                {
+                    "name": "lookup",
+                    "input_schema": {"type": "object", "properties": {}},
+                    "defer_loading": True,
+                }
+            ],
+        }
+    )
+
+
+def test_build_request_body_accepts_deferred_tool_announcement(zai_provider):
+    request = _deferred_tool_request({"type": "tool_reference", "name": "lookup"})
+
+    body = zai_provider._chat._build_request_body(
+        request, reasoning=reasoning_for(request)
+    )
+
+    assert "tool_addition" not in str(body["messages"])
+    assert "Session context" in str(body["messages"])
+    assert [tool["function"]["name"] for tool in body["tools"]] == ["lookup"]
+
+
+def test_build_request_body_rejects_inline_tool_definition(zai_provider):
+    request = _deferred_tool_request(
+        {"type": "tool_definition", "definition": {"name": "inline"}}
+    )
+
+    with pytest.raises(InvalidRequestError, match="inline tool definition"):
+        zai_provider._chat._build_request_body(
+            request, reasoning=reasoning_for(request)
+        )
+
+
 @pytest.mark.asyncio
 async def test_cleanup_closes_openai_client(zai_provider):
     zai_provider._client = MagicMock()
