@@ -97,6 +97,8 @@ ATLASCLOUD_DEFAULT_BASE = "https://api.atlascloud.ai/v1"
 XKIRO_DEFAULT_BASE = "https://api.xkiro.com/v1"
 # Opper OpenAI-compatible Chat Completions gateway.
 OPPER_DEFAULT_BASE = "https://api.opper.ai/v3/compat"
+# LLMTR OpenAI-compatible multi-provider gateway.
+LLMTR_DEFAULT_BASE = "https://llmtr.com/v1"
 # Agnes AI OpenAI-compatible Chat Completions API.
 AGNES_DEFAULT_BASE = "https://apihub.agnes-ai.com/v1"
 # ZenMux OpenAI-compatible Chat Completions gateway.
@@ -777,6 +779,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="opper_api_keys",
         default_base_url=OPPER_DEFAULT_BASE,
         proxy_attr="opper_proxy",
+    ),
+    "llmtr": ProviderDescriptor(
+        provider_id="llmtr",
+        display_name="LLMTR",
+        website_url="https://llmtr.com/",
+        logo_filename="llmtr.svg",
+        credential_env="LLMTR_API_KEY",
+        credential_url="https://llmtr.com/",
+        credential_attr="llmtr_api_keys",
+        default_base_url=LLMTR_DEFAULT_BASE,
+        proxy_attr="llmtr_proxy",
     ),
     "ollama_cloud": ProviderDescriptor(
         provider_id="ollama_cloud",

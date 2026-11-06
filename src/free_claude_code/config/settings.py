@@ -254,6 +254,9 @@ class Settings(BaseModel):
     # ==================== Opper (OpenAI-compatible) ====================
     opper_api_keys: ApiKeyList = Field(default=(), validation_alias="OPPER_API_KEY")
 
+    # ==================== LLMTR (OpenAI-compatible gateway) ====================
+    llmtr_api_keys: ApiKeyList = Field(default=(), validation_alias="LLMTR_API_KEY")
+
     # ==================== Fireworks AI Config ====================
     fireworks_api_keys: ApiKeyList = Field(
         default=(), validation_alias="FIREWORKS_API_KEY"
@@ -567,6 +570,9 @@ class Settings(BaseModel):
     )
     opper_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="OPPER_PROXY"
+    )
+    llmtr_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="LLMTR_PROXY"
     )
     fireworks_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_PROXY"

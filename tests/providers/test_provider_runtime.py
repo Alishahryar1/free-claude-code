@@ -25,6 +25,7 @@ from free_claude_code.config.provider_catalog import (
     HUGGINGFACE_DEFAULT_BASE,
     KIMI_CODE_DEFAULT_BASE,
     LLM7_DEFAULT_BASE,
+    LLMTR_DEFAULT_BASE,
     MINIMAX_DEFAULT_BASE,
     NEBIUS_DEFAULT_BASE,
     OLLAMA_CLOUD_DEFAULT_BASE,
@@ -134,6 +135,7 @@ def _make_settings(**overrides):
     mock.orcarouter_api_keys = "test_orcarouter_key"
     mock.atlascloud_api_keys = "test_atlascloud_key"
     mock.xkiro_api_keys = "test_xkiro_key"
+    mock.llmtr_api_keys = "test_llmtr_key"
     mock.nvidia_nim_proxy = None
     mock.open_router_proxy = None
     mock.lmstudio_proxy = None
@@ -186,6 +188,7 @@ def _make_settings(**overrides):
     mock.orcarouter_proxy = None
     mock.atlascloud_proxy = None
     mock.xkiro_proxy = None
+    mock.llmtr_proxy = None
     mock.kilo_api_keys = "test_kilo_key"
     mock.kilo_proxy = None
     mock.openai_proxy = None
@@ -448,6 +451,36 @@ async def test_atlascloud_provider_config_uses_key_base_and_proxy() -> None:
     assert descriptor.proxy_attr == "atlascloud_proxy"
     assert config.api_key == "atlascloud-token"
     assert config.base_url == ATLASCLOUD_DEFAULT_BASE
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+
+
+@pytest.mark.asyncio
+async def test_llmtr_provider_config_uses_key_base_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["llmtr"]
+    settings = _make_settings(
+        llmtr_api_keys="llmtr-token",
+        llmtr_base_url="https://unused.example/v1",
+        llmtr_proxy="http://proxy.test:8080",
+    )
+
+    config = build_provider_config(descriptor, settings)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider(
+            "llmtr",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
+
+    assert descriptor.display_name == "LLMTR"
+    assert descriptor.credential_env == "LLMTR_API_KEY"
+    assert descriptor.credential_attr == "llmtr_api_keys"
+    assert descriptor.credential_url == "https://llmtr.com/"
+    assert descriptor.default_base_url == LLMTR_DEFAULT_BASE
+    assert descriptor.base_url_attr is None
+    assert descriptor.proxy_attr == "llmtr_proxy"
+    assert config.api_key == "llmtr-token"
+    assert config.base_url == LLMTR_DEFAULT_BASE
     assert config.proxy == "http://proxy.test:8080"
     assert isinstance(provider, OpenAIChatProvider)
 
@@ -1183,6 +1216,7 @@ async def test_create_provider_instantiates_each_builtin():
         "nebius": OpenAIChatProvider,
         "scaleway": OpenAIChatProvider,
         "opper": OpenAIChatProvider,
+        "llmtr": OpenAIChatProvider,
         "chutes": OpenAIChatProvider,
         "featherless": OpenAIChatProvider,
         "azure_openai": OpenAIChatProvider,
