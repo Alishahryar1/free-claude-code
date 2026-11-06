@@ -10,8 +10,9 @@ from openai import AsyncOpenAI
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
-from free_claude_code.providers.gemini import GeminiProvider
+from free_claude_code.providers.google_openai import GoogleOpenAIProvider
 from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
+from free_claude_code.providers.vertex.client import _PROFILE as GOOGLE_PROFILE
 from tests.api.support import create_test_app
 from tests.api.test_hidden_stream_retries import delivered
 from tests.api.test_tool_call_buffer_transports import _tools
@@ -31,7 +32,7 @@ def chat_chunk(delta, finish=None):
     }
 
 
-def gemini_api_response(monkeypatch, events, wire, streaming, *, max_attempts=2):
+def google_compat_api_response(monkeypatch, events, wire, streaming, *, max_attempts=2):
     sent = []
     upstream = (
         "".join(f"data: {json.dumps(event)}\n\n" for event in events)
@@ -53,18 +54,19 @@ def gemini_api_response(monkeypatch, events, wire, streaming, *, max_attempts=2)
     monkeypatch.setattr(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI", lambda **_: sdk
     )
-    provider = GeminiProvider(
+    provider = GoogleOpenAIProvider(
         make_provider_config(api_key="fixture", base_url="https://fixture.invalid/v1"),
+        profile=GOOGLE_PROFILE,
         admission=immediate_admission(max_attempts=max_attempts),
     )
     app = create_test_app(
-        Settings(MODEL="gemini/test-model", ENABLE_WEB_SERVER_TOOLS=False),
-        providers={"gemini": provider},
+        Settings(MODEL="vertex/test-model", ENABLE_WEB_SERVER_TOOLS=False),
+        providers={"vertex": provider},
     )
     schema = {"type": "object", "properties": {"path": {"type": "string"}}}
     if wire == "messages":
         body = {
-            "model": "gemini/test-model",
+            "model": "vertex/test-model",
             "max_tokens": 100,
             "stream": streaming,
             "messages": [{"role": "user", "content": "read both"}],
@@ -72,7 +74,7 @@ def gemini_api_response(monkeypatch, events, wire, streaming, *, max_attempts=2)
         }
     else:
         body = {
-            "model": "gemini/test-model",
+            "model": "vertex/test-model",
             "stream": True,
             "input": "read both",
             "tools": [{"type": "function", "name": "read", "parameters": schema}],
@@ -137,12 +139,12 @@ def gemini_api_response(monkeypatch, events, wire, streaming, *, max_attempts=2)
 @pytest.mark.parametrize(
     "wire,streaming", [("messages", True), ("messages", False), ("responses", True)]
 )
-def test_gemini_parallel_calls_reach_public_api(
+def test_google_compat_parallel_calls_reach_public_api(
     monkeypatch, deltas, expected_ids, wire, streaming
 ):
     events = [chat_chunk({"tool_calls": calls}) for calls in deltas]
     events.append(chat_chunk({}, "tool_calls"))
-    response, sent = gemini_api_response(monkeypatch, events, wire, streaming)
+    response, sent = google_compat_api_response(monkeypatch, events, wire, streaming)
     assert response.status_code == 200, response.text
     assert len(sent) == 1
 
@@ -195,7 +197,7 @@ def test_gemini_parallel_calls_reach_public_api(
 @pytest.mark.parametrize(
     "wire,streaming", [("messages", True), ("messages", False), ("responses", True)]
 )
-def test_gemini_unresolvable_calls_cannot_complete(
+def test_google_compat_unresolvable_calls_cannot_complete(
     monkeypatch, anonymous, wire, streaming
 ):
     if anonymous:
@@ -226,7 +228,7 @@ def test_gemini_unresolvable_calls_cannot_complete(
             chat_chunk({"tool_calls": [call(0, "call_a", '"}', name=None)]}),
         ]
     events.append(chat_chunk({}, "tool_calls"))
-    response, sent = gemini_api_response(
+    response, sent = google_compat_api_response(
         monkeypatch, events, wire, streaming, max_attempts=1
     )
     assert len(sent) == 1
@@ -457,7 +459,7 @@ async def test_private_identity_failure_never_salvages_or_repairs(
         ((0, 1), ("reused", "reused")),
     ],
 )
-async def test_gemini_metadata_replays_under_each_public_id(wire, indexes, ids):
+async def test_google_compat_metadata_replays_under_each_public_id(wire, indexes, ids):
     first = [
         chat_chunk(
             {
@@ -481,8 +483,9 @@ async def test_gemini_metadata_replays_under_each_public_id(wire, indexes, ids):
     ]
 
     def gemini():
-        return GeminiProvider(
+        return GoogleOpenAIProvider(
             make_provider_config("fixture", "https://provider.invalid/v1"),
+            profile=GOOGLE_PROFILE,
             admission=immediate_admission(max_attempts=2),
         )
 

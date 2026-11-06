@@ -52,7 +52,7 @@ class PublicResponseStream(AsyncIterator[str]):
         body: AsyncIterator[str],
         state: StreamDeliveryState,
         *,
-        wire_api: Literal["messages", "responses", "gemini"],
+        wire_api: Literal["messages", "responses", "gemini", "chat"],
         first_chunk: str,
         terminal_frame: Callable[[str, str, BaseException], str] | None,
         terminal_failure_observer: Callable[[BaseException], None] | None,
@@ -190,6 +190,9 @@ class PublicResponseStream(AsyncIterator[str]):
         self._seen_starts.clear()
         self._pending_starts.clear()
         self._offset = None
+        if self._wire_api == "chat" and not self.state.content_released:
+            self._public_id = None
+            self._created_at = None
         if transition is not None:
             self._continuation.begin(handoff=transition == "handoff")
         elif self._continuation.active:
@@ -260,6 +263,8 @@ class PublicResponseStream(AsyncIterator[str]):
         return prefix + frame
 
     def _record(self, frame: str, *, synthetic: bool) -> None:
+        if self._wire_api == "chat" and frame.strip() == "data: [DONE]":
+            return
         payload = frame_data(frame)
         if payload is not None:
             self._delivered.observe(payload, count_progress=not synthetic)
@@ -270,6 +275,8 @@ class PublicResponseStream(AsyncIterator[str]):
         """Keep replacement and failure envelopes in the public response lifecycle."""
         payload = frame_data(frame)
         if payload is None:
+            if self._wire_api == "chat" and frame.strip() == "data: [DONE]":
+                return self._release_content(frame, synthetic=synthetic)
             if any(
                 line.strip() and not line.startswith(":")
                 for line in re.split(r"\r\n|\r|\n", frame)
@@ -278,6 +285,20 @@ class PublicResponseStream(AsyncIterator[str]):
             return frame
 
         raw_kind = payload.get("type")
+        if self._wire_api == "chat":
+            if self._public_id is None and isinstance(payload.get("id"), str):
+                self._public_id = payload["id"]
+                self._created_at = payload.get("created")
+            elif self._public_id is not None and "id" in payload:
+                payload["id"] = self._public_id
+                if self._created_at is not None:
+                    payload["created"] = self._created_at
+                frame = replace_frame_data(frame, payload)
+            if "error" in payload:
+                self._pending_starts.clear()
+            elif self._metadata("", payload) and not self.state.content_released:
+                self._pending_starts.append(frame)
+                return None
         if self._wire_api == "gemini":
             if self._public_id is None and isinstance(payload.get("responseId"), str):
                 self._public_id = payload["responseId"]
@@ -354,6 +375,15 @@ class PublicResponseStream(AsyncIterator[str]):
         return self._release_content(frame, synthetic=synthetic)
 
     def _metadata(self, kind: str, payload: dict[str, Any]) -> bool:
+        if self._wire_api == "chat":
+            return "error" not in payload and all(
+                choice.get("finish_reason") is None
+                and all(
+                    key == "role" or value in (None, "", [], {})
+                    for key, value in (choice.get("delta") or {}).items()
+                )
+                for choice in payload.get("choices", [])
+            )
         if self._wire_api == "gemini":
             return (
                 not gemini_parts(payload)

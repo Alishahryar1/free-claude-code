@@ -5,8 +5,10 @@ from typing import Any, Literal
 
 import simplejson
 
+from .chat_completions.response import ChatResponseAccumulator
 from .gemini.response import gemini_parts
 from .history_replay import (
+    protected_reasoning,
     readable_reasoning,
     unprotected_replay,
 )
@@ -67,7 +69,9 @@ def responses_text_constraint(data: dict[str, Any]) -> str | None:
 class DeliveredResponse:
     """Track this response only; the harness continues to own conversation history."""
 
-    def __init__(self, wire_api: Literal["messages", "responses", "gemini"]) -> None:
+    def __init__(
+        self, wire_api: Literal["messages", "responses", "gemini", "chat"]
+    ) -> None:
         self.wire_api = wire_api
         self.items: dict[int, dict[str, Any]] = {}
         self.closed: set[int] = set()
@@ -81,6 +85,7 @@ class DeliveredResponse:
         self._limited = False
         self._limited_output_tokens = 0
         self.progress = 0
+        self._chat_response = ChatResponseAccumulator() if wire_api == "chat" else None
 
     def _retain(self, value: object) -> bool:
         if self._limited:
@@ -106,6 +111,9 @@ class DeliveredResponse:
         return self._limited
 
     def observe(self, data: dict[str, Any], *, count_progress: bool = True) -> None:
+        if self.wire_api == "chat":
+            self._chat(data, count_progress=count_progress)
+            return
         if self.wire_api == "gemini":
             self._gemini(data, count_progress=count_progress)
             return
@@ -155,6 +163,59 @@ class DeliveredResponse:
                 self._responses(kind, data)
         if self._limited:
             self._limited_output_tokens += estimate_text_tokens(text)
+
+    def _chat(self, data: dict[str, Any], *, count_progress: bool) -> None:
+        if "error" in data:
+            return
+        if not self.header:
+            self.header = {
+                key: deepcopy(data[key])
+                for key in ("id", "model", "created", "object")
+                if key in data
+            }
+        if data.get("usage") is not None:
+            self.header["usage"] = deepcopy(data["usage"])
+        for choice in data.get("choices", []):
+            delta = choice.get("delta") or {}
+            if count_progress and any(
+                value for key, value in delta.items() if key != "role"
+            ):
+                self.progress += 1
+            if choice["index"] != 0:
+                self.unsafe_reason = "multiple_choices"
+            if choice.get("logprobs") is not None:
+                self._text_constraint = "text_logprobs"
+            if protected_reasoning(delta):
+                self.unsafe_reason = "opaque_reasoning"
+            if any(
+                key
+                not in {
+                    "role",
+                    "content",
+                    "tool_calls",
+                    "reasoning",
+                    "reasoning_content",
+                    "reasoning_details",
+                }
+                and value is not None
+                for key, value in delta.items()
+            ):
+                self.unsafe_reason = "unsupported_output"
+            if delta.get("content") is not None and not isinstance(
+                delta["content"], str
+            ):
+                self.unsafe_reason = "unsupported_output"
+            if choice.get("finish_reason") is not None:
+                self.closed.add(choice["index"])
+        if not self._retain(data):
+            self._chat_response = None
+            return
+        assert self._chat_response is not None
+        self._chat_response.feed(data)
+        self.items = {
+            index: choice["message"]
+            for index, choice in self._chat_response.choices.items()
+        }
 
     def _gemini(self, data: dict[str, Any], *, count_progress: bool) -> None:
         if not self.header:
@@ -426,7 +487,12 @@ class DeliveredResponse:
         has_calls = False
         for index, item in sorted(self.items.items()):
             kind = item.get("type")
-            if self.wire_api == "gemini":
+            if self.wire_api == "chat":
+                if isinstance(item.get("content"), str):
+                    text.append(item["content"])
+                thinking.extend(value for value, _ in readable_reasoning(item))
+                has_calls |= bool(item.get("tool_calls")) and index in self.closed
+            elif self.wire_api == "gemini":
                 if "text" in item:
                     (thinking if item.get("thought") else text).append(item["text"])
                 if "functionCall" in item:
@@ -482,6 +548,8 @@ class DeliveredResponse:
 
     @property
     def can_handoff(self) -> bool:
+        if self.wire_api == "chat":
+            return False
         if self._text_constraint or self.unsafe_reason not in {
             None,
             "opaque_reasoning",
@@ -495,7 +563,7 @@ class DeliveredResponse:
         )
 
     def closing_events(self) -> list[dict[str, Any]]:
-        if self.wire_api == "gemini":
+        if self.wire_api in {"gemini", "chat"}:
             return []
         events: list[dict[str, Any]] = []
         for index, item in sorted(self.items.items()):

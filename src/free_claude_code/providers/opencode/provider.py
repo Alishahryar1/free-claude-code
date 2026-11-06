@@ -10,6 +10,7 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -249,6 +250,30 @@ class OpenCodeProvider(BaseProvider):
                     request_id=request_id,
                 )
 
+    def stream_chat(
+        self,
+        request: ChatRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        endpoint_context: EndpointContext | None = None,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[str]:
+        return self._dispatch_openai_stream(
+            request,
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=response_model or request.model,
+            reasoning=reasoning,
+            endpoint_context=endpoint_context,
+            request_headers=request_headers,
+            continuation=continuation,
+        )
+
     def stream_gemini(
         self,
         request: GeminiRequest,
@@ -299,7 +324,7 @@ class OpenCodeProvider(BaseProvider):
 
     async def _dispatch_openai_stream(
         self,
-        request: OpenAIResponsesRequest | GeminiRequest,
+        request: OpenAIResponsesRequest | GeminiRequest | ChatRequest,
         *,
         input_tokens: int,
         request_id: str | None,
@@ -316,7 +341,23 @@ class OpenCodeProvider(BaseProvider):
         )
         selected_stream: AsyncIterator[str] | None = None
         try:
-            if isinstance(routed, GeminiRequest):
+            if isinstance(routed, ChatRequest):
+                transport = (
+                    self._responses
+                    if route.transport is OpenCodeUpstreamTransport.RESPONSES
+                    else self._chat
+                )
+                selected_stream = transport.stream_chat(
+                    routed,
+                    input_tokens=input_tokens,
+                    request_id=request_id,
+                    response_model=response_model,
+                    reasoning=reasoning,
+                    endpoint_context=endpoint_context,
+                    extra_headers=self._upstream_headers(request_headers or {}),
+                    continuation=continuation,
+                )
+            elif isinstance(routed, GeminiRequest):
                 transport = (
                     self._responses
                     if route.transport is OpenCodeUpstreamTransport.RESPONSES

@@ -7,54 +7,17 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningControl,
-    ReasoningEffort,
     ReasoningPolicy,
 )
 from free_claude_code.providers.openai_chat import (
     validate_extra_body_does_not_override_reasoning_fields,
 )
 
-_GEMINI_EFFORTS = {
-    ReasoningEffort.MINIMAL: "minimal",
-    ReasoningEffort.LOW: "low",
-    ReasoningEffort.MEDIUM: "medium",
-    ReasoningEffort.HIGH: "high",
-    ReasoningEffort.XHIGH: "high",
-    ReasoningEffort.MAX: "high",
-}
 _THINKING_CONFIG_CONFLICT = (
     "Google extra_body.google.thinking_config cannot be combined with FCC "
     "reasoning controls. Use either thinking/output_config or the provider-native "
     "thinking_config."
 )
-
-
-@dataclass(frozen=True, slots=True)
-class GeminiReasoningEncoder:
-    """Choose one Gemini API reasoning channel for each resolved policy."""
-
-    off_field = ("reasoning_effort",)
-
-    def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
-        if _preserve_caller_thinking_config(body, policy):
-            return
-
-        if policy.control is ReasoningControl.OFF:
-            body["reasoning_effort"] = "none"
-            return
-
-        if policy.budget_tokens is not None:
-            thinking = _thinking_config(body)
-            thinking["thinking_budget"] = policy.budget_tokens
-            thinking["include_thoughts"] = True
-            return
-
-        if effort := _GEMINI_EFFORTS.get(policy.effort):
-            body["reasoning_effort"] = effort
-            return
-
-        if policy.control is ReasoningControl.ON:
-            _thinking_config(body)["include_thoughts"] = True
 
 
 @dataclass(frozen=True, slots=True)

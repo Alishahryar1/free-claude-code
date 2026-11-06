@@ -220,7 +220,7 @@ async def test_renewable_callback_is_resolved_once_per_attempt_and_pins_provenan
             )
             assert bundle is not None
             expected = replay_origin(
-                "GEMINI",
+                GOOGLE_PROFILE.provider_name,
                 "chat",
                 "model",
                 client=client.with_options(api_key=f"synthetic-{index}"),
@@ -270,7 +270,9 @@ async def test_endpoint_snapshot_precedes_renewable_callback():
 
 def test_global_cache_bound_and_native_metadata_precedence():
     behavior = GoogleChatBehavior(GOOGLE_PROFILE)
-    source = ReplayOrigin("GEMINI", "chat", "endpoint", "account", "model")
+    source = ReplayOrigin(
+        GOOGLE_PROFILE.provider_name, "chat", "endpoint", "account", "model"
+    )
     for index in range(4097):
         behavior.record_tool_call_extra_content(
             str(index),
@@ -330,7 +332,9 @@ async def test_concurrent_attempts_record_their_own_origin():
             consume(transport(other, behavior), "gemini"),
         )
         for selected, identity in ((client, "one"), (other, "two")):
-            origin = replay_origin("GEMINI", "chat", "model", client=selected)
+            origin = replay_origin(
+                GOOGLE_PROFILE.provider_name, "chat", "model", client=selected
+            )
             body: dict[str, Any] = {
                 "messages": [{"role": "assistant", "tool_calls": [{"id": "call_a"}]}]
             }
@@ -394,10 +398,16 @@ async def test_buffered_recovery_metadata_uses_replacement_credentials():
         )
         assert bundle is not None
         source = replay_origin(
-            "GEMINI", "chat", "model", client=client.with_options(api_key="key-1")
+            GOOGLE_PROFILE.provider_name,
+            "chat",
+            "model",
+            client=client.with_options(api_key="key-1"),
         )
         replacement = replay_origin(
-            "GEMINI", "chat", "model", client=client.with_options(api_key="key-2")
+            GOOGLE_PROFILE.provider_name,
+            "chat",
+            "model",
+            client=client.with_options(api_key="key-2"),
         )
         assert requests == ["Bearer key-1", "Bearer key-2"]
         assert bundle.records == ()
