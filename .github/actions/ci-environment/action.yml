@@ -17,7 +17,7 @@ inputs:
 
 outputs:
   python-version:
-    description: Exact Python version required by the project
+    description: Python minor version required by the project
     value: ${{ steps.identity.outputs.python-version }}
   python-path:
     description: Managed Python cache directory
@@ -67,12 +67,24 @@ runs:
         import tomllib
 
         project = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
-        stable = r"((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))"
-        python = re.fullmatch("==" + stable, project["project"]["requires-python"])
+        number = r"(?:0|[1-9][0-9]*)"
+        stable = "(" + number + r"\." + number + r"\." + number + ")"
+        minor = "(" + number + r")\.(" + number + r")"
+        python = re.fullmatch(
+            ">=" + minor + ",<" + minor,
+            project["project"]["requires-python"],
+        )
         uv = re.fullmatch(">=" + stable, project["tool"]["uv"]["required-version"])
         if python is None or uv is None:
-            raise SystemExit("Expected exact ==Python and minimum >=uv versions in pyproject.toml")
-        print(python[1], uv[1])
+            raise SystemExit(
+                "Expected a bounded Python minor series and minimum >=uv version in pyproject.toml"
+            )
+        major, minor_version, upper_major, upper_minor = map(int, python.groups())
+        if (upper_major, upper_minor) != (major, minor_version + 1):
+            raise SystemExit(
+                "Expected requires-python to cover exactly one Python minor series"
+            )
+        print(f"{major}.{minor_version}", uv[1])
         PY
         )"
         read -r version uv_version <<< "$versions"

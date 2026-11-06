@@ -2075,6 +2075,7 @@ function Read-ToolchainRequirements {
     $values = @{}
     $number = '(0|[1-9][0-9]*)'
     $version = "$number\.$number\.$number"
+    $minorVersion = "$number\.$number"
     foreach ($rawLine in ($Text -split "`n")) {
         $line = $rawLine.Trim()
         if ($line.StartsWith('[')) {
@@ -2091,11 +2092,25 @@ function Read-ToolchainRequirements {
             ($section -eq "uv" -and $line -cmatch '^required-version\s*=')) {
             if ($values.ContainsKey($section)) { throw "Duplicate toolchain requirement." }
             $value = ($line -split '=', 2)[1].TrimStart()
-            $operator = if ($section -eq "project") { "==" } else { ">=" }
-            if ($value -cnotmatch ('^(?<quote>["''])' + $operator + '(?<version>' + $version + ')\k<quote>\s*(#.*)?$')) {
-                throw "Invalid $section toolchain requirement."
+            if ($section -eq "project") {
+                if ($value -cnotmatch ('^(?<quote>["''])>=(?<lower>' + $minorVersion + '),<(?<upper>' + $minorVersion + ')\k<quote>\s*(#.*)?$')) {
+                    throw "Invalid project toolchain requirement."
+                }
+                $lower = [version] $Matches.lower
+                $upper = [version] $Matches.upper
+                $expectedUpper = [version]::new(
+                    [int] $lower.Major, ([int] $lower.Minor + 1)
+                )
+                if ($upper -ne $expectedUpper) {
+                    throw "The project Python requirement must cover exactly one minor series."
+                }
+                $values[$section] = "$($lower.Major).$($lower.Minor)"
+            } else {
+                if ($value -cnotmatch ('^(?<quote>["''])>=(?<version>' + $version + ')\k<quote>\s*(#.*)?$')) {
+                    throw "Invalid uv toolchain requirement."
+                }
+                $values[$section] = $Matches.version
             }
-            $values[$section] = $Matches.version
         }
     }
     if (-not $values.ContainsKey("project") -or -not $values.ContainsKey("uv")) {

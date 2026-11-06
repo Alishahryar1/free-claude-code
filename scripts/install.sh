@@ -1758,7 +1758,11 @@ dispatch_release() {
 parse_toolchain_requirements() {
     # Only the two supported scalar requirements in our own pyproject schema.
     awk -v single_quote="'" '
-        BEGIN { number = "(0|[1-9][0-9]*)"; version = number "[.]" number "[.]" number }
+        BEGIN {
+            number = "(0|[1-9][0-9]*)"
+            version = number "[.]" number "[.]" number
+            minor_version = number "[.]" number
+        }
         {
             line = $0
             sub(/^[ \t]+/, "", line)
@@ -1775,14 +1779,36 @@ parse_toolchain_requirements() {
                 if (++keys[section] != 1) invalid = 1
                 sub(/^[^=]*=[ \t]*/, "", line)
                 quote = substr(line, 1, 1)
-                operator = section == "project" ? "==" : ">="
-                if ((quote != "\"" && quote != single_quote) ||
-                    line !~ ("^" quote operator version quote "[ \t]*(#.*)?$")) {
+                if (quote != "\"" && quote != single_quote) {
                     invalid = 1
                     next
                 }
-                value = substr(line, 4)
-                sub(quote ".*$", "", value)
+                if (section == "project") {
+                    if (line !~ ("^" quote ">=" minor_version ",<" minor_version quote "[ \t]*(#.*)?$")) {
+                        invalid = 1
+                        next
+                    }
+                    lower_text = line
+                    sub("^" quote ">=", "", lower_text)
+                    sub(",<" minor_version quote ".*$", "", lower_text)
+                    upper_text = line
+                    sub("^" quote ">=" minor_version ",<", "", upper_text)
+                    sub(quote ".*$", "", upper_text)
+                    split(lower_text, lower, "[.]")
+                    split(upper_text, upper, "[.]")
+                    if (lower[1] != upper[1] || lower[2] + 1 != upper[2]) {
+                        invalid = 1
+                        next
+                    }
+                    value = lower_text
+                } else {
+                    if (line !~ ("^" quote ">=" version quote "[ \t]*(#.*)?$")) {
+                        invalid = 1
+                        next
+                    }
+                    value = substr(line, 4)
+                    sub(quote ".*$", "", value)
+                }
                 values[section] = value
             }
         }

@@ -11,6 +11,7 @@ _PACKAGE_ROOT = _REPO_ROOT / "src" / "free_claude_code"
 _PACKAGE_NAME = "free_claude_code"
 
 ALLOWED_PACKAGE_DEPENDENCIES: dict[str, set[str]] = {
+    "platforms": set(),
     "updater": set(),
     "config": {"core"},
     "core": set(),
@@ -29,6 +30,7 @@ ALLOWED_PACKAGE_DEPENDENCIES: dict[str, set[str]] = {
         "harnesses",
         "messaging",
         "providers",
+        "platforms",
     },
 }
 
@@ -39,6 +41,13 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
     ): (
         "Owner: installed diagnostic command. "
         "Reason: read-only report composition owns provider and harness inspection."
+    ),
+    (
+        "free_claude_code.cli.doctor",
+        "free_claude_code.runtime.termux_diagnostics",
+    ): (
+        "Owner: installed Termux diagnostic command. "
+        "Reason: read-only report composition owns Termux environment inspection."
     ),
     (
         "free_claude_code.cli.commands",

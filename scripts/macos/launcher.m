@@ -47,7 +47,10 @@ int main(int argc, char **argv) {
             !library || ![files isReadableFileAtPath:library]) {
             return fail(@"The installed Python runtime is missing or inaccessible.");
         }
-        if (![settings[@"PythonVersion"] isEqual:@FCC_PYTHON_VERSION]) {
+        NSString *versionPrefix = [@FCC_PYTHON_VERSION stringByAppendingString:@"."];
+        id configuredVersion = settings[@"PythonVersion"];
+        if (![configuredVersion isKindOfClass:[NSString class]] ||
+            ![configuredVersion hasPrefix:versionPrefix]) {
             return fail(@"The application and its Python configuration have different versions.");
         }
         void *runtime = dlopen(library.fileSystemRepresentation, RTLD_NOW | RTLD_GLOBAL);
@@ -73,7 +76,7 @@ int main(int argc, char **argv) {
         const char *version = Py_GetVersion();
         size_t expectedLength = strlen(FCC_PYTHON_VERSION);
         if (strncmp(version, FCC_PYTHON_VERSION, expectedLength) != 0 ||
-            (version[expectedLength] != ' ' && version[expectedLength] != '\0')) {
+            version[expectedLength] != '.') {
             return fail(@"The installed Python version does not match this desktop launcher.");
         }
         unsetenv("PYTHONEXECUTABLE");
