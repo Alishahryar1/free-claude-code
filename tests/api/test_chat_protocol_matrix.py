@@ -177,6 +177,7 @@ def test_native_chat_null_tool_delta_preserves_text_and_later_calls(
     }
     deltas = [
         {"role": "assistant", "content": "hello", "tool_calls": None},
+        *([{"tool_calls": [{**call, "function": None}]}] if with_tool else []),
         {"tool_calls": [call]} if with_tool else {"tool_calls": None},
     ]
 
@@ -192,7 +193,7 @@ def test_native_chat_null_tool_delta_preserves_text_and_later_calls(
                         "index": 0,
                         "delta": delta,
                         "finish_reason": ("tool_calls" if with_tool else "stop")
-                        if index == 1
+                        if index == len(deltas) - 1
                         else None,
                     }
                 ],
@@ -264,6 +265,88 @@ def test_chat_malformed_fields_fail_before_provider_execution(changes):
         )
     assert response.status_code == 400, response.text
     assert response.json()["error"]["type"] == "invalid_request_error"
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize(
+    ("field", "updates", "expected"),
+    [
+        (
+            "function_call",
+            [
+                {"name": None, "arguments": None},
+                {"name": "read", "arguments": "{"},
+                {"name": None, "arguments": "}"},
+            ],
+            {"name": "read", "arguments": "{}"},
+        ),
+        (
+            "audio",
+            [
+                {"id": "audio_a", "data": None, "transcript": None},
+                {"data": "YQ==", "transcript": "hello"},
+                {"id": None, "data": None, "transcript": None, "expires_at": 123},
+            ],
+            {"id": "audio_a", "data": "YQ==", "transcript": "hello", "expires_at": 123},
+        ),
+        (
+            "reasoning_details",
+            [
+                [{"type": "reasoning.text", "text": "one"}],
+                [{"type": "reasoning.text", "text": " two"}],
+            ],
+            [{"type": "reasoning.text", "text": "one two"}],
+        ),
+        ("citations", [["source-a"], ["source-b"]], ["source-a", "source-b"]),
+    ],
+)
+def test_native_chat_nullable_fields_accumulate_later_values(
+    streaming, field, updates, expected
+):
+    from tests.api.test_four_protocol_matrix import matrix_app, response_value
+
+    def reply(_):
+        deltas = [
+            {"role": "assistant", field: None},
+            *[{field: value} for value in updates],
+            {field: None, "content": "done"},
+        ]
+        events = [
+            {
+                "id": "chatcmpl-a",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "backend",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": delta,
+                        "finish_reason": "stop" if index == len(deltas) - 1 else None,
+                    }
+                ],
+            }
+            for index, delta in enumerate(deltas)
+        ]
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+        )
+
+    with TestClient(matrix_app("chat", reply)) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "public",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": streaming,
+            },
+        )
+        value = response_value(response, "chat", streaming)
+    assert value["choices"][0]["message"][field] == expected
+    if streaming:
+        first = json.loads(response.text.splitlines()[0][6:])
+        assert first["choices"][0]["delta"][field] is None
 
 
 @pytest.mark.parametrize("streaming", [False, True])

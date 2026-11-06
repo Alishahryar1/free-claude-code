@@ -35,6 +35,47 @@ GEMINI_PARTS = [
 ]
 
 
+@pytest.mark.parametrize("tool_type", [None, "custom", "web_search_20250305"])
+def test_messages_custom_tool_type_is_translated_to_native_gemini(tool_type):
+    from tests.providers.test_gemini import _sse
+
+    bodies = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        return _sse([{"text": "hello"}])
+
+    tool = {"name": "read", "description": "Read a file", "input_schema": SCHEMA}
+    if tool_type is not None:
+        tool["type"] = tool_type
+    with TestClient(matrix_app("gemini", reply)) as client:
+        response = client.post(
+            "/v1/messages",
+            json={
+                "model": "public",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 128,
+                "tools": [tool],
+            },
+        )
+    if tool_type == "web_search_20250305":
+        assert response.status_code == 400
+        assert not bodies
+    else:
+        assert response.status_code == 200, response.text
+        assert bodies[0]["tools"] == [
+            {
+                "functionDeclarations": [
+                    {
+                        "name": "read",
+                        "description": "Read a file",
+                        "parametersJsonSchema": SCHEMA,
+                    }
+                ]
+            }
+        ]
+
+
 def source_events(protocol):
     if protocol == "gemini":
         return [

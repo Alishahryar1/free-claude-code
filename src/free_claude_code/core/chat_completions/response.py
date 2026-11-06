@@ -196,7 +196,11 @@ class ChatResponseAccumulator:
             if choice.get("logprobs"):
                 logprobs = target.setdefault("logprobs", {})
                 for key, value in choice["logprobs"].items():
-                    if isinstance(value, list):
+                    if value is None:
+                        logprobs.setdefault(key, None)
+                    elif isinstance(value, list):
+                        if logprobs.get(key) is None:
+                            logprobs.pop(key, None)
                         logprobs.setdefault(key, []).extend(deepcopy(value))
                     else:
                         logprobs[key] = deepcopy(value)
@@ -204,22 +208,25 @@ class ChatResponseAccumulator:
             for key, value in (choice.get("delta") or {}).items():
                 if value is None:
                     message.setdefault(key, None)
-                elif key == "tool_calls":
-                    if message.get("tool_calls") is None:
-                        message["tool_calls"] = []
-                    calls = message["tool_calls"]
+                    continue
+                if message.get(key) is None:
+                    message.pop(key, None)
+                if key == "tool_calls":
+                    calls = message.setdefault("tool_calls", [])
                     for call in value:
                         index = call["index"]
                         while len(calls) <= index:
                             calls.append({})
                         dest = calls[index]
                         for field, item in call.items():
+                            if item is None:
+                                continue
                             if field in {"function", "custom"}:
                                 tool = dest.setdefault(field, {})
                                 for name, text in item.items():
                                     if text is not None:
                                         tool[name] = tool.get(name, "") + text
-                            elif field != "index" and item is not None:
+                            elif field != "index":
                                 dest[field] = deepcopy(item)
                 elif key == "reasoning_details":
                     details = message.setdefault(key, [])
@@ -262,13 +269,16 @@ class ChatResponseAccumulator:
                 elif isinstance(value, dict):
                     existing = message.setdefault(key, {})
                     for name, item in value.items():
+                        if item is None:
+                            existing.setdefault(name, None)
+                            continue
                         if isinstance(item, str) and (
                             name in {"data", "transcript"}
                             or (
                                 key == "function_call" and name in {"name", "arguments"}
                             )
                         ):
-                            existing[name] = existing.get(name, "") + item
+                            existing[name] = (existing.get(name) or "") + item
                         else:
                             existing[name] = deepcopy(item)
                 else:

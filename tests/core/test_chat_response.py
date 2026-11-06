@@ -81,6 +81,26 @@ def test_native_gemini_json_preserves_metadata_and_late_usage():
     assert accumulator.result()["usageMetadata"] == {"totalTokenCount": 12}
 
 
+def test_chat_logprobs_accumulate_after_null_and_survive_trailing_null():
+    accumulator = ChatResponseAccumulator()
+    token = {"token": "hello", "logprob": -0.1, "bytes": None, "top_logprobs": []}
+    for content in (None, [token], None):
+        accumulator.feed(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {},
+                        "logprobs": {"content": content},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+        )
+    accumulator.finish()
+    assert accumulator.result()["choices"][0]["logprobs"]["content"] == [token]
+
+
 def test_native_legacy_function_arguments_accumulate_without_replacement():
     accumulator = ChatResponseAccumulator()
     for call in [{"name": "read", "arguments": '{"pa'}, {"arguments": 'th":"kept"}'}]:

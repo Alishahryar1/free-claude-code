@@ -139,12 +139,14 @@ class ToolCallBuffer:
                 self._begin_call(key)
                 target = self._chat_calls.setdefault(key, {})
                 for field, value in call.items():
+                    if value is None:
+                        continue
                     if field in {"function", "custom"}:
                         dest = target.setdefault(field, {})
                         for name, text in value.items():
                             if text is not None:
                                 dest[name] = dest.get(name, "") + text
-                    elif value is not None:
+                    else:
                         target[field] = value
             if choice.get("finish_reason") is not None:
                 for key in tuple(self._chat_calls):

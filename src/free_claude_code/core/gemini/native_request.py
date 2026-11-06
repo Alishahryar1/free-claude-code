@@ -428,7 +428,7 @@ def messages_to_gemini(request: MessagesRequest) -> JsonObject:
                 raise GeminiConversionError(
                     "Native Gemini cannot enforce strict function tools"
                 )
-            if tool.get("type"):
+            if tool.get("type") not in (None, "custom"):
                 raise GeminiConversionError(
                     "Native Gemini cannot execute provider-hosted tools"
                 )
