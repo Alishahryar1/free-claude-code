@@ -91,6 +91,57 @@ def test_chat_http_dispatch_preserves_controls_credentials_and_public_model(
     ].endswith("upstream-key")
 
 
+@pytest.mark.parametrize("wire", ["openai_chat", "openai_responses"])
+@pytest.mark.parametrize(
+    "strict", [{}, {"strict": None}, {"strict": False}, {"strict": True}]
+)
+def test_chat_function_strictness_survives_upstream_translation(wire, strict):
+    sent = []
+
+    def reply(request):
+        sent.append(json.loads(request.content))
+        return httpx2.Response(
+            200, text=completion(wire), headers={"content-type": "text/event-stream"}
+        )
+
+    configured = definition(api_format=wire)
+    instance = provider(configured, openai_handler=reply)
+    app = create_test_app(
+        Settings(
+            MODEL=f"{configured.provider_id}/backend",
+            custom_providers=(configured,),
+        ),
+        providers={configured.provider_id: instance},
+    )
+    function = {
+        "name": "weather",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"] if strict.get("strict") else [],
+            "additionalProperties": False,
+        },
+        **strict,
+    }
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "public",
+                "messages": [{"role": "user", "content": "weather"}],
+                "tools": [{"type": "function", "function": function}],
+            },
+        )
+        assert response.status_code == 200, response.text
+    assert len(sent) == 1
+    if wire == "openai_chat":
+        assert sent[0]["tools"] == [{"type": "function", "function": function}]
+    else:
+        assert sent[0]["tools"] == [
+            {"type": "function", **function, "strict": strict.get("strict") is True}
+        ]
+
+
 def test_chat_validation_and_auth_errors_use_openai_shape():
     app = create_test_app(
         Settings(PROXY_AUTH_ENABLED=True, proxy_auth_token="ingress-key")

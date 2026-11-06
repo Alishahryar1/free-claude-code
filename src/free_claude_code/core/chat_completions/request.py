@@ -562,7 +562,15 @@ def chat_responses_body(request: ChatRequest) -> JsonObject:
     if limit := body.get("max_completion_tokens") or body.get("max_tokens"):
         result["max_output_tokens"] = limit
     if tools := _tools(body):
-        result["tools"] = [{"type": "function", **tool} for tool in tools]
+        # Responses defaults to strict normalization; Chat defaults to non-strict.
+        result["tools"] = [
+            {
+                "type": "function",
+                **tool,
+                "strict": tool["strict"] if tool.get("strict") is not None else False,
+            }
+            for tool in tools
+        ]
     if (choice := body.get("tool_choice")) is not None:
         result["tool_choice"] = (
             choice
