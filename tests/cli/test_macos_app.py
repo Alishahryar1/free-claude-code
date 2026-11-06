@@ -48,7 +48,10 @@ def test_runtime_keeps_symlinked_venv_identity(runtime):
     executable, library, _variables = runtime
     base_executable = library.parent / "python"
     executable.rename(base_executable)
-    executable.symlink_to(base_executable)
+    try:
+        executable.symlink_to(base_executable)
+    except OSError as error:
+        pytest.skip(f"Symlink creation is unavailable: {error}")
     settings, _architecture = macos_app.runtime_settings()
     assert settings["PythonExecutable"] == str(executable)
     assert Path(settings["PythonExecutable"]).resolve() == base_executable
@@ -91,6 +94,12 @@ def installer(tmp_path, monkeypatch, runtime):
     monkeypatch.setattr(macos_app, "files", lambda package: resources)
     monkeypatch.setattr(macos_app.Path, "home", lambda: home)
     monkeypatch.setattr(macos_app.sys, "platform", "darwin")
+    if os.name == "nt":
+        monkeypatch.setattr(
+            Path,
+            "symlink_to",
+            lambda self, target, target_is_directory=False: self.mkdir(),
+        )
     calls = []
 
     def sign(command, **kwargs):
@@ -116,7 +125,11 @@ def test_complete_bundle_is_signed_before_publication(installer, runtime):
     assert info["LSUIElement"] and info["LSMultipleInstancesProhibited"]
     with (contents / "Resources/runtime.plist").open("rb") as stream:
         assert plistlib.load(stream)["PythonExecutable"] == str(runtime[0])
-    assert (home / "Desktop/Free Claude Code.app").resolve() == app.resolve()
+    desktop_app = home / "Desktop/Free Claude Code.app"
+    if os.name == "nt":
+        assert desktop_app.is_dir()
+    else:
+        assert desktop_app.resolve() == app.resolve()
     assert [call[:-1] for call in calls] == [
         ["/usr/bin/codesign", "--force", "--sign", "-"],
         ["/usr/bin/codesign", "--verify", "--strict"],
@@ -209,7 +222,11 @@ def test_app_symlink_is_not_treated_as_owned(installer):
     app = owned_app(home)
     real = app.with_name("Other.app")
     app.rename(real)
-    app.symlink_to(real, target_is_directory=True)
+    try:
+        os.symlink(real, app, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"Symlink creation is unavailable: {error}")
+    assert app.is_symlink()
     with pytest.raises(ValueError, match="not managed"):
         macos_app.install()
     assert (real / "old").read_text() == "preserve on failure"
