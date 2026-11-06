@@ -2,8 +2,10 @@
 
 import re
 
+from markdown_it import MarkdownIt
+
 _TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
-_FENCE_RE = re.compile(r"^\s*```")
+_CODE_BLOCK_PARSER = MarkdownIt("commonmark", {"html": False, "breaks": False})
 
 
 def _is_gfm_table_header_line(line: str) -> bool:
@@ -17,23 +19,31 @@ def _is_gfm_table_header_line(line: str) -> bool:
 
 
 def normalize_gfm_tables(text: str) -> str:
-    """Insert blank lines before detected tables outside fenced code blocks."""
+    """Insert blank lines before detected tables outside Markdown code blocks."""
     lines = text.splitlines()
     if len(lines) < 2:
         return text
 
     out_lines: list[str] = []
-    in_fence = False
+    # Use the renderers' Markdown grammar: list indentation and indented code
+    # cannot be recognized reliably from an isolated fence line. Source maps
+    # must use the same normalized lines that this function emits.
+    code_ranges = iter(
+        (token.map[0], token.map[1])
+        for token in _CODE_BLOCK_PARSER.parse("\n".join(lines))
+        if token.type in ("fence", "code_block") and token.map is not None
+    )
+    code_range = next(code_ranges, None)
 
     for idx, line in enumerate(lines):
-        if _FENCE_RE.match(line):
-            in_fence = not in_fence
+        while code_range is not None and idx >= code_range[1]:
+            code_range = next(code_ranges, None)
+        if code_range is not None and idx >= code_range[0]:
             out_lines.append(line)
             continue
 
         if (
-            not in_fence
-            and idx + 1 < len(lines)
+            idx + 1 < len(lines)
             and _is_gfm_table_header_line(line)
             and _TABLE_SEP_RE.match(lines[idx + 1])
             and out_lines
