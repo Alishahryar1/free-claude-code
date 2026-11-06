@@ -15,6 +15,11 @@ from openai.types.responses.response_create_params import ResponseCreateParamsSt
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.chat_completions.request import (
+    ChatRequest,
+    chat_responses_body,
+)
+from free_claude_code.core.chat_completions.responses_stream import ChatResponsesStream
 from free_claude_code.core.diagnostics import extract_upstream_error_detail
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.gemini import GeminiConversionError, GeminiRequest
@@ -249,6 +254,46 @@ class OpenAIResponsesTransport:
                 public_model=response_model, tool_events=tools.event_adapter()
             ),
             continuation=continuation,
+        )
+
+    def stream_chat(
+        self,
+        request: ChatRequest,
+        *,
+        input_tokens: int,
+        request_id: str | None,
+        response_model: str,
+        reasoning: ReasoningPolicy,
+        endpoint_context: EndpointContext | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[str]:
+        try:
+            body = chat_responses_body(request)
+            for field in self._omitted_request_fields - {"store", "include"}:
+                if field in body:
+                    raise InvalidRequestError(
+                        f"{self._provider_name} cannot represent Chat control {field}"
+                    )
+            translated = OpenAIResponsesRequest.model_validate(body)
+            body, _ = self._build_native_body(translated, reasoning=reasoning)
+            reserved = request.reserved_tool_ids()
+        except ValueError as error:
+            raise InvalidRequestError(str(error)) from error
+        return self._run_stream(
+            body,
+            request_id=request_id,
+            response_model=response_model,
+            endpoint_context=endpoint_context,
+            extra_headers=extra_headers,
+            continuation=continuation,
+            presenter_factory=lambda _pad_empty, origin: ChatResponsesStream(
+                model=response_model,
+                origin=origin,
+                reserved_tool_ids=reserved,
+                include_usage=request.include_usage,
+                include_thoughts=reasoning.output_enabled,
+            ),
         )
 
     def _build_messages_body(

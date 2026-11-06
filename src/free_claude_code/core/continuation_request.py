@@ -6,6 +6,11 @@ from typing import Any, Literal, cast
 from .anthropic.conversion import AnthropicToOpenAIConverter, ReasoningReplayMode
 from .anthropic.models import Message, MessagesRequest
 from .anthropic.native import NativeMessagesOptions
+from .chat_completions.request import (
+    ChatRequest,
+    chat_messages_body,
+    chat_responses_body,
+)
 from .gemini.models import GeminiRequest
 from .gemini.request import (
     build_gemini_chat_request,
@@ -22,7 +27,7 @@ from .openai_responses import (
 from .reasoning import ReasoningPolicy
 from .stream_recovery import ContinuationSeed
 
-type UpstreamProtocol = Literal["chat", "messages", "responses"]
+type UpstreamProtocol = Literal["chat", "messages", "responses", "gemini"]
 
 
 class ContinuationRequest:
@@ -34,7 +39,13 @@ class ContinuationRequest:
 
     def build(self, body: dict[str, Any], seed: ContinuationSeed) -> dict[str, Any]:
         result = deepcopy(body)
-        field = "input" if self.protocol == "responses" else "messages"
+        field = (
+            "input"
+            if self.protocol == "responses"
+            else "contents"
+            if self.protocol == "gemini"
+            else "messages"
+        )
         history = result.get(field, [])
         if isinstance(history, str):
             history = [{"role": "user", "content": history}]
@@ -55,14 +66,17 @@ class ContinuationRequest:
                 "or executed. Any unfinished calls were discarded. Emit the required "
                 "tool calls using the provided tools."
             )
-        tail.append(
-            {
-                "role": "user",
-                "content": [{"type": "input_text", "text": instruction}]
-                if self.protocol == "responses"
-                else instruction,
-            }
-        )
+        if self.protocol == "gemini":
+            tail.append({"role": "user", "parts": [{"text": instruction}]})
+        else:
+            tail.append(
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": instruction}]
+                    if self.protocol == "responses"
+                    else instruction,
+                }
+            )
         result[field] = [*history, *tail]
         self._injected_rows = len(tail)
         return result
@@ -73,6 +87,38 @@ class ContinuationRequest:
         items = deepcopy(list(seed.items))
         model = str(body.get("model", "continuation"))
         options = NativeMessagesOptions(model, int(body.get("max_tokens") or 1))
+        if seed.wire_api == "chat":
+            if self.protocol == "chat":
+                return items
+            request = ChatRequest(model=model, messages=items)
+            if self.protocol == "messages":
+                return cast(list[Any], chat_messages_body(request)["messages"])
+            if self.protocol == "responses":
+                return cast(list[Any], chat_responses_body(request)["input"])
+            from .gemini.native_request import chat_to_gemini
+
+            return cast(list[Any], chat_to_gemini(request)["contents"])
+        if self.protocol == "gemini":
+            from .gemini.native_request import messages_to_gemini, responses_to_gemini
+
+            if seed.wire_api == "gemini":
+                return [{"role": "model", "parts": items}]
+            if seed.wire_api == "messages":
+                return cast(
+                    list[Any],
+                    messages_to_gemini(
+                        MessagesRequest(
+                            model=model,
+                            messages=[Message(role="assistant", content=items)],
+                        )
+                    )["contents"],
+                )
+            return cast(
+                list[Any],
+                responses_to_gemini(OpenAIResponsesRequest(model=model, input=items))[
+                    "contents"
+                ],
+            )
         if seed.wire_api == "messages":
             if self.protocol == "messages":
                 return [{"role": "assistant", "content": items}]

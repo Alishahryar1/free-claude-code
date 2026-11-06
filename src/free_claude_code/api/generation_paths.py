@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-type WireApi = Literal["messages", "responses", "gemini"]
+type WireApi = Literal["messages", "responses", "gemini", "chat"]
 
 
 def generation_api(path: str) -> WireApi | None:
@@ -10,6 +10,8 @@ def generation_api(path: str) -> WireApi | None:
         return "messages"
     if path == "/v1/responses":
         return "responses"
+    if path == "/v1/chat/completions":
+        return "chat"
     if path.startswith("/v1beta/models/"):
         return "gemini"
     return None

@@ -41,7 +41,7 @@ COHERE_DEFAULT_BASE = "https://api.cohere.ai/compatibility/v1"
 ZAI_CODING_DEFAULT_BASE = "https://api.z.ai/api/coding/paas/v4"
 ZAI_API_DEFAULT_BASE = "https://api.z.ai/api/paas/v4"
 # Google AI Studio Gemini API OpenAI-compat layer (not Vertex AI).
-GEMINI_DEFAULT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
+GEMINI_DEFAULT_BASE = "https://generativelanguage.googleapis.com/v1beta/"
 # Vertex AI API root. The provider owns project/location endpoint composition.
 VERTEX_AI_API_ROOT = "https://aiplatform.googleapis.com"
 GROQ_DEFAULT_BASE = "https://api.groq.com/openai/v1"

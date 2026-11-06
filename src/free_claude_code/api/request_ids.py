@@ -15,7 +15,7 @@ REQUEST_ID_HEADER = "request-id"
 OPENAI_REQUEST_ID_HEADER = "x-request-id"
 _REQUEST_ID_STATE_ATTRIBUTE = "fcc_request_id"
 _OPENAI_REQUEST_ID_PATHS = frozenset(
-    {"/v1/responses", "/v1/models", "/muse-code/models"}
+    {"/v1/responses", "/v1/chat/completions", "/v1/models", "/muse-code/models"}
 )
 
 

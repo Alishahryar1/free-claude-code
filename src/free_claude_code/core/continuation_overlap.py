@@ -89,6 +89,10 @@ class ContinuationOverlap:
         frame = _Frame(data, texts)
         terminal = (
             gemini_finished(data)
+            or any(
+                choice.get("finish_reason") is not None
+                for choice in data.get("choices", [])
+            )
             or kind
             in {
                 "response.completed",
@@ -164,6 +168,32 @@ class ContinuationOverlap:
         return identity
 
     def _texts(self, data: dict[str, Any]) -> list[_Text]:
+        if "choices" in data:
+            texts = []
+            for choice in data["choices"]:
+                delta = choice.get("delta") or {}
+                fields = (
+                    ("content",)
+                    if self._channel == "text"
+                    else ("reasoning_content", "reasoning")
+                )
+                texts.extend(
+                    _Text(("chat", 0), (0, 0), delta, field, delta=True)
+                    for field in fields
+                    if isinstance(delta.get(field), str)
+                )
+                if self._channel == "thinking":
+                    for detail in delta.get("reasoning_details", []):
+                        field = (
+                            "summary"
+                            if detail.get("type") == "reasoning.summary"
+                            else "text"
+                        )
+                        if isinstance(detail.get(field), str):
+                            texts.append(
+                                _Text(("chat", 0), (0, 0), detail, field, delta=True)
+                            )
+            return texts
         if "candidates" in data:
             return [
                 _Text(("gemini", 0), (0, 0), part, "text", delta=True)
@@ -377,6 +407,23 @@ class ContinuationOverlap:
             and all(text.delta for text in frame.texts)
             and not any(text.value.get(text.field) for text in frame.texts)
         ):
+            if "choices" in frame.data:
+                for choice in frame.data["choices"]:
+                    delta = choice.get("delta") or {}
+                    if choice.get("finish_reason") is not None or any(
+                        value
+                        for key, value in delta.items()
+                        if key
+                        not in {
+                            "content",
+                            "reasoning",
+                            "reasoning_content",
+                            "reasoning_details",
+                            "role",
+                        }
+                    ):
+                        return [frame.data]
+                return []
             if "candidates" in frame.data:
                 for candidate in frame.data["candidates"]:
                     content = candidate.get("content", {})

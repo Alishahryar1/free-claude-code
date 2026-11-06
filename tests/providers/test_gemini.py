@@ -1,725 +1,526 @@
-"""Tests for Google AI Studio Gemini (OpenAI-compatible) provider."""
+"""All client protocols exercise native Gemini over HTTP, including replay."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+import json
+from copy import deepcopy
+from typing import Any
 
+import httpx
 import pytest
 
-from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.config.provider_catalog import GEMINI_DEFAULT_BASE
+from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
+from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.chat_completions.request import ChatRequest
+from free_claude_code.core.chat_completions.response import ChatResponseAccumulator
+from free_claude_code.core.gemini import GeminiRequest
+from free_claude_code.core.gemini.response import GeminiResponseAccumulator
+from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.gemini import GeminiProvider
-from free_claude_code.providers.google_openai import (
-    GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR,
-)
-from free_claude_code.providers.history_replay import replay_origin
-from tests.providers.request_factory import make_messages_request
-from tests.providers.support import (
-    SDKStreamDouble,
-    immediate_admission,
-    make_provider_config,
-    reasoning_for,
-)
+from tests.providers.support import immediate_admission, make_provider_config
 
 
-def make_request(**overrides):
-    return make_messages_request("models/gemini-3.1-flash-lite", **overrides)
-
-
-def _simulate_openai_sdk_wire_json(body: dict) -> dict:
-    wire = {key: value for key, value in body.items() if key != "extra_body"}
-    sdk_extra = body.get("extra_body")
-    if isinstance(sdk_extra, dict):
-        wire.update(sdk_extra)
-    return wire
-
-
-def _google_thinking_config(wire: dict) -> dict | None:
-    literal_extra_body = wire.get("extra_body")
-    if not isinstance(literal_extra_body, dict):
-        return None
-    google = literal_extra_body.get("google")
-    if not isinstance(google, dict):
-        return None
-    thinking_config = google.get("thinking_config")
-    return thinking_config if isinstance(thinking_config, dict) else None
-
-
-@pytest.fixture
-def gemini_config():
-    return make_provider_config(
-        api_key="test_gemini_key",
-        base_url=GEMINI_DEFAULT_BASE,
+def _sse(parts):
+    events: list[dict[str, Any]] = [
+        {"candidates": [{"index": 0, "content": {"role": "model", "parts": [part]}}]}
+        for part in parts
+    ]
+    events.append(
+        {
+            "modelVersion": "actual",
+            "candidates": [{"index": 0, "finishReason": "STOP"}],
+            "usageMetadata": {
+                "promptTokenCount": 12,
+                "candidatesTokenCount": 3,
+                "thoughtsTokenCount": 4,
+                "totalTokenCount": 19,
+            },
+        }
+    )
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
     )
 
 
-@pytest.fixture
-def gemini_provider(gemini_config):
-    return GeminiProvider(gemini_config, admission=immediate_admission())
-
-
-def test_init(gemini_config):
-    """Test provider initialization."""
-    with patch(
-        "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
-    ) as mock_openai:
-        provider = GeminiProvider(gemini_config, admission=immediate_admission())
-        assert provider._api_key == "test_gemini_key"
-        assert (
-            provider._base_url
-            == "https://generativelanguage.googleapis.com/v1beta/openai"
+def _request(wire, history=None):
+    model = "models/test-model"
+    if wire == "messages":
+        return MessagesRequest(
+            model=model,
+            messages=history or [{"role": "user", "content": "hello"}],
+            max_tokens=100,
         )
-        mock_openai.assert_called_once()
-
-
-def test_default_base_url_constant():
-    assert GEMINI_DEFAULT_BASE == (
-        "https://generativelanguage.googleapis.com/v1beta/openai/"
+    if wire == "responses":
+        return OpenAIResponsesRequest(
+            model=model, input=history or [{"role": "user", "content": "hello"}]
+        )
+    if wire == "chat":
+        return ChatRequest(
+            model=model,
+            messages=history or [{"role": "user", "content": "hello"}],
+            stream_options={"include_usage": True},
+        )
+    return GeminiRequest.model_validate(
+        {
+            "model": model,
+            "contents": history or [{"role": "user", "parts": [{"text": "hello"}]}],
+            "generationConfig": {"thinkingConfig": {"includeThoughts": True}},
+        }
     )
 
 
-def test_build_request_body_basic(gemini_provider):
-    """Basic body conversion attaches Gemini thinking fields when thinking is on."""
-    req = make_request()
-    body = gemini_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
-
-    assert body["model"] == "models/gemini-3.1-flash-lite"
-    assert body["messages"][0]["role"] == "system"
-    assert "reasoning_effort" not in body
-    eb = body.get("extra_body")
-    assert isinstance(eb, dict)
-    literal_extra_body = eb.get("extra_body")
-    assert isinstance(literal_extra_body, dict)
-    gc = literal_extra_body.get("google")
-    assert isinstance(gc, dict)
-    tc = gc.get("thinking_config")
-    assert isinstance(tc, dict)
-    assert tc.get("include_thoughts") is True
-    assert "google" not in eb
-
-
-def test_build_request_body_sdk_wire_json_has_literal_extra_body(gemini_provider):
-    """Regression for issue #542: SDK merge must not send top-level google."""
-    req = make_request()
-
-    body = gemini_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
-    wire_json = _simulate_openai_sdk_wire_json(body)
-
-    assert "reasoning_effort" not in wire_json
-    assert "google" not in wire_json
-    literal_extra_body = wire_json.get("extra_body")
-    assert isinstance(literal_extra_body, dict)
-    google = literal_extra_body.get("google")
-    assert isinstance(google, dict)
-    thinking_config = google.get("thinking_config")
-    assert isinstance(thinking_config, dict)
-    assert thinking_config.get("include_thoughts") is True
+async def _collect(wire, stream):
+    if wire == "messages":
+        message, error, stopped = await aggregate_anthropic_sse_to_message(stream)
+        assert error is None and stopped
+        return message
+    chunks = [chunk async for chunk in stream]
+    events = parse_sse_text("".join(chunks))
+    if wire == "responses":
+        return events[-1].data["response"]
+    if wire == "gemini":
+        accumulator = GeminiResponseAccumulator()
+        for event in events:
+            accumulator.feed(event.data)
+        return accumulator.result()
+    accumulator = ChatResponseAccumulator()
+    for event in events:
+        accumulator.feed(event.data)
+    assert chunks[-1] == "data: [DONE]\n\n"
+    accumulator.finish()
+    return accumulator.result()
 
 
-def test_build_request_body_reasoning_off_sets_reasoning_none():
-    """When thinking is off, Gemini uses reasoning_effort none (Gemini 2.5 convention)."""
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses", "chat", "gemini"])
+@pytest.mark.parametrize("interleaved", [False, True])
+async def test_all_ingresses_use_native_gemini_and_replay_signed_parts(
+    wire, interleaved
+):
+    bodies = []
+    parts = [
+        {"text": "typed thought", "thought": True},
+        {
+            "text": "<thought>literal answer</thought>",
+            "thoughtSignature": "c2lnbmF0dXJl",
+        },
+    ]
+
+    if interleaved:
+        parts.extend(
+            [{"text": "a later thought", "thought": True}, {"text": "a later answer"}]
+        )
+
+    def reply(request):
+        assert request.url.path == "/v1beta/models/test-model:streamGenerateContent"
+        assert request.url.params["alt"] == "sse"
+        assert request.headers["x-goog-api-key"] == "test-key"
+        bodies.append(json.loads(request.content))
+        return _sse(parts)
+
     provider = GeminiProvider(
-        make_provider_config(
-            api_key="test_gemini_key",
-            base_url=GEMINI_DEFAULT_BASE,
-        ),
+        make_provider_config(api_key="test-key", base_url=GEMINI_DEFAULT_BASE),
         admission=immediate_admission(),
+        transport=httpx.MockTransport(reply),
     )
-    req = make_request(thinking={"type": "disabled"})
-    body = provider._chat._build_request_body(req, reasoning=reasoning_for(req))
+    try:
+        first = await _collect(
+            wire,
+            getattr(provider, f"stream_{wire}")(
+                _request(wire), response_model="public"
+            ),
+        )
+        if wire == "messages":
+            history = [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": first["content"]},
+                {"role": "user", "content": "next"},
+            ]
+        elif wire == "responses":
+            history = [
+                {"role": "user", "content": "hello"},
+                *first["output"],
+                {"role": "user", "content": "next"},
+            ]
+        elif wire == "chat":
+            history = [
+                {"role": "user", "content": "hello"},
+                first["choices"][0]["message"],
+                {"role": "user", "content": "next"},
+            ]
+        else:
+            history = [
+                {"role": "user", "parts": [{"text": "hello"}]},
+                first["candidates"][0]["content"],
+                {"role": "user", "parts": [{"text": "next"}]},
+            ]
+        original = deepcopy(history)
+        await _collect(
+            wire, getattr(provider, f"stream_{wire}")(_request(wire, history))
+        )
+        assert history == original
+        assert bodies[1]["contents"][1] == {"role": "model", "parts": parts}
+        assert "model" not in bodies[0]
+        assert "literal answer" in str(first)
+    finally:
+        await provider.cleanup()
 
-    assert body["reasoning_effort"] == "none"
-    roles = [m.get("role") for m in body.get("messages", [])]
-    assert "assistant_reasoning_content" not in roles
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses", "chat"])
+@pytest.mark.parametrize("native_id", [None, "google-call"])
+async def test_native_signed_tool_round_trip_keeps_original_parts_and_ids(
+    wire, native_id
+):
+    parts = [
+        {"text": "inspect the tool", "thought": True},
+        {
+            "functionCall": {
+                "name": "lookup",
+                "args": {"x": 7},
+                **({"id": native_id} if native_id else {}),
+            },
+            "thoughtSignature": "signed-call",
+        },
+        {"text": "", "thoughtSignature": "late-signature"},
+    ]
+    bodies = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        return _sse(parts if len(bodies) == 1 else [{"text": "complete"}])
+
+    schema = {
+        "type": "object",
+        "properties": {"x": {"type": "integer"}},
+        "required": ["x"],
+    }
+    function = {"name": "lookup", "parameters": schema}
+    tools = (
+        [{"name": "lookup", "input_schema": schema}]
+        if wire == "messages"
+        else [
+            {"type": "function", "function": function}
+            if wire == "chat"
+            else {"type": "function", **function}
+        ]
+    )
+    initial = _request(wire)
+    request = type(initial).model_validate(
+        {**initial.model_dump(mode="json", exclude_unset=True), "tools": tools}
+    )
+    provider = GeminiProvider(
+        make_provider_config(api_key="key", base_url=GEMINI_DEFAULT_BASE),
+        admission=immediate_admission(),
+        transport=httpx.MockTransport(reply),
+    )
+    try:
+        first = await _collect(wire, getattr(provider, f"stream_{wire}")(request))
+        if wire == "messages":
+            call = next(
+                block for block in first["content"] if block["type"] == "tool_use"
+            )
+            history = [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": first["content"]},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": call["id"],
+                            "content": "result",
+                        }
+                    ],
+                },
+            ]
+        elif wire == "responses":
+            call = next(
+                item for item in first["output"] if item["type"] == "function_call"
+            )
+            history = [
+                {"role": "user", "content": "hello"},
+                *first["output"],
+                {
+                    "type": "function_call_output",
+                    "call_id": call["call_id"],
+                    "output": "result",
+                },
+            ]
+        else:
+            message = first["choices"][0]["message"]
+            call = message["tool_calls"][0]
+            history = [
+                {"role": "user", "content": "hello"},
+                message,
+                {"role": "tool", "tool_call_id": call["id"], "content": "result"},
+            ]
+        next_request = type(request).model_validate(
+            {
+                **request.model_dump(mode="json", exclude_unset=True),
+                "input" if wire == "responses" else "messages": history,
+            }
+        )
+        await _collect(wire, getattr(provider, f"stream_{wire}")(next_request))
+        assert bodies[-1]["contents"][1] == {"role": "model", "parts": parts}
+        result = bodies[-1]["contents"][2]["parts"][0]["functionResponse"]
+        assert result.get("id") == native_id
+        assert result["name"] == "lookup"
+    finally:
+        await provider.cleanup()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses", "chat"])
+async def test_explicit_off_hides_native_thoughts_but_keeps_signed_replay(wire):
+    provider = GeminiProvider(
+        make_provider_config(api_key="key", base_url=GEMINI_DEFAULT_BASE),
+        admission=immediate_admission(),
+        transport=httpx.MockTransport(
+            lambda request: _sse(
+                [
+                    {"text": "hidden thought", "thought": True},
+                    {"text": "answer", "thoughtSignature": "sig"},
+                ]
+            )
+        ),
+    )
+    try:
+        result = await _collect(
+            wire,
+            getattr(provider, f"stream_{wire}")(
+                _request(wire), reasoning=ReasoningPolicy.off()
+            ),
+        )
+        assert "hidden thought" not in json.dumps(result)
+        assert "fcc:history:" in json.dumps(result)
+    finally:
+        await provider.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_native_model_discovery_follows_pages_and_keeps_native_names():
+    urls = []
+
+    def reply(request):
+        urls.append(str(request.url))
+        assert request.headers["x-goog-api-key"] == "key"
+        if request.url.params.get("pageToken") == "second":
+            return httpx.Response(
+                200,
+                json={
+                    "models": [
+                        {
+                            "name": "models/second",
+                            "supportedGenerationMethods": ["generateContent"],
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    {
+                        "name": "models/first",
+                        "supportedGenerationMethods": ["generateContent"],
+                        "thinking": True,
+                        "inputTokenLimit": 1000,
+                        "outputTokenLimit": 100,
+                    },
+                    {
+                        "name": "models/embedding",
+                        "supportedGenerationMethods": ["embedContent"],
+                    },
+                ],
+                "nextPageToken": "second",
+            },
+        )
+
+    provider = GeminiProvider(
+        make_provider_config(api_key="key", base_url=GEMINI_DEFAULT_BASE),
+        admission=immediate_admission(),
+        transport=httpx.MockTransport(reply),
+    )
+    try:
+        models = {model.model_id: model for model in await provider.list_model_infos()}
+        assert set(models) == {"models/first", "models/second"}
+        assert models["models/first"].context_window_tokens == 1000
+        assert models["models/first"].max_output_tokens == 100
+        assert len(urls) == 2
+    finally:
+        await provider.cleanup()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("reasoning", "expected_effort", "expected_thinking_config"),
+    ("reasoning", "expected"),
     [
-        (ReasoningPolicy.provider_default(), None, None),
-        (ReasoningPolicy.off(), "none", None),
-        (ReasoningPolicy.on(), None, {"include_thoughts": True}),
         (
             ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
-            "high",
-            None,
+            {"includeThoughts": True, "thinkingLevel": "HIGH"},
         ),
         (
             ReasoningPolicy.on(budget_tokens=777),
-            None,
-            {"thinking_budget": 777, "include_thoughts": True},
+            {"includeThoughts": True, "thinkingBudget": 777},
         ),
-        (
-            ReasoningPolicy.on(
-                effort=ReasoningEffort.HIGH,
-                budget_tokens=777,
-            ),
-            None,
-            {"thinking_budget": 777, "include_thoughts": True},
-        ),
+        (ReasoningPolicy.off(), {"includeThoughts": False, "thinkingBudget": 0}),
     ],
 )
-def test_gemini_reasoning_uses_exactly_one_wire_channel(
-    gemini_provider: GeminiProvider,
-    reasoning: ReasoningPolicy,
-    expected_effort: str | None,
-    expected_thinking_config: dict | None,
-) -> None:
-    body = gemini_provider._chat._build_request_body(
-        make_request(thinking=None),
-        reasoning=reasoning,
+async def test_native_reasoning_uses_one_computation_control(reasoning, expected):
+    bodies: list[dict[str, Any]] = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        return _sse([{"text": "answer"}])
+
+    provider = GeminiProvider(
+        make_provider_config(api_key="key", base_url=GEMINI_DEFAULT_BASE),
+        admission=immediate_admission(),
+        transport=httpx.MockTransport(reply),
     )
-    wire = _simulate_openai_sdk_wire_json(body)
-
-    assert wire.get("reasoning_effort") == expected_effort
-    assert _google_thinking_config(wire) == expected_thinking_config
-    assert not (
-        "reasoning_effort" in wire and _google_thinking_config(wire) is not None
-    )
-
-
-def test_gemini_adaptive_thinking_with_effort_does_not_emit_custom_config(
-    gemini_provider: GeminiProvider,
-) -> None:
-    request = make_messages_request(
-        "models/gemini-3.5-flash",
-        thinking={"type": "adaptive"},
-        output_config={"effort": "high"},
-    )
-
-    body = gemini_provider._chat._build_request_body(
-        request,
-        reasoning=reasoning_for(request),
-    )
-    wire = _simulate_openai_sdk_wire_json(body)
-
-    assert wire["reasoning_effort"] == "high"
-    assert _google_thinking_config(wire) is None
-
-
-def test_build_request_body_preserves_caller_extra_body(gemini_provider):
-    # This opaque sentinel verifies FCC's pass-through contract only; it does not
-    # imply that Gemini accepts an undocumented "custom_tag" wire field.
-    req = make_request(extra_body={"custom_tag": {"user": "u1"}})
-
-    body = gemini_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
-
-    assert "reasoning_effort" not in body
-    eb = body.get("extra_body")
-    assert isinstance(eb, dict)
-    assert eb.get("custom_tag") == {"user": "u1"}
-    literal_extra_body = eb.get("extra_body")
-    assert isinstance(literal_extra_body, dict)
-    google = literal_extra_body.get("google")
-    assert isinstance(google, dict)
-
-
-def test_build_request_body_strips_unsupported_metadata_key(gemini_provider):
-    """Regression for #1548: Gemini's OpenAI-compat endpoint hard-rejects the
-    whole request with "Unknown name 'metadata': Cannot find field" if this
-    key is present -- whether the caller sends it as a top-level extra_body
-    entry or FCC would otherwise forward it verbatim via the SDK merge.
-    """
-    req = make_request(extra_body={"metadata": {"user_id": "u1"}})
-
-    body = gemini_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
-    wire_json = _simulate_openai_sdk_wire_json(body)
-
-    assert "metadata" not in body
-    assert "metadata" not in body.get("extra_body", {})
-    assert "metadata" not in wire_json
-
-
-@pytest.mark.parametrize("choice", ["auto", "any", "none"])
-def test_build_request_body_omits_tool_choice_without_tools(gemini_provider, choice):
-    """Regression for #565: Gemini rejects the whole request with "Function
-    calling config is set without function_declarations" when a tool choice
-    reaches it with no tools to choose from.
-    """
-    req = make_request(tool_choice={"type": choice})
-
-    body = gemini_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
-    wire_json = _simulate_openai_sdk_wire_json(body)
-
-    assert "tools" not in wire_json
-    assert "tool_choice" not in wire_json
-
-
-def test_build_request_body_keeps_tool_choice_with_tools(gemini_provider):
-    req = make_request(
-        tool_choice={"type": "auto"},
-        tools=[{"name": "Read", "input_schema": {"type": "object"}}],
-    )
-
-    body = gemini_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
-
-    assert body["tool_choice"] == "auto"
-    assert [tool["function"]["name"] for tool in body["tools"]] == ["Read"]
-
-
-def test_build_request_body_merges_caller_nested_google(gemini_provider):
-    req = make_request(
-        thinking=None,
-        extra_body={
-            "extra_body": {
-                "google": {
-                    "thinking_config": {
-                        "thinking_level": "low",
-                        "include_thoughts": False,
-                    },
-                    "cached_content": "cachedContents/example",
-                }
-            },
-        },
-    )
-
-    body = gemini_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
-
-    assert "reasoning_effort" not in body
-    eb = body.get("extra_body")
-    assert isinstance(eb, dict)
-    literal_extra_body = eb.get("extra_body")
-    assert isinstance(literal_extra_body, dict)
-    google = literal_extra_body.get("google")
-    assert isinstance(google, dict)
-    assert google.get("cached_content") == "cachedContents/example"
-    thinking_config = google.get("thinking_config")
-    assert isinstance(thinking_config, dict)
-    assert thinking_config == {
-        "thinking_level": "low",
-        "include_thoughts": False,
-    }
-
-
-def test_gemini_rejects_caller_thinking_config_with_fcc_reasoning_control(
-    gemini_provider: GeminiProvider,
-) -> None:
-    request = make_request(
-        thinking=None,
-        extra_body={
-            "extra_body": {"google": {"thinking_config": {"thinking_level": "low"}}}
-        },
-    )
-
-    with pytest.raises(InvalidRequestError, match="thinking_config"):
-        gemini_provider._chat._build_request_body(
-            request,
-            reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
+    try:
+        await _collect(
+            "messages",
+            provider.stream_messages(_request("messages"), reasoning=reasoning),
         )
-
-
-def test_gemini_rejects_malformed_google_extension_container(
-    gemini_provider: GeminiProvider,
-) -> None:
-    request = make_request(
-        thinking=None,
-        extra_body={"extra_body": {"google": {"thinking_config": "low"}}},
-    )
-
-    with pytest.raises(InvalidRequestError, match="thinking_config must be an object"):
-        gemini_provider._chat._build_request_body(
-            request,
-            reasoning=ReasoningPolicy.provider_default(),
-        )
-
-
-def test_build_request_body_preserves_tool_call_extra_content(gemini_provider):
-    req = make_request(
-        system=None,
-        messages=[
-            {"role": "user", "content": "Find files"},
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "id": "function-call-1",
-                        "name": "Glob",
-                        "input": {"pattern": "*.py"},
-                        "extra_content": {
-                            "google": {"thought_signature": "sig-from-client"}
-                        },
-                    },
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "function-call-1",
-                        "content": "[]",
-                    },
-                ],
-            },
-        ],
-    )
-
-    body = gemini_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
-
-    tool_call = body["messages"][1]["tool_calls"][0]
-    assert tool_call["extra_content"] == {
-        "google": {"thought_signature": "sig-from-client"}
-    }
-
-
-def cache_origin(provider):
-    return replay_origin(
-        "GEMINI", "chat", make_request().model, client=provider._client
-    )
-
-
-def test_build_request_body_uses_cached_tool_call_signature(gemini_provider):
-    gemini_provider._behavior.record_tool_call_extra_content(
-        "function-call-1",
-        {"google": {"thought_signature": "sig-from-cache"}},
-        origin=cache_origin(gemini_provider),
-    )
-    req = make_request(
-        system=None,
-        messages=[
-            {"role": "user", "content": "Find files"},
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "id": "function-call-1",
-                        "name": "Glob",
-                        "input": {"pattern": "*.py"},
-                    },
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "function-call-1",
-                        "content": "[]",
-                    },
-                ],
-            },
-        ],
-    )
-
-    body = gemini_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
-
-    body = gemini_provider._behavior.prepare_history_body(
-        body, cache_origin(gemini_provider)
-    )
-
-    tool_call = body["messages"][1]["tool_calls"][0]
-    assert tool_call["extra_content"] == {
-        "google": {"thought_signature": "sig-from-cache"}
-    }
-
-
-def test_build_request_body_adds_current_turn_fallback_signature(
-    gemini_provider,
-):
-    req = make_request(
-        system=None,
-        messages=[
-            {"role": "user", "content": "Find files"},
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "id": "function-call-1",
-                        "name": "Glob",
-                        "input": {"pattern": "*.py"},
-                    },
-                    {
-                        "type": "tool_use",
-                        "id": "function-call-2",
-                        "name": "Read",
-                        "input": {"file_path": "a.py"},
-                    },
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "function-call-1",
-                        "content": "[]",
-                    },
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": "function-call-2",
-                        "content": "contents",
-                    },
-                ],
-            },
-        ],
-    )
-
-    body = gemini_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
-
-    body = gemini_provider._behavior.prepare_history_body(
-        body, cache_origin(gemini_provider)
-    )
-
-    tool_calls = body["messages"][1]["tool_calls"]
-    assert tool_calls[0]["extra_content"] == {
-        "google": {"thought_signature": GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR}
-    }
-    assert "extra_content" not in tool_calls[1]
+        assert bodies[0]["generationConfig"]["thinkingConfig"] == expected
+    finally:
+        await provider.cleanup()
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_text(gemini_provider):
-    req = make_request(thinking={"type": "enabled"})
-
-    mock_chunk = MagicMock()
-    mock_chunk.choices = [
-        MagicMock(
-            delta=MagicMock(
-                content="Hello back!",
-                reasoning_content=None,
-                tool_calls=None,
-            ),
-            finish_reason="stop",
-        )
-    ]
-    mock_chunk.usage = MagicMock(completion_tokens=5, prompt_tokens=10)
-
-    async def mock_stream():
-        yield mock_chunk
-
-    with patch.object(
-        gemini_provider._client.chat.completions, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.return_value = SDKStreamDouble(mock_stream())
-
-        events = [
-            event
-            async for event in gemini_provider.stream_messages(
-                req, reasoning=reasoning_for(req)
+async def test_native_empty_signed_part_does_not_emit_empty_text_block():
+    provider = GeminiProvider(
+        make_provider_config(api_key="key", base_url=GEMINI_DEFAULT_BASE),
+        admission=immediate_admission(),
+        transport=httpx.MockTransport(
+            lambda _: _sse(
+                [{"text": "answer"}, {"text": "", "thoughtSignature": "sig"}]
             )
-        ]
-
-        assert any(
-            '"text_delta"' in event and "Hello back!" in event for event in events
+        ),
+    )
+    try:
+        events = parse_sse_text(
+            "".join(
+                [
+                    chunk
+                    async for chunk in provider.stream_messages(_request("messages"))
+                ]
+            )
         )
-        kwargs = mock_create.call_args.kwargs
-        assert "reasoning_effort" not in kwargs
-        extra_body = kwargs.get("extra_body")
-        assert isinstance(extra_body, dict)
-        literal_extra_body = extra_body.get("extra_body")
-        assert isinstance(literal_extra_body, dict)
-        google = literal_extra_body.get("google")
-        assert isinstance(google, dict)
-        thinking_config = google.get("thinking_config")
-        assert isinstance(thinking_config, dict)
-        assert thinking_config.get("include_thoughts") is True
-
-
-@pytest.mark.asyncio
-async def test_stream_messages_preserves_tool_call_extra_content(gemini_provider):
-    req = make_request()
-
-    mock_tc = MagicMock()
-    mock_tc.index = 0
-    mock_tc.id = "function-call-1"
-    mock_tc.extra_content = {"google": {"thought_signature": "sig-stream"}}
-    mock_tc.function = MagicMock()
-    mock_tc.function.name = "Glob"
-    mock_tc.function.arguments = '{"pattern":"*.py"}'
-
-    mock_chunk = MagicMock()
-    mock_chunk.choices = [
-        MagicMock(
-            delta=MagicMock(
-                content=None,
-                reasoning_content=None,
-                tool_calls=[mock_tc],
-            ),
-            finish_reason="tool_calls",
-        )
-    ]
-    mock_chunk.usage = MagicMock(completion_tokens=5, prompt_tokens=10)
-
-    async def mock_stream():
-        yield mock_chunk
-
-    with patch.object(
-        gemini_provider._client.chat.completions, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.return_value = SDKStreamDouble(mock_stream())
-
-        events = [event async for event in gemini_provider.stream_messages(req)]
-
-    tool_starts = [
-        event
+    finally:
+        await provider.cleanup()
+    text_starts = [
+        event.data
         for event in events
-        if '"content_block_start"' in event and '"tool_use"' in event
+        if event.data.get("type") == "content_block_start"
+        and event.data.get("content_block", {}).get("type") == "text"
     ]
-    assert any(
-        '"extra_content"' in event and "sig-stream" in event for event in tool_starts
-    )
-    assert gemini_provider._behavior._tool_call_extra_content_by_id[
-        (cache_origin(gemini_provider), "function-call-1")
-    ] == {"google": {"thought_signature": "sig-stream"}}
+    assert len(text_starts) == 1
+    stops = [
+        event.data["index"]
+        for event in events
+        if event.data.get("type") == "content_block_stop"
+    ]
+    assert stops[-1] == text_starts[0]["index"]
 
 
 @pytest.mark.asyncio
-async def test_colliding_stream_tool_id_rekeys_cached_thought_signature(
-    gemini_provider,
+@pytest.mark.parametrize("code", [400, 429, 503])
+async def test_native_inband_error_preserves_retry_semantics_without_history_probes(
+    code,
 ):
-    """Gemini metadata follows the public ID returned to the client."""
+    from free_claude_code.core.failures import ExecutionFailure
+
+    bodies = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=f"data: {json.dumps({'error': {'code': code, 'message': 'provider failure'}})}\n\n",
+        )
+
+    provider = GeminiProvider(
+        make_provider_config(api_key="key", base_url=GEMINI_DEFAULT_BASE),
+        admission=immediate_admission(max_attempts=2),
+        transport=httpx.MockTransport(reply),
+    )
+    try:
+        with pytest.raises(ExecutionFailure) as caught:
+            await _collect(
+                "chat",
+                provider.stream_chat(
+                    _request(
+                        "chat",
+                        [
+                            {
+                                "role": "assistant",
+                                "content": "old",
+                                "reasoning_content": "thinking",
+                            },
+                            {"role": "user", "content": "next"},
+                        ],
+                    )
+                ),
+            )
+        assert caught.value.status_code == code
+        assert caught.value.retryable == (code in {429, 503})
+        assert len(bodies) == (2 if code in {429, 503} else 1)
+        assert all(body == bodies[0] for body in bodies)
+    finally:
+        await provider.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_native_history_modes_share_attempt_budget_and_restore_source():
+    bodies = []
+
+    def reply(request):
+        bodies.append(json.loads(request.content))
+        if len(bodies) < 3:
+            return httpx.Response(
+                400, json={"error": {"code": 400, "message": "Unsupported history"}}
+            )
+        return _sse([{"text": "answer"}])
+
+    provider = GeminiProvider(
+        make_provider_config(api_key="key", base_url=GEMINI_DEFAULT_BASE),
+        admission=immediate_admission(max_attempts=3),
+        transport=httpx.MockTransport(reply),
+    )
     history = [
-        {"role": "user", "content": "Find files once."},
         {
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "tool_use",
-                    "id": "function-call-1",
-                    "name": "Glob",
-                    "input": {"pattern": "*.py"},
-                }
-            ],
+            "role": "model",
+            "parts": [{"text": "old thought", "thought": True}, {"text": "old answer"}],
         },
+        {"role": "user", "parts": [{"text": "next"}]},
         {
-            "role": "user",
-            "content": [
-                {
-                    "type": "tool_result",
-                    "tool_use_id": "function-call-1",
-                    "content": "[]",
-                }
+            "role": "model",
+            "parts": [
+                {"text": "current thought", "thought": True},
+                {"text": "current answer"},
             ],
         },
     ]
-    request = make_request(
-        system=None,
-        messages=[*history, {"role": "user", "content": "Find files again."}],
-    )
-    tool_call = MagicMock()
-    tool_call.index = 0
-    tool_call.id = "function-call-1"
-    tool_call.extra_content = {"google": {"thought_signature": "sig-stream"}}
-    tool_call.function = MagicMock()
-    tool_call.function.name = "Glob"
-    tool_call.function.arguments = '{"pattern":"*.py"}'
-    chunk = MagicMock()
-    chunk.choices = [
-        MagicMock(
-            delta=MagicMock(
-                content=None,
-                reasoning_content=None,
-                tool_calls=[tool_call],
-            ),
-            finish_reason="tool_calls",
-        )
+    original = deepcopy(history)
+    try:
+        await _collect("gemini", provider.stream_gemini(_request("gemini", history)))
+    finally:
+        await provider.cleanup()
+    assert history == original
+    thoughts = [
+        [
+            part["text"]
+            for content in body["contents"]
+            for part in content["parts"]
+            if part.get("thought")
+        ]
+        for body in bodies
     ]
-    chunk.usage = MagicMock(completion_tokens=5, prompt_tokens=10)
-
-    async def mock_stream():
-        yield chunk
-
-    with patch.object(
-        gemini_provider._client.chat.completions,
-        "create",
-        new_callable=AsyncMock,
-        return_value=SDKStreamDouble(mock_stream()),
-    ):
-        events = [event async for event in gemini_provider.stream_messages(request)]
-
-    starts = [
-        event.data["content_block"]
-        for event in parse_sse_text("".join(events))
-        if event.event == "content_block_start"
-        and event.data.get("content_block", {}).get("type") == "tool_use"
-    ]
-    [start] = starts
-    public_id = start["id"]
-    assert public_id != "function-call-1"
-    assert gemini_provider._behavior._tool_call_extra_content_by_id[
-        (cache_origin(gemini_provider), public_id)
-    ] == {"google": {"thought_signature": "sig-stream"}}
-
-    replay = make_request(
-        system=None,
-        messages=[
-            *request.messages,
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "id": public_id,
-                        "name": "Glob",
-                        "input": {"pattern": "*.py"},
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": public_id,
-                        "content": "[]",
-                    }
-                ],
-            },
-        ],
-    )
-    body = gemini_provider._chat._build_request_body(
-        replay,
-        reasoning=reasoning_for(replay),
-    )
-    body = gemini_provider._behavior.prepare_history_body(
-        body, cache_origin(gemini_provider)
-    )
-    replayed_call = body["messages"][-2]["tool_calls"][0]
-    assert replayed_call["id"] == public_id
-    assert replayed_call["extra_content"] == {
-        "google": {"thought_signature": "sig-stream"}
-    }
-
-
-@pytest.mark.asyncio
-async def test_stream_messages_reasoning_content(gemini_provider):
-    req = make_request()
-
-    mock_chunk = MagicMock()
-    mock_chunk.choices = [
-        MagicMock(
-            delta=MagicMock(
-                content=None,
-                reasoning_content="Thinking...",
-                tool_calls=None,
-            ),
-            finish_reason="stop",
-        )
-    ]
-    mock_chunk.usage = MagicMock(completion_tokens=2, prompt_tokens=10)
-
-    async def mock_stream():
-        yield mock_chunk
-
-    with patch.object(
-        gemini_provider._client.chat.completions, "create", new_callable=AsyncMock
-    ) as mock_create:
-        mock_create.return_value = SDKStreamDouble(mock_stream())
-
-        events = [event async for event in gemini_provider.stream_messages(req)]
-
-        assert any(
-            '"thinking_delta"' in event and "Thinking..." in event for event in events
-        )
-
-
-@pytest.mark.asyncio
-async def test_cleanup(gemini_provider):
-    gemini_provider._client = AsyncMock()
-
-    await gemini_provider.cleanup()
-
-    gemini_provider._client.close.assert_called_once()
+    assert thoughts == [["old thought", "current thought"], ["current thought"], []]

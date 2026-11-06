@@ -4,6 +4,7 @@ from collections.abc import Mapping
 
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.core.anthropic.models import MessagesRequest, ThinkingConfig
+from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -65,8 +66,20 @@ def resolve_gemini_reasoning_policy(
     return _apply_reasoning_preference(request.reasoning_policy(), preference)
 
 
+def client_chat_reasoning_policy(request: ChatRequest) -> ReasoningPolicy:
+    return responses_reasoning_policy({"effort": request.reasoning_effort})
+
+
+def resolve_chat_reasoning_policy(
+    request: ChatRequest, preference: ReasoningPreference
+) -> ReasoningPolicy:
+    return _apply_reasoning_preference(
+        client_chat_reasoning_policy(request), preference
+    )
+
+
 def prepare_fallback_request[
-    T: MessagesRequest | OpenAIResponsesRequest | GeminiRequest
+    T: MessagesRequest | OpenAIResponsesRequest | GeminiRequest | ChatRequest
 ](original: T, *, model: str, preference: ReasoningPreference) -> T:
     """Copy a candidate and remove computation controls replaced by its policy."""
 
@@ -87,6 +100,9 @@ def prepare_fallback_request[
         thinking = request.generation_config.thinking_config
         thinking.thinking_budget = None
         thinking.thinking_level = None
+    elif isinstance(request, ChatRequest):
+        request.reasoning_effort = None
+        request.model_fields_set.discard("reasoning_effort")
     elif request.reasoning is not None:
         request.reasoning.pop("effort", None)
     return request

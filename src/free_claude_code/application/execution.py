@@ -1,6 +1,7 @@
 """Provider execution shared by inbound API adapters."""
 
 import asyncio
+import json
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from types import MappingProxyType
@@ -28,6 +29,7 @@ from free_claude_code.core.stream_recovery import (
     RecoveryAction,
     assess_recovery,
 )
+from free_claude_code.core.token_estimation import estimate_text_tokens
 from free_claude_code.core.trace import (
     close_stream_input,
     trace_event,
@@ -36,6 +38,7 @@ from free_claude_code.core.trace import (
 
 from .ports import ModelInfoLookup, ProviderResolver
 from .reasoning import (
+    client_chat_reasoning_policy,
     client_reasoning_policy,
     client_responses_reasoning_policy,
     prepare_fallback_request,
@@ -45,6 +48,7 @@ from .routing import (
     ProviderModelCandidate,
     ProviderModelTarget,
     ResolvedModelRoute,
+    RoutedChatRequest,
     RoutedGeminiRequest,
     RoutedMessagesRequest,
     RoutedNativeMessagesRequest,
@@ -52,7 +56,7 @@ from .routing import (
 )
 
 ResponsesTokenCounter = Callable[[OpenAIResponsesRequest], int]
-WireApi = Literal["messages", "responses", "gemini"]
+WireApi = Literal["messages", "responses", "gemini", "chat"]
 CandidateStreamOpener = Callable[
     [int, ProviderModelCandidate, ContinuationSeed | None],
     Awaitable[AsyncIterator[str]],
@@ -394,6 +398,66 @@ class ProviderExecutor:
             },
             ingress_count_name="content_count",
             ingress_count=len(routed.request.contents),
+            request_id=request_id,
+            open_candidate=open_candidate,
+        )
+
+    def stream_chat(
+        self,
+        routed: RoutedChatRequest,
+        *,
+        raw_log_payload: Callable[[], object],
+        request_id: str,
+    ) -> AsyncIterator[str]:
+        client_reasoning = client_chat_reasoning_policy(routed.request)
+        input_tokens = sum(
+            estimate_text_tokens(json.dumps(message)[:1_000_000])
+            for message in routed.request.messages
+        )
+
+        async def open_candidate(
+            index: int,
+            candidate: ProviderModelCandidate,
+            continuation: ContinuationSeed | None,
+        ) -> AsyncIterator[str]:
+            target = candidate.target
+            provider = await self._provider_resolver(
+                target.provider_id, target.api_key_number
+            )
+            request = prepare_fallback_request(
+                routed.request,
+                model=target.provider_model,
+                preference=candidate.reasoning_preference,
+            )
+            return provider.stream_chat(
+                request,
+                input_tokens=input_tokens,
+                request_id=request_id,
+                response_model=routed.resolved.original_model,
+                reasoning=resolve_fallback_reasoning(
+                    routed.reasoning,
+                    candidate.reasoning_preference,
+                    client=client_reasoning,
+                ),
+                request_headers=self._request_headers,
+                continuation=continuation,
+                model_info=self._model_info_lookup(
+                    target.provider_id, target.provider_model
+                ),
+            )
+
+        return self._stream_candidates(
+            resolved=routed.resolved,
+            reasoning=routed.reasoning,
+            wire_api="chat",
+            raw_log_label="FULL_CHAT_PAYLOAD",
+            raw_log_payload=raw_log_payload,
+            request_snapshot=lambda: {
+                "model": routed.request.model,
+                "message_count": len(routed.request.messages),
+            },
+            ingress_count_name="message_count",
+            ingress_count=len(routed.request.messages),
             request_id=request_id,
             open_candidate=open_candidate,
         )
