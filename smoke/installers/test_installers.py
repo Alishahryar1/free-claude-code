@@ -17,7 +17,20 @@ import pytest
 PROJECT = tomllib.loads(
     (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text(encoding="utf-8")
 )
-PYTHON_VERSION = PROJECT["project"]["requires-python"].removeprefix("==")
+PYTHON_REQUIREMENT = PROJECT["project"]["requires-python"]
+PYTHON_MATCH = re.fullmatch(
+    r">=([0-9]+)\.([0-9]+),<([0-9]+)\.([0-9]+)", PYTHON_REQUIREMENT
+)
+if PYTHON_MATCH is None:
+    raise ValueError("Expected a bounded Python minor-series requirement")
+PYTHON_MAJOR, PYTHON_MINOR, PYTHON_UPPER_MAJOR, PYTHON_UPPER_MINOR = map(
+    int, PYTHON_MATCH.groups()
+)
+if (PYTHON_UPPER_MAJOR, PYTHON_UPPER_MINOR) != (PYTHON_MAJOR, PYTHON_MINOR + 1):
+    raise ValueError(
+        "Expected requires-python to cover exactly one Python minor series"
+    )
+PYTHON_VERSION = f"{PYTHON_MAJOR}.{PYTHON_MINOR}"
 UV_MINIMUM = PROJECT["tool"]["uv"]["required-version"].removeprefix(">=")
 UV_NEWER = ".".join(
     [*UV_MINIMUM.split(".")[:2], str(int(UV_MINIMUM.split(".")[2]) + 1)]
@@ -75,8 +88,8 @@ else:
 @pytest.mark.parametrize(
     "text",
     [
-        '[project]\nrequires-python = "==3.15.2"\n[tool.uv]\nrequired-version = ">=0.14.2"\n',
-        " [project] # package\r\n requires-python = '==3.15.2' # runtime\r\n [tool.uv]\r\n required-version = '>=0.14.2' # minimum\r\n[tool.other]\r\nrequires-python = 'bad'\r\n",
+        '[project]\nrequires-python = ">=3.15,<3.16"\n[tool.uv]\nrequired-version = ">=0.14.2"\n',
+        " [project] # package\r\n requires-python = '>=3.15,<3.16' # runtime\r\n [tool.uv]\r\n required-version = '>=0.14.2' # minimum\r\n[tool.other]\r\nrequires-python = 'bad'\r\n",
     ],
 )
 def test_selected_release_toolchain_is_read_from_metadata(release_harness, text):
@@ -89,7 +102,7 @@ def test_selected_release_toolchain_is_read_from_metadata(release_harness, text)
     )
     result = release_harness.run_functions(body)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "selected:3.15.2|0.14.2" in result.stdout
+    assert "selected:3.15|0.14.2" in result.stdout
     assert release_harness.calls() == [f"download:{METADATA_URL}"]
 
 

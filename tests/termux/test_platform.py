@@ -1,6 +1,6 @@
 import platform
 
-from free_claude_code.platform import termux
+from free_claude_code.platforms import termux
 
 
 def test_detects_native_termux_arm64(monkeypatch):

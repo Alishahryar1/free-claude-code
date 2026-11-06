@@ -15,7 +15,7 @@ from typing import Any
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.paths import config_dir_path
 from free_claude_code.config.settings import Settings
-from free_claude_code.platform.termux import (
+from free_claude_code.platforms.termux import (
     TermuxEnvironment,
     detect_termux_environment,
 )

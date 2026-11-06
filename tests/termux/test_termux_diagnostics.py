@@ -1,10 +1,12 @@
+"""Termux-specific doctor and diagnostics checks."""
+
 import json
 
 import pytest
 
 from free_claude_code.cli import doctor
 from free_claude_code.config.settings import Settings
-from free_claude_code.platform.termux import TermuxEnvironment
+from free_claude_code.platforms.termux import TermuxEnvironment
 from free_claude_code.runtime import termux_diagnostics
 
 
