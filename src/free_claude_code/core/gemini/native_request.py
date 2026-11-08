@@ -28,7 +28,7 @@ from ..json_types import JsonObject
 from ..openai_responses import OpenAIResponsesRequest
 from ..reasoning import ReasoningControl, ReasoningPolicy
 from .errors import GeminiConversionError
-from .models import GeminiRequest, InlineData
+from .models import GeminiRequest, InlineData, ThinkingConfig
 
 
 def _image(url: str) -> dict[str, Any]:
@@ -113,6 +113,12 @@ def apply_reasoning(
     if native and policy == ReasoningPolicy.provider_default():
         return
     thinking = config.setdefault("thinkingConfig", {})
+    if (
+        native
+        and policy.control is not ReasoningControl.OFF
+        and policy == ThinkingConfig.model_validate(thinking).policy()
+    ):
+        return
     # Visibility is a separate native choice. Cross-protocol callers request
     # summaries whenever reasoning output is allowed.
     if not native:
@@ -120,19 +126,9 @@ def apply_reasoning(
     if policy.control is ReasoningControl.OFF:
         thinking.pop("thinkingLevel", None)
         thinking.update(thinkingBudget=0, includeThoughts=False)
-    elif policy.budget_tokens is not None:
+    elif (budget := policy.numeric_budget_tokens) is not None:
         thinking.pop("thinkingLevel", None)
-        thinking["thinkingBudget"] = policy.budget_tokens
-    elif policy.effort is not None:
-        # Gemini 2.5 exposes budgets rather than the later thinking-level API.
-        if str(body["model"]).removeprefix("models/").startswith("gemini-2.5-"):
-            thinking.pop("thinkingLevel", None)
-            thinking["thinkingBudget"] = policy.numeric_budget_tokens
-        else:
-            thinking.pop("thinkingBudget", None)
-            thinking["thinkingLevel"] = {"xhigh": "HIGH", "max": "HIGH"}.get(
-                policy.effort.value, policy.effort.value.upper()
-            )
+        thinking["thinkingBudget"] = budget
 
 
 def _tool_config(choice: Any, *, responses: bool = False) -> dict[str, Any]:
