@@ -5,7 +5,14 @@ from dataclasses import replace
 from typing import Any
 
 from .continuation_request import ContinuationRequest
-from .history_replay import HistoryReplayError, decode_replay, encode_replay, is_replay
+from .history_replay import (
+    HistoryReplayError,
+    decode_gemini_replay,
+    decode_replay,
+    encode_gemini_replay,
+    encode_replay,
+    is_replay,
+)
 from .recovery_limits import RECOVERY_RETENTION_BYTES
 from .stream_recovery import DeliveredPrefix
 
@@ -41,13 +48,22 @@ def finalize_replay(
     changed = False
     for container, key in _carrier_fields(payload):
         value = container.get(key)
-        if not isinstance(value, str) or not is_replay(value):
+        if not isinstance(value, str):
             continue
         if value in sealed:
             container[key] = sealed[value]
             changed = True
             continue
-        record = decode_replay(value)
+        native = key == "thoughtSignature"
+        record = (
+            decode_gemini_replay(value)
+            if native
+            else decode_replay(value)
+            if is_replay(value)
+            else None
+        )
+        if record is None:
+            continue
         continuation = record.continuation
         if continuation is None or continuation.echo is not None:
             continue
@@ -64,7 +80,7 @@ def finalize_replay(
             raise HistoryReplayError(
                 "Continuation replay requires one public assistant turn."
             )
-        encoded = encode_replay(
+        encoded = (encode_gemini_replay if native else encode_replay)(
             replace(
                 record,
                 continuation=replace(continuation, echo=tuple(history[0]["parts"])),

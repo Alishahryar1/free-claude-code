@@ -135,6 +135,30 @@ def _check_continuation_size(encoded: str) -> None:
         raise HistoryReplayError("Continuation replay exceeded the retention limit.")
 
 
+def encode_gemini_replay(record: ReplayRecord) -> str:
+    """Encode the existing record as Gemini's base64 byte field."""
+    encoded = base64.b64encode(encode_replay(record).encode("utf-8")).decode("ascii")
+    _check_continuation_size(encoded)
+    return encoded
+
+
+def decode_gemini_replay(signature: str) -> ReplayRecord | None:
+    """Recognize an FCC record while leaving ordinary native signatures alone."""
+    try:
+        raw = base64.b64decode(
+            signature + "=" * (-len(signature) % 4), altchars=b"-_", validate=True
+        )
+    except ValueError:
+        return None
+    if not raw.startswith((b"fcc:history:", b"fcc:anthropic-reasoning:")):
+        return None
+    _check_continuation_size(signature)
+    try:
+        return decode_replay(raw.decode("utf-8"))
+    except UnicodeError as error:
+        raise HistoryReplayError("Malformed native Gemini replay.") from error
+
+
 def _continuation_replay(value: JsonValue) -> ContinuationReplay:
     from .gemini.models import Content, Part
 
@@ -1060,8 +1084,17 @@ def _restore_gemini_parts(
     carrier_index = None
     for index, part in enumerate(parts):
         signature = part.get("thoughtSignature")
-        if isinstance(signature, str) and is_replay(signature):
-            records.append(decode_replay(signature))
+        record = (
+            (
+                decode_replay(signature)
+                if is_replay(signature)
+                else decode_gemini_replay(signature)
+            )
+            if isinstance(signature, str)
+            else None
+        )
+        if record is not None:
+            records.append(record)
             carrier_index = index
             stripped = {
                 key: value for key, value in part.items() if key != "thoughtSignature"

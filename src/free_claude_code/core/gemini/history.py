@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from hashlib import sha256
 
-from ..history_replay import decode_replay, is_replay
+from ..history_replay import decode_gemini_replay
 from .errors import GeminiConversionError
 from .models import Content, GeminiRequest, Part
 from .replay import ReplayBundle, decode_bundle
@@ -25,12 +25,13 @@ def normalized_history(request: GeminiRequest) -> tuple[GeminiTurn, ...]:
         replay = []
         for part_index, part in enumerate(original.parts):
             if part.thought_signature is not None:
+                record = decode_gemini_replay(part.thought_signature)
                 bundle = (
                     ReplayBundle(
                         sha256(part.thought_signature.encode("utf-8")).hexdigest(),
-                        records=(decode_replay(part.thought_signature),),
+                        records=(record,),
                     )
-                    if is_replay(part.thought_signature)
+                    if record is not None
                     else decode_bundle(part.thought_signature)
                 )
                 if bundle is None:

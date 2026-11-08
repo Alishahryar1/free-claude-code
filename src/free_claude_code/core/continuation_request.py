@@ -13,7 +13,7 @@ from .chat_completions.request import (
     chat_messages_body,
     chat_responses_body,
 )
-from .gemini.models import GeminiRequest
+from .gemini.models import Content, GeminiRequest
 from .gemini.request import (
     build_gemini_chat_request,
     build_gemini_messages_request,
@@ -117,7 +117,12 @@ class ContinuationRequest:
             from .gemini.native_request import messages_to_gemini, responses_to_gemini
 
             if seed.wire_api == "gemini":
-                return [{"role": "model", "parts": items}]
+                # Public frame parsing retains Decimal; use the native JSON
+                # model's numeric representation before storing the echo.
+                content = Content.model_validate({"role": "model", "parts": items})
+                return [
+                    content.model_dump(mode="json", by_alias=True, exclude_none=True)
+                ]
             if seed.wire_api == "messages":
                 # Completed public tool blocks retain their streamed JSON deltas.
                 for item in items:

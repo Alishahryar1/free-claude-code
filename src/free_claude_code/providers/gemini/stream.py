@@ -12,6 +12,7 @@ from free_claude_code.core.history_replay import (
     ContinuationReplay,
     ReplayOrigin,
     ReplayRecord,
+    encode_gemini_replay,
     encode_replay,
 )
 from free_claude_code.core.json_types import JsonObject
@@ -234,7 +235,7 @@ class GeminiStream:
             raise conversion_failure(f"Gemini generation failed with {self._reason}")
         events: list[str] = []
         if any(part.get("thoughtSignature") for part in self._parts):
-            carrier = encode_replay(
+            carrier = (encode_gemini_replay if self._output is None else encode_replay)(
                 ReplayRecord(
                     self._origin,
                     {"role": "model", "parts": self._parts},

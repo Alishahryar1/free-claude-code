@@ -7,6 +7,7 @@ from free_claude_code.core.delivered_response import DeliveredResponse
 from free_claude_code.core.history_replay import (
     HistoryReplayError,
     decode_replay,
+    encode_gemini_replay,
     encode_replay,
 )
 from free_claude_code.core.replay_finalization import finalize_replay
@@ -90,7 +91,7 @@ async def test_disconnected_public_stream_releases_replay_state(publish_carrier)
                                     "role": "model",
                                     "parts": [
                                         {
-                                            "thoughtSignature": encode_replay(
+                                            "thoughtSignature": encode_gemini_replay(
                                                 recovered(echo=False)
                                             )
                                         }
