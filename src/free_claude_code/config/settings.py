@@ -731,7 +731,7 @@ class Settings(BaseModel):
     )
 
     # ==================== Server ====================
-    host: NonEmptyString = Field(default="0.0.0.0", validation_alias="HOST")
+    host: NonEmptyString = Field(default="127.0.0.1", validation_alias="HOST")
     port: int = Field(default=8082, validation_alias="PORT")
     open_admin_browser: bool = Field(default=True, validation_alias="FCC_OPEN_BROWSER")
     proxy_auth_enabled: bool = Field(
