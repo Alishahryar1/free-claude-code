@@ -1,63 +1,103 @@
 # Free Claude Code — Project Blueprint
-**Version:** 2.4.0 · **Updated:** 2026-10-29 · **Python:** 3.14.0
+**Version:** 2.4.0 · **Updated:** 2026-11-08 · **Python:** 3.14.0
 **Live:** https://free-claude-code-main-ebon.vercel.app · **Repo:** https://github.com/dnzengou/free-claude-code
 
 ---
 
 ## Executive Summary
 
-Drop-in Anthropic Messages API proxy that routes Claude Code CLI traffic to 18 provider backends. Keeps Claude Code's client-side protocol stable while swapping the underlying model. Ships with a local Admin UI, Discord/Telegram bot wrapper, and optional voice-note transcription.
+Free Claude Code is a drop-in Anthropic Messages API proxy that routes Claude Code CLI, VS Code, JetBrains ACP, and Discord / Telegram bot traffic to 18 provider backends (OpenAI, DeepSeek, Groq, Cerebras, Gemini, Mistral × 2, NVIDIA NIM, OpenRouter, Fireworks, Kimi, Wafer, Z.ai, OpenCode Zen / Go, plus local LM Studio / llama.cpp / Ollama). Clients speak the unmodified Anthropic wire; the operator chooses the upstream.
+
+On top of the proxy, the project ships a **three-pillar self-evolving routing stack** that compounds across every deploy:
+
+- **EvoMetaClaw** (capture) — every request emits a priced, skill-tagged trajectory row.
+- **EvoForge** (process) — a scheduled offline pipeline scores trajectories and publishes a policy.
+- **SkillOpt** (route) — the router consults the policy per inferred skill and walks a fallback chain on provider failure.
+
+A **periodic auto-forge** runs the pipeline on a cadence so the flywheel spins without a human; an **agent-discovery surface** (`/llms.txt`, `/.well-known/{ai-plugin,agents,mcp}.json`, `/robots.txt`) makes every deploy detectable by AI agents without a human intermediary. Every evolving-routing + auto-forge flag is opt-in and default-off — a fresh install behaves identically to a plain Anthropic proxy. See `ECOSYSTEM.md` for cross-service deployment patterns.
 
 ---
 
 ## Architecture
 
 ```
-Claude Code CLI / VS Code / JetBrains ACP
+Claude Code CLI / VS Code / JetBrains ACP / bots / arbitrary AI agent
         │  Anthropic Messages API
+        │  (agent discovery via /llms.txt, /.well-known/*)
         ▼
-┌─────────────────────────────────────────┐
-│           FastAPI Proxy (server.py)     │
-│  ┌──────────┐  ┌──────────────────────┐ │
-│  │  /admin  │  │  /v1/messages        │ │
-│  │  Admin   │  │  /v1/models          │ │
-│  │  UI      │  │  /v1/messages/count  │ │
-│  └──────────┘  └──────────┬───────────┘ │
-│                           │             │
-│  ┌────────────────────────▼───────────┐ │
-│  │         Model Router               │ │
-│  │  Opus → MODEL_OPUS                 │ │
-│  │  Sonnet → MODEL_SONNET             │ │
-│  │  Haiku → MODEL_HAIKU               │ │
-│  │  * → MODEL (fallback)              │ │
-│  └────────────────────────┬───────────┘ │
-└───────────────────────────┼─────────────┘
-                            │
-        ┌───────────────────┼───────────────────┐
-        ▼                   ▼                   ▼
- AnthropicMessages    OpenAICompat         Local
- Transport            Transport            Providers
- (DeepSeek, Kimi,    (NIM, OpenRouter,    (LM Studio,
-  Wafer, Fireworks,   Gemini, Groq,        llama.cpp,
-  Z.ai)              Cerebras, Mistral,    Ollama)
-                      OpenCode, Codestral)
+┌──────────────────────────────────────────────────────────┐
+│          FastAPI Proxy (server.py → api/app.py)          │
+│  ┌──────────┐  ┌───────────────┐  ┌──────────────────┐   │
+│  │  /admin  │  │  /v1/messages │  │  /llms.txt       │   │
+│  │  Admin   │  │  /v1/models   │  │  /.well-known/*  │   │
+│  │  UI      │  │  /v1/*/count  │  │  /robots.txt     │   │
+│  └──────────┘  └───────┬───────┘  └──────────────────┘   │
+│                        │                                 │
+│  ┌─────────────────────▼───────────────────────────────┐ │
+│  │         Model Router                                │ │
+│  │   direct provider/model slug ─────────────► use it  │ │
+│  │   else SkillOpt (skill hint) ───► primary + fallbacks│ │
+│  │   else MODEL_OPUS / SONNET / HAIKU                  │ │
+│  │   else MODEL (default fallback)                     │ │
+│  └─────────────────────┬───────────────────────────────┘ │
+│                        │                                 │
+│  ┌─────────────────────▼───────────────────────────────┐ │
+│  │  Service: preflight with SkillOpt fallback chain    │ │
+│  │  Streaming with EvoMetaClaw trajectory capture      │ │
+│  └─────────────────────┬───────────────────────────────┘ │
+└────────────────────────┼─────────────────────────────────┘
+                         │
+     ┌───────────────────┼───────────────────┐
+     ▼                   ▼                   ▼
+ AnthropicMessages  OpenAICompat          Local
+ Transport          Transport             Providers
+ (DeepSeek, Kimi,  (NIM, OpenRouter,     (LM Studio,
+  Wafer, Fireworks, Gemini, Groq,         llama.cpp,
+  Z.ai)            Cerebras, Mistral,     Ollama)
+                   OpenCode, Codestral,
+                   OpenAI)
+
+           ┌──────────────── EvoMetaClaw × EvoForge × SkillOpt ───────────────┐
+           │                                                                 │
+           │   trajectory.jsonl ──► auto_forge (scheduled) ──► evoforge.run │
+           │          ▲                                             │       │
+           │          │                                             ▼       │
+           │   (every request)                       skillopt_policy.json   │
+           │          │                                             │       │
+           │          └── Service._metered_stream  ◄── SkillOpt ◄───┘       │
+           └─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Module Map
 
-| Package | Responsibility |
+| Package / File | Responsibility |
 |---|---|
 | `server.py` | ASGI entry point — `create_asgi_app()` |
-| `api/` | FastAPI routes, admin UI, services, model routing, request optimizations |
+| `api/app.py` | FastAPI app factory, exception handlers, router wiring (admin + discovery + main) |
+| `api/routes.py` | Core auth-guarded routes: `/v1/messages`, `/v1/models`, `/health`, `/health/ready` |
+| `api/admin_routes.py` | Loopback-only admin API: config, status, metrics, trajectory, skillopt, auto-forge, forge-now |
+| `api/discovery_routes.py` | Public agent-detectable surface: `/llms.txt`, `/llms-full.txt`, `/.well-known/{ai-plugin,agents,mcp}.json`, `/robots.txt` |
+| `api/services.py` | Request orchestration, SkillOpt fallback traversal (`_preflight_with_fallbacks`), SSE metering |
+| `api/model_router.py` | Claude model → provider/model resolution; `skill=` hint consults SkillOpt; `rebind_messages_request` for fallback candidates |
+| `api/trajectory.py` | **EvoMetaClaw**: opt-in JSONL trajectory append, skill inference, byte-cap rotation, serverless-safe |
+| `api/pricing.py` | USD/1M-token rate cards for 15 model slugs; drives cost cards + trajectory scoring |
+| `api/evoforge.py` | **EvoForge**: load → aggregate → score → build policy → atomic write |
+| `api/skillopt.py` | **SkillOpt**: mtime-cached policy loader; `lookup(skill)` + `fallbacks(skill)` |
+| `api/auto_forge.py` | Periodic background task + `run_now()` manual trigger; serverless-safe |
+| `api/metrics.py` | In-memory per-request latency / token / cost buffer |
+| `api/health_history.py` | Per-provider health-check history, JSON-persisted |
+| `api/admin_static/` | Admin UI assets: `index.html`, `fcc.css`, `admin.js` |
 | `core/anthropic/` | Shared Anthropic protocol: SSE, content, conversion, thinking, tokens, tools |
-| `core/` | Rate limiting, trace/logging utilities |
+| `core/` | Rate limiting, trace / logging utilities |
 | `providers/` | Provider transports (18 backends), registry, base classes, error mapping |
 | `config/` | Settings (`pydantic-settings`), provider catalog, logging config, paths |
-| `messaging/` | Discord/Telegram platforms, session trees, voice transcription |
+| `messaging/` | Discord / Telegram platforms, session trees, voice transcription |
 | `cli/` | `fcc-server`, `fcc-claude`, `fcc-init` entry points; process registry |
-| `tests/` | 1443 unit, contract, and integration tests |
+| `scripts/evoforge.py` | EvoForge CLI shim: `--dry-run`, `--min-samples`, `--top-k` |
+| `ECOSYSTEM.md` | Four deployment patterns across a portfolio of productized services |
+| `tests/` | 1443 baseline + 56 new (trajectory, pricing, skillopt, evoforge, skillopt-fallbacks, discovery, auto-forge, admin endpoints) |
 
 ---
 
@@ -301,6 +341,10 @@ All enforced in `.github/workflows/tests.yml` on push/PR to `main`/`master`:
 ---
 
 ## Changelog
+
+### v2.4.0 — 2026-11-08 (blueprint consolidation)
+- **Blueprint top-of-file rewritten** to reflect the shipped state (v2.4.0). Executive Summary now names EvoMetaClaw × EvoForge × SkillOpt, the auto-forge flywheel, agent discovery, and the always-opt-in / default-off discipline. Architecture diagram adds agent-discovery traffic, the SkillOpt-aware router, preflight fallback chain, metered streaming, and the EvoMetaClaw ↔ EvoForge ↔ SkillOpt loop. Module Map now itemises every new module (`trajectory`, `pricing`, `evoforge`, `skillopt`, `auto_forge`, `discovery_routes`, `scripts/evoforge.py`, `ECOSYSTEM.md`).
+- No code changed in this entry — the goal was to make the blueprint accurately describe what's on `main` so a newcomer can navigate the moat from the top of the file.
 
 ### v2.4.0 — 2026-10-29 (auto-forge)
 - **Periodic auto-forge (`api/auto_forge.py`)**: asyncio background task calls `evoforge.run()` under `asyncio.to_thread` every `AUTO_FORGE_INTERVAL_HOURS` (default 24, floored at 60s). Opt-in via `AUTO_FORGE_ENABLED=1`. Only one forge in-flight at a time (lock-guarded). An `OSError` on write (serverless read-only FS) disables the loop for the process — same discipline as `health_history` / `trajectory`. Wired into `AppRuntime.startup` / `.shutdown`; `best_effort` wraps shutdown so it never blocks lifespan teardown.
