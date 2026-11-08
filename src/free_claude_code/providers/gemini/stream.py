@@ -195,6 +195,7 @@ class GeminiStream:
                         part.pop("thoughtSignature", None)
                     content = candidate.get("content")
                     if content is not None:
+                        content.setdefault("role", "model")
                         content["parts"] = [
                             part
                             for part in content.get("parts", [])
@@ -212,8 +213,17 @@ class GeminiStream:
                             candidate.pop("content")
                     if candidate.get("finishReason"):
                         self._terminal = deepcopy(result)
+                        if not any(
+                            part.get("thoughtSignature") for part in self._parts
+                        ):
+                            return []
                         self._terminal["candidates"][0].pop("content", None)
                         candidate.pop("finishReason")
+                if not any(
+                    candidate.get("content", {}).get("parts")
+                    for candidate in result.get("candidates", [])
+                ):
+                    return []
             return [gemini_frame(result)]
         return [event for event in events if event]
 
@@ -253,21 +263,11 @@ class GeminiStream:
                 )
             )
             if self._output is None:
-                events.append(
-                    gemini_frame(
-                        {
-                            "candidates": [
-                                {
-                                    "index": 0,
-                                    "content": {
-                                        "role": "model",
-                                        "parts": [{"thoughtSignature": carrier}],
-                                    },
-                                }
-                            ]
-                        }
-                    )
-                )
+                assert self._terminal is not None
+                self._terminal["candidates"][0]["content"] = {
+                    "role": "model",
+                    "parts": [{"thoughtSignature": carrier}],
+                }
             else:
                 events.extend(self._output.emit_opaque_reasoning(carrier))
         if self._output is None:

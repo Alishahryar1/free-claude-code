@@ -2,7 +2,7 @@
 
 import base64
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
@@ -1074,6 +1074,68 @@ def _visible_gemini_parts(
     return result
 
 
+def _gemini_replay_record(signature: object) -> ReplayRecord | None:
+    if not isinstance(signature, str):
+        return None
+    return (
+        decode_replay(signature)
+        if is_replay(signature)
+        else decode_gemini_replay(signature)
+    )
+
+
+def _gemini_replay_turns(
+    contents: list[JsonValue], *, continuation: bool
+) -> Iterator[tuple[int, JsonObject, list[HistoryPath]]]:
+    """Join SDK chunks of a recovered turn, retaining caller row coordinates."""
+    index = 0
+    while index < len(contents):
+        content = contents[index]
+        if not isinstance(content, dict) or not isinstance(content.get("parts"), list):
+            raise HistoryReplayError("Invalid native Gemini content")
+        end = index + 1
+        if content.get("role") == "model":
+            while end < len(contents):
+                following = contents[end]
+                if (
+                    not isinstance(following, dict)
+                    or following.get("role") != "model"
+                    or not isinstance(following.get("parts"), list)
+                    or (continuation and end == len(contents) - 2)
+                ):
+                    break
+                end += 1
+        rows = cast(list[JsonObject], contents[index:end])
+        if end > index + 1 and any(
+            record is not None and record.continuation is not None
+            for row in rows
+            for part in cast(list[JsonObject], row["parts"])
+            for record in [_gemini_replay_record(part.get("thoughtSignature"))]
+        ):
+            parts = [
+                part for row in rows for part in cast(list[JsonObject], row["parts"])
+            ]
+            paths: list[HistoryPath] = [
+                ("contents", row_index, "parts", part_index)
+                for row_index, row in enumerate(rows, index)
+                for part_index, _ in enumerate(cast(list[JsonObject], row["parts"]))
+            ]
+            yield index, {"role": "model", "parts": parts}, paths
+        else:
+            for row_index, row in enumerate(rows, index):
+                yield (
+                    row_index,
+                    row,
+                    [
+                        ("contents", row_index, "parts", part_index)
+                        for part_index, _ in enumerate(
+                            cast(list[JsonObject], row["parts"])
+                        )
+                    ],
+                )
+        index = end
+
+
 def _restore_gemini_parts(
     parts: list[dict[str, Any]],
     origin: ReplayOrigin,
@@ -1084,15 +1146,7 @@ def _restore_gemini_parts(
     carrier_index = None
     for index, part in enumerate(parts):
         signature = part.get("thoughtSignature")
-        record = (
-            (
-                decode_replay(signature)
-                if is_replay(signature)
-                else decode_gemini_replay(signature)
-            )
-            if isinstance(signature, str)
-            else None
-        )
+        record = _gemini_replay_record(signature)
         if record is not None:
             records.append(record)
             carrier_index = index
@@ -1211,9 +1265,9 @@ def _prepare_gemini_history(
     )
     projected = []
     call_aliases: set[str] = set()
-    for index, content in enumerate(contents):
-        if not isinstance(content, dict) or not isinstance(content.get("parts"), list):
-            raise HistoryReplayError("Invalid native Gemini content")
+    for index, content, part_sources in _gemini_replay_turns(
+        contents, continuation=continuation
+    ):
         source = ("contents", index)
         target = ("contents", len(projected))
         paths[target] = source
@@ -1234,6 +1288,9 @@ def _prepare_gemini_history(
             origin,
             call_aliases,
         )
+        if carrier_index is not None:
+            source = part_sources[carrier_index][:-2]
+            paths[target] = source
         if continuation_context:
             for context in continuation_context:
                 paths[("contents", len(projected))] = source
@@ -1250,11 +1307,9 @@ def _prepare_gemini_history(
                 and not include
             ):
                 continue
-            paths[(*target, "parts", len(kept))] = (
-                *source,
-                "parts",
-                carrier_index if carrier_index is not None else part_index,
-            )
+            paths[(*target, "parts", len(kept))] = part_sources[
+                carrier_index if carrier_index is not None else part_index
+            ]
             kept.append(part)
         if (
             not continuation_context

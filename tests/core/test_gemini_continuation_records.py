@@ -15,6 +15,7 @@ from free_claude_code.core.history_replay import (
     HistoryReplayError,
     ReplayRecord,
     decode_replay,
+    encode_gemini_replay,
     encode_replay,
     prepare_history,
 )
@@ -190,6 +191,76 @@ def test_context_mapping_excludes_expanded_previous_replay(remove_prefix):
     contents = sent["contents"]
     assert isinstance(contents, list)
     assert len(contents) > len(body["contents"])
+
+
+@pytest.mark.parametrize("mode", list(HistoryMode))
+def test_fragmented_model_turn_restores_once_and_maps_original_carrier(mode):
+    record = recovered()
+    body = request(record)
+    body["contents"][1:2] = [
+        {"role": "model", "parts": [{"text": "prefix "}]},
+        {"role": "model", "parts": [{"text": "suffix"}]},
+        {
+            "role": "model",
+            "parts": [{"thoughtSignature": encode_gemini_replay(record)}],
+        },
+    ]
+    original = deepcopy(body)
+    paths = {}
+    prepared = prepare_history(body, ORIGIN, scope=mode, source_paths=paths)
+    assert prepared["contents"] == [
+        body["contents"][0],
+        *record.continuation.context,
+        record.native,
+        body["contents"][-1],
+    ]
+    assert paths[("contents", 3, "parts", 0)] == ("contents", 3, "parts", 0)
+    assert paths[("contents", 1)] == ("contents", 3)
+    assert body == original
+
+
+@pytest.mark.parametrize("damage", ["edited_prefix", "cross_user", "second_carrier"])
+def test_fragmented_replay_cannot_hide_edits_or_cross_turns(damage):
+    record = recovered()
+    body = request(record)
+    carrier = {"thoughtSignature": encode_gemini_replay(record)}
+    body["contents"][1:2] = [
+        {"role": "model", "parts": [{"text": "prefix suffix"}]},
+        {"role": "model", "parts": [carrier]},
+    ]
+    if damage == "edited_prefix":
+        body["contents"][1]["parts"][0]["text"] = "edited"
+    elif damage == "cross_user":
+        body["contents"].insert(
+            2, {"role": "user", "parts": [{"text": "different turn"}]}
+        )
+    else:
+        body["contents"].insert(2, {"role": "model", "parts": [carrier]})
+    with pytest.raises(HistoryReplayError):
+        prepare_history(body, ORIGIN)
+
+
+def test_fragmented_previous_replay_does_not_absorb_injected_model_prefix():
+    record = recovered()
+    source = request(record)
+    source["contents"][1:] = [
+        {"role": "model", "parts": [{"text": "prefix suffix"}]},
+        {
+            "role": "model",
+            "parts": [{"thoughtSignature": encode_gemini_replay(record)}],
+        },
+    ]
+    owner = ContinuationRequest("gemini")
+    body = owner.build(
+        source, ContinuationSeed("messages", ({"type": "text", "text": "new prefix"},))
+    )
+    paths = {}
+    prepared = prepare_history(
+        body, ORIGIN, scope=HistoryMode.NONE, source_paths=paths, continuation=True
+    )
+    assert owner.sent_context(prepared, source=body, source_paths=paths) == tuple(
+        body["contents"][-2:]
+    )
 
 
 def test_replay_works_in_a_fresh_process():
