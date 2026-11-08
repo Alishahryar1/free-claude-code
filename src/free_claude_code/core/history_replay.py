@@ -141,13 +141,13 @@ def _continuation_replay(value: JsonValue) -> ContinuationReplay:
     if not isinstance(value, dict) or set(value) != {"context", "echo"}:
         raise HistoryReplayError("Invalid continuation replay fields.")
     context, echo = value["context"], value["echo"]
-    if not isinstance(context, list) or len(context) != 2:
+    if not isinstance(context, list) or len(context) not in {1, 2}:
         raise HistoryReplayError(
-            "Continuation replay requires its model and user context."
+            "Continuation replay requires its instruction and optional model prefix."
         )
     try:
         contents = [Content.model_validate(item) for item in context]
-        if [item.role for item in contents] != ["model", "user"] or any(
+        if [item.role for item in contents] not in (["user"], ["model", "user"]) or any(
             not item.parts
             or any(
                 part.text is None or part.thought_signature or part.function_call

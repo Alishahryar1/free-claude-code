@@ -1,6 +1,7 @@
 """Convert the delivered native suffix without rewriting the client conversation."""
 
 import json
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any, Literal, cast
 
@@ -18,6 +19,7 @@ from .gemini.request import (
     build_gemini_messages_request,
     build_gemini_responses_request,
 )
+from .history_replay import HistoryPath
 from .json_types import JsonObject, JsonValue
 from .openai_responses import (
     OpenAIResponsesRequest,
@@ -206,12 +208,21 @@ class ContinuationRequest:
             prepared.body["input" if self.protocol == "responses" else "messages"],
         )
 
-    def sent_context(self, body: JsonObject) -> tuple[JsonObject, ...] | None:
+    def sent_context(
+        self,
+        body: JsonObject,
+        *,
+        source: JsonObject,
+        source_paths: Mapping[HistoryPath, HistoryPath],
+    ) -> tuple[JsonObject, ...] | None:
         """Capture the injected Gemini suffix after accepted request corrections."""
         if self.protocol != "gemini" or not self._injected_rows:
             return None
+        start = len(cast(list[JsonObject], source["contents"])) - self._injected_rows
         return tuple(
-            deepcopy(cast(list[JsonObject], body["contents"])[-self._injected_rows :])
+            deepcopy(content)
+            for index, content in enumerate(cast(list[JsonObject], body["contents"]))
+            if cast(int, source_paths[("contents", index)][1]) >= start
         )
 
 

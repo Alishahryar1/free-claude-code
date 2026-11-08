@@ -18,6 +18,7 @@ from free_claude_code.core.history_replay import (
     encode_replay,
     prepare_history,
 )
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from tests.core.test_native_gemini_history import ORIGIN
 
@@ -60,8 +61,16 @@ def request(record):
 
 
 @pytest.mark.parametrize("mode", list(HistoryMode))
-def test_roundtrip_restores_exact_context_and_native_parts(mode):
+@pytest.mark.parametrize("removed_prefix", [False, True])
+def test_roundtrip_restores_exact_context_and_native_parts(mode, removed_prefix):
     record = recovered()
+    if removed_prefix:
+        record = replace(
+            record,
+            continuation=replace(
+                record.continuation, context=record.continuation.context[1:]
+            ),
+        )
     encoded = encode_replay(record)
     assert encode_replay(decode_replay(encoded)) == encoded
     body = request(record)
@@ -90,18 +99,33 @@ def test_invalid_echo_or_origin_never_replays(damage):
 
 
 @pytest.mark.parametrize(
-    "damage", ["role", "signed_context", "signed_echo", "foreign_protocol"]
+    "damage",
+    [
+        "role",
+        "signed_context",
+        "signed_echo",
+        "foreign_protocol",
+        "empty_context",
+        "model_only",
+        "extra_context",
+    ],
 )
 def test_continuation_metadata_is_validated(damage):
     record = recovered()
-    context = deepcopy(list(record.continuation.context))
+    context: list[JsonObject] = deepcopy(list(record.continuation.context))
     echo = deepcopy(list(record.continuation.echo))
     if damage == "role":
         context[0]["role"] = "user"
     if damage == "signed_context":
-        context[0]["parts"][0]["thoughtSignature"] = "unsafe"
+        context[0]["parts"] = [{"text": "prefix", "thoughtSignature": "unsafe"}]
     if damage == "signed_echo":
         echo[0]["thoughtSignature"] = "unsafe"
+    if damage == "empty_context":
+        context = []
+    if damage == "model_only":
+        context = context[:1]
+    if damage == "extra_context":
+        context.insert(0, {"role": "user", "parts": [{"text": "unrelated"}]})
     record = replace(
         record, continuation=ContinuationReplay(tuple(context), tuple(echo))
     )
@@ -123,19 +147,49 @@ def test_complete_encoded_record_is_bounded(monkeypatch):
 
 def test_captures_corrected_sent_context():
     owner = ContinuationRequest("gemini")
-    assert owner.sent_context({"contents": []}) is None
+    assert owner.sent_context({"contents": []}, source={}, source_paths={}) is None
     body = owner.build(
         {"contents": [{"role": "user", "parts": [{"text": "old"}]}]},
         ContinuationSeed("messages", ({"type": "text", "text": "prefix"},)),
     )
     body["contents"][-2]["parts"].append({"text": "", "thought": True})
-    captured = owner.sent_context(body)
+    paths = {}
+    sent = prepare_history(body, ORIGIN, source_paths=paths, continuation=True)
+    captured = owner.sent_context(sent, source=body, source_paths=paths)
     assert captured == tuple(body["contents"][-2:])
     body["contents"][-2]["parts"][0]["text"] = "later mutation"
     assert captured[0] == {
         "role": "model",
         "parts": [{"text": "prefix"}, {"text": "", "thought": True}],
     }
+
+
+@pytest.mark.parametrize("remove_prefix", [False, True])
+def test_context_mapping_excludes_expanded_previous_replay(remove_prefix):
+    owner = ContinuationRequest("gemini")
+    original = request(recovered())
+    original["model"] = ORIGIN.model
+    body = owner.build(
+        original,
+        ContinuationSeed(
+            "messages", ({"type": "thinking", "thinking": "Current thought"},)
+        ),
+    )
+    paths = {}
+    sent = prepare_history(
+        body,
+        ORIGIN,
+        scope=HistoryMode.NONE if remove_prefix else HistoryMode.ALL,
+        source_paths=paths,
+        continuation=True,
+    )
+    captured = owner.sent_context(sent, source=body, source_paths=paths)
+    assert captured == tuple(body["contents"][-(1 if remove_prefix else 2) :])
+    # Prior replay expands one source row into three wire rows. It is not part
+    # of the new continuation even when the current model row is removed.
+    contents = sent["contents"]
+    assert isinstance(contents, list)
+    assert len(contents) > len(body["contents"])
 
 
 def test_replay_works_in_a_fresh_process():
