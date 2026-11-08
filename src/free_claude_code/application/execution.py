@@ -367,7 +367,11 @@ class ProviderExecutor:
             request = prepare_fallback_request(
                 routed.request,
                 model=target.provider_model,
-                preference=candidate.reasoning_preference,
+                preference=(
+                    routed.resolved.reasoning_preference
+                    if candidate.reasoning_preference is ReasoningPreference.INHERIT
+                    else candidate.reasoning_preference
+                ),
             )
             return provider.stream_gemini(
                 request,

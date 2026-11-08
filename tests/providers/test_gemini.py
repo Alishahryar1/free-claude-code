@@ -430,7 +430,7 @@ async def test_native_model_discovery_follows_pages_and_keeps_native_names():
     [
         (
             ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
-            {"includeThoughts": True, "thinkingLevel": "HIGH"},
+            {"includeThoughts": True, "thinkingBudget": 2048},
         ),
         (
             ReasoningPolicy.on(budget_tokens=777),

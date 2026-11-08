@@ -25,6 +25,7 @@ from free_claude_code.core.openai_responses import (
 )
 from free_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
+    ReasoningCapability,
     ReasoningControl,
     ReasoningPolicy,
 )
@@ -124,6 +125,9 @@ class GeminiProvider(BaseProvider):
                     supports_thinking=model.get("thinking")
                     if isinstance(model.get("thinking"), bool)
                     else None,
+                    reasoning_capability=ReasoningCapability.NONE
+                    if model.get("thinking") is False
+                    else ReasoningCapability.UNKNOWN,
                     context_window_tokens=model.get("inputTokenLimit"),
                     max_output_tokens=model.get("outputTokenLimit"),
                 )
