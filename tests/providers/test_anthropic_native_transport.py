@@ -265,7 +265,9 @@ async def test_leading_ping_does_not_accept_attempt_or_prevent_retry(failure):
         output = parse_sse_text(
             "".join(await collect(p, native_body(True), response_model="native"))
         )
-        assert [event.data for event in output] == events
+        assert [event.data for event in output] == [
+            event for event in events if event["type"] != "ping"
+        ]
         assert first.closed and second.closed
     finally:
         await p.cleanup()

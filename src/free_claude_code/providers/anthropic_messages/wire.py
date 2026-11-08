@@ -1,12 +1,14 @@
 """Shared Messages framing and upstream failure evidence."""
 
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, Mapping
+from contextlib import aclosing
 from typing import cast
 
 import httpx
 
 from free_claude_code.core.anthropic.errors import anthropic_status_for_error_type
+from free_claude_code.core.anthropic.stream_contracts import SSEEvent
 from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
 from free_claude_code.core.diagnostics import (
     ERROR_DETAIL_DISPLAY_CAP_BYTES,
@@ -21,14 +23,24 @@ from free_claude_code.providers.failure_policy import (
     is_context_window_error_code,
     is_context_window_finish_reason,
 )
+from free_claude_code.providers.stream_read import read_stream_event
 
 
 async def messages_events(
-    response: httpx.Response,
-) -> AsyncIterator[tuple[str, JsonObject]]:
-    decoder = AnthropicSSEDecoder()
-    async for chunk in response.aiter_text():
-        for event in decoder.feed(chunk):
+    response: httpx.Response, *, read_timeout_s: float
+) -> AsyncGenerator[tuple[str, JsonObject]]:
+    async with aclosing(_decoded_events(response)) as source:
+        while True:
+            try:
+                event = await read_stream_event(
+                    source,
+                    timeout=read_timeout_s,
+                    is_keepalive=lambda event: (
+                        event.event == "ping" or event.data.get("type") == "ping"
+                    ),
+                )
+            except StopAsyncIteration:
+                return
             payload = cast(JsonObject, event.data)
             kind = event.event or payload.get("type")
             if not isinstance(kind, str) or not kind:
@@ -36,14 +48,15 @@ async def messages_events(
                     "Messages stream has an invalid event type."
                 )
             yield kind, payload
+
+
+async def _decoded_events(response: httpx.Response) -> AsyncGenerator[SSEEvent]:
+    decoder = AnthropicSSEDecoder()
+    async for chunk in response.aiter_text():
+        for event in decoder.feed(chunk):
+            yield event
     for event in decoder.finish():
-        payload = cast(JsonObject, event.data)
-        kind = event.event or payload.get("type")
-        if not isinstance(kind, str) or not kind:
-            raise RetryableProviderProtocolError(
-                "Messages stream has an invalid final event."
-            )
-        yield kind, payload
+        yield event
 
 
 def is_messages_stop(event_type: str, payload: JsonObject) -> bool:

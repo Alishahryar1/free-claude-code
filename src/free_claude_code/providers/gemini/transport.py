@@ -2,7 +2,8 @@
 
 import asyncio
 import sys
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
+from contextlib import aclosing
 from functools import partial
 from typing import Any
 from urllib.parse import quote
@@ -10,6 +11,7 @@ from urllib.parse import quote
 import httpx
 
 from free_claude_code.application.errors import InvalidRequestError
+from free_claude_code.core.anthropic.stream_contracts import SSEEvent
 from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
 from free_claude_code.core.continuation_request import ContinuationRequest
 from free_claude_code.core.history_replay import HistoryReplayError
@@ -41,6 +43,7 @@ from free_claude_code.providers.request_recovery import (
     RequestCorrections,
     RequestRecovery,
 )
+from free_claude_code.providers.stream_read import read_stream_event
 from free_claude_code.providers.stream_recovery import (
     HoldbackSignal,
     RecoveryController,
@@ -50,13 +53,31 @@ from free_claude_code.providers.stream_recovery import (
 from .stream import GeminiStream
 
 
-async def _events(response: httpx.Response) -> AsyncIterator[dict[str, Any]]:
+async def _events(
+    response: httpx.Response, *, read_timeout: float
+) -> AsyncIterator[dict[str, Any]]:
+    async with aclosing(_decoded_events(response)) as source:
+        while True:
+            try:
+                event = await read_stream_event(
+                    source,
+                    timeout=read_timeout,
+                    is_keepalive=lambda event: (
+                        event.event == "ping" or event.data.get("type") == "ping"
+                    ),
+                )
+            except StopAsyncIteration:
+                return
+            yield event.data
+
+
+async def _decoded_events(response: httpx.Response) -> AsyncGenerator[SSEEvent]:
     decoder = AnthropicSSEDecoder()
     async for chunk in response.aiter_text():
         for event in decoder.feed(chunk):
-            yield event.data
+            yield event
     for event in decoder.finish():
-        yield event.data
+        yield event
 
 
 class GeminiTransport:
@@ -219,7 +240,7 @@ class GeminiTransport:
                     },
                     include_thoughts=include_thoughts,
                 )
-                upstream = _events(response)
+                upstream = _events(response, read_timeout=self._read_timeout)
                 try:
                     async with recovery.read_stream(upstream) as events:
                         async for payload in events:

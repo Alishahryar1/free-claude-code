@@ -462,7 +462,9 @@ class AnthropicMessagesTransport:
                         "Messages upstream did not return an SSE stream."
                     )
                 stream_opened = True
-                upstream = messages_events(response)
+                upstream = messages_events(
+                    response, read_timeout_s=self._read_timeout_s
+                )
                 try:
                     async with recovery.read_stream(upstream) as events:
                         async for item in events:
