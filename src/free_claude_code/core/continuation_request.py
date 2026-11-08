@@ -54,7 +54,7 @@ class ContinuationRequest:
         if self._injected_rows:
             # Targeted opaque-state corrections cannot delete this readable suffix.
             history = history[: -self._injected_rows]
-        tail = self._history(seed, result)
+        tail = self.history(seed, result)
         instruction = (
             "The previous provider stream was interrupted. Continue the assistant "
             "response exactly where it stopped. Do not repeat thinking or text "
@@ -81,7 +81,8 @@ class ContinuationRequest:
         self._injected_rows = len(tail)
         return result
 
-    def _history(self, seed: ContinuationSeed, body: dict[str, Any]) -> list[Any]:
+    def history(self, seed: ContinuationSeed, body: dict[str, Any]) -> list[Any]:
+        """Project the delivered prefix into this upstream's history format."""
         if not seed.items:
             return []
         items = deepcopy(list(seed.items))
@@ -185,6 +186,14 @@ class ContinuationRequest:
         return cast(
             list[Any],
             prepared.body["input" if self.protocol == "responses" else "messages"],
+        )
+
+    def sent_context(self, body: JsonObject) -> tuple[JsonObject, ...] | None:
+        """Capture the injected Gemini suffix after accepted request corrections."""
+        if self.protocol != "gemini" or not self._injected_rows:
+            return None
+        return tuple(
+            deepcopy(cast(list[JsonObject], body["contents"])[-self._injected_rows :])
         )
 
 

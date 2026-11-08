@@ -1,0 +1,214 @@
+"""Signed continuation history survives serialization without server session state."""
+
+import json
+import subprocess
+import sys
+from copy import deepcopy
+from dataclasses import replace
+
+import pytest
+
+from free_claude_code.core.continuation_request import ContinuationRequest
+from free_claude_code.core.history_replay import (
+    ContinuationReplay,
+    HistoryMode,
+    HistoryReplayError,
+    ReplayRecord,
+    decode_replay,
+    encode_replay,
+    prepare_history,
+)
+from free_claude_code.core.stream_recovery import ContinuationSeed
+from tests.core.test_native_gemini_history import ORIGIN
+
+
+def recovered(*, echo=True):
+    return ReplayRecord(
+        ORIGIN,
+        {
+            "role": "model",
+            "parts": [
+                {"text": "hidden native thought", "thought": True},
+                {"text": "suffix", "thoughtSignature": "native-signature"},
+                {"text": "", "thoughtSignature": "late-signature"},
+            ],
+        },
+        continuation=ContinuationReplay(
+            (
+                {"role": "model", "parts": [{"text": "prefix "}]},
+                {"role": "user", "parts": [{"text": "Continue without repeating."}]},
+            ),
+            ({"text": "prefix suffix"},) if echo else None,
+        ),
+    )
+
+
+def request(record):
+    return {
+        "contents": [
+            {"role": "user", "parts": [{"text": "original"}]},
+            {
+                "role": "model",
+                "parts": [
+                    {"text": "prefix suffix"},
+                    {"thoughtSignature": encode_replay(record)},
+                ],
+            },
+            {"role": "user", "parts": [{"text": "next"}]},
+        ]
+    }
+
+
+@pytest.mark.parametrize("mode", list(HistoryMode))
+def test_roundtrip_restores_exact_context_and_native_parts(mode):
+    record = recovered()
+    encoded = encode_replay(record)
+    assert encode_replay(decode_replay(encoded)) == encoded
+    body = request(record)
+    original = deepcopy(body)
+    value = prepare_history(body, ORIGIN, scope=mode)
+    assert value["contents"] == [
+        body["contents"][0],
+        *record.continuation.context,
+        record.native,
+        body["contents"][-1],
+    ]
+    assert body == original
+
+
+@pytest.mark.parametrize("damage", ["text", "origin", "unfinished"])
+def test_invalid_echo_or_origin_never_replays(damage):
+    record = recovered(echo=damage != "unfinished")
+    body = request(record)
+    origin = ORIGIN
+    if damage == "text":
+        body["contents"][1]["parts"][0]["text"] = "edited"
+    if damage == "origin":
+        origin = replace(ORIGIN, connection="other-account")
+    with pytest.raises(HistoryReplayError):
+        prepare_history(body, origin)
+
+
+@pytest.mark.parametrize(
+    "damage", ["role", "signed_context", "signed_echo", "foreign_protocol"]
+)
+def test_continuation_metadata_is_validated(damage):
+    record = recovered()
+    context = deepcopy(list(record.continuation.context))
+    echo = deepcopy(list(record.continuation.echo))
+    if damage == "role":
+        context[0]["role"] = "user"
+    if damage == "signed_context":
+        context[0]["parts"][0]["thoughtSignature"] = "unsafe"
+    if damage == "signed_echo":
+        echo[0]["thoughtSignature"] = "unsafe"
+    record = replace(
+        record, continuation=ContinuationReplay(tuple(context), tuple(echo))
+    )
+    if damage == "foreign_protocol":
+        record = replace(record, origin=replace(ORIGIN, protocol="chat"))
+    with pytest.raises(HistoryReplayError):
+        encode_replay(record)
+
+
+def test_complete_encoded_record_is_bounded(monkeypatch):
+    record = recovered()
+    size = len(encode_replay(record))
+    monkeypatch.setattr(
+        "free_claude_code.core.stream_recovery.RECOVERY_RETENTION_BYTES", size - 1
+    )
+    with pytest.raises(HistoryReplayError, match="retention"):
+        encode_replay(record)
+
+
+def test_captures_corrected_sent_context():
+    owner = ContinuationRequest("gemini")
+    assert owner.sent_context({"contents": []}) is None
+    body = owner.build(
+        {"contents": [{"role": "user", "parts": [{"text": "old"}]}]},
+        ContinuationSeed("messages", ({"type": "text", "text": "prefix"},)),
+    )
+    body["contents"][-2]["parts"].append({"text": "", "thought": True})
+    captured = owner.sent_context(body)
+    assert captured == tuple(body["contents"][-2:])
+    body["contents"][-2]["parts"][0]["text"] = "later mutation"
+    assert captured[0] == {
+        "role": "model",
+        "parts": [{"text": "prefix"}, {"text": "", "thought": True}],
+    }
+
+
+def test_replay_works_in_a_fresh_process():
+    record = recovered()
+    script = """
+import json, sys
+from free_claude_code.core.history_replay import decode_replay, prepare_history
+body=json.load(sys.stdin)
+record=decode_replay(body['contents'][1]['parts'][1]['thoughtSignature'])
+print(json.dumps(prepare_history(body,record.origin)))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        input=json.dumps(request(record)),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=True,
+    )
+    assert json.loads(result.stdout)["contents"][1:-1] == [
+        *record.continuation.context,
+        record.native,
+    ]
+
+
+def test_recovered_tool_defaults_and_generated_id_preserve_original_call():
+    record = recovered()
+    call = {"name": "read", "args": {}}
+    record = replace(
+        record,
+        native={
+            "role": "model",
+            "parts": [{"functionCall": call, "thoughtSignature": "call-signature"}],
+        },
+        tool_defaults={"read": {"limit": 10}},
+        continuation=replace(
+            record.continuation,
+            echo=(
+                {"text": "prefix "},
+                {"functionCall": {"id": "generated", **call}},
+            ),
+        ),
+    )
+    body = request(record)
+    body["contents"][1]["parts"] = [
+        {"text": "prefix "},
+        {"functionCall": {"id": "generated", "name": "read", "args": {"limit": 10}}},
+        {"thoughtSignature": encode_replay(record)},
+    ]
+    body["contents"][-1] = {
+        "role": "user",
+        "parts": [
+            {
+                "functionResponse": {
+                    "id": "generated",
+                    "name": "read",
+                    "response": {"result": "ok"},
+                }
+            }
+        ],
+    }
+    prepared = prepare_history(body, ORIGIN)
+    contents = prepared["contents"]
+    assert isinstance(contents, list)
+    assert contents[-2] == record.native
+    assert contents[-1] == {
+        "role": "user",
+        "parts": [
+            {
+                "functionResponse": {
+                    "name": "read",
+                    "response": {"result": "ok"},
+                }
+            }
+        ],
+    }

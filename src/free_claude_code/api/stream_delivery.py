@@ -11,8 +11,13 @@ from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecode
 from free_claude_code.core.async_iterators import try_close_async_iterator
 from free_claude_code.core.continuation_stream import ContinuationStream
 from free_claude_code.core.delivered_response import DeliveredResponse
-from free_claude_code.core.failures import find_execution_failure
+from free_claude_code.core.failures import (
+    ExecutionFailure,
+    FailureKind,
+    find_execution_failure,
+)
 from free_claude_code.core.gemini.response import gemini_finished, gemini_parts
+from free_claude_code.core.replay_finalization import finalize_replay
 from free_claude_code.core.stream_delivery import (
     StreamDeliveryState,
     bind_stream_delivery,
@@ -77,6 +82,7 @@ class PublicResponseStream(AsyncIterator[str]):
         self._sequence = -1
         self._offset: int | None = None
         self._pending_starts: list[str] = []
+        self._replay_carriers: dict[str, str] = {}
         self.start_frame = ""
         self._initial_chunk = first_chunk
         self._latest_chunk = ""
@@ -124,6 +130,15 @@ class PublicResponseStream(AsyncIterator[str]):
         payload = frame_data(frame)
         if payload is None:
             return frame
+        if finalize_replay(payload, self._delivered.snapshot, self._replay_carriers):
+            if self._continuation.active and not self._continuation.made_progress:
+                raise ExecutionFailure(
+                    kind=FailureKind.UPSTREAM,
+                    status_code=502,
+                    message="The provider continuation completed without adding output.",
+                    retryable=False,
+                )
+            frame = replace_frame_data(frame, payload)
         kind = payload.get("type")
         if kind == "response.failed":
             response = payload.get("response")
@@ -240,6 +255,7 @@ class PublicResponseStream(AsyncIterator[str]):
         await self._events.aclose()
         self._pending_starts.clear()
         self._decoder = AnthropicSSEDecoder()
+        self._replay_carriers.clear()
         self._tools = ToolCallBuffer(self._wire_api)
         self.state.bind_prefix(None)
         self._delivered = DeliveredResponse(self._wire_api)

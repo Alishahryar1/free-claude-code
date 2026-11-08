@@ -239,6 +239,7 @@ class GeminiTransport:
                         for tool in declarations
                     },
                     include_thoughts=include_thoughts,
+                    continuation_context=continuation_request.sent_context(sent_body),
                 )
                 upstream = _events(response, read_timeout=self._read_timeout)
                 try:
