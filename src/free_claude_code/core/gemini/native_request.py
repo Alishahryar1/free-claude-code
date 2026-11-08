@@ -182,7 +182,9 @@ def _function_result(
     return {"functionResponse": result}
 
 
-def chat_to_gemini(request: ChatRequest) -> JsonObject:
+def chat_to_gemini(
+    request: ChatRequest, *, allow_pending_calls: bool = False
+) -> JsonObject:
     body = translated_body(
         request,
         supported={
@@ -257,7 +259,7 @@ def chat_to_gemini(request: ChatRequest) -> JsonObject:
                 }
             )
         _append(contents, "model" if role == "assistant" else "user", parts)
-    if calls:
+    if calls and not allow_pending_calls:
         raise GeminiConversionError("Unresolved tool calls in history")
     config: dict[str, Any] = {}
     for source, target in {
@@ -317,7 +319,9 @@ def chat_to_gemini(request: ChatRequest) -> JsonObject:
     return result
 
 
-def messages_to_gemini(request: MessagesRequest) -> JsonObject:
+def messages_to_gemini(
+    request: MessagesRequest, *, allow_pending_calls: bool = False
+) -> JsonObject:
     body = dump_messages_request(request)
     unsupported = set(request.model_extra or {})
     unsupported.update(key for key in ("mcp_servers", "extra_body") if body.get(key))
@@ -397,7 +401,7 @@ def messages_to_gemini(request: MessagesRequest) -> JsonObject:
             system.extend(parts)
         else:
             _append(contents, "model" if role == "assistant" else "user", parts)
-    if calls:
+    if calls and not allow_pending_calls:
         raise GeminiConversionError("Unresolved tool calls in history")
     config: dict[str, Any] = {}
     for source, target in {
@@ -457,7 +461,9 @@ def messages_to_gemini(request: MessagesRequest) -> JsonObject:
     return result
 
 
-def responses_to_gemini(request: OpenAIResponsesRequest) -> JsonObject:
+def responses_to_gemini(
+    request: OpenAIResponsesRequest, *, allow_pending_calls: bool = False
+) -> JsonObject:
     body = request.model_dump(mode="json", exclude_none=True)
     supported = {
         "model",
@@ -549,7 +555,7 @@ def responses_to_gemini(request: OpenAIResponsesRequest) -> JsonObject:
             )
         else:
             raise GeminiConversionError(f"Unsupported Responses input item {kind!r}")
-    if calls:
+    if calls and not allow_pending_calls:
         raise GeminiConversionError("Unresolved function calls in history")
     config: dict[str, Any] = {}
     for source, target in {

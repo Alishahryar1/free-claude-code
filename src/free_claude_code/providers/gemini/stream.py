@@ -15,7 +15,7 @@ from free_claude_code.core.history_replay import (
     encode_replay,
 )
 from free_claude_code.core.json_types import JsonObject
-from free_claude_code.core.stream_recovery import RECOVERY_RETENTION_BYTES
+from free_claude_code.core.recovery_limits import RECOVERY_RETENTION_BYTES
 from free_claude_code.providers.openai_chat import (
     ChatStreamOutput,
     ChatStreamUsage,

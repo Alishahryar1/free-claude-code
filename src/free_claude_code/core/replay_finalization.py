@@ -6,7 +6,8 @@ from typing import Any
 
 from .continuation_request import ContinuationRequest
 from .history_replay import HistoryReplayError, decode_replay, encode_replay, is_replay
-from .stream_recovery import RECOVERY_RETENTION_BYTES, DeliveredPrefix
+from .recovery_limits import RECOVERY_RETENTION_BYTES
+from .stream_recovery import DeliveredPrefix
 
 
 def _carrier_fields(payload: dict[str, Any]) -> Iterator[tuple[dict[str, Any], str]]:
@@ -55,8 +56,9 @@ def finalize_replay(
             raise HistoryReplayError(
                 "The public response cannot be retained for continuation replay."
             )
+        # These calls are completed output. Their results arrive next turn.
         history = ContinuationRequest("gemini").history(
-            seed, {"model": record.origin.model}
+            seed, {"model": record.origin.model}, allow_pending_calls=True
         )
         if len(history) != 1:
             raise HistoryReplayError(

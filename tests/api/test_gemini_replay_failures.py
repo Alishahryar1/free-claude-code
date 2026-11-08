@@ -57,7 +57,7 @@ def test_failed_signed_continuation_stops_and_releases_attempt(
             if failure == "retention":
                 # Native state fits, but the complete serialized replay does not.
                 monkeypatch.setattr(
-                    "free_claude_code.core.stream_recovery.RECOVERY_RETENTION_BYTES",
+                    "free_claude_code.core.history_replay.RECOVERY_RETENTION_BYTES",
                     500,
                 )
             events = [event]

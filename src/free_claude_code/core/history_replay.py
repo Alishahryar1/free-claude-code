@@ -10,6 +10,7 @@ from typing import Any, Literal, cast
 
 from .json_types import JsonObject, JsonValue
 from .openai_chat import ChatToolResultImages
+from .recovery_limits import RECOVERY_RETENTION_BYTES
 
 type HistoryProtocol = Literal["responses", "messages", "chat", "gemini"]
 _PREFIX = "fcc:history:v1:"
@@ -130,8 +131,6 @@ def encode_replay(record: ReplayRecord) -> str:
 
 
 def _check_continuation_size(encoded: str) -> None:
-    from .stream_recovery import RECOVERY_RETENTION_BYTES
-
     if len(encoded.encode("utf-8")) > RECOVERY_RETENTION_BYTES:
         raise HistoryReplayError("Continuation replay exceeded the retention limit.")
 
@@ -1119,7 +1118,7 @@ def _restore_gemini_parts(
         call = next(native_calls, {}) if isinstance(expected_call, dict) else None
         echo_call = echoed.get("functionCall")
         if isinstance(call, dict) and isinstance(echo_call, dict):
-            original_args = call.get("args", {})
+            original_args = call.get("args") or {}
             echo_args = echo_call.get("args", {})
             # Harnesses can materialize declared defaults before echoing a call.
             # Ignore only added default-valued fields during comparison. The
@@ -1137,7 +1136,7 @@ def _restore_gemini_parts(
         # Other harnesses require an ID. Google's signed Part may omit it.
         if (
             isinstance(call, dict)
-            and "id" not in call
+            and not call.get("id")
             and isinstance(echo_call, dict)
             and isinstance(alias := echo_call.pop("id", None), str)
         ):

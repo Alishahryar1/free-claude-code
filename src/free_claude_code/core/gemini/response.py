@@ -14,7 +14,7 @@ from ..history_replay import (
     readable_reasoning,
 )
 from ..json_types import JsonObject
-from ..stream_recovery import RECOVERY_RETENTION_BYTES
+from ..recovery_limits import RECOVERY_RETENTION_BYTES
 from .errors import gemini_error_payload
 from .replay import CallReplay, ReplayBundle, encode_bundle
 

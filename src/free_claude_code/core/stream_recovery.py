@@ -8,8 +8,6 @@ from typing import Literal
 from .history_replay import readable_reasoning
 from .json_types import JsonObject
 
-RECOVERY_RETENTION_BYTES = 1_048_576
-
 
 @dataclass(frozen=True, slots=True)
 class DeliveredPrefix:

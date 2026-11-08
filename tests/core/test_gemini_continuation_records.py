@@ -115,7 +115,7 @@ def test_complete_encoded_record_is_bounded(monkeypatch):
     record = recovered()
     size = len(encode_replay(record))
     monkeypatch.setattr(
-        "free_claude_code.core.stream_recovery.RECOVERY_RETENTION_BYTES", size - 1
+        "free_claude_code.core.history_replay.RECOVERY_RETENTION_BYTES", size - 1
     )
     with pytest.raises(HistoryReplayError, match="retention"):
         encode_replay(record)

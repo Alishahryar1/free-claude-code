@@ -1,5 +1,6 @@
 """Convert the delivered native suffix without rewriting the client conversation."""
 
+import json
 from copy import deepcopy
 from typing import Any, Literal, cast
 
@@ -81,7 +82,13 @@ class ContinuationRequest:
         self._injected_rows = len(tail)
         return result
 
-    def history(self, seed: ContinuationSeed, body: dict[str, Any]) -> list[Any]:
+    def history(
+        self,
+        seed: ContinuationSeed,
+        body: dict[str, Any],
+        *,
+        allow_pending_calls: bool = False,
+    ) -> list[Any]:
         """Project the delivered prefix into this upstream's history format."""
         if not seed.items:
             return []
@@ -98,27 +105,38 @@ class ContinuationRequest:
                 return cast(list[Any], chat_responses_body(request)["input"])
             from .gemini.native_request import chat_to_gemini
 
-            return cast(list[Any], chat_to_gemini(request)["contents"])
+            return cast(
+                list[Any],
+                chat_to_gemini(request, allow_pending_calls=allow_pending_calls)[
+                    "contents"
+                ],
+            )
         if self.protocol == "gemini":
             from .gemini.native_request import messages_to_gemini, responses_to_gemini
 
             if seed.wire_api == "gemini":
                 return [{"role": "model", "parts": items}]
             if seed.wire_api == "messages":
+                # Completed public tool blocks retain their streamed JSON deltas.
+                for item in items:
+                    if item.get("type") == "tool_use" and "partial_json" in item:
+                        item["input"] = json.loads(cast(str, item.pop("partial_json")))
                 return cast(
                     list[Any],
                     messages_to_gemini(
                         MessagesRequest(
                             model=model,
                             messages=[Message(role="assistant", content=items)],
-                        )
+                        ),
+                        allow_pending_calls=allow_pending_calls,
                     )["contents"],
                 )
             return cast(
                 list[Any],
-                responses_to_gemini(OpenAIResponsesRequest(model=model, input=items))[
-                    "contents"
-                ],
+                responses_to_gemini(
+                    OpenAIResponsesRequest(model=model, input=items),
+                    allow_pending_calls=allow_pending_calls,
+                )["contents"],
             )
         if seed.wire_api == "messages":
             if self.protocol == "messages":

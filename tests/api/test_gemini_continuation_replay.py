@@ -9,7 +9,12 @@ from fastapi.testclient import TestClient
 
 from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.support import provider_manager_for_app
-from tests.api.test_four_protocol_matrix import matrix_app, response_value
+from tests.api.test_four_protocol_matrix import (
+    ingress_request,
+    matrix_app,
+    reply_history,
+    response_value,
+)
 
 
 def native(text, finish=False):
@@ -156,3 +161,59 @@ def test_recovered_signed_answer_replays_exact_history(
         assert "FOLLOWUP_OK" in second.text
         assert provider_manager_for_app(app)._current.active_leases == 0
     assert len(requests) == interruptions + 2
+
+
+@pytest.mark.parametrize("wire", ["messages", "chat", "responses", "gemini"])
+@pytest.mark.parametrize("native_id", [False, True])
+def test_recovered_signed_tool_call_accepts_its_result(wire, native_id, monkeypatch):
+    monkeypatch.setattr(
+        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
+        lambda: RecoveryHoldbackBuffer(max_bytes=1),
+    )
+    bodies = []
+    call = {"name": "read", "args": {"path": "kept"}}
+    if native_id:
+        call["id"] = "native-call"
+    signed = {
+        "role": "model",
+        "parts": [{"functionCall": call, "thoughtSignature": "signed-call"}],
+    }
+
+    def reply(request):
+        value = json.loads(request.content)
+        bodies.append(value)
+        if len(bodies) == 1:
+            event = native("I will read it. ")
+        elif len(bodies) == 2:
+            event = {
+                "candidates": [{"index": 0, "content": signed, "finishReason": "STOP"}]
+            }
+        else:
+            assert value["contents"][:-2] == bodies[1]["contents"]
+            assert value["contents"][-2] == signed
+            result = value["contents"][-1]["parts"][0]["functionResponse"]
+            assert result.get("id") == ("native-call" if native_id else None)
+            assert "tool-value" in json.dumps(result)
+            event = native("TOOL_RESULT_OK", True)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="data: " + json.dumps(event) + "\n\n",
+        )
+
+    app = matrix_app("gemini", reply)
+    with TestClient(app) as client:
+        path, request = ingress_request(wire, True)
+        value = response_value(client.post(path, json=request), wire, True)
+        if wire == "gemini" and not native_id:
+            next(
+                p["functionCall"]
+                for p in value["candidates"][0]["content"]["parts"]
+                if "functionCall" in p
+            )["id"] = "client-generated"
+        path, request = ingress_request(wire, True, reply_history(value, wire))
+        response = client.post(path, json=request)
+        response_value(response, wire, True)
+        assert "TOOL_RESULT_OK" in response.text
+        assert provider_manager_for_app(app)._current.active_leases == 0
+    assert len(bodies) == 3
