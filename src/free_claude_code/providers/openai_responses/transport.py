@@ -497,7 +497,9 @@ class OpenAIResponsesTransport:
                     request_client=request_client,
                     extra_headers=extra_headers,
                 )
-                stream = scope.retain(OpenAIStreamAdapter(sdk_stream))
+                stream = scope.retain(
+                    OpenAIStreamAdapter(sdk_stream, read_timeout_s=self._read_timeout_s)
+                )
                 stream_opened = True
 
                 async with recovery.read_stream(stream) as events:

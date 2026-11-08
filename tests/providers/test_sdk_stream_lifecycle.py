@@ -1,6 +1,7 @@
 """Real SDK response ownership across provider stream boundaries."""
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from unittest.mock import patch
 
@@ -35,6 +36,59 @@ from tests.providers.test_openai_responses_transport import (
     _sse,
     _text_delta,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["chat", "responses"])
+async def test_sdk_reader_only_discards_identifiable_pings(kind):
+    payloads = [
+        {},
+        {"choices": []},
+        {"choices": [{"index": 0, "delta": {"role": "assistant"}}]},
+        {"usage": None},
+        {"usage": {"total_tokens": 3}},
+        {"type": "response.in_progress", "opaque": {"state": "retained"}},
+        {"choices": [{"index": 0, "delta": {"reasoning_content": "thought"}}]},
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [{"index": 0, "function": {"arguments": "{"}}]
+                    },
+                }
+            ]
+        },
+    ]
+    ping = 'event: ping\ndata: {"type":"ping"}\n\n'
+    wire = "".join(ping + "data: " + json.dumps(event) + "\n\n" for event in payloads)
+    # The SDK loses arbitrary SSE names. An unnamed empty object must survive.
+    wire += "event: ping\ndata: {}\n\n"
+    async with AsyncOpenAI(
+        api_key="test",
+        http_client=httpx2.AsyncClient(
+            transport=httpx2.MockTransport(
+                lambda request: httpx2.Response(
+                    200, headers={"content-type": "text/event-stream"}, content=wire
+                )
+            )
+        ),
+    ) as client:
+        stream = (
+            await client.chat.completions.create(
+                model="model", messages=[], stream=True
+            )
+            if kind == "chat"
+            else await client.responses.create(
+                model="model", input="hello", stream=True
+            )
+        )
+        adapter = OpenAIStreamAdapter(stream, read_timeout_s=1)
+        try:
+            result = [event.model_dump(exclude_unset=True) async for event in adapter]
+        finally:
+            await adapter.aclose()
+        assert result == [*payloads, {}]
 
 
 class ResponseBody(httpx2.AsyncByteStream):
@@ -325,7 +379,7 @@ async def test_mistral_cleanup_preserves_normalization_error():
     sdk_stream = await client.chat.completions.create(
         model="model", messages=[], stream=True
     )
-    source = OpenAIStreamAdapter(sdk_stream)
+    source = OpenAIStreamAdapter(sdk_stream, read_timeout_s=2)
     stream = normalize_mistral_stream(source)
     original = ValueError("invalid normalization")
     try:
@@ -467,7 +521,7 @@ async def test_sdk_observer_runs_before_normalization_without_owning_cleanup(
         sdk_stream = await client.chat.completions.create(
             model="model", messages=[], stream=True
         )
-        source = OpenAIStreamAdapter(sdk_stream, on_event=seen.append)
+        source = OpenAIStreamAdapter(sdk_stream, read_timeout_s=2, on_event=seen.append)
         normalized = (
             _RejectingNormalizedStream(source) if reject_normalization else source
         )

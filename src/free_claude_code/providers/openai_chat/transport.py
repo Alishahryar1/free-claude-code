@@ -799,6 +799,7 @@ class OpenAIChatTransport:
                         **create_body,
                         stream=True,
                     ),
+                    read_timeout_s=self._read_timeout_s,
                     on_event=observed,
                 )
                 if not native_chat:

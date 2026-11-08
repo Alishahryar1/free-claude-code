@@ -4,6 +4,7 @@ import asyncio
 import json
 import sys
 from collections.abc import AsyncIterator, Mapping
+from contextlib import aclosing
 from dataclasses import replace
 from functools import partial
 
@@ -150,24 +151,28 @@ async def stream_native_messages(
                         "Messages upstream did not return an SSE stream."
                     )
                 relay = NativeMessagesPassthrough(public_model)
-                async for kind, payload in messages_events(response):
-                    normal_stop_seen |= is_messages_stop(kind, payload)
-                    check_messages_failure(kind, payload, native=True)
-                    source.observe(
-                        "messages",
-                        payload,
-                        continuing=operation_kind is ProviderOperationKind.CONTINUATION,
-                    )
-                    output = relay.feed(kind, payload)
-                    if output is None:
-                        continue
-                    corrections.accepted_history()
-                    if not attempt.accepted:
-                        await attempt.accept()
-                    committed = True
-                    yield output
-                    if relay.completed:
-                        break
+                async with aclosing(
+                    messages_events(response, read_timeout_s=read_timeout_s)
+                ) as events:
+                    async for kind, payload in events:
+                        normal_stop_seen |= is_messages_stop(kind, payload)
+                        check_messages_failure(kind, payload, native=True)
+                        source.observe(
+                            "messages",
+                            payload,
+                            continuing=operation_kind
+                            is ProviderOperationKind.CONTINUATION,
+                        )
+                        output = relay.feed(kind, payload)
+                        if output is None:
+                            continue
+                        corrections.accepted_history()
+                        if not attempt.accepted:
+                            await attempt.accept()
+                        committed = True
+                        yield output
+                        if relay.completed:
+                            break
                 if not relay.completed:
                     raise RetryableProviderProtocolError(
                         "Messages stream ended without message_stop."
