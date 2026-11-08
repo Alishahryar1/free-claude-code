@@ -1,5 +1,7 @@
 """Convert the delivered native suffix without rewriting the client conversation."""
 
+import json
+from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any, Literal, cast
 
@@ -11,12 +13,13 @@ from .chat_completions.request import (
     chat_messages_body,
     chat_responses_body,
 )
-from .gemini.models import GeminiRequest
+from .gemini.models import Content, GeminiRequest
 from .gemini.request import (
     build_gemini_chat_request,
     build_gemini_messages_request,
     build_gemini_responses_request,
 )
+from .history_replay import HistoryPath
 from .json_types import JsonObject, JsonValue
 from .openai_responses import (
     OpenAIResponsesRequest,
@@ -54,7 +57,7 @@ class ContinuationRequest:
         if self._injected_rows:
             # Targeted opaque-state corrections cannot delete this readable suffix.
             history = history[: -self._injected_rows]
-        tail = self._history(seed, result)
+        tail = self.history(seed, result)
         instruction = (
             "The previous provider stream was interrupted. Continue the assistant "
             "response exactly where it stopped. Do not repeat thinking or text "
@@ -81,7 +84,14 @@ class ContinuationRequest:
         self._injected_rows = len(tail)
         return result
 
-    def _history(self, seed: ContinuationSeed, body: dict[str, Any]) -> list[Any]:
+    def history(
+        self,
+        seed: ContinuationSeed,
+        body: dict[str, Any],
+        *,
+        allow_pending_calls: bool = False,
+    ) -> list[Any]:
+        """Project the delivered prefix into this upstream's history format."""
         if not seed.items:
             return []
         items = deepcopy(list(seed.items))
@@ -97,27 +107,43 @@ class ContinuationRequest:
                 return cast(list[Any], chat_responses_body(request)["input"])
             from .gemini.native_request import chat_to_gemini
 
-            return cast(list[Any], chat_to_gemini(request)["contents"])
+            return cast(
+                list[Any],
+                chat_to_gemini(request, allow_pending_calls=allow_pending_calls)[
+                    "contents"
+                ],
+            )
         if self.protocol == "gemini":
             from .gemini.native_request import messages_to_gemini, responses_to_gemini
 
             if seed.wire_api == "gemini":
-                return [{"role": "model", "parts": items}]
+                # Public frame parsing retains Decimal; use the native JSON
+                # model's numeric representation before storing the echo.
+                content = Content.model_validate({"role": "model", "parts": items})
+                return [
+                    content.model_dump(mode="json", by_alias=True, exclude_none=True)
+                ]
             if seed.wire_api == "messages":
+                # Completed public tool blocks retain their streamed JSON deltas.
+                for item in items:
+                    if item.get("type") == "tool_use" and "partial_json" in item:
+                        item["input"] = json.loads(cast(str, item.pop("partial_json")))
                 return cast(
                     list[Any],
                     messages_to_gemini(
                         MessagesRequest(
                             model=model,
                             messages=[Message(role="assistant", content=items)],
-                        )
+                        ),
+                        allow_pending_calls=allow_pending_calls,
                     )["contents"],
                 )
             return cast(
                 list[Any],
-                responses_to_gemini(OpenAIResponsesRequest(model=model, input=items))[
-                    "contents"
-                ],
+                responses_to_gemini(
+                    OpenAIResponsesRequest(model=model, input=items),
+                    allow_pending_calls=allow_pending_calls,
+                )["contents"],
             )
         if seed.wire_api == "messages":
             if self.protocol == "messages":
@@ -185,6 +211,23 @@ class ContinuationRequest:
         return cast(
             list[Any],
             prepared.body["input" if self.protocol == "responses" else "messages"],
+        )
+
+    def sent_context(
+        self,
+        body: JsonObject,
+        *,
+        source: JsonObject,
+        source_paths: Mapping[HistoryPath, HistoryPath],
+    ) -> tuple[JsonObject, ...] | None:
+        """Capture the injected Gemini suffix after accepted request corrections."""
+        if self.protocol != "gemini" or not self._injected_rows:
+            return None
+        start = len(cast(list[JsonObject], source["contents"])) - self._injected_rows
+        return tuple(
+            deepcopy(content)
+            for index, content in enumerate(cast(list[JsonObject], body["contents"]))
+            if cast(int, source_paths[("contents", index)][1]) >= start
         )
 
 

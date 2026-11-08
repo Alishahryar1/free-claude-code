@@ -1,7 +1,9 @@
 """Validate Gemini call associations without changing caller-owned history."""
 
 from dataclasses import dataclass
+from hashlib import sha256
 
+from ..history_replay import decode_gemini_replay
 from .errors import GeminiConversionError
 from .models import Content, GeminiRequest, Part
 from .replay import ReplayBundle, decode_bundle
@@ -23,7 +25,15 @@ def normalized_history(request: GeminiRequest) -> tuple[GeminiTurn, ...]:
         replay = []
         for part_index, part in enumerate(original.parts):
             if part.thought_signature is not None:
-                bundle = decode_bundle(part.thought_signature)
+                record = decode_gemini_replay(part.thought_signature)
+                bundle = (
+                    ReplayBundle(
+                        sha256(part.thought_signature.encode("utf-8")).hexdigest(),
+                        records=(record,),
+                    )
+                    if record is not None
+                    else decode_bundle(part.thought_signature)
+                )
                 if bundle is None:
                     raise GeminiConversionError(
                         "Caller-native Gemini signatures cannot be replayed through this gateway. "

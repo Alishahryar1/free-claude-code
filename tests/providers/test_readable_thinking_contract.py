@@ -124,6 +124,53 @@ def test_standalone_google_signature_uses_protected_recovery_rule():
         SourceRecoveryState(Mock()).observe("chat", payload, continuing=True)
 
 
+def test_gemini_continuation_accepts_signature_but_keeps_failure_protected():
+    source = SourceRecoveryState(Mock())
+    source.observe(
+        "gemini",
+        {"candidates": [{"content": {"parts": [{"text": "Plan", "thought": True}]}}]},
+        continuing=True,
+    )
+    assert source.unsafe_reason is None
+    source.observe(
+        "gemini",
+        {"candidates": [{"content": {"parts": [{"thoughtSignature": "signed"}]}}]},
+        continuing=True,
+    )
+    assert (
+        source.snapshot(
+            body={}, protocol="gemini", normal_stop_seen=False
+        ).unsafe_reason
+        == "signed_thinking"
+    )
+    assert not source.can_handoff
+
+
+def test_gemini_signature_cannot_clear_unsupported_native_evidence():
+    source = SourceRecoveryState(Mock())
+    source.observe(
+        "gemini",
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"inlineData": {"data": "AA==", "mimeType": "image/png"}}
+                        ]
+                    }
+                }
+            ]
+        },
+    )
+    with pytest.raises(ExecutionFailure):
+        source.observe(
+            "gemini",
+            {"candidates": [{"content": {"parts": [{"thoughtSignature": "signed"}]}}]},
+            continuing=True,
+        )
+    assert source.unsafe_reason == "native_content"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses", "gemini"])
 @pytest.mark.parametrize("scalar_first", [False, True])

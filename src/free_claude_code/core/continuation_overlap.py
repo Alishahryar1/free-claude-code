@@ -6,9 +6,9 @@ from typing import Any, Literal
 
 import simplejson
 
-from .delivered_response import RECOVERY_RETENTION_BYTES
 from .failures import ExecutionFailure, FailureKind
 from .gemini.response import gemini_finished, gemini_parts
+from .recovery_limits import RECOVERY_RETENTION_BYTES
 
 type PartKey = tuple[int | str, int]
 

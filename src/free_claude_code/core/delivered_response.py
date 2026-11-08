@@ -13,7 +13,8 @@ from .history_replay import (
     unprotected_replay,
 )
 from .openai_responses import is_client_search
-from .stream_recovery import RECOVERY_RETENTION_BYTES, ContinuationSeed, DeliveredPrefix
+from .recovery_limits import RECOVERY_RETENTION_BYTES
+from .stream_recovery import ContinuationSeed, DeliveredPrefix
 from .token_estimation import estimate_text_tokens
 
 CLIENT_CALL_TYPES = frozenset(

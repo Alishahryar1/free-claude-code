@@ -212,6 +212,13 @@ class ContinuationStream:
                     message="The provider continuation completed without adding output.",
                     retryable=False,
                 )
+            # After overlap removal, keep an empty terminal valid for SDK chat
+            # history. This adds no output and cannot satisfy the progress check.
+            for candidate in data.get("candidates", []):
+                if candidate.get("finishReason") and not candidate.get(
+                    "content", {}
+                ).get("parts"):
+                    candidate["content"] = {"role": "model", "parts": [{"text": ""}]}
             # Per-attempt usage cannot describe a synthesized multi-attempt answer.
             data.pop("usageMetadata", None)
             return data

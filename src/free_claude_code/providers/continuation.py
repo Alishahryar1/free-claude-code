@@ -94,7 +94,7 @@ class SourceRecoveryState:
             self._handoff_blocked = True
             for candidate in payload.get("candidates", []):
                 for part in candidate.get("content", {}).get("parts", []):
-                    if part.get("thought") or part.get("thoughtSignature"):
+                    if part.get("thoughtSignature") and self.unsafe_reason is None:
                         self.unsafe_reason = "signed_thinking"
                     if any(
                         key
@@ -193,7 +193,11 @@ class SourceRecoveryState:
             if kind == "response.output_text.annotation.added":
                 self.unsafe_reason = "native_content"
                 self._handoff_blocked = True
-        if continuing and self.unsafe_reason:
+        if (
+            continuing
+            and self.unsafe_reason
+            and not (protocol == "gemini" and self.unsafe_reason == "signed_thinking")
+        ):
             raise ExecutionFailure(
                 kind=FailureKind.UPSTREAM,
                 status_code=502,

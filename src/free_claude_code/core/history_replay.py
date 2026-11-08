@@ -2,7 +2,7 @@
 
 import base64
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
@@ -10,6 +10,7 @@ from typing import Any, Literal, cast
 
 from .json_types import JsonObject, JsonValue
 from .openai_chat import ChatToolResultImages
+from .recovery_limits import RECOVERY_RETENTION_BYTES
 
 type HistoryProtocol = Literal["responses", "messages", "chat", "gemini"]
 _PREFIX = "fcc:history:v1:"
@@ -53,10 +54,18 @@ class ReplayOrigin:
 
 
 @dataclass(frozen=True, slots=True)
+class ContinuationReplay:
+    context: tuple[JsonObject, ...]
+    # None is an internal draft, sealed only after public overlap processing.
+    echo: tuple[JsonObject, ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ReplayRecord:
     origin: ReplayOrigin
     native: JsonObject
     tool_defaults: JsonObject | None = field(default=None, kw_only=True)
+    continuation: ContinuationReplay | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,16 +107,94 @@ def is_replay(value: object) -> bool:
 
 def encode_replay(record: ReplayRecord) -> str:
     """Preserve native state, without claiming to encrypt or authenticate it."""
-    payload = _json_copy({"origin": asdict(record.origin), "native": record.native})
+    payload: JsonObject = {"origin": asdict(record.origin), "native": record.native}
     if record.tool_defaults is not None:
         payload["tool_defaults"] = record.tool_defaults
+    if record.continuation is not None:
+        payload["continuation"] = {
+            "context": list(record.continuation.context),
+            "echo": list(record.continuation.echo)
+            if record.continuation.echo is not None
+            else None,
+        }
     associated = isinstance(record, AssociatedReplayRecord)
     if associated:
         payload.update(group_id=record.group_id, part=record.part)
+    payload = _json_copy(payload)
     _validate_record(payload, associated=associated)
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     prefix = _ASSOCIATED_PREFIX if associated else _PREFIX
-    return prefix + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    encoded = prefix + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    if record.continuation is not None:
+        _check_continuation_size(encoded)
+    return encoded
+
+
+def _check_continuation_size(encoded: str) -> None:
+    if len(encoded.encode("utf-8")) > RECOVERY_RETENTION_BYTES:
+        raise HistoryReplayError("Continuation replay exceeded the retention limit.")
+
+
+def encode_gemini_replay(record: ReplayRecord) -> str:
+    """Encode the existing record as Gemini's base64 byte field."""
+    encoded = base64.b64encode(encode_replay(record).encode("utf-8")).decode("ascii")
+    _check_continuation_size(encoded)
+    return encoded
+
+
+def decode_gemini_replay(signature: str) -> ReplayRecord | None:
+    """Recognize an FCC record while leaving ordinary native signatures alone."""
+    try:
+        raw = base64.b64decode(
+            signature + "=" * (-len(signature) % 4), altchars=b"-_", validate=True
+        )
+    except ValueError:
+        return None
+    if not raw.startswith((b"fcc:history:", b"fcc:anthropic-reasoning:")):
+        return None
+    _check_continuation_size(signature)
+    try:
+        return decode_replay(raw.decode("utf-8"))
+    except UnicodeError as error:
+        raise HistoryReplayError("Malformed native Gemini replay.") from error
+
+
+def _continuation_replay(value: JsonValue) -> ContinuationReplay:
+    from .gemini.models import Content, Part
+
+    if not isinstance(value, dict) or set(value) != {"context", "echo"}:
+        raise HistoryReplayError("Invalid continuation replay fields.")
+    context, echo = value["context"], value["echo"]
+    if not isinstance(context, list) or len(context) not in {1, 2}:
+        raise HistoryReplayError(
+            "Continuation replay requires its instruction and optional model prefix."
+        )
+    try:
+        contents = [Content.model_validate(item) for item in context]
+        if [item.role for item in contents] not in (["user"], ["model", "user"]) or any(
+            not item.parts
+            or any(
+                part.text is None or part.thought_signature or part.function_call
+                for part in item.parts
+            )
+            for item in contents
+        ):
+            raise ValueError("Invalid readable context")
+        if echo is not None:
+            if not isinstance(echo, list) or not echo:
+                raise ValueError("Invalid public echo")
+            for item in echo:
+                part = Part.model_validate(item)
+                if part.thought_signature or (
+                    part.text is None and part.function_call is None
+                ):
+                    raise ValueError("Invalid public echo part")
+    except ValueError as error:
+        raise HistoryReplayError("Invalid continuation replay content.") from error
+    return ContinuationReplay(
+        tuple(cast(JsonObject, item) for item in context),
+        tuple(cast(JsonObject, item) for item in echo) if echo is not None else None,
+    )
 
 
 def _validate_record(payload: JsonObject, *, associated: bool = False) -> ReplayRecord:
@@ -116,6 +203,8 @@ def _validate_record(payload: JsonObject, *, associated: bool = False) -> Replay
         {"origin", "native", "group_id", "part"} if associated else {"origin", "native"}
     )
     defaults = payload.get("tool_defaults")
+    if "continuation" in payload:
+        fields.add("continuation")
     if "tool_defaults" in payload:
         fields.add("tool_defaults")
         if not isinstance(defaults, dict) or any(
@@ -136,6 +225,13 @@ def _validate_record(payload: JsonObject, *, associated: bool = False) -> Replay
             "History replay has invalid provenance or native data."
         )
     protocol = cast(HistoryProtocol, origin["protocol"])
+    continuation = None
+    if "continuation" in payload:
+        if protocol != "gemini" or associated:
+            raise HistoryReplayError(
+                "Continuation replay requires native Gemini state."
+            )
+        continuation = _continuation_replay(payload["continuation"])
     if defaults is not None and (protocol != "gemini" or associated):
         raise HistoryReplayError("Tool replay defaults require native Gemini state.")
     if protocol == "gemini":
@@ -188,6 +284,7 @@ def _validate_record(payload: JsonObject, *, associated: bool = False) -> Replay
         ),
         native,
         tool_defaults=cast(JsonObject | None, defaults),
+        continuation=continuation,
     )
     if associated:
         group_id, part = payload.get("group_id"), payload.get("part")
@@ -246,7 +343,10 @@ def decode_replay(value: str) -> ReplayRecord:
             },
             "native": payload["block"],
         }
-    return _validate_record(payload, associated=prefix == _ASSOCIATED_PREFIX)
+    record = _validate_record(payload, associated=prefix == _ASSOCIATED_PREFIX)
+    if record.continuation is not None:
+        _check_continuation_size(value)
+    return record
 
 
 def resolve_messages_replay(content: Sequence[JsonValue]) -> list[JsonValue]:
@@ -974,18 +1074,81 @@ def _visible_gemini_parts(
     return result
 
 
+def _gemini_replay_record(signature: object) -> ReplayRecord | None:
+    if not isinstance(signature, str):
+        return None
+    return (
+        decode_replay(signature)
+        if is_replay(signature)
+        else decode_gemini_replay(signature)
+    )
+
+
+def _gemini_replay_turns(
+    contents: list[JsonValue], *, continuation: bool
+) -> Iterator[tuple[int, JsonObject, list[HistoryPath]]]:
+    """Join SDK chunks of a recovered turn, retaining caller row coordinates."""
+    index = 0
+    while index < len(contents):
+        content = contents[index]
+        if not isinstance(content, dict) or not isinstance(content.get("parts"), list):
+            raise HistoryReplayError("Invalid native Gemini content")
+        end = index + 1
+        if content.get("role") == "model":
+            while end < len(contents):
+                following = contents[end]
+                if (
+                    not isinstance(following, dict)
+                    or following.get("role") != "model"
+                    or not isinstance(following.get("parts"), list)
+                    or (continuation and end == len(contents) - 2)
+                ):
+                    break
+                end += 1
+        rows = cast(list[JsonObject], contents[index:end])
+        if end > index + 1 and any(
+            record is not None and record.continuation is not None
+            for row in rows
+            for part in cast(list[JsonObject], row["parts"])
+            for record in [_gemini_replay_record(part.get("thoughtSignature"))]
+        ):
+            parts = [
+                part for row in rows for part in cast(list[JsonObject], row["parts"])
+            ]
+            paths: list[HistoryPath] = [
+                ("contents", row_index, "parts", part_index)
+                for row_index, row in enumerate(rows, index)
+                for part_index, _ in enumerate(cast(list[JsonObject], row["parts"]))
+            ]
+            yield index, {"role": "model", "parts": parts}, paths
+        else:
+            for row_index, row in enumerate(rows, index):
+                yield (
+                    row_index,
+                    row,
+                    [
+                        ("contents", row_index, "parts", part_index)
+                        for part_index, _ in enumerate(
+                            cast(list[JsonObject], row["parts"])
+                        )
+                    ],
+                )
+        index = end
+
+
 def _restore_gemini_parts(
     parts: list[dict[str, Any]],
     origin: ReplayOrigin,
     call_aliases: set[str],
-) -> tuple[list[dict[str, Any]], int | None]:
+) -> tuple[list[dict[str, Any]], int | None, tuple[JsonObject, ...]]:
     records = []
     echo = []
     carrier_index = None
     for index, part in enumerate(parts):
         signature = part.get("thoughtSignature")
-        if isinstance(signature, str) and is_replay(signature):
-            records.append(decode_replay(signature))
+        record = _gemini_replay_record(signature)
+        if record is not None:
+            records.append(record)
             carrier_index = index
             stripped = {
                 key: value for key, value in part.items() if key != "thoughtSignature"
@@ -1004,7 +1167,7 @@ def _restore_gemini_parts(
                     )
             echo.append(part)
     if not records:
-        return parts, None
+        return parts, None, ()
     native = [record for record in records if record.origin.protocol == "gemini"]
     if not native:
         # A compatibility signature is bound to the old Chat representation.
@@ -1021,14 +1184,28 @@ def _restore_gemini_parts(
         )
     tool_defaults = cast(dict[str, dict[str, Any]], record.tool_defaults or {})
     restored = cast(list[dict[str, Any]], deepcopy(record.native["parts"]))
+    continuation = record.continuation
+    if continuation is not None and continuation.echo is None:
+        raise HistoryReplayError(
+            "Unfinished continuation replay cannot be used as history."
+        )
+    expected = (
+        cast(list[dict[str, Any]], list(continuation.echo))
+        if continuation is not None and continuation.echo is not None
+        else restored
+    )
     thoughts = any(part.get("thought") and part.get("text") for part in echo)
     visible_echo = _visible_gemini_parts(echo, thoughts=thoughts)
-    visible_native = _visible_gemini_parts(restored, thoughts=thoughts)
+    visible_native = _visible_gemini_parts(expected, thoughts=thoughts)
+    native_calls = iter(
+        part["functionCall"] for part in restored if "functionCall" in part
+    )
     for echoed, native_part in zip(visible_echo, visible_native, strict=False):
-        call = native_part.get("functionCall")
+        expected_call = native_part.get("functionCall")
+        call = next(native_calls, {}) if isinstance(expected_call, dict) else None
         echo_call = echoed.get("functionCall")
         if isinstance(call, dict) and isinstance(echo_call, dict):
-            original_args = call.get("args", {})
+            original_args = call.get("args") or {}
             echo_args = echo_call.get("args", {})
             # Harnesses can materialize declared defaults before echoing a call.
             # Ignore only added default-valued fields during comparison. The
@@ -1040,18 +1217,26 @@ def _restore_gemini_parts(
                     and echo_args[key] == value
                 ):
                     echo_args.pop(key)
+                    if isinstance(expected_call, dict):
+                        expected_call.get("args", {}).pop(key, None)
 
         # Other harnesses require an ID. Google's signed Part may omit it.
         if (
             isinstance(call, dict)
-            and "id" not in call
+            and not call.get("id")
             and isinstance(echo_call, dict)
             and isinstance(alias := echo_call.pop("id", None), str)
         ):
             call_aliases.add(alias)
+            if isinstance(expected_call, dict):
+                expected_call.pop("id", None)
     if visible_echo != visible_native:
         raise HistoryReplayError("Signed Gemini content was edited after generation")
-    return restored, carrier_index
+    return (
+        restored,
+        carrier_index,
+        deepcopy(continuation.context) if continuation else (),
+    )
 
 
 def _prepare_gemini_history(
@@ -1080,9 +1265,9 @@ def _prepare_gemini_history(
     )
     projected = []
     call_aliases: set[str] = set()
-    for index, content in enumerate(contents):
-        if not isinstance(content, dict) or not isinstance(content.get("parts"), list):
-            raise HistoryReplayError("Invalid native Gemini content")
+    for index, content, part_sources in _gemini_replay_turns(
+        contents, continuation=continuation
+    ):
         source = ("contents", index)
         target = ("contents", len(projected))
         paths[target] = source
@@ -1098,24 +1283,40 @@ def _prepare_gemini_history(
                     result.pop("id")
             projected.append(content)
             continue
-        parts, carrier_index = _restore_gemini_parts(
+        parts, carrier_index, continuation_context = _restore_gemini_parts(
             cast(list[dict[str, Any]], content["parts"]),
             origin,
             call_aliases,
         )
+        if carrier_index is not None:
+            source = part_sources[carrier_index][:-2]
+            paths[target] = source
+        if continuation_context:
+            for context in continuation_context:
+                paths[("contents", len(projected))] = source
+                projected.append(context)
+            target = ("contents", len(projected))
+            paths[target] = source
         include = scope.includes(index, last_user)
         kept = []
         for part_index, part in enumerate(parts):
-            if part.get("thought") and not part.get("thoughtSignature") and not include:
+            if (
+                not continuation_context
+                and part.get("thought")
+                and not part.get("thoughtSignature")
+                and not include
+            ):
                 continue
-            paths[(*target, "parts", len(kept))] = (
-                *source,
-                "parts",
-                carrier_index if carrier_index is not None else part_index,
-            )
+            paths[(*target, "parts", len(kept))] = part_sources[
+                carrier_index if carrier_index is not None else part_index
+            ]
             kept.append(part)
-        if include and not any(
-            part.get("thought") or part.get("thoughtSignature") for part in kept
+        if (
+            not continuation_context
+            and include
+            and not any(
+                part.get("thought") or part.get("thoughtSignature") for part in kept
+            )
         ):
             kept.append({"text": "", "thought": True})
         if kept:

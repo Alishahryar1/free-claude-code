@@ -181,6 +181,7 @@ class GeminiTransport:
                     )
                 except HistoryReplayError as error:
                     raise InvalidRequestError(str(error)) from error
+                assert corrections.history is not None
                 model = str(sent_body["model"]).removeprefix("models/")
                 headers = {"Accept": "text/event-stream", **snapshot.headers}
                 if snapshot.api_key:
@@ -239,6 +240,11 @@ class GeminiTransport:
                         for tool in declarations
                     },
                     include_thoughts=include_thoughts,
+                    continuation_context=continuation_request.sent_context(
+                        sent_body,
+                        source=corrections.history.source,
+                        source_paths=corrections.history.paths,
+                    ),
                 )
                 upstream = _events(response, read_timeout=self._read_timeout)
                 try:

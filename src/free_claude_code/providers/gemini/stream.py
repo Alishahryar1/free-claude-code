@@ -9,11 +9,14 @@ from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.gemini.models import Part
 from free_claude_code.core.gemini.response import conversion_failure, gemini_frame
 from free_claude_code.core.history_replay import (
+    ContinuationReplay,
     ReplayOrigin,
     ReplayRecord,
+    encode_gemini_replay,
     encode_replay,
 )
-from free_claude_code.core.stream_recovery import RECOVERY_RETENTION_BYTES
+from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.recovery_limits import RECOVERY_RETENTION_BYTES
 from free_claude_code.providers.openai_chat import (
     ChatStreamOutput,
     ChatStreamUsage,
@@ -30,6 +33,7 @@ class GeminiStream:
         tool_names: frozenset[str],
         tool_defaults: dict[str, Any],
         include_thoughts: bool,
+        continuation_context: tuple[JsonObject, ...] | None = None,
     ) -> None:
         self._model = model
         self._origin = origin
@@ -37,8 +41,14 @@ class GeminiStream:
         self._tools = tool_names
         self._tool_defaults = tool_defaults
         self._include_thoughts = include_thoughts
+        self._continuation_context = deepcopy(continuation_context)
+        self._terminal: dict[str, Any] | None = None
         self._parts: list[dict[str, Any]] = []
-        self._retained_bytes = 0
+        self._retained_bytes = (
+            len(json.dumps(continuation_context, ensure_ascii=False).encode("utf-8"))
+            if continuation_context is not None
+            else 0
+        )
         self._started = False
         self._reason: str | None = None
         self._usage: dict[str, Any] = {}
@@ -94,14 +104,16 @@ class GeminiStream:
                 )
             if candidate.get("finishReason"):
                 self._reason = candidate["finishReason"]
-            if self._output is not None and any(
+            if (
+                self._output is not None or self._continuation_context is not None
+            ) and any(
                 candidate.get(key) for key in ("groundingMetadata", "citationMetadata")
             ):
                 raise conversion_failure(
                     "This client protocol cannot represent Gemini grounding or citations"
                 )
             for raw in candidate.get("content", {}).get("parts", []):
-                if self._output is None:
+                if self._output is None and self._continuation_context is None:
                     continue
                 try:
                     part = Part.model_validate(raw)
@@ -129,6 +141,8 @@ class GeminiStream:
                     self._parts[-1]["text"] += saved["text"]
                 else:
                     self._parts.append(saved)
+                if self._output is None:
+                    continue
                 if part.text is not None:
                     if not part.text:
                         continue
@@ -175,6 +189,41 @@ class GeminiStream:
         if self._output is None:
             result = deepcopy(payload)
             result["modelVersion"] = self._model
+            if self._continuation_context is not None:
+                for candidate in result.get("candidates", []):
+                    for part in candidate.get("content", {}).get("parts", []):
+                        part.pop("thoughtSignature", None)
+                    content = candidate.get("content")
+                    if content is not None:
+                        content.setdefault("role", "model")
+                        content["parts"] = [
+                            part
+                            for part in content.get("parts", [])
+                            if any(
+                                key in part
+                                for key in (
+                                    "text",
+                                    "functionCall",
+                                    "inlineData",
+                                    "functionResponse",
+                                )
+                            )
+                        ]
+                        if not content["parts"]:
+                            candidate.pop("content")
+                    if candidate.get("finishReason"):
+                        self._terminal = deepcopy(result)
+                        if not any(
+                            part.get("thoughtSignature") for part in self._parts
+                        ):
+                            return []
+                        self._terminal["candidates"][0].pop("content", None)
+                        candidate.pop("finishReason")
+                if not any(
+                    candidate.get("content", {}).get("parts")
+                    for candidate in result.get("candidates", [])
+                ):
+                    return []
             return [gemini_frame(result)]
         return [event for event in events if event]
 
@@ -182,7 +231,7 @@ class GeminiStream:
         if self._reason is None:
             raise conversion_failure("Gemini stream ended without finishReason")
         self.completed = True
-        if self._output is None:
+        if self._output is None and self._continuation_context is None:
             return []
         if self._reason not in {
             "STOP",
@@ -196,7 +245,7 @@ class GeminiStream:
             raise conversion_failure(f"Gemini generation failed with {self._reason}")
         events: list[str] = []
         if any(part.get("thoughtSignature") for part in self._parts):
-            carrier = encode_replay(
+            carrier = (encode_gemini_replay if self._output is None else encode_replay)(
                 ReplayRecord(
                     self._origin,
                     {"role": "model", "parts": self._parts},
@@ -208,9 +257,23 @@ class GeminiStream:
                         and self._tool_defaults[name]
                     }
                     or None,
+                    continuation=ContinuationReplay(self._continuation_context)
+                    if self._continuation_context is not None
+                    else None,
                 )
             )
-            events.extend(self._output.emit_opaque_reasoning(carrier))
+            if self._output is None:
+                assert self._terminal is not None
+                self._terminal["candidates"][0]["content"] = {
+                    "role": "model",
+                    "parts": [{"thoughtSignature": carrier}],
+                }
+            else:
+                events.extend(self._output.emit_opaque_reasoning(carrier))
+        if self._output is None:
+            assert self._terminal is not None
+            self._terminal["usageMetadata"] = self._usage
+            return [*events, gemini_frame(self._terminal)]
         events.extend(self._output.close_content_blocks())
         usage = self._usage
         input_tokens = int(usage.get("promptTokenCount", self._output.input_tokens))
