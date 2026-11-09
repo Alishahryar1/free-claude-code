@@ -27,11 +27,13 @@ REQUIRED_TEST_RUNNERS = {
 @pytest.mark.parametrize(
     "requirement, uv_requirement, python_version, uv_version",
     [
-        ('"==3.14.7"', '">=0.13.5"', "3.14.7", "0.13.5"),
-        ("'==3.15.0' # runtime", "'>=0.14.0' # minimum", "3.15.0", "0.14.0"),
+        ('">=3.14,<3.15"', '">=0.13.5"', "3.14", "0.13.5"),
+        ("'>=3.15,<3.16' # runtime", "'>=0.14.0' # minimum", "3.15", "0.14.0"),
+        ('"==3.14.7"', '">=0.13.5"', None, None),
         ('">=3.14.7"', '">=0.13.5"', None, None),
-        ('"==3.14.7"', '"==0.13.5"', None, None),
-        ('"==3.14.7"', '">=0.13.5,<1"', None, None),
+        ('">=3.14,<3.16"', '">=0.13.5"', None, None),
+        ('">=3.14,<3.15"', '"==0.13.5"', None, None),
+        ('">=3.14,<3.15"', '">=0.13.5,<1"', None, None),
     ],
 )
 def test_ci_python_identity_parses_toml(
@@ -86,10 +88,12 @@ def test_ci_python_identity_parses_toml(
 def test_python_lock_matches_package_requirement() -> None:
     project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     requirement = project["project"]["requires-python"]
-    match = re.fullmatch(r"==([0-9]+\.[0-9]+\.[0-9]+)", requirement)
+    match = re.fullmatch(r">=([0-9]+)\.([0-9]+),<([0-9]+)\.([0-9]+)", requirement)
     assert match is not None
+    major, minor, upper_major, upper_minor = map(int, match.groups())
+    assert (upper_major, upper_minor) == (major, minor + 1)
     lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
-    assert lock["requires-python"] == requirement
+    assert lock["requires-python"] == f"=={major}.{minor}.*"
 
 
 def _shard_counts(workflow: dict, suite: str) -> dict[str, int]:

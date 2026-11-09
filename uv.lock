@@ -1,6 +1,10 @@
 version = 1
 revision = 5
-requires-python = "==3.14.10"
+requires-python = "==3.14.*"
+resolution-markers = [
+    "'android' in platform_release",
+    "'android' not in platform_release",
+]
 
 [[package]]
 name = "accelerate"
@@ -611,18 +615,17 @@ dependencies = [
     { name = "aiohttp" },
     { name = "anyio" },
     { name = "discord-py" },
-    { name = "fastapi", extra = ["standard"] },
+    { name = "fastapi" },
+    { name = "fastapi", extra = ["standard"], marker = "'android' not in platform_release" },
     { name = "github-copilot-sdk" },
     { name = "google-auth", extra = ["requests"] },
-    { name = "grpcio" },
-    { name = "grpcio-tools" },
     { name = "httpx", extra = ["socks"] },
     { name = "httpx2", extra = ["socks"] },
     { name = "json5" },
     { name = "jsonschema" },
     { name = "loguru" },
     { name = "markdown-it-py" },
-    { name = "nvidia-riva-client" },
+    { name = "nvidia-riva-client", marker = "'android' not in platform_release" },
     { name = "openai" },
     { name = "packaging" },
     { name = "pillow", marker = "sys_platform == 'darwin' or sys_platform == 'win32'" },
@@ -635,7 +638,7 @@ dependencies = [
     { name = "ruamel-yaml" },
     { name = "simplejson" },
     { name = "sqlalchemy" },
-    { name = "tiktoken" },
+    { name = "tiktoken", marker = "'android' not in platform_release" },
     { name = "tomlkit" },
     { name = "uvicorn" },
 ]
@@ -668,11 +671,10 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.14.5" },
     { name = "anyio", specifier = ">=4.15.1" },
     { name = "discord-py", specifier = ">=2.7.1" },
-    { name = "fastapi", extras = ["standard"], specifier = ">=0.141.1" },
+    { name = "fastapi", marker = "'android' in platform_release", specifier = ">=0.141.1" },
+    { name = "fastapi", extras = ["standard"], marker = "'android' not in platform_release", specifier = ">=0.141.1" },
     { name = "github-copilot-sdk", specifier = ">=1.0.26" },
     { name = "google-auth", extras = ["requests"], specifier = ">=2.56.3" },
-    { name = "grpcio", specifier = ">=1.84.1" },
-    { name = "grpcio-tools", specifier = ">=1.81.1" },
     { name = "httpx", extras = ["socks"], specifier = ">=0.28.1" },
     { name = "httpx2", extras = ["socks"], specifier = ">=2.7.0,<3" },
     { name = "json5", specifier = ">=0.17.3" },
@@ -680,7 +682,7 @@ requires-dist = [
     { name = "librosa", marker = "extra == 'voice-local'", specifier = ">=1.0.0" },
     { name = "loguru", specifier = ">=0.7.0" },
     { name = "markdown-it-py", specifier = ">=4.2.0" },
-    { name = "nvidia-riva-client", specifier = ">=2.26.0" },
+    { name = "nvidia-riva-client", marker = "'android' not in platform_release", specifier = ">=2.26.0" },
     { name = "openai", specifier = ">=3.37.0" },
     { name = "packaging", specifier = ">=26.3" },
     { name = "pillow", marker = "sys_platform == 'darwin' or sys_platform == 'win32'", specifier = ">=13.0.0" },
@@ -693,7 +695,7 @@ requires-dist = [
     { name = "ruamel-yaml", specifier = ">=0.19.1" },
     { name = "simplejson", specifier = ">=4.2.0" },
     { name = "sqlalchemy", specifier = ">=2.1.6" },
-    { name = "tiktoken", specifier = ">=0.13.0" },
+    { name = "tiktoken", marker = "'android' not in platform_release", specifier = ">=0.13.0" },
     { name = "tomlkit", specifier = ">=0.15.2" },
     { name = "torch", marker = "extra == 'voice-local'", specifier = ">=2.14.1", index = "https://download.pytorch.org/whl/cu130" },
     { name = "transformers", marker = "extra == 'voice-local'", specifier = ">=5.20.2" },

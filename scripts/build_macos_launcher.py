@@ -16,9 +16,16 @@ def build() -> None:
             "Building macOS launcher templates requires macOS and Xcode tools"
         )
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    version = project["project"]["requires-python"].removeprefix("==")
-    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
-        raise ValueError("Expected an exact Python requirement")
+    requirement = project["project"]["requires-python"]
+    match = re.fullmatch(r">=([0-9]+)\.([0-9]+),<([0-9]+)\.([0-9]+)", requirement)
+    if match is None:
+        raise ValueError("Expected a bounded Python minor-series requirement")
+    major, minor, upper_major, upper_minor = map(int, match.groups())
+    if (upper_major, upper_minor) != (major, minor + 1):
+        raise ValueError(
+            "Expected requires-python to cover exactly one Python minor series"
+        )
+    version = f"{major}.{minor}"
     destination = ROOT / "src/free_claude_code/assets/macos"
     destination.mkdir(parents=True, exist_ok=True)
     for architecture, minimum in TARGETS.items():
