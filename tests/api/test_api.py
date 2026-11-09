@@ -136,7 +136,7 @@ def test_models_list(client: TestClient):
     data = response.json()
     assert data["has_more"] is False
     ids = [item["id"] for item in data["data"]]
-    assert "claude-sonnet-4-20250514" in ids
+    assert "claude-sonnet-5-5" in ids
     assert data["first_id"] == ids[0]
     assert data["last_id"] == ids[-1]
     assert response.headers["x-request-id"] == response.headers["request-id"]
