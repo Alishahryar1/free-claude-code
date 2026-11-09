@@ -742,6 +742,10 @@ class Settings(BaseModel):
         default="freecc",
         validation_alias="ANTHROPIC_AUTH_TOKEN",
     )
+    admin_allow_remote: bool = Field(
+        default=False,
+        validation_alias="FCC_ADMIN_ALLOW_REMOTE",
+    )
 
     @field_validator("max_message_log_entries_per_chat", mode="before")
     @classmethod

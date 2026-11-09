@@ -190,6 +190,19 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description="Require the retained API/CLI token on FCC API routes.",
     ),
     ConfigFieldSpec(
+        "FCC_ADMIN_ALLOW_REMOTE",
+        "Allow Remote Admin Access",
+        "runtime",
+        "boolean",
+        settings_attr="admin_allow_remote",
+        restart_required=False,
+        description=(
+            "Allow the Admin UI to be accessed from non-loopback addresses. "
+            "Enable only on a trusted private network. "
+            "Consider also enabling Proxy Authentication as an additional layer."
+        ),
+    ),
+    ConfigFieldSpec(
         "ANTHROPIC_AUTH_TOKEN",
         "API/CLI Auth Token",
         "runtime",

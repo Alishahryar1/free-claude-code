@@ -55,8 +55,24 @@ def _authority_is_local(authority: str | None) -> bool:
     )
 
 
+def _admin_allow_remote(request: Request) -> bool:
+    """Read the admin_allow_remote setting from app state if available."""
+    try:
+        services = request.app.state.services
+        return bool(services.requests.current_settings().admin_allow_remote)
+    except AttributeError:
+        return False
+
+
 def require_loopback_admin(request: Request) -> None:
-    """Allow Admin access only from the local machine."""
+    """Allow Admin access only from the local machine.
+
+    When ``FCC_ADMIN_ALLOW_REMOTE`` is enabled in settings, remote LAN/WAN
+    access is permitted.  Use this only on a trusted private network; consider
+    enabling Proxy Authentication as an additional layer.
+    """
+    if _admin_allow_remote(request):
+        return
 
     client_host = request.client.host if request.client else None
     if not _is_loopback_host(client_host):
