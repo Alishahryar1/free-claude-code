@@ -8,6 +8,8 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
+from scripts.ci_timings import effective_durations
+
 
 @pytest.fixture
 def suite(tmp_path):
@@ -115,3 +117,45 @@ def test_shards_partition_all_items_once_and_run_with_workstealing(suite, count)
 def test_invalid_or_empty_shards_fail(suite, count, group):
     result = run_pytest(suite, *split_args(count, group))
     assert result.returncode == (5 if count == 17 else 4), result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("weights", ["uneven", "zero", "mixed"])
+def test_recorded_timings_partition_once_and_only_store_fresh_measurements(
+    suite, weights
+):
+    baseline = collect(suite)
+    durations = dict.fromkeys(baseline, 0.0)
+    if weights != "zero":
+        durations[baseline[0]] = 100.0
+    if weights == "uneven":
+        durations.update(dict.fromkeys(baseline[1:], 1.0))
+        durations.pop(baseline[-1])  # A newly added test has no prior timing.
+    durations["test_deleted.py::test_old"] = 50.0
+    frozen = effective_durations(durations)
+    selected = []
+    measured = {}
+    for group in range(1, 4):
+        path = suite / "durations.json"
+        path.write_text(json.dumps(frozen))
+        args = [*split_args(3, group), "--durations-path", str(path)]
+        members = collect(suite, *args)
+        assert members
+        selected.extend(members)
+        result = run_pytest(
+            suite,
+            *args,
+            "-q",
+            "-n",
+            "2",
+            "--dist=worksteal",
+            "--store-durations",
+            "--clean-durations",
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        fresh = json.loads(path.read_text())
+        assert set(fresh) == set(members)
+        assert not measured.keys() & fresh.keys()
+        measured.update(fresh)
+    assert len(selected) == len(set(selected)) == len(baseline)
+    assert set(measured) == set(baseline)
+    assert all(value >= 0 for value in measured.values())

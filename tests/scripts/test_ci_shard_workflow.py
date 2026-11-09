@@ -22,7 +22,7 @@ def test_shard_jobs_use_generated_matrices_and_existing_parallelism(suite):
     config = workflow()
     prepare = config["jobs"]["prepare-shards"]
     assert f"{suite}_matrix" in prepare["outputs"]
-    generate = prepare["steps"][-1]
+    generate = next(step for step in prepare["steps"] if step.get("id") == "matrix")
     for os_name in ("linux", "windows", "macos"):
         variable = f"CI_{suite.upper()}_{os_name.upper()}_SHARDS"
         shard_count(config["env"][variable])
@@ -70,7 +70,7 @@ def test_browser_artifacts_identify_each_shard_and_run_attempt():
     upload = next(
         step
         for step in job["steps"]
-        if "actions/upload-artifact@" in step.get("uses", "")
+        if step.get("name") == "Upload Playwright failure artifacts"
     )
     name = upload["with"]["name"]
     for field in (
@@ -85,6 +85,96 @@ def test_browser_artifacts_identify_each_shard_and_run_attempt():
     assert upload["if"] == "failure()"
     assert upload["with"]["path"] == "test-results/"
     assert upload["with"]["retention-days"] == 7
+
+
+def test_timing_preparation_freezes_one_input_and_reuses_it_on_reruns():
+    prepare = workflow()["jobs"]["prepare-shards"]
+    assert prepare["permissions"] == {"contents": "read", "actions": "read"}
+    steps = {step.get("id"): step for step in prepare["steps"]}
+    assert steps["timings"]["run"] == "python -m scripts.ci_timings prepare"
+    assert (
+        steps["timings"]["env"]["CI_PYTEST_MATRIX"]
+        == "${{ steps.matrix.outputs.pytest_matrix }}"
+    )
+    assert (
+        steps["timings"]["env"]["CI_PLAYWRIGHT_MATRIX"]
+        == "${{ steps.matrix.outputs.playwright_matrix }}"
+    )
+    freeze = steps["freeze"]
+    assert freeze["if"] == "steps.timings.outputs.artifact_id == ''"
+    assert freeze["with"]["name"] == "ci-timings-input-v1"
+    assert freeze["with"]["retention-days"] == 30
+    assert freeze["with"].get("overwrite", False) is False
+    assert (
+        prepare["outputs"]["timings_input_id"]
+        == "${{ steps.timings.outputs.artifact_id || steps.freeze.outputs.artifact-id }}"
+    )
+
+
+@pytest.mark.parametrize("suite", ["pytest", "playwright"])
+def test_timing_shards_share_the_frozen_input_and_upload_only_after_success(suite):
+    job = workflow()["jobs"][f"{suite}-shards"]
+    assert job["permissions"] == {"contents": "read"}
+    assert job["env"]["CI_TIMINGS_SUITE"] == suite
+    assert (
+        job["env"]["CI_TIMINGS_INPUT_ID"]
+        == "${{ needs.prepare-shards.outputs.timings_input_id }}"
+    )
+    steps = job["steps"]
+    restore = next(
+        step for step in steps if step.get("name") == "Restore frozen timing input"
+    )
+    assert restore["with"]["artifact-ids"] == job["env"]["CI_TIMINGS_INPUT_ID"]
+    command = next(
+        step
+        for step in steps
+        if step.get("run", "").startswith("uv run --locked pytest ")
+    )
+    assert "--store-durations --clean-durations" in command["run"]
+    assert (
+        '--durations-path "${{ runner.temp }}/fcc-ci-timings/working/durations.json"'
+        in command["run"]
+    )
+    record = next(step for step in steps if step.get("name") == "Record shard timings")
+    upload = next(step for step in steps if step.get("name") == "Upload shard timings")
+    assert (
+        steps.index(restore)
+        < steps.index(command)
+        < steps.index(record)
+        < steps.index(upload)
+    )
+    assert (
+        "if" not in record and "if" not in upload
+    )  # Actions' default success() guard.
+    assert "${{ github.run_attempt }}" in upload["with"]["name"]
+    assert upload["with"]["retention-days"] == 30
+    assert upload["with"]["if-no-files-found"] == "error"
+
+
+def test_timing_collector_publishes_only_complete_current_attempts():
+    job = workflow()["jobs"]["collect-test-timings"]
+    assert set(job["needs"]) == {
+        "prepare-shards",
+        "pytest-summary",
+        "playwright-summary",
+    }
+    assert "if" not in job
+    assert job["permissions"] == {"contents": "read"}
+    download = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Download current-attempt shard timings"
+    )
+    assert (
+        download["with"]["pattern"]
+        == "ci-timings-shard-v1-*-attempt-${{ github.run_attempt }}"
+    )
+    assert not download["with"].get("merge-multiple", False)
+    upload = next(
+        step for step in job["steps"] if step.get("name") == "Publish complete timings"
+    )
+    assert upload["if"] == "steps.merge.outputs.complete == 'true'"
+    assert upload["with"]["retention-days"] == 30
 
 
 @pytest.mark.parametrize(

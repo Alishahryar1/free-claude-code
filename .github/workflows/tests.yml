@@ -82,9 +82,11 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      actions: read
     outputs:
       pytest_matrix: ${{ steps.matrix.outputs.pytest_matrix }}
       playwright_matrix: ${{ steps.matrix.outputs.playwright_matrix }}
+      timings_input_id: ${{ steps.timings.outputs.artifact_id || steps.freeze.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -101,6 +103,24 @@ jobs:
             --playwright-windows-shards "$CI_PLAYWRIGHT_WINDOWS_SHARDS" \
             --playwright-macos-shards "$CI_PLAYWRIGHT_MACOS_SHARDS" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare timing input
+        id: timings
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_PYTEST_MATRIX: ${{ steps.matrix.outputs.pytest_matrix }}
+          CI_PLAYWRIGHT_MATRIX: ${{ steps.matrix.outputs.playwright_matrix }}
+        run: python -m scripts.ci_timings prepare
+
+      - name: Freeze timing input
+        id: freeze
+        if: steps.timings.outputs.artifact_id == ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ci-timings-input-v1
+          path: ${{ runner.temp }}/fcc-ci-timings/baseline/
+          if-no-files-found: error
+          retention-days: 30
+
   pytest-shards:
     name: pytest (${{ matrix.os }}, shard ${{ matrix.shard }}/${{ matrix.shards }})
     needs: prepare-shards
@@ -108,6 +128,13 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+    env:
+      CI_PYTEST_MATRIX: ${{ needs.prepare-shards.outputs.pytest_matrix }}
+      CI_PLAYWRIGHT_MATRIX: ${{ needs.prepare-shards.outputs.playwright_matrix }}
+      CI_TIMINGS_INPUT_ID: ${{ needs.prepare-shards.outputs.timings_input_id }}
+      CI_TIMINGS_SUITE: pytest
+      CI_TIMINGS_SHARD: ${{ matrix.shard }}
+      CI_TIMINGS_SHARDS: ${{ matrix.shards }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare-shards.outputs.pytest_matrix) }}
@@ -123,11 +150,33 @@ jobs:
           runner-label: ${{ matrix.runner }}
           prepare-node: "true"
 
+      - name: Restore frozen timing input
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ needs.prepare-shards.outputs.timings_input_id }}
+          path: ${{ runner.temp }}/fcc-ci-timings/baseline/
+
+      - name: Prepare shard timing file
+        run: uv run --locked python -m scripts.ci_timings start
+
       - name: Run pytest
         run: >-
           uv run --locked pytest -v --tb=short -o thread_dump_timeout=15 --durations=50
           --splits ${{ matrix.shards }} --group ${{ matrix.shard }}
           --splitting-algorithm=least_duration
+          --store-durations --clean-durations
+          --durations-path "${{ runner.temp }}/fcc-ci-timings/working/durations.json"
+
+      - name: Record shard timings
+        run: uv run --locked python -m scripts.ci_timings record
+
+      - name: Upload shard timings
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ci-timings-shard-v1-pytest-${{ matrix.os }}-${{ matrix.shard }}-of-${{ matrix.shards }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fcc-ci-timings/result/
+          if-no-files-found: error
+          retention-days: 30
 
   playwright-shards:
     name: playwright (${{ matrix.os }}, shard ${{ matrix.shard }}/${{ matrix.shards }})
@@ -136,6 +185,13 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+    env:
+      CI_PYTEST_MATRIX: ${{ needs.prepare-shards.outputs.pytest_matrix }}
+      CI_PLAYWRIGHT_MATRIX: ${{ needs.prepare-shards.outputs.playwright_matrix }}
+      CI_TIMINGS_INPUT_ID: ${{ needs.prepare-shards.outputs.timings_input_id }}
+      CI_TIMINGS_SUITE: playwright
+      CI_TIMINGS_SHARD: ${{ matrix.shard }}
+      CI_TIMINGS_SHARDS: ${{ matrix.shards }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare-shards.outputs.playwright_matrix) }}
@@ -153,6 +209,15 @@ jobs:
       - name: Install Chromium
         run: uv run --locked playwright install --only-shell ${{ matrix.os == 'Linux' && '--with-deps chromium' || 'chromium' }}
 
+      - name: Restore frozen timing input
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ needs.prepare-shards.outputs.timings_input_id }}
+          path: ${{ runner.temp }}/fcc-ci-timings/baseline/
+
+      - name: Prepare shard timing file
+        run: uv run --locked python -m scripts.ci_timings start
+
       - name: Run Playwright
         run: >-
           uv run --locked pytest e2e -v --tb=short
@@ -161,6 +226,19 @@ jobs:
           --full-page-screenshot --output=test-results
           --splits ${{ matrix.shards }} --group ${{ matrix.shard }}
           --splitting-algorithm=least_duration
+          --store-durations --clean-durations
+          --durations-path "${{ runner.temp }}/fcc-ci-timings/working/durations.json"
+
+      - name: Record shard timings
+        run: uv run --locked python -m scripts.ci_timings record
+
+      - name: Upload shard timings
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ci-timings-shard-v1-playwright-${{ matrix.os }}-${{ matrix.shard }}-of-${{ matrix.shards }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fcc-ci-timings/result/
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload Playwright failure artifacts
         if: failure()
@@ -186,6 +264,47 @@ jobs:
           SHARDS_RESULT: ${{ needs.pytest-shards.result }}
         run: |
           test "$PREPARATION_RESULT" = success && test "$SHARDS_RESULT" = success
+
+  collect-test-timings:
+    name: Collect test timings
+    needs: [prepare-shards, pytest-summary, playwright-summary]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      CI_PYTEST_MATRIX: ${{ needs.prepare-shards.outputs.pytest_matrix }}
+      CI_PLAYWRIGHT_MATRIX: ${{ needs.prepare-shards.outputs.playwright_matrix }}
+      CI_TIMINGS_INPUT_ID: ${{ needs.prepare-shards.outputs.timings_input_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Restore frozen timing input
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ needs.prepare-shards.outputs.timings_input_id }}
+          path: ${{ runner.temp }}/fcc-ci-timings/baseline/
+
+      - name: Download current-attempt shard timings
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: ci-timings-shard-v1-*-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fcc-ci-timings/shards/
+
+      - name: Merge complete timing maps
+        id: merge
+        run: python -m scripts.ci_timings merge
+
+      - name: Publish complete timings
+        if: steps.merge.outputs.complete == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ci-timings-complete-v1-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fcc-ci-timings/complete/
+          if-no-files-found: error
+          retention-days: 30
 
   playwright-summary:
     name: playwright
