@@ -107,44 +107,24 @@ class ModelsListResponse(BaseModel):
 
 SUPPORTED_CLAUDE_MODELS = [
     ModelResponse(
-        id="claude-fable-5",
-        display_name="Claude Fable 5",
-        created_at="2026-06-09T00:00:00Z",
+        id="claude-fable-5-1",
+        display_name="Claude Fable 5.1",
+        created_at=DISCOVERED_MODEL_CREATED_AT,
     ),
     ModelResponse(
-        id="claude-opus-4-20250514",
-        display_name="Claude Opus 4",
-        created_at="2025-05-14T00:00:00Z",
+        id="claude-opus-5-5",
+        display_name="Claude Opus 5.5",
+        created_at=DISCOVERED_MODEL_CREATED_AT,
     ),
     ModelResponse(
-        id="claude-sonnet-4-20250514",
-        display_name="Claude Sonnet 4",
-        created_at="2025-05-14T00:00:00Z",
+        id="claude-sonnet-5-5",
+        display_name="Claude Sonnet 5.5",
+        created_at=DISCOVERED_MODEL_CREATED_AT,
     ),
     ModelResponse(
-        id="claude-haiku-4-20250514",
-        display_name="Claude Haiku 4",
-        created_at="2025-05-14T00:00:00Z",
-    ),
-    ModelResponse(
-        id="claude-3-opus-20240229",
-        display_name="Claude 3 Opus",
-        created_at="2024-02-29T00:00:00Z",
-    ),
-    ModelResponse(
-        id="claude-3-5-sonnet-20241022",
-        display_name="Claude 3.5 Sonnet",
-        created_at="2024-10-22T00:00:00Z",
-    ),
-    ModelResponse(
-        id="claude-3-haiku-20240307",
-        display_name="Claude 3 Haiku",
-        created_at="2024-03-07T00:00:00Z",
-    ),
-    ModelResponse(
-        id="claude-3-5-haiku-20241022",
-        display_name="Claude 3.5 Haiku",
-        created_at="2024-10-22T00:00:00Z",
+        id="claude-haiku-5-5",
+        display_name="Claude Haiku 5.5",
+        created_at=DISCOVERED_MODEL_CREATED_AT,
     ),
 ]
 

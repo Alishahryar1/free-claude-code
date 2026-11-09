@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.routing import ModelRouter
 from free_claude_code.config.api_keys import normalize_api_keys
 from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.config.model_refs import ModelFallback
@@ -40,6 +41,38 @@ def _cache_models(app, provider_id: str, *model_ids: str) -> None:
         provider_id,
         {ProviderModelInfo(model_id) for model_id in model_ids},
     )
+
+
+@pytest.mark.parametrize("view", ["claude", "claude-desktop"])
+@pytest.mark.parametrize("overrides", [False, True])
+def test_claude_shortcuts_are_exactly_four_current_versions_and_route_by_tier(
+    view, overrides
+):
+    expected = {
+        "claude-fable-5-1": "Claude Fable 5.1",
+        "claude-opus-5-5": "Claude Opus 5.5",
+        "claude-sonnet-5-5": "Claude Sonnet 5.5",
+        "claude-haiku-5-5": "Claude Haiku 5.5",
+    }
+    settings = _settings().model_copy(
+        update={
+            f"model_{tier}": f"deepseek/{tier}-target" if overrides else None
+            for tier in ("fable", "opus", "sonnet", "haiku")
+        }
+    )
+    response = TestClient(create_test_app(settings)).get(f"/v1/models?view={view}")
+    assert response.status_code == 200
+    shortcuts = {
+        row["id"]: row["display_name"]
+        for row in response.json()["data"]
+        if "/" not in row["id"]
+    }
+    assert list(shortcuts.items()) == list(expected.items())
+    router = ModelRouter(settings)
+    for model_id in shortcuts:
+        tier = model_id.split("-")[1]
+        target = f"deepseek/{tier}-target" if overrides else settings.model
+        assert router.resolve(model_id).primary.provider_model_ref == target
 
 
 @pytest.mark.parametrize("view", ["messages", "responses"])
@@ -124,7 +157,7 @@ def test_models_list_includes_configured_refs_cached_provider_models_and_aliases
     assert response.status_code == 200
     data = response.json()
     ids = [item["id"] for item in data["data"]]
-    assert ids[0] == "claude-fable-5"
+    assert ids[0] == "claude-fable-5-1"
     assert [model_id for model_id in ids if "/" in model_id] == [
         "anthropic/deepseek/deepseek-chat",
         "claude-3-freecc-no-thinking/deepseek/deepseek-chat",
@@ -144,8 +177,8 @@ def test_models_list_includes_configured_refs_cached_provider_models_and_aliases
         display_names["claude-3-freecc-no-thinking/open_router/meta/llama-3.3"]
         == "open_router/meta/llama-3.3 (no thinking)"
     )
-    assert "claude-sonnet-4-20250514" in ids
-    assert "claude-fable-5" in ids
+    assert "claude-sonnet-5-5" in ids
+    assert "claude-fable-5-1" in ids
     assert data["first_id"] == ids[0]
     assert data["last_id"] == ids[-1]
     assert data["has_more"] is False
@@ -276,14 +309,14 @@ def test_models_list_works_with_empty_discovery_catalog():
 
     assert response.status_code == 200
     ids = [item["id"] for item in response.json()["data"]]
-    assert ids[0] == "claude-fable-5"
+    assert ids[0] == "claude-fable-5-1"
     assert [model_id for model_id in ids if "/" in model_id] == [
         "anthropic/deepseek/deepseek-chat",
         "claude-3-freecc-no-thinking/deepseek/deepseek-chat",
         "anthropic/open_router/anthropic/claude-opus",
         "claude-3-freecc-no-thinking/open_router/anthropic/claude-opus",
     ]
-    assert "claude-sonnet-4-20250514" in ids
+    assert "claude-sonnet-5-5" in ids
 
 
 def test_direct_model_views_exclude_claude_aliases_and_duplicate_variants():
@@ -305,7 +338,7 @@ def test_direct_model_views_exclude_claude_aliases_and_duplicate_variants():
         "claude-3-freecc-no-thinking/open_router/plain-model",
         "open_router/reasoning-model",
     ]
-    assert "claude-sonnet-4-20250514" not in {row["id"] for row in messages["data"]}
+    assert "claude-sonnet-5-5" not in {row["id"] for row in messages["data"]}
     assert all("apiBackend" not in row for row in messages["data"])
     assert responses["data"][0] == {
         "object": "model",
