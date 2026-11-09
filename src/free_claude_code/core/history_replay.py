@@ -12,6 +12,11 @@ from .json_types import JsonObject, JsonValue
 from .openai_chat import ChatToolResultImages
 from .recovery_limits import RECOVERY_RETENTION_BYTES
 
+# Content block types known to be invalid in request bodies (CLI/proxy notifications)
+_BLOCKED_BLOCK_TYPES = frozenset({
+    "tool_addition",
+})
+
 type HistoryProtocol = Literal["responses", "messages", "chat", "gemini"]
 _PREFIX = "fcc:history:v1:"
 _ASSOCIATED_PREFIX = "fcc:history:v2:"
@@ -393,7 +398,12 @@ def resolve_messages_replay(content: Sequence[JsonValue]) -> list[JsonValue]:
         block[key] = encode_replay(ReplayRecord(record.origin, record.native))
         if anchor and final:
             removed.add(final[0])
-    return [block for index, block in enumerate(blocks) if index not in removed]
+    return [
+        block for index, block in enumerate(blocks)
+        if index not in removed and (
+            not isinstance(block, dict) or block.get("type") not in _BLOCKED_BLOCK_TYPES
+        )
+    ]
 
 
 def readable_reasoning(item: Mapping[str, JsonValue]) -> list[tuple[str, bool]]:
@@ -879,10 +889,13 @@ def _prepare_messages_content(
     has_reasoning = False
     for index, block in enumerate(content):
         values: list[JsonValue] = []
-        if not isinstance(block, dict) or block.get("type") not in {
-            "thinking",
-            "redacted_thinking",
-        }:
+        if not isinstance(block, dict):
+            continue
+        block_type = block.get("type")
+        if block_type in _BLOCKED_BLOCK_TYPES:
+            # Filter out invalid CLI/proxy notification block types (e.g., tool_addition)
+            continue
+        if block_type not in {"thinking", "redacted_thinking"}:
             values.append(block)
         else:
             record = _record(block, "signature", "data", destination=destination)
