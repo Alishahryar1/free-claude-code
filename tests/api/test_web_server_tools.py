@@ -30,7 +30,11 @@ from free_claude_code.application.web_tools.request import (
     plan_automatic_web_search,
     unsupported_server_tool_error,
 )
-from free_claude_code.application.web_tools.service import WebToolService
+from free_claude_code.application.web_tools.service import (
+    WebToolService,
+    _search_summary,
+)
+from free_claude_code.config.admin.manifest import FIELD_BY_KEY
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.config.settings import Settings
@@ -58,6 +62,7 @@ from free_claude_code.core.openai_responses.provider_input import (
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_recovery import ContinuationSeed
+from free_claude_code.core.token_estimation import estimate_text_tokens
 from free_claude_code.core.version import package_version
 from free_claude_code.core.web_tools import WebFetchResult, WebSearchResult
 from free_claude_code.messaging.event_parser import parse_cli_event
@@ -65,7 +70,9 @@ from free_claude_code.runtime.web_tools import egress as web_egress
 from free_claude_code.runtime.web_tools.client import (
     HTTPWebToolsClient,
     _drain_response_body_capped,
+    _mcp_json,
     _read_response_body_capped,
+    _run_parallel_web_search,
 )
 from free_claude_code.runtime.web_tools.egress import enforce_web_fetch_egress
 from tests.web_tools_support import StubWebToolsClient
@@ -380,6 +387,7 @@ def _automatic_search_service(
     provider: ScriptedSelectionProvider,
     *,
     settings: Settings | None = None,
+    web_tools: HTTPWebToolsClient | None = None,
 ) -> MessagesHandler:
     effective_settings = settings or Settings()
     return MessagesHandler(
@@ -390,7 +398,7 @@ def _automatic_search_service(
             _PROVIDER_IDS[0],
             provider_model="upstream-model",
         ),
-        web_tools=StubWebToolsClient(),
+        web_tools=web_tools or StubWebToolsClient(),
     )
 
 
@@ -1931,6 +1939,324 @@ async def test_service_rejects_listed_server_tools_for_every_provider(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("response_format", ["json", "multiline_sse"])
+@pytest.mark.parametrize("cleanup_failure", [False, True])
+async def test_parallel_search_mcp_invokes_advertised_tool_and_preserves_excerpts(
+    response_format: str,
+    cleanup_failure: bool,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "DELETE":
+            if cleanup_failure:
+                raise httpx.ConnectError("session cleanup failed", request=request)
+            return httpx.Response(200)
+        payload = json.loads(request.content)
+        method = payload["method"]
+        if method == "initialize":
+            return httpx.Response(
+                200,
+                headers={"Mcp-Session-Id": "test-session"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {"protocolVersion": "2025-03-26"},
+                },
+            )
+        if method == "notifications/initialized":
+            return httpx.Response(202)
+        if method == "tools/list":
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "result": {
+                        "tools": [{"name": "web_search"}, {"name": "web_fetch"}]
+                    },
+                },
+            )
+        assert payload["params"] == {
+            "name": "web_search",
+            "arguments": {
+                "objective": "current MCP protocol",
+                "search_queries": ["current MCP protocol"],
+            },
+        }
+        result = {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "result": {
+                "structuredContent": {
+                    "results": [
+                        {
+                            "url": "https://example.com/mcp",
+                            "title": None,
+                            "excerpts": ["Protocol evidence", "More evidence"],
+                        }
+                    ]
+                }
+            },
+        }
+        if response_format == "multiline_sse":
+            before_result, result_body = json.dumps(result).split('"result":', 1)
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                text=(
+                    "event: progress\n"
+                    'data: {"jsonrpc":"2.0","method":"notifications/progress"}\n\n'
+                    "event: message\n"
+                    f"data: {before_result}\n"
+                    f'data: "result":{result_body}\n\n'
+                    "event: progress\n"
+                    'data: {"jsonrpc":"2.0","method":"notifications/progress"}\n\n'
+                ),
+            )
+        return httpx.Response(200, json=result)
+
+    async_client = httpx.AsyncClient
+
+    with (
+        patch(
+            "free_claude_code.runtime.web_tools.client._PARALLEL_SEARCH_MCP_URL",
+            "https://fixture.invalid/mcp",
+        ),
+        patch(
+            "httpx.AsyncClient",
+            side_effect=lambda **kwargs: async_client(
+                transport=httpx.MockTransport(handle), **kwargs
+            ),
+        ),
+    ):
+        results = await _run_parallel_web_search("current MCP protocol")
+
+    assert results == [
+        WebSearchResult(
+            url="https://example.com/mcp",
+            title="https://example.com/mcp",
+            content="Protocol evidence\nMore evidence",
+        )
+    ]
+    assert [request.method for request in requests] == [
+        "POST",
+        "POST",
+        "POST",
+        "POST",
+        "DELETE",
+    ]
+    assert all(
+        request.headers["user-agent"].startswith(
+            "Mozilla/5.0 compatible; free-claude-code/"
+        )
+        for request in requests
+    )
+    assert requests[-1].headers["mcp-session-id"] == "test-session"
+    assert requests[-1].headers["mcp-protocol-version"] == "2025-03-26"
+
+
+def test_web_search_provider_defaults_to_duckduckgo_and_requires_explicit_parallel() -> (
+    None
+):
+    assert Settings().web_search_provider == "duckduckgo"
+    assert (
+        Settings.model_validate({"WEB_SEARCH_PROVIDER": "parallel"}).web_search_provider
+        == "parallel"
+    )
+    with pytest.raises(ValueError, match="WEB_SEARCH_PROVIDER"):
+        Settings.model_validate({"WEB_SEARCH_PROVIDER": "unknown"})
+
+
+def test_duckduckgo_search_summary_is_byte_for_byte_compatible() -> None:
+    assert (
+        _search_summary(
+            "incumbent query",
+            [
+                WebSearchResult(
+                    title="Existing title", url="https://example.com/existing"
+                )
+            ],
+        )
+        == "Search results for: incumbent query\n\n1. Existing title\nhttps://example.com/existing"
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "event: message\ndata: not-json\n\n",
+        "event: message\ndata: []\n\n",
+        "event: keepalive\n\n",
+        'event: message\ndata: {"jsonrpc":"2.0","id":9,"result":{}}\n\n',
+    ],
+)
+def test_parallel_mcp_rejects_invalid_or_unrelated_sse_responses(payload: str) -> None:
+    response = httpx.Response(
+        200,
+        headers={"Content-Type": "text/event-stream"},
+        text=payload,
+        request=httpx.Request("POST", "https://fixture.invalid/mcp"),
+    )
+
+    with pytest.raises(ValueError, match="JSON-RPC"):
+        _mcp_json(response, request_id=3)
+
+
+@pytest.mark.parametrize("response_format", ["json", "sse"])
+@pytest.mark.parametrize(
+    ("payload", "request_id"),
+    [
+        ({"jsonrpc": "2.0", "id": 9, "result": {}}, 3),
+        ({"jsonrpc": "2.0", "id": True, "result": {}}, 1),
+        ({"id": 3, "result": {}}, 3),
+        ({"jsonrpc": "1.0", "id": 3, "result": {}}, 3),
+        ({"jsonrpc": "2.0", "result": {}}, 3),
+        ({"jsonrpc": "2.0", "id": 3}, 3),
+        (
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "result": {},
+                "error": {"code": -32000, "message": "invalid"},
+            },
+            3,
+        ),
+    ],
+)
+def test_parallel_mcp_requires_matching_jsonrpc_response_envelopes(
+    response_format: str,
+    payload: dict[str, object],
+    request_id: int,
+) -> None:
+    body = json.dumps(payload)
+    if response_format == "sse":
+        body = f"event: message\ndata: {body}\n\n"
+    response = httpx.Response(
+        200,
+        headers={
+            "Content-Type": (
+                "text/event-stream" if response_format == "sse" else "application/json"
+            )
+        },
+        text=body,
+        request=httpx.Request("POST", "https://fixture.invalid/mcp"),
+    )
+
+    with pytest.raises(ValueError, match="JSON-RPC"):
+        _mcp_json(response, request_id=request_id)
+
+
+@pytest.mark.parametrize("response_format", ["json", "sse"])
+def test_parallel_mcp_preserves_matching_jsonrpc_server_errors(
+    response_format: str,
+) -> None:
+    body = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "error": {"code": -32000, "message": "search unavailable"},
+        }
+    )
+    if response_format == "sse":
+        body = f"event: message\ndata: {body}\n\n"
+    response = httpx.Response(
+        200,
+        headers={
+            "Content-Type": (
+                "text/event-stream" if response_format == "sse" else "application/json"
+            )
+        },
+        text=body,
+        request=httpx.Request("POST", "https://fixture.invalid/mcp"),
+    )
+
+    with pytest.raises(ValueError, match="server returned a JSON-RPC error"):
+        _mcp_json(response, request_id=3)
+
+
+@pytest.mark.asyncio
+async def test_forced_messages_handler_uses_opted_in_parallel_and_emits_excerpts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parallel = AsyncMock(
+        return_value=[
+            WebSearchResult(
+                title="Parallel result",
+                url="https://example.com/parallel",
+                content="model-visible forced excerpt",
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        "free_claude_code.runtime.web_tools.client._run_parallel_web_search", parallel
+    )
+    settings = Settings.model_validate(
+        {"ENABLE_WEB_SERVER_TOOLS": True, "WEB_SEARCH_PROVIDER": "parallel"}
+    )
+    provider_resolver = MagicMock()
+    service = MessagesHandler(
+        settings,
+        provider_resolver=provider_resolver,
+        model_router=FixedProviderModelRouter(settings, _PROVIDER_IDS[0]),
+        web_tools=HTTPWebToolsClient(search_provider=settings.web_search_provider),
+    )
+    request = MessagesRequest(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=100,
+        stream=True,
+        messages=[Message(role="user", content="Search for runtime evidence")],
+        tools=[Tool(name="web_search", type="web_search_20250305")],
+        tool_choice={"type": "tool", "name": "web_search"},
+    )
+
+    response = await service.create(request)
+
+    assert isinstance(response, StreamingResponse)
+    raw = await _streaming_body_text(response)
+    parallel.assert_awaited_once_with("Search for runtime evidence")
+    assert "model-visible forced excerpt" in text_content(parse_sse_text(raw))
+    provider_resolver.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_automatic_messages_handler_uses_opted_in_parallel_and_emits_excerpts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parallel = AsyncMock(
+        return_value=[
+            WebSearchResult(
+                title="Parallel result",
+                url="https://example.com/parallel",
+                content="model-visible automatic excerpt",
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        "free_claude_code.runtime.web_tools.client._run_parallel_web_search", parallel
+    )
+    provider = ScriptedSelectionProvider(
+        _provider_tool_events(arguments={"query": "selected parallel query"})
+    )
+    settings = Settings.model_validate({"WEB_SEARCH_PROVIDER": "parallel"})
+    service = _automatic_search_service(
+        provider,
+        settings=settings,
+        web_tools=HTTPWebToolsClient(search_provider=settings.web_search_provider),
+    )
+
+    response = await service.create(
+        _automatic_search_request(), request_id="req_parallel_automatic"
+    )
+
+    assert isinstance(response, StreamingResponse)
+    raw = await _streaming_body_text(response)
+    parallel.assert_awaited_once_with("selected parallel query")
+    assert "model-visible automatic excerpt" in text_content(parse_sse_text(raw))
+
+
+@pytest.mark.asyncio
 async def test_automatic_selection_stays_private_until_provider_finishes() -> None:
     release = asyncio.Event()
     provider = ScriptedSelectionProvider(
@@ -2007,6 +2333,160 @@ async def test_local_tool_start_precedes_outbound_and_cancellation_closes_operat
             pending.cancel()
             await asyncio.gather(pending, return_exceptions=True)
         await body.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("automatic", "excerpt_character", "additional_calls"),
+    [(False, "🧠", 0), (True, "界", 0), (True, "界", 1)],
+    ids=["forced-dense-emoji", "automatic-dense-unicode", "automatic-multiple"],
+)
+async def test_parallel_search_respects_real_request_token_budget(
+    automatic: bool,
+    excerpt_character: str,
+    additional_calls: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parallel = AsyncMock(
+        return_value=[
+            WebSearchResult(
+                title="Relevant evidence",
+                url="https://example.com/evidence",
+                content=excerpt_character * 24_000,
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        "free_claude_code.runtime.web_tools.client._run_parallel_web_search", parallel
+    )
+    settings = Settings.model_validate({"WEB_SEARCH_PROVIDER": "parallel"})
+    if automatic:
+        provider = ScriptedSelectionProvider(
+            _provider_tool_events(
+                arguments={"query": "selected evidence"},
+                additional_calls=additional_calls,
+            )
+        )
+        service = _automatic_search_service(
+            provider,
+            settings=settings,
+            web_tools=HTTPWebToolsClient(search_provider=settings.web_search_provider),
+        )
+        request = _automatic_search_request()
+    else:
+        service = MessagesHandler(
+            settings,
+            provider_resolver=MagicMock(),
+            model_router=FixedProviderModelRouter(settings, _PROVIDER_IDS[0]),
+            web_tools=HTTPWebToolsClient(search_provider=settings.web_search_provider),
+        )
+        request = MessagesRequest(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=100,
+            stream=True,
+            messages=[Message(role="user", content="Search for dense evidence")],
+            tools=[Tool(name="web_search", type="web_search_20250305")],
+            tool_choice={"type": "tool", "name": "web_search"},
+        )
+
+    response = await service.create(request)
+
+    assert isinstance(response, StreamingResponse)
+    events = parse_sse_text(await _streaming_body_text(response))
+    summary = text_content(events)
+    assert excerpt_character in summary
+    assert estimate_text_tokens(summary) <= 100
+    assert len(summary) <= 400
+    final_usage = next(
+        event.data["usage"] for event in events if event.event == "message_delta"
+    )
+    assert final_usage["output_tokens"] <= 100
+    assert final_usage["server_tool_use"]["web_search_requests"] == 1 + additional_calls
+    assert parallel.await_count == 1 + additional_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup_failure", [False, True])
+async def test_parallel_malformed_initialize_still_closes_allocated_session(
+    cleanup_failure: bool,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "DELETE":
+            if cleanup_failure:
+                raise httpx.ConnectError("session cleanup failed", request=request)
+            return httpx.Response(200)
+        return httpx.Response(
+            200,
+            headers={"Mcp-Session-Id": "allocated-before-malformed-body"},
+            content=b"not-json",
+        )
+
+    async_client = httpx.AsyncClient
+    with (
+        patch(
+            "free_claude_code.runtime.web_tools.client._PARALLEL_SEARCH_MCP_URL",
+            "https://fixture.invalid/mcp",
+        ),
+        patch(
+            "httpx.AsyncClient",
+            side_effect=lambda **kwargs: async_client(
+                transport=httpx.MockTransport(handle), **kwargs
+            ),
+        ),
+        pytest.raises(json.JSONDecodeError),
+    ):
+        await _run_parallel_web_search("cleanup query")
+
+    assert [request.method for request in requests] == ["POST", "DELETE"]
+    assert requests[-1].headers["mcp-session-id"] == "allocated-before-malformed-body"
+
+
+@pytest.mark.asyncio
+async def test_parallel_cleanup_failure_preserves_request_cancellation() -> None:
+    requests: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "DELETE":
+            raise httpx.ConnectError("session cleanup failed", request=request)
+        return httpx.Response(
+            200,
+            headers={"Mcp-Session-Id": "cancelled-session"},
+            json={"jsonrpc": "2.0", "id": 1, "result": {}},
+        )
+
+    async_client = httpx.AsyncClient
+    with (
+        patch(
+            "free_claude_code.runtime.web_tools.client._PARALLEL_SEARCH_MCP_URL",
+            "https://fixture.invalid/mcp",
+        ),
+        patch(
+            "httpx.AsyncClient",
+            side_effect=lambda **kwargs: async_client(
+                transport=httpx.MockTransport(handle), **kwargs
+            ),
+        ),
+        patch(
+            "free_claude_code.runtime.web_tools.client._mcp_json",
+            side_effect=asyncio.CancelledError,
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _run_parallel_web_search("cancelled query")
+
+    assert [request.method for request in requests] == ["POST", "DELETE"]
+
+
+def test_web_search_provider_admin_field_is_native_select() -> None:
+    field = FIELD_BY_KEY["WEB_SEARCH_PROVIDER"]
+    assert field.field_type == "select"
+    assert field.settings_attr == "web_search_provider"
+    assert field.options == ("duckduckgo", "parallel")
+    assert field.resolved_default() == "duckduckgo"
 
 
 @pytest.mark.asyncio

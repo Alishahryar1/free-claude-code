@@ -33,6 +33,7 @@ from free_claude_code.core.anthropic.server_tool_sse import (
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_delivery import bind_stream_delivery
+from free_claude_code.core.token_estimation import estimate_text_tokens
 from free_claude_code.core.trace import close_stream_input, trace_event
 from free_claude_code.core.web_tools import WebSearchResult
 
@@ -70,6 +71,7 @@ class WebToolService:
         self._executor = executor
         self._token_counter = token_counter
         self._enabled = settings.enable_web_server_tools
+        self._search_provider = settings.web_search_provider
         self._verbose_client_errors = settings.log_api_error_tracebacks
         self._egress = WebFetchEgressPolicy(
             allow_private_network_targets=settings.web_fetch_allow_private_networks,
@@ -118,6 +120,7 @@ class WebToolService:
             tool_input=tool_input,
             input_tokens=input_tokens,
             response_model=routed.resolved.original_model,
+            max_output_tokens=request.max_tokens,
         )
 
     async def _stream_automatic_search(
@@ -252,9 +255,14 @@ class WebToolService:
                     yield frame
                 summaries.append(summary)
 
+        summary = "\n\n".join(summaries)
+        if self._search_provider == "parallel":
+            summary = _bounded_parallel_search_summary(
+                summary, routed.request.max_tokens
+            )
         for frame in server_tool_finish_frames(
             contexts[0],
-            summary="\n\n".join(summaries),
+            summary=summary,
             index=len(contexts) * 2,
             request_count=executed,
         ):
@@ -276,6 +284,7 @@ class WebToolService:
         response_model: str,
         provider_usage: Mapping[str, object] | None = None,
         domains: WebSearchDomainFilter | None = None,
+        max_output_tokens: int | None = None,
     ) -> AsyncIterator[str]:
         context = ServerToolResponseContext(
             message_id=f"msg_{uuid.uuid4()}",
@@ -291,6 +300,8 @@ class WebToolService:
 
         if tool_name == "web_search":
             result_block, summary = await self._search_result(context, domains)
+            if self._search_provider == "parallel":
+                summary = _bounded_parallel_search_summary(summary, max_output_tokens)
         else:
             try:
                 fetched = await self._client.fetch(
@@ -337,8 +348,32 @@ def _search_summary(query: str, results: list[WebSearchResult]) -> str:
         return f"No web search results found for: {query}"
     lines = [f"Search results for: {query}"]
     for index, result in enumerate(results, start=1):
-        lines.append(f"{index}. {result.title}\n{result.url}")
+        item = f"{index}. {result.title}\n{result.url}"
+        if result.content:
+            item = f"{item}\n{result.content}"
+        lines.append(item)
     return "\n\n".join(lines)
+
+
+def _bounded_parallel_search_summary(summary: str, max_tokens: int | None) -> str:
+    if max_tokens is not None and max_tokens <= 0:
+        return ""
+
+    character_limit = 24_000
+    if max_tokens is not None:
+        character_limit = min(character_limit, max_tokens * 4)
+    upper = min(len(summary), character_limit)
+    if max_tokens is None or estimate_text_tokens(summary[:upper]) <= max_tokens:
+        return summary[:upper]
+
+    lower = 0
+    while lower < upper:
+        middle = (lower + upper + 1) // 2
+        if estimate_text_tokens(summary[:middle]) <= max_tokens:
+            lower = middle
+        else:
+            upper = middle - 1
+    return summary[:lower]
 
 
 async def _iterate_chunks(chunks: list[str]) -> AsyncIterator[str]:
