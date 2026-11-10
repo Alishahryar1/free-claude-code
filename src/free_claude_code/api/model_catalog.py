@@ -107,8 +107,8 @@ class ModelsListResponse(BaseModel):
 
 SUPPORTED_CLAUDE_MODELS = [
     ModelResponse(
-        id="claude-fable-5-1",
-        display_name="Claude Fable 5.1",
+        id="claude-fable-5-2",
+        display_name="Claude Fable 5.2",
         created_at=DISCOVERED_MODEL_CREATED_AT,
     ),
     ModelResponse(
