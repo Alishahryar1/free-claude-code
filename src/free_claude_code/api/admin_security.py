@@ -59,19 +59,25 @@ def _origin_matches_host(origin: str | None, host: str | None) -> bool:
     """Return True when the Origin matches the request Host (same-origin check).
 
     Absent Origin (direct navigation / non-browser clients) is always allowed.
+    Parses both sides with urlsplit so IPv6 brackets are handled correctly:
+    Origin: http://[::1]:8082  and  Host: [::1]:8082  both yield hostname=::1,
+    port=8082 and compare equal.
     """
     if not origin:
         return True
     if not host:
         return False
     try:
-        parsed = urlsplit(origin)
-        _ = parsed.port
+        parsed_origin = urlsplit(origin)
+        _ = parsed_origin.port
+        parsed_host = urlsplit(f"//{host}")
+        _ = parsed_host.port
     except ValueError:
         return False
-    hostname = parsed.hostname or ""
-    origin_authority = f"{hostname}:{parsed.port}" if parsed.port else hostname
-    return origin_authority == host.lower().strip()
+    return (
+        (parsed_origin.hostname or "").lower() == (parsed_host.hostname or "").lower()
+        and parsed_origin.port == parsed_host.port
+    )
 
 
 def _admin_allow_remote(request: Request) -> bool:
