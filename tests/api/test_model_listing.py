@@ -49,7 +49,7 @@ def test_claude_shortcuts_are_exactly_four_current_versions_and_route_by_tier(
     view, overrides
 ):
     expected = {
-        "claude-fable-5-1": "Claude Fable 5.1",
+        "claude-fable-5-2": "Claude Fable 5.2",
         "claude-opus-5-5": "Claude Opus 5.5",
         "claude-sonnet-5-5": "Claude Sonnet 5.5",
         "claude-haiku-5-5": "Claude Haiku 5.5",
@@ -157,7 +157,7 @@ def test_models_list_includes_configured_refs_cached_provider_models_and_aliases
     assert response.status_code == 200
     data = response.json()
     ids = [item["id"] for item in data["data"]]
-    assert ids[0] == "claude-fable-5-1"
+    assert ids[0] == "claude-fable-5-2"
     assert [model_id for model_id in ids if "/" in model_id] == [
         "anthropic/deepseek/deepseek-chat",
         "claude-3-freecc-no-thinking/deepseek/deepseek-chat",
@@ -178,7 +178,7 @@ def test_models_list_includes_configured_refs_cached_provider_models_and_aliases
         == "open_router/meta/llama-3.3 (no thinking)"
     )
     assert "claude-sonnet-5-5" in ids
-    assert "claude-fable-5-1" in ids
+    assert "claude-fable-5-2" in ids
     assert data["first_id"] == ids[0]
     assert data["last_id"] == ids[-1]
     assert data["has_more"] is False
@@ -309,7 +309,7 @@ def test_models_list_works_with_empty_discovery_catalog():
 
     assert response.status_code == 200
     ids = [item["id"] for item in response.json()["data"]]
-    assert ids[0] == "claude-fable-5-1"
+    assert ids[0] == "claude-fable-5-2"
     assert [model_id for model_id in ids if "/" in model_id] == [
         "anthropic/deepseek/deepseek-chat",
         "claude-3-freecc-no-thinking/deepseek/deepseek-chat",
