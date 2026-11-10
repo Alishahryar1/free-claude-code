@@ -1,8 +1,10 @@
 """Test sharding and required summaries are wired into the CI workflow."""
 
 import os
+import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -63,6 +65,53 @@ def test_workflow_uses_three_shards_except_two_for_macos_pytest():
         "CI_PLAYWRIGHT_WINDOWS_SHARDS": "3",
         "CI_PLAYWRIGHT_MACOS_SHARDS": "3",
     }
+
+
+@pytest.mark.parametrize("suite", ["pytest", "playwright"])
+def test_external_timing_path_preserves_config_and_collection_scope(tmp_path, suite):
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n', encoding="utf-8"
+    )
+    for directory in ("tests", "e2e", "smoke"):
+        path = checkout / directory
+        path.mkdir()
+        (path / f"test_{directory}.py").write_text(
+            'raise RuntimeError("Live smoke must not be collected")\n'
+            if directory == "smoke"
+            else f"def test_{directory}(): pass\n",
+            encoding="utf-8",
+        )
+    runner_temp = tmp_path / "runner temp"
+    timing_path = runner_temp / "fcc-ci-timings/working/durations.json"
+    timing_path.parent.mkdir(parents=True)
+    timing_path.write_text("{}", encoding="utf-8")
+    job = workflow()["jobs"][f"{suite}-shards"]
+    command = next(
+        step["run"]
+        for step in job["steps"]
+        if step.get("name") == ("Run pytest" if suite == "pytest" else "Run Playwright")
+    )
+    command = (
+        command.replace("${{ runner.temp }}", runner_temp.as_posix())
+        .replace("${{ matrix.shards }}", "1")
+        .replace("${{ matrix.shard }}", "1")
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", *shlex.split(command)[3:], "--collect-only"],
+        cwd=checkout,
+        env={**os.environ, "PYTEST_ADDOPTS": "", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": ""},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "configfile: pyproject.toml" in result.stdout
+    assert "collected 1 item" in result.stdout
+    target = "tests" if suite == "pytest" else "e2e"
+    assert f"test_{target}.py" in result.stdout
 
 
 def test_browser_artifacts_identify_each_shard_and_run_attempt():
