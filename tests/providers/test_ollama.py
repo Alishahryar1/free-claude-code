@@ -63,7 +63,9 @@ def test_init_normalizes_openai_base_url(configured: str, expected: str) -> None
     assert provider._provider_name == "OLLAMA"
     assert provider._base_url == expected
     assert provider._api_key == "ollama"
-    assert openai_client.call_args.kwargs["base_url"] == expected
+    assert openai_client.call_args.kwargs["base_url"] == expected.replace(
+        "localhost", "127.0.0.1"
+    )
 
 
 def test_cloud_init_uses_fixed_openai_endpoint_and_api_key() -> None:
