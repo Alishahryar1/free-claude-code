@@ -4,6 +4,7 @@ import asyncio
 import re
 import tempfile
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Literal
@@ -159,7 +160,7 @@ class SdkRuntime:
             result = await self._running().rpc.models.list(
                 ModelsListRequest(), timeout=SDK_RPC_TIMEOUT
             )
-            return tuple(
+            named = tuple(
                 _model(model)
                 for model in result.models
                 if model.id.strip()
@@ -169,6 +170,20 @@ class SdkRuntime:
                     or model.policy.state is ModelPolicyState.ENABLED
                 )
             )
+            if named:
+                return named
+            auto_candidate = next(
+                (m for m in result.models if m.id.strip().casefold() == "auto"),
+                None,
+            )
+            if auto_candidate is not None:
+                if (
+                    auto_candidate.policy is not None
+                    and auto_candidate.policy.state is not ModelPolicyState.ENABLED
+                ):
+                    return ()
+                return (_auto_model(auto_candidate),)
+            return (_default_auto_model(),)
         except Exception:
             raise CopilotUnavailable(
                 "Could not discover Copilot subscription models. Check the selected account and its model policies."
@@ -350,11 +365,17 @@ class SdkSession:
         self._closed = True
 
 
-def _model(model: Model) -> CopilotModel:
-    limits = model.capabilities.limits
-    supports = model.capabilities.supports
+def _model(model: Model, *, canonical_id: str | None = None) -> CopilotModel:
+    capabilities = getattr(model, "capabilities", None)
+    limits = getattr(capabilities, "limits", None) if capabilities is not None else None
+    supports = (
+        getattr(capabilities, "supports", None) if capabilities is not None else None
+    )
     adaptive: Literal["unsupported", "optional", "required"] | None = None
-    if supports is not None and supports.adaptive_thinking is not None:
+    if (
+        supports is not None
+        and getattr(supports, "adaptive_thinking", None) is not None
+    ):
         modes: dict[
             AdaptiveThinkingSupport, Literal["unsupported", "optional", "required"]
         ] = {
@@ -362,18 +383,22 @@ def _model(model: Model) -> CopilotModel:
             AdaptiveThinkingSupport.OPTIONAL: "optional",
             AdaptiveThinkingSupport.REQUIRED: "required",
         }
-        adaptive = modes[supports.adaptive_thinking]
-    vision = supports.vision if supports is not None else None
-    effort_support = supports.reasoning_effort if supports is not None else None
-    efforts = (
-        tuple(model.supported_reasoning_efforts)
-        if model.supported_reasoning_efforts is not None
+        adaptive = modes.get(supports.adaptive_thinking)
+    vision = getattr(supports, "vision", None) if supports is not None else None
+    effort_support = (
+        getattr(supports, "reasoning_effort", None) if supports is not None else None
+    )
+    supported_efforts = getattr(model, "supported_reasoning_efforts", None)
+    efforts = tuple(supported_efforts) if supported_efforts is not None else None
+    output = getattr(limits, "max_output_tokens", None) if limits is not None else None
+    context = (
+        getattr(limits, "max_context_window_tokens", None)
+        if limits is not None
         else None
     )
-    output = limits.max_output_tokens if limits is not None else None
-    context = limits.max_context_window_tokens if limits is not None else None
+    effective_id = canonical_id or model.id
     info = ProviderModelInfo(
-        model_id=model.id,
+        model_id=effective_id,
         reasoning_capability=reasoning_capability_from_options(
             {"supported_efforts": efforts}
         ),
@@ -398,8 +423,39 @@ def _model(model: Model) -> CopilotModel:
             supports_vision=vision,
         ),
         efforts,
-        model.default_reasoning_effort,
+        getattr(model, "default_reasoning_effort", None),
     )
+
+
+def _default_auto_model() -> CopilotModel:
+    info = ProviderModelInfo(
+        model_id="auto",
+        supports_thinking=None,
+        input_modalities=frozenset({ModelInputModality.TEXT}),
+        context_window_tokens=None,
+        max_output_tokens=None,
+    )
+    return CopilotModel(
+        info=info,
+        messages=MessagesModelCapabilities(),
+        supported_efforts=None,
+        default_effort=None,
+    )
+
+
+def _auto_model(model: Model) -> CopilotModel:
+    parsed = _model(model, canonical_id="auto")
+    if parsed.info.input_modalities is None:
+        return CopilotModel(
+            replace(
+                parsed.info,
+                input_modalities=frozenset({ModelInputModality.TEXT}),
+            ),
+            parsed.messages,
+            parsed.supported_efforts,
+            parsed.default_effort,
+        )
+    return parsed
 
 
 def _endpoint(endpoint: ProviderEndpoint, model_id: str) -> CopilotEndpoint:
@@ -453,8 +509,14 @@ def _endpoint(endpoint: ProviderEndpoint, model_id: str) -> CopilotEndpoint:
     expires = None
     token = endpoint.session_token
     if token is not None:
+        token_model = token.model.strip() if token.model is not None else None
+        token_matches = (
+            token_model is None
+            or model_id.strip().casefold() == "auto"
+            or token_model.casefold() == model_id.strip().casefold()
+        )
         if (
-            token.model not in {None, model_id}
+            not token_matches
             or not token.token
             or _HEADER_NAME.fullmatch(token.header) is None
             or any(character in token.token for character in "\r\n\0")
