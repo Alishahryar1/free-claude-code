@@ -7,8 +7,6 @@ or directly via:
     uv run python server.py
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 from free_claude_code.cli.process_registry import kill_all_best_effort
