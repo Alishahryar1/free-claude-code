@@ -135,18 +135,38 @@ def test_rerun_reuses_original_input_even_when_cold(run, tmp_path):
     assert timing.read_bundle(tmp_path) == (original, empty)
 
 
-@pytest.mark.parametrize("problem", ["missing", "sha", "matrix"])
-def test_rerun_never_silently_repartitions(run, tmp_path, problem):
+@pytest.mark.parametrize("warm", [False, True])
+def test_rerun_rebuilds_missing_input_for_restarted_shards(run, tmp_path, warm):
+    source = timing.Run(2, 1, "b" * 40, run.matrices)
+    github = FakeGitHub(
+        runs=[prior(source)] if warm else [],
+        artifacts={2: [artifact(20, timing.COMPLETE_PREFIX + "1")]},
+        blobs={20: archive(source.manifest("complete"))},
+    )
+    rerun = timing.Run(run.run_id, 2, run.sha, run.matrices)
+    assert timing.prepare(rerun, tmp_path, github) is None
+    manifest, restored = timing.read_bundle(tmp_path)
+    assert manifest == rerun.manifest("input") | {
+        "source_artifact_id": 20 if warm else None
+    }
+    assert restored == (maps() if warm else {name: {} for name in timing.MAP_NAMES})
+    assert github.queried_history
+    rerun.check_input(manifest)
+
+
+@pytest.mark.parametrize("problem", ["sha", "matrix", "duplicate", "download"])
+def test_rerun_rejects_unusable_existing_input(run, tmp_path, problem):
     manifest = run.manifest("input")
     if problem == "sha":
         manifest["sha"] = "b" * 40
     if problem == "matrix":
         manifest["matrices"]["pytest"] = matrix(dict.fromkeys(RUNNERS, 1))
     github = FakeGitHub(
-        artifacts={}
-        if problem == "missing"
-        else {100: [artifact(42, timing.INPUT_NAME)]},
-        blobs={42: archive(manifest)},
+        artifacts={
+            100: [artifact(42, timing.INPUT_NAME)]
+            + ([artifact(43, timing.INPUT_NAME)] if problem == "duplicate" else [])
+        },
+        blobs={} if problem == "download" else {42: archive(manifest)},
     )
     with pytest.raises(ValueError, match="fresh CI run"):
         timing.prepare(timing.Run(100, 2, run.sha, run.matrices), tmp_path, github)

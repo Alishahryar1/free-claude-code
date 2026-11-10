@@ -236,18 +236,22 @@ def prepare(run: Run, directory: Path, github: GitHub) -> int | None:
                 for a in github.artifacts(run.run_id)
                 if a["name"] == INPUT_NAME and not a["expired"]
             ]
-            if len(originals) != 1:
-                raise ValueError("Original input artifact is missing")
-            artifact_id = originals[0]["id"]
-            manifest, maps = read_archive(github.download(artifact_id))
-            run.check_input(manifest)
-            write_bundle(directory, manifest, maps)
-            print(f"Reusing original timing input artifact {artifact_id}")
-            return artifact_id
+            if len(originals) > 1:
+                raise ValueError("Multiple original input artifacts")
+            if originals:
+                artifact_id = originals[0]["id"]
+                manifest, maps = read_archive(github.download(artifact_id))
+                run.check_input(manifest)
+                write_bundle(directory, manifest, maps)
+                print(f"Reusing original timing input artifact {artifact_id}")
+                return artifact_id
         except HISTORY_ERRORS as error:
             raise ValueError(
                 "Cannot recover original timing input; start a fresh CI run"
             ) from error
+        # Full reruns clear artifacts. Rerunning preparation also restarts all
+        # dependent shards, so they can safely share a newly frozen input.
+        print("Original timing input is absent; preparing input for restarted shards")
 
     maps = {name: {} for name in MAP_NAMES}
     source_id = None
