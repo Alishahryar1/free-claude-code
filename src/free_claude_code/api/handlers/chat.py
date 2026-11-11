@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 
+import simplejson
 from fastapi.responses import JSONResponse, Response
 
 from free_claude_code.api.request_errors import (
@@ -87,7 +88,15 @@ class ChatHandler:
                         consume(frame)
                 for frame in decoder.finish_frames():
                     consume(frame)
-                return JSONResponse(content=aggregate.result())
+                return Response(
+                    content=simplejson.dumps(
+                        aggregate.result(),
+                        use_decimal=True,
+                        ensure_ascii=False,
+                        allow_nan=False,
+                    ),
+                    media_type="application/json",
+                )
             finally:
                 await response.aclose()
         except (Exception, BaseExceptionGroup) as error:
