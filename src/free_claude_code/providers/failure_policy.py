@@ -1,7 +1,9 @@
 """Provider-owned SDK classification and retry qualification."""
 
 import json
+import math
 import ssl
+import time
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import replace
@@ -50,11 +52,18 @@ _CONTEXT_WINDOW_FINISH_REASON = "model_context_window_exceeded"
 
 
 class ProviderRecoveryExhausted(RuntimeError):
-    """A shared provider recovery episode exhausted its single probe budget."""
+    """The provider recovery gate is closed for this execution."""
 
-    def __init__(self, last_error: Exception) -> None:
+    def __init__(
+        self, last_error: Exception, *, retry_not_before: float | None = None
+    ) -> None:
         super().__init__("Provider recovery retry budget was exhausted.")
+        if isinstance(last_error, ProviderRecoveryExhausted):
+            if retry_not_before is None:
+                retry_not_before = last_error.retry_not_before
+            last_error = last_error.last_error
         self.last_error = last_error
+        self.retry_not_before = retry_not_before
 
 
 class RetryableProviderProtocolError(RuntimeError):
@@ -74,10 +83,13 @@ def classify_provider_failure(
     provider_failure_override: ProviderFailureOverride | None = None,
 ) -> ExecutionFailure:
     """Return one detailed canonical failure after provider retries are exhausted."""
+    remaining = 0
+    if isinstance(exc, ProviderRecoveryExhausted) and exc.retry_not_before is not None:
+        remaining = math.ceil(exc.retry_not_before - time.monotonic())
     exc = underlying_provider_error(exc)
     if isinstance(exc, ExecutionFailure):
         failure = exc
-        message = failure.message
+        message = _with_cooldown(failure.message, remaining)
         request_id_line = f"Request ID: {request_id}" if request_id else None
         if request_id_line and request_id_line not in message:
             message = f"{message}\n\n{request_id_line}"
@@ -93,6 +105,7 @@ def classify_provider_failure(
             exc,
             read_timeout_s=read_timeout_s,
         )
+    failure = replace(failure, message=_with_cooldown(failure.message, remaining))
     message = format_execution_failure_message(
         failure,
         extract_upstream_error_detail(exc),
@@ -100,6 +113,16 @@ def classify_provider_failure(
         request_id=request_id,
     )
     return replace(failure, message=message)
+
+
+def _with_cooldown(message: str, remaining: int) -> str:
+    if remaining <= 0:
+        return message
+    message = message.removesuffix(" Please retry shortly.").removesuffix(
+        " Please retry."
+    )
+    unit = "second" if remaining == 1 else "seconds"
+    return f"{message} Retry this provider route in {remaining} {unit}."
 
 
 def overloaded_provider_failure() -> ExecutionFailure:

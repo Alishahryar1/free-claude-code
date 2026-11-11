@@ -87,6 +87,7 @@ class ProviderFailureDecision:
 
     retryable: bool
     retry_allowed: bool
+    error: Exception
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +198,8 @@ class ProviderExecution:
                         provider_failure_override=provider_failure_override,
                     )
                     if not decision.retry_allowed:
+                        if decision.error is not error:
+                            raise decision.error from error
                         raise
                 else:
                     await attempt.accept()
@@ -362,7 +365,7 @@ class ProviderAttempt:
     ) -> ProviderFailureDecision:
         """Classify one failure and return its immutable retry decision."""
         if self._resolved or self._closed:
-            return ProviderFailureDecision(retryable=False, retry_allowed=False)
+            return ProviderFailureDecision(False, False, error)
         effective_error = (
             provider_failure_override(error)
             if provider_failure_override is not None
@@ -377,8 +380,8 @@ class ProviderAttempt:
             await self._controller._attempt_rejected(self._execution, self._permit)
             self._execution.fail(error)
             self._resolve("rejected", status=status, error=effective_error)
-            return ProviderFailureDecision(retryable=False, retry_allowed=False)
-        await self._controller._attempt_failed(
+            return ProviderFailureDecision(False, False, error)
+        error = await self._controller._attempt_failed(
             self._execution,
             self._permit,
             error=error,
@@ -396,6 +399,7 @@ class ProviderAttempt:
         return ProviderFailureDecision(
             retryable=True,
             retry_allowed=retry_allowed,
+            error=error,
         )
 
     async def aclose(self) -> None:
@@ -572,6 +576,7 @@ class ProviderAdmissionController:
                 raise
 
     async def _wait_for_gate(self, execution: ProviderExecution) -> _GatePermit:
+        logged_episode: _RecoveryEpisode | None = None
         while True:
             self._maintain_idle_episodes()
             if self._closed:
@@ -593,7 +598,8 @@ class ProviderAdmissionController:
                 self._maintain_idle_episodes()
             if episode.leader is execution and not episode.probe_active:
                 delay = max(0.0, episode.ready_at - time.monotonic())
-                if delay > 0:
+                if delay > 0 and logged_episode is not episode:
+                    logged_episode = episode
                     _log_recovery(
                         "Provider {} recovery active, waiting {:.1f}s for one probe",
                         self._provider_name,
@@ -601,7 +607,10 @@ class ProviderAdmissionController:
                     )
                 try:
                     if delay > 0:
-                        await asyncio.sleep(delay)
+                        async with asyncio.timeout(delay):
+                            await changed.wait()
+                except TimeoutError:
+                    pass
                 except asyncio.CancelledError:
                     if (
                         self._episodes.get(execution.model) is episode
@@ -611,14 +620,14 @@ class ProviderAdmissionController:
                         episode.leader = None
                         self._notify_recovery_waiters()
                     raise
-                # Backoff yields. Revalidate ownership and the execution before
-                # reserving a probe, including termination during the sleep.
+                # A notification can arrive before the original probe deadline.
                 if (
                     self._episodes.get(execution.model) is episode
                     and episode.leader is execution
                     and episode.terminal_until is None
                     and not episode.probe_active
                     and execution.can_attempt
+                    and episode.ready_at <= time.monotonic()
                 ):
                     episode.probe_active = True
                     return self._probe_permit(execution, episode)
@@ -755,14 +764,23 @@ class ProviderAdmissionController:
         *,
         error: Exception,
         status: int | None,
-    ) -> None:
+    ) -> Exception:
+        retry_after = _retry_after_seconds(error)
+        self._maintain_idle_episodes()
+        episode = self._episodes.get(execution.model)
+        if retry_after is not None and retry_after > self._max_delay:
+            return self._defer_recovery(execution, episode, error, retry_after)
+        if episode is not None and isinstance(
+            episode.last_error, ProviderRecoveryExhausted
+        ):
+            execution._fail_recovery(episode.last_error)
+            return ProviderRecoveryExhausted(episode.last_error)
+
         can_retry = execution.can_attempt
-        delay = self._retry_delay(error, execution.attempts_started)
+        delay = self._retry_delay(retry_after, execution.attempts_started)
         became_leader = False
         exhausted_episode = False
 
-        self._maintain_idle_episodes()
-        episode = self._episodes.get(execution.model)
         matching_probe = self._matching_probe(execution, permit)
         if can_retry:
             if episode is None:
@@ -784,10 +802,6 @@ class ProviderAdmissionController:
                 episode.waiters.add(execution)
             self._notify_recovery_waiters()
         elif episode is None or matching_probe is not None:
-            terminal_delay = self._retry_delay(
-                error,
-                execution.attempts_started,
-            )
             if episode is None:
                 episode = self._start_recovery_episode(
                     model=execution.model,
@@ -796,16 +810,8 @@ class ProviderAdmissionController:
                     last_error=error,
                     request_id=execution.request_id,
                 )
-            episode.last_error = error
-            episode.leader = None
-            episode.probe_active = False
-            episode.terminal_until = time.monotonic() + terminal_delay
-            waiters = tuple(episode.waiters)
-            episode.waiters.clear()
-            for waiter in waiters:
-                waiter._fail_recovery(error)
+            self._finish_recovery_episode(episode, error, time.monotonic() + delay)
             exhausted_episode = True
-            self._notify_recovery_waiters()
 
         label = self._failure_label(status, error)
         if became_leader:
@@ -861,6 +867,72 @@ class ProviderAdmissionController:
                 attempts=execution.attempts_started,
                 episode_exhausted=exhausted_episode,
             )
+        return error
+
+    def _defer_recovery(
+        self,
+        execution: ProviderExecution,
+        episode: _RecoveryEpisode | None,
+        error: Exception,
+        retry_after: float,
+    ) -> ProviderRecoveryExhausted:
+        now = time.monotonic()
+        deadline = now + retry_after
+        if episode is not None and episode.terminal_until is not None:
+            if episode.terminal_until >= deadline and isinstance(
+                episode.last_error, ProviderRecoveryExhausted
+            ):
+                execution._fail_recovery(episode.last_error)
+                return ProviderRecoveryExhausted(episode.last_error)
+            deadline = max(deadline, episode.terminal_until)
+
+        failure = ProviderRecoveryExhausted(error, retry_not_before=deadline)
+        if episode is None:
+            episode = self._start_recovery_episode(
+                model=execution.model,
+                leader=None,
+                ready_at=now,
+                last_error=failure,
+                request_id=execution.request_id,
+            )
+        leader = episode.leader
+        if leader is not None and leader._active_claim is None:
+            episode.waiters.add(leader)
+        self._finish_recovery_episode(episode, failure, deadline)
+        execution._fail_recovery(failure)
+        _log_recovery(
+            "Provider {} model {} deferred for {:.1f}s after Retry-After",
+            self._provider_name,
+            execution.model,
+            deadline - now,
+        )
+        trace_event(
+            stage="provider",
+            event="provider.recovery.cooldown",
+            source="provider",
+            provider=self._provider_name,
+            request_id=execution.request_id,
+            model=execution.model,
+            generation=episode.generation,
+            delay_s=round(deadline - now, 3),
+        )
+        return ProviderRecoveryExhausted(failure)
+
+    def _finish_recovery_episode(
+        self,
+        episode: _RecoveryEpisode,
+        error: Exception,
+        deadline: float,
+    ) -> None:
+        episode.last_error = error
+        episode.leader = None
+        episode.probe_active = False
+        episode.terminal_until = deadline
+        waiters = tuple(episode.waiters)
+        episode.waiters.clear()
+        for waiter in waiters:
+            waiter._fail_recovery(error)
+        self._notify_recovery_waiters()
 
     def _start_recovery_episode(
         self,
@@ -1000,11 +1072,10 @@ class ProviderAdmissionController:
     def _release_concurrency(self) -> None:
         self._capacity.release()
 
-    def _retry_delay(self, error: Exception, attempt: int) -> float:
+    def _retry_delay(self, retry_after: float | None, attempt: int) -> float:
         exponent = max(0, attempt - 1)
         backoff = min(self._base_delay * (2**exponent), self._max_delay)
         backoff += random.uniform(0, self._jitter)
-        retry_after = _retry_after_seconds(error)
         return max(backoff, retry_after or 0.0)
 
     @staticmethod

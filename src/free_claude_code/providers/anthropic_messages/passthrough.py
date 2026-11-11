@@ -208,6 +208,7 @@ async def stream_native_messages(
                     if corrected is not None:
                         body = corrected
                         continue
+                retryable = is_retryable_stream_error(error)
                 if scope is not None:
                     hidden_stop = (
                         normal_stop_seen
@@ -218,11 +219,12 @@ async def stream_native_messages(
                         await scope.attempt.accept()
                     else:
                         decision = await scope.attempt.fail(error)
+                        error = decision.error
                         if (
                             not committed and decision.retry_allowed
                         ) or can_retry_undelivered_stream(
                             execution.delivery,
-                            retryable=is_retryable_stream_error(error),
+                            retryable=retryable,
                             attempts_remaining=execution.attempts_remaining,
                             normal_stop_seen=normal_stop_seen,
                         ):
@@ -233,7 +235,7 @@ async def stream_native_messages(
                     execution,
                     body=body,
                     request=continuation_request,
-                    retryable=is_retryable_stream_error(error),
+                    retryable=retryable,
                     normal_stop_seen=normal_stop_seen,
                     source=source,
                 )

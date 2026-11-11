@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
@@ -14,6 +15,7 @@ import openai
 import pytest
 
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.providers import admission
 from free_claude_code.providers.admission import (
     UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
     ProviderAdmissionController,
@@ -68,6 +70,13 @@ def _status_error(
 
 async def _open(execution: ProviderExecution) -> ProviderAttempt:
     return await execution.open_attempt(ProviderOperationKind.GENERATION)
+
+
+@pytest.fixture
+def recovery_clock(monkeypatch):
+    clock = SimpleNamespace(now=100.0)
+    monkeypatch.setattr(admission, "time", SimpleNamespace(monotonic=lambda: clock.now))
+    return clock
 
 
 @pytest.mark.parametrize(
@@ -594,7 +603,7 @@ async def test_discovery_requests_share_recovery_health() -> None:
 
 
 @pytest.mark.asyncio
-async def test_one_leader_backs_off_while_followers_coalesce() -> None:
+async def test_one_leader_backs_off_while_followers_coalesce(recovery_clock) -> None:
     controller = _controller(base_delay=2.0, max_delay=60.0)
     leader_execution = controller.start_execution()
     follower_execution = controller.start_execution()
@@ -607,37 +616,20 @@ async def test_one_leader_backs_off_while_followers_coalesce() -> None:
     await leader.aclose()
     await follower.aclose()
 
-    real_sleep = asyncio.sleep
-    sleep_started = asyncio.Event()
-    release_sleep = asyncio.Event()
-    delays: list[float] = []
+    leader_probe_task = asyncio.create_task(_open(leader_execution))
+    follower_attempt_task = asyncio.create_task(_open(follower_execution))
+    await asyncio.sleep(0)
+    assert not leader_probe_task.done()
+    assert not follower_attempt_task.done()
 
-    async def controlled_sleep(delay: float) -> None:
-        delays.append(delay)
-        sleep_started.set()
-        await release_sleep.wait()
+    recovery_clock.now += 2
+    controller._notify_recovery_waiters()
+    leader_probe = await asyncio.wait_for(leader_probe_task, timeout=1)
+    assert not follower_attempt_task.done()
 
-    with patch(
-        "free_claude_code.providers.admission.asyncio.sleep",
-        side_effect=controlled_sleep,
-    ):
-        leader_probe_task = asyncio.create_task(_open(leader_execution))
-        await sleep_started.wait()
-        follower_attempt_task = asyncio.create_task(_open(follower_execution))
-        await real_sleep(0)
-
-        assert len(delays) == 1
-        assert 1.9 <= delays[0] <= 2.0
-        assert not follower_attempt_task.done()
-
-        release_sleep.set()
-        leader_probe = await asyncio.wait_for(leader_probe_task, timeout=1)
-        await real_sleep(0)
-        assert not follower_attempt_task.done()
-
-        await leader_probe.accept()
-        await leader_probe.aclose()
-        resumed_follower = await asyncio.wait_for(follower_attempt_task, timeout=1)
+    await leader_probe.accept()
+    await leader_probe.aclose()
+    resumed_follower = await asyncio.wait_for(follower_attempt_task, timeout=1)
 
     await resumed_follower.accept()
     await resumed_follower.aclose()
@@ -670,7 +662,7 @@ async def test_cancelled_follower_leaves_recovery_episode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancelled_backoff_leader_transfers_to_a_waiter() -> None:
+async def test_cancelled_backoff_leader_transfers_to_a_waiter(recovery_clock) -> None:
     controller = _controller(base_delay=2.0, max_delay=60.0)
     leader_execution = controller.start_execution()
     follower_execution = controller.start_execution()
@@ -682,38 +674,19 @@ async def test_cancelled_backoff_leader_transfers_to_a_waiter() -> None:
     await leader.aclose()
     await follower.aclose()
 
-    real_sleep = asyncio.sleep
-    first_sleep_started = asyncio.Event()
-    second_sleep_started = asyncio.Event()
-    release_second_sleep = asyncio.Event()
-    sleep_calls = 0
+    leader_task = asyncio.create_task(_open(leader_execution))
+    follower_task = asyncio.create_task(_open(follower_execution))
+    await asyncio.sleep(0)
 
-    async def controlled_sleep(delay: float) -> None:
-        nonlocal sleep_calls
-        assert 1.9 <= delay <= 2.0
-        sleep_calls += 1
-        if sleep_calls == 1:
-            first_sleep_started.set()
-            await asyncio.Event().wait()
-        second_sleep_started.set()
-        await release_second_sleep.wait()
+    leader_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await leader_task
 
-    with patch(
-        "free_claude_code.providers.admission.asyncio.sleep",
-        side_effect=controlled_sleep,
-    ):
-        leader_task = asyncio.create_task(_open(leader_execution))
-        await first_sleep_started.wait()
-        follower_task = asyncio.create_task(_open(follower_execution))
-        await real_sleep(0)
-
-        leader_task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await leader_task
-
-        await second_sleep_started.wait()
-        release_second_sleep.set()
-        probe = await asyncio.wait_for(follower_task, timeout=1)
+    await asyncio.sleep(0)
+    assert not follower_task.done()
+    recovery_clock.now += 2
+    controller._notify_recovery_waiters()
+    probe = await asyncio.wait_for(follower_task, timeout=1)
 
     await probe.accept()
     await probe.aclose()
@@ -947,33 +920,134 @@ async def test_late_in_flight_failure_keeps_exhausted_generation_outcome() -> No
 
 
 @pytest.mark.asyncio
-async def test_retry_after_is_a_minimum_backoff() -> None:
-    controller = _controller(max_attempts=2)
-    attempts = 0
+@pytest.mark.parametrize("hint", ["7", "60", "invalid", None])
+async def test_retry_after_within_ceiling_keeps_coordinated_backoff(
+    hint, recovery_clock
+):
+    controller = _controller(max_attempts=2, base_delay=1, max_delay=60)
+    execution = controller.start_execution()
+    attempt = await _open(execution)
+    assert (await attempt.fail(_status_error(429, retry_after=hint))).retry_allowed
+    await attempt.aclose()
 
-    async def recover() -> str:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise _status_error(429, retry_after="7")
-        return "ok"
+    delay = float(hint) if hint in {"7", "60"} else 1.0
+    pending = asyncio.create_task(_open(execution))
+    await asyncio.sleep(0)
+    recovery_clock.now += delay - 0.5
+    controller._notify_recovery_waiters()
+    await asyncio.sleep(0)
+    assert not pending.done()
 
-    with patch(
-        "free_claude_code.providers.admission.asyncio.sleep",
-        return_value=None,
-    ) as sleep:
-        assert (
-            await controller.start_execution().run_call(
-                recover,
-                operation_kind=ProviderOperationKind.GENERATION,
-            )
-            == "ok"
+    recovery_clock.now += 0.5
+    controller._notify_recovery_waiters()
+    probe = await asyncio.wait_for(pending, timeout=1)
+    await probe.accept()
+    await probe.aclose()
+
+
+@pytest.mark.asyncio
+async def test_long_http_date_stops_retry_and_reopens_at_deadline(recovery_clock):
+    controller = _controller(max_delay=60)
+    future = format_datetime(datetime.now(UTC) + timedelta(hours=1), usegmt=True)
+    error = _status_error(503, retry_after=future)
+
+    async def fail() -> None:
+        raise error
+
+    execution = controller.start_execution(model="primary")
+    with pytest.raises(ProviderRecoveryExhausted) as exc_info:
+        await asyncio.wait_for(
+            execution.run_call(fail, operation_kind=ProviderOperationKind.GENERATION),
+            timeout=1,
         )
+    assert execution.attempts_started == 1
+    assert exc_info.value.last_error is error
+    deadline = exc_info.value.retry_not_before
+    assert deadline is not None
+    assert 3598 <= deadline - recovery_clock.now <= 3600
 
-    sleep.assert_awaited_once()
-    await_args = sleep.await_args
-    assert await_args is not None
-    assert 6.9 <= await_args.args[0] <= 7.0
+    recovery_clock.now = deadline - 0.5
+    denied = controller.start_execution(model="primary")
+    with pytest.raises(ProviderRecoveryExhausted) as blocked:
+        await _open(denied)
+    assert blocked.value.retry_not_before == deadline
+    assert denied.attempts_started == 0
+
+    recovery_clock.now = deadline
+    admitted = await _open(controller.start_execution(model="primary"))
+    await admitted.accept()
+    await admitted.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("leader_wait", ["backoff", "capacity", "in_flight"])
+async def test_long_hint_supersedes_short_recovery_and_releases_waiters(
+    leader_wait, recovery_clock
+):
+    controller = _controller(max_concurrency=3, base_delay=10, max_delay=60)
+    leader = controller.start_execution(model="primary")
+    first = await _open(leader)
+    long_source = await _open(controller.start_execution(model="primary"))
+    shorter_source = await _open(controller.start_execution(model="primary"))
+
+    assert (await first.fail(_status_error(503))).retry_allowed
+    await first.aclose()
+    holder = None
+    leader_task = None
+    if leader_wait == "capacity":
+        holder = await _open(controller.start_execution(model="other"))
+    if leader_wait != "backoff":
+        recovery_clock.now += 10
+    if leader_wait == "in_flight":
+        probe = await _open(leader)
+    else:
+        leader_task = asyncio.create_task(_open(leader))
+
+    follower = controller.start_execution(model="primary")
+    follower_task = asyncio.create_task(_open(follower))
+    await asyncio.sleep(0)
+    assert not follower_task.done()
+    if leader_task is not None:
+        assert not leader_task.done()
+
+    error = _status_error(429, retry_after="3600")
+    decision = await long_source.fail(error)
+    assert decision.retryable and not decision.retry_allowed
+    deadline = recovery_clock.now + 3600
+    for task in (follower_task, leader_task):
+        if task is not None:
+            with pytest.raises(ProviderRecoveryExhausted) as blocked:
+                await asyncio.wait_for(task, timeout=1)
+            assert blocked.value.last_error is error
+            assert blocked.value.retry_not_before == deadline
+
+    shorter = await shorter_source.fail(_status_error(503, retry_after="120"))
+    assert not shorter.retry_allowed
+    assert isinstance(shorter.error, ProviderRecoveryExhausted)
+    assert shorter.error.last_error is error
+    assert shorter.error.retry_not_before == deadline
+    if leader_wait == "in_flight":
+        await probe.accept()
+        await probe.aclose()
+
+    with pytest.raises(ProviderRecoveryExhausted) as blocked:
+        await _open(controller.start_execution(model="primary"))
+    assert blocked.value.last_error is error
+    assert blocked.value.retry_not_before == deadline
+
+    await long_source.aclose()
+    await shorter_source.aclose()
+    if holder is not None:
+        await holder.accept()
+        await holder.aclose()
+    healthy = [
+        await asyncio.wait_for(_open(controller.start_execution(model="other")), 1)
+        for _ in range(3)
+    ]
+    for attempt in healthy:
+        await attempt.accept()
+        await attempt.aclose()
+    controller.close()
 
 
 def test_retry_after_accepts_http_date_and_rejects_invalid_values() -> None:

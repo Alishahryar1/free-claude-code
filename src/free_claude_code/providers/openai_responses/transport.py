@@ -611,6 +611,7 @@ class OpenAIResponsesTransport:
                 attempt_failure = None
                 if scope is not None and not scope.attempt.accepted:
                     attempt_failure = await scope.attempt.fail(error)
+                    error = attempt_failure.error
                 if attempt_failure is not None and attempt_failure.retry_allowed:
                     recovery.discard()
                     _trace_early_retry(

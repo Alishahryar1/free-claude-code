@@ -1,0 +1,122 @@
+"""A long upstream cooldown surfaces through the ordinary wire error."""
+
+import asyncio
+import json
+from types import SimpleNamespace
+
+import httpx
+import httpx2
+import pytest
+
+from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.providers import admission, failure_policy
+from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
+from tests.api.test_delivered_stream_recovery import public_text, text_events
+from tests.api.test_four_protocol_matrix import ingress_request, matrix_app
+
+
+@pytest.fixture
+def cooldown_clock(monkeypatch):
+    clock = SimpleNamespace(now=100.0)
+    monotonic_time = SimpleNamespace(monotonic=lambda: clock.now)
+    monkeypatch.setattr(admission, "time", monotonic_time)
+    monkeypatch.setattr(failure_policy, "time", monotonic_time)
+    return clock
+
+
+@pytest.mark.parametrize(
+    ("wire", "protocol"),
+    [
+        ("messages", "chat"),
+        ("messages", "messages"),
+        ("chat", "chat"),
+        ("responses", "messages"),
+        ("responses", "responses"),
+        ("gemini", "gemini"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_cooldown_reports_remaining_time_for_initial_and_later_requests(
+    wire, protocol, cooldown_clock
+):
+    calls = []
+
+    def rate_limit(request):
+        calls.append(request)
+        response = (
+            httpx.Response if protocol in {"messages", "gemini"} else httpx2.Response
+        )
+        return response(
+            429,
+            headers={"Retry-After": "3600"},
+            json={
+                "error": {"message": "test quota exhausted", "type": "rate_limit_error"}
+            },
+        )
+
+    app = matrix_app(protocol, rate_limit, max_attempts=10)
+    path, body = ingress_request(wire, wire == "responses")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app), base_url="http://test"
+    ) as client:
+        for remaining in (3600, 3300):
+            response = await asyncio.wait_for(client.post(path, json=body), timeout=2)
+            assert response.status_code == 429, response.text
+            assert response.headers["x-should-retry"] == "false"
+            assert "retry-after" not in response.headers
+            error = response.json()["error"]
+            assert error.get("status" if wire == "gemini" else "type") == (
+                "RESOURCE_EXHAUSTED" if wire == "gemini" else "rate_limit_error"
+            )
+            assert "test quota exhausted" in error["message"]
+            assert f"{remaining} seconds" in error["message"]
+            cooldown_clock.now += 300
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
+@pytest.mark.asyncio
+async def test_continuation_cooldown_uses_terminal_event(
+    protocol, monkeypatch, cooldown_clock
+):
+    monkeypatch.setattr(
+        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
+        lambda: RecoveryHoldbackBuffer(max_bytes=1),
+    )
+    calls = []
+    response_type = httpx.Response if protocol == "messages" else httpx2.Response
+
+    def reply(request):
+        calls.append(request)
+        if len(calls) == 1:
+            events = text_events(protocol, "Hello", complete=False)
+            return response_type(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+            )
+        return response_type(
+            429,
+            headers={"Retry-After": "3600"},
+            json={
+                "error": {
+                    "message": "continuation quota exhausted",
+                    "type": "rate_limit_error",
+                }
+            },
+        )
+
+    wire = "responses" if protocol == "responses" else "messages"
+    path, body = ingress_request(wire, True)
+    app = matrix_app(protocol, reply, max_attempts=10)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app), base_url="http://test"
+    ) as client:
+        response = await asyncio.wait_for(client.post(path, json=body), timeout=2)
+    assert response.status_code == 200, response.text
+    events = parse_sse_text(response.text)
+    assert public_text(events, wire) == "Hello"
+    assert events[-1].event == ("response.failed" if wire == "responses" else "error")
+    assert "continuation quota exhausted" in response.text
+    assert "3600 seconds" in response.text
+    assert len(calls) == 2

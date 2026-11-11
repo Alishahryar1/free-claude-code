@@ -842,6 +842,8 @@ class OpenAIChatTransport:
                     provider_failure_override=self._behavior.failure_override,
                 )
                 if not decision.retry_allowed:
+                    if decision.error is not error:
+                        raise decision.error from error
                     raise
             finally:
                 if not retain_attempt:
@@ -1541,6 +1543,7 @@ class _OpenAIChatStreamRunner:
                     error,
                     provider_failure_override=self._transport._behavior.failure_override,
                 )
+                error = attempt_failure.error
 
         retryable = (
             attempt_failure.retryable
@@ -1619,7 +1622,7 @@ class _OpenAIChatStreamRunner:
                     exc_type=type(recovery_error).__name__,
                 )
                 recovery_failure = classify_provider_failure(
-                    underlying_provider_error(recovery_error),
+                    recovery_error,
                     provider_name=tag,
                     read_timeout_s=self._transport._read_timeout_s,
                     request_id=self._request_id,
@@ -1647,7 +1650,7 @@ class _OpenAIChatStreamRunner:
             request_id=self._request_id,
         )
         failure = classify_provider_failure(
-            reported_error,
+            error,
             provider_name=tag,
             read_timeout_s=self._transport._read_timeout_s,
             request_id=self._request_id,
@@ -1823,6 +1826,8 @@ class _OpenAIChatStreamRunner:
                             self._transport._behavior.failure_override
                         ),
                     )
+                    if failure.error is not error:
+                        raise failure.error from error
                     retryable = failure.retryable
                 if (
                     not retryable
