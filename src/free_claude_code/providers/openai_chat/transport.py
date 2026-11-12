@@ -78,6 +78,7 @@ from free_claude_code.providers.continuation import (
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.failure_policy import (
+    ProviderRecoveryExhausted,
     RetryableToolProtocolError,
     classify_provider_failure,
     context_window_exceeded_provider_failure,
@@ -842,6 +843,8 @@ class OpenAIChatTransport:
                     provider_failure_override=self._behavior.failure_override,
                 )
                 if not decision.retry_allowed:
+                    if decision.error is not error:
+                        raise decision.error from error
                     raise
             finally:
                 if not retain_attempt:
@@ -1537,10 +1540,11 @@ class _OpenAIChatStreamRunner:
                 # Do not reserve a retry probe for this terminal execution.
                 await scope.attempt.accept()
             else:
-                attempt_failure = await scope.attempt.fail(
+                attempt_failure = await scope.fail(
                     error,
                     provider_failure_override=self._transport._behavior.failure_override,
                 )
+                error = attempt_failure.error
 
         retryable = (
             attempt_failure.retryable
@@ -1618,17 +1622,23 @@ class _OpenAIChatStreamRunner:
                     request_id=self._request_id,
                     exc_type=type(recovery_error).__name__,
                 )
-                recovery_failure = classify_provider_failure(
-                    underlying_provider_error(recovery_error),
-                    provider_name=tag,
-                    read_timeout_s=self._transport._read_timeout_s,
-                    request_id=self._request_id,
-                    provider_failure_override=(
-                        self._transport._behavior.failure_override
-                    ),
-                )
-                if recovery_failure.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED:
-                    error = recovery_failure
+                if (
+                    isinstance(recovery_error, ProviderRecoveryExhausted)
+                    and recovery_error.retry_not_before is not None
+                ):
+                    error = recovery_error
+                else:
+                    recovery_failure = classify_provider_failure(
+                        recovery_error,
+                        provider_name=tag,
+                        read_timeout_s=self._transport._read_timeout_s,
+                        request_id=self._request_id,
+                        provider_failure_override=(
+                            self._transport._behavior.failure_override
+                        ),
+                    )
+                    if recovery_failure.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED:
+                        error = recovery_failure
                 recovery_events = None
             if recovery_events is not None:
                 return _OpenAIChatFailureResolution(
@@ -1647,7 +1657,7 @@ class _OpenAIChatStreamRunner:
             request_id=self._request_id,
         )
         failure = classify_provider_failure(
-            reported_error,
+            error,
             provider_name=tag,
             read_timeout_s=self._transport._read_timeout_s,
             request_id=self._request_id,
@@ -1817,12 +1827,14 @@ class _OpenAIChatStreamRunner:
                 last_error = error
                 retryable = is_retryable_stream_error(error)
                 if scope is not None and not scope.attempt.accepted:
-                    failure = await scope.attempt.fail(
+                    failure = await scope.fail(
                         error,
                         provider_failure_override=(
                             self._transport._behavior.failure_override
                         ),
                     )
+                    if failure.error is not error:
+                        raise failure.error from error
                     retryable = failure.retryable
                 if (
                     not retryable

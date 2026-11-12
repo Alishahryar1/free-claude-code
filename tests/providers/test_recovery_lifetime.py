@@ -260,7 +260,8 @@ async def test_exhausted_waiters_keep_their_failure_after_expiry(clock):
     for outcome, execution in zip(outcomes, followers, strict=True):
         assert isinstance(outcome, ProviderRecoveryExhausted)
         assert outcome.last_error is error
-        assert execution.last_failure is error
+        assert isinstance(execution.last_failure, ProviderRecoveryExhausted)
+        assert execution.last_failure.last_error is error
         assert execution.attempts_started == 1
 
 
@@ -285,7 +286,12 @@ async def test_late_normal_failure_obeys_current_cooldown(clock, expired):
     decision = await normal.fail(new_error)
     await normal.aclose()
     assert decision.retry_allowed is expired
-    assert late.last_failure is (new_error if expired else old_error)
+    if expired:
+        assert late.last_failure is new_error
+    else:
+        assert isinstance(late.last_failure, ProviderRecoveryExhausted)
+        assert late.last_failure.last_error is old_error
+        assert decision.error is late.last_failure
     episode = controller._episodes["a"]
     assert (episode.generation > generation) is expired
     late.abandon()
