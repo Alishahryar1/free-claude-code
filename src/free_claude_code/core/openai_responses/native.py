@@ -112,12 +112,8 @@ class NativeResponsesRelay:
             response_id = response.get("id")
             if isinstance(response_id, str) and response_id:
                 self._response_id = response_id
-        sequence_number = data.get("sequence_number")
-        if isinstance(sequence_number, int) and not isinstance(sequence_number, bool):
-            self._next_sequence_number = max(
-                self._next_sequence_number,
-                sequence_number + 1,
-            )
+        data["sequence_number"] = self._next_sequence_number
+        self._next_sequence_number += 1
         if event_type in _TERMINAL_EVENT_TYPES:
             self._terminal_type = event_type
         return data

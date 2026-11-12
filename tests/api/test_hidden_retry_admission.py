@@ -13,6 +13,10 @@ from free_claude_code.api.response_streams import (
     openai_responses_sse_streaming_response,
 )
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.stream_delivery import (
+    StreamDeliveryState,
+    bind_stream_delivery,
+)
 from free_claude_code.providers.anthropic_messages.passthrough import (
     stream_native_messages,
 )
@@ -202,7 +206,8 @@ async def test_stopped_messages_cannot_close_another_executions_recovery(route):
     async with _messages_path(
         route, lambda _: (200, ConcurrentWire(_sse({"type": "message_stop"})))
     ) as (source, _bodies, _wires, admission):
-        other = admission.start_execution(model="native")
+        with bind_stream_delivery(StreamDeliveryState()):
+            other = admission.start_execution(model="native")
         leader = await _open(other)
         result = await _response(
             source(), "responses" if route == "responses" else "messages"

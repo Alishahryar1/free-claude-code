@@ -29,6 +29,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     reasoning_for,
+    sdk_chat_chunk,
 )
 
 
@@ -175,7 +176,7 @@ def _chunk(
     if reasoning_details is not None:
         delta.reasoning_details = reasoning_details
     choice = SimpleNamespace(delta=delta, finish_reason=finish_reason)
-    return SimpleNamespace(choices=[choice], usage=None)
+    return sdk_chat_chunk(SimpleNamespace(choices=[choice], usage=None))
 
 
 def test_init_uses_openai_chat_provider(open_router_provider):
@@ -420,8 +421,9 @@ async def test_stream_maps_reasoning_content_and_details(open_router_provider):
         return_value=stream,
     ):
         events = [
-            event
+            frame
             async for event in open_router_provider.stream_messages(make_request())
+            for frame in event.frames
         ]
 
     event_text = "".join(events)

@@ -15,6 +15,10 @@ from free_claude_code.application import execution
 from free_claude_code.config.settings import Settings
 from free_claude_code.core import trace
 from free_claude_code.core.anthropic import TokenCountRequest
+from free_claude_code.core.stream_delivery import (
+    StreamDeliveryState,
+    bind_stream_delivery,
+)
 from free_claude_code.providers.openai_chat import transport as chat_transport
 from tests.application.test_execution import (
     FakeProvider,
@@ -56,6 +60,7 @@ async def _probe(level: str, raw: bool) -> None:
             "provider_chat_body_snapshot",
             wraps=chat_transport.provider_chat_body_snapshot,
         ) as provider_snapshot,
+        bind_stream_delivery(StreamDeliveryState()),
         logger.contextualize(request_id="req_lazy", instance_id="instance_lazy"),
     ):
         trace.trace_event(fields, stage="unit", event="lazy.probe", source="test")

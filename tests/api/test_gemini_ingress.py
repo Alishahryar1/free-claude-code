@@ -12,6 +12,7 @@ from free_claude_code.cli.uvicorn_server import (
     uvicorn_log_config,
 )
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.stream_output import StreamOutput
 from tests.api.support import create_test_app, provider_manager_for_app
 
 
@@ -42,33 +43,44 @@ def fixture_provider():
         calls.append((request, kwargs))
         for part in ({"text": "Hello "}, {"text": "world"}):
             yield (
-                "data: "
-                + json.dumps(
-                    {
-                        "responseId": "fcc_test",
-                        "modelVersion": kwargs["response_model"],
-                        "candidates": [
-                            {"index": 0, "content": {"role": "model", "parts": [part]}}
-                        ],
-                    }
+                StreamOutput(
+                    (
+                        "data: "
+                        + json.dumps(
+                            {
+                                "responseId": "fcc_test",
+                                "modelVersion": kwargs["response_model"],
+                                "candidates": [
+                                    {
+                                        "index": 0,
+                                        "content": {"role": "model", "parts": [part]},
+                                    }
+                                ],
+                            }
+                        )
+                        + "\n\n",
+                    )
                 )
-                + "\n\n"
             )
         yield (
-            "data: "
-            + json.dumps(
-                {
-                    "responseId": "fcc_test",
-                    "modelVersion": kwargs["response_model"],
-                    "candidates": [{"index": 0, "finishReason": "STOP"}],
-                    "usageMetadata": {
-                        "promptTokenCount": 3,
-                        "candidatesTokenCount": 2,
-                        "totalTokenCount": 5,
-                    },
-                }
+            StreamOutput(
+                (
+                    "data: "
+                    + json.dumps(
+                        {
+                            "responseId": "fcc_test",
+                            "modelVersion": kwargs["response_model"],
+                            "candidates": [{"index": 0, "finishReason": "STOP"}],
+                            "usageMetadata": {
+                                "promptTokenCount": 3,
+                                "candidatesTokenCount": 2,
+                                "totalTokenCount": 5,
+                            },
+                        }
+                    )
+                    + "\n\n",
+                )
             )
-            + "\n\n"
         )
 
     provider.stream_gemini = stream

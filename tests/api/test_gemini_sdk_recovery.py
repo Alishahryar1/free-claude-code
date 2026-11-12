@@ -9,7 +9,6 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.support import provider_manager_for_app
 from tests.api.test_four_protocol_matrix import matrix_app
 from tests.api.test_gemini_continuation_replay import native
@@ -43,10 +42,6 @@ with warnings.catch_warnings():
 def test_sdk_recovers_and_replays_native_generation(
     streaming, client_api, empty_terminal, case, monkeypatch
 ):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
     args = {
         "integer": {"amount": 9007199254740993},
         "fractional": {"amount": 1.5},
@@ -91,11 +86,22 @@ def test_sdk_recovers_and_replays_native_generation(
             }
         else:
             if case == "unsigned":
-                assert "Prefix " in json.dumps(value["contents"])
+                assert ("Prefix " in json.dumps(value["contents"])) == streaming
                 assert "Done" in json.dumps(value["contents"])
             else:
                 assert value["contents"][:-2] == bodies[1]["contents"]
-                assert value["contents"][-2] == signed
+                expected = deepcopy(signed)
+                if not streaming and case in {"defaults", "null_fields"}:
+                    expected_parts = expected["parts"]
+                    assert isinstance(expected_parts, list)
+                    function = expected_parts[0]["functionCall"]
+                    assert isinstance(function, dict)
+                    if case == "defaults":
+                        function["args"] = {"amount": 1.5}
+                    else:
+                        function.pop("args")
+                        function.pop("id")
+                assert value["contents"][-2] == expected
             event = {
                 "candidates": [
                     {
@@ -210,6 +216,8 @@ def test_sdk_recovers_and_replays_native_generation(
             ]
             if case == "unsigned":
                 assert not signatures
+            elif not streaming:
+                assert signatures == [b"original-native-signature"]
             else:
                 assert len(signatures) == 1 and signatures[0].startswith(
                     b"fcc:history:"
@@ -253,10 +261,6 @@ def test_sdk_recovers_and_replays_native_generation(
 async def test_sdk_chat_automatic_tool_result_preserves_recovered_history(
     async_client, monkeypatch
 ):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
     bodies = []
     executed = []
     signed = {

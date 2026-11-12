@@ -32,7 +32,13 @@ def test_native_fallback_applies_selected_effort_after_passthrough_primary(effor
                 json={"error": {"type": "permission_error", "message": "unavailable"}},
             )
         return httpx.Response(
-            200, json={"type": "message", "model": "backup", "content": []}
+            200,
+            json={
+                "stop_reason": "end_turn",
+                "type": "message",
+                "model": "backup",
+                "content": [],
+            },
         )
 
     app = create_test_app(
@@ -125,7 +131,13 @@ def test_native_fallback_excludes_compatibility_and_preserves_alias():
                 },
             )
         return httpx.Response(
-            200, json={"type": "message", "model": "backup", "content": []}
+            200,
+            json={
+                "stop_reason": "end_turn",
+                "type": "message",
+                "model": "backup",
+                "content": [],
+            },
         )
 
     settings = Settings(
@@ -268,7 +280,9 @@ def test_native_proxy_auth_remains_separate_from_upstream_key():
 
     def handle(request):
         calls.append(request)
-        return httpx.Response(200, json={"type": "message", "content": []})
+        return httpx.Response(
+            200, json={"stop_reason": "end_turn", "type": "message", "content": []}
+        )
 
     settings = Settings(
         MODEL="anthropic/selected",

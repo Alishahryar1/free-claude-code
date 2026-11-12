@@ -22,6 +22,7 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
     reasoning_for,
+    sdk_chat_chunk,
 )
 
 
@@ -62,9 +63,11 @@ def _chunk(
         reasoning_content=reasoning_content,
         tool_calls=None,
     )
-    return SimpleNamespace(
-        choices=[SimpleNamespace(delta=delta, finish_reason=finish_reason)],
-        usage=None,
+    return sdk_chat_chunk(
+        SimpleNamespace(
+            choices=[SimpleNamespace(delta=delta, finish_reason=finish_reason)],
+            usage=None,
+        )
     )
 
 
@@ -153,7 +156,11 @@ async def test_stream_preserves_reasoning_content(minimax_provider):
         new_callable=AsyncMock,
         return_value=stream,
     ) as create:
-        events = [event async for event in minimax_provider.stream_messages(request)]
+        events = [
+            frame
+            async for event in minimax_provider.stream_messages(request)
+            for frame in event.frames
+        ]
 
     parsed = parse_sse_text("".join(events))
     assert thinking_content(parsed) == "plan"

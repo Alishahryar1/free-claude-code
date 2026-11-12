@@ -27,6 +27,7 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
     reasoning_for,
+    sdk_chat_chunk,
 )
 
 SESSION_HEADERS = {"x-opencode-session": "sess-123"}
@@ -54,7 +55,7 @@ def _text_chunk(text: str = "Hello back!"):
         )
     ]
     chunk.usage = MagicMock(completion_tokens=5, prompt_tokens=10)
-    return chunk
+    return sdk_chat_chunk(chunk)
 
 
 async def _single_chunk_stream():
@@ -158,10 +159,11 @@ async def test_stream_messages_sends_affinity_header(mistral_provider):
         mock_create.return_value = SDKStreamDouble(_single_chunk_stream())
 
         events = [
-            event
+            frame
             async for event in mistral_provider.stream_messages(
                 req, request_headers=SESSION_HEADERS
             )
+            for frame in event.frames
         ]
 
     assert any("Hello back!" in event for event in events)
@@ -191,10 +193,11 @@ async def test_stream_messages_without_session_header_sends_no_extra_headers(
         mock_create.return_value = SDKStreamDouble(_single_chunk_stream())
 
         events = [
-            event
+            frame
             async for event in mistral_provider.stream_messages(
                 req, request_headers=request_headers
             )
+            for frame in event.frames
         ]
 
     assert any("Hello back!" in event for event in events)
@@ -215,12 +218,13 @@ async def test_stream_messages_affinity_header_survives_reasoning_retry(
         mock_create.side_effect = [error, SDKStreamDouble(_single_chunk_stream())]
 
         events = [
-            event
+            frame
             async for event in mistral_provider.stream_messages(
                 req,
                 reasoning=reasoning_for(req),
                 request_headers=SESSION_HEADERS,
             )
+            for frame in event.frames
         ]
 
     assert mock_create.await_count == 2
@@ -239,10 +243,11 @@ async def test_stream_responses_sends_affinity_header(mistral_provider):
         mock_create.return_value = SDKStreamDouble(_single_chunk_stream())
 
         chunks = [
-            chunk
+            frame
             async for chunk in mistral_provider.stream_responses(
                 request, request_headers=SESSION_HEADERS
             )
+            for frame in chunk.frames
         ]
 
     assert chunks
@@ -263,7 +268,11 @@ async def test_stream_responses_without_session_header_sends_no_extra_headers(
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(_single_chunk_stream())
 
-        chunks = [chunk async for chunk in mistral_provider.stream_responses(request)]
+        chunks = [
+            frame
+            async for chunk in mistral_provider.stream_responses(request)
+            for frame in chunk.frames
+        ]
 
     assert chunks
     assert mock_create.await_args is not None
@@ -285,10 +294,11 @@ async def test_other_openai_chat_providers_do_not_send_affinity_headers():
         mock_create.return_value = SDKStreamDouble(_single_chunk_stream())
 
         events = [
-            event
+            frame
             async for event in provider.stream_messages(
                 req, request_headers=SESSION_HEADERS
             )
+            for frame in event.frames
         ]
 
     assert any("Hello back!" in event for event in events)
@@ -301,35 +311,41 @@ async def test_stream_messages_maps_cached_usage_to_anthropic_fields(mistral_pro
     req = make_messages_request("devstral-small-latest")
 
     async def fake_stream():
-        yield SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    delta=SimpleNamespace(
-                        content="hello", reasoning_content=None, tool_calls=None
-                    ),
-                    finish_reason=None,
-                )
-            ],
-            usage=None,
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content="hello", reasoning_content=None, tool_calls=None
+                        ),
+                        finish_reason=None,
+                    )
+                ],
+                usage=None,
+            )
         )
-        yield SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    delta=SimpleNamespace(
-                        content=None, reasoning_content=None, tool_calls=None
-                    ),
-                    finish_reason="stop",
-                )
-            ],
-            usage=None,
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None, reasoning_content=None, tool_calls=None
+                        ),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=None,
+            )
         )
-        yield SimpleNamespace(
-            choices=[],
-            usage=SimpleNamespace(
-                completion_tokens=5,
-                prompt_tokens=1000,
-                prompt_tokens_details={"cached_tokens": 640},
-            ),
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[],
+                usage=SimpleNamespace(
+                    completion_tokens=5,
+                    prompt_tokens=1000,
+                    prompt_tokens_details={"cached_tokens": 640},
+                ),
+            )
         )
 
     with patch.object(
@@ -338,10 +354,11 @@ async def test_stream_messages_maps_cached_usage_to_anthropic_fields(mistral_pro
         mock_create.return_value = SDKStreamDouble(fake_stream())
 
         chunks = [
-            chunk
+            frame
             async for chunk in mistral_provider.stream_messages(
                 req, request_headers=SESSION_HEADERS
             )
+            for frame in chunk.frames
         ]
 
     parsed = parse_sse_text("".join(chunks))

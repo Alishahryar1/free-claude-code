@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import httpx2
 import pytest
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionChunk
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import CLINE_DEFAULT_BASE
@@ -30,6 +31,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     profiled_provider,
+    sdk_chat_chunk,
 )
 
 
@@ -80,12 +82,12 @@ def _request(**overrides: JsonValue) -> MessagesRequest:
 
 
 class AsyncStream(SDKStreamDouble):
-    def __init__(self, chunks: list[SimpleNamespace]) -> None:
+    def __init__(self, chunks: list[ChatCompletionChunk]) -> None:
         self._chunks = chunks
         self.closed = False
         super().__init__(self._iter(), close=self.aclose)
 
-    async def _iter(self) -> AsyncIterator[SimpleNamespace]:
+    async def _iter(self) -> AsyncIterator[ChatCompletionChunk]:
         for chunk in self._chunks:
             yield chunk
 
@@ -99,7 +101,7 @@ def _chunk(
     reasoning: str | None = None,
     reasoning_details: list[JsonObject] | None = None,
     finish_reason: str | None = None,
-) -> SimpleNamespace:
+) -> ChatCompletionChunk:
     delta = SimpleNamespace(
         content=content,
         reasoning=reasoning,
@@ -107,7 +109,7 @@ def _chunk(
         tool_calls=None,
     )
     choice = SimpleNamespace(delta=delta, finish_reason=finish_reason)
-    return SimpleNamespace(choices=[choice], usage=None)
+    return sdk_chat_chunk(SimpleNamespace(choices=[choice], usage=None))
 
 
 def test_init_uses_documented_cline_api(
@@ -311,11 +313,12 @@ async def test_stream_uses_upstream_sse_and_preserves_reasoning_details(
     ):
         event_text = "".join(
             [
-                event
+                frame
                 async for event in cline_pass_provider.stream_messages(
                     _request(),
                     reasoning=ReasoningPolicy.on(),
                 )
+                for frame in event.frames
             ]
         )
 

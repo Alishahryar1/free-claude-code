@@ -23,6 +23,7 @@ from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from tests.web_tools_support import StubWebToolsClient
 
@@ -66,7 +67,7 @@ class FakeProvider:
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         self.requests.append(request)
         self.stream_kwargs.append(
             {
@@ -77,7 +78,7 @@ class FakeProvider:
             }
         )
         for event in self.events:
-            yield event
+            yield StreamOutput((event,))
 
     async def stream_responses(
         self,
@@ -90,7 +91,7 @@ class FakeProvider:
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         self.responses_requests.append(request)
         self.stream_kwargs.append(
             {
@@ -100,7 +101,9 @@ class FakeProvider:
                 "reasoning": reasoning,
             }
         )
-        yield 'event: response.completed\ndata: {"type":"response.completed"}\n\n'
+        yield StreamOutput(
+            ('event: response.completed\ndata: {"type":"response.completed"}\n\n',)
+        )
 
 
 async def _streaming_body_text(response: StreamingResponse) -> str:
@@ -172,7 +175,7 @@ async def test_messages_handler_startup_invalid_request_stays_http_error(
             reasoning: ReasoningPolicy,
             model_info: ProviderModelInfo | None = None,
             **kwargs: object,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[StreamOutput]:
             raise InvalidRequestError("bad tool shape")
 
     provider = RejectStartupProvider()
@@ -473,7 +476,7 @@ async def test_messages_handler_stream_false_provider_exception_keeps_status() -
             request_headers: Mapping[str, str] | None = None,
             model_info: ProviderModelInfo | None = None,
             continuation: ContinuationSeed | None = None,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[StreamOutput]:
             self.requests.append(request)
             self.stream_kwargs.append(
                 {
@@ -489,7 +492,7 @@ async def test_messages_handler_stream_false_provider_exception_keeps_status() -
                 message="upstream is busy",
                 retryable=True,
             )
-            yield "unreachable"
+            yield StreamOutput(("unreachable",))
 
     provider = FailingProvider()
     handler = MessagesHandler(

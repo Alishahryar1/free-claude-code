@@ -2,10 +2,14 @@
 
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import httpx2
 from openai import AsyncOpenAI
+from openai._models import construct_type
+from openai.types.chat import ChatCompletionChunk
 
 from free_claude_code.application.reasoning import client_reasoning_policy
 from free_claude_code.core.anthropic.models import MessagesRequest
@@ -25,6 +29,44 @@ from free_claude_code.providers.openai_chat import (
 REASONING_DEFAULT = ReasoningPolicy.provider_default()
 REASONING_ON = ReasoningPolicy.on()
 REASONING_OFF = ReasoningPolicy.off()
+
+
+def sdk_chat_chunk(value: Any) -> ChatCompletionChunk:
+    """Use the SDK's permissive wire construction for explicitly populated fixtures."""
+    if isinstance(value, ChatCompletionChunk):
+        return value
+
+    def plain(item: Any) -> Any:
+        if isinstance(item, (Mock, SimpleNamespace)):
+            return {
+                key: plain(value)
+                for key, value in vars(item).items()
+                if not key.startswith("_") and key not in {"method_calls"}
+            }
+        if isinstance(item, dict):
+            return {key: plain(value) for key, value in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [plain(value) for value in item]
+        return item
+
+    payload: dict[str, Any] = {
+        "id": "chat_fixture",
+        "object": "chat.completion.chunk",
+        "model": "test",
+        "created": 0,
+        **plain(value),
+    }
+    for choice in payload.get("choices", []):
+        choice.setdefault("index", 0)
+    if isinstance(usage := payload.get("usage"), dict):
+        usage.update(usage.pop("model_extra", {}))
+        usage.setdefault(
+            "total_tokens",
+            (usage.get("prompt_tokens") or 0) + (usage.get("completion_tokens") or 0),
+        )
+    chunk = construct_type(value=payload, type_=ChatCompletionChunk)
+    assert isinstance(chunk, ChatCompletionChunk)
+    return chunk
 
 
 class SDKStreamDouble[EventT](AsyncIterator[EventT]):

@@ -4,7 +4,6 @@ import json
 import sys
 from collections.abc import AsyncIterator, Mapping, Sequence
 from copy import deepcopy
-from types import SimpleNamespace
 from typing import Any
 
 import openai
@@ -125,19 +124,11 @@ def normalize_mistral_chunk(chunk: Any) -> Any:
             normalized_choices.append(choice)
             continue
         changed = True
-        normalized_choices.append(
-            SimpleNamespace(
-                delta=normalized_delta,
-                finish_reason=getattr(choice, "finish_reason", None),
-            )
-        )
+        normalized_choices.append(choice.model_copy(update={"delta": normalized_delta}))
 
     if not changed:
         return chunk
-    return SimpleNamespace(
-        choices=normalized_choices,
-        usage=getattr(chunk, "usage", None),
-    )
+    return chunk.model_copy(update={"choices": normalized_choices})
 
 
 def _normalize_mistral_delta(delta: Any) -> Any:
@@ -160,10 +151,8 @@ def _normalize_mistral_delta(delta: Any) -> Any:
     if not changed:
         return delta
 
-    return SimpleNamespace(
-        content=text,
-        reasoning_content=reasoning or None,
-        tool_calls=_field(delta, "tool_calls"),
+    return delta.model_copy(
+        update={"content": text, "reasoning_content": reasoning or None}
     )
 
 

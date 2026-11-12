@@ -18,7 +18,6 @@ from free_claude_code.providers.history_negotiation import (
 )
 from free_claude_code.providers.history_replay import history_retry_body
 from free_claude_code.providers.reasoning_compatibility import ReasoningCorrection
-from free_claude_code.providers.stream_recovery import RecoveryController
 
 
 class RequestRecovery:
@@ -29,11 +28,9 @@ class RequestRecovery:
         execution: ProviderExecution,
         *,
         endpoint: RequestEndpoint | None = None,
-        stream: RecoveryController | None = None,
     ) -> None:
         self._execution = execution
         self._endpoint = endpoint
-        self._stream = stream
         self._refreshed = False
 
     @property
@@ -42,7 +39,8 @@ class RequestRecovery:
 
     @property
     def _committed(self) -> bool:
-        return self._stream is not None and self._stream.committed
+        delivery = self.execution.delivery
+        return delivery is not None and delivery.content_released
 
     async def _authorize(self, error: Exception, attempt: ProviderAttempt) -> bool:
         return (

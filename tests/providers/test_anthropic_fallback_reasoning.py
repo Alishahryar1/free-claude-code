@@ -52,7 +52,9 @@ async def test_native_override_replaces_controls_and_preserves_extensions(
         received.append(request)
         if len(received) == 1:
             return httpx.Response(529, json={"error": {"type": "overloaded_error"}})
-        return httpx.Response(200, json={"type": "message", "content": []})
+        return httpx.Response(
+            200, json={"type": "message", "content": [], "stop_reason": "end_turn"}
+        )
 
     p = provider(handle)
     body = native_body()
@@ -161,7 +163,9 @@ async def test_native_inherit_preserves_unknown_controls_without_metadata():
     def handle(request):
         assert request.method == "POST"
         sent.append(json.loads(request.content))
-        return httpx.Response(200, json={"type": "message", "content": []})
+        return httpx.Response(
+            200, json={"type": "message", "content": [], "stop_reason": "end_turn"}
+        )
 
     p = provider(handle)
     body = native_body()

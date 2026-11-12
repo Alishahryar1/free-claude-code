@@ -2,13 +2,13 @@
 
 import asyncio
 import json
-from contextlib import nullcontext
 from copy import deepcopy
 from typing import Any
 
 import httpx2
 import pytest
 
+from free_claude_code.application.response_collection import collect_response
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
     parse_sse_text,
@@ -18,6 +18,7 @@ from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.openai_api.provider import OpenAIAPIProvider
+from tests.api.test_hidden_stream_retries import delivered
 from tests.providers.support import without_empty_reasoning
 from tests.providers.test_openai_api_provider import (
     _collect,
@@ -425,19 +426,14 @@ async def test_sampling_correction_respects_stream_commitment(ingress, committed
         )
 
     provider = _provider(httpx2.MockTransport(handler), max_attempts=3)
-    chunks = []
     try:
-        expected_error = (
-            pytest.raises(ExecutionFailure)
-            if committed and ingress == "messages"
-            else nullcontext()
-        )
-        with expected_error:
-            async for chunk in _stream(provider, _request(ingress)):
-                chunks.extend((chunk,))
+        source = _stream(provider, _request(ingress))
+        if committed:
+            output = await delivered(source, ingress)
+        else:
+            output = "".join(await collect_response(source, protocol=ingress))
     finally:
         await provider.cleanup()
-    output = "".join(chunks)
     events = parse_sse_text(output)
     start = "message_start" if ingress == "messages" else "response.created"
     assert sum(event.event == start for event in events) == 1

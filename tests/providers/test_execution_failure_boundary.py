@@ -21,6 +21,7 @@ from tests.providers.support import (
     SDKStreamDouble,
     immediate_admission,
     make_provider_config,
+    sdk_chat_chunk,
 )
 
 
@@ -53,7 +54,7 @@ class _FailingStream(SDKStreamDouble[object]):
 def _chunk(*, content: str | None = None, finish_reason: str | None = None) -> object:
     delta = MagicMock(content=content, tool_calls=None, reasoning_content=None)
     choice = MagicMock(delta=delta, finish_reason=finish_reason)
-    return MagicMock(choices=[choice], usage=None)
+    return sdk_chat_chunk(MagicMock(choices=[choice], usage=None))
 
 
 def _provider() -> NvidiaNimProvider:
@@ -67,17 +68,14 @@ def _provider() -> NvidiaNimProvider:
 
 
 @pytest.mark.asyncio
-async def test_committed_provider_failure_closes_block_then_raises_canonical_value() -> (
-    None
-):
+async def test_provider_failure_preserves_text_and_raises_canonical_value() -> None:
     provider = _provider()
     request = make_messages_request(
         "test-model",
         messages=[],
         max_tokens=32,
     )
-    # Crossing the recovery buffer's byte threshold makes the content block
-    # downstream-visible before the failure, so its close prelude must escape.
+    # A source failure preserves emitted text without inventing a successful close.
     stream = _FailingStream(
         [_chunk(content="x" * 65_536)],
         RuntimeError("connection lost after commit"),
@@ -97,10 +95,10 @@ async def test_committed_provider_failure_closes_block_then_raises_canonical_val
             request,
             request_id="req_committed_failure",
         ):
-            emitted.append(event)
+            emitted.extend(event.frames)
 
     events = parse_sse_text("".join(emitted))
-    assert [event.event for event in events][-1] == "content_block_stop"
+    assert [event.event for event in events][-1] == "content_block_delta"
     assert not any(event.event in {"error", "message_stop"} for event in events)
     assert exc_info.value.kind is FailureKind.UPSTREAM
     assert exc_info.value.status_code == 502
@@ -134,11 +132,12 @@ async def test_openai_stream_close_failure_cannot_mask_execution_failure() -> No
         pytest.raises(ExecutionFailure) as exc_info,
     ):
         [
-            event
+            frame
             async for event in provider.stream_messages(
                 request,
                 request_id="req_close_failure",
             )
+            for frame in event.frames
         ]
 
     assert stream.close_calls == 1
@@ -272,11 +271,12 @@ async def test_completed_stream_close_failure_preserves_success_lifecycle(
         patch("free_claude_code.providers.http.trace_event") as trace_event,
     ):
         emitted = [
-            event
+            frame
             async for event in provider.stream_messages(
                 request,
                 request_id="req_successful_close_failure",
             )
+            for frame in event.frames
         ]
 
     events = parse_sse_text("".join(emitted))

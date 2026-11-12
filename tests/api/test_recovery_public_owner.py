@@ -7,8 +7,8 @@ import pytest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.continuation_stream import ContinuationStream
 from free_claude_code.core.stream_delivery import current_stream_delivery
+from free_claude_code.core.stream_output import completed_output
 from free_claude_code.providers.request_recovery import RequestCorrections
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_delivered_stream_recovery import public_text, text_events
 from tests.api.test_hidden_stream_retries import delivered
 from tests.api.test_tool_call_buffer import _call, _frames, _response, _start
@@ -17,12 +17,33 @@ from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
 
 
-@pytest.fixture(autouse=True)
-def immediate_events(monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
+@pytest.mark.asyncio
+async def test_completion_proof_survives_replay_hold_until_later_text():
+    observed = []
+
+    async def source():
+        state = current_stream_delivery()
+        assert state is not None
+        for value in text_events("responses", "Hello ", complete=False):
+            yield completed_output(_frames("responses", [(value["type"], value)]))
+        state.begin_continuation()
+        state.begin_attempt()
+        for value in text_events("responses", "He", complete=False):
+            yield completed_output(_frames("responses", [(value["type"], value)]))
+        yield completed_output(_frames("responses", _call("responses", index=1)))
+        assert state.prefix is not None and not state.prefix.has_calls
+        value = text_events("responses", "llo world.", complete=False)[-1]
+        yield completed_output(_frames("responses", [(value["type"], value)]))
+        assert state.prefix is not None
+        observed.append(state.prefix.has_calls)
+
+    response = await _response("responses", source())
+    try:
+        async for _ in response.body_iterator:
+            pass
+    finally:
+        await response.aclose()
+    assert observed == [True]
 
 
 @pytest.mark.asyncio
@@ -63,7 +84,7 @@ async def test_continuation_preserves_call_completed_by_terminal_snapshot(
         )
     events = parse_sse_text(raw)
     assert len(bodies) == 2
-    assert events[-1].event == "response.completed"
+    assert events[-1].event == "response.completed", events[-1].data
     output = events[-1].data["response"]["output"]
     calls = [item for item in output if item["type"] == "function_call"]
     assert len(calls) == 1
@@ -126,7 +147,7 @@ async def test_body_correction_depends_on_current_attempt_publication(activity):
 
 
 @pytest.mark.asyncio
-async def test_released_tool_group_is_published_one_frame_at_a_time():
+async def test_released_tool_packet_is_complete_before_upstream_resumes():
     resumed = []
     states = []
 
@@ -134,32 +155,28 @@ async def test_released_tool_group_is_published_one_frame_at_a_time():
         state = current_stream_delivery()
         assert state is not None
         states.append(state)
-        yield "".join(_frames("responses", [_start("responses")]))
-        yield "".join(_frames("responses", _call("responses")))
+        yield completed_output(("".join(_frames("responses", [_start("responses")])),))
+        yield completed_output(("".join(_frames("responses", _call("responses"))),))
         resumed.append(state.content_released)
 
     response = await _response("responses", source())
     try:
         iterator = aiter(response.body_iterator)
         assert parse_sse_text(str(await anext(iterator)))[0].event == "response.created"
-        first = parse_sse_text(str(await anext(iterator)))
-        assert len(first) == 1
-        assert first[0].event == "response.output_item.added"
-        assert not states[0].prefix.has_calls
+        packet = parse_sse_text(str(await anext(iterator)))
+        assert packet[0].event == "response.output_item.added"
+        assert packet[-1].event == "response.output_item.done"
+        assert states[0].prefix.has_calls
         assert resumed == []
-        assert len(parse_sse_text(str(await anext(iterator)))) == 1
-        assert resumed == []
-        await anext(iterator)
-        await anext(iterator)
-        assert resumed == []
-        assert [part async for part in iterator] == []
+        with pytest.raises(StopAsyncIteration):
+            await anext(iterator)
         assert resumed == [True]
     finally:
         await response.aclose()
 
 
 @pytest.mark.asyncio
-async def test_public_transform_failure_preserves_returned_frames_and_emits_error(
+async def test_public_transform_failure_preserves_returned_packets_and_emits_error(
     monkeypatch,
 ):
     original = ContinuationStream.prepare
@@ -177,15 +194,21 @@ async def test_public_transform_failure_preserves_returned_frames_and_emits_erro
         assert state is not None
         try:
             for event in text_events("responses", "Hello ", complete=False):
-                yield _frames("responses", [(event["type"], event)])[0]
+                yield completed_output(
+                    (_frames("responses", [(event["type"], event)])[0],)
+                )
             state.begin_continuation()
-            yield "".join(
-                _frames(
-                    "responses",
-                    [
-                        (event["type"], event)
-                        for event in text_events("responses", "world.")
-                    ],
+            yield completed_output(
+                (
+                    "".join(
+                        _frames(
+                            "responses",
+                            [
+                                (event["type"], event)
+                                for event in text_events("responses", "world.")
+                            ],
+                        )
+                    ),
                 )
             )
         finally:
@@ -193,7 +216,7 @@ async def test_public_transform_failure_preserves_returned_frames_and_emits_erro
 
     raw = await delivered(source(), "responses")
     events = parse_sse_text(raw)
-    assert public_text(events, "responses") == "Hello world."
+    assert public_text(events, "responses") == "Hello "
     assert events[-1].event == "response.failed"
     assert sum(e.event == "response.failed" for e in events) == 1
     assert not any(e.event == "response.completed" for e in events)
@@ -286,19 +309,19 @@ async def test_attempt_resets_are_atomic_and_old_closures_do_not_commit_new_atte
         assert state is not None
         state.begin_attempt()
         for event in text_events("responses", "Hello ", complete=False):
-            yield _frames("responses", [(event["type"], event)])[0]
+            yield completed_output((_frames("responses", [(event["type"], event)])[0],))
         state.begin_continuation()
         state.begin_attempt()
-        yield _frames("responses", [_start("responses")])[0]
+        yield completed_output((_frames("responses", [_start("responses")])[0],))
         attempts.append(state.attempt_content_released)
-        yield "".join(_frames("responses", _call("responses")[:2]))
-        yield 'event: response.output_item.added\ndata: {"type":'
+
+        yield completed_output(('event: response.output_item.added\ndata: {"type":',))
         attempts.append(state.attempt_content_released)
         # Several invisible failures can occur in one read of the provider iterator.
         state.begin_attempt()
         state.begin_attempt()
         for event in text_events("responses", "world."):
-            yield _frames("responses", [(event["type"], event)])[0]
+            yield completed_output((_frames("responses", [(event["type"], event)])[0],))
         attempts.append(state.attempt_content_released)
 
     raw = await delivered(source(), "responses")

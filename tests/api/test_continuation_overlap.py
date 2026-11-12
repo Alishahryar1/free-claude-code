@@ -8,20 +8,12 @@ import pytest
 
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.stream_delivery import current_stream_delivery
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
+from free_claude_code.core.stream_output import completed_output
 from tests.api.test_delivered_stream_recovery import public_text, text_events
 from tests.api.test_hidden_stream_retries import delivered
 from tests.api.test_tool_call_buffer import _frames, _response
 from tests.providers.support import assistant_history_text
 from tests.providers.test_history_transports import _harness
-
-
-@pytest.fixture(autouse=True)
-def immediate_events(monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
 
 
 def responses_parts(parts, *, separate_items=False, representation="deltas"):
@@ -257,15 +249,19 @@ async def test_overflow_preserves_public_prefix_and_closes_the_source(monkeypatc
                     for event in text_events("responses", "Hello ", complete=False)
                 ],
             ):
-                yield frame
+                yield completed_output((frame,))
             state.begin_continuation()
             state.begin_attempt()
             attempts.append(2)
             for event in responses_parts(["He"], representation="text_done")[:4]:
-                yield _frames("responses", [(event["type"], event)])[0]
+                yield completed_output(
+                    (_frames("responses", [(event["type"], event)])[0],)
+                )
             for _ in range(30):
                 event = {"type": "ping", "padding": "x" * 60}
-                yield _frames("responses", [(event["type"], event)])[0]
+                yield completed_output(
+                    (_frames("responses", [(event["type"], event)])[0],)
+                )
             pytest.fail("the owner must stop reading after its overlap limit")
         finally:
             closed.append(True)
@@ -281,7 +277,7 @@ async def test_overflow_preserves_public_prefix_and_closes_the_source(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_overlap_release_records_each_frame_only_when_returned():
+async def test_overlap_release_records_each_packet_only_when_returned():
     states = []
     resumed = []
 
@@ -296,10 +292,10 @@ async def test_overlap_release_records_each_frame_only_when_returned():
                 for event in text_events("responses", "Hello ", complete=False)
             ],
         ):
-            yield frame
+            yield completed_output((frame,))
         state.begin_continuation()
         for event in responses_parts(["He", "llo world."], representation="text_done"):
-            yield _frames("responses", [(event["type"], event)])[0]
+            yield completed_output((_frames("responses", [(event["type"], event)])[0],))
             prefix = state.prefix
             assert prefix is not None
             if (
@@ -318,12 +314,11 @@ async def test_overlap_release_records_each_frame_only_when_returned():
     try:
         async for chunk in response.body_iterator:
             frames = parse_sse_text(str(chunk))
-            assert len(frames) == 1
-            event = frames[0]
-            events.append(event)
-            if (
+            events.extend(frames)
+            if any(
                 event.event == "response.output_text.done"
                 and event.data["text"] == "world."
+                for event in frames
             ):
                 assert states[0].prefix.text == "Hello world."
                 assert resumed == []
@@ -343,7 +338,7 @@ async def test_hidden_attempt_replacement_discards_queued_replay():
         state.begin_attempt()
         prefix = text_events("responses", "Hello ", complete=False)
         for frame in _frames("responses", [(event["type"], event) for event in prefix]):
-            yield frame
+            yield completed_output((frame,))
         state.begin_continuation()
         for _ in range(2):
             state.begin_attempt()
@@ -354,13 +349,13 @@ async def test_hidden_attempt_replacement_discards_queued_replay():
                 "item_id": "msg_abandoned",
                 "delta": "He",
             }
-            yield _frames("responses", [(event["type"], event)])[0]
+            yield completed_output((_frames("responses", [(event["type"], event)])[0],))
             prefix = state.prefix
             assert prefix is not None
             unpublished.append((state.attempt_content_released, prefix.text))
         state.begin_attempt()
         for event in responses_parts(["world."], representation="text_done"):
-            yield _frames("responses", [(event["type"], event)])[0]
+            yield completed_output((_frames("responses", [(event["type"], event)])[0],))
 
     raw = await delivered(source(), "responses")
     assert unpublished == [(False, "Hello "), (False, "Hello ")]
@@ -386,10 +381,12 @@ async def test_cancellation_drops_ambiguous_replay_and_closes_the_source():
             for frame in _frames(
                 "responses", [(event["type"], event) for event in prefix]
             ):
-                yield frame
+                yield completed_output((frame,))
             state.begin_continuation()
             for event in responses_parts(["He"], representation="text_done")[:4]:
-                yield _frames("responses", [(event["type"], event)])[0]
+                yield completed_output(
+                    (_frames("responses", [(event["type"], event)])[0],)
+                )
             waiting.set()
             await asyncio.Event().wait()
         finally:

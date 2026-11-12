@@ -1,17 +1,21 @@
 """Map continuation events into an existing public response lifecycle."""
 
 from copy import deepcopy
-from typing import Any, Literal
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4, uuid5
 
 from .continuation_overlap import ContinuationOverlap
 from .delivered_response import (
     DeliveredResponse,
-    client_call,
     responses_text_constraint,
 )
 from .failures import ExecutionFailure, FailureKind
 from .gemini.response import gemini_finished, gemini_parts
+from .openai_responses import is_client_call
+
+if TYPE_CHECKING:
+    from .stream_output import CompletedCall
 
 
 class ContinuationStream:
@@ -61,16 +65,19 @@ class ContinuationStream:
 
     def boundary(self) -> list[dict[str, Any]]:
         events, self._boundary = self._boundary, []
-        return [self._sequence(event) for event in events]
-
-    def _sequence(self, event: dict[str, Any]) -> dict[str, Any]:
-        if self.delivered.wire_api == "responses":
-            self.delivered.sequence += 1
-            event["sequence_number"] = self.delivered.sequence
-        return event
+        return events
 
     def _item_id(self, value: str) -> str:
         return f"{value.split('_')[0]}_{uuid5(self._namespace, value).hex}"
+
+    def map_call_reference(self, call: CompletedCall) -> CompletedCall:
+        if not self.active or self.handoff or call.protocol in {"chat", "gemini"}:
+            return call
+        return replace(
+            call,
+            position=(call.position[0] + self._offset,),
+            item_id=self._item_id(call.item_id) if call.item_id is not None else None,
+        )
 
     def prepare(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         if not self.active:
@@ -161,7 +168,7 @@ class ContinuationStream:
                 for item in response.get("output", []):
                     if isinstance(item.get("id"), str):
                         item["id"] = self._item_id(item["id"])
-        return self._sequence(data)
+        return data
 
     def finalize(self, data: dict[str, Any]) -> dict[str, Any]:
         """Finish the response only after preceding frames have been published."""
@@ -173,6 +180,7 @@ class ContinuationStream:
                     choice.get("finish_reason") is not None
                     for choice in data.get("choices", [])
                 )
+                and not self.handoff
                 and not self.made_progress
                 and not any(
                     any(
@@ -254,7 +262,7 @@ class ContinuationStream:
     @staticmethod
     def _has_output(items: list[dict[str, Any]]) -> bool:
         return any(
-            client_call(item)
+            is_client_call(item)
             or any(
                 part.get("text") or part.get("refusal")
                 for part in [*(item.get("content") or []), *(item.get("summary") or [])]

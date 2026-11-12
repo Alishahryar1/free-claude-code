@@ -32,6 +32,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     reasoning_for,
+    sdk_chat_chunk,
 )
 
 
@@ -1110,45 +1111,52 @@ async def test_stream_uses_chat_completions_and_maps_cache_usage(deepseek_provid
     )
 
     async def fake_stream():
-        yield SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    delta=SimpleNamespace(
-                        content="hello", reasoning_content=None, tool_calls=None
-                    ),
-                    finish_reason=None,
-                )
-            ],
-            usage=None,
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content="hello", reasoning_content=None, tool_calls=None
+                        ),
+                        finish_reason=None,
+                    )
+                ],
+                usage=None,
+            )
         )
-        yield SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    delta=SimpleNamespace(
-                        content=None, reasoning_content=None, tool_calls=None
-                    ),
-                    finish_reason="stop",
-                )
-            ],
-            usage=None,
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None, reasoning_content=None, tool_calls=None
+                        ),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=None,
+            )
         )
-        yield SimpleNamespace(
-            choices=[],
-            usage=SimpleNamespace(
-                completion_tokens=3,
-                prompt_tokens=30,
-                prompt_cache_hit_tokens=10,
-                prompt_cache_miss_tokens=20,
-            ),
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[],
+                usage=SimpleNamespace(
+                    completion_tokens=3,
+                    prompt_tokens=30,
+                    prompt_cache_hit_tokens=10,
+                    prompt_cache_miss_tokens=20,
+                ),
+            )
         )
 
     create = AsyncMock(return_value=SDKStreamDouble(fake_stream()))
     with patch.object(deepseek_provider._client.chat.completions, "create", create):
         chunks = [
-            chunk
+            frame
             async for chunk in deepseek_provider.stream_messages(
                 request, input_tokens=7, request_id="r1"
             )
+            for frame in chunk.frames
         ]
 
     create.assert_awaited_once()
@@ -1174,47 +1182,54 @@ async def test_responses_stream_maps_deepseek_cache_usage(deepseek_provider):
     request = OpenAIResponsesRequest(model="m", input="hi")
 
     async def fake_stream():
-        yield SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    delta=SimpleNamespace(
-                        content="hello", reasoning_content=None, tool_calls=None
-                    ),
-                    finish_reason=None,
-                )
-            ],
-            usage=None,
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content="hello", reasoning_content=None, tool_calls=None
+                        ),
+                        finish_reason=None,
+                    )
+                ],
+                usage=None,
+            )
         )
-        yield SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    delta=SimpleNamespace(
-                        content=None, reasoning_content=None, tool_calls=None
-                    ),
-                    finish_reason="stop",
-                )
-            ],
-            usage=None,
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None, reasoning_content=None, tool_calls=None
+                        ),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=None,
+            )
         )
-        yield SimpleNamespace(
-            choices=[],
-            usage=SimpleNamespace(
-                completion_tokens=3,
-                prompt_tokens=30,
-                model_extra={
-                    "prompt_cache_hit_tokens": 10,
-                    "prompt_cache_miss_tokens": 20,
-                },
-            ),
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[],
+                usage=SimpleNamespace(
+                    completion_tokens=3,
+                    prompt_tokens=30,
+                    model_extra={
+                        "prompt_cache_hit_tokens": 10,
+                        "prompt_cache_miss_tokens": 20,
+                    },
+                ),
+            )
         )
 
     create = AsyncMock(return_value=SDKStreamDouble(fake_stream()))
     with patch.object(deepseek_provider._client.chat.completions, "create", create):
         chunks = [
-            chunk
+            frame
             async for chunk in deepseek_provider.stream_responses(
                 request, input_tokens=7, request_id="r1"
             )
+            for frame in chunk.frames
         ]
 
     parsed = parse_sse_text("".join(chunks))

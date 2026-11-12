@@ -24,6 +24,7 @@ from free_claude_code.core.anthropic import (
 )
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from tests.stream_packets import packets
 
 
 async def _body_chunks(chunks: list[str]) -> AsyncGenerator[str]:
@@ -113,7 +114,7 @@ async def test_anthropic_response_waits_for_first_chunk_before_returning() -> No
 
     task = asyncio.create_task(
         anthropic_sse_streaming_response(
-            body(),
+            packets(body()),
             pre_start_error_response=_json_error,
             request_id="req_test",
         )
@@ -131,12 +132,14 @@ async def test_anthropic_response_waits_for_first_chunk_before_returning() -> No
 @pytest.mark.asyncio
 async def test_anthropic_pre_start_provider_error_returns_non_200_json() -> None:
     response = await anthropic_sse_streaming_response(
-        _body_raises(
-            ExecutionFailure(
-                kind=FailureKind.RATE_LIMIT,
-                status_code=429,
-                message="provider says slow down",
-                retryable=True,
+        packets(
+            _body_raises(
+                ExecutionFailure(
+                    kind=FailureKind.RATE_LIMIT,
+                    status_code=429,
+                    message="provider says slow down",
+                    retryable=True,
+                )
             )
         ),
         pre_start_error_response=_json_error,
@@ -169,7 +172,7 @@ async def test_pre_start_failure_closes_body_before_response_release() -> None:
         lifecycle.append("lease_released")
 
     response = await anthropic_sse_streaming_response(
-        FailingBody(),
+        packets(FailingBody()),
         pre_start_error_response=_json_error,
         request_id="req_pre_start_order",
     )
@@ -201,9 +204,11 @@ async def test_terminal_execution_error_response_disables_client_retry() -> None
 @pytest.mark.asyncio
 async def test_anthropic_post_start_exception_emits_terminal_error_frame() -> None:
     response = await anthropic_sse_streaming_response(
-        _body_then_raises(
-            ['event: message_start\ndata: {"type":"message_start"}\n\n'],
-            RuntimeError("socket cut"),
+        packets(
+            _body_then_raises(
+                ['event: message_start\ndata: {"type":"message_start"}\n\n'],
+                RuntimeError("socket cut"),
+            )
         ),
         pre_start_error_response=_json_error,
         request_id="req_test",
@@ -292,7 +297,7 @@ async def test_streaming_response_releases_when_consumer_closes_early() -> None:
             source_closed.set()
 
     response = await anthropic_sse_streaming_response(
-        body(),
+        packets(body()),
         pre_start_error_response=_json_error,
         request_id="req_test",
     )
@@ -350,7 +355,7 @@ async def test_response_start_send_failure_closes_prefetched_tail_and_releases()
             source_closed.set()
 
     response = await anthropic_sse_streaming_response(
-        body(),
+        packets(body()),
         pre_start_error_response=_json_error,
         request_id="req_test",
     )
@@ -381,7 +386,7 @@ async def test_first_body_send_failure_closes_prefetched_tail_and_releases() -> 
             source_closed.set()
 
     response = await anthropic_sse_streaming_response(
-        body(),
+        packets(body()),
         pre_start_error_response=_json_error,
         request_id="req_test",
     )
@@ -412,7 +417,7 @@ async def test_asgi_23_correlation_boundary_preserves_response_start_cleanup() -
             source_closed.set()
 
     response = await anthropic_sse_streaming_response(
-        body(),
+        packets(body()),
         pre_start_error_response=_json_error,
         request_id="req_test",
     )
@@ -519,7 +524,7 @@ async def test_repeated_pre_start_cancellation_waits_for_body_close() -> None:
 
     response_task = asyncio.create_task(
         anthropic_sse_streaming_response(
-            GatedPreStartBody(),
+            packets(GatedPreStartBody()),
             pre_start_error_response=_json_error,
             request_id="req_pre_start_cancel",
         )
@@ -557,7 +562,7 @@ async def test_cancellation_during_pre_start_error_cleanup_waits_for_close() -> 
 
     response_task = asyncio.create_task(
         anthropic_sse_streaming_response(
-            FailingPreStartBody(),
+            packets(FailingPreStartBody()),
             pre_start_error_response=_json_error,
             request_id="req_pre_start_error_cancel",
         )

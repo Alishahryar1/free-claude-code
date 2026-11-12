@@ -621,15 +621,11 @@ class ResponsesToolEventAdapter:
         self._tools = tools
         self._custom_items: set[str] = set()
         self._search_items: set[str] = set()
-        self._sequence = 0
 
     def feed(
         self, event_type: str, payload: JsonObject
     ) -> Iterable[tuple[str, JsonObject]]:
         data = deepcopy(payload)
-        sequence = data.get("sequence_number")
-        if isinstance(sequence, int) and not isinstance(sequence, bool):
-            self._sequence = max(self._sequence, sequence)
         original_item = data.get("item")
         item = self._tools.restore_item(original_item)
         if isinstance(item, dict):
@@ -713,10 +709,9 @@ class ResponsesToolEventAdapter:
                 )
         yield self._emit(event_type, data)
 
-    def _emit(self, event_type: str, payload: JsonObject) -> tuple[str, JsonObject]:
-        payload = {**payload, "type": event_type, "sequence_number": self._sequence}
-        self._sequence += 1
-        return event_type, payload
+    @staticmethod
+    def _emit(event_type: str, payload: JsonObject) -> tuple[str, JsonObject]:
+        return event_type, {**payload, "type": event_type}
 
 
 def _name(value: Mapping[str, JsonValue]) -> str:

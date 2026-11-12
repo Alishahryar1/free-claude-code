@@ -73,7 +73,9 @@ async def test_executor_converts_chat_request_once(wire):
             stream = getattr(executor, f"stream_{wire}")(
                 routed, raw_log_payload=dict, request_id="conversion-once"
             )
-            output = "".join([event async for event in stream])
+            output = "".join(
+                [frame async for event in stream for frame in event.frames]
+            )
         assert "hello" in output
         assert len(generation_calls) == 1
         assert build.call_count == 1
@@ -108,7 +110,9 @@ async def test_executor_converts_selected_opencode_route_once(wire, egress, warm
             stream = getattr(executor, f"stream_{wire}")(
                 routed, raw_log_payload=dict, request_id="opencode-conversion-once"
             )
-            assert f"{egress}-ok" in "".join([event async for event in stream])
+            assert f"{egress}-ok" in "".join(
+                [frame async for event in stream for frame in event.frames]
+            )
         assert build.call_count == 1
         assert len(generation) == len(catalog) == 1
     finally:
@@ -148,7 +152,9 @@ async def test_executor_converts_subscription_request_once(wire):
                 routed, raw_log_payload=dict, request_id="subscription-conversion-once"
             )
             assert auth.access_calls == 0
-            assert "hello" in "".join([event async for event in stream])
+            assert "hello" in "".join(
+                [frame async for event in stream for frame in event.frames]
+            )
         assert build.call_count == len(generation) == auth.access_calls == 1
     finally:
         await provider.cleanup()

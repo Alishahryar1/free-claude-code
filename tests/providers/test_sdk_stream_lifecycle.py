@@ -21,7 +21,7 @@ from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
 )
-from free_claude_code.providers.failure_policy import RetryableToolProtocolError
+from free_claude_code.providers.failure_policy import RetryableProviderProtocolError
 from free_claude_code.providers.mistral import MistralProvider
 from free_claude_code.providers.mistral.reasoning import normalize_mistral_stream
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
@@ -263,7 +263,9 @@ async def test_sdk_body_lifetime(kind, wire, termination):
                     await task
             elif termination == "complete":
                 async with asyncio.timeout(2):
-                    output = "".join([event async for event in stream])
+                    output = "".join(
+                        [frame async for event in stream for frame in event.frames]
+                    )
                 assert "x" * 100 in output
             else:
                 async with asyncio.timeout(2):
@@ -335,7 +337,13 @@ async def test_cancelled_retry_cleanup_releases_recovery_ownership(wire):
     ):
 
         async def consume():
-            return "".join([event async for event in _public_stream(provider, wire)])
+            return "".join(
+                [
+                    frame
+                    async for packet in _public_stream(provider, wire)
+                    for frame in packet.frames
+                ]
+            )
 
         task = None
         try:
@@ -417,7 +425,7 @@ class _RejectingNormalizedStream:
     async def __anext__(self):
         chunk = await anext(self.source)
         if chunk.choices and chunk.choices[0].delta.content == "reject normalization":
-            raise RetryableToolProtocolError("invalid normalized chunk")
+            raise RetryableProviderProtocolError("invalid normalized chunk")
         return chunk
 
     async def aclose(self):
@@ -451,7 +459,11 @@ async def test_normalization_failure_closes_response_before_retry(wire):
         ):
             async with asyncio.timeout(2):
                 output = "".join(
-                    [event async for event in _public_stream(provider, wire)]
+                    [
+                        frame
+                        async for packet in _public_stream(provider, wire)
+                        for frame in packet.frames
+                    ]
                 )
         assert "recovered" in output
         assert "reject normalization" not in output
@@ -527,7 +539,7 @@ async def test_sdk_observer_runs_before_normalization_without_owning_cleanup(
         )
         try:
             if reject_normalization:
-                with pytest.raises(RetryableToolProtocolError):
+                with pytest.raises(RetryableProviderProtocolError):
                     await anext(normalized)
             else:
                 event = await anext(normalized)
@@ -547,7 +559,6 @@ async def test_sdk_observer_runs_before_normalization_without_owning_cleanup(
     [
         ProviderOperationKind.GENERATION,
         ProviderOperationKind.CONTINUATION,
-        ProviderOperationKind.TOOL_REPAIR,
     ],
 )
 async def test_normalizer_construction_failure_closes_response_before_retry(operation):
@@ -568,7 +579,7 @@ async def test_normalizer_construction_failure_closes_response_before_retry(oper
             nonlocal calls
             calls += 1
             if calls == 1:
-                raise RetryableToolProtocolError("invalid normalization")
+                raise RetryableProviderProtocolError("invalid normalization")
             assert bodies[0].close_count == 1
             return normalize(stream, body)
 

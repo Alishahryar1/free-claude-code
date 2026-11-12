@@ -56,7 +56,6 @@ class ResponsesChatRequest:
 
     body: dict[str, object]
     tool_names: OpenAIToolNameCodec
-    tool_schemas: dict[str, JsonObject]
     reserved_tool_ids: frozenset[str]
     tool_adapter: ResponsesToolAdapter
 
@@ -438,14 +437,12 @@ def build_responses_chat_request(
     if response_format := _chat_response_format(extra.get("text")):
         body["response_format"] = response_format
 
-    tool_schemas = _body_tool_schemas(body)
     reserved_tool_ids = frozenset(_body_tool_call_ids(body))
     tool_names = OpenAIToolNameCodec.from_names(_body_tool_names(body))
     builder.encode_discovery_outputs(tool_names)
     return ResponsesChatRequest(
         body=body,
         tool_names=tool_names,
-        tool_schemas=tool_schemas,
         reserved_tool_ids=reserved_tool_ids,
         tool_adapter=adapter,
     )
@@ -712,24 +709,6 @@ def _body_tool_names(body: Mapping[str, object]) -> list[str]:
         if isinstance(function, Mapping) and isinstance(function.get("name"), str):
             names.append(function["name"])
     return names
-
-
-def _body_tool_schemas(body: Mapping[str, object]) -> dict[str, JsonObject]:
-    schemas: dict[str, JsonObject] = {}
-    tools = body.get("tools")
-    if not isinstance(tools, list):
-        return schemas
-    for tool in tools:
-        if not isinstance(tool, Mapping):
-            continue
-        function = tool.get("function")
-        if not isinstance(function, Mapping):
-            continue
-        name = function.get("name")
-        parameters = function.get("parameters")
-        if isinstance(name, str) and isinstance(parameters, Mapping):
-            schemas[name] = dict(parameters)
-    return schemas
 
 
 def _body_tool_call_ids(body: Mapping[str, object]) -> list[str]:

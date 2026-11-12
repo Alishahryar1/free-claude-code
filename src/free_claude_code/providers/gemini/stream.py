@@ -20,6 +20,7 @@ from free_claude_code.core.recovery_limits import RECOVERY_RETENTION_BYTES
 from free_claude_code.providers.openai_chat import (
     ChatStreamOutput,
     ChatStreamUsage,
+    CompletedToolCall,
 )
 
 
@@ -114,6 +115,13 @@ class GeminiStream:
                 )
             for raw in candidate.get("content", {}).get("parts", []):
                 if self._output is None and self._continuation_context is None:
+                    if "functionCall" in raw:
+                        try:
+                            Part.model_validate(raw)
+                        except ValueError as error:
+                            raise conversion_failure(
+                                "Gemini returned an unsupported partial function call"
+                            ) from error
                     continue
                 try:
                     part = Part.model_validate(raw)
@@ -167,20 +175,14 @@ class GeminiStream:
                         allow_nan=False,
                     )
                     events.extend(self._output.close_content_blocks())
-                    events.append(
-                        self._output.start_tool_block(
+                    events.extend(
+                        self._output.emit_complete_tool(
                             self._tool_index,
-                            call.id or f"call_{uuid4().hex}",
-                            call.name,
+                            CompletedToolCall(
+                                call.id or f"call_{uuid4().hex}", call.name, arguments
+                            ),
                         )
                     )
-                    events.append(
-                        self._output.emit_tool_delta(
-                            self._tool_index,
-                            arguments,
-                        )
-                    )
-                    events.extend(self._output.stop_tool_block(self._tool_index))
                     self._tool_index += 1
                 elif part.inline_data is not None or part.function_response is not None:
                     raise conversion_failure("Gemini returned unsupported model output")

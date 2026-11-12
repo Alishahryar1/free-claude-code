@@ -11,7 +11,6 @@ import pytest
 from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.providers import admission, failure_policy
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_delivered_stream_recovery import public_text, text_events
 from tests.api.test_four_protocol_matrix import ingress_request, matrix_app
 
@@ -80,10 +79,6 @@ async def test_cooldown_reports_remaining_time_for_initial_and_later_requests(
 async def test_continuation_cooldown_uses_terminal_event(
     protocol, monkeypatch, cooldown_clock
 ):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
     calls = []
     response_type = httpx.Response if protocol == "messages" else httpx2.Response
 
@@ -174,7 +169,7 @@ async def test_automatic_websearch_preserves_continuation_cooldown(
             assert second.status_code == 429, second.text
             assert "3600 seconds" in second.json()["error"]["message"]
 
-    assert partial in json.dumps(calls[1]["messages"])
+    assert partial not in json.dumps(calls[1]["messages"])
     models = [body["model"] for body in calls]
     if with_backup:
         assert models == ["backend", "backend", "backup"]

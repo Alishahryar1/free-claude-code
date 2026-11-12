@@ -8,12 +8,12 @@ from free_claude_code.core.continuation_request import (
     UpstreamProtocol,
 )
 from free_claude_code.core.delivered_response import (
-    client_call,
     is_structured_text_format,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.history_replay import protected_reasoning
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.openai_responses import is_client_call
 from free_claude_code.core.stream_recovery import (
     RecoveryAction,
     SourceRecoverySnapshot,
@@ -206,7 +206,9 @@ class SourceRecoveryState:
             )
 
     def _response_item(self, item: dict[str, Any], *, completed: bool) -> None:
-        if item.get("type") not in {"message", "reasoning"} and not client_call(item):
+        if item.get("type") not in {"message", "reasoning"} and not is_client_call(
+            item
+        ):
             self.unsafe_reason = "hosted_or_native_content"
             self._handoff_blocked = True
         if item.get("encrypted_content"):
@@ -240,17 +242,22 @@ def public_stream_failure(
     responses_failure_payload: JsonObject | None = None,
 ) -> ExecutionFailure:
     """Retain source evidence until routing has decided the public outcome."""
+    snapshot = source.snapshot(
+        body=body,
+        protocol=protocol,
+        normal_stop_seen=normal_stop_seen,
+        for_model_fallback=True,
+    )
+    if (
+        failure.stream_context is not None
+        and failure.stream_context.source.unsafe_reason
+    ):
+        snapshot = replace(
+            snapshot, unsafe_reason=failure.stream_context.source.unsafe_reason
+        )
     return replace(
         failure,
-        stream_context=StreamFailureContext(
-            source.snapshot(
-                body=body,
-                protocol=protocol,
-                normal_stop_seen=normal_stop_seen,
-                for_model_fallback=True,
-            ),
-            responses_failure_payload,
-        ),
+        stream_context=StreamFailureContext(snapshot, responses_failure_payload),
     )
 
 

@@ -7,7 +7,6 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.support import provider_manager_for_app
 from tests.api.test_delivered_stream_recovery import text_events
 from tests.api.test_four_protocol_matrix import (
@@ -32,10 +31,6 @@ def native_text(text, complete):
 
 @pytest.mark.parametrize(("source", "wire"), PAIRS)
 def test_truncated_text_continues_without_duplicate_output(source, wire, monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
     bodies = []
 
     def reply(request):
@@ -180,10 +175,6 @@ def test_unsupported_native_gemini_controls_fail_before_inference(path, body):
 def test_native_gemini_structured_output_never_continues_partial_json(
     config, monkeypatch
 ):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
     bodies = []
 
     def reply(request):

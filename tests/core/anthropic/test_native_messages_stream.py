@@ -97,10 +97,10 @@ def test_relay_preserves_native_identity_and_extensions_without_mutating_input()
         "index": 5,
         "content_block": {"type": "text", "text": "hello", "citations": []},
     }
-    assert (
-        parse_sse_lines(relay.feed("content_block_start", block).splitlines())[0].data
-        == block
-    )
+    assert parse_sse_lines(relay.feed("content_block_start", block).splitlines())[
+        0
+    ].data == {**block, "index": 0}
+    assert block["index"] == 5
     assert not relay.completed
 
 

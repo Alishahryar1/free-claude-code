@@ -10,13 +10,13 @@ from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.chat_completions.response import ChatResponseAccumulator
 from free_claude_code.core.reasoning import ReasoningPolicy
 from tests.providers.test_anthropic_messages_transport import Endpoint
-from tests.providers.test_history_transports import _harness, _native
+from tests.providers.test_history_transports import _events_for, _harness, _native
 from tests.providers.test_native_tool_arguments import tool_events
 
 
 async def collect(stream):
     accumulator = ChatResponseAccumulator()
-    chunks = [chunk async for chunk in stream]
+    chunks = [frame async for chunk in stream for frame in chunk.frames]
     for event in parse_sse_text("".join(chunks)):
         if event.data:
             accumulator.feed(event.data)
@@ -302,3 +302,65 @@ async def test_native_chat_json_reassembles_readable_reasoning_but_keeps_opaque_
             )
         )
     assert bodies[-1]["messages"][1]["reasoning_details"] == expected
+
+
+def _tool_names(event):
+    data = event.data
+    block = data.get("content_block")
+    if isinstance(block, dict) and block.get("type") == "tool_use":
+        return [block["name"]]
+    items = [data.get("item")]
+    response = data.get("response")
+    if isinstance(response, dict):
+        items += response.get("output") or []
+    return [
+        item["name"]
+        for item in items
+        if isinstance(item, dict) and item.get("type") == "function_call"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_fragmented_tool_name_starts_with_complete_name(wire):
+    template = _events_for("chat")[0]
+    deltas = [
+        {
+            "tool_calls": [
+                {
+                    "index": 0,
+                    "id": "call_probe",
+                    "type": "function",
+                    "function": {"name": "Re", "arguments": ""},
+                }
+            ]
+        },
+        {
+            "tool_calls": [
+                {"index": 0, "function": {"name": "ad", "arguments": '{"path":"a"}'}}
+            ]
+        },
+    ]
+    events = [
+        {**template, "choices": [{"index": 0, "delta": delta, "finish_reason": None}]}
+        for delta in deltas
+    ] + [
+        {
+            **template,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+        }
+    ]
+    schema = {"type": "object", "properties": {"path": {"type": "string"}}}
+    async with _harness("chat", lambda _: (200, events)) as (send, _, _):
+        stream = send(
+            wire,
+            [{"role": "user", "content": "read"}],
+            tools=[{"type": "function", "name": "Read", "parameters": schema}]
+            if wire == "responses"
+            else [{"name": "Read", "input_schema": schema}],
+        )
+        output = parse_sse_text(
+            "".join([frame async for chunk in stream for frame in chunk.frames])
+        )
+    names = [name for event in output for name in _tool_names(event)]
+    assert names and set(names) == {"Read"}

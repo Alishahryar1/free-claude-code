@@ -78,10 +78,6 @@ class RetryableProviderProtocolError(RuntimeError):
     """A malformed upstream protocol result eligible for provider retry."""
 
 
-class RetryableToolProtocolError(RetryableProviderProtocolError):
-    """A malformed tool response whose continuation still requires tools."""
-
-
 def classify_provider_failure(
     exc: Exception,
     *,

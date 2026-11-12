@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from free_claude_code.api.handlers import MessagesHandler
 from free_claude_code.application.execution import ProviderExecutor
+from free_claude_code.application.response_collection import collect_response
 from free_claude_code.application.routing import ModelRouter
 from free_claude_code.config.reasoning import FALLBACK_REASONING_PREFERENCES
 from free_claude_code.config.settings import Settings
@@ -18,7 +19,6 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.custom import CustomProvider
 from free_claude_code.providers.runtime.config import build_custom_provider_config
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.model_fallback_support import (
     ControlledFallbackProvider,
     execution_failure,
@@ -162,12 +162,12 @@ async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
     before = request.model_dump()
     try:
         output = "".join(
-            [
-                event
-                async for event in getattr(executor, f"stream_{wire_api}")(
+            await collect_response(
+                getattr(executor, f"stream_{wire_api}")(
                     routed, raw_log_payload=dict, request_id="fallback-wire"
-                )
-            ]
+                ),
+                protocol=wire_api,
+            )
         )
         assert "Hello" in output and request.model_dump() == before
         assert len(captured) == 1 and captured[0]["model"] == "backup"
@@ -195,10 +195,6 @@ async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire_api", ["messages", "responses"])
 async def test_candidate_efforts_survive_retry_and_continuation(monkeypatch, wire_api):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
     bodies = []
     attempts = {"primary": 0, "low": 0, "inherited": 0}
 

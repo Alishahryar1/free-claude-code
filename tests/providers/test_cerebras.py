@@ -13,6 +13,7 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
     reasoning_for,
+    sdk_chat_chunk,
 )
 
 
@@ -208,14 +209,18 @@ async def test_stream_messages_text(cerebras_provider):
     mock_chunk.usage = MagicMock(completion_tokens=5, prompt_tokens=10)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with patch.object(
         cerebras_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in cerebras_provider.stream_messages(req)]
+        events = [
+            frame
+            async for event in cerebras_provider.stream_messages(req)
+            for frame in event.frames
+        ]
 
         assert any(
             '"text_delta"' in event and "Hello back!" in event for event in events
@@ -241,14 +246,18 @@ async def test_stream_messages_reasoning(cerebras_provider):
     mock_chunk.usage = MagicMock(completion_tokens=2, prompt_tokens=10)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with patch.object(
         cerebras_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in cerebras_provider.stream_messages(req)]
+        events = [
+            frame
+            async for event in cerebras_provider.stream_messages(req)
+            for frame in event.frames
+        ]
 
         assert any(
             '"thinking_delta"' in event and "Thinking..." in event for event in events

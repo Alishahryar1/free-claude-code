@@ -62,7 +62,6 @@ class ProviderOperationKind(StrEnum):
     MODEL_DISCOVERY = "model_discovery"
     GENERATION = "generation"
     CONTINUATION = "continuation"
-    TOOL_REPAIR = "tool_repair"
 
 
 class ProviderExecutionState(StrEnum):
@@ -169,6 +168,11 @@ class ProviderExecution:
         operation_kind: ProviderOperationKind,
     ) -> ProviderAttempt:
         """Open the sole active physical call for this execution."""
+        if self._delivery is None and operation_kind in {
+            ProviderOperationKind.GENERATION,
+            ProviderOperationKind.CONTINUATION,
+        }:
+            raise RuntimeError("Generation requires a response delivery context")
         attempt = await self._controller._open_attempt(self, operation_kind)
         if self._delivery and operation_kind in {
             ProviderOperationKind.GENERATION,

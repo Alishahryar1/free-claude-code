@@ -15,6 +15,7 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
     reasoning_for,
+    sdk_chat_chunk,
 )
 
 LLAMACPP_MODEL = "llamacpp-community/qwen2.5-7b-instruct"
@@ -130,7 +131,7 @@ async def test_stream_messages_uses_shared_openai_chat_provider(
     chunk.usage = MagicMock(prompt_tokens=8, completion_tokens=4)
 
     async def stream():
-        yield chunk
+        yield sdk_chat_chunk(chunk)
 
     with patch.object(
         provider._client.chat.completions,
@@ -140,10 +141,11 @@ async def test_stream_messages_uses_shared_openai_chat_provider(
     ) as create:
         output = "".join(
             [
-                event
+                frame
                 async for event in provider.stream_messages(
                     make_messages_request(LLAMACPP_MODEL)
                 )
+                for frame in event.frames
             ]
         )
 

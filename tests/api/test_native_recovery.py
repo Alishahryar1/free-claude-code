@@ -11,6 +11,10 @@ from fastapi.testclient import TestClient
 from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.stream_delivery import (
+    StreamDeliveryState,
+    bind_stream_delivery,
+)
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
@@ -56,7 +60,13 @@ async def test_native_fallback_tries_other_model_during_primary_cooldown(
                 content=_sse(*_events()),
             )
         return httpx.Response(
-            200, json={"type": "message", "model": model, "content": []}
+            200,
+            json={
+                "type": "message",
+                "model": model,
+                "content": [],
+                "stop_reason": "end_turn",
+            },
         )
 
     upstream = provider(handle)
@@ -222,7 +232,8 @@ async def test_leading_ping_timeout_or_disconnect_releases_all_resources(disconn
         assert all(wire.closed for wire in wires)
         assert manager._current.active_leases == 0
         # With concurrency one, a new operation can finish only if the old permit was released.
-        execution = p._admission.start_execution()
+        with bind_stream_delivery(StreamDeliveryState()):
+            execution = p._admission.start_execution()
 
         async def next_call():
             return "released"
@@ -261,7 +272,12 @@ def test_count_generate_and_continue_native_tool_history_with_recovery():
         else:
             return httpx.Response(
                 200,
-                json={"type": "message", "model": "primary", "content": [result_block]},
+                json={
+                    "type": "message",
+                    "model": "primary",
+                    "content": [result_block],
+                    "stop_reason": "end_turn",
+                },
             )
         return httpx.Response(
             200, headers={"content-type": "text/event-stream"}, stream=wire

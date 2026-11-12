@@ -24,6 +24,7 @@ from free_claude_code.core.openai_responses import (
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.request_outcomes import record_request_route
 from free_claude_code.core.stream_delivery import current_stream_delivery
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import (
     ContinuationSeed,
     RecoveryAction,
@@ -59,7 +60,7 @@ ResponsesTokenCounter = Callable[[OpenAIResponsesRequest], int]
 WireApi = Literal["messages", "responses", "gemini", "chat"]
 CandidateStreamOpener = Callable[
     [int, ProviderModelCandidate, ContinuationSeed | None],
-    Awaitable[AsyncIterator[str]],
+    Awaitable[AsyncIterator[StreamOutput]],
 ]
 
 
@@ -160,14 +161,14 @@ class ProviderExecutor:
         routed: RoutedNativeMessagesRequest,
         *,
         request_id: str,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         native_reasoning = ReasoningPolicy.provider_default()
 
         async def open_candidate(
             index: int,
             candidate: ProviderModelCandidate,
             continuation: ContinuationSeed | None,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[StreamOutput]:
             target = candidate.target
             provider = await self._provider_resolver(
                 target.provider_id, target.api_key_number
@@ -215,7 +216,7 @@ class ProviderExecutor:
         *,
         raw_log_payload: Callable[[], object],
         request_id: str,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Execute one Anthropic Messages request."""
 
         primary_request = routed.request.model_copy(deep=True)
@@ -230,7 +231,7 @@ class ProviderExecutor:
             index: int,
             candidate: ProviderModelCandidate,
             continuation: ContinuationSeed | None,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[StreamOutput]:
             target = candidate.target
             provider = await self._provider_resolver(
                 target.provider_id, target.api_key_number
@@ -280,7 +281,7 @@ class ProviderExecutor:
         *,
         raw_log_payload: Callable[[], object],
         request_id: str,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Execute one native OpenAI Responses request."""
 
         primary_request = routed.request.model_copy(deep=True)
@@ -291,7 +292,7 @@ class ProviderExecutor:
             index: int,
             candidate: ProviderModelCandidate,
             continuation: ContinuationSeed | None,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[StreamOutput]:
             target = candidate.target
             provider = await self._provider_resolver(
                 target.provider_id, target.api_key_number
@@ -351,7 +352,7 @@ class ProviderExecutor:
         *,
         raw_log_payload: Callable[[], object],
         request_id: str,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         client_reasoning = routed.request.reasoning_policy()
         input_tokens = estimate_gemini_input_tokens(routed.request)
 
@@ -359,7 +360,7 @@ class ProviderExecutor:
             index: int,
             candidate: ProviderModelCandidate,
             continuation: ContinuationSeed | None,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[StreamOutput]:
             target = candidate.target
             provider = await self._provider_resolver(
                 target.provider_id, target.api_key_number
@@ -412,7 +413,7 @@ class ProviderExecutor:
         *,
         raw_log_payload: Callable[[], object],
         request_id: str,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         client_reasoning = client_chat_reasoning_policy(routed.request)
         input_tokens = sum(
             estimate_text_tokens(json.dumps(message)[:1_000_000])
@@ -423,7 +424,7 @@ class ProviderExecutor:
             index: int,
             candidate: ProviderModelCandidate,
             continuation: ContinuationSeed | None,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[StreamOutput]:
             target = candidate.target
             provider = await self._provider_resolver(
                 target.provider_id, target.api_key_number
@@ -479,7 +480,7 @@ class ProviderExecutor:
         ingress_count: int,
         request_id: str,
         open_candidate: CandidateStreamOpener,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Start and consume candidates through one protocol-blind lifecycle."""
 
         primary = resolved.primary
@@ -528,13 +529,18 @@ class ProviderExecutor:
                 f"{raw_log_label} [{{}}]: {{}}", lambda: request_id, raw_log_payload
             )
 
-        async def provider_body() -> AsyncIterator[str]:
+        async def provider_body() -> AsyncIterator[StreamOutput]:
             delivery = current_stream_delivery()
+            if delivery is None:
+                raise RuntimeError("Generation requires a response delivery context")
             continuation: ContinuationSeed | None = None
             for index, candidate in enumerate(candidates):
+                if index:
+                    # A replacement can fail before its provider opens an attempt.
+                    delivery.begin_attempt()
                 target = candidate.target
                 record_request_route(target.provider_id, target.provider_model)
-                provider_stream: AsyncIterator[str] | None = None
+                provider_stream: AsyncIterator[StreamOutput] | None = None
                 candidate_committed = False
                 candidate_failure: ExecutionFailure | None = None
                 try:
@@ -557,7 +563,7 @@ class ProviderExecutor:
                         except ExecutionFailure as failure:
                             candidate_failure = failure
                             break
-                        if not chunk:
+                        if not any(chunk.frames) and not chunk.completed_calls:
                             await asyncio.sleep(0)
                             continue
                         if not candidate_committed:
@@ -587,8 +593,8 @@ class ProviderExecutor:
                 recovery_action = "continue" if continuation is not None else "restart"
                 recovery_reason = "no_candidate_output"
                 context = candidate_failure.stream_context
-                if delivery is None or context is None:
-                    if candidate_committed:
+                if context is None:
+                    if delivery.content_released:
                         raise candidate_failure
                 else:
                     assessment = assess_recovery(

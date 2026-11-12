@@ -82,7 +82,7 @@ class ResponseBlockCompleter:
     def _complete_tool_block(self, state: ToolBlockState) -> list[str]:
         if state.kind == "custom":
             return self._complete_custom_tool_block(state)
-        arguments = "".join(state.argument_parts)
+        arguments = state.arguments
         item = tool_item(state, status="completed", arguments=arguments)
         chunks: list[str] = []
         if arguments:
@@ -103,9 +103,7 @@ class ResponseBlockCompleter:
         return chunks
 
     def _complete_custom_tool_block(self, state: ToolBlockState) -> list[str]:
-        input_text = custom_tool_input_text_from_arguments(
-            "".join(state.argument_parts)
-        )
+        input_text = custom_tool_input_text_from_arguments(state.arguments)
         item = tool_item(state, status="completed", input_text=input_text)
         self._ledger.commit_output(state.output_index, item)
         chunks: list[str] = []

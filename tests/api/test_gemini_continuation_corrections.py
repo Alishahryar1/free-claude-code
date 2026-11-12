@@ -7,7 +7,6 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.support import provider_manager_for_app
 from tests.api.test_four_protocol_matrix import matrix_app, response_value
 from tests.api.test_gemini_continuation_replay import body, native
@@ -19,10 +18,6 @@ from tests.api.test_gemini_continuation_replay import body, native
 def test_corrected_continuation_and_followup_preserve_actual_context(
     wire, thinking_only, interrupt_again, monkeypatch
 ):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
     sent = []
     corrected = []
     completed_context = None

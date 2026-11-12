@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.tool_call_buffer import RetentionBudget
 
 from .content import streamed_tool_arguments
 from .native import NativeMessagesError
@@ -228,12 +229,47 @@ class NativeMessagesStreamState:
         return CompletedMessagesBlock(block.body, arguments)
 
 
+class MessagesBlockIndexMap:
+    """Give surviving native blocks dense client indexes without retaining payloads."""
+
+    def __init__(self) -> None:
+        self._active: dict[int, int] = {}
+        self._next_index = 0
+        self._budget = RetentionBudget()
+
+    def project(self, kind: str, payload: Mapping[str, JsonValue]) -> JsonObject:
+        body = dict(payload)
+        if kind not in {
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+        }:
+            return body
+        source = body.get("index")
+        if not isinstance(source, int) or isinstance(source, bool) or source < 0:
+            raise NativeMessagesError("Native content block requires an index.")
+        if kind == "content_block_start":
+            if source in self._active:
+                raise NativeMessagesError("Native content block started twice.")
+            self._budget.add(32)
+            self._active[source] = self._next_index
+            self._next_index += 1
+        if source not in self._active:
+            raise NativeMessagesError("Native content event has no active block.")
+        body["index"] = self._active[source]
+        if kind == "content_block_stop":
+            del self._active[source]
+            self._budget.release(32)
+        return body
+
+
 class NativeMessagesRelay:
-    """Preserve upstream IDs, indexes, fields and event order for Messages clients."""
+    """Preserve native content with client indexes assigned after source filtering."""
 
     def __init__(self, *, public_model: str) -> None:
         self._public_model = public_model
         self._state = NativeMessagesStreamState()
+        self._indexes = MessagesBlockIndexMap()
 
     @property
     def completed(self) -> bool:
@@ -245,7 +281,7 @@ class NativeMessagesRelay:
 
     def feed(self, event_type: str, payload: Mapping[str, JsonValue]) -> str:
         self._state.accept(event_type, payload)
-        body = dict(payload)
+        body = self._indexes.project(event_type, payload)
         if event_type == "message_start":
             message = body.get("message")
             if not isinstance(message, dict):

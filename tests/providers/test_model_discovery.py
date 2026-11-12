@@ -19,6 +19,7 @@ from free_claude_code.config.provider_catalog import (
 )
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.deepseek import DeepSeekProvider
@@ -516,9 +517,9 @@ class FakeProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         if False:
-            yield ""
+            yield StreamOutput(("",))
 
     async def stream_responses(
         self,
@@ -531,9 +532,9 @@ class FakeProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         if False:
-            yield ""
+            yield StreamOutput(("",))
 
 
 @pytest.mark.asyncio

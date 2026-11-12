@@ -24,6 +24,7 @@ from free_claude_code.core.openai_responses import (
     openai_error_from_failure,
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -31,7 +32,6 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatProvider,
     OpenAIChatRequestPolicy,
 )
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.support import create_test_app
 from tests.api.test_delivered_stream_recovery import text_events
 from tests.providers.support import immediate_admission, make_provider_config
@@ -64,10 +64,10 @@ class CanonicalFailureProvider:
         self,
         _request: object,
         **kwargs: Any,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         self.stream_kwargs.append(kwargs)
         for chunk in self._chunks:
-            yield chunk
+            yield StreamOutput((chunk,))
         failure = self._failure(str(kwargs["request_id"]))
         if self._grouped:
             raise self._grouped_failure(failure)
@@ -77,7 +77,7 @@ class CanonicalFailureProvider:
         self,
         _request: OpenAIResponsesRequest,
         **kwargs: Any,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         self.stream_kwargs.append(kwargs)
         failure = self._failure(str(kwargs["request_id"]))
         if not self._chunks:
@@ -85,7 +85,7 @@ class CanonicalFailureProvider:
                 raise self._grouped_failure(failure)
             raise failure
         for chunk in _partial_responses_stream(failure):
-            yield chunk
+            yield StreamOutput((chunk,))
 
     def _failure(self, request_id: str) -> ExecutionFailure:
         return ExecutionFailure(
@@ -124,11 +124,11 @@ class ResponsesFailureProvider:
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         del input_tokens, response_model, reasoning
         try:
             for chunk in self._responses_chunks:
-                yield chunk
+                yield StreamOutput((chunk,))
             raise ExecutionFailure(
                 FailureKind.TIMEOUT,
                 504,
@@ -277,10 +277,6 @@ def _client_for(
 def test_retired_progress_value_does_not_interrupt_slow_response(
     path, partial, monkeypatch
 ):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
     closed = []
 
     class SlowStream(httpx2.AsyncByteStream):
@@ -354,11 +350,6 @@ def test_retired_progress_value_does_not_interrupt_slow_response(
 def test_sdk_stream_invalid_request_preserves_public_error_semantics(
     partial, monkeypatch
 ) -> None:
-    if partial:
-        monkeypatch.setattr(
-            "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-            lambda: RecoveryHoldbackBuffer(max_bytes=1),
-        )
     calls = 0
 
     def reply(request: httpx2.Request) -> httpx2.Response:

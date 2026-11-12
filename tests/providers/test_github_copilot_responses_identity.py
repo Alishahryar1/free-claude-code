@@ -13,6 +13,7 @@ from typing import cast
 import httpx2
 import pytest
 
+from free_claude_code.application.response_collection import collect_response
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
@@ -22,11 +23,12 @@ from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.github_copilot.types import CopilotEgress
-from tests.providers.test_github_copilot_provider import Harness, collect, responses_sse
+from tests.providers.test_github_copilot_provider import Harness, responses_sse
 from tests.providers.test_openai_responses_transport import (
     _completed_event,
     _text_delta,
 )
+from tests.public_stream import delivered
 
 
 def _capture() -> list[JsonObject]:
@@ -84,14 +86,22 @@ def _input(responses: bool, model: str) -> MessagesRequest | OpenAIResponsesRequ
 
 
 async def _run(
-    harness: Harness, request: MessagesRequest | OpenAIResponsesRequest
+    harness: Harness,
+    request: MessagesRequest | OpenAIResponsesRequest,
+    *,
+    public: bool = False,
 ) -> list[JsonObject]:
     stream = (
         harness.provider.stream_messages(request)
         if isinstance(request, MessagesRequest)
         else harness.provider.stream_responses(request)
     )
-    raw = await collect(stream)
+    protocol = "messages" if isinstance(request, MessagesRequest) else "responses"
+    raw = (
+        await delivered(stream, protocol)
+        if public
+        else "".join(await collect_response(stream, protocol=protocol))
+    )
     parsed = parse_sse_text(raw)
     if isinstance(request, MessagesRequest):
         assert_anthropic_stream_contract(parsed)
@@ -285,7 +295,8 @@ async def test_copilot_argument_delta_without_item_metadata_fails_before_inventi
         try:
             async for chunk in stream:
                 emitted.extend(
-                    cast(JsonObject, event.data) for event in parse_sse_text(chunk)
+                    cast(JsonObject, event.data)
+                    for event in parse_sse_text("".join(chunk.frames))
                 )
         except ExecutionFailure as error:
             failure = error
@@ -446,11 +457,10 @@ async def test_copilot_rejects_incomplete_or_changed_tool_identity(
 
 
 @pytest.mark.asyncio
-async def test_copilot_committed_failure_retains_public_response_and_item_identity(
+async def test_copilot_completed_call_handoff_retains_public_response_and_item_identity(
     tmp_path: Path,
 ) -> None:
     capture = _capture()
-    capture[3]["delta"] = " " * 70000 + str(capture[3]["delta"])
     capture[-1]["type"] = "response.failed"
     _response(capture[-1])["status"] = "failed"
     _response(capture[-1])["error"] = {
@@ -460,8 +470,8 @@ async def test_copilot_committed_failure_retains_public_response_and_item_identi
     harness = Harness(tmp_path, CopilotEgress.RESPONSES)
     harness.responses_content = responses_sse(*capture).encode()
     try:
-        events = await _run(harness, _input(True, harness.runtime.name))
-        assert events[-1]["type"] == "response.failed"
+        events = await _run(harness, _input(True, harness.runtime.name), public=True)
+        assert events[-1]["type"] == "response.completed"
         output = _assert_native_identity(events)
         assert output[0]["id"] == _item(capture[2])["id"]
         assert len(harness.seen) == 1

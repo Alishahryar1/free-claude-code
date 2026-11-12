@@ -31,7 +31,7 @@ class ToolBlockState:
     kind: Literal["function", "custom"]
     name: str
     namespace: str | None = None
-    argument_parts: list[str] = field(default_factory=list)
+    arguments: str = ""
 
 
 BlockState = TextBlockState | ReasoningBlockState | ToolBlockState
