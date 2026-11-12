@@ -236,3 +236,66 @@ def test_distinct_response_items_cannot_share_an_execution_call_id():
             "response.output_item.done",
             {"output_index": 1, "item": {**item(1), "call_id": "call_0"}},
         )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "response.completed",
+        "response.incomplete",
+        "response.failed",
+        "response.in_progress",
+    ],
+)
+@pytest.mark.parametrize("status", ["completed", "incomplete", "in_progress"])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("name", "delete"),
+        ("arguments", '{"changed":true}'),
+        ("call_id", "different"),
+        ("type", "message"),
+    ],
+)
+def test_every_snapshot_preserves_accepted_call_execution_fields(
+    kind, status, field, value
+):
+    buffer = ResponsesToolCallBuffer()
+    original = item(0)
+    buffer.feed("response.output_item.done", {"output_index": 0, "item": original})
+    changed = {**original, "status": status, field: value}
+    with pytest.raises(ExecutionFailure, match="changed an already completed"):
+        buffer.feed(
+            kind, {"response": {"status": kind.split(".")[-1], "output": [changed]}}
+        )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "response.completed",
+        "response.incomplete",
+        "response.failed",
+        "response.in_progress",
+    ],
+)
+@pytest.mark.parametrize("status", ["completed", "incomplete", "in_progress"])
+def test_unchanged_accepted_call_is_not_reemitted_by_a_snapshot(kind, status):
+    buffer = ResponsesToolCallBuffer()
+    buffer.feed("response.output_item.done", {"output_index": 0, "item": item(0)})
+    snapshot = {
+        "response": {"status": kind.split(".")[-1], "output": [item(0, status)]}
+    }
+    groups = buffer.feed(kind, snapshot)
+    assert [event for group in groups for event, _ in group] == [kind]
+    assert groups[0][0][1]["response"]["output"] == [item(0, status)]
+
+
+def test_repeated_item_done_cannot_change_a_call_into_a_non_call():
+    buffer = ResponsesToolCallBuffer()
+    buffer.feed("response.output_item.done", {"output_index": 0, "item": item(0)})
+    with pytest.raises(ExecutionFailure, match="changed an already completed"):
+        buffer.feed(
+            "response.output_item.done",
+            {"output_index": 0, "item": {**item(0), "type": "message"}},
+        )

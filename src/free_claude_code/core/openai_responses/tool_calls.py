@@ -91,11 +91,7 @@ class ResponsesToolCallBuffer:
                 self._buffer.grow(item_id, _size(data))
                 pending.events.append((kind, data))
             return self._drain()
-        if (
-            isinstance(item_id, str)
-            and item_id in self._fingerprints
-            and is_client_call(item)
-        ):
+        if isinstance(item_id, str) and item_id in self._fingerprints:
             if kind == "response.output_item.done":
                 self._verify(item_id, item)
                 return self._drain()
@@ -113,9 +109,16 @@ class ResponsesToolCallBuffer:
             output = response.get("output")
             if isinstance(output, list):
                 for position, value in enumerate(output):
-                    if not isinstance(value, dict) or not is_client_call(value):
+                    if not isinstance(value, dict):
                         continue
                     identity = value.get("id")
+                    if isinstance(identity, str) and identity in self._fingerprints:
+                        # Admission of new completion is separate from the immutable
+                        # execution fields of a call already accepted as complete.
+                        self._verify(identity, value)
+                        continue
+                    if not is_client_call(value):
+                        continue
                     if not isinstance(identity, str) or not identity:
                         raise _failure("Responses snapshot tool requires an ID")
                     eligible = terminal and (
@@ -126,10 +129,7 @@ class ResponsesToolCallBuffer:
                             not in {"in_progress", "incomplete", "failed"}
                         )
                     )
-                    if identity in self._fingerprints:
-                        if eligible:
-                            self._verify(identity, value)
-                    elif eligible:
+                    if eligible:
                         self._ensure(identity, position, value)
                         self._finish_item(identity, value)
                 response["output"] = [

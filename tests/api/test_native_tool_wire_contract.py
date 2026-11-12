@@ -336,3 +336,45 @@ async def test_generated_alias_with_arguments_waits_for_remaining_name_and_sourc
     ]
     assert names == ([original] if complete else [])
     assert len(bodies) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind", ["response.incomplete", "response.failed", "response.in_progress"]
+)
+@pytest.mark.parametrize("public", [False, True])
+async def test_contradictory_snapshot_never_replaces_a_completed_native_call(
+    kind, public
+):
+    from free_claude_code.core.failures import ExecutionFailure
+
+    events = tool_events("responses", "{}")
+    final = deepcopy(events[-1])
+    changed = deepcopy(final)
+    changed["type"] = kind
+    changed["response"]["status"] = kind.split(".")[-1]
+    changed["response"]["output"][0].update(
+        status="incomplete", name="delete", arguments='{"changed":true}'
+    )
+    if kind == "response.failed":
+        changed["response"]["error"] = {
+            "code": "server_error",
+            "message": "upstream failed",
+        }
+    events[-1:] = [changed, final] if kind == "response.in_progress" else [changed]
+    async with _harness("responses", lambda _: (200, events), max_attempts=2) as (
+        send,
+        bodies,
+        _,
+    ):
+        body = send("responses", [{"role": "user", "content": "read"}])
+        if public:
+            frames = await public_frames(body, "responses")
+            output = [event.data for event in parse_sse_text("".join(frames))]
+            assert output[-1]["type"] == "response.failed"
+            assert "already completed" in output[-1]["response"]["error"]["message"]
+            assert "delete" not in "".join(frames)
+        else:
+            with pytest.raises(ExecutionFailure, match="already completed"):
+                await collect_response(body, protocol="responses")
+        assert len(bodies) == 1
