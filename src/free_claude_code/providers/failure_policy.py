@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import replace
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 import httpx2
@@ -51,19 +51,31 @@ _CONTEXT_WINDOW_ERROR_CODE = "context_length_exceeded"
 _CONTEXT_WINDOW_FINISH_REASON = "model_context_window_exceeded"
 
 
+class RecoveryFailureSource(Protocol):
+    def failure_snapshot(self) -> tuple[Exception, float | None]: ...
+
+
 class ProviderRecoveryExhausted(RuntimeError):
     """The provider recovery gate is closed for this execution."""
 
-    def __init__(
-        self, last_error: Exception, *, retry_not_before: float | None = None
-    ) -> None:
+    def __init__(self, source: Exception | RecoveryFailureSource) -> None:
         super().__init__("Provider recovery retry budget was exhausted.")
-        if isinstance(last_error, ProviderRecoveryExhausted):
-            if retry_not_before is None:
-                retry_not_before = last_error.retry_not_before
-            last_error = last_error.last_error
-        self.last_error = last_error
-        self.retry_not_before = retry_not_before
+        self._source = (
+            source._source if isinstance(source, ProviderRecoveryExhausted) else source
+        )
+
+    def failure_snapshot(self) -> tuple[Exception, float | None]:
+        if isinstance(self._source, Exception):
+            return self._source, None
+        return self._source.failure_snapshot()
+
+    @property
+    def last_error(self) -> Exception:
+        return self.failure_snapshot()[0]
+
+    @property
+    def retry_not_before(self) -> float | None:
+        return self.failure_snapshot()[1]
 
 
 class RetryableProviderProtocolError(RuntimeError):
@@ -84,9 +96,10 @@ def classify_provider_failure(
 ) -> ExecutionFailure:
     """Return one detailed canonical failure after provider retries are exhausted."""
     remaining = 0
-    if isinstance(exc, ProviderRecoveryExhausted) and exc.retry_not_before is not None:
-        remaining = math.ceil(exc.retry_not_before - time.monotonic())
-    exc = underlying_provider_error(exc)
+    if isinstance(exc, ProviderRecoveryExhausted):
+        exc, retry_not_before = exc.failure_snapshot()
+        if retry_not_before is not None:
+            remaining = math.ceil(retry_not_before - time.monotonic())
     if isinstance(exc, ExecutionFailure):
         failure = exc
         message = _with_cooldown(failure.message, remaining)

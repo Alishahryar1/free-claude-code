@@ -1540,7 +1540,7 @@ class _OpenAIChatStreamRunner:
                 # Do not reserve a retry probe for this terminal execution.
                 await scope.attempt.accept()
             else:
-                attempt_failure = await scope.attempt.fail(
+                attempt_failure = await scope.fail(
                     error,
                     provider_failure_override=self._transport._behavior.failure_override,
                 )
@@ -1649,6 +1649,15 @@ class _OpenAIChatStreamRunner:
                     ),
                 )
 
+        if isinstance(error, ProviderRecoveryExhausted):
+            if scope is not None:
+                await scope.aclose(active_error=error)
+            await close_provider_stream(
+                self._request_client,
+                active_error=error,
+                provider_name=tag,
+                request_id=self._request_id,
+            )
         reported_error = underlying_provider_error(error)
         self._transport._log_stream_transport_error(
             tag,
@@ -1827,7 +1836,7 @@ class _OpenAIChatStreamRunner:
                 last_error = error
                 retryable = is_retryable_stream_error(error)
                 if scope is not None and not scope.attempt.accepted:
-                    failure = await scope.attempt.fail(
+                    failure = await scope.fail(
                         error,
                         provider_failure_override=(
                             self._transport._behavior.failure_override

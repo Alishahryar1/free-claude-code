@@ -1074,7 +1074,9 @@ async def test_terminal_waiters_report_latest_failure_from_their_episode(
         await asyncio.sleep(0)
         assert not queued.done()
 
-        await shorter.fail(_status_error(429, retry_after="120"))
+        original_decision = await shorter.fail(_status_error(429, retry_after="120"))
+        assert isinstance(original_decision.error, ProviderRecoveryExhausted)
+        assert original_decision.error.retry_not_before == recovery_clock.now + 120
         later_error = _status_error(503, retry_after="3600")
         await longer.fail(later_error)
         deadline = recovery_clock.now + 3600
@@ -1104,7 +1106,7 @@ async def test_terminal_waiters_report_latest_failure_from_their_episode(
             )
         assert between_attempts.attempts_started == 1
 
-        for failure in (waiting.value, coalesced.value):
+        for failure in (original_decision.error, waiting.value, coalesced.value):
             assert failure.last_error is later_error
             assert failure.retry_not_before == deadline
             classified = failure_policy.classify_provider_failure(
@@ -1117,6 +1119,49 @@ async def test_terminal_waiters_report_latest_failure_from_their_episode(
                 assert "3600 seconds" in classified.message
     finally:
         controller.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_scope_rechecks_retry_after_cleanup_and_releases_capacity_once():
+    controller = _controller(max_concurrency=3, base_delay=2, max_delay=60)
+    closing = asyncio.Event()
+    release = asyncio.Event()
+    close_count = 0
+
+    class Resource:
+        async def aclose(self):
+            nonlocal close_count
+            close_count += 1
+            closing.set()
+            await release.wait()
+
+    leader, follower, extending = [
+        await _open(controller.start_execution(model="primary")) for _ in range(3)
+    ]
+    scope = ProviderAttemptScope(follower, provider_name="TEST", request_id=None)
+    scope.retain(Resource())
+    assert (await leader.fail(_status_error(503))).retry_allowed
+    await leader.aclose()
+
+    async with asyncio.timeout(1), asyncio.TaskGroup() as tasks:
+        pending = tasks.create_task(scope.fail(_status_error(503)))
+        await closing.wait()
+        try:
+            cooldown = _status_error(429, retry_after="3600")
+            await extending.fail(cooldown)
+            await extending.aclose()
+            assert controller._capacity._active_attempts == 1
+        finally:
+            release.set()
+
+    failure = pending.result()
+    assert failure.retryable and not failure.retry_allowed
+    assert isinstance(failure.error, ProviderRecoveryExhausted)
+    assert failure.error.last_error is cooldown
+    await scope.aclose(active_error=None)
+    assert close_count == 1
+    assert controller._capacity._active_attempts == 0
+    controller.close()
 
 
 def test_retry_after_accepts_http_date_and_rejects_invalid_values() -> None:

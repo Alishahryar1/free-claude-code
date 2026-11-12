@@ -308,7 +308,7 @@ class GeminiTransport:
                         recovery.discard()
                         continue
                     if not scope.attempt.accepted:
-                        attempt_failure = await scope.attempt.fail(error)
+                        attempt_failure = await scope.fail(error)
                         error = attempt_failure.error
                 if attempt_failure is not None and attempt_failure.retry_allowed:
                     recovery.discard()

@@ -218,7 +218,7 @@ async def stream_native_messages(
                     if hidden_stop:
                         await scope.attempt.accept()
                     else:
-                        decision = await scope.attempt.fail(error)
+                        decision = await scope.fail(error)
                         error = decision.error
                         if (
                             not committed and decision.retry_allowed
