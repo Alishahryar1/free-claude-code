@@ -63,19 +63,15 @@ class OpenAIToolNameCodec:
         """Return the original client name for one known wire alias."""
         return self._alias_to_original.get(name, name)
 
-    def is_alias(self, value: str) -> bool:
-        """Return whether value is one complete alias generated for this request."""
-        return value in self._alias_to_original
+    def is_declared(self, value: str) -> bool:
+        """Return whether value is one complete wire name sent upstream."""
+        return value in self._alias_to_original or value in self._unchanged_names
 
-    def is_unchanged_name(self, value: str) -> bool:
-        """Return whether value is one complete name sent upstream unchanged."""
-        return value in self._unchanged_names
-
-    def is_alias_prefix(self, value: str) -> bool:
-        """Return whether value is an incomplete prefix of a generated alias."""
+    def is_declared_prefix(self, value: str) -> bool:
+        """Return whether value is a strict prefix of a wire name sent upstream."""
         return bool(value) and any(
-            alias != value and alias.startswith(value)
-            for alias in self._alias_to_original
+            name != value and name.startswith(value)
+            for name in (*self._alias_to_original, *self._unchanged_names)
         )
 
 

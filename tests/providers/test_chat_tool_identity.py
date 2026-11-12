@@ -267,11 +267,11 @@ def test_name_flush_uses_logical_slots_for_repeated_index():
     output = _make_anthropic_output()
     assembler = OpenAIToolCallAssembler(reserved_tool_ids=())
     names = {}
-    for tool_id, argument in (("call_a", '{"path":"a"}'), ("call_b", '{"path":"b"}')):
+    for tool_id in ("call_a", "call_b"):
         assert (
             list(
                 assembler.process_tool_call(
-                    call(0, tool_id, argument, name="tool"),
+                    call(0, tool_id, "", name="tool"),
                     output,
                     tool_names=codec,
                     tool_name_buffers=names,
@@ -291,10 +291,7 @@ def test_name_flush_uses_logical_slots_for_repeated_index():
     assert [
         (state.tool_id, state.name, state.content)
         for state in output.tool_states.values()
-    ] == [
-        ("call_a", "tool", '{"path":"a"}'),
-        ("call_b", "tool", '{"path":"b"}'),
-    ]
+    ] == [("call_a", "tool", ""), ("call_b", "tool", "")]
 
 
 @pytest.mark.asyncio
@@ -321,7 +318,7 @@ async def test_recovery_import_discards_unstarted_call_state(recovered_ids):
                         call(
                             0,
                             "abandoned",
-                            '{"old":',
+                            "",
                             name="tool",
                             metadata={"old": True},
                         )
@@ -511,8 +508,8 @@ def test_name_prefix_without_output_state_reserves_its_own_slot():
     names = {}
     for delta in (
         call(8, None, "", name="tool"),
-        call(2, "call_b", '{"path":"b"}', name="tool"),
-        call(8, "call_a", '{"path":"a"}', name=None),
+        call(2, "call_b", "", name="tool"),
+        call(8, "call_a", "", name=None),
     ):
         assert (
             list(
@@ -541,6 +538,32 @@ def test_name_prefix_without_output_state_reserves_its_own_slot():
     ]
     assert starts == ["call_a", "call_b"]
     assert {state.tool_id: state.content for state in output.tool_states.values()} == {
-        "call_a": '{"path":"a"}',
-        "call_b": '{"path":"b"}',
+        "call_a": "",
+        "call_b": "",
     }
+
+
+def test_name_that_prefixes_a_declared_name_starts_at_its_first_arguments():
+    codec = OpenAIToolNameCodec.from_names(["Read", "ReadNotifications"])
+    output = _make_anthropic_output()
+    assembler = OpenAIToolCallAssembler(reserved_tool_ids=())
+    names: dict[int, str] = {}
+
+    def feed(delta):
+        return parse_sse_text(
+            "".join(
+                assembler.process_tool_call(
+                    delta, output, tool_names=codec, tool_name_buffers=names
+                )
+            )
+        )
+
+    assert feed(call(0, "call_a", "", name="Read")) == []
+    events = feed({"index": 0, "function": {"arguments": '{"path":"a"}'}})
+    assert [event.event for event in events] == [
+        "content_block_start",
+        "content_block_delta",
+    ]
+    assert events[0].data["content_block"]["name"] == "Read"
+    assert events[1].data["delta"]["partial_json"] == '{"path":"a"}'
+    assert names == {}

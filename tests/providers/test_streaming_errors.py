@@ -2789,8 +2789,8 @@ class TestProcessToolCall:
         )
         assert buffers == {}
 
-    def test_valid_name_that_prefixes_alias_is_resolved_on_flush(self):
-        """An ambiguous valid name is delayed, not mistaken for an alias fragment."""
+    def test_valid_name_that_prefixes_alias_starts_with_its_arguments(self):
+        """An ambiguous valid name waits for arguments, not for an alias fragment."""
         provider = _make_provider()
         original = "tool"
         long_name = "tool." + "x" * 70
@@ -2801,7 +2801,7 @@ class TestProcessToolCall:
             ]
         )
         codec = OpenAIToolNameCodec.from_request(request)
-        assert codec.is_alias_prefix(original)
+        assert codec.is_declared_prefix(original)
         buffers: dict[int, str] = {}
         sse = _make_anthropic_output()
         assembler = _make_tool_assembler(provider)
@@ -2828,8 +2828,13 @@ class TestProcessToolCall:
             )
         )
 
-        assert initial == []
-        assert original in "".join(flushed)
+        starts = [
+            event.data["content_block"]["name"]
+            for event in parse_sse_text("".join(initial))
+            if event.event == "content_block_start"
+        ]
+        assert starts == [original]
+        assert flushed == []
         assert buffers == {}
 
     def test_buffered_collector_decodes_before_schema_validation(self):

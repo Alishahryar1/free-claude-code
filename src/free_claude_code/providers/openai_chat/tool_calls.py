@@ -221,6 +221,15 @@ class OpenAIToolCallAssembler:
             )
             if resolved_name is not None:
                 output.register_tool_name(tc_index, resolved_name)
+        if (
+            arguments
+            and tool_names is not None
+            and tool_name_buffers is not None
+            and tc_index in tool_name_buffers
+        ):
+            # Arguments follow the name, so a held name is now complete.
+            held_name = tool_name_buffers.pop(tc_index)
+            output.register_tool_name(tc_index, tool_names.decode(held_name))
 
         state = output.tool_states.get(tc_index)
         resolved_name = (state.name if state else "") or ""
@@ -439,16 +448,13 @@ def _decode_streamed_tool_name(
     tool_names: OpenAIToolNameCodec | None,
     buffers: dict[int, str] | None,
 ) -> str | None:
-    if tool_names is None or not tool_names.has_aliases:
+    if tool_names is None:
         return incoming
     if buffers is None:
         return tool_names.decode(incoming)
 
     combined = _merge_tool_name(buffers.get(tool_index, ""), incoming)
-    if tool_names.is_alias(combined):
-        buffers.pop(tool_index, None)
-        return tool_names.decode(combined)
-    if tool_names.is_alias_prefix(combined):
+    if tool_names.is_declared_prefix(combined):
         buffers[tool_index] = combined
         return None
     buffers.pop(tool_index, None)

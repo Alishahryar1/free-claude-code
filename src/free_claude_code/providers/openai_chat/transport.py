@@ -390,7 +390,7 @@ class _OpenAIChatStreamAssembler:
         if is_context_window_finish_reason(self._finish_reason):
             raise context_window_exceeded_provider_failure()
         if any(
-            not self._tool_names.is_unchanged_name(name)
+            not self._tool_names.is_declared(name)
             for name in self._tool_name_buffers.values()
         ):
             raise TruncatedProviderStreamError(
