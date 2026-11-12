@@ -227,3 +227,48 @@ def test_invalid_json_tools_are_forwarded_for_harness_validation(partial: str) -
     )
     relay.feed("message_stop", {"type": "message_stop"})
     assert relay.completed
+
+
+@pytest.mark.asyncio
+async def test_zero_argument_tool_resolves_empty_json_delta_to_start_input() -> None:
+    events: list[JsonObject] = [
+        _START,
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "tool_use",
+                "id": "c",
+                "name": "get_time",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": ""},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"},
+            "usage": {"output_tokens": 1},
+        },
+        {"type": "message_stop"},
+    ]
+    state = NativeMessagesStreamState()
+    completed = None
+    for event in events:
+        block = state.accept(cast(str, event["type"]), event)
+        if block is not None:
+            completed = block
+    assert completed is not None and completed.tool_arguments == "{}"
+    relay = NativeMessagesRelay(public_model="public")
+
+    async def stream() -> AsyncIterator[str]:
+        for event in events:
+            yield relay.feed(cast(str, event["type"]), event)
+
+    message, error, complete = await aggregate_anthropic_sse_to_message(stream())
+    assert complete and error is None
+    assert message["content"][0]["input"] == {}

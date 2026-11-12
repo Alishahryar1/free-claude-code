@@ -167,3 +167,28 @@ def test_native_continuation_carriers_project_and_replace_as_one_suffix(protocol
     assert json.dumps(projected).count("retained native thought") == 1
     assert "First second" in json.dumps(projected)
     assert original == {field: [{"role": "user", "content": "hello"}]}
+
+
+def test_gemini_history_resolves_empty_streamed_tool_arguments_to_start_input():
+    seed = ContinuationSeed(
+        "messages",
+        (
+            {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "get_time",
+                "input": {},
+                "partial_json": "",
+            },
+        ),
+    )
+    history = ContinuationRequest("gemini").history(
+        seed, {"model": "model"}, allow_pending_calls=True
+    )
+    calls = [
+        part["functionCall"]
+        for content in history
+        for part in content["parts"]
+        if "functionCall" in part
+    ]
+    assert [(call["name"], call["args"]) for call in calls] == [("get_time", {})]

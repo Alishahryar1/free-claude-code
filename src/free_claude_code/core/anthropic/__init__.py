@@ -1,6 +1,11 @@
 """Anthropic protocol helpers shared across API, providers, and integrations."""
 
-from .content import extract_text_from_content, get_block_attr, get_block_type
+from .content import (
+    extract_text_from_content,
+    get_block_attr,
+    get_block_type,
+    streamed_tool_arguments,
+)
 from .conversion import (
     AnthropicToOpenAIConverter,
     OpenAIConversionError,
@@ -95,4 +100,5 @@ __all__ = [
     "map_stop_reason",
     "serialize_tool_result_content",
     "set_if_not_none",
+    "streamed_tool_arguments",
 ]
