@@ -3,7 +3,7 @@ from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from telegram.error import NetworkError, RetryAfter, TelegramError
+from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 
 
 def _limiter_mock() -> MagicMock:
@@ -537,3 +537,45 @@ async def test_with_retry_message_not_found_returns_none():
 
         result = await platform.outbound._with_retry(_f)
         assert result is None
+
+
+@pytest.mark.asyncio
+async def test_with_retry_drops_parse_mode_on_bad_request_entity_error(monkeypatch):
+    """BadRequest subclasses NetworkError; markdown fallback must still run."""
+    with patch(
+        "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
+    ):
+        platform = _telegram_runtime(bot_token="t")
+        monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+        calls = []
+
+        async def _f(parse_mode=None):
+            calls.append(parse_mode)
+            if parse_mode:
+                raise BadRequest("Can't parse entities: bad markdown")
+            return "ok"
+
+        assert await platform.outbound._with_retry(_f, parse_mode="MarkdownV2") == "ok"
+        assert calls == ["MarkdownV2", None]
+
+
+@pytest.mark.asyncio
+async def test_with_retry_swallows_bad_request_edit_not_found_without_retry(
+    monkeypatch,
+):
+    """BadRequest 'message to edit not found' is benign and must not be retried."""
+    with patch(
+        "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
+    ):
+        platform = _telegram_runtime(bot_token="t")
+        sleep = AsyncMock()
+        monkeypatch.setattr(asyncio, "sleep", sleep)
+        calls = {"n": 0}
+
+        async def _f():
+            calls["n"] += 1
+            raise BadRequest("Message to edit not found")
+
+        assert await platform.outbound._with_retry(_f) is None
+        assert calls["n"] == 1
+        sleep.assert_not_awaited()
