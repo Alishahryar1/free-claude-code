@@ -76,6 +76,7 @@ def _settings(**overrides):
         "cheaperinference_api_keys": "",
         "orcarouter_api_keys": "",
         "xkiro_api_keys": "",
+        "tensorx_api_keys": "",
         "fireworks_api_keys": "",
         "novita_api_keys": "",
         "cloudflare_api_tokens": "",
@@ -705,6 +706,23 @@ def test_scaleway_provider_smoke_uses_documented_agent_model(monkeypatch) -> Non
 
     assert [model.provider for model in models] == ["scaleway"]
     assert models[0].full_model == "scaleway/deepseek/deepseek-v4-flash"
+    assert models[0].source == "provider_default"
+
+
+def test_tensorx_provider_smoke_uses_documented_quickstart_model(monkeypatch) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_TENSORX", raising=False)
+    config = _smoke_config(
+        settings=_settings(
+            model="ollama/llama3.1",
+            ollama_base_url="",
+            tensorx_api_keys="tensorx-key",
+        )
+    )
+
+    models = config.provider_smoke_models()
+
+    assert [model.provider for model in models] == ["tensorx"]
+    assert models[0].full_model == "tensorx/z-ai/glm-5.2"
     assert models[0].source == "provider_default"
 
 

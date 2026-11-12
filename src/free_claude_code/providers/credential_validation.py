@@ -71,6 +71,7 @@ _MODELS = _list_field("data")
 # https://github.com/nebius/nebius-physical-ai/blob/main/docs/workbench/token-factory.md
 # https://www.scaleway.com/en/docs/generative-apis/
 # https://docs.opper.ai/build/chat/drop-in-sdks
+# https://docs.tensorx.ai/api-reference/overview
 # https://vercel.com/docs/ai-gateway/sdks-and-apis/rest-api
 # https://github.com/huggingface/huggingface_hub/blob/main/src/huggingface_hub/hf_api.py
 # https://docs.cohere.com/reference/list-models
@@ -117,6 +118,7 @@ _PROBES = (
     _Probe("nebius", "/models", _MODELS, _AUTH_401),
     _Probe("scaleway", "/models", _MODELS, _AUTH_401),
     _Probe("opper", "/models", _MODELS, _AUTH_401),
+    _Probe("tensorx", "/models", _MODELS, _AUTH_401),
     _Probe(
         "vercel",
         "/credits",
