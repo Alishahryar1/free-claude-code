@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.tool_call_buffer import RetentionBudget
 
+from .content import streamed_tool_arguments
 from .native import NativeMessagesError
 
 _STOP_REASONS = {
@@ -221,12 +222,8 @@ class NativeMessagesStreamState:
             )
         arguments = None
         if block.body["type"] == "tool_use":
-            arguments = (
-                "".join(block.parts)
-                if block.parts
-                else json.dumps(
-                    block.body["input"], ensure_ascii=False, separators=(",", ":")
-                )
+            arguments = streamed_tool_arguments(
+                "".join(block.parts), block.body["input"]
             )
         self._blocks.pop(index)
         return CompletedMessagesBlock(block.body, arguments)
