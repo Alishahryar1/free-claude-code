@@ -70,6 +70,10 @@ class AuthenticatedLease:
     def egress(self) -> CopilotEgress:
         return self._lease.egress
 
+    @property
+    def resolved_model(self) -> str | None:
+        return self._lease.resolved_model
+
     async def endpoint(self, *, force_refresh: bool = False) -> HttpEndpoint:
         try:
             self._manager.ensure_current(self._broker, self._revision)

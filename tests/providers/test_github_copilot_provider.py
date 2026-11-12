@@ -153,6 +153,7 @@ class Runtime(FakeRuntime):
     def __init__(self, egress: CopilotEgress) -> None:
         super().__init__()
         self.egress = egress
+        self.resolved_model: str | None = None
         # Names deliberately do not identify the transport family.
         self.name = (
             "gpt-looking" if egress is CopilotEgress.MESSAGES else "claude-looking"
@@ -180,6 +181,7 @@ class Runtime(FakeRuntime):
                 {"X-Session": f"session-{model_id}"},
                 "account-secret",
             ),
+            resolved_model=self.resolved_model,
         )
         return session
 
@@ -766,10 +768,133 @@ async def test_auto_is_never_resolved_by_an_inference_turn(tmp_path: Path) -> No
     harness = Harness(tmp_path, CopilotEgress.CHAT)
     try:
         with pytest.raises(InvalidRequestError, match="concrete"):
+            await collect(
+                harness.provider.stream_responses(
+                    OpenAIResponsesRequest(model="auto", input="hi")
+                )
+            )
+        assert not harness.seen and harness.runtime.session_calls == 0
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model",
+    ["auto", "AUTO", " Auto ", "github_copilot/auto", " github_copilot/AUTO "],
+)
+@pytest.mark.parametrize("resolved_model", [None, "mai-code-1.1-flash"])
+async def test_auto_dispatches_canonical_or_resolved_model_and_preserves_response_model(
+    tmp_path: Path, requested_model: str, resolved_model: str | None
+) -> None:
+    harness = Harness(tmp_path, CopilotEgress.RESPONSES)
+    harness.runtime.available = (
+        CopilotModel(
+            ProviderModelInfo(model_id="auto", max_output_tokens=4096),
+            MessagesModelCapabilities(max_output_tokens=4096),
+        ),
+    )
+    harness.runtime.resolved_model = resolved_model
+    try:
+        output = await collect(
+            harness.provider.stream_messages(
+                MessagesRequest(
+                    model=requested_model,
+                    messages=[{"role": "user", "content": "hi"}],
+                    max_tokens=16,
+                )
+            )
+        )
+        assert len(harness.seen) == 1
+        assert harness.runtime.session_calls == 1
+        assert harness.runtime.sessions[0].model_id == "auto"
+        body = json.loads(harness.seen[0].content)
+        assert body["model"] == (resolved_model or "auto")
+        events = parse_sse_text(output)
+        assert events[0].data["message"]["model"] == requested_model
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "policy",
+    [
+        DEFAULT_REASONING_POLICY,
+        ReasoningPolicy.on(effort=ReasoningEffort.LOW),
+        ReasoningPolicy.off(),
+    ],
+)
+async def test_auto_strips_reasoning_and_thinking_controls_before_policy_validation(
+    tmp_path: Path, policy: ReasoningPolicy
+) -> None:
+    harness = Harness(tmp_path, CopilotEgress.RESPONSES)
+    harness.runtime.available = (
+        CopilotModel(
+            ProviderModelInfo(model_id="auto", max_output_tokens=4096),
+            MessagesModelCapabilities(max_output_tokens=4096),
+        ),
+    )
+    harness.runtime.resolved_model = "mai-code-1.1-flash"
+    try:
+        await collect(
+            harness.provider.stream_messages(
+                MessagesRequest(
+                    model="auto",
+                    messages=[{"role": "user", "content": "hi"}],
+                    max_tokens=16,
+                    thinking={"type": "enabled", "budget_tokens": 1024},
+                    output_config={"effort": "low"},
+                ),
+                reasoning=policy,
+            )
+        )
+        await collect(
+            harness.provider.stream_responses(
+                OpenAIResponsesRequest(
+                    model="auto",
+                    input="hi",
+                    reasoning={"effort": "low"},
+                ),
+                reasoning=policy,
+            )
+        )
+        assert len(harness.seen) == 2
+        for request in harness.seen:
+            body = json.loads(request.content)
+            assert body["model"] == "mai-code-1.1-flash"
+            assert "reasoning" not in body
+            assert "thinking" not in body
+    finally:
+        await harness.close()
+
+
+@pytest.mark.asyncio
+async def test_auto_recovers_after_initial_discovery_failure(tmp_path: Path) -> None:
+    from free_claude_code.providers.github_copilot.types import CopilotUnavailable
+
+    harness = Harness(tmp_path, CopilotEgress.RESPONSES)
+    harness.runtime.available = (
+        CopilotModel(
+            ProviderModelInfo(model_id="auto", max_output_tokens=4096),
+            MessagesModelCapabilities(max_output_tokens=4096),
+        ),
+    )
+    harness.runtime.resolved_model = "mai-code-1.1-flash"
+    harness.runtime.model_error = CopilotUnavailable("transient discovery failure")
+    try:
+        with pytest.raises(ExecutionFailure):
+            await harness.provider.list_model_infos()
+        harness.runtime.model_error = None
+        output = await collect(
             harness.provider.stream_responses(
                 OpenAIResponsesRequest(model="auto", input="hi")
             )
-        assert not harness.seen and harness.runtime.session_calls == 0
+        )
+        assert "ok" in output
+        assert len(harness.seen) == 1
+        body = json.loads(harness.seen[0].content)
+        assert body["model"] == "mai-code-1.1-flash"
     finally:
         await harness.close()
 

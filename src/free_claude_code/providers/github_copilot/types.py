@@ -52,6 +52,7 @@ class CopilotEndpoint:
     egress: CopilotEgress
     http: HttpEndpoint = field(repr=False)
     expires_at: float | None = None
+    resolved_model: str | None = None
 
 
 class CopilotSession(Protocol):

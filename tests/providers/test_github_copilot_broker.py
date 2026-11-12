@@ -220,3 +220,49 @@ async def test_cached_discovery_rejects_changed_or_signed_out_native_identity(
             await broker.snapshot(refresh=False)
     finally:
         await broker.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model",
+    ["auto", "AUTO", "github_copilot/auto", " github_copilot/AUTO "],
+)
+async def test_broker_leases_auto_model_and_propagates_resolved_model(
+    requested_model: str,
+) -> None:
+    runtime = FakeRuntime()
+    runtime.available = (model("auto"),)
+    broker = CopilotBroker(runtime)
+    try:
+        snapshot = await broker.snapshot()
+        assert list(snapshot) == ["auto"]
+        async with broker.lease(requested_model) as lease:
+            assert lease.model.info.model_id == "auto"
+            assert runtime.sessions[0].model_id == "auto"
+            assert len(runtime.sessions) == 1
+            runtime.sessions[0].value = replace(
+                runtime.sessions[0].value, resolved_model="mai-code-1.1-flash"
+            )
+            await lease.endpoint(force_refresh=True)
+            assert lease.resolved_model == "mai-code-1.1-flash"
+    finally:
+        await broker.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model",
+    ["auto", "AUTO", "github_copilot/auto", " github_copilot/AUTO "],
+)
+async def test_broker_rejects_auto_when_concrete_models_exist(
+    requested_model: str,
+) -> None:
+    runtime = FakeRuntime()
+    runtime.available = (model("gpt-4o"),)
+    broker = CopilotBroker(runtime)
+    try:
+        with pytest.raises(InvalidRequestError, match="Choose a concrete model"):
+            async with broker.lease(requested_model):
+                pytest.fail("auto should not lease when concrete models exist")
+    finally:
+        await broker.close()

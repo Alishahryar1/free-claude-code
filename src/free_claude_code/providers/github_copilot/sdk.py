@@ -159,7 +159,7 @@ class SdkRuntime:
             result = await self._running().rpc.models.list(
                 ModelsListRequest(), timeout=SDK_RPC_TIMEOUT
             )
-            return tuple(
+            models = tuple(
                 _model(model)
                 for model in result.models
                 if model.id.strip()
@@ -169,6 +169,27 @@ class SdkRuntime:
                     or model.policy.state is ModelPolicyState.ENABLED
                 )
             )
+            if models:
+                return models
+            auto_models = tuple(
+                _auto_model(model)
+                for model in result.models
+                if model.id.strip().casefold() == "auto"
+                and (
+                    model.policy is None
+                    or model.policy.state is ModelPolicyState.ENABLED
+                )
+            )
+            if auto_models:
+                return (auto_models[0],)
+            if any(
+                model.id.strip().casefold() == "auto"
+                and model.policy is not None
+                and model.policy.state is not ModelPolicyState.ENABLED
+                for model in result.models
+            ):
+                return ()
+            return (_default_auto_model(),)
         except Exception:
             raise CopilotUnavailable(
                 "Could not discover Copilot subscription models. Check the selected account and its model policies."
@@ -313,8 +334,15 @@ class SdkSession:
         if self._closed:
             raise CopilotUnavailable("Copilot endpoint session is closed.")
         try:
+            # Calling getEndpoint(modelId="auto") returns an endpoint with no
+            # session token, and the upstream HTTP API rejects `"model": "auto"`
+            # with `model_not_supported`. Omitting `model_id` lets the session
+            # return a token bound to the concrete model it resolved `auto` to.
+            request_model_id = (
+                None if self._model_id.strip().casefold() == "auto" else self._model_id
+            )
             endpoint = await self._session.rpc.provider.get_endpoint(
-                SessionProviderGetEndpointRequest(model_id=self._model_id),
+                SessionProviderGetEndpointRequest(model_id=request_model_id),
                 timeout=SDK_RPC_TIMEOUT,
             )
             return _endpoint(endpoint, self._model_id)
@@ -402,17 +430,51 @@ def _model(model: Model) -> CopilotModel:
     )
 
 
+def _auto_model(model: Model) -> CopilotModel:
+    converted = _model(model)
+    info = ProviderModelInfo(
+        model_id="auto",
+        reasoning_capability=converted.info.reasoning_capability,
+        supports_thinking=converted.info.supports_thinking,
+        input_modalities=converted.info.input_modalities
+        or frozenset({ModelInputModality.TEXT, ModelInputModality.IMAGE}),
+        context_window_tokens=converted.info.context_window_tokens,
+        max_output_tokens=converted.info.max_output_tokens,
+    )
+    return CopilotModel(
+        info,
+        converted.messages,
+        converted.supported_efforts,
+        converted.default_effort,
+    )
+
+
+def _default_auto_model() -> CopilotModel:
+    info = ProviderModelInfo(
+        model_id="auto",
+        input_modalities=frozenset({ModelInputModality.TEXT, ModelInputModality.IMAGE}),
+    )
+    return CopilotModel(
+        info,
+        MessagesModelCapabilities(supports_vision=True),
+    )
+
+
 def _endpoint(endpoint: ProviderEndpoint, model_id: str) -> CopilotEndpoint:
     if endpoint.transport not in {None, ProviderTransport.HTTP}:
         raise CopilotUnavailable(
             "This Copilot model requires an unsupported upstream transport."
         )
+    is_auto = model_id.strip().casefold() == "auto"
     if endpoint.type is ProviderType.ANTHROPIC and endpoint.wire_api is None:
         egress = CopilotEgress.MESSAGES
     elif endpoint.type is ProviderType.OPENAI:
+        # The CLI advertises `completions` for `auto`, but the backend models it
+        # resolves to (e.g. `mai-code-1.1-flash`) are only served via `/responses`
+        # and reject `/chat/completions` with `unsupported_api_for_model`.
         egress = (
             CopilotEgress.RESPONSES
-            if endpoint.wire_api is ProviderWireAPI.RESPONSES
+            if endpoint.wire_api is ProviderWireAPI.RESPONSES or is_auto
             else CopilotEgress.CHAT
         )
     else:
@@ -451,10 +513,16 @@ def _endpoint(endpoint: ProviderEndpoint, model_id: str) -> CopilotEndpoint:
                 "Copilot returned invalid endpoint headers."
             ) from None
     expires = None
+    resolved_model: str | None = None
     token = endpoint.session_token
     if token is not None:
+        token_model = token.model.strip() if token.model else None
         if (
-            token.model not in {None, model_id}
+            (
+                token_model is not None
+                and token_model.casefold() != model_id.strip().casefold()
+                and not is_auto
+            )
             or not token.token
             or _HEADER_NAME.fullmatch(token.header) is None
             or any(character in token.token for character in "\r\n\0")
@@ -462,6 +530,8 @@ def _endpoint(endpoint: ProviderEndpoint, model_id: str) -> CopilotEndpoint:
             raise CopilotUnavailable(
                 "Copilot returned an invalid or differently bound session token."
             )
+        if is_auto and token_model and token_model.casefold() != "auto":
+            resolved_model = token_model
         try:
             headers[token.header] = token.token
         except UnicodeError, ValueError:
@@ -493,4 +563,5 @@ def _endpoint(endpoint: ProviderEndpoint, model_id: str) -> CopilotEndpoint:
             endpoint.api_key,
         ),
         expires,
+        resolved_model,
     )
