@@ -326,6 +326,10 @@ def atomic_write_managed_config(
     rendered = render_managed_config(values, mask_secrets=mask_secrets)
     if mask_secrets:
         return rendered
+    try:
+        dotenv_values_from_text(rendered)
+    except ValueError as exc:
+        raise ValueError(f"Refusing to write unparsable configuration: {exc}") from exc
 
     target.parent.mkdir(parents=True, exist_ok=True)
     temp_path = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
@@ -390,7 +394,7 @@ def quote_env_value(value: str) -> str:
     if (
         not value
         or any(char.isspace() for char in value)
-        or any(char in value for char in ('"', "#", "=", "$"))
+        or any(char in value for char in ('"', "#", "=", "$", "'", "\\"))
     ):
         return f'"{escaped}"'
     return value
