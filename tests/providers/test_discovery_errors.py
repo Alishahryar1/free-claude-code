@@ -145,8 +145,9 @@ async def test_real_admission_cooldown_retains_discovery_failure(error):
 
 
 def test_recovery_wrapper_cycles_do_not_hang_classification():
-    wrapper = ProviderRecoveryExhausted(RuntimeError("secret-canary"))
-    wrapper.last_error = wrapper
+    error = RuntimeError("unclassified failure")
+    wrapper = ProviderRecoveryExhausted(error)
+    error.__cause__ = wrapper
     assert (
         _provider_query_failure_reason(wrapper)
         == "Could not load models. Check the provider's settings and retry."
