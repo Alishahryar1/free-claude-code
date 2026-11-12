@@ -147,9 +147,11 @@ async def test_completed_native_arguments_are_transparent(protocol, wire, argume
         )
         assert len(bodies) == 1
         if wire == "responses":
+            # A Messages zero-argument call streams one empty delta after input {}.
+            expected = "{}" if protocol == "messages" and not arguments else arguments
             assert events[-1].event == "response.completed"
             call = events[-1].data["response"]["output"][0]
-            assert call["arguments"] == arguments
+            assert call["arguments"] == expected
             assert call["call_id"] == "call_probe"
             assert (
                 "".join(
@@ -157,7 +159,7 @@ async def test_completed_native_arguments_are_transparent(protocol, wire, argume
                     for e in events
                     if e.event == "response.function_call_arguments.delta"
                 )
-                == arguments
+                == expected
             )
         else:
             assert events[-1].event == "message_stop"
@@ -204,7 +206,7 @@ async def test_harness_tool_error_is_kept_in_next_request(protocol, arguments):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "arguments", ['{"path":', "[]", "null", "", '{"x":NaN}', '{"x":1e400}']
+    "arguments", ['{"path":', "[]", "null", '{"x":NaN}', '{"x":1e400}']
 )
 @pytest.mark.parametrize("upstream_error", [False, True])
 async def test_nonstream_messages_requires_an_object_and_preserves_upstream_errors(

@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any, Literal, cast
 
+from .anthropic.content import streamed_tool_arguments
 from .anthropic.conversion import AnthropicToOpenAIConverter, ReasoningReplayMode
 from .anthropic.models import Message, MessagesRequest
 from .anthropic.native import NativeMessagesOptions
@@ -127,7 +128,11 @@ class ContinuationRequest:
                 # Completed public tool blocks retain their streamed JSON deltas.
                 for item in items:
                     if item.get("type") == "tool_use" and "partial_json" in item:
-                        item["input"] = json.loads(cast(str, item.pop("partial_json")))
+                        item["input"] = json.loads(
+                            streamed_tool_arguments(
+                                cast(str, item.pop("partial_json")), item.get("input")
+                            )
+                        )
                 return cast(
                     list[Any],
                     messages_to_gemini(
