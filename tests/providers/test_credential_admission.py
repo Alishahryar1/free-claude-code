@@ -9,6 +9,7 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
 from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
+from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
 from free_claude_code.providers.groq import GroqProvider
 from free_claude_code.providers.runtime import ProviderRuntime
 
@@ -68,8 +69,10 @@ async def test_models_and_credentials_share_capacity_and_limit_updates(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("new_first", ["synthetic-second", "replacement-first"])
+@pytest.mark.parametrize("retry_after", ["60", "3600"])
 async def test_recovery_follows_credentials_across_key_reorder_and_replacement(
     new_first,
+    retry_after,
 ):
     old_settings = Settings(
         GROQ_API_KEY=["synthetic-first", "synthetic-second"],
@@ -96,7 +99,7 @@ async def test_recovery_follows_credentials_across_key_reorder_and_replacement(
         old_attempt = await execution.open_attempt(ProviderOperationKind.GENERATION)
         response = httpx.Response(
             503,
-            headers={"retry-after": "60"},
+            headers={"retry-after": retry_after},
             request=httpx.Request("POST", "https://provider.example"),
         )
         await old_attempt.fail(
@@ -112,13 +115,16 @@ async def test_recovery_follows_credentials_across_key_reorder_and_replacement(
         assert same_credential._admission is old_first._admission
         assert same_credential._admission._expiry_timer is timer
         assert not timer.cancelled()
-        pending = asyncio.create_task(
-            same_credential._admission.start_execution(model="model").open_attempt(
-                ProviderOperationKind.GENERATION
-            )
-        )
-        await asyncio.sleep(0)
-        assert not pending.done(), "moving a credential bypassed its recovery"
+        blocked = same_credential._admission.start_execution(model="model")
+        same_route = blocked.open_attempt(ProviderOperationKind.GENERATION)
+        if retry_after == "3600":
+            with pytest.raises(ProviderRecoveryExhausted):
+                await asyncio.wait_for(same_route, 1)
+        else:
+            pending = asyncio.create_task(same_route)
+            await asyncio.sleep(0)
+            assert not pending.done(), "moving a credential bypassed its recovery"
+        assert blocked.attempts_started == 0
         healthy_attempt = await asyncio.wait_for(
             healthy._admission.start_execution(model="model").open_attempt(
                 ProviderOperationKind.GENERATION

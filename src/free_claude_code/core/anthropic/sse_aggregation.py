@@ -14,6 +14,7 @@ from typing import Any
 
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 
+from .content import streamed_tool_arguments
 from .stream_contracts import SSEEvent
 from .streaming.decoder import AnthropicSSEDecoder
 
@@ -124,8 +125,8 @@ async def aggregate_anthropic_sse_to_message(
             block.setdefault("signature", "")
         elif btype == "tool_use" and error is None:
             try:
-                value = (
-                    json.loads(accumulated) if parts.get(idx) else block.get("input")
+                value = json.loads(
+                    streamed_tool_arguments(accumulated, block.get("input"))
                 )
                 if not isinstance(value, dict):
                     raise ValueError("Tool input must be an object.")

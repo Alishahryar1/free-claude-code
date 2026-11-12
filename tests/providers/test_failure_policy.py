@@ -880,3 +880,12 @@ def test_shared_recovery_exhaustion_preserves_last_provider_failure() -> None:
     assert "Request ID: req_exhausted" in failure.message
     assert retryable_upstream_status(exhausted) is None
     assert not is_retryable_provider_error(exhausted)
+
+
+@pytest.mark.parametrize("deadline", [None, 1234.0])
+def test_recovery_rewrap_preserves_selected_cause_and_deadline(deadline):
+    cause = RuntimeError("selected upstream error")
+    first = ProviderRecoveryExhausted(cause, retry_not_before=deadline)
+    copied = ProviderRecoveryExhausted(first)
+    assert copied.last_error is cause
+    assert copied.retry_not_before == deadline

@@ -24,7 +24,13 @@ from tests.providers.test_anthropic_provider import native_body, provider
 
 
 @pytest.mark.parametrize("stream", [False, True])
-def test_native_fallback_tries_other_model_during_primary_cooldown(stream):
+@pytest.mark.parametrize(
+    ("status", "retry_after", "max_attempts"), [(529, "60", 1), (429, "3600", 10)]
+)
+@pytest.mark.asyncio
+async def test_native_fallback_tries_other_model_during_primary_cooldown(
+    stream, status, retry_after, max_attempts
+):
     calls = []
 
     def handle(request):
@@ -32,9 +38,16 @@ def test_native_fallback_tries_other_model_during_primary_cooldown(stream):
         calls.append(model)
         if model == "primary":
             return httpx.Response(
-                529,
-                headers={"retry-after": "60"},
-                json={"error": {"type": "overloaded_error", "message": "busy"}},
+                status,
+                headers={"retry-after": retry_after},
+                json={
+                    "error": {
+                        "type": "rate_limit_error"
+                        if status == 429
+                        else "overloaded_error",
+                        "message": "busy",
+                    }
+                },
             )
         if stream:
             return httpx.Response(
@@ -46,21 +59,40 @@ def test_native_fallback_tries_other_model_during_primary_cooldown(stream):
             200, json={"type": "message", "model": model, "content": []}
         )
 
+    upstream = provider(handle)
+    upstream._admission = ProviderAdmissionController(
+        provider_name="native-recovery-test",
+        rate_limit=1_000_000,
+        max_attempts=max_attempts,
+        jitter=0,
+    )
     app = create_test_app(
         Settings(
             MODEL="anthropic/primary",
             MODEL_FALLBACKS=[ModelFallback(model="anthropic/backup")],
         ),
-        providers={"anthropic": provider(handle, max_attempts=1)},
+        providers={"anthropic": upstream},
     )
-    with TestClient(app) as client:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app), base_url="http://test"
+    ) as client:
         for _ in range(2):
-            response = client.post("/v1/messages", json=native_body(stream))
+            response = await asyncio.wait_for(
+                client.post("/v1/messages", json=native_body(stream)), timeout=2
+            )
             assert response.status_code == 200, response.text
             if stream:
                 assert "message_stop" in response.text
                 assert "event: error" not in response.text
-    assert calls == ["primary", "backup", "backup"]
+        direct = await asyncio.wait_for(
+            client.post(
+                "/v1/messages",
+                json={**native_body(stream), "model": "anthropic/backup"},
+            ),
+            timeout=2,
+        )
+        assert direct.status_code == 200, direct.text
+    assert calls == ["primary", "backup", "backup", "backup"]
 
 
 def test_only_leading_pings_then_all_candidates_fail_returns_json_error():

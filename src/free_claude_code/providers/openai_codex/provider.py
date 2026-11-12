@@ -152,6 +152,8 @@ class OpenAICodexProvider(BaseProvider):
                             decision = await scope.attempt.fail(error)
                             if decision.retry_allowed:
                                 continue
+                            if decision.error is not error:
+                                raise decision.error from error
                     execution.fail(error)
                     raise
                 finally:

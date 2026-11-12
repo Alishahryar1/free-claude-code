@@ -122,7 +122,7 @@ def source_events(protocol):
     return [{**event, "sequence_number": index} for index, event in enumerate(events)]
 
 
-def matrix_app(protocol, reply, *, max_attempts=2):
+def matrix_app(protocol, reply, *, max_attempts=2, model_fallbacks=None):
     if protocol == "gemini":
         instance = GeminiProvider(
             make_provider_config(api_key="upstream-key", base_url=GEMINI_DEFAULT_BASE),
@@ -149,7 +149,9 @@ def matrix_app(protocol, reply, *, max_attempts=2):
                 admission=immediate_admission(max_attempts=max_attempts),
             )
         provider_id = "open_router"
-        settings = Settings(MODEL="open_router/backend")
+        settings = Settings(
+            MODEL="open_router/backend", MODEL_FALLBACKS=model_fallbacks
+        )
     else:
         configured = definition(
             api_format="anthropic_messages"

@@ -129,9 +129,11 @@ async def test_completed_chat_tool_arguments_remain_opaque(protocol, arguments):
         if protocol == "messages":
             kwargs["endpoint_context"] = Endpoint()
         result = await collect(transport.stream_chat(request, **kwargs))
+    # A Messages zero-argument call streams one empty delta after input {}.
+    expected = "{}" if protocol == "messages" and not arguments else arguments
     assert (
         result["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
-        == arguments
+        == expected
     )
 
 
