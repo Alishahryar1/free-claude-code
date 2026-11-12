@@ -7,7 +7,11 @@ from typing import Any, TypeVar
 from loguru import logger
 
 from free_claude_code.core.trace import trace_event
-from free_claude_code.providers.admission import ProviderAttempt
+from free_claude_code.providers.admission import (
+    ProviderAttempt,
+    ProviderFailureDecision,
+)
+from free_claude_code.providers.failure_policy import ProviderFailureOverride
 
 _ResourceT = TypeVar("_ResourceT")
 
@@ -87,6 +91,21 @@ class ProviderAttemptScope:
             raise RuntimeError("provider attempt scope already owns a resource")
         self._resource = resource
         return resource
+
+    async def fail(
+        self,
+        error: Exception,
+        *,
+        provider_failure_override: ProviderFailureOverride | None = None,
+    ) -> ProviderFailureDecision:
+        """Close a failed attempt before letting its caller retry."""
+        decision = await self.attempt.fail(
+            error, provider_failure_override=provider_failure_override
+        )
+        if not decision.retry_allowed:
+            return decision
+        await self.aclose(active_error=decision.error)
+        return self.attempt.failure_after_cleanup(decision)
 
     async def aclose(self, *, active_error: BaseException | None) -> None:
         """Close transport state without masking the established operation outcome."""

@@ -72,7 +72,10 @@ from free_claude_code.providers.history_replay import (
     replay_origin,
     validate_history,
 )
-from free_claude_code.providers.http import ProviderAttemptScope, maybe_await_aclose
+from free_claude_code.providers.http import (
+    ProviderAttemptScope,
+    maybe_await_aclose,
+)
 from free_claude_code.providers.openai_client import OpenAIRequestClient
 from free_claude_code.providers.openai_stream import OpenAIStreamAdapter
 from free_claude_code.providers.reasoning_compatibility import (
@@ -610,7 +613,8 @@ class OpenAIResponsesTransport:
                         continue
                 attempt_failure = None
                 if scope is not None and not scope.attempt.accepted:
-                    attempt_failure = await scope.attempt.fail(error)
+                    attempt_failure = await scope.fail(error)
+                    error = attempt_failure.error
                 if attempt_failure is not None and attempt_failure.retry_allowed:
                     recovery.discard()
                     _trace_early_retry(
