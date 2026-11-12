@@ -15,7 +15,7 @@ import openai
 import pytest
 
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.providers import admission
+from free_claude_code.providers import admission, failure_policy
 from free_claude_code.providers.admission import (
     UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
     ProviderAdmissionController,
@@ -75,7 +75,9 @@ async def _open(execution: ProviderExecution) -> ProviderAttempt:
 @pytest.fixture
 def recovery_clock(monkeypatch):
     clock = SimpleNamespace(now=100.0)
-    monkeypatch.setattr(admission, "time", SimpleNamespace(monotonic=lambda: clock.now))
+    monotonic_time = SimpleNamespace(monotonic=lambda: clock.now)
+    monkeypatch.setattr(admission, "time", monotonic_time)
+    monkeypatch.setattr(failure_policy, "time", monotonic_time)
     return clock
 
 
@@ -1048,6 +1050,73 @@ async def test_long_hint_supersedes_short_recovery_and_releases_waiters(
         await attempt.accept()
         await attempt.aclose()
     controller.close()
+
+
+@pytest.mark.parametrize("later_episode", [False, True])
+@pytest.mark.asyncio
+async def test_terminal_waiters_report_latest_failure_from_their_episode(
+    later_episode, recovery_clock
+):
+    controller = _controller(base_delay=10, max_delay=60)
+    queued_execution = controller.start_execution(model="primary")
+    between_attempts = controller.start_execution(model="primary")
+    leader = await _open(controller.start_execution(model="primary"))
+    follower = await _open(between_attempts)
+    shorter = await _open(controller.start_execution(model="primary"))
+    longer = await _open(controller.start_execution(model="primary"))
+    try:
+        assert (await leader.fail(_status_error(503))).retry_allowed
+        assert (await follower.fail(_status_error(503))).retry_allowed
+        await leader.aclose()
+        await follower.aclose()
+
+        queued = asyncio.create_task(_open(queued_execution))
+        await asyncio.sleep(0)
+        assert not queued.done()
+
+        await shorter.fail(_status_error(429, retry_after="120"))
+        later_error = _status_error(503, retry_after="3600")
+        await longer.fail(later_error)
+        deadline = recovery_clock.now + 3600
+        await shorter.aclose()
+        await longer.aclose()
+        with pytest.raises(ProviderRecoveryExhausted) as current:
+            await _open(controller.start_execution(model="primary"))
+        assert current.value.last_error is later_error
+        assert current.value.retry_not_before == deadline
+
+        if later_episode:
+            recovery_clock.now = deadline
+            new_attempt = await _open(controller.start_execution(model="primary"))
+            await new_attempt.fail(_status_error(429, retry_after="120"))
+            await new_attempt.aclose()
+
+        with pytest.raises(ProviderRecoveryExhausted) as waiting:
+            await asyncio.wait_for(queued, 1)
+        assert queued_execution.attempts_started == 0
+
+        async def unexpected_call() -> None:
+            pytest.fail("a terminal waiter started another upstream call")
+
+        with pytest.raises(ProviderRecoveryExhausted) as coalesced:
+            await between_attempts.run_call(
+                unexpected_call, operation_kind=ProviderOperationKind.GENERATION
+            )
+        assert between_attempts.attempts_started == 1
+
+        for failure in (waiting.value, coalesced.value):
+            assert failure.last_error is later_error
+            assert failure.retry_not_before == deadline
+            classified = failure_policy.classify_provider_failure(
+                failure, provider_name="TEST", read_timeout_s=None, request_id=None
+            )
+            assert "HTTP 503" in classified.message
+            if later_episode:
+                assert "Retry this provider route" not in classified.message
+            else:
+                assert "3600 seconds" in classified.message
+    finally:
+        controller.close()
 
 
 def test_retry_after_accepts_http_date_and_rejects_invalid_values() -> None:

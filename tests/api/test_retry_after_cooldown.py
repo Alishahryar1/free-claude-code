@@ -8,6 +8,7 @@ import httpx
 import httpx2
 import pytest
 
+from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.providers import admission, failure_policy
 from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
@@ -120,3 +121,71 @@ async def test_continuation_cooldown_uses_terminal_event(
     assert "continuation quota exhausted" in response.text
     assert "3600 seconds" in response.text
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize("with_backup", [False, True])
+@pytest.mark.asyncio
+async def test_automatic_websearch_preserves_continuation_cooldown(
+    with_backup, cooldown_clock
+):
+    partial = "Partial answer" if with_backup else "a" * 66_000
+    calls = []
+
+    def reply(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        if body["model"] == "backup":
+            events = text_events("chat", "Answer from backup.")
+        elif len(calls) == 1:
+            events = text_events("chat", partial, complete=False)
+        else:
+            return httpx2.Response(
+                429,
+                headers={"Retry-After": "3600"},
+                json={
+                    "error": {
+                        "message": "continuation quota",
+                        "type": "rate_limit_error",
+                    }
+                },
+            )
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+        )
+
+    app = matrix_app(
+        "chat",
+        reply,
+        max_attempts=2 if with_backup else 10,
+        model_fallbacks=[ModelFallback(model="open_router/backup")]
+        if with_backup
+        else None,
+    )
+    path, request = ingress_request("messages", False)
+    request["tools"] = [{"name": "web_search", "type": "web_search_20250305"}]
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app), base_url="http://test"
+    ) as client:
+        first = await asyncio.wait_for(client.post(path, json=request), 3)
+        if not with_backup:
+            second = await asyncio.wait_for(client.post(path, json=request), 3)
+            assert second.status_code == 429, second.text
+            assert "3600 seconds" in second.json()["error"]["message"]
+
+    assert partial in json.dumps(calls[1]["messages"])
+    models = [body["model"] for body in calls]
+    if with_backup:
+        assert models == ["backend", "backend", "backup"]
+        assert first.status_code == 200, first.text
+        assert [block["text"] for block in first.json()["content"]] == [
+            "Answer from backup."
+        ]
+    else:
+        assert models == ["backend", "backend"]
+        assert first.status_code == 429, first.text
+        error = first.json()["error"]
+        assert error["type"] == "rate_limit_error"
+        assert "continuation quota" in error["message"]
+        assert "3600 seconds" in error["message"]

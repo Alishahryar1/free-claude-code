@@ -115,7 +115,7 @@ class ProviderExecution:
         self._model = model
         self._attempts_started = 0
         self._active_claim: _AttemptClaim | None = None
-        self._last_failure: Exception | None = None
+        self._failure: Exception | _RecoveryEpisode | None = None
         self._state = ProviderExecutionState.ACTIVE
         self._delivery = current_stream_delivery()
 
@@ -162,7 +162,9 @@ class ProviderExecution:
 
     @property
     def last_failure(self) -> Exception | None:
-        return self._last_failure
+        if isinstance(self._failure, _RecoveryEpisode):
+            return self._failure.last_error
+        return self._failure
 
     async def open_attempt(
         self,
@@ -214,17 +216,17 @@ class ProviderExecution:
             # TLS or HTTP failures while cancellation still propagates.
             if (
                 operation_kind is ProviderOperationKind.MODEL_DISCOVERY
-                and self._last_failure is not None
+                and (last_failure := self.last_failure) is not None
             ):
-                raise cancelled from self._last_failure
+                raise cancelled from last_failure
             raise
         except Exception as error:
             self.fail(error)
             raise
 
-        if self._last_failure is not None:
-            self.fail(self._last_failure)
-            raise self._last_failure
+        if (last_failure := self.last_failure) is not None:
+            self.fail(last_failure)
+            raise last_failure
         self.abandon()
         raise RuntimeError("provider execution ended without an attempt outcome")
 
@@ -236,8 +238,11 @@ class ProviderExecution:
 
     def fail(self, error: Exception) -> None:
         """Mark the complete logical provider operation failed."""
+        self._mark_failed(error)
+
+    def _mark_failed(self, failure: Exception | _RecoveryEpisode) -> None:
         if self._state is ProviderExecutionState.ACTIVE:
-            self._last_failure = error
+            self._failure = failure
             self._state = ProviderExecutionState.FAILED
             self._controller._execution_terminated(self)
 
@@ -272,14 +277,15 @@ class ProviderExecution:
 
     def _record_failure(self, error: Exception) -> None:
         if self._state is ProviderExecutionState.ACTIVE:
-            self._last_failure = error
+            self._failure = error
 
-    def _fail_recovery(self, error: Exception) -> None:
-        self.fail(error)
+    def _fail_recovery(self, episode: _RecoveryEpisode) -> None:
+        # In-flight attempts can extend this episode before the execution resumes.
+        self._mark_failed(episode)
 
     def _terminal_failure(self) -> Exception | None:
         if self._state is ProviderExecutionState.FAILED:
-            return self._last_failure
+            return self.last_failure
         return None
 
 
@@ -773,7 +779,7 @@ class ProviderAdmissionController:
         if episode is not None and isinstance(
             episode.last_error, ProviderRecoveryExhausted
         ):
-            execution._fail_recovery(episode.last_error)
+            execution._fail_recovery(episode)
             return ProviderRecoveryExhausted(episode.last_error)
 
         can_retry = execution.can_attempt
@@ -797,7 +803,7 @@ class ProviderAdmissionController:
                 episode.ready_at = time.monotonic() + delay
                 became_leader = True
             elif episode.terminal_until is not None:
-                execution._fail_recovery(episode.last_error)
+                execution._fail_recovery(episode)
             else:
                 episode.waiters.add(execution)
             self._notify_recovery_waiters()
@@ -882,7 +888,7 @@ class ProviderAdmissionController:
             if episode.terminal_until >= deadline and isinstance(
                 episode.last_error, ProviderRecoveryExhausted
             ):
-                execution._fail_recovery(episode.last_error)
+                execution._fail_recovery(episode)
                 return ProviderRecoveryExhausted(episode.last_error)
             deadline = max(deadline, episode.terminal_until)
 
@@ -899,7 +905,7 @@ class ProviderAdmissionController:
         if leader is not None and leader._active_claim is None:
             episode.waiters.add(leader)
         self._finish_recovery_episode(episode, failure, deadline)
-        execution._fail_recovery(failure)
+        execution._fail_recovery(episode)
         _log_recovery(
             "Provider {} model {} deferred for {:.1f}s after Retry-After",
             self._provider_name,
@@ -931,7 +937,7 @@ class ProviderAdmissionController:
         waiters = tuple(episode.waiters)
         episode.waiters.clear()
         for waiter in waiters:
-            waiter._fail_recovery(error)
+            waiter._fail_recovery(episode)
         self._notify_recovery_waiters()
 
     def _start_recovery_episode(

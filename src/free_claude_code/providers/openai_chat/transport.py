@@ -78,6 +78,7 @@ from free_claude_code.providers.continuation import (
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.failure_policy import (
+    ProviderRecoveryExhausted,
     RetryableToolProtocolError,
     classify_provider_failure,
     context_window_exceeded_provider_failure,
@@ -1621,17 +1622,23 @@ class _OpenAIChatStreamRunner:
                     request_id=self._request_id,
                     exc_type=type(recovery_error).__name__,
                 )
-                recovery_failure = classify_provider_failure(
-                    recovery_error,
-                    provider_name=tag,
-                    read_timeout_s=self._transport._read_timeout_s,
-                    request_id=self._request_id,
-                    provider_failure_override=(
-                        self._transport._behavior.failure_override
-                    ),
-                )
-                if recovery_failure.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED:
-                    error = recovery_failure
+                if (
+                    isinstance(recovery_error, ProviderRecoveryExhausted)
+                    and recovery_error.retry_not_before is not None
+                ):
+                    error = recovery_error
+                else:
+                    recovery_failure = classify_provider_failure(
+                        recovery_error,
+                        provider_name=tag,
+                        read_timeout_s=self._transport._read_timeout_s,
+                        request_id=self._request_id,
+                        provider_failure_override=(
+                            self._transport._behavior.failure_override
+                        ),
+                    )
+                    if recovery_failure.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED:
+                        error = recovery_failure
                 recovery_events = None
             if recovery_events is not None:
                 return _OpenAIChatFailureResolution(
