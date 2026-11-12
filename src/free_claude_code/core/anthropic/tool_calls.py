@@ -24,6 +24,7 @@ class MessagesToolCallBuffer:
         self._buffer = OrderedToolCallBuffer[SourceEmission | _PendingTool]()
         self._tools: dict[int, _PendingTool] = {}
         self._seen: set[int] = set()
+        self._call_ids: set[str] = set()
         self._stop_reason: object = None
 
     def feed(self, kind: str, payload: dict[str, Any]) -> list[SourceEmission]:
@@ -74,6 +75,10 @@ class MessagesToolCallBuffer:
                 }
                 for key, pending in self._tools.items():
                     if successful and pending.stopped:
+                        block = pending.events[0][1]["content_block"]
+                        identity = validate_tool_identity(block, self._call_ids)
+                        self._buffer.budget.add(len(identity.encode("utf-8")), 0)
+                        self._call_ids.add(identity)
                         self._buffer.complete(key)
                     else:
                         self._buffer.discard(key)
@@ -101,6 +106,22 @@ class MessagesToolCallBuffer:
             tuple(value.events) if isinstance(value, _PendingTool) else value
             for value in self._buffer.drain()
         ]
+
+
+def validate_tool_identity(block: dict[str, Any], seen: set[str]) -> str:
+    """Validate a complete tool's execution identity for SSE and native JSON."""
+    identity = block.get("id")
+    name = block.get("name")
+    if (
+        not isinstance(identity, str)
+        or not identity.strip()
+        or not isinstance(name, str)
+        or not name.strip()
+    ):
+        raise _failure("Completed Messages tool requires an ID and name")
+    if identity in seen:
+        raise _failure("Messages tools share an execution ID")
+    return identity
 
 
 def _failure(message: str) -> ExecutionFailure:

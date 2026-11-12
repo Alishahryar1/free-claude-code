@@ -81,7 +81,6 @@ class PublicResponseStream(AsyncIterator[str]):
         self._public_id: str | None = None
         self._created_at: object = None
         self._sequence = -1
-        self._offset: int | None = None
         self._pending_starts: list[str] = []
         self._replay_carriers: dict[str, str] = {}
         self.start_frame = ""
@@ -239,7 +238,6 @@ class PublicResponseStream(AsyncIterator[str]):
         self._seen_starts.clear()
         self._pending_starts.clear()
         self._pending_call_proofs.clear()
-        self._offset = None
         if self._wire_api == "chat" and not (
             self.state.content_released or self._pending_release
         ):
@@ -412,20 +410,10 @@ class PublicResponseStream(AsyncIterator[str]):
             ):
                 payload["response_id"] = self._public_id
                 changed = True
-        number = payload.get("sequence_number")
-        if failure or (synthetic and self._wire_api == "responses"):
-            number = self._sequence + 1
-            payload["sequence_number"] = number
+        if self._wire_api == "responses":
+            self._sequence += 1
+            payload["sequence_number"] = self._sequence
             changed = True
-        if isinstance(number, int) and not isinstance(number, bool):
-            if self._replacement and not failure:
-                if self._offset is None:
-                    self._offset = max(0, self._sequence + 1 - number)
-                if self._offset:
-                    payload["sequence_number"] = number + self._offset
-                    changed = True
-                number += self._offset
-            self._sequence = max(self._sequence, number)
         frame = replace_frame_data(frame, payload) if changed else frame
         if metadata:
             self._record(frame, synthetic=synthetic)

@@ -50,6 +50,7 @@ class ResponsesToolCallBuffer:
         self._indices: dict[int, str] = {}
         self._fingerprints: dict[str, bytes] = {}
         self._discarded: set[str] = set()
+        self._call_ids: dict[str, str] = {}
 
     def feed(self, kind: str, payload: dict[str, Any]) -> list[SourceEmission]:
         data = deepcopy(payload)
@@ -170,6 +171,26 @@ class ResponsesToolCallBuffer:
             self._discarded.add(identity)
             del self._items[identity]
             return
+        call_id = item.get("call_id")
+        name = item.get("name")
+        if (
+            not is_client_call(item)
+            or not isinstance(call_id, str)
+            or not call_id.strip()
+        ):
+            raise _failure("Completed Responses client call requires a call ID")
+        if item.get("type") in {"function_call", "custom_tool_call"} and (
+            not isinstance(name, str) or not name.strip()
+        ):
+            raise _failure("Completed Responses function requires a name")
+        for key in ("type", "call_id", "name", "namespace", "execution", "environment"):
+            initial = pending.item.get(key)
+            if initial not in (None, "") and initial != item.get(key):
+                raise _failure("Responses completion changed the tool identity")
+        if call_id in self._call_ids and self._call_ids[call_id] != identity:
+            raise _failure("Responses items share an execution call ID")
+        self._budget.add(len(call_id.encode("utf-8")), 0)
+        self._call_ids[call_id] = identity
         self._buffer.grow(identity, _size(item))
         final = deepcopy(item)
         self._fingerprints[identity] = _fingerprint(final)

@@ -332,6 +332,21 @@ class ChatToolCallBuffer:
         group = self._native_group
         if group is None:
             return
+        identities: set[tuple[int, str]] = set()
+        for call in self._calls.values():
+            if call.completed is None:
+                continue
+            identity = call.completed.body.get("id")
+            if not isinstance(identity, str) or not identity.strip():
+                raise AmbiguousToolCallIdentityError(
+                    "Completed native Chat call requires an ID"
+                )
+            key = (call.choice, identity)
+            if key in identities:
+                raise AmbiguousToolCallIdentityError(
+                    "Native Chat calls share an execution ID"
+                )
+            identities.add(key)
         seen: set[tuple[int, int]] = set()
         for data in group.frames:
             for choice in data.get("choices", []):

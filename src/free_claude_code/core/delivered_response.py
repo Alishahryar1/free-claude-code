@@ -58,7 +58,6 @@ class DeliveredResponse:
         self._text_closed: set[tuple[int, str, int]] = set()
         self._part_closed: set[tuple[int, str, int]] = set()
         self.header: dict[str, Any] = {}
-        self.sequence = -1
         self.unsafe_reason: str | None = None
         self._text_constraint: str | None = None
         self._bytes = 0
@@ -103,9 +102,6 @@ class DeliveredResponse:
         if not isinstance(kind, str):
             self.unsafe_reason = "unknown_event"
             return
-        sequence = data.get("sequence_number")
-        if isinstance(sequence, int):
-            self.sequence = max(self.sequence, sequence)
         if kind in {"message_start", "response.created"} and not self.header:
             self.header = deepcopy(data.get("message", data.get("response", {})))
         delta = data.get("delta", "")

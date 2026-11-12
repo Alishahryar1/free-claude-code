@@ -14,6 +14,7 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import (
+    NativeResponsesRelay,
     OpenAIResponsesRequest,
     ResponsesConversionError,
     ResponsesToolAdapter,
@@ -1012,6 +1013,8 @@ def test_native_original_arguments_agree_across_the_stream(prefix: str) -> None:
             },
         )
     )
+    relay = NativeResponsesRelay(public_model="example")
+    events = [(kind, relay.project(kind, data)) for kind, data in events]
     completed = cast(dict[str, Any], events[-1][1]["item"])
     delta = "".join(
         str(data["delta"])
@@ -1391,8 +1394,11 @@ def _completed_tool_events(
                 {"response": {"output": [completed], "status": "completed"}},
             ),
         ]
+        relay = NativeResponsesRelay(public_model="example")
         return [
-            data for kind, payload in payloads for _, data in events.feed(kind, payload)
+            relay.project(kind, data)
+            for event, payload in payloads
+            for kind, data in events.feed(event, payload)
         ]
     adapter = build_responses_chat_request(
         request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
@@ -1778,6 +1784,8 @@ def test_interleaved_tool_kinds_keep_arguments_and_terminal_output_consistent(
                 {"response": {"output": completed, "status": "completed"}},
             )
         )
+        relay = NativeResponsesRelay(public_model="example")
+        events = [relay.project(str(event["type"]), event) for event in events]
     else:
         prepared = build_responses_chat_request(
             request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT

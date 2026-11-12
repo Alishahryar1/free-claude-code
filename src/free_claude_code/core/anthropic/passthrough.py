@@ -14,6 +14,7 @@ from free_claude_code.core.history_replay import (
 from free_claude_code.core.json_types import JsonObject
 
 from .native import NativeMessagesError, validate_messages_json
+from .native_stream import MessagesBlockIndexMap
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +88,7 @@ class NativeMessagesPassthrough:
         self.public_model = public_model
         self.started = False
         self.completed = False
+        self._indexes = MessagesBlockIndexMap()
 
     def feed(self, kind: str, payload: JsonObject) -> str | None:
         if self.completed:
@@ -96,7 +98,7 @@ class NativeMessagesPassthrough:
             raise NativeMessagesError("Messages event has an invalid payload type.")
         if kind == "ping" and not self.started:
             return None
-        body = dict(payload)
+        body = self._indexes.project(kind, payload)
         if kind == "message_start":
             message = body.get("message")
             if self.started or not isinstance(message, dict):

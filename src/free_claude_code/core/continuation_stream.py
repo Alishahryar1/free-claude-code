@@ -65,13 +65,7 @@ class ContinuationStream:
 
     def boundary(self) -> list[dict[str, Any]]:
         events, self._boundary = self._boundary, []
-        return [self._sequence(event) for event in events]
-
-    def _sequence(self, event: dict[str, Any]) -> dict[str, Any]:
-        if self.delivered.wire_api == "responses":
-            self.delivered.sequence += 1
-            event["sequence_number"] = self.delivered.sequence
-        return event
+        return events
 
     def _item_id(self, value: str) -> str:
         return f"{value.split('_')[0]}_{uuid5(self._namespace, value).hex}"
@@ -174,7 +168,7 @@ class ContinuationStream:
                 for item in response.get("output", []):
                     if isinstance(item.get("id"), str):
                         item["id"] = self._item_id(item["id"])
-        return self._sequence(data)
+        return data
 
     def finalize(self, data: dict[str, Any]) -> dict[str, Any]:
         """Finish the response only after preceding frames have been published."""

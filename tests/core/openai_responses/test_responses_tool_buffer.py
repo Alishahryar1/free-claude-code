@@ -209,3 +209,30 @@ def test_server_tools_are_not_gated_as_client_calls(tool):
         "item": {"id": "server", "status": "in_progress", **tool},
     }
     assert buffer.feed("response.output_item.added", payload)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("call_id", "different"), ("name", "different"), ("type", "custom_tool_call")],
+)
+def test_completion_cannot_change_an_observed_execution_identity(field, value):
+    buffer = ResponsesToolCallBuffer()
+    buffer.feed(
+        "response.output_item.added",
+        {"output_index": 0, "item": item(0, "in_progress", "")},
+    )
+    with pytest.raises(ExecutionFailure):
+        buffer.feed(
+            "response.output_item.done",
+            {"output_index": 0, "item": {**item(0), field: value}},
+        )
+
+
+def test_distinct_response_items_cannot_share_an_execution_call_id():
+    buffer = ResponsesToolCallBuffer()
+    buffer.feed("response.output_item.done", {"output_index": 0, "item": item(0)})
+    with pytest.raises(ExecutionFailure):
+        buffer.feed(
+            "response.output_item.done",
+            {"output_index": 1, "item": {**item(1), "call_id": "call_0"}},
+        )

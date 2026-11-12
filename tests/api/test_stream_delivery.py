@@ -168,7 +168,7 @@ async def test_unicode_meaningful_frame_still_releases_content(separator):
         },
     ],
 )
-async def test_opaque_frame_closes_eligibility_without_changing_bytes(payload):
+async def test_opaque_frame_closes_eligibility_and_preserves_payload_fields(payload):
     raw = _frames("responses", [_start("responses")])[0]
     raw += "event: future\ndata: " + json.dumps(payload) + "\n\n"
     seen = []
@@ -177,13 +177,14 @@ async def test_opaque_frame_closes_eligibility_without_changing_bytes(payload):
         seen.append(current_stream_delivery())
         yield completed_output((raw,))
 
-    assert await drained(source(), "responses") == raw
+    output = await drained(source(), "responses")
+    assert json.loads(output.split("data: ")[-1]) == {**payload, "sequence_number": 1}
     assert seen[0].content_released
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("separator", ["", "\u2028", "\u2029", "\x85"])
-async def test_retry_sequence_offset_preserves_decimal_extensions_and_call_ids(
+async def test_public_sequence_preserves_decimal_extensions_and_call_ids(
     separator,
 ):
     async def source():
@@ -213,7 +214,7 @@ async def test_retry_sequence_offset_preserves_decimal_extensions_and_call_ids(
 
     output = await drained(source(), "responses")
     payload = simplejson.loads(output.split("data: ")[-1], use_decimal=True)
-    assert payload["sequence_number"] == 41
+    assert payload["sequence_number"] == 1
     assert payload["response_id"] == payload["response"]["id"] == "resp_old"
     assert payload["response"]["created_at"] == 7
     assert payload["call_id"] == "resp_new"

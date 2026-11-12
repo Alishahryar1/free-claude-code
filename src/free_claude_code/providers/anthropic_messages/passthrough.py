@@ -15,7 +15,10 @@ from free_claude_code.core.anthropic.native import (
     validate_messages_json,
 )
 from free_claude_code.core.anthropic.passthrough import NativeMessagesPassthrough
-from free_claude_code.core.anthropic.tool_calls import MessagesToolCallBuffer
+from free_claude_code.core.anthropic.tool_calls import (
+    MessagesToolCallBuffer,
+    validate_tool_identity,
+)
 from free_claude_code.core.diagnostics import (
     extract_upstream_error_detail,
     format_execution_failure_message,
@@ -151,6 +154,10 @@ async def stream_native_messages(
                             for block in message.get("content", [])
                             if block.get("type") != "tool_use"
                         ]
+                    call_ids: set[str] = set()
+                    for block in message.get("content", []):
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            call_ids.add(validate_tool_identity(block, call_ids))
                     corrections.accepted_history()
                     await attempt.accept()
                     execution.succeed()

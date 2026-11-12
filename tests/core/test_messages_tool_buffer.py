@@ -78,3 +78,39 @@ def test_confirmed_tool_cannot_emit_late_argument_fragments():
                 delta={"type": "input_json_delta", "partial_json": "late"},
             )
         )
+
+
+def test_confirmed_messages_tools_cannot_share_an_execution_id():
+    buffer = MessagesToolCallBuffer()
+    for index in (0, 1):
+        buffer.feed(
+            *event(
+                "content_block_start",
+                index=index,
+                content_block={
+                    "type": "tool_use",
+                    "id": "duplicate",
+                    "name": "read",
+                    "input": {},
+                },
+            )
+        )
+        buffer.feed(*event("content_block_stop", index=index))
+    with pytest.raises(ExecutionFailure):
+        buffer.feed(*event("message_delta", delta={"stop_reason": "tool_use"}))
+
+
+def test_native_messages_index_bookkeeping_has_a_fixed_record_bound():
+    from free_claude_code.core.anthropic.native_stream import MessagesBlockIndexMap
+    from free_claude_code.core.tool_call_buffer import (
+        MAX_PENDING_RECORDS,
+        ToolBufferLimitError,
+    )
+
+    indexes = MessagesBlockIndexMap()
+    with pytest.raises(ToolBufferLimitError):
+        for index in range(MAX_PENDING_RECORDS + 1):
+            indexes.project(
+                "content_block_start",
+                {"index": index, "content_block": {"type": "text", "text": ""}},
+            )
