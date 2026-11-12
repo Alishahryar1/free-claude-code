@@ -73,6 +73,8 @@ NEBIUS_DEFAULT_BASE = "https://api.tokenfactory.nebius.com/v1"
 SCALEWAY_DEFAULT_BASE = "https://api.scaleway.ai/v1"
 # Chutes OpenAI-compatible Chat Completions API.
 CHUTES_DEFAULT_BASE = "https://llm.chutes.ai/v1"
+# Runcrate OpenAI-compatible Chat Completions API.
+RUNCRATE_DEFAULT_BASE = "https://api.runcrate.ai/v1"
 # Featherless AI OpenAI-compatible Chat Completions API.
 FEATHERLESS_DEFAULT_BASE = "https://api.featherless.ai/v1"
 # TokenRouter OpenAI-compatible Chat Completions gateway.
@@ -327,6 +329,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="chutes_api_keys",
         default_base_url=CHUTES_DEFAULT_BASE,
         proxy_attr="chutes_proxy",
+    ),
+    "runcrate": ProviderDescriptor(
+        provider_id="runcrate",
+        display_name="Runcrate",
+        website_url="https://www.runcrate.ai/inference/free?utm_source=free-claude-code&utm_medium=directory&utm_campaign=gpu_pricing",
+        logo_filename="runcrate.svg",
+        credential_env="RUNCRATE_API_KEY",
+        credential_url="https://www.runcrate.ai/dashboard/api-keys",
+        credential_attr="runcrate_api_keys",
+        default_base_url=RUNCRATE_DEFAULT_BASE,
+        proxy_attr="runcrate_proxy",
     ),
     "featherless": ProviderDescriptor(
         provider_id="featherless",

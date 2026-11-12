@@ -335,6 +335,11 @@ class Settings(BaseModel):
     # ==================== Nebius Token Factory (OpenAI-compatible) ====================
     nebius_api_keys: ApiKeyList = Field(default=(), validation_alias="NEBIUS_API_KEY")
 
+    # ==================== Runcrate (OpenAI-compatible) ====================
+    runcrate_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="RUNCRATE_API_KEY"
+    )
+
     # ==================== Chutes (OpenAI-compatible) ====================
     chutes_api_keys: ApiKeyList = Field(default=(), validation_alias="CHUTES_API_KEY")
 
@@ -456,6 +461,9 @@ class Settings(BaseModel):
     )
     nebius_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="NEBIUS_PROXY"
+    )
+    runcrate_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="RUNCRATE_PROXY"
     )
     chutes_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="CHUTES_PROXY"

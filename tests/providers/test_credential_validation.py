@@ -41,6 +41,12 @@ CASES = [
         400,
     ),
     ("nebius", "https://api.tokenfactory.nebius.com/v1/models", {"data": []}, 401),
+    (
+        "runcrate",
+        "https://www.runcrate.ai/api/v1/billing/balance",
+        {"data": {"creditsBalance": 1.5, "activeUsageCost": 0}},
+        401,
+    ),
     ("scaleway", "https://api.scaleway.ai/v1/models", {"data": []}, 401),
     ("opper", "https://api.opper.ai/v3/compat/models", {"data": []}, 401),
     (
