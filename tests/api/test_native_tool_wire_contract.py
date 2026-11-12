@@ -378,3 +378,60 @@ async def test_contradictory_snapshot_never_replaces_a_completed_native_call(
             with pytest.raises(ExecutionFailure, match="already completed"):
                 await collect_response(body, protocol="responses")
         assert len(bodies) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["chat", "messages", "responses"])
+@pytest.mark.parametrize("public", [False, True])
+@pytest.mark.parametrize("placeholder", [None, "", " \t"])
+async def test_chat_fragment_placeholders_preserve_the_resolved_execution_id(
+    wire, public, placeholder
+):
+    events = tool_events("chat", "{}")
+    events[1]["choices"][0]["delta"]["tool_calls"][0]["id"] = placeholder
+    async with _harness("chat", lambda _: (200, events), max_attempts=1) as (
+        send,
+        bodies,
+        source,
+    ):
+        body = (
+            source.stream_chat(
+                ChatRequest.model_validate(
+                    {
+                        "model": "native",
+                        "messages": [{"role": "user", "content": "read"}],
+                        "stream": True,
+                    }
+                )
+            )
+            if wire == "chat"
+            else send(wire, [{"role": "user", "content": "read"}])
+        )
+        frames = (
+            await public_frames(body, wire)
+            if public
+            else await collect_response(body, protocol=wire)
+        )
+        output = [event.data for event in parse_sse_text("".join(frames))]
+        if wire == "chat":
+            identities = [
+                call["id"]
+                for value in output
+                for choice in value.get("choices", [])
+                for call in choice.get("delta", {}).get("tool_calls", [])
+                if "id" in call
+            ]
+        elif wire == "messages":
+            identities = [
+                value["content_block"]["id"]
+                for value in output
+                if value.get("content_block", {}).get("type") == "tool_use"
+            ]
+        else:
+            identities = [
+                value["item"]["call_id"]
+                for value in output
+                if value.get("type") == "response.output_item.done"
+            ]
+        assert identities == ["call_probe"]
+        assert len(bodies) == 1

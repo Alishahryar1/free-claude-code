@@ -49,7 +49,7 @@ class ToolCallIdentityResolver:
         self._calls: list[_Identity] = []
         self._budget = budget
 
-    def resolve(self, raw_index: object, raw_id: object) -> int:
+    def resolve(self, raw_index: object, raw_id: object) -> tuple[int, str | None]:
         index = (
             raw_index
             if isinstance(raw_index, int)
@@ -92,7 +92,7 @@ class ToolCallIdentityResolver:
             if self._budget is not None and call.tool_id is None:
                 self._budget.add(len(tool_id.encode("utf-8")), 0)
             call.tool_id = tool_id
-        return slot
+        return slot, call.tool_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,7 +116,7 @@ class _PendingCall:
     kind: str = "function"
     completed: CompletedChatCall | None = None
 
-    def add(self, fragment: Mapping[str, Any]) -> None:
+    def add(self, fragment: Mapping[str, Any], *, tool_id: str | None) -> None:
         if isinstance(fragment.get("custom"), Mapping):
             self.kind = "custom"
         function = fragment.get(self.kind) or {}
@@ -129,9 +129,10 @@ class _PendingCall:
             if not isinstance(arguments, str):
                 raise chat_failure("Tool argument fragment must be a string")
             self.arguments.append(arguments)
-        for key in ("id", "type"):
-            if fragment.get(key) is not None:
-                self.body[key] = fragment[key]
+        if tool_id is not None:
+            self.body["id"] = tool_id
+        if fragment.get("type") is not None:
+            self.body["type"] = fragment["type"]
         extra = {
             key: deepcopy(value)
             for key, value in fragment.items()
@@ -253,7 +254,9 @@ class ChatToolCallBuffer:
                 resolver = self._identities.setdefault(
                     choice_index, ToolCallIdentityResolver(self._buffer.budget)
                 )
-                slot = resolver.resolve(fragment.get("index"), fragment.get("id"))
+                slot, tool_id = resolver.resolve(
+                    fragment.get("index"), fragment.get("id")
+                )
                 key = (choice_index, slot)
                 if key not in self._calls:
                     base = {
@@ -273,7 +276,7 @@ class ChatToolCallBuffer:
                     self._buffer.reserve(key, call)
                     self._calls[key] = call
                 self._buffer.grow(key, _size(fragment))
-                self._calls[key].add(fragment)
+                self._calls[key].add(fragment, tool_id=tool_id)
             if finish is not None:
                 self._finish_choice(choice_index, finish)
                 self._append(
@@ -310,12 +313,14 @@ class ChatToolCallBuffer:
                 resolver = self._identities.setdefault(
                     choice_index, ToolCallIdentityResolver(self._buffer.budget)
                 )
-                slot = resolver.resolve(fragment.get("index"), fragment.get("id"))
+                slot, tool_id = resolver.resolve(
+                    fragment.get("index"), fragment.get("id")
+                )
                 key = (choice_index, slot)
                 if key not in self._calls:
                     self._calls[key] = _PendingCall(choice_index, slot, {})
                 self._buffer.grow("native", 0)
-                self._calls[key].add(fragment)
+                self._calls[key].add(fragment, tool_id=tool_id)
                 fragment["index"] = slot
             reason = choice.get("finish_reason")
             if reason is not None:
@@ -410,6 +415,8 @@ class ChatToolCallBuffer:
                         seen.add(key)
                     elif isinstance(function, dict):
                         function.pop("name", None)
+                    if fragment.get("id") != call.completed.body["id"]:
+                        fragment.pop("id", None)
                     retained.append(fragment)
                 if retained:
                     delta["tool_calls"] = retained

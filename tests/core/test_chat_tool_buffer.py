@@ -141,3 +141,45 @@ def test_native_standard_mixed_chunk_streams_text_before_its_pending_call():
     assert (
         frames[0]["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] == "read"
     )
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("late_id", [False, True])
+@pytest.mark.parametrize("placeholder", [None, "", " \t", 7])
+def test_parallel_calls_keep_resolved_ids_across_unusable_fragments(
+    native, late_id, placeholder
+):
+    buffer = ChatToolCallBuffer(native=native)
+    assert (
+        buffer.feed(event([call(4, "read", "{", placeholder if late_id else "a")]))
+        == []
+    )
+    assert buffer.feed(event([call(2, "other", "{", "b")])) == []
+    assert buffer.feed(event([call(2, arguments="}", tool_id=placeholder)])) == []
+    if late_id:
+        assert buffer.feed(event([call(4, tool_id="a")])) == []
+    assert buffer.feed(event([call(4, arguments="}", tool_id=placeholder)])) == []
+    result = buffer.feed(event(finish="tool_calls"))
+    if native:
+        assert len(result) == 1 and isinstance(result[0], CompletedChatBatch)
+        calls = [
+            fragment
+            for frame in result[0].frames
+            for choice in frame["choices"]
+            for fragment in choice["delta"].get("tool_calls", [])
+        ]
+        for index, identity in enumerate(("a", "b")):
+            fragments = [fragment for fragment in calls if fragment["index"] == index]
+            assert fragments[0]["id"] == identity
+            assert all(
+                fragment["id"] == identity for fragment in fragments if "id" in fragment
+            )
+            assert (
+                "".join(fragment["function"]["arguments"] for fragment in fragments)
+                == "{}"
+            )
+    else:
+        calls = [item for item in result if isinstance(item, CompletedChatCall)]
+        assert [
+            (item.body["id"], item.body["function"]["arguments"]) for item in calls
+        ] == [("a", "{}"), ("b", "{}")]
