@@ -1649,15 +1649,6 @@ class _OpenAIChatStreamRunner:
                     ),
                 )
 
-        if isinstance(error, ProviderRecoveryExhausted):
-            if scope is not None:
-                await scope.aclose(active_error=error)
-            await close_provider_stream(
-                self._request_client,
-                active_error=error,
-                provider_name=tag,
-                request_id=self._request_id,
-            )
         reported_error = underlying_provider_error(error)
         self._transport._log_stream_transport_error(
             tag,

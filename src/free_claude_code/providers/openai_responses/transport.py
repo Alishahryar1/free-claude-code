@@ -55,7 +55,6 @@ from free_claude_code.providers.continuation import (
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.failure_policy import (
-    ProviderRecoveryExhausted,
     RetryableProviderProtocolError,
     classify_provider_failure,
     context_window_exceeded_provider_failure,
@@ -75,7 +74,6 @@ from free_claude_code.providers.history_replay import (
 )
 from free_claude_code.providers.http import (
     ProviderAttemptScope,
-    close_provider_stream,
     maybe_await_aclose,
 )
 from free_claude_code.providers.openai_client import OpenAIRequestClient
@@ -670,13 +668,6 @@ class OpenAIResponsesTransport:
                     corrections = RequestCorrections("responses", reasoning_correction)
                     continue
 
-                if isinstance(error, ProviderRecoveryExhausted):
-                    await close_provider_stream(
-                        request_client,
-                        active_error=error,
-                        provider_name=self._provider_name,
-                        request_id=request_id,
-                    )
                 failure = classify_provider_failure(
                     error,
                     provider_name=self._provider_name,

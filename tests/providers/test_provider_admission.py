@@ -1052,11 +1052,9 @@ async def test_long_hint_supersedes_short_recovery_and_releases_waiters(
     controller.close()
 
 
-@pytest.mark.parametrize("later_episode", [False, True])
+@pytest.mark.parametrize("elapsed", [0, 30, 120, 3600])
 @pytest.mark.asyncio
-async def test_terminal_waiters_report_latest_failure_from_their_episode(
-    later_episode, recovery_clock
-):
+async def test_terminal_waiters_keep_captured_failure(elapsed, recovery_clock):
     controller = _controller(base_delay=10, max_delay=60)
     queued_execution = controller.start_execution(model="primary")
     between_attempts = controller.start_execution(model="primary")
@@ -1074,7 +1072,9 @@ async def test_terminal_waiters_report_latest_failure_from_their_episode(
         await asyncio.sleep(0)
         assert not queued.done()
 
-        original_decision = await shorter.fail(_status_error(429, retry_after="120"))
+        original_error = _status_error(429, retry_after="120")
+        original_deadline = recovery_clock.now + 120
+        original_decision = await shorter.fail(original_error)
         assert isinstance(original_decision.error, ProviderRecoveryExhausted)
         assert original_decision.error.retry_not_before == recovery_clock.now + 120
         later_error = _status_error(503, retry_after="3600")
@@ -1087,11 +1087,16 @@ async def test_terminal_waiters_report_latest_failure_from_their_episode(
         assert current.value.last_error is later_error
         assert current.value.retry_not_before == deadline
 
-        if later_episode:
-            recovery_clock.now = deadline
+        recovery_clock.now += elapsed
+        if elapsed == 3600:
             new_attempt = await _open(controller.start_execution(model="primary"))
             await new_attempt.fail(_status_error(429, retry_after="120"))
             await new_attempt.aclose()
+        else:
+            with pytest.raises(ProviderRecoveryExhausted) as still_blocked:
+                await _open(controller.start_execution(model="primary"))
+            assert still_blocked.value.last_error is later_error
+            assert still_blocked.value.retry_not_before == deadline
 
         with pytest.raises(ProviderRecoveryExhausted) as waiting:
             await asyncio.wait_for(queued, 1)
@@ -1107,16 +1112,93 @@ async def test_terminal_waiters_report_latest_failure_from_their_episode(
         assert between_attempts.attempts_started == 1
 
         for failure in (original_decision.error, waiting.value, coalesced.value):
-            assert failure.last_error is later_error
-            assert failure.retry_not_before == deadline
+            assert failure.last_error is original_error
+            assert failure.retry_not_before == original_deadline
             classified = failure_policy.classify_provider_failure(
                 failure, provider_name="TEST", read_timeout_s=None, request_id=None
             )
-            assert "HTTP 503" in classified.message
-            if later_episode:
+            assert "HTTP 429" in classified.message
+            if elapsed >= 120:
                 assert "Retry this provider route" not in classified.message
             else:
-                assert "3600 seconds" in classified.message
+                assert f"{120 - elapsed} seconds" in classified.message
+    finally:
+        controller.close()
+
+
+@pytest.mark.parametrize("late_budget", [1, 2])
+@pytest.mark.parametrize("long_first", [False, True])
+@pytest.mark.asyncio
+async def test_terminal_episode_selects_late_attempt_failure(
+    recovery_clock, late_budget, long_first
+):
+    controller = _controller(max_attempts=2, max_delay=60)
+    leader = controller.start_execution(model="primary")
+    late = ProviderExecution(
+        controller, max_attempts=late_budget, request_id=None, model="primary"
+    )
+    first = await _open(leader)
+    late_attempt = await _open(late)
+    extending = await _open(controller.start_execution(model="primary"))
+    try:
+        await first.fail(_status_error(503))
+        await first.aclose()
+        probe = await _open(leader)
+        ordinary = _status_error(503, retry_after="2")
+        cooldown = _status_error(429, retry_after="3600")
+        if long_first:
+            await extending.fail(cooldown)
+        else:
+            await probe.fail(ordinary)
+        decision = await late_attempt.fail(_status_error(502))
+        assert not decision.retry_allowed
+        assert isinstance(decision.error, ProviderRecoveryExhausted)
+        assert decision.error is late.last_failure
+        assert decision.error.last_error is (cooldown if long_first else ordinary)
+        assert decision.error.retry_not_before == (
+            recovery_clock.now + 3600 if long_first else None
+        )
+        if long_first:
+            await probe.fail(ordinary)
+        else:
+            await extending.fail(cooldown)
+        await probe.aclose()
+        await extending.aclose()
+        await late_attempt.aclose()
+        # Repeated failure reporting and cleanup cannot replace the terminal cause.
+        repeated = await late_attempt.fail(_status_error(400))
+        assert repeated.error is decision.error
+        assert decision.error.last_error is (cooldown if long_first else ordinary)
+        with pytest.raises(ProviderRecoveryExhausted) as blocked:
+            await _open(controller.start_execution(model="primary"))
+        assert blocked.value.last_error is cooldown
+    finally:
+        controller.close()
+
+
+@pytest.mark.asyncio
+async def test_gate_rejection_stays_terminal_after_route_reopens(recovery_clock):
+    controller = _controller(max_delay=60)
+    source = await _open(controller.start_execution(model="primary"))
+    try:
+        error = _status_error(429, retry_after="120")
+        await source.fail(error)
+        await source.aclose()
+        rejected = controller.start_execution(model="primary")
+        with pytest.raises(ProviderRecoveryExhausted) as first:
+            await _open(rejected)
+        assert rejected.state is ProviderExecutionState.FAILED
+        assert rejected.attempts_started == 0
+        assert rejected.last_failure is first.value
+        recovery_clock.now += 120
+        with pytest.raises(ProviderRecoveryExhausted) as repeated:
+            await _open(rejected)
+        assert repeated.value.last_error is error
+        assert repeated.value.retry_not_before == first.value.retry_not_before
+        assert rejected.attempts_started == 0
+        fresh = await _open(controller.start_execution(model="primary"))
+        await fresh.accept()
+        await fresh.aclose()
     finally:
         controller.close()
 

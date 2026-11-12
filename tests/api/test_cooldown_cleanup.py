@@ -1,4 +1,4 @@
-"""Cooldown errors use the recovery episode after provider cleanup."""
+"""Request failures stay fixed while shared recovery continues."""
 
 import asyncio
 
@@ -35,19 +35,19 @@ class DelayedResponseClose(httpx.AsyncByteStream):
         await self.release.wait()
 
 
-def assert_cooldown(response: httpx.Response, detail: str) -> None:
+def assert_cooldown(response: httpx.Response, detail: str, seconds: int = 3600) -> None:
     assert response.status_code == 429, response.text
     assert response.headers["x-should-retry"] == "false"
     error = response.json()["error"]
     assert error["type"] == "rate_limit_error"
-    assert "3600 seconds" in error["message"], error["message"].split(
+    assert f"{seconds} seconds" in error["message"], error["message"].split(
         "Upstream error:"
     )[0]
     assert detail in error["message"]
 
 
 @pytest.mark.asyncio
-async def test_active_request_reports_extension_after_response_close(cooldown_clock):
+async def test_active_request_keeps_failure_through_response_close(cooldown_clock):
     calls = 0
     first_entered = asyncio.Event()
     both_entered = asyncio.Event()
@@ -95,8 +95,10 @@ async def test_active_request_reports_extension_after_response_close(cooldown_cl
             release_first.set()
 
     assert calls == 2
-    for response in (second, fresh, first.result()):
+    for response in (second, fresh):
         assert_cooldown(response, detail)
+    assert_cooldown(first.result(), "xxxxxxxx", 120)
+    assert detail not in first.result().text
 
 
 @pytest.mark.parametrize("translated", [False, True])
@@ -185,7 +187,7 @@ async def test_cooldown_during_retry_cleanup_reaches_wire(cooldown_clock, transl
 
 @pytest.mark.parametrize("api_format", ["openai_chat", "openai_responses"])
 @pytest.mark.asyncio
-async def test_owned_client_close_precedes_cooldown_snapshot(
+async def test_owned_client_close_preserves_captured_failure(
     api_format, cooldown_clock, monkeypatch
 ):
     first_entered = asyncio.Event()
@@ -239,10 +241,92 @@ async def test_owned_client_close_precedes_cooldown_snapshot(
         await first_entered.wait()
         try:
             second = await client.post(path, json=payload)
+            fresh = await client.post(path, json=payload)
             assert not first.done()
         finally:
             release.set()
 
     assert calls == 2
-    for response in (second, first.result()):
+    for response in (second, fresh):
         assert_cooldown(response, "upstream cooldown 3600")
+    assert_cooldown(first.result(), "upstream cooldown 120", 120)
+
+
+@pytest.mark.asyncio
+async def test_ordinary_terminal_failure_survives_cooldown_promotion(cooldown_clock):
+    leader_entered, late_entered, all_entered = (asyncio.Event() for _ in range(3))
+    leader_done, late_closing, release_late = (asyncio.Event() for _ in range(3))
+    calls = 0
+
+    async def upstream(request):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            leader_entered.set()
+            await all_entered.wait()
+            return httpx.Response(503, json={"error": {"message": "ordinary backoff"}})
+        if calls == 2:
+            late_entered.set()
+            await leader_done.wait()
+            return httpx.Response(
+                502, stream=DelayedResponseClose(late_closing, release_late)
+            )
+        if calls == 3:
+            all_entered.set()
+            await late_closing.wait()
+            return httpx.Response(
+                429,
+                headers={"retry-after": "3600"},
+                json={
+                    "error": {
+                        "message": "extended shared cooldown",
+                        "type": "rate_limit_error",
+                    }
+                },
+            )
+        return httpx.Response(
+            503,
+            headers={"retry-after": "2"},
+            json={"error": {"message": "ordinary recovery exhausted"}},
+        )
+
+    instance = anthropic_provider(upstream)
+    instance._admission = ProviderAdmissionController(
+        provider_name="TEST", max_attempts=2, base_delay=0, jitter=0
+    )
+    app = create_test_app(
+        Settings(MODEL="anthropic/primary"), providers={"anthropic": instance}
+    )
+    async with (
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app), base_url="http://test"
+        ) as client,
+        asyncio.timeout(3),
+        asyncio.TaskGroup() as tasks,
+    ):
+        leader = tasks.create_task(client.post("/v1/messages", json=native_body(False)))
+        await leader_entered.wait()
+        late = tasks.create_task(client.post("/v1/messages", json=native_body(False)))
+        await late_entered.wait()
+        extending = tasks.create_task(
+            client.post("/v1/messages", json=native_body(False))
+        )
+        try:
+            ordinary = await leader
+            assert ordinary.status_code == 529, ordinary.text
+            leader_done.set()
+            latest = await extending
+            assert_cooldown(latest, "extended shared cooldown")
+            fresh = await client.post("/v1/messages", json=native_body(False))
+            assert_cooldown(fresh, "extended shared cooldown")
+            assert not late.done()
+        finally:
+            leader_done.set()
+            release_late.set()
+
+    assert calls == 4
+    for response in (ordinary, late.result()):
+        assert response.status_code == 529, response.text
+        assert "ordinary recovery exhausted" in response.json()["error"]["message"]
+        assert "Retry this provider route" not in response.text
+        assert "extended shared cooldown" not in response.text
