@@ -116,7 +116,7 @@ async def test_fetch_cancellation_closes_response_session_and_connector(monkeypa
                 status=200,
                 url=url,
                 headers={},
-                get_encoding=lambda: "utf-8",
+                charset=None,
                 raise_for_status=lambda: None,
                 content=SimpleNamespace(iter_chunked=chunks),
             )
@@ -151,3 +151,106 @@ async def test_fetch_cancellation_closes_response_session_and_connector(monkeypa
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "charset", "body", "expected_title", "expected_data"),
+    [
+        (
+            {"content-type": "text/html"},
+            None,
+            b"<html><head><title>Test Title</title></head><body><p>Hello world</p></body></html>",
+            "Test Title",
+            "Hello world",
+        ),
+        (
+            {},
+            None,
+            b"Plain utf-8 body",
+            "https://8.8.8.8/",
+            "Plain utf-8 body",
+        ),
+        (
+            {"content-type": "text/plain; charset=iso-8859-1"},
+            "iso-8859-1",
+            b"caf\xe9",
+            "https://8.8.8.8/",
+            "café",
+        ),
+        (
+            {"content-type": "text/plain; charset=bogus"},
+            "bogus",
+            b"fallback text",
+            "https://8.8.8.8/",
+            "fallback text",
+        ),
+        (
+            {"content-type": "application/pdf"},
+            None,
+            b"%PDF-1.4\n%mangled\xff\xfe",
+            "https://8.8.8.8/",
+            "%PDF-1.4\n%mangled\ufffd\ufffd",
+        ),
+    ],
+)
+async def test_fetch_charset_and_content_type_handling(
+    monkeypatch, headers, charset, body, expected_title, expected_data
+):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    from free_claude_code.application.web_tools.ports import WebFetchEgressPolicy
+
+    async def chunks(_size):
+        yield body
+
+    def raise_for_unread_encoding():
+        if charset:
+            return charset
+        raise RuntimeError("Cannot compute fallback encoding of a not yet read body")
+
+    @asynccontextmanager
+    async def response(url, *, allow_redirects):
+        assert url == "https://8.8.8.8/"
+        assert allow_redirects is False
+        yield SimpleNamespace(
+            status=200,
+            url=url,
+            headers=headers,
+            charset=charset,
+            get_encoding=raise_for_unread_encoding,
+            raise_for_status=lambda: None,
+            content=SimpleNamespace(iter_chunked=chunks),
+        )
+
+    @asynccontextmanager
+    async def session(**kwargs):
+        yield SimpleNamespace(get=response)
+
+    monkeypatch.setattr(web_client, "ClientSession", session)
+    result = await web_client.HTTPWebToolsClient().fetch(
+        "https://8.8.8.8/",
+        egress=WebFetchEgressPolicy(False, frozenset({"https"})),
+    )
+    assert result.url == "https://8.8.8.8/"
+    assert result.title == expected_title
+    assert result.media_type == "text/plain"
+    assert result.data == expected_data
+
+
+@pytest.mark.parametrize(
+    ("charset", "expected"),
+    [
+        (None, "utf-8"),
+        ("", "utf-8"),
+        ("utf-8", "utf-8"),
+        ("UTF-8", "utf-8"),
+        ("iso-8859-1", "iso8859-1"),
+        ("latin-1", "iso8859-1"),
+        ("bogus", "utf-8"),
+        ("invalid\x00null", "utf-8"),
+    ],
+)
+def test_text_encoding(charset, expected):
+    assert web_client._text_encoding(charset) == expected
