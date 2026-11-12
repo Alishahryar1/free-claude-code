@@ -1,7 +1,6 @@
 """Application workflow for supported local Anthropic web-tool requests."""
 
 import asyncio
-import sys
 import uuid
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import replace
@@ -12,6 +11,7 @@ from loguru import logger
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.execution import ProviderExecutor, TokenCounter
+from free_claude_code.application.response_collection import collect_response
 from free_claude_code.application.routing import RoutedMessagesRequest
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import (
@@ -32,8 +32,8 @@ from free_claude_code.core.anthropic.server_tool_sse import (
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
-from free_claude_code.core.stream_delivery import bind_stream_delivery
-from free_claude_code.core.trace import close_stream_input, trace_event
+from free_claude_code.core.stream_output import StreamOutput
+from free_claude_code.core.trace import trace_event
 from free_claude_code.core.web_tools import WebSearchResult
 
 from .ports import (
@@ -80,7 +80,7 @@ class WebToolService:
 
     def try_stream_messages(
         self, routed: RoutedMessagesRequest, *, request_id: str
-    ) -> AsyncIterator[str] | None:
+    ) -> AsyncIterator[StreamOutput] | None:
         """Validate synchronously; return a lazy body only for handled requests."""
         request = routed.request
         plan = plan_automatic_web_search(request, web_tools_enabled=self._enabled)
@@ -127,7 +127,7 @@ class WebToolService:
         *,
         request_id: str,
         fallback_input_tokens: int,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Keep one provider decision private, then replay it or execute search."""
         translated = replace(routed, request=plan.request)
         trace_event(
@@ -142,17 +142,7 @@ class WebToolService:
             raw_log_payload=plan.request.model_dump,
             request_id=request_id,
         )
-        chunks: list[str] = []
-        with bind_stream_delivery(None):
-            try:
-                chunks.extend([chunk async for chunk in provider_stream])
-            finally:
-                await close_stream_input(
-                    provider_stream,
-                    owner="automatic_web_search",
-                    source="api",
-                    preserved_error=sys.exception(),
-                )
+        chunks = await collect_response(provider_stream, protocol="messages")
 
         message, stream_error, _complete = await aggregate_anthropic_sse_to_message(
             _iterate_chunks(chunks)
@@ -169,7 +159,7 @@ class WebToolService:
                 model=routed.resolved.original_model,
             )
             for chunk in chunks:
-                yield chunk
+                yield StreamOutput((chunk,))
             return
         queries: list[str] = []
         for call in tool_calls:
@@ -218,7 +208,7 @@ class WebToolService:
         ]
         executed = min(len(contexts), plan.max_uses or len(contexts))
         for frame in server_tool_message_start_frames(contexts[0]):
-            yield frame
+            yield StreamOutput((frame,))
 
         limit = asyncio.Semaphore(4)
 
@@ -236,7 +226,7 @@ class WebToolService:
             ]
             for index, context in enumerate(contexts):
                 for frame in server_tool_use_frames(context, index=index * 2):
-                    yield frame
+                    yield StreamOutput((frame,))
                 if index < executed:
                     result_block, summary = await tasks[index]
                 else:
@@ -249,7 +239,7 @@ class WebToolService:
                 for frame in server_tool_result_frames(
                     result_block, index=index * 2 + 1
                 ):
-                    yield frame
+                    yield StreamOutput((frame,))
                 summaries.append(summary)
 
         for frame in server_tool_finish_frames(
@@ -258,7 +248,7 @@ class WebToolService:
             index=len(contexts) * 2,
             request_count=executed,
         ):
-            yield frame
+            yield StreamOutput((frame,))
         trace_event(
             stage="execution",
             event="free_claude_code.api.web_search.automatic_completed",
@@ -276,7 +266,7 @@ class WebToolService:
         response_model: str,
         provider_usage: Mapping[str, object] | None = None,
         domains: WebSearchDomainFilter | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         context = ServerToolResponseContext(
             message_id=f"msg_{uuid.uuid4()}",
             tool_id=f"srvtoolu_{uuid.uuid4().hex}",
@@ -287,7 +277,7 @@ class WebToolService:
             provider_usage=provider_usage,
         )
         for frame in server_tool_start_frames(context):
-            yield frame
+            yield StreamOutput((frame,))
 
         if tool_name == "web_search":
             result_block, summary = await self._search_result(context, domains)
@@ -310,7 +300,7 @@ class WebToolService:
         for frame in server_tool_completion_frames(
             context, result_block, summary=summary
         ):
-            yield frame
+            yield StreamOutput((frame,))
 
     async def _search_result(
         self,
@@ -341,7 +331,7 @@ def _search_summary(query: str, results: list[WebSearchResult]) -> str:
     return "\n\n".join(lines)
 
 
-async def _iterate_chunks(chunks: list[str]) -> AsyncIterator[str]:
+async def _iterate_chunks(chunks: tuple[str, ...]) -> AsyncIterator[str]:
     for chunk in chunks:
         yield chunk
 

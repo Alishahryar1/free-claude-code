@@ -48,7 +48,6 @@ from free_claude_code.providers.opencode.catalog import (
     OpenCodeUpstreamTransport,
     parse_open_code_catalog,
 )
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_response_streams import _serve
 from tests.api.test_tool_call_buffer import _response
 from tests.providers.support import (
@@ -284,12 +283,13 @@ def _provider_with_wire_transports(
 async def _collect(provider: OpenCodeProvider, model: str, **overrides: object) -> str:
     return "".join(
         [
-            chunk
+            frame
             async for chunk in provider.stream_messages(
                 _request(model, **overrides),
                 input_tokens=2,
                 request_id="req_opencode",
             )
+            for frame in chunk.frames
         ]
     )
 
@@ -301,12 +301,13 @@ async def _collect_responses(
 ) -> str:
     return "".join(
         [
-            chunk
+            frame
             async for chunk in provider.stream_responses(
                 _responses_request(model, **overrides),
                 input_tokens=2,
                 request_id="req_opencode_responses",
             )
+            for frame in chunk.frames
         ]
     )
 
@@ -726,7 +727,13 @@ async def test_responses_tool_search_accepts_optional_codex_arguments() -> None:
     )
     try:
         await provider.list_model_infos()
-        body = "".join([chunk async for chunk in provider.stream_responses(request)])
+        body = "".join(
+            [
+                frame
+                async for chunk in provider.stream_responses(request)
+                for frame in chunk.frames
+            ]
+        )
     finally:
         await provider.cleanup()
 
@@ -1067,11 +1074,6 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
 ) -> None:
     from tests.api.test_delivered_stream_recovery import text_events
 
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
-
     def generation_response(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == failed_path:
             if midstream:
@@ -1151,7 +1153,7 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
             messages = await _serve(response)
             body = b"".join(message.get("body", b"") for message in messages).decode()
         else:
-            body = "".join([chunk async for chunk in stream])
+            body = "".join([frame async for chunk in stream for frame in chunk.frames])
     finally:
         await provider.cleanup()
 

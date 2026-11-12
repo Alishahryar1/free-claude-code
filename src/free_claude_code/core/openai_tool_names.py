@@ -20,7 +20,6 @@ class OpenAIToolNameCodec:
 
     _original_to_alias: dict[str, str]
     _alias_to_original: dict[str, str]
-    _unchanged_names: frozenset[str]
 
     @classmethod
     def from_request(cls, request: MessagesRequest) -> OpenAIToolNameCodec:
@@ -47,7 +46,6 @@ class OpenAIToolNameCodec:
         return cls(
             original_to_alias,
             alias_to_original,
-            frozenset(portable_names),
         )
 
     @property
@@ -62,17 +60,6 @@ class OpenAIToolNameCodec:
     def decode(self, name: str) -> str:
         """Return the original client name for one known wire alias."""
         return self._alias_to_original.get(name, name)
-
-    def is_declared(self, value: str) -> bool:
-        """Return whether value is one complete wire name sent upstream."""
-        return value in self._alias_to_original or value in self._unchanged_names
-
-    def is_declared_prefix(self, value: str) -> bool:
-        """Return whether value is a strict prefix of a wire name sent upstream."""
-        return bool(value) and any(
-            name != value and name.startswith(value)
-            for name in (*self._alias_to_original, *self._unchanged_names)
-        )
 
 
 def encode_openai_chat_tool_names(

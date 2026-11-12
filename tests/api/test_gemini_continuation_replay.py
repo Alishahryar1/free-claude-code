@@ -7,7 +7,6 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.support import provider_manager_for_app
 from tests.api.test_four_protocol_matrix import (
     ingress_request,
@@ -47,10 +46,6 @@ def body(wire, history):
 def test_recovered_signed_answer_replays_exact_history(
     wire, interruptions, ambiguous, signature_shape, thinking, monkeypatch
 ):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
     requests = []
     final_native = None
 
@@ -166,10 +161,6 @@ def test_recovered_signed_answer_replays_exact_history(
 @pytest.mark.parametrize("wire", ["messages", "chat", "responses", "gemini"])
 @pytest.mark.parametrize("native_id", [False, True])
 def test_recovered_signed_tool_call_accepts_its_result(wire, native_id, monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
     bodies = []
     call = {"name": "read", "args": {"path": "kept"}}
     if native_id:

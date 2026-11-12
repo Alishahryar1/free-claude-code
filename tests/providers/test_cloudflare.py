@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from openai.types.chat import ChatCompletionChunk
 
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.application.model_metadata import ProviderModelInfo
@@ -22,6 +23,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     reasoning_for,
+    sdk_chat_chunk,
 )
 
 _ACCOUNT_ID = "account-123"
@@ -54,14 +56,18 @@ def _request(model: str = "@cf/moonshotai/kimi-k2.6") -> MessagesRequest:
     )
 
 
-def _chunk(delta: SimpleNamespace, *, finish_reason: str = "stop") -> SimpleNamespace:
-    return SimpleNamespace(
-        choices=[SimpleNamespace(delta=delta, finish_reason=finish_reason)],
-        usage=SimpleNamespace(completion_tokens=5, prompt_tokens=8),
+def _chunk(
+    delta: SimpleNamespace, *, finish_reason: str = "stop"
+) -> ChatCompletionChunk:
+    return sdk_chat_chunk(
+        SimpleNamespace(
+            choices=[SimpleNamespace(delta=delta, finish_reason=finish_reason)],
+            usage=SimpleNamespace(completion_tokens=5, prompt_tokens=8),
+        )
     )
 
 
-async def _stream(*chunks: SimpleNamespace) -> AsyncIterator[SimpleNamespace]:
+async def _stream(*chunks: ChatCompletionChunk) -> AsyncIterator[ChatCompletionChunk]:
     for chunk in chunks:
         yield chunk
 
@@ -224,7 +230,9 @@ async def test_stream_uses_openai_chat_completions(
         return_value=SDKStreamDouble(_stream(_chunk(delta))),
     ) as mock_create:
         events = [
-            event async for event in cloudflare_provider.stream_messages(_request())
+            frame
+            async for event in cloudflare_provider.stream_messages(_request())
+            for frame in event.frames
         ]
 
     parsed = parse_sse_text("".join(events))
@@ -255,7 +263,9 @@ async def test_stream_maps_cloudflare_reasoning_delta_to_thinking(
         return_value=SDKStreamDouble(_stream(_chunk(delta))),
     ):
         events = [
-            event async for event in cloudflare_provider.stream_messages(_request())
+            frame
+            async for event in cloudflare_provider.stream_messages(_request())
+            for frame in event.frames
         ]
 
     parsed = parse_sse_text("".join(events))
@@ -307,7 +317,11 @@ async def test_stream_maps_openai_tool_calls_to_tool_use(
             _stream(_chunk(delta, finish_reason="tool_calls"))
         ),
     ):
-        events = [event async for event in cloudflare_provider.stream_messages(request)]
+        events = [
+            frame
+            async for event in cloudflare_provider.stream_messages(request)
+            for frame in event.frames
+        ]
 
     parsed = parse_sse_text("".join(events))
     assert any(

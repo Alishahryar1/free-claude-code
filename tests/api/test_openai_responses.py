@@ -20,6 +20,7 @@ from free_claude_code.core.reasoning import (
     ReasoningEffort,
     ReasoningPolicy,
 )
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
     OpenAIChatProfile,
@@ -80,13 +81,13 @@ class FakeProvider:
         self,
         request_data: OpenAIResponsesRequest,
         **kwargs: object,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         if self.startup_error is not None:
             raise self.startup_error
         self.requests.append(request_data)
         self.stream_kwargs.append(kwargs)
         for chunk in self.chunks:
-            yield chunk
+            yield StreamOutput((chunk,))
 
 
 class PreStartFailingProvider(FakeProvider):
@@ -97,7 +98,7 @@ class PreStartFailingProvider(FakeProvider):
         self,
         request_data: OpenAIResponsesRequest,
         **kwargs: object,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         self.requests.append(request_data)
         self.stream_kwargs.append(kwargs)
         raise ExecutionFailure(
@@ -106,7 +107,7 @@ class PreStartFailingProvider(FakeProvider):
             message="upstream is busy",
             retryable=True,
         )
-        yield "unreachable"
+        yield StreamOutput(("unreachable",))
 
 
 @pytest.fixture

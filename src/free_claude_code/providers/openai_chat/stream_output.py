@@ -9,8 +9,6 @@ from typing import Protocol
 
 from free_claude_code.core.anthropic.streaming import (
     AnthropicStreamLedger,
-    ToolSchema,
-    parse_complete_tool_input,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.history_replay import ReplayOrigin
@@ -24,7 +22,6 @@ from free_claude_code.core.openai_responses import (
     ResponsesToolAdapter,
     TextBlockState,
     ToolBlockState,
-    new_call_id,
     new_message_item_id,
     new_reasoning_item_id,
     new_response_id,
@@ -65,21 +62,14 @@ class ChatStreamUsage:
     finish_reason: str | None = None
 
 
-@dataclass(slots=True)
-class ChatToolState:
-    """Chat parser state for one streamed tool call."""
+@dataclass(frozen=True, slots=True)
+class CompletedToolCall:
+    """A source-complete call ready for destination serialization."""
 
-    tool_id: str = ""
-    name: str = ""
+    tool_id: str
+    name: str
+    content: str
     extra_content: JsonObject | None = None
-    started: bool = False
-    open: bool = False
-    pre_start_args: str = ""
-    argument_parts: list[str] = field(default_factory=list)
-
-    @property
-    def content(self) -> str:
-        return "".join(self.argument_parts)
 
 
 class ChatStreamOutput(ABC):
@@ -92,7 +82,8 @@ class ChatStreamOutput(ABC):
         self.input_tokens = input_tokens
         self.replay_origin: ReplayOrigin | None = None
         self.reasoning_replay: ReasoningReplayLifecycle | None = None
-        self.tool_states: dict[int, ChatToolState] = {}
+        self._tool_count = 0
+        self._tool_tokens = 0
         self._text_parts: list[str] = []
         self._reasoning_parts: list[str] = []
         self._pending_opaque: list[str] = []
@@ -235,59 +226,18 @@ class ChatStreamOutput(ABC):
             self._text_started = False
         return events
 
-    def ensure_tool_state(self, tool_index: int) -> ChatToolState:
-        return self.tool_states.setdefault(tool_index, ChatToolState())
-
-    def set_tool_extra_content(
-        self, tool_index: int, extra_content: JsonObject | None
-    ) -> None:
-        if extra_content:
-            self.ensure_tool_state(tool_index).extra_content = extra_content
-
-    def register_tool_name(self, tool_index: int, name: str) -> None:
-        state = self.ensure_tool_state(tool_index)
-        previous = state.name
-        if not previous or name.startswith(previous):
-            state.name = name
-        elif not previous.startswith(name):
-            state.name = previous + name
-
-    def start_tool_block(
-        self,
-        tool_index: int,
-        tool_id: str,
-        name: str,
-        *,
-        extra_content: JsonObject | None = None,
-    ) -> str:
-        state = self.ensure_tool_state(tool_index)
-        state.tool_id = tool_id
-        state.name = name
-        if extra_content:
-            state.extra_content = extra_content
-        state.started = True
-        state.open = True
+    def emit_complete_tool(self, tool_index: int, call: CompletedToolCall) -> list[str]:
+        events = self._emit_complete_tool(tool_index, call)
         self._content_started = True
-        return self._start_tool_block(tool_index, state)
-
-    def emit_tool_delta(self, tool_index: int, partial_json: str) -> str:
-        state = self.tool_states[tool_index]
-        state.argument_parts.append(partial_json)
-        return self._emit_tool_delta(tool_index, state, partial_json)
-
-    def stop_tool_block(self, tool_index: int) -> list[str]:
-        state = self.tool_states[tool_index]
-        if not state.open:
-            return []
-        state.open = False
-        return self._stop_tool_block(tool_index, state)
+        self._tool_count += 1
+        self._tool_tokens += (
+            estimate_text_tokens(call.name) + estimate_text_tokens(call.content) + 15
+        )
+        return events
 
     def close_all_blocks(self) -> list[str]:
         events = self.flush_reasoning_replay()
         events.extend(self._pause_reasoning())
-        for tool_index, state in self.tool_states.items():
-            if state.open:
-                events.extend(self.stop_tool_block(tool_index))
         if self._text_started:
             events.extend(self._stop_text_block())
             self._text_started = False
@@ -296,12 +246,10 @@ class ChatStreamOutput(ABC):
     def close_unclosed_blocks(self) -> list[str]:
         events = self.flush_reasoning_replay(completed=False)
         events.extend(self._close_content_blocks())
-        for state in self.tool_states.values():
-            state.open = False
         return events
 
     def has_emitted_tool_block(self) -> bool:
-        return any(state.started for state in self.tool_states.values())
+        return self._tool_count > 0
 
     def has_content_block(self) -> bool:
         return self._content_started
@@ -311,42 +259,16 @@ class ChatStreamOutput(ABC):
             return "tool_use"
         return "end_turn" if fallback == "tool_use" else fallback
 
-    def tool_block_for_tool_index(self, tool_index: int) -> ChatToolState | None:
-        state = self.tool_states.get(tool_index)
-        return state if state is not None and state.started else None
-
-    def started_tool_states(self) -> list[tuple[int, ChatToolState]]:
-        return [
-            (tool_index, state)
-            for tool_index, state in self.tool_states.items()
-            if state.started
-        ]
-
-    def can_salvage_tool_use(self, schemas: dict[str, ToolSchema]) -> bool:
-        states = [state for state in self.tool_states.values() if state.started]
-        return bool(states) and all(
-            state.tool_id
-            and state.name
-            and parse_complete_tool_input(state.content, state.name, schemas)
-            is not None
-            for state in states
-        )
-
     def estimate_output_tokens(self) -> int:
-        tool_tokens = sum(
-            estimate_text_tokens(state.name) + estimate_text_tokens(state.content) + 15
-            for state in self.tool_states.values()
-            if state.started
-        )
         block_count = (
-            (1 if self.accumulated_reasoning else 0)
-            + (1 if self.accumulated_text else 0)
-            + sum(1 for state in self.tool_states.values() if state.started)
+            int(bool(self.accumulated_reasoning))
+            + int(bool(self.accumulated_text))
+            + self._tool_count
         )
         return (
             estimate_text_tokens(self.accumulated_text)
             + estimate_text_tokens(self.accumulated_reasoning)
-            + tool_tokens
+            + self._tool_tokens
             + (block_count * 4)
         )
 
@@ -404,15 +326,9 @@ class ChatStreamOutput(ABC):
     def _stop_text_block(self) -> list[str]: ...
 
     @abstractmethod
-    def _start_tool_block(self, tool_index: int, state: ChatToolState) -> str: ...
-
-    @abstractmethod
-    def _emit_tool_delta(
-        self, tool_index: int, state: ChatToolState, partial_json: str
-    ) -> str: ...
-
-    @abstractmethod
-    def _stop_tool_block(self, tool_index: int, state: ChatToolState) -> list[str]: ...
+    def _emit_complete_tool(
+        self, tool_index: int, call: CompletedToolCall
+    ) -> list[str]: ...
 
     @abstractmethod
     def _finish_success(
@@ -449,8 +365,6 @@ class AnthropicChatStreamOutput(ChatStreamOutput):
         self._text_started = False
         self._open_reasoning_sources.clear()
         self._reasoning_indices.clear()
-        for state in self.tool_states.values():
-            state.open = False
         return events
 
     def _start_events(self) -> list[str]:
@@ -499,21 +413,16 @@ class AnthropicChatStreamOutput(ChatStreamOutput):
     def _stop_text_block(self) -> list[str]:
         return [self._ledger.stop_text_block()]
 
-    def _start_tool_block(self, tool_index: int, state: ChatToolState) -> str:
-        return self._ledger.start_tool_block(
-            tool_index,
-            state.tool_id,
-            state.name,
-            extra_content=state.extra_content,
-        )
-
-    def _emit_tool_delta(
-        self, tool_index: int, state: ChatToolState, partial_json: str
-    ) -> str:
-        return self._ledger.emit_tool_delta(tool_index, partial_json)
-
-    def _stop_tool_block(self, tool_index: int, state: ChatToolState) -> list[str]:
-        return [self._ledger.stop_tool_block(tool_index)]
+    def _emit_complete_tool(
+        self, tool_index: int, call: CompletedToolCall
+    ) -> list[str]:
+        return [
+            self._ledger.start_tool_block(
+                tool_index, call.tool_id, call.name, extra_content=call.extra_content
+            ),
+            self._ledger.emit_tool_delta(tool_index, call.content),
+            self._ledger.stop_tool_block(tool_index),
+        ]
 
     def _finish_success(self, *, stop_reason: str, usage: ChatStreamUsage) -> list[str]:
         return [
@@ -556,9 +465,7 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
         )
         self._text_state: TextBlockState | None = None
         self._reasoning_states: dict[int, ReasoningBlockState] = {}
-        self._tool_output_states: dict[int, ToolBlockState] = {}
         self._usage: dict[str, object] | None = None
-        self._conversion_failure: ExecutionFailure | None = None
         self._started = False
 
     def _response_payload(
@@ -718,53 +625,35 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
         self._ledger.pop_active_block(state.index)
         return self._completer.complete_block(state)
 
-    def _start_tool_block(self, tool_index: int, state: ChatToolState) -> str:
+    def _emit_complete_tool(
+        self, tool_index: int, call: CompletedToolCall
+    ) -> list[str]:
         output_index = self._ledger.reserve_output_slot()
         output_state = ToolBlockState(
             index=output_index,
             output_index=output_index,
             item_id=f"fc_{uuid.uuid4().hex[:24]}",
-            call_id=state.tool_id or new_call_id(),
+            call_id=call.tool_id,
             kind="function",
-            name=state.name,
+            name=call.name,
         )
-        self._tool_output_states[tool_index] = output_state
-        self._ledger.set_active_block(output_state)
-        return self._events.output_item_added(
-            output_index,
-            tool_item(output_state, status="in_progress"),
+        added = self._events.output_item_added(
+            output_index, tool_item(output_state, status="in_progress")
         )
-
-    def _emit_tool_delta(
-        self, tool_index: int, state: ChatToolState, partial_json: str
-    ) -> str:
-        output_state = self._tool_output_states.get(tool_index)
-        if output_state is not None:
-            output_state.argument_parts.append(partial_json)
-        return ""
-
-    def _stop_tool_block(self, tool_index: int, state: ChatToolState) -> list[str]:
-        output_state = self._tool_output_states.get(tool_index)
-        if output_state is None:
-            return []
-        self._ledger.pop_active_block(output_state.index)
+        output_state.arguments = call.content
         try:
-            return self._completer.complete_block(output_state)
-        except ResponsesConversionError:
-            # Object-valued protocol conversions (such as tool search) cannot
-            # carry opaque malformed JSON. Ordinary function arguments can.
-            self._conversion_failure = ExecutionFailure(
+            completed = self._completer.complete_block(output_state)
+        except ResponsesConversionError as error:
+            raise ExecutionFailure(
                 FailureKind.UPSTREAM,
                 502,
                 "Provider tool output cannot be represented in the requested protocol.",
                 False,
-            )
-            return []
+            ) from error
+        return [added, *completed]
 
     def _finish_success(self, *, stop_reason: str, usage: ChatStreamUsage) -> list[str]:
         self._usage = _responses_usage(usage)
-        if self._conversion_failure is not None:
-            return self._finish_failure(self._conversion_failure)
         if stop_reason in {"length", "max_tokens"}:
             response = self._response_payload(
                 status="incomplete",

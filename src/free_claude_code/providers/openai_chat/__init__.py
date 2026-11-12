@@ -31,6 +31,7 @@ from .stream_output import (
     AnthropicChatStreamOutput,
     ChatStreamOutput,
     ChatStreamUsage,
+    CompletedToolCall,
     ResponsesChatStreamOutput,
 )
 from .transport import OpenAIChatTransport
@@ -65,6 +66,7 @@ __all__ = [
     "ChatStreamOutput",
     "ChatStreamUsage",
     "ChatTemplateReasoning",
+    "CompletedToolCall",
     "NamedEffortReasoning",
     "NativeChatStreamOutput",
     "OpenAIAsyncCredentialProvider",

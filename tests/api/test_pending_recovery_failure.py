@@ -11,7 +11,7 @@ from openai import AsyncOpenAI
 
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.stream_delivery import current_stream_delivery
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
+from free_claude_code.core.stream_output import completed_output
 from tests.api.test_delivered_stream_recovery import public_text, text_events
 from tests.api.test_hidden_stream_retries import delivered
 from tests.api.test_stream_delivery import drained
@@ -45,11 +45,7 @@ async def test_continuation_timeout_retains_delivered_output(
             return 200, text_events(protocol, "Hello ", complete=False)
         return 200, TimedOutStream()
 
-    with monkeypatch.context() as patch:
-        patch.setattr(
-            "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-            lambda: RecoveryHoldbackBuffer(max_bytes=1),
-        )
+    with monkeypatch.context():
         async with _harness(
             protocol,
             reply,
@@ -122,7 +118,9 @@ async def test_pending_recovery_failure_does_not_require_successful_closures(han
 
     async def source():
         for payload in prefix:
-            yield f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n"
+            yield completed_output(
+                (f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n",)
+            )
         state = current_stream_delivery()
         assert state is not None
         state.begin_continuation(handoff=handoff)
@@ -149,7 +147,9 @@ async def test_cancellation_during_pending_continuation_emits_no_failure():
     async def source():
         try:
             for payload in text_events("responses", "Hello ", complete=False):
-                yield f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n"
+                yield completed_output(
+                    (f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n",)
+                )
             state = current_stream_delivery()
             assert state is not None
             state.begin_continuation()

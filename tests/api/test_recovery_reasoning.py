@@ -6,7 +6,6 @@ import pytest
 
 from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_delivered_stream_recovery import (
     assert_completed,
     public_text,
@@ -14,14 +13,6 @@ from tests.api.test_delivered_stream_recovery import (
 )
 from tests.api.test_hidden_stream_retries import delivered
 from tests.providers.test_history_transports import _events_for, _harness
-
-
-@pytest.fixture(autouse=True)
-def immediate_events(monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
 
 
 def reasoning_events(*, field="summary", seeded="", closed=True):

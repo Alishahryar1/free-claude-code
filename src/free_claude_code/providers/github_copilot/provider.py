@@ -18,6 +18,7 @@ from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.anthropic_messages.transport import (
@@ -149,7 +150,7 @@ class GitHubCopilotProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         self._check_model(request.model)
         return self._dispatch(
             request,
@@ -171,7 +172,7 @@ class GitHubCopilotProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         self._check_model(request.model)
         return self._dispatch(
             request,
@@ -193,7 +194,7 @@ class GitHubCopilotProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         self._check_model(request.model)
         return self._dispatch(
             request,
@@ -215,7 +216,7 @@ class GitHubCopilotProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         self._check_model(request.model)
         return self._dispatch(
             request,
@@ -251,13 +252,13 @@ class GitHubCopilotProvider(BaseProvider):
         response_model: str,
         reasoning: ReasoningPolicy,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         async with self._condition:
             self._check_model(request.model)
             self._active += 1
         try:
             async with self._auth.lease(request.model) as lease:
-                selected: AsyncIterator[str] | None = None
+                selected: AsyncIterator[StreamOutput] | None = None
                 http: httpx.AsyncClient | None = None
                 try:
                     if lease.egress is CopilotEgress.MESSAGES:
@@ -430,7 +431,7 @@ class GitHubCopilotProvider(BaseProvider):
 
 
 async def _close_request(
-    stream: AsyncIterator[str] | None,
+    stream: AsyncIterator[StreamOutput] | None,
     client: httpx.AsyncClient | None,
     *,
     active_error: BaseException | None,
@@ -458,11 +459,11 @@ async def _endpoint_required() -> str:
     )
 
 
-async def _advance(stream: AsyncIterator[str]) -> str:
+async def _advance(stream: AsyncIterator[StreamOutput]) -> StreamOutput:
     return await anext(stream)
 
 
-async def _next_event(stream: AsyncIterator[str]) -> str:
+async def _next_event(stream: AsyncIterator[StreamOutput]) -> StreamOutput:
     # Cancel transport work once, then protect its response-close finally blocks
     # from repeated caller cancellation before releasing the account lease.
     task = asyncio.create_task(_advance(stream))

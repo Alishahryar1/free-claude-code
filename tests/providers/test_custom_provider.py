@@ -54,7 +54,7 @@ async def test_custom_requests_use_first_key_in_each_protocol(api_format):
                 messages=[{"role": "user", "content": "Hello"}],
             )
         )
-        assert [event async for event in stream]
+        assert [frame async for event in stream for frame in event.frames]
     finally:
         await instance.cleanup()
     assert len(requests) == 1
@@ -101,10 +101,11 @@ async def test_native_default_preserves_controls_without_advertised_support(thin
     before = request.model_dump()
     try:
         assert [
-            item
+            frame
             async for item in instance.stream_messages(
                 request, reasoning=ReasoningPolicy.off()
             )
+            for frame in item.frames
         ]
         assert bodies[0].get("thinking") == thinking
         assert bodies[0]["output_config"] == request.output_config
@@ -150,7 +151,7 @@ async def test_messages_egress_obeys_request_model_limit(ingress, limit, cap, ex
             )
             stream = instance.stream_responses(request, model_info=info)
         before = request.model_dump()
-        assert [item async for item in stream]
+        assert [frame async for item in stream for frame in item.frames]
         assert bodies[0]["max_tokens"] == expected
         assert "thinking" not in bodies[0]
         assert "effort" not in bodies[0].get("output_config", {})
@@ -203,7 +204,7 @@ async def test_manual_preset_respects_cap_before_resolving_budget(ingress, exact
                 reasoning=policy,
                 model_info=info,
             )
-        return [item async for item in stream]
+        return [frame async for item in stream for frame in item.frames]
 
     try:
         if exact or cap == 1024:
@@ -242,7 +243,7 @@ async def test_native_default_does_not_invent_or_shrink_exact_budget(thinking, e
                 ),
                 model_info=ProviderModelInfo("m", max_output_tokens=4096),
             )
-            [item async for item in stream]
+            [frame async for item in stream for frame in item.frames]
         assert not bodies
     finally:
         await instance.cleanup()
@@ -276,7 +277,7 @@ async def test_concurrent_models_keep_independent_limits():
             ),
             model_info=ProviderModelInfo(model, max_output_tokens=cap),
         )
-        return [item async for item in stream]
+        return [frame async for item in stream for frame in item.frames]
 
     try:
         await asyncio.gather(call("small", 2048), call("large", 6000))
@@ -483,7 +484,7 @@ async def test_six_paths_use_exact_endpoint_and_credentials(
             stream = instance.stream_responses(
                 request, reasoning=policy, continuation=continuation
             )
-        output = "".join([chunk async for chunk in stream])
+        output = "".join([frame async for chunk in stream for frame in chunk.frames])
         assert "Hello" in output
         assert len(requests) == 1
         sent = requests[0]
@@ -609,10 +610,11 @@ async def test_reasoning_presets_encode_controls_on_the_wire(
             model="m", max_tokens=4096, messages=[{"role": "user", "content": "Hello"}]
         )
         assert [
-            chunk
+            frame
             async for chunk in instance.stream_messages(
                 request, reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
             )
+            for frame in chunk.frames
         ]
         assert bodies[0][field] == expected
     finally:

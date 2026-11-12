@@ -365,7 +365,7 @@ class AnthropicToResponsesStream:
                     raise NativeMessagesError(
                         "Native custom tool input must contain exactly one text input."
                     )
-            state.argument_parts.append(arguments)
+            state.arguments = arguments
         events = self._completer.complete_block(state)
         self._ledger.pop_active_block(index)
         return events

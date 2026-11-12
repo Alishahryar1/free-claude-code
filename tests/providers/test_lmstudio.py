@@ -37,6 +37,7 @@ from tests.providers.support import (
     continuation_seed,
     immediate_admission,
     make_provider_config,
+    sdk_chat_chunk,
 )
 
 
@@ -470,14 +471,18 @@ async def test_stream_messages_text(lmstudio_provider):
     mock_chunk.usage = MagicMock(completion_tokens=5, prompt_tokens=10)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with patch.object(
         lmstudio_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in lmstudio_provider.stream_messages(req)]
+        events = [
+            frame
+            async for event in lmstudio_provider.stream_messages(req)
+            for frame in event.frames
+        ]
 
         assert any(
             '"text_delta"' in event and "Hello back!" in event for event in events
@@ -504,7 +509,7 @@ async def test_stream_messages_passes_exact_reasoning_budget_via_extra_body(
     mock_chunk.usage = MagicMock(completion_tokens=1, prompt_tokens=1)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with patch.object(
         lmstudio_provider._client.chat.completions, "create", new_callable=AsyncMock
@@ -512,11 +517,12 @@ async def test_stream_messages_passes_exact_reasoning_budget_via_extra_body(
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
-            event
+            frame
             async for event in lmstudio_provider.stream_messages(
                 req,
                 reasoning=policy,
             )
+            for frame in event.frames
         ]
 
     await_args = mock_create.await_args
@@ -664,7 +670,11 @@ async def test_metadata_http_policy_preserves_the_generation_client(
     async with provider_with_http(handler, base_url=provider_url) as provider:
         assert await provider._loaded_context_length() == 4096
         output = "".join(
-            [event async for event in stream_request(provider, "messages")]
+            [
+                frame
+                async for packet in stream_request(provider, "messages")
+                for frame in packet.frames
+            ]
         )
         assert "hello" in output
         assert "message_stop" in output
@@ -717,7 +727,11 @@ async def test_metadata_failure_is_cached_without_retry_and_allows_generation(fa
         assert await provider._loaded_context_length() is None
         assert await provider._loaded_context_length() is None
         output = "".join(
-            [event async for event in stream_request(provider, "messages")]
+            [
+                frame
+                async for packet in stream_request(provider, "messages")
+                for frame in packet.frames
+            ]
         )
         assert "hello" in output
         assert "message_stop" in output
@@ -883,7 +897,7 @@ async def test_closing_validated_stream_closes_upstream_and_releases_admission(w
         stream = stream_request(provider, wire)
         try:
             async with asyncio.timeout(2):
-                first = await anext(stream)
+                first = "".join((await anext(stream)).frames)
             assert (
                 "message_start" in first
                 if wire == "messages"
@@ -894,7 +908,13 @@ async def test_closing_validated_stream_closes_upstream_and_releases_admission(w
         assert body.close_count == 1
         assert not provider._client.is_closed()
         async with asyncio.timeout(2):
-            output = "".join([event async for event in stream_request(provider, wire)])
+            output = "".join(
+                [
+                    frame
+                    async for packet in stream_request(provider, wire)
+                    for frame in packet.frames
+                ]
+            )
         assert "hello" in output
         assert generations == 2
 
@@ -920,7 +940,7 @@ async def test_context_rejection_before_first_event_allows_fallback(wire):
             raw_log_payload=dict,
             request_id="context-fallback",
         )
-        output = [event async for event in stream]
+        output = [frame async for event in stream for frame in event.frames]
         assert output == [
             "event: message_stop\ndata: {}\n\n"
             if wire == "messages"

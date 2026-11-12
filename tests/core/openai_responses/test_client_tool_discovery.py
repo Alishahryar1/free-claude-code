@@ -11,6 +11,7 @@ from pydantic import TypeAdapter
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -22,6 +23,7 @@ from free_claude_code.core.openai_responses import (
 from free_claude_code.core.openai_tool_names import encode_openai_chat_tool_names
 from free_claude_code.providers.openai_chat.stream_output import (
     ChatStreamUsage,
+    CompletedToolCall,
     ResponsesChatStreamOutput,
 )
 from free_claude_code.providers.openai_responses.presentation import (
@@ -1396,8 +1398,10 @@ def _completed_tool_events(
         request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
     ).tool_adapter
     writer = ResponsesChatStreamOutput(adapter, input_tokens=1)
-    frames = [*writer.start_events(), writer.start_tool_block(0, "call_test", name)]
-    frames.append(writer.emit_tool_delta(0, arguments))
+    frames = [
+        *writer.start_events(),
+        *writer.emit_complete_tool(0, CompletedToolCall("call_test", name, arguments)),
+    ]
     frames.extend(
         writer.finish_success(
             stop_reason="tool_calls",
@@ -1617,14 +1621,13 @@ def test_discovery_preserves_outer_namespace_in_nested_tools(
 
 
 def test_chat_does_not_turn_missing_search_arguments_into_a_successful_call() -> None:
-    events = _completed_tool_events(
-        OpenAIResponsesRequest(model="example", input="Search", tools=[SEARCH]),
-        native=False,
-        name="fcc_tool_search",
-        arguments="",
-    )
-    assert events[-1]["type"] == "response.failed"
-    assert events[-1]["response"]["output"] == []
+    with pytest.raises(ExecutionFailure, match="cannot be represented"):
+        _completed_tool_events(
+            OpenAIResponsesRequest(model="example", input="Search", tools=[SEARCH]),
+            native=False,
+            name="fcc_tool_search",
+            arguments="",
+        )
 
 
 @pytest.mark.parametrize("native", [False, True])
@@ -1782,10 +1785,10 @@ def test_interleaved_tool_kinds_keep_arguments_and_terminal_output_consistent(
         writer = ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=1)
         frames = [*writer.start_events()]
         for i, name in enumerate(names):
-            frames.append(writer.start_tool_block(i, f"call_{i}", name))
-        for part in range(2):
             frames.extend(
-                writer.emit_tool_delta(i, fragments[i][part]) for i in range(3)
+                writer.emit_complete_tool(
+                    i, CompletedToolCall(f"call_{i}", name, "".join(fragments[i]))
+                )
             )
         frames.extend(
             writer.finish_success(
@@ -1867,11 +1870,10 @@ def test_non_finite_arguments_are_opaque_except_in_object_conversion(
                 request, native=native, name=name, arguments=arguments
             )
     elif search:
-        events = _completed_tool_events(
-            request, native=native, name=name, arguments=arguments
-        )
-        assert events[-1]["type"] == "response.failed"
-        assert events[-1]["response"]["output"] == []
+        with pytest.raises(ExecutionFailure, match="cannot be represented"):
+            _completed_tool_events(
+                request, native=native, name=name, arguments=arguments
+            )
     else:
         events = _completed_tool_events(
             request, native=native, name=name, arguments=arguments
@@ -1989,8 +1991,7 @@ def test_argument_numbers_survive_sse_serialization(
         writer = ResponsesChatStreamOutput(adapter, input_tokens=1)
         frames = [
             *writer.start_events(),
-            writer.start_tool_block(0, "call", name),
-            writer.emit_tool_delta(0, arguments),
+            *writer.emit_complete_tool(0, CompletedToolCall("call", name, arguments)),
         ]
         frames.extend(
             writer.finish_success(

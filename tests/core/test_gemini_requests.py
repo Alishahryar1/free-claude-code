@@ -107,8 +107,17 @@ def test_direct_builders_preserve_parallel_tool_history_and_schema(protocol):
     before = source.model_dump()
     prepared = build(source, protocol)
     assert prepared.reserved_tool_ids == {"a", "b"}
-    assert prepared.tool_schemas["read.file"]["properties"]["path"]["default"] is None
-    assert prepared.tool_schemas["read.file"]["additionalProperties"] is False
+    assert prepared.declared_names == frozenset({"read.file"})
+    tool = prepared.body["tools"][0]
+    schema = (
+        tool["function"]["parameters"]
+        if protocol == "chat"
+        else tool["parameters"]
+        if protocol == "responses"
+        else tool["input_schema"]
+    )
+    assert schema["properties"]["path"]["default"] is None
+    assert schema["additionalProperties"] is False
     assert source.model_dump() == before
     assert prepared.body["model"] == "backend"
     values = prepared.body["input" if protocol == "responses" else "messages"]

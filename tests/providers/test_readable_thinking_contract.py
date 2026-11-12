@@ -15,6 +15,7 @@ from free_claude_code.core.history_replay import (
     responses_reasoning_blocks,
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.continuation import SourceRecoveryState
 from tests.providers.test_anthropic_messages_transport import Endpoint
 from tests.providers.test_gemini_transport import collect, gemini_request
@@ -80,13 +81,14 @@ async def test_unsigned_thinking_has_only_client_native_history(protocol, wire):
             assert all("thoughtSignature" not in part for part in parts)
         else:
             chunks = [
-                chunk
+                frame
                 async for chunk in send(wire, [{"role": "user", "content": "hello"}])
+                for frame in chunk.frames
             ]
 
             async def replay():
                 for chunk in chunks:
-                    yield chunk
+                    yield StreamOutput((chunk,))
 
             saved = await _saved_reply(replay(), wire)
             if wire == "messages":
@@ -296,7 +298,7 @@ async def test_owned_thinking_and_answer_stream_before_late_signature(wire):
             else send(wire, [{"role": "user", "content": "hello"}])
         )
         async for chunk in stream:
-            chunks.append(chunk)
+            chunks.extend(chunk.frames)
             if all(
                 text in "".join(chunks)
                 for text in ("Native thought.", "Parsed thought.", "Answer.")

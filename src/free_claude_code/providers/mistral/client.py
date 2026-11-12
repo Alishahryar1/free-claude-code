@@ -14,6 +14,7 @@ from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
@@ -125,7 +126,7 @@ class MistralProvider(OpenAIChatProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Stream with the Mistral prompt-cache affinity header when known.
 
         The base provider drops ``request_headers``; the transport accepts
@@ -156,7 +157,7 @@ class MistralProvider(OpenAIChatProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Stream Chat with the Mistral prompt-cache affinity header."""
         return self._chat.stream_chat(
             request,
@@ -181,7 +182,7 @@ class MistralProvider(OpenAIChatProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Stream Gemini with the Mistral prompt-cache affinity header."""
         return self._chat.stream_gemini(
             request,
@@ -206,7 +207,7 @@ class MistralProvider(OpenAIChatProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Stream Responses with the Mistral prompt-cache affinity header."""
         return self._chat.stream_responses(
             request,

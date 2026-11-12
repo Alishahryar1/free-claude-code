@@ -128,7 +128,7 @@ async def test_completed_native_arguments_are_transparent(protocol, wire, argume
         events = parse_sse_text(
             "".join(
                 [
-                    chunk
+                    frame
                     async for chunk in send(
                         wire,
                         history,
@@ -142,6 +142,7 @@ async def test_completed_native_arguments_are_transparent(protocol, wire, argume
                         if wire == "responses"
                         else [{"name": "read", "input_schema": {"type": "object"}}],
                     )
+                    for frame in chunk.frames
                 ]
             )
         )
@@ -181,7 +182,13 @@ async def test_harness_tool_error_is_kept_in_next_request(protocol, arguments):
     ) as (send, bodies, _):
         history = [{"role": "user", "content": "read"}]
         first = parse_sse_text(
-            "".join([chunk async for chunk in send("responses", history)])
+            "".join(
+                [
+                    frame
+                    async for chunk in send("responses", history)
+                    for frame in chunk.frames
+                ]
+            )
         )
         call = first[-1].data["response"]["output"][0]
         history += [
@@ -192,7 +199,11 @@ async def test_harness_tool_error_is_kept_in_next_request(protocol, arguments):
                 "output": "Invalid arguments. Supply a path string.",
             },
         ]
-        _ = [chunk async for chunk in send("responses", history)]
+        _ = [
+            frame
+            async for chunk in send("responses", history)
+            for frame in chunk.frames
+        ]
         if protocol == "chat":
             sent = bodies[-1]["messages"]
             assert sent[-2]["tool_calls"][0]["function"]["arguments"] == arguments
@@ -267,7 +278,7 @@ async def test_tool_looking_text_stays_literal_across_chunk_boundaries(wire, tex
             output = parse_sse_text(
                 "".join(
                     [
-                        chunk
+                        frame
                         async for chunk in send(
                             wire,
                             [{"role": "user", "content": "read"}],
@@ -281,6 +292,7 @@ async def test_tool_looking_text_stays_literal_across_chunk_boundaries(wire, tex
                             if wire == "responses"
                             else [{"name": "read", "input_schema": {"type": "object"}}],
                         )
+                        for frame in chunk.frames
                     ]
                 )
             )

@@ -282,7 +282,13 @@ async def test_provider_discovery_call_and_result_round_trip(
                 "max_output_tokens": 128,
             }
         )
-        output = "".join([chunk async for chunk in provider.stream_responses(request)])
+        output = "".join(
+            [
+                frame
+                async for chunk in provider.stream_responses(request)
+                for frame in chunk.frames
+            ]
+        )
         events = parse_sse_text(output)
         assert events[-1].event == "response.completed"
         response = events[-1].data["response"]

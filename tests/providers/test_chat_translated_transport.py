@@ -16,7 +16,7 @@ from tests.providers.test_native_tool_arguments import tool_events
 
 async def collect(stream):
     accumulator = ChatResponseAccumulator()
-    chunks = [chunk async for chunk in stream]
+    chunks = [frame async for chunk in stream for frame in chunk.frames]
     for event in parse_sse_text("".join(chunks)):
         if event.data:
             accumulator.feed(event.data)
@@ -357,6 +357,8 @@ async def test_fragmented_tool_name_starts_with_complete_name(wire):
             if wire == "responses"
             else [{"name": "Read", "input_schema": schema}],
         )
-        output = parse_sse_text("".join([chunk async for chunk in stream]))
+        output = parse_sse_text(
+            "".join([frame async for chunk in stream for frame in chunk.frames])
+        )
     names = [name for event in output for name in _tool_names(event)]
     assert names and set(names) == {"Read"}

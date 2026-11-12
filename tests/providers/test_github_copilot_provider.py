@@ -35,6 +35,7 @@ from free_claude_code.core.reasoning import (
     ReasoningEffort,
     ReasoningPolicy,
 )
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.anthropic_messages.request_policy import (
     MessagesModelCapabilities,
@@ -303,7 +304,7 @@ class Harness:
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         history: bool = False,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         request = _request(responses, self.runtime.name, history=history)
         if isinstance(request, MessagesRequest):
             return self.provider.stream_messages(
@@ -357,7 +358,7 @@ async def test_classifier_uses_current_lease_controls_and_clears_raw_hints(
     )
     try:
         output = [
-            event
+            frame
             async for event in harness.provider.stream_messages(
                 request,
                 reasoning=ReasoningPolicy.prefer_off(),
@@ -365,6 +366,7 @@ async def test_classifier_uses_current_lease_controls_and_clears_raw_hints(
                     harness.runtime.name, reasoning_capability=ReasoningCapability.NONE
                 ),
             )
+            for frame in event.frames
         ]
         assert text_content(parse_sse_text("".join(output))) == "ok"
         body = json.loads(harness.seen[0].content)
@@ -487,8 +489,8 @@ def _request(
     )
 
 
-async def collect(stream: AsyncIterator[str]) -> str:
-    return "".join([event async for event in stream])
+async def collect(stream: AsyncIterator[StreamOutput]) -> str:
+    return "".join([frame async for event in stream for frame in event.frames])
 
 
 @pytest.mark.asyncio

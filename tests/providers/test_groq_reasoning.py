@@ -33,6 +33,7 @@ from tests.providers.support import (
     capture_openai_chat_wire_body,
     immediate_admission,
     make_provider_config,
+    sdk_chat_chunk,
 )
 
 _MODEL = "opaque-model-a"
@@ -94,9 +95,11 @@ def _chunk(*, content: str | None = None, finish_reason: str | None = None):
         reasoning_content=None,
         tool_calls=None,
     )
-    return MagicMock(
-        choices=[MagicMock(delta=delta, finish_reason=finish_reason)],
-        usage=None,
+    return sdk_chat_chunk(
+        MagicMock(
+            choices=[MagicMock(delta=delta, finish_reason=finish_reason)],
+            usage=None,
+        )
     )
 
 
@@ -128,7 +131,7 @@ async def test_classifier_correction_does_not_change_later_requests(message):
         with patch.object(provider._client.chat.completions, "create", create):
             classifier = "".join(
                 [
-                    event
+                    frame
                     async for event in provider.stream_messages(
                         make_messages_request(_MODEL, max_tokens=64),
                         reasoning=ReasoningPolicy.prefer_off(),
@@ -136,15 +139,17 @@ async def test_classifier_correction_does_not_change_later_requests(message):
                             _MODEL, reasoning_capability=ReasoningCapability.OPTIONAL
                         ),
                     )
+                    for frame in event.frames
                 ]
             )
             ordinary = "".join(
                 [
-                    event
+                    frame
                     async for event in provider.stream_messages(
                         _request(),
                         reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
                     )
+                    for frame in event.frames
                 ]
             )
     finally:
@@ -787,11 +792,12 @@ async def test_reasoning_correction_emits_one_downstream_lifecycle() -> None:
     with patch.object(provider._client.chat.completions, "create", create):
         raw = "".join(
             [
-                event
+                frame
                 async for event in provider.stream_messages(
                     request,
                     reasoning=policy,
                 )
+                for frame in event.frames
             ]
         )
 

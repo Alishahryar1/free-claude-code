@@ -21,6 +21,7 @@ from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.admission import (
     UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
     ProviderAdmissionController,
@@ -187,8 +188,8 @@ def _complete_stream(text: str) -> str:
     )
 
 
-async def _collect(stream: AsyncIterator[str]) -> str:
-    return "".join([chunk async for chunk in stream])
+async def _collect(stream: AsyncIterator[StreamOutput]) -> str:
+    return "".join([frame async for chunk in stream for frame in chunk.frames])
 
 
 @pytest.mark.asyncio
@@ -642,6 +643,7 @@ async def test_provider_round_trips_portable_tool_name_alias() -> None:
                 "response.output_item.added",
                 {
                     "type": "response.output_item.added",
+                    "output_index": 0,
                     "item": {
                         "type": "function_call",
                         "id": "fc_1",
@@ -654,6 +656,7 @@ async def test_provider_round_trips_portable_tool_name_alias() -> None:
                 "response.output_item.done",
                 {
                     "type": "response.output_item.done",
+                    "output_index": 0,
                     "item": {
                         "type": "function_call",
                         "id": "fc_1",

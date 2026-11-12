@@ -15,7 +15,6 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.failure_policy import RetryableProviderProtocolError
 from free_claude_code.providers.request_recovery import RequestCorrections
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.support import create_test_app, provider_manager_for_app
 from tests.api.test_hidden_stream_retries import delivered, partial_tool
 from tests.api.test_tool_call_buffer import _response
@@ -30,14 +29,6 @@ from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
-
-
-@pytest.fixture(autouse=True)
-def release_provider_events(monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
 
 
 def text_events(protocol, text, *, complete=True):
@@ -226,7 +217,7 @@ async def test_text_cutoff_continues_one_response_and_preserves_tools(protocol, 
 async def test_released_tool_finishes_handoff_without_another_request(protocol, wire):
     def reply(_bodies):
         events = tool_events(protocol, '{"path":"kept"}')
-        return 200, events[:-2] if protocol == "messages" else events[:-1]
+        return 200, events[:-1]
 
     async with _harness(protocol, reply, max_attempts=1) as (send, bodies, _):
         result = await delivered(
@@ -234,6 +225,12 @@ async def test_released_tool_finishes_handoff_without_another_request(protocol, 
         )
     events = parse_sse_text(result)
     assert len(bodies) == 1
+    if protocol == "messages":
+        assert "call_probe" in result
+        assert events[-1].event == (
+            "error" if wire == "messages" else "response.failed"
+        )
+        return
     assert_completed(events, wire)
     if wire == "messages":
         assert events[-2].data["delta"]["stop_reason"] == "tool_use"
@@ -576,7 +573,7 @@ async def test_hidden_hosted_action_after_text_blocks_continuation(wire):
             wire,
         )
     assert len(bodies) == 1
-    assert "ws_held" not in result
+    assert ("ws_held" in result) == (wire == "responses")
     assert parse_sse_text(result)[-1].event == (
         "error" if wire == "messages" else "response.failed"
     )
@@ -635,7 +632,7 @@ async def test_cancellation_during_continuation_closes_both_attempts():
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_completed_signed_thinking_and_call_can_finish_without_regeneration(wire):
     events = _events_for("messages")[:-2]
-    calls = tool_events("messages", '{"path":"kept"}')[1:-2]
+    calls = tool_events("messages", '{"path":"kept"}')[1:]
     for event in calls:
         if "index" in event:
             event["index"] += 1
@@ -662,6 +659,7 @@ def test_http_recovery_then_real_harness_tool_result_has_no_private_history():
                 json={
                     "type": "message",
                     "model": "primary",
+                    "stop_reason": "end_turn",
                     "content": [{"type": "text", "text": "result received"}],
                 },
             )

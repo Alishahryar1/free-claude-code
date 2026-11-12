@@ -32,6 +32,7 @@ from tests.providers.support import (
     SDKStreamDouble,
     immediate_admission,
     make_provider_config,
+    sdk_chat_chunk,
 )
 from tests.providers.test_gemini import _sse
 from tests.web_tools_support import StubWebToolsClient
@@ -52,19 +53,21 @@ class ClassifierStream(SDKStreamDouble):
             (None if self.starved else "<severity>0</severity>", None, None),
             (None, None, "length" if self.starved else "stop"),
         ):
-            yield SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        delta=SimpleNamespace(
-                            content=text,
-                            reasoning=reasoning,
-                            reasoning_content=reasoning,
-                            tool_calls=None,
-                        ),
-                        finish_reason=finish,
-                    )
-                ],
-                usage=None,
+            yield sdk_chat_chunk(
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(
+                                content=text,
+                                reasoning=reasoning,
+                                reasoning_content=reasoning,
+                                tool_calls=None,
+                            ),
+                            finish_reason=finish,
+                        )
+                    ],
+                    usage=None,
+                )
             )
 
     async def aclose(self):

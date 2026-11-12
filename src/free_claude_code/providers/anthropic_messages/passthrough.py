@@ -15,12 +15,14 @@ from free_claude_code.core.anthropic.native import (
     validate_messages_json,
 )
 from free_claude_code.core.anthropic.passthrough import NativeMessagesPassthrough
+from free_claude_code.core.anthropic.tool_calls import MessagesToolCallBuffer
 from free_claude_code.core.diagnostics import (
     extract_upstream_error_detail,
     format_execution_failure_message,
 )
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.stream_output import StreamOutput, completed_output
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -68,7 +70,7 @@ async def stream_native_messages(
     read_timeout_s: float,
     request_id: str | None,
     continuation: ContinuationSeed | None = None,
-) -> AsyncIterator[str]:
+) -> AsyncIterator[StreamOutput]:
     execution = admission.start_execution(
         request_id=request_id, model=str(body["model"])
     )
@@ -82,13 +84,14 @@ async def stream_native_messages(
     endpoint = HttpEndpoint(base_url=base_url, api_key=None, headers=dict(headers))
 
     try:
-        committed = False
         continuation_request = ContinuationRequest("messages")
         operation_kind = ProviderOperationKind.GENERATION
         if continuation is not None:
             body = continuation_request.build(body, continuation)
             operation_kind = ProviderOperationKind.CONTINUATION
         while execution.can_attempt:
+            relay = None
+            tool_buffer = MessagesToolCallBuffer()
             normal_stop_seen = False
             source = SourceRecoveryState(execution, previous=source)
             scope = None
@@ -132,15 +135,31 @@ async def stream_native_messages(
                     if (
                         not isinstance(message, dict)
                         or message.get("type") != "message"
+                        or message.get("stop_reason") is None
                     ):
                         raise RetryableProviderProtocolError(
                             "Messages upstream did not return a Message object."
                         )
+                    normal_stop_seen = True
+                    if message["stop_reason"] not in {
+                        "tool_use",
+                        "end_turn",
+                        "stop_sequence",
+                    }:
+                        message["content"] = [
+                            block
+                            for block in message.get("content", [])
+                            if block.get("type") != "tool_use"
+                        ]
                     corrections.accepted_history()
                     await attempt.accept()
                     execution.succeed()
-                    yield json.dumps(
-                        {**message, "model": public_model}, ensure_ascii=False
+                    yield StreamOutput(
+                        (
+                            json.dumps(
+                                {**message, "model": public_model}, ensure_ascii=False
+                            ),
+                        )
                     )
                     return
                 if (
@@ -151,6 +170,7 @@ async def stream_native_messages(
                         "Messages upstream did not return an SSE stream."
                     )
                 relay = NativeMessagesPassthrough(public_model)
+                tool_buffer = MessagesToolCallBuffer()
                 async with aclosing(
                     messages_events(response, read_timeout_s=read_timeout_s)
                 ) as events:
@@ -163,14 +183,19 @@ async def stream_native_messages(
                             continuing=operation_kind
                             is ProviderOperationKind.CONTINUATION,
                         )
-                        output = relay.feed(kind, payload)
-                        if output is None:
-                            continue
                         corrections.accepted_history()
                         if not attempt.accepted:
                             await attempt.accept()
-                        committed = True
-                        yield output
+                        for group in tool_buffer.feed(kind, payload):
+                            yield completed_output(
+                                filter(
+                                    None,
+                                    (
+                                        relay.feed(event, value)
+                                        for event, value in group
+                                    ),
+                                )
+                            )
                         if relay.completed:
                             break
                 if not relay.completed:
@@ -182,14 +207,24 @@ async def stream_native_messages(
             except asyncio.CancelledError, GeneratorExit:
                 raise
             except Exception as raw_error:
+                if relay is not None and not (
+                    isinstance(raw_error, ExecutionFailure)
+                    and raw_error.stream_context
+                    and raw_error.stream_context.source.unsafe_reason
+                ):
+                    for group in tool_buffer.abandon():
+                        yield completed_output(
+                            filter(
+                                None,
+                                (relay.feed(event, value) for event, value in group),
+                            )
+                        )
                 error = (
                     RetryableProviderProtocolError(str(raw_error))
                     if isinstance(raw_error, NativeMessagesError)
                     else raw_error
                 )
-                if scope is not None and (
-                    not committed or execution.delivery is not None
-                ):
+                if scope is not None:
                     corrected = await request_recovery.retry_request(
                         error,
                         None,
@@ -220,9 +255,7 @@ async def stream_native_messages(
                     else:
                         decision = await scope.fail(error)
                         error = decision.error
-                        if (
-                            not committed and decision.retry_allowed
-                        ) or can_retry_undelivered_stream(
+                        if can_retry_undelivered_stream(
                             execution.delivery,
                             retryable=retryable,
                             attempts_remaining=execution.attempts_remaining,

@@ -20,6 +20,7 @@ from free_claude_code.core.reasoning import (
     ReasoningEffort,
     ReasoningPolicy,
 )
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -228,7 +229,7 @@ class CustomProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         reasoning = self._reasoning(reasoning)
         if (
             self._definition.reasoning_format == "provider_default"
@@ -280,7 +281,7 @@ class CustomProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         reasoning = self._reasoning(reasoning)
         if self._messages is not None:
             return self._messages.stream_chat(
@@ -315,7 +316,7 @@ class CustomProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         reasoning = self._reasoning(reasoning)
         if self._messages is not None:
             return self._messages.stream_gemini(
@@ -350,7 +351,7 @@ class CustomProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         reasoning = (
             responses_reasoning_policy(request.reasoning)
             if self._definition.reasoning_format == "provider_default"

@@ -344,7 +344,7 @@ async def test_chat_stream_preserves_reasoning_tools_and_usage(wire):
                 )
             )
         )
-        output = "".join([event async for event in stream])
+        output = "".join([frame async for event in stream for frame in event.frames])
 
     assert len(requests) == 1
     assert requests[0].url.path == "/compatible-mode/v1/chat/completions"

@@ -6,6 +6,7 @@ import pytest
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.providers.anthropic import AnthropicProvider
 from tests.providers.support import (
     immediate_admission,
@@ -51,6 +52,7 @@ async def test_native_json_preserves_body_and_owns_auth():
         return httpx.Response(
             200,
             json={
+                "stop_reason": "end_turn",
                 "type": "message",
                 "model": "claude-test",
                 "content": [{"type": "future_tool_result", "opaque": "kept"}],
@@ -64,7 +66,7 @@ async def test_native_json_preserves_body_and_owns_auth():
     p = provider(handle)
     try:
         result = [
-            x
+            frame
             async for x in p.stream_native_messages(
                 NativeMessagesRequest(body),
                 request_id="r",
@@ -76,6 +78,7 @@ async def test_native_json_preserves_body_and_owns_auth():
                     "anthropic-beta": "test-beta,test-beta",
                 },
             )
+            for frame in x.frames
         ]
         message = json.loads("".join(result))
         assert message["model"] == "public"
@@ -135,8 +138,11 @@ async def test_native_sse_relays_unknown_tool_events_without_replay():
                 request_id="r",
                 response_model="public",
             ):
-                assert isinstance(chunk, str)
-                output.append(chunk)
+                output.extend(chunk.frames)
+                if "server_tool_use" in "".join(chunk.frames):
+                    state = current_stream_delivery()
+                    assert state is not None
+                    state.release_content()
         assert len(calls) == 1
         assert '"model": "public"' in output[0]
         assert "input_json_delta" in "".join(output)

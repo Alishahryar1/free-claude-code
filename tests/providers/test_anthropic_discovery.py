@@ -158,7 +158,7 @@ async def test_concurrent_models_use_independent_conversion_capabilities():
 
         async def messages():
             return [
-                event
+                frame
                 async for event in p.stream_messages(
                     MessagesRequest(
                         model="manual",
@@ -167,15 +167,17 @@ async def test_concurrent_models_use_independent_conversion_capabilities():
                     ),
                     reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
                 )
+                for frame in event.frames
             ]
 
         async def responses():
             return [
-                event
+                frame
                 async for event in p.stream_responses(
                     OpenAIResponsesRequest(model="adaptive", input="hello"),
                     reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
                 )
+                for frame in event.frames
             ]
 
         message_output, response_output = await asyncio.gather(messages(), responses())
@@ -223,13 +225,14 @@ async def test_refresh_does_not_mutate_an_inflight_model_record():
 
     async def run():
         return [
-            event
+            frame
             async for event in p.stream_messages(
                 MessagesRequest(
                     model="same", messages=[{"role": "user", "content": "hi"}]
                 ),
                 reasoning=ReasoningPolicy.on(),
             )
+            for frame in event.frames
         ]
 
     try:
@@ -267,7 +270,7 @@ async def test_fresh_owner_does_not_trust_stale_generic_capabilities():
     try:
         with pytest.raises(InvalidRequestError, match="thinking mode"):
             _ = [
-                event
+                frame
                 async for event in p.stream_messages(
                     MessagesRequest(
                         model="alias", messages=[{"role": "user", "content": "hi"}]
@@ -277,6 +280,7 @@ async def test_fresh_owner_does_not_trust_stale_generic_capabilities():
                     ),
                     reasoning=ReasoningPolicy.on(),
                 )
+                for frame in event.frames
             ]
         assert len(calls) == 1
     finally:

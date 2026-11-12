@@ -16,7 +16,7 @@ from free_claude_code.core.history_replay import (
 )
 from free_claude_code.core.json_types import JsonObject
 
-from .stream_output import ChatStreamOutput, ChatStreamUsage, ChatToolState
+from .stream_output import ChatStreamOutput, ChatStreamUsage, CompletedToolCall
 
 
 class GeminiChatStreamOutput(ChatStreamOutput):
@@ -96,32 +96,26 @@ class GeminiChatStreamOutput(ChatStreamOutput):
     def _stop_text_block(self) -> list[str]:
         return []
 
-    def _start_tool_block(self, tool_index: int, state: ChatToolState) -> str:
-        return ""
-
-    def _emit_tool_delta(
-        self, tool_index: int, state: ChatToolState, partial_json: str
-    ) -> str:
-        return ""
-
-    def _stop_tool_block(self, tool_index: int, state: ChatToolState) -> list[str]:
-        if state.name not in self._tool_names:
+    def _emit_complete_tool(
+        self, tool_index: int, call: CompletedToolCall
+    ) -> list[str]:
+        if call.name not in self._tool_names:
             raise conversion_failure(
-                f"Upstream called an undeclared function: {state.name}"
+                f"Upstream called an undeclared function: {call.name}"
             )
-        arguments = function_arguments(state.content)
-        if state.extra_content:
+        arguments = function_arguments(call.content)
+        if call.extra_content:
             assert self.replay_origin is not None
             self._gemini.capture_call(
                 CallReplay(
-                    self.replay_origin, state.tool_id, deepcopy(state.extra_content)
+                    self.replay_origin, call.tool_id, deepcopy(call.extra_content)
                 )
             )
         return self._gemini.part(
             {
                 "functionCall": {
-                    "id": state.tool_id,
-                    "name": state.name,
+                    "id": call.tool_id,
+                    "name": call.name,
                     "args": arguments,
                 }
             }

@@ -23,6 +23,7 @@ from free_claude_code.core.openai_responses.provider_stream import (
     ResponsesProviderStream,
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.google_openai import GoogleOpenAIProvider
 from free_claude_code.providers.openai_chat.reasoning_details import (
     StructuredReasoningStream,
@@ -67,8 +68,9 @@ async def test_plain_reasoning_emits_no_artificial_replay_state(wire, thinking):
     async with _harness("chat", lambda _: (200, upstream)) as (send, _, _):
         stream = "".join(
             [
-                chunk
+                frame
                 async for chunk in send(wire, [{"role": "user", "content": "hello"}])
+                for frame in chunk.frames
             ]
         )
     assert "fcc:history:" not in stream
@@ -126,8 +128,9 @@ async def test_late_opaque_metadata_finishes_before_answer(wire):
     async with _harness("chat", lambda _: (200, upstream)) as (send, _, _):
         stream = "".join(
             [
-                chunk
+                frame
                 async for chunk in send(wire, [{"role": "user", "content": "hello"}])
+                for frame in chunk.frames
             ]
         )
     assert "fcc:history:" not in stream
@@ -366,10 +369,11 @@ async def test_responses_late_cipher_preserves_thinking_and_final_answer():
     async with _harness("responses", lambda _: (200, upstream)) as (send, _, _):
         stream = "".join(
             [
-                chunk
+                frame
                 async for chunk in send(
                     "messages", [{"role": "user", "content": "hello"}]
                 )
+                for frame in chunk.frames
             ]
         )
     events = parse_sse_text(stream)
@@ -454,7 +458,7 @@ async def test_hiding_readable_thinking_preserves_opaque_replay_state(wire):
                 input_tokens=0,
                 reasoning=ReasoningPolicy.off(),
             )
-        output = "".join([chunk async for chunk in stream])
+        output = "".join([frame async for chunk in stream for frame in chunk.frames])
     assert "Hidden thought." not in output
     assert "opaque-kept" in output
 
@@ -688,11 +692,12 @@ async def test_completed_full_reasoning_survives_streamed_summary(answer_before_
         frames = [
             frame
             async for frame in send("messages", [{"role": "user", "content": "hello"}])
+            for frame in frame.frames
         ]
 
         async def saved_frames():
             for frame in frames:
-                yield frame
+                yield StreamOutput((frame,))
 
         saved = await _saved_reply(saved_frames(), "messages")
         await _saved_reply(

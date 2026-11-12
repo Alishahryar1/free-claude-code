@@ -9,7 +9,6 @@ from free_claude_code.api.response_streams import (
 )
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.openai_responses import ResponsesToolPolicy
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_delivered_stream_recovery import public_text, text_events
 from tests.api.test_midstream_model_fallback import delivered_candidates
 from tests.api.test_response_streams import _json_error
@@ -89,12 +88,6 @@ def interrupted_search(bodies, status, *, text="", terminal="failed"):
 async def test_failed_client_search_projection_preserves_model_fallback(
     monkeypatch, release, status
 ):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(
-            max_bytes=1 if release else 1_000_000, holdback_seconds=60
-        ),
-    )
     async with (
         _harness(
             "responses",
@@ -119,10 +112,6 @@ async def test_failed_client_search_projection_preserves_model_fallback(
 async def test_final_search_failure_keeps_native_error_metadata_and_valid_output(
     monkeypatch, status
 ):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
     source = []
 
     def failed(bodies):
@@ -137,6 +126,12 @@ async def test_final_search_failure_keeps_native_error_metadata_and_valid_output
     assert public_text(events, "responses") == "Saved text"
     final = events[-1]
     assert final.event == "response.failed"
+    if status == "completed":
+        # Explicit completion reaches representation validation. Invalid search
+        # arguments fail atomically before publishing the call.
+        assert final.data["response"]["error"]["type"] == "api_error"
+        assert "call_abandoned" not in raw
+        return
     assert final.data["extension"] == source[-1]["extension"]
     for field in ("error", "metadata", "usage"):
         assert final.data["response"][field] == source[-1]["response"][field]
@@ -150,10 +145,6 @@ async def test_invalid_successful_search_snapshot_still_fails_without_fallback(
     monkeypatch,
     terminal,
 ):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
     async with (
         _harness(
             "responses",

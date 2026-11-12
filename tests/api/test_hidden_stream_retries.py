@@ -17,12 +17,10 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.failure_policy import (
     RetryableProviderProtocolError,
-    RetryableToolProtocolError,
 )
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.nvidia_nim.client import NvidiaNimChatBehavior
-from free_claude_code.providers.openai_chat.transport import _OpenAIChatStreamAssembler
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
+from free_claude_code.providers.openai_chat.transport import _ChatStreamPresenter
 from tests.api.test_response_streams import _serve
 from tests.api.test_tool_call_buffer import _response
 from tests.api.test_tool_call_buffer_transports import _tools
@@ -32,15 +30,6 @@ from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _events_for, _harness, _native
 from tests.providers.test_native_tool_arguments import tool_events
-
-
-@pytest.fixture
-def committed_holdback(monkeypatch):
-    # Commit on metadata, regardless of whether a presenter emits partial args.
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
 
 
 def partial_tool(protocol):
@@ -58,6 +47,7 @@ def partial_tool(protocol):
         json.dumps(events)
         .replace("call_probe", "call_abandoned")
         .replace("resp_probe", "resp_abandoned")
+        .replace("fc_probe", "fc_abandoned")
     )
 
 
@@ -116,9 +106,7 @@ def assert_winning_tool(result, wire):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_hidden_tool_cutoff_retries_identical_generation(
-    protocol, wire, committed_holdback
-):
+async def test_hidden_tool_cutoff_retries_identical_generation(protocol, wire):
     def reply(bodies):
         return 200, (
             partial_tool(protocol)
@@ -226,7 +214,7 @@ class _FaultingNormalizedStream:
                 if self.suppress_terminal and choice.finish_reason is not None:
                     continue
                 if choice.delta.content == "reject normalization":
-                    raise RetryableToolProtocolError("invalid normalized chunk")
+                    raise RetryableProviderProtocolError("invalid normalized chunk")
             return chunk
 
     async def aclose(self):
@@ -256,7 +244,7 @@ def _rejected_terminal(reason):
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("reason", ["stop", "length", "tool_calls", "content_filter"])
 async def test_normal_chat_stop_survives_normalization_failure(
-    wire, reason, committed_holdback, failing_normalizer
+    wire, reason, failing_normalizer
 ):
     async with _harness(
         "chat",
@@ -281,9 +269,7 @@ async def test_normal_chat_stop_survives_normalization_failure(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_unstopped_normalization_failure_can_retry(
-    wire, committed_holdback, failing_normalizer
-):
+async def test_unstopped_normalization_failure_can_retry(wire, failing_normalizer):
     async with _harness(
         "chat",
         lambda bodies: (
@@ -304,9 +290,7 @@ async def test_unstopped_normalization_failure_can_retry(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_replacement_stop_prevents_third_generation(
-    wire, committed_holdback, failing_normalizer
-):
+async def test_replacement_stop_prevents_third_generation(wire, failing_normalizer):
     async with _harness(
         "chat",
         lambda bodies: (
@@ -330,7 +314,7 @@ async def test_replacement_stop_prevents_third_generation(
 
 @pytest.mark.asyncio
 async def test_concurrent_normalized_requests_keep_stop_evidence_independent(
-    committed_holdback, failing_normalizer
+    failing_normalizer,
 ):
     attempts = {"stopped": 0, "retry": 0}
 
@@ -367,7 +351,7 @@ async def test_concurrent_normalized_requests_keep_stop_evidence_independent(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_raw_stop_survives_normalization_and_later_null_and_empty_choices(
-    wire, committed_holdback, monkeypatch
+    wire, monkeypatch
 ):
     monkeypatch.setattr(
         NvidiaNimChatBehavior,
@@ -403,7 +387,7 @@ def overlapping_tools(protocol):
     partial = json.loads(
         json.dumps(partial_tool(protocol))
         .replace("call_abandoned", "call_oldB")
-        .replace("fc_probe", "fc_oldB")
+        .replace("fc_abandoned", "fc_oldB")
     )
     if protocol == "chat":
         for event in partial:
@@ -422,10 +406,10 @@ def overlapping_tools(protocol):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
+@pytest.mark.parametrize("protocol", ["chat", "messages"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_complete_call_held_by_partial_call_restarts_on_last_attempt(
-    protocol, wire, committed_holdback
+    protocol, wire
 ):
     async with _harness(
         protocol,
@@ -446,11 +430,9 @@ async def test_complete_call_held_by_partial_call_restarts_on_last_attempt(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
+@pytest.mark.parametrize("protocol", ["chat", "messages"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_hidden_failures_exhaust_one_budget_without_salvage(
-    protocol, wire, committed_holdback
-):
+async def test_hidden_failures_exhaust_one_budget_without_salvage(protocol, wire):
     async with _harness(
         protocol,
         lambda _: (200, overlapping_tools(protocol)),
@@ -467,10 +449,10 @@ async def test_hidden_failures_exhaust_one_budget_without_salvage(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
+@pytest.mark.parametrize("protocol", ["chat", "messages"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_replacement_rejection_before_frames_uses_public_empty_envelope(
-    protocol, wire, committed_holdback
+    protocol, wire
 ):
     def reply(bodies):
         return (
@@ -500,7 +482,7 @@ async def test_replacement_rejection_before_frames_uses_public_empty_envelope(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("retryable", [True, False])
 async def test_typed_upstream_failure_qualifies_before_wire_error(
-    protocol, wire, retryable, committed_holdback
+    protocol, wire, retryable
 ):
     failure = (
         {
@@ -548,9 +530,7 @@ async def test_typed_upstream_failure_qualifies_before_wire_error(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("terminal", ["response.completed", "response.incomplete"])
-async def test_normal_responses_stop_prevents_retry_when_adapter_raises(
-    wire, terminal, committed_holdback
-):
+async def test_normal_responses_stop_prevents_retry_when_adapter_raises(wire, terminal):
     events = [
         *partial_tool("responses"),
         {
@@ -584,9 +564,7 @@ async def test_normal_responses_stop_prevents_retry_when_adapter_raises(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("stop", ["end_turn", "max_tokens", "refusal", "pause_turn"])
-async def test_messages_normal_stop_with_open_hidden_block_cannot_retry(
-    wire, stop, committed_holdback
-):
+async def test_messages_normal_stop_with_open_hidden_block_cannot_retry(wire, stop):
     events = [
         *partial_tool("messages"),
         {
@@ -604,9 +582,7 @@ async def test_messages_normal_stop_with_open_hidden_block_cannot_retry(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_thinking_hidden_inside_tool_group_can_be_discarded(
-    wire, committed_holdback
-):
+async def test_thinking_behind_abandoned_tool_drains_before_recovery(wire):
     events = overlapping_tools("messages")
     events += [
         {
@@ -632,24 +608,27 @@ async def test_thinking_hidden_inside_tool_group_can_be_discarded(
         result = await delivered(
             send(wire, [{"role": "user", "content": "read"}], tools=_tools(wire)), wire
         )
-    assert len(bodies) == 2 and "hidden old reasoning" not in result
-    assert_winning_tool(result, wire)
+    assert len(bodies) == 1 and "hidden old reasoning" in result
+    assert "call_oldA" not in result and "call_oldB" not in result
+    assert parse_sse_text(result)[-1].event == (
+        "error" if wire == "messages" else "response.failed"
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("reason", ["stop", "length", "tool_calls", "content_filter"])
 async def test_normal_chat_finish_survives_later_parser_failure(
-    wire, reason, committed_holdback, monkeypatch
+    wire, reason, monkeypatch
 ):
-    feed = _OpenAIChatStreamAssembler.feed
+    feed = _ChatStreamPresenter.feed
 
     def rejected_terminal(self, chunk):
         yield from feed(self, chunk)
         if chunk.choices and chunk.choices[0].finish_reason is not None:
             raise RetryableProviderProtocolError("terminal parsing failed")
 
-    monkeypatch.setattr(_OpenAIChatStreamAssembler, "feed", rejected_terminal)
+    monkeypatch.setattr(_ChatStreamPresenter, "feed", rejected_terminal)
     terminal = tool_events("chat", "")[-1]
     terminal["choices"][0]["finish_reason"] = reason
     async with _harness("chat", lambda _: (200, [*partial_tool("chat"), terminal])) as (
@@ -660,7 +639,8 @@ async def test_normal_chat_finish_survives_later_parser_failure(
         result = await delivered(
             send(wire, [{"role": "user", "content": "read"}], tools=_tools(wire)), wire
         )
-    assert len(bodies) == 1 and "call_abandoned" not in result
+    assert len(bodies) == 1
+    assert ("call_abandoned" in result) == (reason in {"stop", "tool_calls"})
     assert parse_sse_text(result)[-1].event == (
         "error" if wire == "messages" else "response.failed"
     )
@@ -839,9 +819,7 @@ async def test_raw_native_cancellation_closes_once_without_replacement(
 
 
 @pytest.mark.asyncio
-async def test_hidden_retry_keeps_correction_and_uses_its_remaining_budget(
-    committed_holdback,
-):
+async def test_hidden_retry_keeps_correction_and_uses_its_remaining_budget():
     def reply(bodies):
         if len(bodies) == 1:
             return 400, {

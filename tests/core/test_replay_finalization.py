@@ -12,7 +12,9 @@ from free_claude_code.core.history_replay import (
 )
 from free_claude_code.core.replay_finalization import finalize_replay
 from free_claude_code.core.stream_delivery import StreamDeliveryState
+from free_claude_code.core.stream_output import StreamOutput
 from tests.core.test_gemini_continuation_records import recovered
+from tests.stream_packets import packets
 
 
 def test_terminal_snapshot_reuses_sealed_carrier():
@@ -107,10 +109,10 @@ async def test_disconnected_public_stream_releases_replay_state(publish_carrier)
             closed.append(True)
 
     stream = PublicResponseStream(
-        source(),
+        packets(source()),
         StreamDeliveryState(),
         wire_api="gemini",
-        first_chunk="",
+        first_chunk=StreamOutput(()),
         terminal_frame=None,
         terminal_failure_observer=None,
     )

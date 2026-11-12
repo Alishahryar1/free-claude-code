@@ -16,7 +16,6 @@ from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderExecutionState,
 )
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_delivered_stream_recovery import (
     assert_completed,
     public_text,
@@ -24,14 +23,6 @@ from tests.api.test_delivered_stream_recovery import (
 )
 from tests.api.test_hidden_stream_retries import delivered
 from tests.providers.test_history_transports import _harness
-
-
-@pytest.fixture
-def immediate_events(monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
 
 
 def assert_unavailable_snapshot(events):
@@ -54,7 +45,7 @@ def assert_unavailable_snapshot(events):
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("continuing", [False, True])
 async def test_retention_failure_does_not_claim_a_partial_final_snapshot(
-    monkeypatch, immediate_events, protocol, wire, continuing
+    monkeypatch, protocol, wire, continuing
 ):
     monkeypatch.setattr(
         "free_claude_code.core.delivered_response.RECOVERY_RETENTION_BYTES", 1200
@@ -80,7 +71,7 @@ async def test_retention_failure_does_not_claim_a_partial_final_snapshot(
 @pytest.mark.parametrize("limited", [False, True])
 @pytest.mark.parametrize("code", [None, "context_length_exceeded"])
 async def test_failed_frame_keeps_error_category_and_finishes_execution(
-    monkeypatch, immediate_events, limited, code
+    monkeypatch, limited, code
 ):
     if limited:
         monkeypatch.setattr(
@@ -170,9 +161,7 @@ async def test_production_cap_during_closures_does_not_count_as_new_output(candi
 
 
 @pytest.mark.asyncio
-async def test_cap_during_closures_does_not_turn_pure_echo_into_success(
-    monkeypatch, immediate_events
-):
+async def test_cap_during_closures_does_not_turn_pure_echo_into_success(monkeypatch):
     monkeypatch.setattr(
         "free_claude_code.core.delivered_response.RECOVERY_RETENTION_BYTES", 1200
     )
@@ -194,9 +183,7 @@ async def test_cap_during_closures_does_not_turn_pure_echo_into_success(
 
 
 @pytest.mark.asyncio
-async def test_cap_failure_formatting_does_not_reenter_a_failed_mapper(
-    monkeypatch, immediate_events
-):
+async def test_cap_failure_formatting_does_not_reenter_a_failed_mapper(monkeypatch):
     monkeypatch.setattr(
         "free_claude_code.core.delivered_response.RECOVERY_RETENTION_BYTES", 1200
     )
@@ -244,7 +231,7 @@ ANNOTATION = {
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("continuing", [False, True])
 async def test_annotated_part_blocks_continuation_before_its_item_snapshot(
-    immediate_events, part_event, wire, continuing
+    part_event, wire, continuing
 ):
     annotated_attempt = 2 if continuing else 1
 
@@ -271,9 +258,7 @@ async def test_annotated_part_blocks_continuation_before_its_item_snapshot(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("annotated", [False, True])
-async def test_healthy_original_response_preserves_annotations(
-    immediate_events, annotated
-):
+async def test_healthy_original_response_preserves_annotations(annotated):
     source = text_events("responses", "Cited ")
     if annotated:
         source[2]["part"]["annotations"] = [ANNOTATION]

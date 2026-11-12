@@ -11,7 +11,6 @@ from openai import AsyncOpenAI
 from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.support import create_test_app, provider_manager_for_app
 from tests.api.test_delivered_stream_recovery import (
     assert_completed,
@@ -26,14 +25,6 @@ from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
-
-
-@pytest.fixture(autouse=True)
-def release_events(monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
 
 
 def test_native_fallback_closes_source_preserves_options_and_filters_candidates():

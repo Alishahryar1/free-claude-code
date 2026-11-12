@@ -18,6 +18,7 @@ from free_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningPolicy,
 )
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -223,7 +224,7 @@ class OpenAIChatProvider(BaseProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._chat.stream_messages(
             request,
             input_tokens=input_tokens,
@@ -247,7 +248,7 @@ class OpenAIChatProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._chat.stream_chat(
             request,
             input_tokens=input_tokens,
@@ -270,7 +271,7 @@ class OpenAIChatProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._chat.stream_gemini(
             request,
             input_tokens=input_tokens,
@@ -293,7 +294,7 @@ class OpenAIChatProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._chat.stream_responses(
             request,
             input_tokens=input_tokens,

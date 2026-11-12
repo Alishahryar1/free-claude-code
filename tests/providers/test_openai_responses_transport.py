@@ -12,6 +12,7 @@ import pytest
 from openai import AsyncOpenAI
 
 from free_claude_code.application.errors import InvalidRequestError
+from free_claude_code.application.response_collection import collect_response
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
@@ -30,6 +31,7 @@ from free_claude_code.core.openai_responses import (
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.providers.openai_chat.stream_output import (
     ChatStreamUsage,
+    CompletedToolCall,
     ResponsesChatStreamOutput,
 )
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
@@ -39,6 +41,7 @@ from tests.providers.support import (
     immediate_admission,
     without_empty_reasoning,
 )
+from tests.public_stream import delivered
 
 
 @pytest.mark.asyncio
@@ -81,7 +84,7 @@ async def test_tolerant_classifier_corrects_required_reasoning(stream_error, err
     client = _client(handler)
     try:
         output = [
-            event
+            frame
             async for event in _transport(client).stream_messages(
                 _request(max_tokens=64, thinking={"type": "disabled"}),
                 input_tokens=11,
@@ -89,6 +92,7 @@ async def test_tolerant_classifier_corrects_required_reasoning(stream_error, err
                 response_model="public",
                 reasoning=ReasoningPolicy.prefer_off(),
             )
+            for frame in event.frames
         ]
         assert text_content(parse_sse_text("".join(output))) == "<severity>0</severity>"
         assert len(bodies) == 2
@@ -217,17 +221,19 @@ def _transport(
 async def _collect(
     transport: OpenAIResponsesTransport,
     request: MessagesRequest | None = None,
+    *,
+    public: bool = False,
 ) -> list[str]:
-    return [
-        chunk
-        async for chunk in transport.stream_messages(
-            request or _request(),
-            input_tokens=11,
-            request_id="req_responses",
-            response_model="public-model",
-            reasoning=REASONING_ON,
-        )
-    ]
+    stream = transport.stream_messages(
+        request or _request(),
+        input_tokens=11,
+        request_id="req_responses",
+        response_model="public-model",
+        reasoning=REASONING_ON,
+    )
+    if public:
+        return [await delivered(stream, "messages")]
+    return list(await collect_response(stream, protocol="messages"))
 
 
 async def _collect_native(
@@ -235,17 +241,18 @@ async def _collect_native(
     request: OpenAIResponsesRequest,
     *,
     reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+    public: bool = False,
 ) -> list[str]:
-    return [
-        chunk
-        async for chunk in transport.stream_responses(
-            request,
-            input_tokens=11,
-            request_id="req_native_responses",
-            response_model="public-model",
-            reasoning=reasoning,
-        )
-    ]
+    stream = transport.stream_responses(
+        request,
+        input_tokens=11,
+        request_id="req_native_responses",
+        response_model="public-model",
+        reasoning=reasoning,
+    )
+    if public:
+        return [await delivered(stream, "responses")]
+    return list(await collect_response(stream, protocol="responses"))
 
 
 @pytest.mark.asyncio
@@ -477,8 +484,11 @@ async def test_chat_custom_history_replays_with_native_wire_compatible_ids(
     )
     writer = ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=1)
     frames = writer.start_events()
-    frames.append(writer.start_tool_block(0, "call_edit", "edit"))
-    frames.append(writer.emit_tool_delta(0, '{"input":"patch"}'))
+    frames.extend(
+        writer.emit_complete_tool(
+            0, CompletedToolCall("call_edit", "edit", '{"input":"patch"}')
+        )
+    )
     frames.extend(
         writer.finish_success(
             stop_reason="tool_calls",
@@ -844,7 +854,9 @@ async def test_native_committed_truncation_emits_one_failed_terminal() -> None:
     client = _client(handler)
     request = OpenAIResponsesRequest(model="upstream-model", input="hello")
     try:
-        chunks = await _collect_native(_transport(client, max_attempts=2), request)
+        chunks = await _collect_native(
+            _transport(client, max_attempts=2), request, public=True
+        )
     finally:
         await client.close()
 
@@ -895,7 +907,7 @@ async def test_interrupted_discovery_can_continue_through_native_transport() -> 
         if len(bodies) == 1:
             events = [
                 created,
-                # Commit the attempt before its failure, using the existing buffer limit.
+                # Release text through the public boundary before the source fails.
                 _text_delta(saved_text, sequence=1),
                 {
                     "type": "response.output_item.done",
@@ -974,16 +986,15 @@ async def test_interrupted_discovery_can_continue_through_native_transport() -> 
     try:
         first = OpenAIResponsesRequest(model="example", input=history, tools=[SEARCH])
         original = first.model_dump()
-        events = parse_sse_text("".join(await _collect_native(transport, first)))
+        events = parse_sse_text(
+            "".join(await _collect_native(transport, first, public=True))
+        )
         assert first.model_dump() == original
         failed = events[-1].data["response"]
         assert events[-1].event == "response.failed"
         assert failed["error"] == error
         assert failed["output"][0] == sibling
-        partial = failed["output"][1]
-        assert partial["type"] == "tool_search_call"
-        assert partial["arguments"] == '{"query":'
-        assert partial["status"] == "incomplete"
+        assert len(failed["output"]) == 1
         assert len(bodies) == 1
         history.extend([*failed["output"], retry])
         second = OpenAIResponsesRequest(model="example", input=history, tools=[SEARCH])
@@ -1020,7 +1031,18 @@ async def test_interrupted_discovery_can_continue_through_native_transport() -> 
             await _collect_native(
                 transport,
                 OpenAIResponsesRequest(
-                    model="example", input=[partial], tools=[SEARCH]
+                    model="example",
+                    input=[
+                        {
+                            "type": "tool_search_call",
+                            "id": "partial",
+                            "call_id": "search",
+                            "status": "incomplete",
+                            "arguments": '{"query":',
+                            "execution": "client",
+                        }
+                    ],
+                    tools=[SEARCH],
                 ),
             )
         assert len(bodies) == 3
@@ -1396,19 +1418,11 @@ async def test_post_commit_truncation_is_not_replayed() -> None:
         )
 
     client = _client(handler)
-    chunks: list[str] = []
     try:
-        with pytest.raises(ExecutionFailure):
-            async for chunk in _transport(client).stream_messages(
-                _request(),
-                input_tokens=1,
-                request_id="req_committed",
-                response_model="public-model",
-                reasoning=REASONING_ON,
-            ):
-                chunks.extend((chunk,))
+        chunks = await _collect(_transport(client, max_attempts=1), public=True)
     finally:
         await client.close()
+    assert parse_sse_text("".join(chunks))[-1].event == "error"
 
     assert attempts == 1
     assert "".join(chunks).count(committed) == 1

@@ -8,6 +8,7 @@ import pytest
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.response_collection import collect_response
 from free_claude_code.config.provider_catalog import KILO_DEFAULT_BASE
 from free_claude_code.core.anthropic.models import Message, MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
@@ -25,6 +26,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     reasoning_for,
+    sdk_chat_chunk,
 )
 
 
@@ -73,7 +75,7 @@ def _chunk(
     if reasoning_details is not None:
         delta.reasoning_details = reasoning_details
     choice = SimpleNamespace(delta=delta, finish_reason=finish_reason)
-    return SimpleNamespace(choices=[choice], usage=None)
+    return sdk_chat_chunk(SimpleNamespace(choices=[choice], usage=None))
 
 
 def test_default_base_url():
@@ -271,7 +273,11 @@ async def test_stream_uses_reasoning_field_without_duplicating_plain_details(
         return_value=stream,
     ):
         event_text = "".join(
-            [event async for event in kilo_provider.stream_messages(request)]
+            [
+                frame
+                async for event in kilo_provider.stream_messages(request)
+                for frame in event.frames
+            ]
         )
 
     events = parse_sse_text(event_text)
@@ -330,7 +336,9 @@ async def test_stream_restarts_reasoning_reconciliation_after_early_retry(
         side_effect=[abandoned, recovered],
     ) as create:
         event_text = "".join(
-            [event async for event in kilo_provider.stream_messages(request)]
+            await collect_response(
+                kilo_provider.stream_messages(request), protocol="messages"
+            )
         )
 
     events = parse_sse_text(event_text)
@@ -371,11 +379,12 @@ async def test_stream_hides_readable_reasoning_and_preserves_opaque_when_disable
     ):
         event_text = "".join(
             [
-                event
+                frame
                 async for event in kilo_provider.stream_messages(
                     request,
                     reasoning=ReasoningPolicy.off(),
                 )
+                for frame in event.frames
             ]
         )
 

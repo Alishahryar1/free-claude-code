@@ -1,33 +1,15 @@
-"""Chat tool identity survives missing or reused upstream indexes."""
+"""Logical identity is independent of provider indexes and presentation."""
 
-import json
 from copy import deepcopy
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.anthropic.streaming import ToolSchema
-from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
-from free_claude_code.providers.admission import ProviderOperationKind
-from free_claude_code.providers.failure_policy import RetryableToolProtocolError
-from free_claude_code.providers.openai_chat.tool_calls import (
-    OpenAIToolCallAssembler,
-    OpenAIToolCallCollector,
+from free_claude_code.core.chat_completions.tool_calls import (
+    AmbiguousToolCallIdentityError,
+    ChatToolCallBuffer,
+    CompletedChatCall,
 )
-from free_claude_code.providers.request_recovery import RequestRecovery
-from tests.providers.test_streaming_errors import (
-    ClosableAsyncStreamMock,
-    _make_anthropic_output,
-    _make_chunk,
-    _make_provider,
-    _make_request,
-    _make_stream_runner,
-    _recovery_output,
-)
-
-SCHEMAS = {"read": ToolSchema(name="read", input_schema={"type": "object"})}
+from tests.core.test_chat_tool_buffer import event
 
 
 def call(index=0, tool_id="call_a", arguments="{}", *, name="read", metadata=None):
@@ -42,45 +24,24 @@ def call(index=0, tool_id="call_a", arguments="{}", *, name="read", metadata=Non
     return delta
 
 
-def sdk_call(delta):
-    return SimpleNamespace(
-        **{**delta, "function": SimpleNamespace(**delta["function"])}
-    )
-
-
-@pytest.fixture(params=["stream", "collector"])
-def call_consumer(request):
-    output = _make_anthropic_output()
-    assembler = OpenAIToolCallAssembler(reserved_tool_ids=())
-    collector = OpenAIToolCallCollector()
+@pytest.fixture
+def call_consumer():
+    buffer = ChatToolCallBuffer()
 
     def add(delta):
-        if request.param == "stream":
-            list(assembler.process_tool_call(delta, output))
-        else:
-            collector.add(sdk_call(delta))
+        assert buffer.feed(event([delta])) == []
 
     def completed():
-        if request.param == "stream":
-            return [
-                {
-                    "id": state.tool_id,
-                    "name": state.name,
-                    "arguments": state.content,
-                    "metadata": state.extra_content,
-                }
-                for state in output.tool_states.values()
-            ]
-        calls = collector.completed_calls(SCHEMAS)
-        assert calls is not None
+        output = deepcopy(buffer).feed(event(finish="tool_calls"))
         return [
             {
-                "id": item["id"],
-                "name": item["function"]["name"],
-                "arguments": item["function"]["arguments"],
-                "metadata": item.get("extra_content"),
+                "id": item.body.get("id"),
+                "name": item.body["function"]["name"],
+                "arguments": item.body["function"]["arguments"],
+                "metadata": item.body.get("extra_content"),
             }
-            for item in calls
+            for item in output
+            if isinstance(item, CompletedChatCall)
         ]
 
     return add, completed
@@ -219,7 +180,7 @@ def test_unidentified_fragment_is_rejected_before_content_changes(
     if existing:
         add(call(0, "call_a", '{"path":"a"}', metadata={"original": True}))
     before = deepcopy(completed())
-    with pytest.raises(RetryableToolProtocolError):
+    with pytest.raises(AmbiguousToolCallIdentityError):
         add(call(index, tool_id, '{"path":"b"}', metadata={"wrong": True}))
     assert completed() == before
 
@@ -242,328 +203,6 @@ def test_ambiguous_fragment_is_rejected_before_content_changes(
     for delta in initial:
         add(delta)
     before = deepcopy(completed())
-    with pytest.raises(RetryableToolProtocolError):
+    with pytest.raises(AmbiguousToolCallIdentityError):
         add(fragment)
     assert completed() == before
-
-
-def test_collector_preserves_sparse_numeric_order():
-    collector = OpenAIToolCallCollector()
-    collector.add(sdk_call(call(8, "call_a", '{"path":"a"}')))
-    collector.add(sdk_call(call(2, "call_b", '{"path":"b"}')))
-    result = collector.completed_calls(SCHEMAS)
-    assert result is not None
-    assert [item["id"] for item in result] == ["call_b", "call_a"]
-
-
-def test_name_flush_uses_logical_slots_for_repeated_index():
-    request = _make_request(
-        tools=[
-            {"name": "tool", "input_schema": {"type": "object"}},
-            {"name": "tool." + "x" * 70, "input_schema": {"type": "object"}},
-        ]
-    )
-    codec = OpenAIToolNameCodec.from_request(request)
-    output = _make_anthropic_output()
-    assembler = OpenAIToolCallAssembler(reserved_tool_ids=())
-    names = {}
-    for tool_id in ("call_a", "call_b"):
-        assert (
-            list(
-                assembler.process_tool_call(
-                    call(0, tool_id, "", name="tool"),
-                    output,
-                    tool_names=codec,
-                    tool_name_buffers=names,
-                )
-            )
-            == []
-        )
-    list(
-        assembler.flush_tool_name_buffers(
-            output,
-            tool_names=codec,
-            tool_name_buffers=names,
-            tool_argument_aliases={},
-            tool_argument_alias_buffers={},
-        )
-    )
-    assert [
-        (state.tool_id, state.name, state.content)
-        for state in output.tool_states.values()
-    ] == [("call_a", "tool", ""), ("call_b", "tool", "")]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("recovered_ids", [(None, None), ("same", "same")])
-async def test_recovery_import_discards_unstarted_call_state(recovered_ids):
-    provider = _make_provider()
-    runner = _make_stream_runner(
-        provider,
-        request=_make_request(
-            tools=[
-                {"name": name, "input_schema": {"type": "object"}}
-                for name in ("read", "tool", "tool." + "x" * 70)
-            ]
-        ),
-    )
-    assembler = runner._new_stream_assembler(output_reasoning=True)
-    list(assembler.start_events())
-    list(
-        assembler.feed(
-            _make_chunk(
-                content="visible",
-                tool_calls=[
-                    sdk_call(
-                        call(
-                            0,
-                            "abandoned",
-                            "",
-                            name="tool",
-                            metadata={"old": True},
-                        )
-                    )
-                ],
-            )
-        )
-    )
-    with patch.object(
-        runner,
-        "_collect_recovery_output",
-        new_callable=AsyncMock,
-        return_value=_recovery_output(
-            text="visible",
-            tool_calls=(
-                {
-                    "id": recovered_ids[0],
-                    "function": {"name": "read", "arguments": "{}"},
-                },
-                {
-                    "id": recovered_ids[1],
-                    "function": {"name": "read", "arguments": '{"path":"b"}'},
-                    "extra_content": {"new": True},
-                },
-            ),
-        ),
-    ):
-        result = await runner._recovery_events(
-            body=runner._body,
-            assembler=assembler,
-            error=TimeoutError("cutoff"),
-            tool_argument_alias_buffers=assembler.tool_argument_alias_buffers,
-            output_reasoning=True,
-            request_recovery=RequestRecovery(provider._admission.start_execution()),
-        )
-    assert result is not None
-    events = parse_sse_text("".join(result))
-    starts = [
-        event.data["content_block"]
-        for event in events
-        if event.event == "content_block_start"
-    ]
-    assert len(starts) == 2
-    assert len({start["id"] for start in starts}) == 2
-    assert "abandoned" not in {start["id"] for start in starts}
-    assert "extra_content" not in starts[0]
-    assert starts[1]["extra_content"] == {"new": True}
-    assert [state.content for state in assembler.output.tool_states.values()] == [
-        "{}",
-        '{"path":"b"}',
-    ]
-    assert assembler.output.accumulated_text == "visible"
-    assert assembler._tool_name_buffers == {}
-    await provider.cleanup()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stop", [None, "same", "before"])
-@pytest.mark.parametrize("fragment_index", [0, None])
-async def test_collector_identity_failure_respects_stop_and_closes_attempts(
-    stop, fragment_index
-):
-    provider = _make_provider()
-    runner = _make_stream_runner(
-        provider,
-        request=_make_request(
-            tools=[{"name": "read", "input_schema": {"type": "object"}}]
-        ),
-    )
-    chunks = [
-        _make_chunk(
-            tool_calls=[sdk_call(call(0, "call_a")), sdk_call(call(0, "call_b"))]
-        )
-    ]
-    if stop == "before":
-        chunks.append(_make_chunk(finish_reason="tool_calls"))
-    chunks.append(
-        _make_chunk(
-            tool_calls=[sdk_call(call(fragment_index, None, "uncertain", name=None))],
-            finish_reason="tool_calls" if stop == "same" else None,
-        )
-    )
-    first = ClosableAsyncStreamMock(chunks)
-    winner = ClosableAsyncStreamMock(
-        [
-            _make_chunk(tool_calls=[sdk_call(call(0, "winner", '{"path":"winning"}'))]),
-            _make_chunk(finish_reason="tool_calls"),
-        ]
-    )
-    streams = iter((first, winner))
-
-    async def create_stream(**kwargs):
-        stream = next(streams)
-        if stream is winner:
-            assert first.close_calls == 1
-        return stream
-
-    execution = provider._admission.start_execution()
-    try:
-        with patch.object(
-            provider._client.chat.completions, "create", side_effect=create_stream
-        ):
-            if stop:
-                with pytest.raises(RetryableToolProtocolError):
-                    await runner._collect_recovery_output(
-                        runner._body,
-                        include_reasoning=True,
-                        request_recovery=RequestRecovery(execution),
-                        operation_kind=ProviderOperationKind.CONTINUATION,
-                    )
-            else:
-                result = await runner._collect_recovery_output(
-                    runner._body,
-                    include_reasoning=True,
-                    request_recovery=RequestRecovery(execution),
-                    operation_kind=ProviderOperationKind.CONTINUATION,
-                )
-                assert [item["id"] for item in result.tool_calls] == ["winner"]
-                assert (
-                    result.tool_calls[0]["function"]["arguments"]
-                    == '{"path":"winning"}'
-                )
-        assert execution.attempts_started == (1 if stop else 2)
-        assert first.close_calls == 1
-        assert winner.close_calls == (0 if stop else 1)
-    finally:
-        await runner._request_client.aclose()
-        await provider.cleanup()
-
-
-@pytest.mark.parametrize("index", [0, None])
-def test_colliding_calls_keep_name_and_argument_alias_buffers_separate(index):
-    original = "tool." + "x" * 70
-    request = _make_request(
-        tools=[
-            {"name": original, "input_schema": {"type": "object"}},
-            {"name": "tool", "input_schema": {"type": "object"}},
-        ]
-    )
-    codec = OpenAIToolNameCodec.from_request(request)
-    assembler = OpenAIToolCallAssembler(reserved_tool_ids=())
-    output = _make_anthropic_output()
-    names = {}
-    arguments = {}
-    aliases = {name: {"_fcc_arg_type": "type"} for name in (original, "tool")}
-    for delta in (
-        call(index, "call_a", '{"_fcc_arg_type":"a', name=codec.encode(original)),
-        call(index, "call_b", '{"_fcc_arg_type":"b', name="tool"),
-        call(index, "call_b", '"}', name=None),
-        call(index, "call_a", '"}', name=None),
-    ):
-        list(
-            assembler.process_tool_call(
-                delta,
-                output,
-                tool_names=codec,
-                tool_name_buffers=names,
-                tool_argument_aliases=aliases,
-                tool_argument_alias_buffers=arguments,
-            )
-        )
-    list(
-        assembler.flush_tool_name_buffers(
-            output,
-            tool_names=codec,
-            tool_name_buffers=names,
-            tool_argument_aliases=aliases,
-            tool_argument_alias_buffers=arguments,
-        )
-    )
-    assert [
-        (state.tool_id, state.name, json.loads(state.content))
-        for state in output.tool_states.values()
-    ] == [("call_a", original, {"type": "a"}), ("call_b", "tool", {"type": "b"})]
-
-
-def test_name_prefix_without_output_state_reserves_its_own_slot():
-    request = _make_request(
-        tools=[
-            {"name": "tool", "input_schema": {"type": "object"}},
-            {"name": "tool." + "x" * 70, "input_schema": {"type": "object"}},
-        ]
-    )
-    codec = OpenAIToolNameCodec.from_request(request)
-    assembler = OpenAIToolCallAssembler(reserved_tool_ids=())
-    output = _make_anthropic_output()
-    names = {}
-    for delta in (
-        call(8, None, "", name="tool"),
-        call(2, "call_b", "", name="tool"),
-        call(8, "call_a", "", name=None),
-    ):
-        assert (
-            list(
-                assembler.process_tool_call(
-                    delta,
-                    output,
-                    tool_names=codec,
-                    tool_name_buffers=names,
-                )
-            )
-            == []
-        )
-    events = list(
-        assembler.flush_tool_name_buffers(
-            output,
-            tool_names=codec,
-            tool_name_buffers=names,
-            tool_argument_aliases={},
-            tool_argument_alias_buffers={},
-        )
-    )
-    starts = [
-        event.data["content_block"]["id"]
-        for event in parse_sse_text("".join(events))
-        if event.event == "content_block_start"
-    ]
-    assert starts == ["call_a", "call_b"]
-    assert {state.tool_id: state.content for state in output.tool_states.values()} == {
-        "call_a": "",
-        "call_b": "",
-    }
-
-
-def test_name_that_prefixes_a_declared_name_starts_at_its_first_arguments():
-    codec = OpenAIToolNameCodec.from_names(["Read", "ReadNotifications"])
-    output = _make_anthropic_output()
-    assembler = OpenAIToolCallAssembler(reserved_tool_ids=())
-    names: dict[int, str] = {}
-
-    def feed(delta):
-        return parse_sse_text(
-            "".join(
-                assembler.process_tool_call(
-                    delta, output, tool_names=codec, tool_name_buffers=names
-                )
-            )
-        )
-
-    assert feed(call(0, "call_a", "", name="Read")) == []
-    events = feed({"index": 0, "function": {"arguments": '{"path":"a"}'}})
-    assert [event.event for event in events] == [
-        "content_block_start",
-        "content_block_delta",
-    ]
-    assert events[0].data["content_block"]["name"] == "Read"
-    assert events[1].data["delta"]["partial_json"] == '{"path":"a"}'
-    assert names == {}

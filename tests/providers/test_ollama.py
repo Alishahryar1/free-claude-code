@@ -21,6 +21,7 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
     reasoning_for,
+    sdk_chat_chunk,
 )
 
 OLLAMA_MODEL = "llama3.1:8b"
@@ -185,7 +186,7 @@ async def test_stream_messages_uses_shared_openai_chat_provider() -> None:
     chunk.usage = MagicMock(prompt_tokens=8, completion_tokens=4)
 
     async def stream():
-        yield chunk
+        yield sdk_chat_chunk(chunk)
 
     with patch.object(
         provider._client.chat.completions,
@@ -195,10 +196,11 @@ async def test_stream_messages_uses_shared_openai_chat_provider() -> None:
     ) as create:
         output = "".join(
             [
-                event
+                frame
                 async for event in provider.stream_messages(
                     make_messages_request(OLLAMA_MODEL)
                 )
+                for frame in event.frames
             ]
         )
 
@@ -225,7 +227,7 @@ async def test_cloud_stream_maps_ollama_reasoning_delta_to_anthropic_thinking() 
     chunk.usage = MagicMock(prompt_tokens=8, completion_tokens=4)
 
     async def stream():
-        yield chunk
+        yield sdk_chat_chunk(chunk)
 
     with patch.object(
         client._client.chat.completions,
@@ -235,10 +237,11 @@ async def test_cloud_stream_maps_ollama_reasoning_delta_to_anthropic_thinking() 
     ):
         output = "".join(
             [
-                event
+                frame
                 async for event in client.stream_messages(
                     make_messages_request(OLLAMA_CLOUD_MODEL)
                 )
+                for frame in event.frames
             ]
         )
 

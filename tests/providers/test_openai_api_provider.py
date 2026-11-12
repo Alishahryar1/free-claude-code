@@ -17,6 +17,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
 )
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.openai_api.provider import OpenAIAPIProvider
 from free_claude_code.providers.runtime.config import build_provider_config
 from tests.providers.support import immediate_admission, make_provider_config
@@ -63,8 +64,8 @@ def _provider(
     )
 
 
-async def _collect(stream: AsyncIterator[str]) -> str:
-    return "".join([chunk async for chunk in stream])
+async def _collect(stream: AsyncIterator[StreamOutput]) -> str:
+    return "".join([frame async for chunk in stream for frame in chunk.frames])
 
 
 @pytest.mark.asyncio
@@ -248,6 +249,7 @@ async def test_api_key_provider_preserves_tool_calls() -> None:
                     "response.output_item.added",
                     {
                         "type": "response.output_item.added",
+                        "output_index": 0,
                         "item": {
                             "type": "function_call",
                             "id": "fc_1",
@@ -260,6 +262,7 @@ async def test_api_key_provider_preserves_tool_calls() -> None:
                     "response.output_item.done",
                     {
                         "type": "response.output_item.done",
+                        "output_index": 0,
                         "item": {
                             "type": "function_call",
                             "id": "fc_1",

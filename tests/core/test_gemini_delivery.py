@@ -3,6 +3,7 @@
 from free_claude_code.core.continuation_stream import ContinuationStream
 from free_claude_code.core.delivered_response import DeliveredResponse
 from free_claude_code.core.gemini.response import GeminiResponseAccumulator
+from free_claude_code.core.stream_output import CompletedCall
 
 
 def event(*parts, finish=None):
@@ -16,6 +17,7 @@ def test_delivered_gemini_text_and_complete_calls_have_native_evidence():
     delivered = DeliveredResponse("gemini")
     delivered.observe(event({"text": "answer"}, {"text": "thought", "thought": True}))
     delivered.observe(event({"functionCall": {"id": "a", "name": "read", "args": {}}}))
+    delivered.complete_calls((CompletedCall("gemini", (0, 0), "a"),))
     prefix = delivered.snapshot()
     assert prefix.text == "answer"
     assert prefix.thinking == "thought"

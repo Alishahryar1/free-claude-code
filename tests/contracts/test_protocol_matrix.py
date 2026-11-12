@@ -16,6 +16,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
 )
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
     OpenAIChatProfile,
@@ -252,8 +253,8 @@ def _responses_sse(text: str) -> str:
     return "".join(f"data: {json.dumps(event)}\n\n" for event in events)
 
 
-async def _collect(stream: AsyncIterator[str]) -> str:
-    return "".join([chunk async for chunk in stream])
+async def _collect(stream: AsyncIterator[StreamOutput]) -> str:
+    return "".join([frame async for packet in stream for frame in packet.frames])
 
 
 @pytest.mark.asyncio

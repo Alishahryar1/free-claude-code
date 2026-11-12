@@ -7,15 +7,13 @@ from typing import cast
 
 import httpx
 
-from free_claude_code.core.anthropic.errors import anthropic_status_for_error_type
+from free_claude_code.core.anthropic.errors import anthropic_failure_from_error
 from free_claude_code.core.anthropic.stream_contracts import SSEEvent
 from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
 from free_claude_code.core.diagnostics import (
     ERROR_DETAIL_DISPLAY_CAP_BYTES,
     attach_upstream_error_body,
-    redact_sensitive_error_text,
 )
-from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.failure_policy import (
     RetryableProviderProtocolError,
@@ -83,32 +81,15 @@ def check_messages_failure(
     if event_type != "error":
         return
     error = payload.get("error")
-    kind = error.get("type") if isinstance(error, Mapping) else None
     if isinstance(error, Mapping) and any(
         is_context_window_error_code(error.get(key)) for key in ("type", "code")
     ):
         raise context_window_exceeded_provider_failure()
-    status = anthropic_status_for_error_type(kind if isinstance(kind, str) else "")
-    failure_kind = {
-        400: FailureKind.INVALID_REQUEST,
-        401: FailureKind.AUTHENTICATION,
-        402: FailureKind.PERMISSION,
-        403: FailureKind.PERMISSION,
-        404: FailureKind.INVALID_REQUEST,
-        413: FailureKind.INVALID_REQUEST,
-        429: FailureKind.RATE_LIMIT,
-        504: FailureKind.TIMEOUT,
-        529: FailureKind.OVERLOADED,
-    }.get(status, FailureKind.UPSTREAM)
-    message = error.get("message") if isinstance(error, Mapping) else None
-    failure = ExecutionFailure(
-        failure_kind,
-        status,
-        redact_sensitive_error_text(message[:ERROR_DETAIL_DISPLAY_CAP_BYTES])
-        if isinstance(message, str) and message
-        else "Messages upstream returned an error.",
-        status == 429 or status >= 500,
-    )
+    fields = dict(error) if isinstance(error, Mapping) else {}
+    message = fields.get("message")
+    if isinstance(message, str):
+        fields["message"] = message[:ERROR_DETAIL_DISPLAY_CAP_BYTES]
+    failure = anthropic_failure_from_error(fields)
     attach_upstream_error_body(failure, json.dumps(payload))
     raise failure
 

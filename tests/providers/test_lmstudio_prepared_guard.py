@@ -8,6 +8,10 @@ from unittest.mock import patch
 import httpx2
 import pytest
 
+from free_claude_code.api.response_streams import (
+    ManagedStreamingResponse,
+    gemini_sse_streaming_response,
+)
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.gemini.replay import ReplayBundle, encode_bundle
@@ -19,6 +23,7 @@ from free_claude_code.core.history_replay import (
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.history_replay import replay_origin
+from tests.api.test_response_streams import _json_error
 from tests.providers.test_gemini_transport import chat_response, gemini_request
 from tests.providers.test_google_cache_provenance import history_request
 from tests.providers.test_lmstudio import (
@@ -232,8 +237,17 @@ async def test_internal_continuation_is_rechecked_before_another_inference():
             await original_check(body)
 
         provider._chat._validate_prepared_body = validate
-        with pytest.raises(ExecutionFailure):
-            _ = [event async for event in provider.stream_gemini(gemini_request())]
+        response = await gemini_sse_streaming_response(
+            provider.stream_gemini(gemini_request()),
+            pre_start_error_response=_json_error,
+            request_id="prepared-guard",
+        )
+        assert isinstance(response, ManagedStreamingResponse)
+        try:
+            output = "".join([str(frame) async for frame in response.body_iterator])
+        finally:
+            await response.aclose()
+        assert "error" in output
         assert len(checked) == 2
         assert "prefix " in json.dumps(checked[1])
         assert inference == 1

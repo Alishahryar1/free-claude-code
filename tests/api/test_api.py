@@ -8,6 +8,7 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -67,8 +68,16 @@ _stream_messages_calls: list = []
 async def _mock_stream_messages(*args, **kwargs):
     """Minimal async generator for streaming tests."""
     _stream_messages_calls.append((args, kwargs))
-    yield "event: message_start\ndata: {}\n\n"
-    yield "[DONE]\n\n"
+    yield StreamOutput(
+        (
+            'event: message_start\ndata: {"type":"message_start","message":{"type":"message","id":"m","role":"assistant","content":[],"model":"test"}}\n\n',
+        )
+    )
+    yield StreamOutput(
+        (
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n',
+        )
+    )
 
 
 async def _mock_pre_start_rate_limit(*args, **kwargs):
@@ -80,14 +89,14 @@ async def _mock_pre_start_rate_limit(*args, **kwargs):
         message="upstream is busy",
         retryable=True,
     )
-    yield "unreachable"
+    yield StreamOutput(("unreachable",))
 
 
 async def _mock_empty_stream(*args, **kwargs):
     """Provider stream that completes without a protocol frame."""
     _stream_messages_calls.append((args, kwargs))
     if False:
-        yield "unreachable"
+        yield StreamOutput(("unreachable",))
 
 
 def _terminal_json_error(response, *, status_code: int):

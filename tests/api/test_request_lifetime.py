@@ -27,6 +27,7 @@ from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.gemini.response import GeminiOutput
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from tests.web_tools_support import StubWebToolsClient
 
@@ -405,11 +406,11 @@ class _ControlledProvider:
 
     async def stream_gemini(
         self, _request: GeminiRequest, **kwargs
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         self.request_ids.append(kwargs["request_id"])
         try:
             for chunk in self._chunks:
-                yield chunk
+                yield StreamOutput((chunk,))
             self.blocked.set()
             await asyncio.Event().wait()
         finally:
@@ -426,12 +427,12 @@ class _ControlledProvider:
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         del input_tokens, response_model, reasoning
         self.request_ids.append(request_id)
         try:
             for chunk in self._chunks:
-                yield chunk
+                yield StreamOutput((chunk,))
             self.blocked.set()
             await asyncio.Event().wait()
         finally:
@@ -448,12 +449,12 @@ class _ControlledProvider:
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         del input_tokens, response_model, reasoning
         self.request_ids.append(request_id)
         try:
             for chunk in self._chunks:
-                yield chunk
+                yield StreamOutput((chunk,))
             self.blocked.set()
             await asyncio.Event().wait()
         finally:
