@@ -1,15 +1,17 @@
 """Only the final candidate failure reaches the public Responses lifecycle."""
 
-import asyncio
 from copy import deepcopy
 from itertools import pairwise
 
 import pytest
 
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.stream_delivery import (
+    StreamDeliveryState,
+    bind_stream_delivery,
+)
 from free_claude_code.providers.admission import ProviderAdmissionController
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_delivered_stream_recovery import (
     after_text,
     public_text,
@@ -20,14 +22,6 @@ from tests.api.test_midstream_model_fallback import delivered_candidates
 from tests.api.test_tool_call_buffer_transports import _tools
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
-
-
-@pytest.fixture(autouse=True)
-def release_events(monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
 
 
 def failed_response(text, label):
@@ -85,7 +79,7 @@ async def test_final_native_snapshot_cannot_release_a_withheld_call():
     call = tool_events("responses", '{"path":"unreleased"}')[-1]["response"]["output"][
         0
     ]
-    call["call_id"] = "call_abandoned"
+    call.update(id="fc_abandoned", call_id="call_abandoned", status="incomplete")
     final["response"]["output"].append(call)
     final["sequence_number"] = len(source)
     source.append(final)
@@ -129,9 +123,16 @@ async def test_zero_call_final_candidate_keeps_published_response_identity(proto
     ):
         transport = provider._chat if protocol == "chat" else provider
         transport._admission = admission
-        warmup = last("responses", [{"role": "user", "content": "earlier request"}])
+        warmup = last(
+            "responses",
+            [{"role": "user", "content": "earlier request"}],
+            model="model-1",
+        )
         try:
-            with pytest.raises(ExecutionFailure):
+            with (
+                bind_stream_delivery(StreamDeliveryState()),
+                pytest.raises(ExecutionFailure),
+            ):
                 await anext(warmup)
         finally:
             await warmup.aclose()
@@ -199,22 +200,9 @@ def failed_overlapping_calls():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("same_candidate", [False, True])
 @pytest.mark.parametrize("hold_final_attempt", [False, True])
-async def test_failed_snapshot_cannot_release_an_overlapping_group_hidden_by_provider(
+async def test_failed_snapshot_preserves_independently_completed_call(
     monkeypatch, same_candidate, hold_final_attempt
 ):
-    buffers = []
-
-    def buffer():
-        value = RecoveryHoldbackBuffer(
-            max_bytes=1_000_000 if buffers and hold_final_attempt else 1,
-            holdback_seconds=60,
-        )
-        buffers.append(value)
-        return value
-
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer", buffer
-    )
     async with (
         _harness(
             "responses",
@@ -238,9 +226,11 @@ async def test_failed_snapshot_cannot_release_an_overlapping_group_hidden_by_pro
     assert len(first_bodies) == (2 if same_candidate else 1)
     assert len(last_bodies) == (0 if same_candidate else 1)
     events = parse_sse_text(raw)
-    assert [event.event for event in events] == ["response.created", "response.failed"]
-    assert events[-1].data["response"]["output"] == []
-    assert "call_finished" not in raw and "call_unfinished" not in raw
+    assert events[-1].event == "response.completed"
+    assert [item["call_id"] for item in events[-1].data["response"]["output"]] == [
+        "call_finished"
+    ]
+    assert "call_unfinished" not in raw
 
 
 @pytest.mark.asyncio
@@ -297,27 +287,23 @@ async def test_fallback_timeout_before_its_first_frame_retains_prefix_and_closes
     opened = []
     closed = []
 
-    async def waiting(*args, **kwargs):
+    async def timed_out(*args, **kwargs):
         opened.append(kwargs["continuation"])
         try:
-            await asyncio.Event().wait()
+            raise ExecutionFailure(
+                FailureKind.TIMEOUT, 504, "Provider read timed out", False
+            )
             yield "unreachable"
         finally:
             closed.append(True)
-
-    async def forbidden(*args, **kwargs):
-        raise AssertionError("The application deadline cannot select another candidate")
-        yield "unreachable"
 
     async with _harness(
         "chat",
         lambda _: (200, text_events("chat", "Before. ", complete=False)),
         max_attempts=1,
     ) as (first, _, _):
-        raw = await delivered_candidates(
-            [first, waiting, forbidden], wire, progress_timeout=0.1
-        )
-    assert len(opened) == 1 and opened[0].text == "Before. "
+        raw = await delivered_candidates([first, timed_out], wire)
+    assert len(opened) == 1 and opened[0].readable_text("text") == "Before. "
     assert closed == [True]
     events = parse_sse_text(raw)
     assert public_text(events, wire) == "Before. "

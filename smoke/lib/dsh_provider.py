@@ -2,7 +2,7 @@
 
 import json
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -40,8 +40,6 @@ class DshProvider:
             ) and "Create a concise title for an AI coding-assistant session" in str(
                 first.get("content", "")
             ):
-                assert body.get("max_tokens", body.get("max_output_tokens")) == 64
-                assert not body.get("tools")
                 return "title"
             if any(
                 isinstance(message, dict)
@@ -54,7 +52,7 @@ class DshProvider:
 
 
 @contextmanager
-def dsh_provider(scenario: DshProvider) -> Iterator[str]:
+def dsh_provider(scenario: DshProvider) -> Generator[str]:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 

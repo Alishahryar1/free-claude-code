@@ -5,29 +5,39 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
-from free_claude_code.core.history_replay import readable_reasoning
+from free_claude_code.core.history_replay import (
+    ReplayRecord,
+    encode_replay,
+    protected_reasoning,
+    readable_reasoning,
+)
+from free_claude_code.core.json_types import JsonObject
 
 from .stream_output import ChatStreamOutput
 
 
 @dataclass(slots=True)
 class _ReasoningGroup:
+    replay_owner: int
     details: list[dict[str, Any]] = field(default_factory=list)
     slots: dict[tuple[object, object], int] = field(default_factory=dict)
     native_parts: list[str] = field(default_factory=list)
+    native_fields: dict[str, list[str]] = field(default_factory=dict)
     visible_parts: dict[tuple[str, int], str] = field(default_factory=dict)
     output_sources: dict[tuple[str, int], int] = field(default_factory=dict)
     output_reasoning: bool = True
     after_content: bool = False
-    # Retain native phase transitions without using that field for publication.
+    # Publish the first readable source while later aliases retain native metadata.
     native_primary: bool | None = None
 
 
 class StructuredReasoningStream:
     """Collect replay groups independently of their visible wire blocks."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, structured_details: bool = True) -> None:
         self._group: _ReasoningGroup | None = None
+        self._structured_details = structured_details
+        self._next_replay_owner = 0
 
     @property
     def active(self) -> bool:
@@ -38,6 +48,8 @@ class StructuredReasoningStream:
             yield from self.finish(output)
 
     def before_content(self, output: ChatStreamOutput) -> Iterator[str]:
+        if not self._structured_details:
+            return self.finish(output)
         if self._group is not None and not self._group.after_content:
             self._group.after_content = True
         return iter(())
@@ -48,9 +60,10 @@ class StructuredReasoningStream:
         output: ChatStreamOutput,
         *,
         native_reasoning: str | None,
+        native_field: str = "reasoning_content",
         output_reasoning: bool = True,
     ) -> Iterator[str]:
-        details = _reasoning_details(delta)
+        details = _reasoning_details(delta) if self._structured_details else ()
         if (
             native_reasoning
             and self._group is not None
@@ -67,7 +80,10 @@ class StructuredReasoningStream:
                 for detail in details
             )
         ):
-            self._group = _ReasoningGroup(output_reasoning=output_reasoning)
+            self._group = _ReasoningGroup(
+                self._next_replay_owner, output_reasoning=output_reasoning
+            )
+            self._next_replay_owner += 1
         group = self._group
         if group is None:
             return
@@ -83,8 +99,19 @@ class StructuredReasoningStream:
             elif any(_reasoning_detail_text(detail) for detail in details):
                 group.native_primary = False
         if native_reasoning is not None:
-            # This may be an aggregate alias of signed details arriving later.
+            # Later structured details can be aliases, but must not delay the
+            # readable source that the provider is already streaming.
             group.native_parts.append(native_reasoning)
+            group.native_fields.setdefault(native_field, []).append(native_reasoning)
+            if group.native_primary and output_reasoning and native_reasoning:
+                yield from output.ensure_reasoning_block()
+                yield output.emit_reasoning_delta(
+                    native_reasoning, replay_owner=group.replay_owner
+                )
+                key = ("native", 0)
+                group.visible_parts[key] = (
+                    group.visible_parts.get(key, "") + native_reasoning
+                )
         visible_parts: list[tuple[tuple[str, int], str, bool]] = []
         for detail in details:
             if isinstance(detail, Mapping):
@@ -119,6 +146,7 @@ class StructuredReasoningStream:
                 if (
                     output_reasoning
                     and not group.after_content
+                    and not group.native_primary
                     and (text := _reasoning_detail_text(detail))
                 ):
                     visible_parts.append(
@@ -132,7 +160,9 @@ class StructuredReasoningStream:
             source = _output_source(group, key)
             group.output_sources[key] = source
             yield from output.ensure_reasoning_block(source=source)
-            yield output.emit_reasoning_delta(text, summary=summary, source=source)
+            yield output.emit_reasoning_delta(
+                text, summary=summary, source=source, replay_owner=group.replay_owner
+            )
             group.visible_parts[key] = group.visible_parts.get(key, "") + text
 
     def _remaining_readable(
@@ -145,7 +175,12 @@ class StructuredReasoningStream:
             for slot, detail in enumerate(group.details)
             if (text := _reasoning_detail_text(detail))
         ]
+        aliases = _native_aliases(group)
         for key, text, summary in typed:
+            if key in aliases:
+                group.output_sources[key] = 0
+                group.visible_parts[key] = text
+                continue
             yield from self._remaining_part(output, group, key, text, summary=summary)
             group.visible_parts[key] = text
         represented = set(group.visible_parts.values())
@@ -178,7 +213,12 @@ class StructuredReasoningStream:
             source = _output_source(group, key)
             group.output_sources[key] = source
             yield from output.begin_reasoning_record(source=source)
-            yield output.emit_reasoning_delta(remaining, summary=summary, source=source)
+            yield output.emit_reasoning_delta(
+                remaining,
+                summary=summary,
+                source=source,
+                replay_owner=group.replay_owner,
+            )
 
     def finish(
         self, output: ChatStreamOutput, *, completed: bool = True
@@ -186,12 +226,50 @@ class StructuredReasoningStream:
         group, self._group = self._group, None
         if group is not None:
             yield from self._remaining_readable(output, group)
+            native = _native_record(group)
+            captured = bool(native) and output.capture_reasoning_record(
+                native, replay_owner=group.replay_owner, completed=completed
+            )
+            captured_zero = bool(
+                completed
+                and not captured
+                and output.replay_origin
+                and _native_aliases(group)
+                and any(
+                    protected_reasoning(detail)
+                    for slot, detail in enumerate(group.details)
+                    if _output_source(group, ("detail", slot)) == 0
+                )
+            )
+            if captured_zero:
+                # Late typed aliases belong to the already published scalar.
+                # Other full-text sources retain their own records and signatures.
+                yield from output.complete_reasoning_record(
+                    [_alias_carrier(output, group, native)],
+                    source=0,
+                )
             for slot, detail in enumerate(group.details):
                 if detail.get("type") != "reasoning.text":
                     continue
                 key = ("detail", slot)
                 source = group.output_sources.get(key, slot + 1)
-                opaque = _reasoning_detail_opaque(detail) if completed else []
+                opaque = (
+                    _reasoning_detail_opaque(detail)
+                    if completed
+                    and not captured
+                    and not (captured_zero and source == 0)
+                    else []
+                )
+                if opaque and output.replay_origin is not None:
+                    # Preserve this source boundary through history conversion.
+                    # An independent ordinary thought may have identical text.
+                    opaque = [
+                        encode_replay(
+                            ReplayRecord(
+                                output.replay_origin, {"reasoning_details": [detail]}
+                            )
+                        )
+                    ]
                 if (
                     group.output_reasoning
                     and detail.get("text") == ""
@@ -199,7 +277,9 @@ class StructuredReasoningStream:
                     and key not in group.output_sources
                 ):
                     yield from output.begin_reasoning_record(source=source)
-                    yield output.emit_reasoning_delta("", source=source)
+                    yield output.emit_reasoning_delta(
+                        "", source=source, replay_owner=group.replay_owner
+                    )
                 yield from output.complete_reasoning_record(opaque, source=source)
             yield from output.complete_reasoning_record(
                 [
@@ -208,9 +288,51 @@ class StructuredReasoningStream:
                     if detail.get("type") != "reasoning.text"
                     for value in _reasoning_detail_opaque(detail)
                 ]
-                if completed
+                if completed and not captured and not captured_zero
                 else []
             )
+
+
+def _alias_carrier(
+    output: ChatStreamOutput, group: _ReasoningGroup, native: JsonObject
+) -> str:
+    assert output.replay_origin is not None
+    scoped: JsonObject = {
+        **native,
+        "reasoning_details": [
+            detail
+            for slot, detail in enumerate(group.details)
+            if _output_source(group, ("detail", slot)) == 0
+        ],
+    }
+    return encode_replay(ReplayRecord(output.replay_origin, scoped))
+
+
+def _native_aliases(group: _ReasoningGroup) -> set[tuple[str, int]]:
+    published = group.visible_parts.get(("native", 0))
+    if not group.native_primary or not published:
+        return set()
+    aliases = {
+        ("detail", slot)
+        for slot, detail in enumerate(group.details)
+        if _reasoning_detail_text(detail) == published
+    }
+    for summary in (None, False, True):
+        parts = [
+            (("detail", slot), text)
+            for slot, detail in enumerate(group.details)
+            if (text := _reasoning_detail_text(detail))
+            and (
+                summary is None
+                or (detail.get("type") == "reasoning.summary") == summary
+            )
+        ]
+        if published in {
+            "".join(text for _, text in parts),
+            "\n\n".join(text for _, text in parts),
+        }:
+            aliases.update(key for key, _ in parts)
+    return aliases
 
 
 def _output_source(group: _ReasoningGroup, key: tuple[str, int]) -> int:
@@ -219,6 +341,15 @@ def _output_source(group: _ReasoningGroup, key: tuple[str, int]) -> int:
     if key[0] == "detail" and group.details[key[1]].get("type") == "reasoning.text":
         return key[1] + 1
     return 0
+
+
+def _native_record(group: _ReasoningGroup) -> JsonObject:
+    native: JsonObject = {
+        key: "".join(parts) for key, parts in group.native_fields.items()
+    }
+    if group.details:
+        native["reasoning_details"] = deepcopy(group.details)
+    return native
 
 
 def _reasoning_details(delta: Any) -> Sequence[Any]:

@@ -8,24 +8,16 @@ import pytest
 
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_delivered_stream_recovery import (
     assert_completed,
     public_text,
     text_events,
 )
 from tests.api.test_hidden_stream_retries import delivered
+from tests.providers.support import assistant_history_text, without_empty_reasoning
 from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _events_for, _harness, _saved_reply
-
-
-@pytest.fixture(autouse=True)
-def release_provider_events(monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
 
 
 @pytest.mark.asyncio
@@ -183,8 +175,12 @@ async def test_history_correction_survives_another_interruption(protocol, wire):
     assert "opaque-original" in json.dumps(bodies[2])
     assert all("opaque-original" not in json.dumps(body) for body in bodies[3:])
     history_field = "input" if protocol == "responses" else "messages"
-    assert bodies[4][history_field][:-2] == bodies[3][history_field][:-2]
-    assert "Hello world " in str(bodies[4][history_field][-2])
+    before_history = bodies[3][history_field][:-2]
+    assert bodies[4][history_field][: len(before_history)] == before_history
+    assert (
+        assistant_history_text(bodies[4][history_field][len(before_history) :])
+        == "Hello world "
+    )
     events = parse_sse_text(result)
     assert_completed(events, wire)
     assert public_text(events, wire) == "Hello world again."
@@ -220,7 +216,12 @@ async def test_removed_history_row_stays_removed_after_another_interruption():
 
     assert len(bodies) == 4
     assert len(bodies[2]["input"]) == len(bodies[1]["input"]) - 1
-    assert bodies[3]["input"][:-2] == bodies[2]["input"][:-2]
+    before_history = bodies[2]["input"][:-2]
+    assert bodies[3]["input"][: len(before_history)] == before_history
+    assert (
+        assistant_history_text(bodies[3]["input"][len(before_history) :])
+        == "Hello world "
+    )
     assert_completed(parse_sse_text(result), "responses")
     assert public_text(parse_sse_text(result), "responses") == "Hello world again."
 
@@ -251,11 +252,10 @@ async def test_native_messages_repeated_continuation_replaces_only_private_tail(
         assert_completed(parse_sse_text(result), "messages")
         assert public_text(parse_sse_text(result), "messages") == "Hello world again."
         assert len(bodies) == 3
-        assert bodies[-1]["messages"][:-2] == initial["messages"]
-        assert bodies[-1]["messages"][-2] == {
-            "role": "assistant",
-            "content": "Hello world ",
-        }
+        assert (
+            without_empty_reasoning(bodies[-1]["messages"][:-2]) == initial["messages"]
+        )
+        assert assistant_history_text(bodies[-1]["messages"][-2:]) == "Hello world "
         assert all(wire.closed for wire in wires)
     finally:
         await p.cleanup()

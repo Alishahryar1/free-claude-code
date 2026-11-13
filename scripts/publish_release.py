@@ -35,7 +35,6 @@ class Publisher:
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
             raise ValueError("Expected owner/repository")
         self.repository = repository
-        self.validator = Path(__file__).with_name("validate_release.py").resolve()
 
     def gh(self, *args: str) -> str:
         return command(["gh", "release", *args, "--repo", self.repository])
@@ -162,7 +161,13 @@ class Publisher:
 
     def validate(self, source: Path, dist: Path, version: str) -> None:
         command(
-            [sys.executable, str(self.validator), str(dist), "--version", version],
+            [
+                sys.executable,
+                str(source / "scripts/validate_release.py"),
+                str(dist),
+                "--version",
+                version,
+            ],
             cwd=source,
         )
 
@@ -184,6 +189,10 @@ class Publisher:
             # Publication never begins until both uploaded assets are verified.
             for asset in assets:
                 self.gh("delete-asset", tag, asset["name"], "--yes")
+            builder = source / "scripts/build_macos_launcher.py"
+            # Historical releases predate the native templates and retain their format.
+            if builder.is_file():
+                command([sys.executable, str(builder)], cwd=source)
             command(["uv", "build", "--no-sources", "--out-dir", str(dist)], cwd=source)
             self.validate(source, dist, version)
             self.gh("upload", tag, *(str(dist / name) for name in sorted(names)))

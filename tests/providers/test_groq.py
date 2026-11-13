@@ -12,6 +12,7 @@ from tests.providers.support import (
     SDKStreamDouble,
     immediate_admission,
     make_provider_config,
+    sdk_chat_chunk,
 )
 
 
@@ -87,7 +88,7 @@ def test_build_request_body_basic(groq_provider):
     assert "max_completion_tokens" in body
 
 
-def test_build_request_body_replays_reasoning_as_tagged_content(groq_provider):
+def test_build_request_body_replays_reasoning_in_native_field(groq_provider):
     request = make_request(
         messages=[
             {"role": "user", "content": "Inspect the file."},
@@ -122,18 +123,19 @@ def test_build_request_body_replays_reasoning_as_tagged_content(groq_provider):
     assistant = next(
         message for message in body["messages"] if message["role"] == "assistant"
     )
-    assert assistant["content"] == (
-        "<think>\nI need to read it first.\n</think>\n\nI will inspect the file."
-    )
+    assert assistant["content"] == "I will inspect the file."
+    assert assistant["reasoning_content"] == "I need to read it first."
     assert assistant["tool_calls"][0]["id"] == "toolu_1"
     assert body["messages"][-1] == {
         "role": "tool",
         "tool_call_id": "toolu_1",
         "content": "print('hello')",
     }
+    assert assistant["reasoning_content"] == "I need to read it first."
     assert all(
-        "reasoning_content" not in message and "reasoning" not in message
+        "reasoning_content" not in message
         for message in body["messages"]
+        if message["role"] != "assistant"
     )
 
 
@@ -230,14 +232,18 @@ async def test_stream_messages_text(groq_provider):
     mock_chunk.usage = MagicMock(completion_tokens=5, prompt_tokens=10)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with patch.object(
         groq_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in groq_provider.stream_messages(req)]
+        events = [
+            frame
+            async for event in groq_provider.stream_messages(req)
+            for frame in event.frames
+        ]
 
         assert any(
             '"text_delta"' in event and "Hello back!" in event for event in events
@@ -263,14 +269,18 @@ async def test_stream_messages_reasoning_content(groq_provider):
     mock_chunk.usage = MagicMock(completion_tokens=2, prompt_tokens=10)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with patch.object(
         groq_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in groq_provider.stream_messages(req)]
+        events = [
+            frame
+            async for event in groq_provider.stream_messages(req)
+            for frame in event.frames
+        ]
 
         assert any(
             '"thinking_delta"' in event and "Thinking..." in event for event in events

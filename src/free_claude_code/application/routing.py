@@ -12,6 +12,7 @@ from free_claude_code.config.model_refs import (
     is_retired_model_ref,
     parse_model_name,
     parse_provider_type,
+    replace_retired_model_ref,
 )
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.reasoning import ReasoningPreference
@@ -22,16 +23,23 @@ from free_claude_code.core.anthropic import (
     TokenCountRequest,
 )
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
+from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.gateway_model_ids import (
     DESKTOP_MODEL_PREFIX,
     DESKTOP_NO_THINKING_PREFIX,
     decode_gateway_model_id,
 )
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.trace import trace_event
 
-from .reasoning import resolve_reasoning_policy, resolve_responses_reasoning_policy
+from .reasoning import (
+    resolve_chat_reasoning_policy,
+    resolve_gemini_reasoning_policy,
+    resolve_reasoning_policy,
+    resolve_responses_reasoning_policy,
+)
 
 _ROUTE_SETTINGS = (
     ("fable", "model_fable", "reasoning_fable"),
@@ -90,6 +98,20 @@ def supports_native_messages(provider_id: str) -> bool:
 @dataclass(frozen=True, slots=True)
 class RoutedResponsesRequest:
     request: OpenAIResponsesRequest
+    resolved: ResolvedModelRoute
+    reasoning: ReasoningPolicy
+
+
+@dataclass(frozen=True, slots=True)
+class RoutedGeminiRequest:
+    request: GeminiRequest
+    resolved: ResolvedModelRoute
+    reasoning: ReasoningPolicy
+
+
+@dataclass(frozen=True, slots=True)
+class RoutedChatRequest:
+    request: ChatRequest
     resolved: ResolvedModelRoute
     reasoning: ReasoningPolicy
 
@@ -205,6 +227,13 @@ class ModelRouter:
             return (
                 parse_provider_type(self._settings.model),
                 parse_model_name(self._settings.model),
+                decoded.force_reasoning_off if decoded is not None else False,
+            )
+        replacement = replace_retired_model_ref(candidate)
+        if replacement != candidate:
+            return (
+                parse_provider_type(replacement),
+                parse_model_name(replacement),
                 decoded.force_reasoning_off if decoded is not None else False,
             )
         if decoded is not None:
@@ -356,5 +385,29 @@ class ModelRouter:
             reasoning=resolve_responses_reasoning_policy(
                 routed,
                 resolved.reasoning_preference,
+            ),
+        )
+
+    def resolve_gemini_request(self, request: GeminiRequest) -> RoutedGeminiRequest:
+        resolved = self.resolve(request.model)
+        return RoutedGeminiRequest(
+            request=request.model_copy(
+                update={"model": resolved.primary.provider_model}, deep=True
+            ),
+            resolved=resolved,
+            reasoning=resolve_gemini_reasoning_policy(
+                request, resolved.reasoning_preference
+            ),
+        )
+
+    def resolve_chat_request(self, request: ChatRequest) -> RoutedChatRequest:
+        resolved = self.resolve(request.model)
+        return RoutedChatRequest(
+            request=request.model_copy(
+                update={"model": resolved.primary.provider_model}, deep=True
+            ),
+            resolved=resolved,
+            reasoning=resolve_chat_reasoning_policy(
+                request, resolved.reasoning_preference
             ),
         )

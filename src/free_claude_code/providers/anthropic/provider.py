@@ -16,10 +16,13 @@ from free_claude_code.core.anthropic.passthrough import (
     NativeMessagesRequest,
     restore_native_history,
 )
+from free_claude_code.core.chat_completions.request import ChatRequest
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.history_replay import HistoryReplayError
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -39,6 +42,7 @@ from free_claude_code.providers.anthropic_messages.transport import (
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.history_replay import replay_origin
 from free_claude_code.providers.http import maybe_await_aclose
 from free_claude_code.providers.model_listing import ModelListResponseError
@@ -104,10 +108,11 @@ class AnthropicProvider(BaseProvider):
         config: ProviderConfig,
         *,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         workspace_id: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        super().__init__(config)
+        super().__init__(config, history_cache=history_cache)
         self._admission = admission
         self._snapshot = HttpEndpoint(
             base_url=config.base_url,
@@ -168,7 +173,7 @@ class AnthropicProvider(BaseProvider):
                 return response.json()
 
             try:
-                item = await self._admission.start_execution().run_call(
+                item = await self._admission.start_execution(model=None).run_call(
                     fetch, operation_kind=ProviderOperationKind.MODEL_DISCOVERY
                 )
                 if not isinstance(item, dict):
@@ -190,6 +195,7 @@ class AnthropicProvider(BaseProvider):
         return AnthropicMessagesTransport(
             client=self._http,
             admission=self._admission,
+            history_cache=self._history_cache,
             provider_name="anthropic",
             replay_scope="anthropic",
             read_timeout_s=self._config.http_read_timeout,
@@ -205,7 +211,7 @@ class AnthropicProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         reasoning_override: ReasoningPolicy | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         body, headers = native_request(request.body, request_headers)
         try:
             body = restore_native_history(
@@ -217,10 +223,11 @@ class AnthropicProvider(BaseProvider):
         except (NativeMessagesError, HistoryReplayError) as error:
             raise InvalidRequestError(str(error)) from error
 
-        def open_stream() -> AsyncIterator[str]:
+        def open_stream() -> AsyncIterator[StreamOutput]:
             return stream_native_messages(
                 self._http,
                 self._admission,
+                history_cache=self._history_cache,
                 base_url=self._snapshot.base_url,
                 headers={**self._snapshot.headers, **headers},
                 body=body,
@@ -234,7 +241,7 @@ class AnthropicProvider(BaseProvider):
         if reasoning_override is None:
             return open_stream()
 
-        async def stream_with_reasoning() -> AsyncIterator[str]:
+        async def stream_with_reasoning() -> AsyncIterator[StreamOutput]:
             record = await self.model_record(request.model)
             try:
                 _apply_native_reasoning(
@@ -265,9 +272,65 @@ class AnthropicProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         record = await self.model_record(request.model)
         stream = self._transport(record).stream_messages(
+            request,
+            endpoint_context=self,
+            request_id=request_id,
+            response_model=response_model,
+            reasoning=reasoning,
+            model_info=record.info,
+            continuation=continuation,
+        )
+        try:
+            async for event in stream:
+                yield event
+        finally:
+            await maybe_await_aclose(stream)
+
+    async def stream_chat(
+        self,
+        request: ChatRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[StreamOutput]:
+        record = await self.model_record(request.model)
+        stream = self._transport(record).stream_chat(
+            request,
+            endpoint_context=self,
+            request_id=request_id,
+            response_model=response_model,
+            reasoning=reasoning,
+            model_info=record.info,
+            continuation=continuation,
+        )
+        try:
+            async for event in stream:
+                yield event
+        finally:
+            await maybe_await_aclose(stream)
+
+    async def stream_gemini(
+        self,
+        request: GeminiRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[StreamOutput]:
+        record = await self.model_record(request.model)
+        stream = self._transport(record).stream_gemini(
             request,
             endpoint_context=self,
             request_id=request_id,
@@ -293,7 +356,7 @@ class AnthropicProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         record = await self.model_record(request.model)
         stream = self._transport(record).stream_responses(
             request,

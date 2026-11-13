@@ -11,28 +11,36 @@ from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecode
 from free_claude_code.core.async_iterators import try_close_async_iterator
 from free_claude_code.core.continuation_stream import ContinuationStream
 from free_claude_code.core.delivered_response import DeliveredResponse
-from free_claude_code.core.failures import find_execution_failure
+from free_claude_code.core.failures import (
+    ExecutionFailure,
+    FailureKind,
+    find_execution_failure,
+)
+from free_claude_code.core.gemini.response import gemini_finished, gemini_parts
+from free_claude_code.core.replay_finalization import finalize_replay
 from free_claude_code.core.stream_delivery import (
     StreamDeliveryState,
     bind_stream_delivery,
 )
+from free_claude_code.core.stream_output import StreamOutput, call_references
 
 from .classifier_projection import ClassifierProjection
 from .stream_frames import frame_data, replace_frame_data
-from .tool_call_buffer import ToolCallBuffer
 
 
-class DeliveryObservedStream(AsyncIterator[str]):
+class DeliveryObservedStream(AsyncIterator[StreamOutput]):
     """Bind observation for each read/close, including prefetch in another task."""
 
-    def __init__(self, body: AsyncIterator[str], state: StreamDeliveryState) -> None:
+    def __init__(
+        self, body: AsyncIterator[StreamOutput], state: StreamDeliveryState
+    ) -> None:
         self._body = body
         self._state = state
 
     def __aiter__(self) -> DeliveryObservedStream:
         return self
 
-    async def __anext__(self) -> str:
+    async def __anext__(self) -> StreamOutput:
         with bind_stream_delivery(self._state):
             return await anext(self._body)
 
@@ -48,11 +56,11 @@ class PublicResponseStream(AsyncIterator[str]):
 
     def __init__(
         self,
-        body: AsyncIterator[str],
+        body: AsyncIterator[StreamOutput],
         state: StreamDeliveryState,
         *,
-        wire_api: Literal["messages", "responses"],
-        first_chunk: str,
+        wire_api: Literal["messages", "responses", "gemini", "chat"],
+        first_chunk: StreamOutput,
         terminal_frame: Callable[[str, str, BaseException], str] | None,
         terminal_failure_observer: Callable[[BaseException], None] | None,
         hide_reasoning: bool = False,
@@ -64,7 +72,6 @@ class PublicResponseStream(AsyncIterator[str]):
         self._hide_reasoning = hide_reasoning
         self._decoder = AnthropicSSEDecoder()
         self._projection = ClassifierProjection() if hide_reasoning else None
-        self._tools = ToolCallBuffer(wire_api)
         self._delivered = DeliveredResponse(wire_api)
         self._continuation = ContinuationStream(self._delivered)
         state.bind_prefix(self._delivered.snapshot)
@@ -74,15 +81,17 @@ class PublicResponseStream(AsyncIterator[str]):
         self._public_id: str | None = None
         self._created_at: object = None
         self._sequence = -1
-        self._offset: int | None = None
         self._pending_starts: list[str] = []
+        self._replay_carriers: dict[str, str] = {}
         self.start_frame = ""
-        self._initial_chunk = first_chunk
+        self._initial_chunk = "".join(first_chunk.frames)
         self._latest_chunk = ""
         self._terminal_frame = terminal_frame
         self._terminal_failure_observer = terminal_failure_observer
         self._done = False
         self._closed = False
+        self._pending_release = False
+        self._pending_call_proofs: set[tuple[object, ...]] = set()
         self._events = self._iterate()
 
     def __aiter__(self) -> PublicResponseStream:
@@ -93,9 +102,8 @@ class PublicResponseStream(AsyncIterator[str]):
             raise StopAsyncIteration
         try:
             while True:
-                frame, synthetic = await anext(self._events)
-                frame = self._finalize_frame(frame)
-                value = self._publish(frame, synthetic=synthetic)
+                packet, synthetic = await anext(self._events)
+                value = self._publish_packet(packet, synthetic=synthetic)
                 if value is not None:
                     self._latest_chunk = value
                     return value
@@ -113,16 +121,63 @@ class PublicResponseStream(AsyncIterator[str]):
             frame = self._terminal_frame(
                 self.start_frame or self._initial_chunk, self._latest_chunk, failure
             )
-            # Filter with the failing attempt's call identities before discarding it.
-            (frame,) = self._tools.feed(frame)
-            self._tools = ToolCallBuffer(self._wire_api)
-            frame = self._finalize_frame(frame)
-            return self._publish(frame, synthetic=True) or frame
+            return self._publish_packet(StreamOutput((frame,)), synthetic=True) or frame
+
+    def _publish_packet(self, packet: StreamOutput, *, synthetic: bool) -> str | None:
+        excluded = {
+            "_body",
+            "state",
+            "_events",
+            "_terminal_frame",
+            "_terminal_failure_observer",
+        }
+        saved = deepcopy(
+            {key: value for key, value in self.__dict__.items() if key not in excluded}
+        )
+        try:
+            self._pending_call_proofs.update(
+                self._continuation.map_call_reference(call).identity
+                for call in packet.completed_calls
+            )
+            published = []
+            for chunk in packet.frames:
+                for raw in self._decoder.feed_frames(chunk):
+                    for frame in (raw,) if synthetic else self._process(raw):
+                        frame = self._finalize_frame(frame)
+                        value = self._publish(frame, synthetic=synthetic)
+                        if value is not None:
+                            published.append(value)
+            # Replay removal can hold a completed call until a later text packet.
+            # Retain only its proof identity and consume it at actual publication.
+            calls = tuple(
+                call
+                for call in call_references(published)
+                if call.identity in self._pending_call_proofs
+            )
+            self._delivered.complete_calls(calls)
+            self._pending_call_proofs.difference_update(call.identity for call in calls)
+            if self._pending_release:
+                self.state.release_content(synthetic=synthetic)
+            self._pending_release = False
+            return "".join(published) or None
+        except BaseException:
+            self.__dict__.update(saved)
+            self.state.bind_prefix(self._delivered.snapshot)
+            raise
 
     def _finalize_frame(self, frame: str) -> str:
         payload = frame_data(frame)
         if payload is None:
             return frame
+        if finalize_replay(payload, self._delivered.snapshot, self._replay_carriers):
+            if self._continuation.active and not self._continuation.made_progress:
+                raise ExecutionFailure(
+                    kind=FailureKind.UPSTREAM,
+                    status_code=502,
+                    message="The provider continuation completed without adding output.",
+                    retryable=False,
+                )
+            frame = replace_frame_data(frame, payload)
         kind = payload.get("type")
         if kind == "response.failed":
             response = payload.get("response")
@@ -155,27 +210,22 @@ class PublicResponseStream(AsyncIterator[str]):
             payload = self._continuation.finalize(payload)
         return replace_frame_data(frame, payload)
 
-    async def _iterate(self) -> AsyncGenerator[tuple[str, bool]]:
+    async def _iterate(self) -> AsyncGenerator[tuple[StreamOutput, bool]]:
         while True:
             try:
-                chunk = await anext(self._body)
+                packet = await anext(self._body)
             except StopAsyncIteration:
                 for frame in self._synchronize():
-                    yield frame, True
+                    yield StreamOutput((frame,)), True
                 if self._continuation.handoff:
                     for payload in self._delivered.handoff_events():
-                        for frame in self._prepare(self._format(payload)):
-                            yield frame, True
-                else:
-                    for frame in self._decoder.finish_frames():
-                        for ready in self._process(frame):
-                            yield ready, False
+                        yield StreamOutput((self._format(payload),)), True
+                    if self._wire_api == "chat":
+                        yield StreamOutput(("data: [DONE]\n\n",)), True
                 return
             for frame in self._synchronize():
-                yield frame, True
-            for frame in self._decoder.feed_frames(chunk):
-                for ready in self._process(frame):
-                    yield ready, False
+                yield StreamOutput((frame,)), True
+            yield packet, False
 
     def _synchronize(self) -> Iterator[str]:
         transition = self.state.transition
@@ -184,11 +234,15 @@ class PublicResponseStream(AsyncIterator[str]):
         self._revision = self.state.attempt_revision
         self.state.transition = None
         self._decoder = AnthropicSSEDecoder()
-        self._tools = ToolCallBuffer(self._wire_api)
         self._projection = ClassifierProjection() if self._hide_reasoning else None
         self._seen_starts.clear()
         self._pending_starts.clear()
-        self._offset = None
+        self._pending_call_proofs.clear()
+        if self._wire_api == "chat" and not (
+            self.state.content_released or self._pending_release
+        ):
+            self._public_id = None
+            self._created_at = None
         if transition is not None:
             self._continuation.begin(handoff=transition == "handoff")
         elif self._continuation.active:
@@ -205,8 +259,7 @@ class PublicResponseStream(AsyncIterator[str]):
             if projected is None:
                 return
             frame = projected
-        for released in self._tools.feed(frame):
-            yield from self._prepare(released)
+        yield from self._prepare(frame)
 
     def _prepare(self, frame: str) -> Iterator[str]:
         if not self._continuation.active:
@@ -225,6 +278,8 @@ class PublicResponseStream(AsyncIterator[str]):
 
     @staticmethod
     def _format(payload: dict[str, Any]) -> str:
+        if "type" not in payload:
+            return f"data: {simplejson.dumps(payload, use_decimal=True)}\n\n"
         return f"event: {payload['type']}\ndata: {simplejson.dumps(payload, use_decimal=True)}\n\n"
 
     async def aclose(self) -> None:
@@ -233,8 +288,9 @@ class PublicResponseStream(AsyncIterator[str]):
         self._closed = self._done = True
         await self._events.aclose()
         self._pending_starts.clear()
+        self._pending_call_proofs.clear()
         self._decoder = AnthropicSSEDecoder()
-        self._tools = ToolCallBuffer(self._wire_api)
+        self._replay_carriers.clear()
         self.state.bind_prefix(None)
         self._delivered = DeliveredResponse(self._wire_api)
         self._continuation = ContinuationStream(self._delivered)
@@ -244,7 +300,7 @@ class PublicResponseStream(AsyncIterator[str]):
             raise error
 
     def _release_content(self, frame: str, *, synthetic: bool) -> str:
-        self.state.release_content(synthetic=synthetic)
+        self._pending_release = True
         for start in self._pending_starts:
             self._record(start, synthetic=synthetic)
         self._record(frame, synthetic=synthetic)
@@ -257,6 +313,8 @@ class PublicResponseStream(AsyncIterator[str]):
         return prefix + frame
 
     def _record(self, frame: str, *, synthetic: bool) -> None:
+        if self._wire_api == "chat" and frame.strip() == "data: [DONE]":
+            return
         payload = frame_data(frame)
         if payload is not None:
             self._delivered.observe(payload, count_progress=not synthetic)
@@ -267,6 +325,8 @@ class PublicResponseStream(AsyncIterator[str]):
         """Keep replacement and failure envelopes in the public response lifecycle."""
         payload = frame_data(frame)
         if payload is None:
+            if self._wire_api == "chat" and frame.strip() == "data: [DONE]":
+                return self._release_content(frame, synthetic=synthetic)
             if any(
                 line.strip() and not line.startswith(":")
                 for line in re.split(r"\r\n|\r|\n", frame)
@@ -275,10 +335,37 @@ class PublicResponseStream(AsyncIterator[str]):
             return frame
 
         raw_kind = payload.get("type")
+        if self._wire_api == "chat":
+            if self._public_id is None and isinstance(payload.get("id"), str):
+                self._public_id = payload["id"]
+                self._created_at = payload.get("created")
+            elif self._public_id is not None and "id" in payload:
+                payload["id"] = self._public_id
+                if self._created_at is not None:
+                    payload["created"] = self._created_at
+                frame = replace_frame_data(frame, payload)
+            if "error" in payload:
+                self._pending_starts.clear()
+            elif self._metadata("", payload) and not (
+                self.state.content_released or self._pending_release
+            ):
+                self._pending_starts.append(frame)
+                return None
+        if self._wire_api == "gemini":
+            if self._public_id is None and isinstance(payload.get("responseId"), str):
+                self._public_id = payload["responseId"]
+                self.start_frame = frame
+            elif self._public_id is not None and "responseId" in payload:
+                payload["responseId"] = self._public_id
+                frame = replace_frame_data(frame, payload)
         kind = raw_kind if isinstance(raw_kind, str) else ""
         metadata = self._metadata(kind, payload)
         if self._wire_api == "messages":
-            if kind == "message_start" and metadata and not self.state.content_released:
+            if (
+                kind == "message_start"
+                and metadata
+                and not (self.state.content_released or self._pending_release)
+            ):
                 self._pending_starts.append(frame)
                 return None
             if kind == "error":
@@ -323,20 +410,10 @@ class PublicResponseStream(AsyncIterator[str]):
             ):
                 payload["response_id"] = self._public_id
                 changed = True
-        number = payload.get("sequence_number")
-        if failure:
-            number = self._sequence + 1
-            payload["sequence_number"] = number
+        if self._wire_api == "responses":
+            self._sequence += 1
+            payload["sequence_number"] = self._sequence
             changed = True
-        if isinstance(number, int) and not isinstance(number, bool):
-            if self._replacement and not failure:
-                if self._offset is None:
-                    self._offset = max(0, self._sequence + 1 - number)
-                if self._offset:
-                    payload["sequence_number"] = number + self._offset
-                    changed = True
-                number += self._offset
-            self._sequence = max(self._sequence, number)
         frame = replace_frame_data(frame, payload) if changed else frame
         if metadata:
             self._record(frame, synthetic=synthetic)
@@ -344,6 +421,21 @@ class PublicResponseStream(AsyncIterator[str]):
         return self._release_content(frame, synthetic=synthetic)
 
     def _metadata(self, kind: str, payload: dict[str, Any]) -> bool:
+        if self._wire_api == "chat":
+            return "error" not in payload and all(
+                choice.get("finish_reason") is None
+                and all(
+                    key == "role" or value in (None, "", [], {})
+                    for key, value in (choice.get("delta") or {}).items()
+                )
+                for choice in payload.get("choices", [])
+            )
+        if self._wire_api == "gemini":
+            return (
+                not gemini_parts(payload)
+                and not gemini_finished(payload)
+                and "error" not in payload
+            )
         if kind == "ping":
             return True
         if self._wire_api == "messages" and kind == "message_start":

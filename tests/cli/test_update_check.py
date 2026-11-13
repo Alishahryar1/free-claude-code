@@ -16,13 +16,27 @@ def release(version="1.10.0", *, yanked=False):
 def check(monkeypatch):
     original_client = httpx.Client
 
-    def run(installed="1.9.0", payload=None, status=200, error=None, body=None):
+    def run(
+        installed="1.9.0",
+        payload=None,
+        status=200,
+        error=None,
+        body=None,
+        print_version=False,
+        release_url="https://github.com/Alishahryar1/free-claude-code/releases/tag/v1.10.0",
+    ):
         monkeypatch.setattr(update_check, "version", lambda name: installed)
 
         def respond(request):
-            assert str(request.url) == update_check.PYPI_URL
             if error is not None:
                 raise error
+            if str(request.url).endswith("/releases/latest"):
+                return httpx.Response(302, headers={"Location": release_url})
+            if str(request.url) == release_url:
+                return httpx.Response(status, text="release")
+            assert (
+                str(request.url) == "https://pypi.org/pypi/free-claude-code/1.10.0/json"
+            )
             if body is not None:
                 return httpx.Response(status, content=body)
             return httpx.Response(status, json=payload)
@@ -34,7 +48,7 @@ def check(monkeypatch):
                 transport=httpx.MockTransport(respond), **kwargs
             ),
         )
-        return update_check.main()
+        return update_check.main(["--print-version"] if print_version else [])
 
     return run
 
@@ -65,6 +79,13 @@ def test_version_comparison(check, capsys, installed, expected):
         release("invalid"),
         release("2.0rc1"),
         release("2.0.dev1"),
+        release("2.0"),
+        release("v2.0.0"),
+        release("02.0.0"),
+        release("2.0.0.post1"),
+        release("2.0.0+local"),
+        release("2.0.0\n3.0.0"),
+        release("2.0.0/../main"),
         release(yanked=True),
         {"info": {"version": "2.0"}, "urls": []},
         {"info": {"version": "2.0"}, "urls": [{}]},
@@ -85,7 +106,7 @@ def test_missing_distribution(monkeypatch, capsys):
         raise PackageNotFoundError(name)
 
     monkeypatch.setattr(update_check, "version", missing)
-    assert update_check.main() == 1
+    assert update_check.main([]) == 1
     assert capsys.readouterr().err
 
 
@@ -102,3 +123,48 @@ def test_timeout(check, capsys):
 def test_malformed_json(check, capsys):
     assert check(body="not JSON") == 1
     assert capsys.readouterr().err
+
+
+@pytest.mark.parametrize("installed", ["1.9.0", "1.10.0", "1.11.0"])
+def test_print_version_is_only_the_authorized_release(check, capsys, installed):
+    expected = 10 if installed == "1.9.0" else 0
+    assert check(installed, release(), print_version=True) == expected
+    output = capsys.readouterr()
+    assert output.out == ("1.10.0\n" if expected == 10 else "")
+    assert installed in output.err
+
+
+def test_failed_preflight_prints_no_release(check, capsys):
+    assert check(payload=release("2.0.0/../main"), print_version=True) == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    ["v1.10.0rc1", "v01.10.0", "v1.10.0?query=1", "v1.10.0#fragment", "v1.10.0/extra"],
+)
+def test_invalid_github_release_does_not_authorize_installation(check, suffix):
+    assert (
+        check(
+            payload=release(),
+            release_url="https://github.com/Alishahryar1/free-claude-code/releases/tag/"
+            + suffix,
+        )
+        == 1
+    )
+
+
+def test_release_from_another_repository_is_rejected(check):
+    assert (
+        check(
+            payload=release(),
+            release_url="https://github.com/other/repo/releases/tag/v1.10.0",
+        )
+        == 1
+    )
+
+
+def test_pypi_metadata_must_match_selected_github_release(check):
+    assert check(payload=release("1.11.0")) == 1

@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from free_claude_code.api.handlers import MessagesHandler
 from free_claude_code.application.execution import ProviderExecutor
+from free_claude_code.application.response_collection import collect_response
 from free_claude_code.application.routing import ModelRouter
 from free_claude_code.config.reasoning import FALLBACK_REASONING_PREFERENCES
 from free_claude_code.config.settings import Settings
@@ -18,7 +19,6 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.custom import CustomProvider
 from free_claude_code.providers.runtime.config import build_custom_provider_config
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.model_fallback_support import (
     ControlledFallbackProvider,
     execution_failure,
@@ -30,7 +30,7 @@ from tests.api.test_delivered_stream_recovery import (
     text_events,
 )
 from tests.api.test_hidden_stream_retries import delivered
-from tests.providers.support import immediate_admission
+from tests.providers.support import assistant_history_text, immediate_admission
 from tests.providers.test_custom_provider import completion, definition, provider
 from tests.web_tools_support import StubWebToolsClient
 
@@ -138,7 +138,6 @@ async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
                 primary if provider_id == "nvidia_nim" else fallback
             )
         ),
-        progress_timeout_seconds=10,
     )
     router = ModelRouter(settings)
     if wire_api == "messages":
@@ -163,12 +162,12 @@ async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
     before = request.model_dump()
     try:
         output = "".join(
-            [
-                event
-                async for event in getattr(executor, f"stream_{wire_api}")(
+            await collect_response(
+                getattr(executor, f"stream_{wire_api}")(
                     routed, raw_log_payload=dict, request_id="fallback-wire"
-                )
-            ]
+                ),
+                protocol=wire_api,
+            )
         )
         assert "Hello" in output and request.model_dump() == before
         assert len(captured) == 1 and captured[0]["model"] == "backup"
@@ -196,10 +195,6 @@ async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire_api", ["messages", "responses"])
 async def test_candidate_efforts_survive_retry_and_continuation(monkeypatch, wire_api):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
     bodies = []
     attempts = {"primary": 0, "low": 0, "inherited": 0}
 
@@ -241,9 +236,7 @@ async def test_candidate_efforts_survive_retry_and_continuation(monkeypatch, wir
         admission=immediate_admission(max_attempts=2),
         openai_transport=httpx2.MockTransport(reply),
     )
-    executor = ProviderExecutor(
-        AsyncMock(return_value=instance), progress_timeout_seconds=10
-    )
+    executor = ProviderExecutor(AsyncMock(return_value=instance))
     router = ModelRouter(settings)
     if wire_api == "messages":
         routed = router.resolve_messages_request(
@@ -275,7 +268,7 @@ async def test_candidate_efforts_survive_retry_and_continuation(monkeypatch, wir
             ("low", "low"),
             ("inherited", "high"),
         ]
-        assert "Hello there. " in str(bodies[2]["input"])
-        assert "Low work. " in str(bodies[4]["input"])
+        assert assistant_history_text(bodies[2]["input"]) == "Hello there. "
+        assert assistant_history_text(bodies[4]["input"]) == "Hello there. Low work. "
     finally:
         await instance.cleanup()

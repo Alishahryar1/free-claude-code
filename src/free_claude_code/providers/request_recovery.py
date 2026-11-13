@@ -3,7 +3,7 @@
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from free_claude_code.core.history_replay import HistoryProtocol
+from free_claude_code.core.history_replay import HistoryProtocol, ReplayOrigin
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.admission import (
     ProviderAttempt,
@@ -12,9 +12,12 @@ from free_claude_code.providers.admission import (
     ProviderOperationKind,
 )
 from free_claude_code.providers.endpoint import RequestEndpoint
+from free_claude_code.providers.history_negotiation import (
+    HistoryModeCache,
+    HistoryNegotiation,
+)
 from free_claude_code.providers.history_replay import history_retry_body
 from free_claude_code.providers.reasoning_compatibility import ReasoningCorrection
-from free_claude_code.providers.stream_recovery import RecoveryController
 
 
 class RequestRecovery:
@@ -25,11 +28,9 @@ class RequestRecovery:
         execution: ProviderExecution,
         *,
         endpoint: RequestEndpoint | None = None,
-        stream: RecoveryController | None = None,
     ) -> None:
         self._execution = execution
         self._endpoint = endpoint
-        self._stream = stream
         self._refreshed = False
 
     @property
@@ -38,7 +39,8 @@ class RequestRecovery:
 
     @property
     def _committed(self) -> bool:
-        return self._stream is not None and self._stream.committed
+        delivery = self.execution.delivery
+        return delivery is not None and delivery.content_released
 
     async def _authorize(self, error: Exception, attempt: ProviderAttempt) -> bool:
         return (
@@ -107,9 +109,38 @@ class RequestCorrections:
         protocol: HistoryProtocol,
         reasoning: ReasoningCorrection | None = None,
     ) -> None:
+        self.history: HistoryNegotiation | None = None
         self._protocol = protocol
         self._reasoning = reasoning
         self._used_retry_kinds: set[str] = set()
+
+    def prepare_history(
+        self,
+        body: Mapping[str, Any],
+        origin: ReplayOrigin,
+        cache: HistoryModeCache,
+        *,
+        reasoning_field: str = "reasoning_content",
+        structured_details: bool = True,
+        finalize: Callable[[JsonObject], JsonObject] | None = None,
+        continuation: bool = False,
+        native_chat: bool = False,
+    ) -> JsonObject:
+        if self.history is None:
+            self.history = HistoryNegotiation(cache, origin)
+        return self.history.prepare(
+            body,
+            origin,
+            reasoning_field=reasoning_field,
+            structured_details=structured_details,
+            finalize=finalize,
+            continuation=continuation,
+            native_chat=native_chat,
+        )
+
+    def accepted_history(self) -> None:
+        if self.history is not None:
+            self.history.accepted()
 
     def next_body(
         self,
@@ -121,7 +152,13 @@ class RequestCorrections:
         reasoning_sent_body: Mapping[str, Any] | None = None,
         after_common: Callable[[set[str]], JsonObject | None] | None = None,
     ) -> JsonObject | None:
-        corrected = history_retry_body(history_error, sent_body, self._protocol)
+        corrected = history_retry_body(
+            history_error,
+            sent_body,
+            self._protocol,
+            source=self.history.source if self.history is not None else None,
+            source_paths=self.history.paths if self.history is not None else None,
+        )
         if corrected is not None:
             return corrected
         if self._reasoning is not None and "reasoning" not in self._used_retry_kinds:
@@ -131,6 +168,15 @@ class RequestCorrections:
             if corrected is not None:
                 self._used_retry_kinds.add("reasoning")
                 return corrected
-        return (
+        corrected = (
             after_common(self._used_retry_kinds) if after_common is not None else None
         )
+        if corrected is not None:
+            return corrected
+        if (
+            self.history is not None
+            and getattr(getattr(history_error, "response", None), "status_code", None)
+            == 400
+        ):
+            return self.history.rejected()
+        return None

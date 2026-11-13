@@ -22,6 +22,7 @@ from free_claude_code.core.async_tasks import run_sync_owned
 from free_claude_code.messaging.voice import Transcriber
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.github_copilot.auth import CopilotAuthManager
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.openai_codex.auth import OpenAIAuthManager
 from free_claude_code.providers.runtime.runtime import ProviderRuntime, create_provider
 
@@ -109,8 +110,11 @@ def _load_openai_provider(*, auth: OpenAIAuthManager) -> ProviderFactory:
         config: ProviderConfig,
         _settings: Settings,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
     ) -> BaseProvider:
-        return OpenAICodexProvider(config, auth=auth, admission=admission)
+        return OpenAICodexProvider(
+            config, auth=auth, admission=admission, history_cache=history_cache
+        )
 
     return construct
 
@@ -122,8 +126,11 @@ def _load_copilot_provider(*, auth: CopilotAuthManager) -> ProviderFactory:
         config: ProviderConfig,
         _settings: Settings,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
     ) -> BaseProvider:
-        return GitHubCopilotProvider(config, auth=auth, admission=admission)
+        return GitHubCopilotProvider(
+            config, auth=auth, admission=admission, history_cache=history_cache
+        )
 
     return construct
 

@@ -19,6 +19,77 @@ from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.model_refs import ModelFallback, decode_model_fallbacks
 
 
+@pytest.mark.parametrize(
+    "schema", ["", "FCC_CONFIG_SCHEMA=1\n", "FCC_CONFIG_SCHEMA=2\n"]
+)
+def test_super_migration_persists_once_preserving_other_settings(
+    monkeypatch, tmp_path, schema
+):
+    managed, _ = _paths(monkeypatch, tmp_path)
+    managed.parent.mkdir(parents=True)
+    old = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
+    new = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
+    managed.write_text(
+        schema + f"MODEL={old}\nMODEL_OPUS={old}\nMODEL_SONNET=groq/other\n"
+        f"MODEL_FALLBACKS={old},groq/backup\nREASONING_OPUS=off\n"
+        "NVIDIA_NIM_API_KEY=keep-secret\nUNKNOWN_PRIVATE=keep-unknown\n",
+        encoding="utf-8",
+    )
+    store = ManagedConfigStore()
+    store.initialize({})
+    values = dotenv_values_from_file(managed)
+    assert values["MODEL"] == values["MODEL_OPUS"] == new
+    assert values["MODEL_SONNET"] == "groq/other"
+    assert values["REASONING_OPUS"] == "off"
+    assert decode_model_fallbacks(values["MODEL_FALLBACKS"]) == (
+        ModelFallback(model=new),
+        ModelFallback(model="groq/backup"),
+    )
+    assert (
+        store.read({}).settings.nvidia_nim_api_keys[0].get_secret_value()
+        == "keep-secret"
+    )
+    assert values["UNKNOWN_PRIVATE"] == "keep-unknown"
+    before = managed.read_bytes(), managed.stat().st_mtime_ns
+    store.initialize({})
+    assert (managed.read_bytes(), managed.stat().st_mtime_ns) == before
+
+
+def test_super_migration_imports_legacy_selection_without_editing_source(
+    monkeypatch, tmp_path
+):
+    managed, legacy = _paths(monkeypatch, tmp_path)
+    legacy.parent.mkdir(parents=True)
+    original = "MODEL=nvidia_nim/nvidia/nemotron-3-super-120b-a12b\nNVIDIA_NIM_API_KEY=keep-secret\n"
+    legacy.write_text(original, encoding="utf-8")
+    consolidate_managed_config({})
+    assert (
+        dotenv_values_from_file(managed)["MODEL"]
+        == "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
+    )
+    assert legacy.read_text(encoding="utf-8") == original
+
+
+def test_super_migration_atomic_write_failure_preserves_managed_file(
+    monkeypatch, tmp_path
+):
+    managed, _ = _paths(monkeypatch, tmp_path)
+    managed.parent.mkdir(parents=True)
+    original = (
+        b"FCC_CONFIG_SCHEMA=2\nMODEL=nvidia_nim/nvidia/nemotron-3-super-120b-a12b\n"
+    )
+    managed.write_bytes(original)
+
+    def fail_replace(*args):
+        raise OSError("injected replace failure")
+
+    monkeypatch.setattr(env_migrations.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="injected"):
+        consolidate_managed_config({})
+    assert managed.read_bytes() == original
+    assert list(managed.parent.glob("*.tmp")) == []
+
+
 @pytest.mark.parametrize("schema", ["", "FCC_CONFIG_SCHEMA=1\n"])
 def test_retired_models_repair_managed_config_once_preserving_unknowns(
     monkeypatch, tmp_path, schema

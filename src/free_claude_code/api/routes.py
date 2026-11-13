@@ -1,5 +1,6 @@
 """FastAPI route handlers."""
 
+import json
 from collections.abc import Mapping
 from typing import Annotated, Any, cast
 
@@ -24,6 +25,8 @@ from free_claude_code.core.anthropic.native import (
     validate_messages_json,
 )
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
+from free_claude_code.core.chat_completions.request import ChatRequest
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.trace import trace_event
@@ -32,10 +35,13 @@ from .dependencies import (
     get_services,
     get_settings,
     require_anthropic_proxy_auth,
+    require_gemini_proxy_auth,
     require_proxy_auth,
     resolve_provider,
 )
 from .handlers import MessagesHandler, ResponsesHandler, TokenCountHandler
+from .handlers.chat import ChatHandler
+from .handlers.gemini import GeminiHandler
 from .model_catalog import (
     ModelCatalogView,
     ModelsListResponse,
@@ -50,10 +56,113 @@ from .response_streams import bind_response_lifetime
 router = APIRouter()
 
 
+def _unique_json_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"Duplicate JSON field: {key}")
+        result[key] = value
+    return result
+
+
+@router.post("/v1beta/models/{resource:path}")
+async def create_gemini_response(
+    resource: str,
+    request: Request,
+    request_data: Annotated[dict[str, Any], Body()],
+    services: ApiServices = Depends(get_services),
+    _auth=Depends(require_gemini_proxy_auth),
+):
+    try:
+        json.loads(await request.body(), object_pairs_hook=_unique_json_fields)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    model, separator, action = resource.rpartition(":")
+    if not separator or action not in {"generateContent", "streamGenerateContent"}:
+        raise HTTPException(status_code=404, detail="Unknown Gemini generation method")
+    if not model.strip() or any(
+        not segment or segment in {".", ".."} or any(char.isspace() for char in segment)
+        for segment in model.split("/")
+    ):
+        raise HTTPException(status_code=400, detail="Invalid model resource")
+    streaming = action == "streamGenerateContent"
+    alt = request.query_params.getlist("alt")
+    if (
+        len(alt) > 1
+        or (streaming and alt != ["sse"])
+        or (not streaming and alt not in ([], ["json"]))
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Streaming requires alt=sse; JSON generation accepts alt=json",
+        )
+    if "model" in request_data:
+        raise HTTPException(status_code=400, detail="Specify the model in the URL only")
+    try:
+        data = GeminiRequest.model_validate({**request_data, "model": model})
+    except ValidationError as error:
+        raise RequestValidationError(
+            [{**item, "loc": ("body", *item["loc"])} for item in error.errors()],
+            body=request_data,
+        ) from error
+    lease = await services.requests.acquire()
+    try:
+        await lease.wait_for_token_estimation()
+        handler = GeminiHandler(
+            lease.settings,
+            _provider_resolver(lease),
+            generation_id=lease.generation_id,
+            request_headers={
+                key: value
+                for key, value in request.headers.items()
+                if key.lower() not in {"authorization", "x-api-key", "x-goog-api-key"}
+            },
+            model_info_lookup=lease.model_info,
+        )
+        response = await handler.create(
+            data, streaming=streaming, request_id=get_request_id(request)
+        )
+    except BaseException:
+        await lease.release()
+        raise
+    return await bind_response_lifetime(response, lease.release)
+
+
 def _provider_resolver(lease: RequestRuntimeLease) -> ProviderResolver:
     return lambda provider_type, api_key_number: resolve_provider(
         provider_type, api_key_number, lease=lease
     )
+
+
+@router.post("/v1/chat/completions")
+async def create_chat_completion(
+    request: Request,
+    request_data: ChatRequest,
+    services: ApiServices = Depends(get_services),
+    _auth=Depends(require_proxy_auth),
+):
+    lease = await services.requests.acquire()
+    try:
+        await lease.wait_for_token_estimation()
+        handler = ChatHandler(
+            lease.settings,
+            _provider_resolver(lease),
+            generation_id=lease.generation_id,
+            request_headers=request.headers,
+            model_info_lookup=lease.model_info,
+        )
+        response = await handler.create(
+            request_data, request_id=get_request_id(request)
+        )
+    except BaseException:
+        await lease.release()
+        raise
+    return await bind_response_lifetime(response, lease.release)
+
+
+@router.api_route("/v1/chat/completions", methods=["HEAD", "OPTIONS"])
+async def probe_chat(_auth=Depends(require_proxy_auth)):
+    return _probe_response("POST, HEAD, OPTIONS")
 
 
 async def _create_messages_response(
@@ -302,7 +411,7 @@ async def list_models(
 ):
     """List the model ids this proxy advertises to compatible clients."""
     trace_event(stage="ingress", event="free_claude_code.api.models.list", source="api")
-    snapshot = await services.requests.wait_for_catalog()
+    snapshot = services.requests.catalog_snapshot()
     return build_models_list_response(
         snapshot.settings,
         snapshot,
@@ -321,7 +430,7 @@ async def list_muse_models(
 ):
     """List the direct Responses models expected by Muse Code."""
     trace_event(stage="ingress", event="free_claude_code.api.models.list", source="api")
-    snapshot = await services.requests.wait_for_catalog()
+    snapshot = services.requests.catalog_snapshot()
     return build_muse_models_list_response(snapshot.settings, snapshot)
 
 

@@ -516,12 +516,8 @@ def test_convert_assistant_message_thinking():
     result = AnthropicToOpenAIConverter.convert_messages(messages)
 
     assert len(result) == 1
-    # Expecting <think> tags
-    expected_content = (
-        "<think>\nI need to calculate this.\n</think>\n\nThe answer is 4."
-    )
-    assert result[0]["content"] == expected_content
-    assert "reasoning_content" not in result[0]
+    assert result[0]["content"] == "The answer is 4."
+    assert result[0]["reasoning_content"] == "I need to calculate this."
 
 
 def test_convert_assistant_message_thinking_replays_reasoning_content():
@@ -732,17 +728,17 @@ def _convert_tool_turn(
     )
 
 
-def test_convert_assistant_tool_use_without_thinking_replays_empty_reasoning_content():
+def test_convert_assistant_tool_use_without_thinking_defers_placeholder():
     result = _convert_tool_turn(
         [MockBlock(type="tool_use", id="call_missing", name="Read", input={})]
     )
 
     assert result[0]["content"] == ""
-    assert result[0]["reasoning_content"] == ""
+    assert "reasoning_content" not in result[0]
     assert result[0]["tool_calls"][0]["id"] == "call_missing"
 
 
-def test_convert_parallel_tool_use_without_thinking_replays_one_empty_reasoning_field():
+def test_convert_parallel_tool_use_without_thinking_defers_placeholder():
     result = _convert_tool_turn(
         [
             MockBlock(type="tool_use", id="call_1", name="Read", input={}),
@@ -750,14 +746,14 @@ def test_convert_parallel_tool_use_without_thinking_replays_one_empty_reasoning_
         ]
     )
 
-    assert result[0]["reasoning_content"] == ""
+    assert "reasoning_content" not in result[0]
     assert [tool_call["id"] for tool_call in result[0]["tool_calls"]] == [
         "call_1",
         "call_2",
     ]
 
 
-def test_convert_redacted_thinking_tool_use_replays_empty_reasoning_without_data():
+def test_convert_redacted_thinking_tool_use_preserves_native_data_without_placeholder():
     result = _convert_tool_turn(
         [
             MockBlock(type="redacted_thinking", data="opaque-secret"),
@@ -765,11 +761,10 @@ def test_convert_redacted_thinking_tool_use_replays_empty_reasoning_without_data
         ]
     )
 
-    assert result[0]["reasoning_content"] == ""
+    assert "reasoning_content" not in result[0]
     assert result[0]["reasoning_details"] == [
         {"type": "reasoning.encrypted", "data": "opaque-secret"}
     ]
-    assert "opaque-secret" not in result[0]["reasoning_content"]
 
 
 def test_convert_text_only_assistant_without_thinking_omits_reasoning_content():
@@ -784,9 +779,8 @@ def test_convert_text_only_assistant_without_thinking_omits_reasoning_content():
 @pytest.mark.parametrize(
     "reasoning_replay",
     [
-        ReasoningReplayMode.THINK_TAGS,
+        ReasoningReplayMode.REASONING_CONTENT,
         ReasoningReplayMode.REASONING,
-        ReasoningReplayMode.DISABLED,
     ],
 )
 def test_convert_tool_use_without_thinking_does_not_change_other_replay_modes(
@@ -800,7 +794,7 @@ def test_convert_tool_use_without_thinking_does_not_change_other_replay_modes(
     assert "reasoning_content" not in result[0]
 
 
-def test_convert_assistant_message_thinking_becomes_context_when_disabled():
+def test_convert_assistant_message_thinking_uses_native_field():
     content = [
         MockBlock(type="thinking", thinking="I need to calculate this."),
         MockBlock(type="text", text="The answer is 4."),
@@ -808,16 +802,16 @@ def test_convert_assistant_message_thinking_becomes_context_when_disabled():
     messages = [MockMessage("assistant", content)]
     result = AnthropicToOpenAIConverter.convert_messages(
         messages,
-        reasoning_replay=ReasoningReplayMode.DISABLED,
+        reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
     )
 
     assert len(result) == 1
-    assert "reasoning_content" not in result[0]
+    assert result[0]["reasoning_content"] == "I need to calculate this."
     assert "<think>" not in result[0]["content"]
-    assert result[0]["content"] == "I need to calculate this.\n\nThe answer is 4."
+    assert result[0]["content"] == "The answer is 4."
 
 
-def test_convert_assistant_top_level_reasoning_becomes_context_when_disabled():
+def test_convert_assistant_top_level_reasoning_uses_native_field():
     messages = [
         MockMessage(
             "assistant",
@@ -826,13 +820,14 @@ def test_convert_assistant_top_level_reasoning_becomes_context_when_disabled():
         )
     ]
     result = AnthropicToOpenAIConverter.convert_messages(
-        messages, reasoning_replay=ReasoningReplayMode.DISABLED
+        messages, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
     )
 
     assert result == [
         {
             "role": "assistant",
-            "content": "I need to calculate this.\n\nThe answer is 4.",
+            "content": "The answer is 4.",
+            "reasoning_content": "I need to calculate this.",
         }
     ]
 
@@ -944,7 +939,7 @@ def test_convert_mixed_blocks_and_types_and_roles():
 
     assert len(result) == 4
     assert result[0]["role"] == "user"
-    assert "<think>" in result[1]["content"]
+    assert result[1]["reasoning_content"] == "Thinking..."
     assert result[2]["tool_calls"][0]["id"] == "t1"
 
 
@@ -1068,11 +1063,8 @@ def test_convert_assistant_interleaved_order_preserved():
 
     assert len(result) == 2
     msg = result[0]
-    # Expected: thinking1, text, thinking2 in that order within content; tool_calls at end
-    expected_content = "<think>\nFirst thought.\n</think>\n\nHere is the answer.\n\n<think>\nSecond thought.\n</think>"
-    assert msg["content"] == expected_content, (
-        f"Interleaved order lost. Got: {msg['content']!r}"
-    )
+    assert msg["content"] == "Here is the answer."
+    assert msg["reasoning_content"] == "First thought.\nSecond thought."
     assert len(msg["tool_calls"]) == 1
 
 

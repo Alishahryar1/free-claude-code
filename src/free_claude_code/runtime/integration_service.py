@@ -25,6 +25,7 @@ from free_claude_code.core.async_rwlock import AsyncReadWriteLock
 from free_claude_code.core.async_tasks import run_sync_owned
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.harnesses import (
+    antigravity_integration,
     claude_desktop_integration,
     claude_integration,
     claude_onboarding,
@@ -63,15 +64,16 @@ class IntegrationService:
         self,
         provider_manager: ProviderRuntimeManager,
         *,
-        config_lock: asyncio.Lock,
+        config_publication: AsyncReadWriteLock,
         is_draining: Callable[[], bool],
         has_pending_restart: Callable[[], bool],
     ) -> None:
         self.provider_manager = provider_manager
-        self._config_lock = config_lock
+        self._config_publication = config_publication
         self._is_draining = is_draining
         self._has_pending_restart = has_pending_restart
         self._claude_update = _IntegrationUpdate()
+        self._antigravity_update = _IntegrationUpdate()
         self._desktop_update = _IntegrationUpdate()
         self._codex_update = _IntegrationUpdate()
         self._jetbrains_update = _IntegrationUpdate()
@@ -87,6 +89,7 @@ class IntegrationService:
 
     def _updates(self) -> dict[str, _IntegrationUpdate]:
         return {
+            "antigravity": self._antigravity_update,
             "vscode-chat": self._vscode_update,
             "claude-vscode": self._claude_update,
             "claude-desktop": self._desktop_update,
@@ -123,6 +126,71 @@ class IntegrationService:
                     "Background initialization ended with exc_type={}",
                     type(result).__name__,
                 )
+
+    async def antigravity_status(self) -> JsonObject:
+        return await self._antigravity("status")
+
+    async def connect_antigravity(self) -> JsonObject:
+        return await self._antigravity("connect")
+
+    async def disconnect_antigravity(self) -> JsonObject:
+        return await self._antigravity("disconnect")
+
+    async def _antigravity(
+        self, action: Literal["status", "connect", "disconnect"]
+    ) -> JsonObject:
+        def operate(url: str, token: str, ready: bool) -> JsonObject:
+            path, state = (
+                antigravity_integration.config_path(),
+                antigravity_integration.state_path(),
+            )
+            if action == "disconnect":
+                antigravity_integration.disconnect(path, state)
+            return antigravity_integration.status(path, state)
+
+        try:
+            if action != "connect":
+                return await self._run_integration(
+                    self._antigravity_update, action, operate
+                )
+            while True:
+                self._check_integration_available()
+                snapshot = self.provider_manager.catalog_snapshot()
+                revision = self.provider_manager.catalog_status()["catalog_revision"]
+                async with (
+                    self._antigravity_update.access.write(),
+                    self._config_publication.read(),
+                ):
+                    self._check_integration_available()
+                    if (
+                        snapshot.current_settings() is not self.settings
+                        or revision
+                        != self.provider_manager.catalog_status()["catalog_revision"]
+                    ):
+                        continue
+                    catalog = read_model_catalog(snapshot)
+
+                    def connect(catalog: ModelCatalog = catalog) -> JsonObject:
+                        path, state = (
+                            antigravity_integration.config_path(),
+                            antigravity_integration.state_path(),
+                        )
+                        antigravity_integration.configure(
+                            path, state, catalog, connect=True
+                        )
+                        return antigravity_integration.status(path, state)
+
+                    result = await run_sync_owned(connect)
+                    self._antigravity_update.complete()
+                    return result
+        except ValueError, UnicodeError:
+            raise InvalidRequestError(
+                "Could not configure Antigravity CLI. Check settings.json and the FCC connection record for invalid JSON or conflicting model entries."
+            ) from None
+        except OSError:
+            raise ApplicationUnavailableError(
+                "Could not access Antigravity CLI settings. Finish configuration edits, check file permissions, and retry."
+            ) from None
 
     async def vscode_chat_status(self) -> JsonObject:
         return await self._vscode_chat("status")
@@ -216,13 +284,11 @@ class IntegrationService:
 
         def status_reader() -> Callable[[str, str, bool], JsonObject]:
             catalog = read_model_catalog(self.provider_manager)
-            timeout = self.settings.provider_progress_timeout
             return lambda url, token, ready: dsh_desktop_integration.status(
                 dsh_desktop_integration.config_home(),
                 url,
                 token,
                 catalog,
-                provider_progress_timeout=timeout,
             )
 
         def disconnect(url: str, token: str, ready: bool) -> JsonObject:
@@ -261,9 +327,12 @@ class IntegrationService:
                 if not current["connected"]:
                     return {"changed": False}
             while True:
-                snapshot = await self.provider_manager.wait_for_catalog()
+                snapshot = self.provider_manager.catalog_snapshot()
                 revision = self.provider_manager.catalog_status()["catalog_revision"]
-                async with self._config_lock, self._dsh_update.access.write():
+                async with (
+                    self._dsh_update.access.write(),
+                    self._config_publication.read(),
+                ):
                     self._check_integration_available()
                     if action_revision != self._dsh_action_revision:
                         return await run_sync_owned(
@@ -278,19 +347,16 @@ class IntegrationService:
                         snapshot.current_settings() is not self.settings
                         or revision
                         != self.provider_manager.catalog_status()["catalog_revision"]
-                        or self.provider_manager.catalog_status()["catalog"] != "ready"
                     ):
                         continue
                     catalog = read_model_catalog(snapshot)
                     url = local_proxy_root_url(self.settings)
                     token = self.settings.proxy_auth_token
-                    timeout = self.settings.provider_progress_timeout
 
                     def operate(
                         catalog: ModelCatalog = catalog,
                         url: str = url,
                         token: str = token,
-                        timeout: float = timeout,
                     ) -> JsonObject:
                         home = dsh_desktop_integration.config_home()
                         if action == "refresh":
@@ -300,7 +366,6 @@ class IntegrationService:
                                     url,
                                     token,
                                     catalog,
-                                    provider_progress_timeout=timeout,
                                 )
                             }
                         return dsh_desktop_integration.configure(
@@ -308,7 +373,6 @@ class IntegrationService:
                             url,
                             token,
                             catalog,
-                            provider_progress_timeout=timeout,
                         )
 
                     result = await run_sync_owned(operate)
@@ -346,18 +410,20 @@ class IntegrationService:
                     return {"changed": False}
             while True:
                 snapshot = (
-                    await self.provider_manager.wait_for_catalog()
+                    self.provider_manager.catalog_snapshot()
                     if action in {"connect", "refresh"}
                     else None
                 )
                 revision = self.provider_manager.catalog_status()["catalog_revision"]
-                async with self._config_lock, self._vscode_update.access.write():
+                async with (
+                    self._vscode_update.access.write(),
+                    self._config_publication.read(),
+                ):
                     self._check_integration_available()
                     if snapshot is not None and (
                         snapshot.current_settings() is not self.settings
                         or revision
                         != self.provider_manager.catalog_status()["catalog_revision"]
-                        or self.provider_manager.catalog_status()["catalog"] != "ready"
                     ):
                         continue
                     catalog = (
@@ -424,7 +490,10 @@ class IntegrationService:
 
         try:
             if complete:
-                async with self._config_lock, self._claude_update.access.write():
+                async with (
+                    self._claude_update.access.write(),
+                    self._config_publication.read(),
+                ):
                     self._check_integration_available()
                     return await run_sync_owned(operate)
             async with self._claude_update.access.read():
@@ -494,7 +563,7 @@ class IntegrationService:
             return await self._read_status(
                 update, operation, mask_when_unready=mask_when_unready
             )
-        async with self._config_lock, update.access.write():
+        async with update.access.write(), self._config_publication.read():
             self._check_integration_available()
             url = local_proxy_root_url(self.settings)
             token = self.settings.proxy_auth_token
@@ -733,16 +802,22 @@ class IntegrationService:
                 if not existing["connected"]:
                     return {"changed": False}
             while True:
-                generation_id = (
+                catalog_version = (
                     await self.provider_manager.wait_for_catalog_file(wait)
                     if needs_catalog
                     else None
                 )
-                async with self._config_lock, self._codex_update.access.write():
+                async with (
+                    self._codex_update.access.write(),
+                    self._config_publication.read(),
+                ):
                     self._check_integration_available()
                     if needs_catalog and (
-                        generation_id != self.provider_manager.current_generation_id
-                        or self.provider_manager.catalog_status()["catalog"] != "ready"
+                        catalog_version
+                        != (
+                            self.provider_manager.current_generation_id,
+                            self.provider_manager.catalog_status()["catalog_revision"],
+                        )
                     ):
                         continue
                     url = local_proxy_root_url(self.settings)

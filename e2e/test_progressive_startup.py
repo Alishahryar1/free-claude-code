@@ -1,7 +1,45 @@
+import pytest
 from playwright.sync_api import expect
 
 from e2e.provider_support import api_key_input, close_provider, open_provider
 from e2e.test_code_sessions import create_session
+
+
+@pytest.mark.parametrize(
+    "admin_base_url", [{"NVIDIA_NIM_API_KEY": "e2e-nim-key"}], indirect=True
+)
+def test_discovery_error_is_visible_in_provider_card_and_refresh_result(
+    page, admin_base_url
+):
+    proxy_message = "The network proxy rejected or failed the connection. Check your proxy settings."
+    http_message = "The model-list request returned HTTP 403."
+
+    def status(route):
+        data = route.fetch().json()
+        data["startup"]["providers"]["nvidia_nim"] = "failed"
+        data["startup"]["provider_errors"] = {"nvidia_nim": proxy_message}
+        route.fulfill(json=data)
+
+    page.route("**/admin/api/status", status)
+    page.route(
+        "**/admin/api/providers/nvidia_nim/test",
+        lambda route: route.fulfill(
+            json={"provider_id": "nvidia_nim", "ok": False, "message": http_message}
+        ),
+    )
+    page.goto(f"{admin_base_url}/admin")
+    card = page.locator('[data-provider-check-result="nvidia_nim"]')
+    expect(card).to_have_text(proxy_message)
+    dialog = open_provider(page, "nvidia_nim")
+    expect(dialog.locator("#providerDialogCheck")).to_have_text(proxy_message)
+    expect(
+        dialog.get_by_text(
+            "Optional network proxy. Leave blank unless you use one", exact=True
+        )
+    ).to_be_visible()
+    dialog.get_by_role("button", name="Refresh models", exact=True).click()
+    expect(dialog.locator("#providerDialogCheck")).to_contain_text(http_message)
+    expect(card).to_contain_text(http_message)
 
 
 def test_provider_and_messaging_progress_preserve_settings(page, admin_base_url):
@@ -108,6 +146,7 @@ def test_initial_code_catalog_wait_keeps_history_and_draft(
         if starting:
             data["models"] = []
             data["startup"]["catalog"] = "starting"
+            data["startup"]["providers"]["provider"] = "starting"
         route.fulfill(json=data)
 
     def status(route):
@@ -119,12 +158,14 @@ def test_initial_code_catalog_wait_keeps_history_and_draft(
     page.route("**/admin/api/code/bootstrap", bootstrap)
     page.route("**/admin/api/status", status)
     create_session(page, admin_base_url, tmp_path)
+    assert page.evaluate("window.CodeSessions.refresh()") is True
     composer = page.locator("#codeComposer")
     composer.fill("Keep my draft")
     send = page.locator("#codeSend")
     expect(send).to_be_disabled()
     expect(send).to_have_attribute("aria-busy", "true")
     expect(page.locator("#codeProvider")).to_be_disabled()
+    expect(page.locator("#codeMode")).to_be_enabled()
     starting = False
     expect(send).to_be_enabled()
     expect(composer).to_have_value("Keep my draft")
@@ -183,3 +224,46 @@ def test_code_catalog_cannot_roll_back_after_a_newer_startup_status(
         page.evaluate("status => window.CodeSessions.refresh(status)", status) is True
     )
     expect(page.locator("#codeSelectionError")).to_be_hidden()
+
+
+def test_code_catalog_coalesces_notifications_and_catches_up_to_latest_version(
+    page, admin_base_url, tmp_path
+):
+    create_session(page, admin_base_url, tmp_path)
+    page.wait_for_function("!state.startupRequest && !state.startupTimer")
+    assert page.evaluate("window.CodeSessions.refresh()") is True
+    data = page.request.get(f"{admin_base_url}/admin/api/code/bootstrap").json()
+    status = page.request.get(f"{admin_base_url}/admin/api/status").json()
+    generation = status["startup"]["generation_id"] + 1
+    status["startup"].update(generation_id=generation, catalog_revision=1)
+    first = data | {"startup": data["startup"] | status["startup"]}
+    latest = data | {
+        "startup": first["startup"] | {"catalog_revision": 5},
+        "models": [
+            *data["models"],
+            data["models"][0]
+            | {"id": "extra/later", "provider_id": "extra", "model_name": "later"},
+        ],
+    }
+    pending = []
+    calls = 0
+
+    def bootstrap(route):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            pending.append(route)
+            page.evaluate("window.heldCatalogVersion = true")
+        else:
+            route.fulfill(json=latest)
+
+    page.route("**/admin/api/code/bootstrap", bootstrap)
+    page.evaluate("status => { void window.CodeSessions.refresh(status); }", status)
+    page.wait_for_function("window.heldCatalogVersion === true")
+    for revision in range(2, 6):
+        status["startup"]["catalog_revision"] = revision
+        page.evaluate("status => { void window.CodeSessions.refresh(status); }", status)
+    assert calls == 1
+    pending.pop().fulfill(json=first)
+    expect(page.locator('#codeProvider option[value="extra"]')).to_have_count(1)
+    assert calls == 2

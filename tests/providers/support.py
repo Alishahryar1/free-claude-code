@@ -2,15 +2,24 @@
 
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import Mock
 
 import httpx2
 from openai import AsyncOpenAI
+from openai._models import construct_type
+from openai.types.chat import ChatCompletionChunk
 
 from free_claude_code.application.reasoning import client_reasoning_policy
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.async_iterators import AsyncCloseable
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.providers.admission import ProviderAdmissionController
+from free_claude_code.providers.admission import (
+    UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
+    ProviderAdmissionController,
+)
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.openai_chat import (
     OpenAIChatProvider,
@@ -20,6 +29,44 @@ from free_claude_code.providers.openai_chat import (
 REASONING_DEFAULT = ReasoningPolicy.provider_default()
 REASONING_ON = ReasoningPolicy.on()
 REASONING_OFF = ReasoningPolicy.off()
+
+
+def sdk_chat_chunk(value: Any) -> ChatCompletionChunk:
+    """Use the SDK's permissive wire construction for explicitly populated fixtures."""
+    if isinstance(value, ChatCompletionChunk):
+        return value
+
+    def plain(item: Any) -> Any:
+        if isinstance(item, (Mock, SimpleNamespace)):
+            return {
+                key: plain(value)
+                for key, value in vars(item).items()
+                if not key.startswith("_") and key not in {"method_calls"}
+            }
+        if isinstance(item, dict):
+            return {key: plain(value) for key, value in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [plain(value) for value in item]
+        return item
+
+    payload: dict[str, Any] = {
+        "id": "chat_fixture",
+        "object": "chat.completion.chunk",
+        "model": "test",
+        "created": 0,
+        **plain(value),
+    }
+    for choice in payload.get("choices", []):
+        choice.setdefault("index", 0)
+    if isinstance(usage := payload.get("usage"), dict):
+        usage.update(usage.pop("model_extra", {}))
+        usage.setdefault(
+            "total_tokens",
+            (usage.get("prompt_tokens") or 0) + (usage.get("completion_tokens") or 0),
+        )
+    chunk = construct_type(value=payload, type_=ChatCompletionChunk)
+    assert isinstance(chunk, ChatCompletionChunk)
+    return chunk
 
 
 class SDKStreamDouble[EventT](AsyncIterator[EventT]):
@@ -106,7 +153,7 @@ async def capture_openai_chat_wire_body(body: dict) -> dict:
 def immediate_admission(
     *,
     provider_name: str = "TEST",
-    max_attempts: int = 5,
+    max_attempts: int = UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
 ) -> ProviderAdmissionController:
     """Return a real controller with deterministic zero-delay recovery."""
     return ProviderAdmissionController(
@@ -139,3 +186,63 @@ def reasoning_for(request: MessagesRequest) -> ReasoningPolicy:
     """Resolve provider-test input through the production client boundary."""
 
     return client_reasoning_policy(request)
+
+
+def without_empty_reasoning(value: Any) -> Any:
+    """Compare unrelated wire contracts without negotiated empty placeholders.
+
+    Populated reasoning and all other request fields remain observable. Projection
+    tests assert the empty representations themselves.
+    """
+    empty_items = (
+        {"type": "thinking", "thinking": ""},
+        {
+            "type": "reasoning",
+            "content": [{"type": "reasoning_text", "text": ""}],
+            "summary": [],
+        },
+    )
+    if isinstance(value, list):
+        return [
+            without_empty_reasoning(item) for item in value if item not in empty_items
+        ]
+    if isinstance(value, dict):
+        return {
+            key: without_empty_reasoning(item)
+            for key, item in value.items()
+            if not (
+                value.get("role") == "assistant"
+                and key in {"reasoning_content", "reasoning"}
+                and item == ""
+            )
+        }
+    return value
+
+
+def continuation_seed(text: str = "", thinking: str = ""):
+    from free_claude_code.core.stream_recovery import ContinuationSeed
+
+    items: list[JsonObject] = []
+    if thinking:
+        items.append({"type": "thinking", "thinking": thinking})
+    if text:
+        items.append({"type": "text", "text": text})
+    return ContinuationSeed("messages", tuple(items))
+
+
+def assistant_history_text(rows):
+    """Read actual assistant answer text across both upstream request formats."""
+    parts = []
+    for row in rows:
+        if row.get("role") != "assistant":
+            continue
+        content = row.get("content", "")
+        if isinstance(content, str):
+            parts.append(content)
+        else:
+            parts.extend(
+                part.get("text", "")
+                for part in content
+                if part.get("type") in {"text", "output_text"}
+            )
+    return "".join(parts)

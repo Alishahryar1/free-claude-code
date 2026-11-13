@@ -1,10 +1,9 @@
 """Provider execution shared by inbound API adapters."""
 
 import asyncio
-import math
+import json
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from time import monotonic
 from types import MappingProxyType
 from typing import Literal
 
@@ -16,7 +15,8 @@ from free_claude_code.core.anthropic import (
     get_token_count,
 )
 from free_claude_code.core.anthropic.tokens import TokenCounter
-from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.gemini.tokens import estimate_gemini_input_tokens
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     estimate_responses_input_tokens,
@@ -24,11 +24,13 @@ from free_claude_code.core.openai_responses import (
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.request_outcomes import record_request_route
 from free_claude_code.core.stream_delivery import current_stream_delivery
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import (
     ContinuationSeed,
     RecoveryAction,
     assess_recovery,
 )
+from free_claude_code.core.token_estimation import estimate_text_tokens
 from free_claude_code.core.trace import (
     close_stream_input,
     trace_event,
@@ -37,6 +39,7 @@ from free_claude_code.core.trace import (
 
 from .ports import ModelInfoLookup, ProviderResolver
 from .reasoning import (
+    client_chat_reasoning_policy,
     client_reasoning_policy,
     client_responses_reasoning_policy,
     prepare_fallback_request,
@@ -46,16 +49,18 @@ from .routing import (
     ProviderModelCandidate,
     ProviderModelTarget,
     ResolvedModelRoute,
+    RoutedChatRequest,
+    RoutedGeminiRequest,
     RoutedMessagesRequest,
     RoutedNativeMessagesRequest,
     RoutedResponsesRequest,
 )
 
 ResponsesTokenCounter = Callable[[OpenAIResponsesRequest], int]
-WireApi = Literal["messages", "responses"]
+WireApi = Literal["messages", "responses", "gemini", "chat"]
 CandidateStreamOpener = Callable[
     [int, ProviderModelCandidate, ContinuationSeed | None],
-    Awaitable[AsyncIterator[str]],
+    Awaitable[AsyncIterator[StreamOutput]],
 ]
 
 
@@ -66,7 +71,6 @@ class ProviderExecutor:
         self,
         provider_resolver: ProviderResolver,
         *,
-        progress_timeout_seconds: float,
         token_counter: TokenCounter = get_token_count,
         responses_token_counter: ResponsesTokenCounter = estimate_responses_input_tokens,
         generation_id: int | None = None,
@@ -74,8 +78,6 @@ class ProviderExecutor:
         request_headers: Mapping[str, str] | None = None,
         model_info_lookup: ModelInfoLookup | None = None,
     ) -> None:
-        if not math.isfinite(progress_timeout_seconds) or progress_timeout_seconds <= 0:
-            raise ValueError("progress_timeout_seconds must be finite and positive")
         self._provider_resolver = provider_resolver
         self._model_info_lookup = model_info_lookup or (lambda _provider, _model: None)
         self._token_counter = token_counter
@@ -83,32 +85,6 @@ class ProviderExecutor:
         self._generation_id = generation_id
         self._log_raw_payloads = log_raw_payloads
         self._request_headers = MappingProxyType(dict(request_headers or {}))
-        self._progress_timeout_seconds = float(progress_timeout_seconds)
-
-    def _progress_timeout_failure(
-        self,
-        *,
-        request_id: str,
-        provider_id: str,
-    ) -> ExecutionFailure:
-        trace_event(
-            stage="execution",
-            event="free_claude_code.provider.progress_timeout",
-            source="application",
-            request_id=request_id,
-            provider_id=provider_id,
-            timeout_seconds=self._progress_timeout_seconds,
-        )
-        timeout_text = f"{self._progress_timeout_seconds:g}"
-        return ExecutionFailure(
-            kind=FailureKind.TIMEOUT,
-            status_code=504,
-            message=(
-                f"Provider execution made no progress for {timeout_text} seconds.\n\n"
-                f"Request ID: {request_id}"
-            ),
-            retryable=False,
-        )
 
     def _trace_fallback_started(
         self,
@@ -185,14 +161,14 @@ class ProviderExecutor:
         routed: RoutedNativeMessagesRequest,
         *,
         request_id: str,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         native_reasoning = ReasoningPolicy.provider_default()
 
         async def open_candidate(
             index: int,
             candidate: ProviderModelCandidate,
             continuation: ContinuationSeed | None,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[StreamOutput]:
             target = candidate.target
             provider = await self._provider_resolver(
                 target.provider_id, target.api_key_number
@@ -240,7 +216,7 @@ class ProviderExecutor:
         *,
         raw_log_payload: Callable[[], object],
         request_id: str,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Execute one Anthropic Messages request."""
 
         primary_request = routed.request.model_copy(deep=True)
@@ -255,7 +231,7 @@ class ProviderExecutor:
             index: int,
             candidate: ProviderModelCandidate,
             continuation: ContinuationSeed | None,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[StreamOutput]:
             target = candidate.target
             provider = await self._provider_resolver(
                 target.provider_id, target.api_key_number
@@ -305,7 +281,7 @@ class ProviderExecutor:
         *,
         raw_log_payload: Callable[[], object],
         request_id: str,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Execute one native OpenAI Responses request."""
 
         primary_request = routed.request.model_copy(deep=True)
@@ -316,7 +292,7 @@ class ProviderExecutor:
             index: int,
             candidate: ProviderModelCandidate,
             continuation: ContinuationSeed | None,
-        ) -> AsyncIterator[str]:
+        ) -> AsyncIterator[StreamOutput]:
             target = candidate.target
             provider = await self._provider_resolver(
                 target.provider_id, target.api_key_number
@@ -370,6 +346,127 @@ class ProviderExecutor:
             open_candidate=open_candidate,
         )
 
+    def stream_gemini(
+        self,
+        routed: RoutedGeminiRequest,
+        *,
+        raw_log_payload: Callable[[], object],
+        request_id: str,
+    ) -> AsyncIterator[StreamOutput]:
+        client_reasoning = routed.request.reasoning_policy()
+        input_tokens = estimate_gemini_input_tokens(routed.request)
+
+        async def open_candidate(
+            index: int,
+            candidate: ProviderModelCandidate,
+            continuation: ContinuationSeed | None,
+        ) -> AsyncIterator[StreamOutput]:
+            target = candidate.target
+            provider = await self._provider_resolver(
+                target.provider_id, target.api_key_number
+            )
+            request = prepare_fallback_request(
+                routed.request,
+                model=target.provider_model,
+                preference=(
+                    routed.resolved.reasoning_preference
+                    if candidate.reasoning_preference is ReasoningPreference.INHERIT
+                    else candidate.reasoning_preference
+                ),
+            )
+            return provider.stream_gemini(
+                request,
+                input_tokens=input_tokens,
+                request_id=request_id,
+                response_model=routed.resolved.original_model,
+                reasoning=resolve_fallback_reasoning(
+                    routed.reasoning,
+                    candidate.reasoning_preference,
+                    client=client_reasoning,
+                ),
+                request_headers=self._request_headers,
+                continuation=continuation,
+                model_info=self._model_info_lookup(
+                    target.provider_id, target.provider_model
+                ),
+            )
+
+        return self._stream_candidates(
+            resolved=routed.resolved,
+            reasoning=routed.reasoning,
+            wire_api="gemini",
+            raw_log_label="FULL_GEMINI_PAYLOAD",
+            raw_log_payload=raw_log_payload,
+            request_snapshot=lambda: {
+                "model": routed.request.model,
+                "content_count": len(routed.request.contents),
+            },
+            ingress_count_name="content_count",
+            ingress_count=len(routed.request.contents),
+            request_id=request_id,
+            open_candidate=open_candidate,
+        )
+
+    def stream_chat(
+        self,
+        routed: RoutedChatRequest,
+        *,
+        raw_log_payload: Callable[[], object],
+        request_id: str,
+    ) -> AsyncIterator[StreamOutput]:
+        client_reasoning = client_chat_reasoning_policy(routed.request)
+        input_tokens = sum(
+            estimate_text_tokens(json.dumps(message)[:1_000_000])
+            for message in routed.request.messages
+        )
+
+        async def open_candidate(
+            index: int,
+            candidate: ProviderModelCandidate,
+            continuation: ContinuationSeed | None,
+        ) -> AsyncIterator[StreamOutput]:
+            target = candidate.target
+            provider = await self._provider_resolver(
+                target.provider_id, target.api_key_number
+            )
+            request = prepare_fallback_request(
+                routed.request,
+                model=target.provider_model,
+                preference=candidate.reasoning_preference,
+            )
+            return provider.stream_chat(
+                request,
+                input_tokens=input_tokens,
+                request_id=request_id,
+                response_model=routed.resolved.original_model,
+                reasoning=resolve_fallback_reasoning(
+                    routed.reasoning,
+                    candidate.reasoning_preference,
+                    client=client_reasoning,
+                ),
+                request_headers=self._request_headers,
+                continuation=continuation,
+                model_info=self._model_info_lookup(
+                    target.provider_id, target.provider_model
+                ),
+            )
+
+        return self._stream_candidates(
+            resolved=routed.resolved,
+            reasoning=routed.reasoning,
+            wire_api="chat",
+            raw_log_label="FULL_CHAT_PAYLOAD",
+            raw_log_payload=raw_log_payload,
+            request_snapshot=lambda: {
+                "model": routed.request.model,
+                "message_count": len(routed.request.messages),
+            },
+            ingress_count_name="message_count",
+            ingress_count=len(routed.request.messages),
+            request_id=request_id,
+            open_candidate=open_candidate,
+        )
+
     def _stream_candidates(
         self,
         *,
@@ -383,7 +480,7 @@ class ProviderExecutor:
         ingress_count: int,
         request_id: str,
         open_candidate: CandidateStreamOpener,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Start and consume candidates through one protocol-blind lifecycle."""
 
         primary = resolved.primary
@@ -405,8 +502,8 @@ class ProviderExecutor:
             ),
             "reasoning_budget_tokens": reasoning.budget_tokens,
         }
-        if wire_api == "responses":
-            route_trace["wire_api"] = "responses"
+        if wire_api != "messages":
+            route_trace["wire_api"] = wire_api
         if self._generation_id is not None:
             route_trace["generation_id"] = self._generation_id
         trace_event(**route_trace)
@@ -432,66 +529,41 @@ class ProviderExecutor:
                 f"{raw_log_label} [{{}}]: {{}}", lambda: request_id, raw_log_payload
             )
 
-        async def provider_body() -> AsyncIterator[str]:
-            loop = asyncio.get_running_loop()
-            progress_deadline = loop.time() + self._progress_timeout_seconds
+        async def provider_body() -> AsyncIterator[StreamOutput]:
             delivery = current_stream_delivery()
+            if delivery is None:
+                raise RuntimeError("Generation requires a response delivery context")
             continuation: ContinuationSeed | None = None
             for index, candidate in enumerate(candidates):
+                if index:
+                    # A replacement can fail before its provider opens an attempt.
+                    delivery.begin_attempt()
                 target = candidate.target
                 record_request_route(target.provider_id, target.provider_model)
-                provider_stream: AsyncIterator[str] | None = None
+                provider_stream: AsyncIterator[StreamOutput] | None = None
                 candidate_committed = False
                 candidate_failure: ExecutionFailure | None = None
                 try:
-                    opening_started = monotonic()
                     try:
                         provider_stream = await open_candidate(
                             index, candidate, continuation
                         )
                     except ExecutionFailure as failure:
                         candidate_failure = failure
-                    finally:
-                        # Initialization has its own request budget. Upstream progress
-                        # time is not spent waiting for a provider's startup task.
-                        progress_deadline += monotonic() - opening_started
 
                     if provider_stream is None and candidate_failure is None:
                         raise TypeError(
                             "provider stream method must return an async iterator"
                         )
                     while provider_stream is not None:
-                        if loop.time() >= progress_deadline:
-                            raise self._progress_timeout_failure(
-                                request_id=request_id,
-                                provider_id=target.provider_id,
-                            )
-                        progress_timeout = asyncio.timeout_at(progress_deadline)
-                        read_failure: ExecutionFailure | None = None
                         try:
-                            async with progress_timeout:
-                                try:
-                                    chunk = await anext(provider_stream)
-                                except ExecutionFailure as failure:
-                                    read_failure = failure
+                            chunk = await anext(provider_stream)
                         except StopAsyncIteration:
                             break
-                        except TimeoutError as exc:
-                            if not progress_timeout.expired():
-                                raise
-                            raise self._progress_timeout_failure(
-                                request_id=request_id,
-                                provider_id=target.provider_id,
-                            ) from exc
-                        if progress_timeout.expired():
-                            raise self._progress_timeout_failure(
-                                request_id=request_id,
-                                provider_id=target.provider_id,
-                            )
-                        if read_failure is not None:
-                            candidate_failure = read_failure
+                        except ExecutionFailure as failure:
+                            candidate_failure = failure
                             break
-                        if not chunk:
+                        if not any(chunk.frames) and not chunk.completed_calls:
                             await asyncio.sleep(0)
                             continue
                         if not candidate_committed:
@@ -505,37 +577,24 @@ class ProviderExecutor:
                                     candidate_count=len(candidates),
                                 )
                         yield chunk
-                        progress_deadline = loop.time() + self._progress_timeout_seconds
                 finally:
                     if provider_stream is not None:
                         active_error = sys.exception()
                         preserved_error = active_error or candidate_failure
-                        cleanup_timeout = asyncio.timeout_at(
-                            progress_deadline if active_error is None else None
+                        await close_stream_input(
+                            provider_stream,
+                            owner="provider_executor",
+                            source="api",
+                            preserved_error=preserved_error,
                         )
-                        try:
-                            async with cleanup_timeout:
-                                await close_stream_input(
-                                    provider_stream,
-                                    owner="provider_executor",
-                                    source="api",
-                                    preserved_error=preserved_error,
-                                )
-                        except TimeoutError as exc:
-                            if not cleanup_timeout.expired():
-                                raise
-                            raise self._progress_timeout_failure(
-                                request_id=request_id,
-                                provider_id=target.provider_id,
-                            ) from exc
 
                 if candidate_failure is None:
                     return
                 recovery_action = "continue" if continuation is not None else "restart"
                 recovery_reason = "no_candidate_output"
                 context = candidate_failure.stream_context
-                if delivery is None or context is None:
-                    if candidate_committed:
+                if context is None:
+                    if delivery.content_released:
                         raise candidate_failure
                 else:
                     assessment = assess_recovery(

@@ -39,6 +39,9 @@ def build_opencode_config(
         "settings": {
             "baseURL": proxy_v1_url(proxy_root_url),
             "apiKey": f"{{env:{OPENCODE_API_KEY_ENV}}}",
+            "headerTimeout": False,
+            "chunkTimeout": False,
+            "timeout": False,
         },
     }
     default_model = f"{OPENCODE_PROVIDER_ID}/{default_model_id}"

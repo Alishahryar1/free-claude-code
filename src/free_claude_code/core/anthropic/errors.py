@@ -95,3 +95,28 @@ def _anthropic_failure_message(failure: ExecutionFailure) -> str:
 def anthropic_status_for_error_type(error_type: str) -> int:
     """Return the standard HTTP status for an Anthropic error type."""
     return _ANTHROPIC_ERROR_STATUS_CODES.get(error_type, 500)
+
+
+def anthropic_failure_from_error(error: dict[str, Any]) -> ExecutionFailure:
+    """Preserve the status and category of an in-band Messages error."""
+    status = anthropic_status_for_error_type(error.get("type", ""))
+    kind = {
+        400: FailureKind.INVALID_REQUEST,
+        401: FailureKind.AUTHENTICATION,
+        402: FailureKind.PERMISSION,
+        403: FailureKind.PERMISSION,
+        404: FailureKind.INVALID_REQUEST,
+        413: FailureKind.INVALID_REQUEST,
+        429: FailureKind.RATE_LIMIT,
+        504: FailureKind.TIMEOUT,
+        529: FailureKind.OVERLOADED,
+    }.get(status, FailureKind.UPSTREAM)
+    message = error.get("message")
+    return ExecutionFailure(
+        kind,
+        status,
+        redact_sensitive_error_text(message)
+        if isinstance(message, str) and message
+        else "Messages upstream returned an error.",
+        status == 429 or status >= 500,
+    )

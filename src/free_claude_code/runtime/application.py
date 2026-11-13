@@ -30,6 +30,7 @@ from free_claude_code.config.loader import clear_settings_cache
 from free_claude_code.config.model_refs import parse_provider_type
 from free_claude_code.config.server_urls import local_admin_url
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.async_rwlock import AsyncReadWriteLock
 from free_claude_code.core.async_tasks import run_sync_owned
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.version import package_version
@@ -125,6 +126,7 @@ class ApplicationRuntime:
             for provider_id, manager in self._connected_accounts.items()
         }
         self._config_lock = asyncio.Lock()
+        self._config_publication = AsyncReadWriteLock()
         self._pending_fields: list[str] = []
         self._started = False
         self._instance_id = uuid.uuid4().hex
@@ -137,7 +139,7 @@ class ApplicationRuntime:
         self._http_ready = asyncio.Event()
         self._integrations = IntegrationService(
             provider_manager,
-            config_lock=self._config_lock,
+            config_publication=self._config_publication,
             is_draining=lambda: self._draining,
             has_pending_restart=lambda: bool(self._pending_fields),
         )
@@ -253,7 +255,7 @@ class ApplicationRuntime:
                         type(result).__name__,
                     )
             self._startup_tasks.clear()
-            async with self._config_lock:
+            async with self._config_lock, self._config_publication.write():
                 self._closed = await self._close_owned_resources()
             if self._closed:
                 self._started = False
@@ -345,36 +347,46 @@ class ApplicationRuntime:
         commit: Callable[[], Awaitable[JsonObject]],
     ) -> JsonObject:
         assert prepared.settings is not None
-        if prepared.pending_fields:
-            result = await commit()
-        else:
-            result: JsonObject = {}
+        async with self._config_publication.write():
+            if prepared.pending_fields:
+                result = await commit()
+            else:
+                result: JsonObject = {}
 
-            async def publish_commit() -> None:
-                result.update(await commit())
+                async def publish_commit() -> None:
+                    result.update(await commit())
 
-            await self.provider_manager.replace(
+                await self.provider_manager.replace(
+                    prepared.settings,
+                    commit=publish_commit,
+                    reason="admin_apply",
+                )
+            self._pending_fields = list(prepared.pending_fields)
+            automatic = bool(prepared.pending_fields and self._signal_restart())
+            if automatic:
+                self._pending_fields = []
+            result["restart"] = self._restart_metadata(
+                prepared.pending_fields,
                 prepared.settings,
-                commit=publish_commit,
-                reason="admin_apply",
+                automatic=automatic,
             )
-        self._pending_fields = list(prepared.pending_fields)
-        automatic = bool(prepared.pending_fields and self._signal_restart())
-        if automatic:
-            self._pending_fields = []
-        result["restart"] = self._restart_metadata(
-            prepared.pending_fields,
-            prepared.settings,
-            automatic=automatic,
-        )
-        result["credential_checks"] = check_response
-        return result
+            result["credential_checks"] = check_response
+            return result
 
     async def admin_config(self) -> JsonObject:
         return await self._configuration.admin_config()
 
     async def admin_values(self) -> ValueState:
         return await self._configuration.admin_values()
+
+    async def antigravity_status(self) -> JsonObject:
+        return await self._integrations.antigravity_status()
+
+    async def connect_antigravity(self) -> JsonObject:
+        return await self._integrations.connect_antigravity()
+
+    async def disconnect_antigravity(self) -> JsonObject:
+        return await self._integrations.disconnect_antigravity()
 
     async def vscode_chat_status(self) -> JsonObject:
         return await self._integrations.vscode_chat_status()
@@ -486,7 +498,9 @@ class ApplicationRuntime:
             return {
                 "provider_id": provider_id,
                 "ok": False,
-                "message": _PROVIDER_CHECK_FAILURE_MESSAGE,
+                "message": result.failure_messages.get(
+                    provider_id, _PROVIDER_CHECK_FAILURE_MESSAGE
+                ),
             }
         return {
             "provider_id": provider_id,

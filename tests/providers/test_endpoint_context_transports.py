@@ -15,6 +15,7 @@ from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -118,7 +119,7 @@ def _stream(
     context: Context,
     *,
     responses_ingress: bool,
-) -> AsyncIterator[str]:
+) -> AsyncIterator[StreamOutput]:
     if responses_ingress:
         return transport.stream_responses(
             OpenAIResponsesRequest(model="upstream", input="hi"),
@@ -138,8 +139,8 @@ def _stream(
     )
 
 
-async def _consume(stream: AsyncIterator[str]) -> None:
-    assert [event async for event in stream]
+async def _consume(stream: AsyncIterator[StreamOutput]) -> None:
+    assert [frame async for event in stream for frame in event.frames]
 
 
 @pytest.mark.asyncio

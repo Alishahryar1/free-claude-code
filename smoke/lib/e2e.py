@@ -7,7 +7,7 @@ import subprocess
 import time
 import uuid
 import wave
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Iterator
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -71,7 +71,7 @@ class SmokeServerDriver:
         self.command = command
 
     @contextmanager
-    def run(self) -> Iterator[RunningServer]:
+    def run(self) -> Generator[RunningServer]:
         with start_server(
             self.config,
             env_overrides=self.env_overrides,

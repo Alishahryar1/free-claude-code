@@ -10,7 +10,6 @@ flowchart LR
         config[("Managed Config<br/>~/.fcc/.env")]
         convert["Responses Converter<br/>OpenAI to Anthropic"]
         router{"Model Router<br/>Opus / Sonnet / Haiku"}
-        optimize["Request Optimizations<br/>cheap local probes"]
         normalize["Protocol Normalizer<br/>streaming, tools, thinking"]
         adapters["Provider Adapters<br/>Anthropic + OpenAI-compatible"]
     end
@@ -36,8 +35,7 @@ flowchart LR
     convert --> router
     admin --> config
     config --> router
-    router --> optimize
-    optimize --> normalize
+    router --> normalize
     normalize --> adapters
     adapters --> hosted
     adapters --> local
@@ -53,5 +51,5 @@ flowchart LR
     class messagesApi,responsesApi api;
     class admin,router proxy;
     class config config;
-    class convert,optimize,normalize,adapters transform;
+    class convert,normalize,adapters transform;
     class nim,kimi,wafer,openrouter,deepseek,lmstudio,llamacpp,ollama provider;

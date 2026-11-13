@@ -12,6 +12,8 @@ from typing import Any, cast
 import httpx2
 from loguru import logger
 from openai import AsyncOpenAI
+from openai.types.chat.chat_completion_chunk import ChoiceDelta
+from openai.types.chat.completion_create_params import CompletionCreateParamsStreaming
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
@@ -22,23 +24,25 @@ from free_claude_code.core.anthropic import (
 )
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.streaming import (
-    ToolSchema,
-    accept_tool_json_repair,
-    continuation_suffix,
-    make_response_recovery_body,
-    make_text_recovery_body,
-    make_tool_repair_body,
     map_stop_reason,
-    parse_complete_tool_input,
-    tool_schemas_by_name,
+)
+from free_claude_code.core.chat_completions.request import ChatRequest
+from free_claude_code.core.chat_completions.response import NativeChatRelay
+from free_claude_code.core.chat_completions.tool_calls import (
+    ChatToolCallBuffer,
+    CompletedChatBatch,
+    CompletedChatCall,
+    finalize_chat_call,
 )
 from free_claude_code.core.diagnostics import (
     exception_cause_types,
     redacted_exception_traceback,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.core.history_replay import prepare_history
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.gemini import GeminiConversionError, GeminiRequest
+from free_claude_code.core.gemini.replay import CallReplay, apply_call_replay
+from free_claude_code.core.gemini.request import build_gemini_chat_request
+from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesChatRequest,
@@ -54,6 +58,7 @@ from free_claude_code.core.reasoning import (
     ReasoningControl,
     ReasoningPolicy,
 )
+from free_claude_code.core.stream_output import StreamOutput, completed_output
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.core.trace import provider_chat_body_snapshot, trace_event
 from free_claude_code.providers.admission import (
@@ -70,13 +75,16 @@ from free_claude_code.providers.continuation import (
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.failure_policy import (
-    RetryableToolProtocolError,
     classify_provider_failure,
     context_window_exceeded_provider_failure,
     is_context_window_finish_reason,
     is_retryable_stream_error,
     provider_authentication_status,
     underlying_provider_error,
+)
+from free_claude_code.providers.history_negotiation import (
+    HistoryModeCache,
+    resolve_history_overrides,
 )
 from free_claude_code.providers.history_replay import (
     replay_origin,
@@ -98,14 +106,13 @@ from free_claude_code.providers.request_recovery import (
     RequestRecovery,
 )
 from free_claude_code.providers.stream_recovery import (
-    HoldbackSignal,
-    RecoveryController,
-    RecoveryDecision,
-    RecoveryFailureAction,
     TruncatedProviderStreamError,
+    can_retry_undelivered_stream,
 )
 
 from .behavior import OpenAIChatBehavior
+from .gemini_output import GeminiChatStreamOutput
+from .native_output import NativeChatStreamOutput
 from .output_cap import clamp_output_tokens, parse_output_token_cap
 from .profiles import OpenAIChatProfile
 from .reasoning_details import StructuredReasoningStream
@@ -113,17 +120,12 @@ from .request_policy import (
     apply_openai_chat_body_policy,
 )
 from .stream_output import (
+    ORDINARY_REASONING_SOURCE,
     AnthropicChatStreamOutput,
     ChatStreamOutput,
     ChatStreamUsage,
+    CompletedToolCall,
     ResponsesChatStreamOutput,
-)
-from .tool_call_identity import AmbiguousToolCallIdentityError
-from .tool_calls import (
-    CompletedOpenAIToolCall,
-    OpenAIToolCallAssembler,
-    OpenAIToolCallCollector,
-    tool_call_extra_content,
 )
 from .usage import (
     clone_without_stream_usage,
@@ -134,16 +136,9 @@ from .usage import (
 )
 
 OpenAIAsyncCredentialProvider = Callable[[], Awaitable[str]]
+PreparedBodyValidator = Callable[[Mapping[str, Any]], Awaitable[None]]
 _ExtraReasoningEvents = Callable[[Any, ChatStreamOutput], Iterator[str]]
 _ChatOutputFactory = Callable[[], ChatStreamOutput]
-
-
-@dataclass(frozen=True, slots=True)
-class _CollectedRecoveryOutput:
-    text: str
-    thinking: str
-    tool_calls: tuple[CompletedOpenAIToolCall, ...]
-    request_body: JsonObject
 
 
 def _iter_visible_text_events(
@@ -164,14 +159,12 @@ class _OpenAIChatCompletion:
 
 class _OpenAIChatFailureOutcome(StrEnum):
     RETRY = "retry"
-    COMPLETE = "complete"
     RAISE = "raise"
 
 
 @dataclass(frozen=True, slots=True)
 class _OpenAIChatFailureResolution:
     outcome: _OpenAIChatFailureOutcome
-    events: tuple[str, ...] = ()
     failure: ExecutionFailure | None = None
 
 
@@ -186,7 +179,7 @@ def _reserved_anthropic_tool_ids(request: MessagesRequest) -> frozenset[str]:
     )
 
 
-class _OpenAIChatStreamAssembler:
+class _ChatStreamPresenter:
     """Own one discardable OpenAI-chat replay epoch."""
 
     def __init__(
@@ -197,8 +190,8 @@ class _OpenAIChatStreamAssembler:
         provider_name: str,
         output_reasoning: bool,
         tool_names: OpenAIToolNameCodec,
-        tool_schemas: dict[str, ToolSchema],
-        tool_calls: OpenAIToolCallAssembler,
+        reserved_tool_ids: frozenset[str],
+        record_extra_content: Callable[[str, dict[str, Any]], None],
         extra_reasoning_events: _ExtraReasoningEvents,
     ) -> None:
         self._output = output
@@ -206,23 +199,19 @@ class _OpenAIChatStreamAssembler:
         self._provider_name = provider_name
         self._output_reasoning = output_reasoning
         self._tool_names = tool_names
-        self._tool_schemas = tool_schemas
-        self._tool_calls = tool_calls
+        self._tool_buffer = ChatToolCallBuffer()
+        self._reserved_tool_ids = set(reserved_tool_ids)
+        self._record_extra_content = record_extra_content
         self._extra_reasoning_events = extra_reasoning_events
         self._think_parser = ThinkTagParser()
-        self._structured_reasoning = (
-            StructuredReasoningStream()
-            if profile.structured_reasoning_details
-            else None
+        self._structured_reasoning = StructuredReasoningStream(
+            structured_details=profile.structured_reasoning_details
         )
-        if self._structured_reasoning is not None:
-            self._output.reasoning_replay = self._structured_reasoning
+        self._output.reasoning_replay = self._structured_reasoning
         self._finish_reason: Any = None
         self._raw_stop_seen = False
         self._usage_info: Any = None
         self._tool_argument_aliases: dict[str, dict[str, str]] = {}
-        self._tool_argument_alias_buffers: dict[int, str] = {}
-        self._tool_name_buffers: dict[int, str] = {}
         self._started = False
         self._aliases_bound = False
         self._upstream_finished = False
@@ -248,34 +237,12 @@ class _OpenAIChatStreamAssembler:
         return self._output.committed_output
 
     @property
-    def complete_tool_salvageable(self) -> bool:
-        return (
-            self.generated_output
-            and self._output.has_emitted_tool_block()
-            and self._output.can_salvage_tool_use(self._tool_schemas)
-        )
-
-    @property
-    def tool_argument_alias_buffers(self) -> Mapping[int, str]:
-        return self._tool_argument_alias_buffers
-
-    @property
     def normal_stop_seen(self) -> bool:
         return self._raw_stop_seen or self._finish_reason is not None
 
     def observe_upstream_chunk(self, chunk: Any) -> None:
         if chunk.choices and chunk.choices[0].finish_reason is not None:
             self._raw_stop_seen = True
-
-    def recovered_tool_call_events(
-        self, tool_calls: tuple[CompletedOpenAIToolCall, ...]
-    ) -> Iterator[str]:
-        """Import a complete recovery batch without inheriting abandoned tools."""
-        if self._output.has_emitted_tool_block():
-            raise RuntimeError("cannot replace started tool calls with recovery output")
-        self._tool_name_buffers.clear()
-        self._tool_argument_alias_buffers.clear()
-        yield from self._tool_calls.process_completed_calls(tool_calls, self._output)
 
     def start_events(self) -> Iterator[str]:
         if self._started:
@@ -289,79 +256,107 @@ class _OpenAIChatStreamAssembler:
         self._aliases_bound = True
         self._tool_argument_aliases = aliases
 
-    def feed(self, chunk: Any) -> Iterator[str]:
+    def feed(self, chunk: Any) -> Iterator[StreamOutput]:
         if not self._started or self._upstream_finished:
-            raise RuntimeError("stream assembler is not accepting chunks")
+            raise RuntimeError("stream presenter is not accepting chunks")
 
-        chunk_usage = getattr(chunk, "usage", None)
+        if chunk.choices and chunk.choices[0].finish_reason is not None:
+            self._finish_reason = chunk.choices[0].finish_reason
+        yield from self._present(
+            self._tool_buffer.feed(chunk.model_dump(mode="json", exclude_unset=True))
+        )
+
+    def abandon(self) -> Iterator[StreamOutput]:
+        yield from self._present(self._tool_buffer.abandon())
+
+    def _present(self, items) -> Iterator[StreamOutput]:
+        for item in items:
+            if isinstance(item, CompletedChatCall):
+                call = finalize_chat_call(
+                    item,
+                    codec=self._tool_names,
+                    aliases=self._tool_argument_aliases,
+                    reserved_ids=self._reserved_tool_ids,
+                )
+                function = call.body.get("function")
+                if function is None:
+                    raise ExecutionFailure(
+                        FailureKind.UPSTREAM,
+                        502,
+                        "Custom Chat calls cannot be represented in this protocol",
+                        False,
+                    )
+                extra = call.body.get("extra_content")
+                if extra:
+                    self._record_extra_content(call.body["id"], extra)
+                frames = [
+                    *self._output.close_content_blocks(),
+                    *self._output.emit_complete_tool(
+                        call.index,
+                        CompletedToolCall(
+                            call.body["id"],
+                            function["name"],
+                            function["arguments"],
+                            extra,
+                        ),
+                    ),
+                ]
+                yield completed_output(frames)
+            else:
+                frames = tuple(self._feed_frame(item))
+                if frames:
+                    yield StreamOutput(frames)
+
+    def _feed_frame(self, chunk: dict[str, Any]) -> Iterator[str]:
+
+        chunk_usage = chunk.get("usage")
         if chunk_usage is not None:
             self._usage_info = chunk_usage
 
-        if not chunk.choices:
+        if not chunk.get("choices"):
             return
 
-        choice = chunk.choices[0]
-        delta = choice.delta
-        if choice.finish_reason is not None:
-            self._finish_reason = choice.finish_reason
-        if delta is None:
+        choice = chunk["choices"][0]
+        raw_delta = choice.get("delta")
+        if choice.get("finish_reason") is not None:
+            self._finish_reason = choice["finish_reason"]
+        if raw_delta is None:
             return
+        # This is already SDK-decoded source data. Preserve its permissive extras
+        # for provider reasoning hooks without validating unrelated usage fields.
+        delta = ChoiceDelta.model_construct(**raw_delta)
 
-        if choice.finish_reason:
-            self._finish_reason = choice.finish_reason
+        if choice.get("finish_reason"):
             logger.debug(
                 "{} finish_reason: {}",
                 self._provider_name,
                 self._finish_reason,
             )
 
-        reasoning = self._profile.reasoning_delta(delta)
-        if self._structured_reasoning is not None:
-            yield from self._structured_reasoning.events(
-                delta,
-                self._output,
-                native_reasoning=reasoning if self._output_reasoning else None,
-                output_reasoning=self._output_reasoning,
-            )
-        elif self._output_reasoning and reasoning:
-            yield from self._output.ensure_reasoning_block()
-            yield self._output.emit_reasoning_delta(reasoning)
+        field, reasoning = self._profile.native_reasoning_delta(delta)
+        yield from self._structured_reasoning.events(
+            delta,
+            self._output,
+            native_reasoning=reasoning if self._output_reasoning else None,
+            native_field=field,
+            output_reasoning=self._output_reasoning,
+        )
 
         yield from self._extra_reasoning_events(delta, self._output)
 
-        native_tool_calls = delta.tool_calls
         if delta.content:
             for part in self._think_parser.feed(delta.content):
                 if part.type == ContentType.THINKING:
                     if not self._output_reasoning:
                         continue
-                    yield from self._output.ensure_reasoning_block()
-                    yield self._output.emit_reasoning_delta(part.content)
+                    yield from self._output.ensure_reasoning_block(
+                        source=ORDINARY_REASONING_SOURCE
+                    )
+                    yield self._output.emit_reasoning_delta(
+                        part.content, source=ORDINARY_REASONING_SOURCE
+                    )
                 else:
                     yield from _iter_visible_text_events(self._output, part.content)
-
-        if native_tool_calls:
-            yield from self._output.close_content_blocks()
-            for tool_call in native_tool_calls:
-                extra_content = tool_call_extra_content(tool_call)
-                tool_call_info = {
-                    "index": tool_call.index,
-                    "id": tool_call.id,
-                    "function": {
-                        "name": tool_call.function.name,
-                        "arguments": tool_call.function.arguments,
-                    },
-                }
-                if extra_content:
-                    tool_call_info["extra_content"] = extra_content
-                yield from self._tool_calls.process_tool_call(
-                    tool_call_info,
-                    self._output,
-                    tool_names=self._tool_names,
-                    tool_name_buffers=self._tool_name_buffers,
-                    tool_argument_aliases=self._tool_argument_aliases,
-                    tool_argument_alias_buffers=self._tool_argument_alias_buffers,
-                )
 
     def finish_upstream(self) -> Iterator[str]:
         if self._upstream_finished:
@@ -372,20 +367,16 @@ class _OpenAIChatStreamAssembler:
             )
         if is_context_window_finish_reason(self._finish_reason):
             raise context_window_exceeded_provider_failure()
-        if any(
-            not self._tool_names.is_unchanged_name(name)
-            for name in self._tool_name_buffers.values()
-        ):
-            raise TruncatedProviderStreamError(
-                "Provider stream ended with an incomplete tool name."
-            )
-
         remaining = self._think_parser.flush()
         if remaining:
             if remaining.type == ContentType.THINKING:
                 if self._output_reasoning:
-                    yield from self._output.ensure_reasoning_block()
-                    yield self._output.emit_reasoning_delta(remaining.content)
+                    yield from self._output.ensure_reasoning_block(
+                        source=ORDINARY_REASONING_SOURCE
+                    )
+                    yield self._output.emit_reasoning_delta(
+                        remaining.content, source=ORDINARY_REASONING_SOURCE
+                    )
             else:
                 yield from _iter_visible_text_events(self._output, remaining.content)
 
@@ -395,14 +386,6 @@ class _OpenAIChatStreamAssembler:
     def prepare_completion(self, *, pad_empty: bool) -> Iterator[str]:
         if not self._upstream_finished or self._completion is not None:
             raise RuntimeError("stream completion cannot be prepared")
-
-        yield from self._tool_calls.flush_tool_name_buffers(
-            self._output,
-            tool_names=self._tool_names,
-            tool_name_buffers=self._tool_name_buffers,
-            tool_argument_aliases=self._tool_argument_aliases,
-            tool_argument_alias_buffers=self._tool_argument_alias_buffers,
-        )
 
         has_emitted_tool = self._output.has_emitted_tool_block()
         has_content_blocks = self._output.has_content_block()
@@ -417,11 +400,6 @@ class _OpenAIChatStreamAssembler:
             yield from self._output.ensure_text_block()
             yield self._output.emit_text_delta(" ")
 
-        yield from self._tool_calls.flush_tool_argument_alias_buffers(
-            self._output,
-            self._tool_argument_aliases,
-            self._tool_argument_alias_buffers,
-        )
         yield from self._output.close_all_blocks()
 
         completion = usage_int(self._usage_info, "completion_tokens")
@@ -452,6 +430,74 @@ class _OpenAIChatStreamAssembler:
         self._completed = True
 
 
+class _NativeChatStreamPresenter(_ChatStreamPresenter):
+    """Use the existing attempt owner without translating native Chat chunks."""
+
+    def __init__(self, *, choices: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        assert isinstance(self._output, NativeChatStreamOutput)
+        self._output.reasoning_replay = None
+        self._relay = NativeChatRelay(self._output.chat.model, choices=choices)
+        self._tool_buffer = ChatToolCallBuffer(native=True)
+        self._generated = False
+
+    @property
+    def generated_output(self) -> bool:
+        return self._generated
+
+    @property
+    def normal_stop_seen(self) -> bool:
+        return self._relay.normal_stop_seen
+
+    def observe_upstream_chunk(self, chunk: Any) -> None:
+        pass
+
+    def start_events(self) -> Iterator[str]:
+        self._started = True
+        return iter(())
+
+    def feed(self, chunk: Any) -> Iterator[StreamOutput]:
+        payload = chunk.model_dump(mode="json", exclude_unset=True)
+        if getattr(chunk, "usage", None) is not None:
+            self._usage_info = chunk.usage
+        for choice in payload.get("choices", []):
+            if choice.get("finish_reason") is not None:
+                self._finish_reason = choice["finish_reason"]
+            delta = choice.get("delta") or {}
+            self._generated |= any(
+                value for key, value in delta.items() if key != "role"
+            )
+        yield from self._present(self._tool_buffer.feed(payload))
+
+    def _present(self, items) -> Iterator[StreamOutput]:
+        for item in items:
+            if isinstance(item, CompletedChatBatch):
+                yield completed_output(self._relay.feed(frame) for frame in item.frames)
+            else:
+                yield StreamOutput((self._relay.feed(item),))
+
+    def finish_upstream(self) -> Iterator[str]:
+        if not self._relay.normal_stop_seen:
+            raise TruncatedProviderStreamError(
+                "Native Chat stream ended before all choices completed"
+            )
+        self._upstream_finished = True
+        return iter(())
+
+    def prepare_completion(self, *, pad_empty: bool) -> Iterator[str]:
+        provider_input = usage_int(self._usage_info, "prompt_tokens")
+        self._completion = _OpenAIChatCompletion(
+            self._finish_reason,
+            usage_int(self._usage_info, "completion_tokens") or 0,
+            provider_input if provider_input is not None else self._output.input_tokens,
+            provider_input,
+        )
+        return iter(())
+
+    def terminal_events(self, *, usage: ChatStreamUsage) -> Iterator[str]:
+        yield from self._relay.finish()
+
+
 class OpenAIChatTransport:
     """Execute Chat requests while borrowing provider-owned HTTP resources."""
 
@@ -460,14 +506,20 @@ class OpenAIChatTransport:
         *,
         client: AsyncOpenAI,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         behavior: OpenAIChatBehavior,
         read_timeout_s: float,
         log_raw_sse_events: bool,
         log_api_error_tracebacks: bool,
         endpoint_transport: httpx2.AsyncBaseTransport | None = None,
+        api_key_provider: OpenAIAsyncCredentialProvider | None = None,
+        validate_prepared_body: PreparedBodyValidator | None = None,
     ) -> None:
         self._client = client
         self._admission = admission
+        self._history_cache = (
+            history_cache if history_cache is not None else HistoryModeCache()
+        )
         self._behavior = behavior
         self._profile = behavior.profile
         self._provider_name = self._profile.provider_name
@@ -475,6 +527,8 @@ class OpenAIChatTransport:
         self._log_raw_sse_events = log_raw_sse_events
         self._log_api_error_tracebacks = log_api_error_tracebacks
         self._endpoint_transport = endpoint_transport
+        self._api_key_provider = api_key_provider
+        self._validate_prepared_body = validate_prepared_body
         self._model_output_caps: dict[str, int] = {}
 
     def _log_stream_transport_error(
@@ -573,7 +627,6 @@ class OpenAIChatTransport:
         return ResponsesChatRequest(
             body=body,
             tool_names=translated.tool_names,
-            tool_schemas=translated.tool_schemas,
             reserved_tool_ids=translated.reserved_tool_ids,
             tool_adapter=translated.tool_adapter,
         )
@@ -589,6 +642,9 @@ class OpenAIChatTransport:
         request_client: OpenAIRequestClient | None = None,
         extra_headers: Mapping[str, str] | None = None,
         on_event: Callable[[Any], None] | None = None,
+        on_origin: Callable[[ReplayOrigin], None] | None = None,
+        call_replay: tuple[CallReplay, ...] = (),
+        native_chat: bool = False,
     ) -> tuple[Any, dict, ProviderAttempt, dict]:
         """Create a streaming chat completion with bounded request fallbacks."""
         execution = request_recovery.execution
@@ -601,13 +657,27 @@ class OpenAIChatTransport:
             stream: Any | None = None
             retain_attempt = False
             create_body = body
+            validating = False
             try:
-                create_body = self._behavior.prepare_create_body(body)
+                create_body = cast(
+                    dict[str, Any],
+                    resolve_history_overrides(
+                        body
+                        if native_chat
+                        else self._behavior.prepare_create_body(body)
+                    ),
+                )
                 client = self._client
                 if endpoint is not None:
                     assert request_client is not None
                     client = request_client.for_endpoint(
                         self._client, await endpoint.resolve()
+                    )
+                elif self._api_key_provider is not None:
+                    # A borrowed view pins the same credential for provenance and
+                    # inference, without owning or closing the provider's HTTP pool.
+                    client = self._client.with_options(
+                        api_key=await self._api_key_provider()
                     )
                 if extra_headers or endpoint is not None:
                     create_body = create_body.copy()
@@ -623,33 +693,87 @@ class OpenAIChatTransport:
                 origin = replay_origin(
                     self._provider_name,
                     "chat",
-                    str(body["model"]),
+                    str(create_body["model"]),
                     client=client,
                     endpoint=endpoint.snapshot if endpoint is not None else None,
                 )
+                if on_origin is not None:
+                    on_origin(origin)
                 create_body = cast(
                     dict[str, Any],
-                    prepare_history(
+                    corrections.prepare_history(
                         create_body,
                         origin,
-                        scope=self._behavior.history_scope(body),
+                        self._history_cache,
                         reasoning_field=self._profile.request_policy.reasoning_replay.value,
                         structured_details=self._profile.structured_reasoning_details,
+                        native_chat=native_chat,
+                        continuation=operation_kind
+                        is ProviderOperationKind.CONTINUATION,
+                        finalize=lambda projected, origin=origin: (
+                            self._behavior.prepare_history_body(
+                                cast(
+                                    dict[str, Any],
+                                    apply_call_replay(projected, origin, call_replay),
+                                )
+                                if call_replay
+                                else projected,
+                                origin,
+                            )
+                        ),
                     ),
                 )
+                if self._validate_prepared_body is not None:
+                    validating = True
+                    await self._validate_prepared_body(create_body)
+                    validating = False
+
+                def observed(event: Any) -> None:
+                    if (
+                        getattr(event, "choices", None)
+                        or getattr(event, "usage", None) is not None
+                    ):
+                        corrections.accepted_history()
+                    if on_event is not None:
+                        on_event(event)
+
+                if native_chat:
+                    sdk_fields = CompletionCreateParamsStreaming.__annotations__
+                    extras = {
+                        key: value
+                        for key, value in create_body.items()
+                        if key not in sdk_fields
+                        and key not in {"extra_body", "extra_headers"}
+                    }
+                    create_body = {
+                        key: value
+                        for key, value in create_body.items()
+                        if key in sdk_fields or key in {"extra_body", "extra_headers"}
+                    }
+                    if extras:
+                        create_body["extra_body"] = {
+                            **extras,
+                            **create_body.get("extra_body", {}),
+                        }
                 stream = OpenAIStreamAdapter(
                     await client.chat.completions.create(
                         **create_body,
                         stream=True,
                     ),
-                    on_event=on_event,
+                    read_timeout_s=self._read_timeout_s,
+                    on_event=observed,
                 )
-                stream = self._behavior.normalize_stream(stream, body)
+                if not native_chat:
+                    stream = self._behavior.normalize_stream(stream, body)
                 retain_attempt = True
                 return stream, body, attempt, create_body
             except asyncio.CancelledError:
                 raise
             except Exception as error:
+                if validating:
+                    # No upstream response occurred. Abandon the permit without
+                    # teaching correction or recovery state about a rejection.
+                    raise
                 retry_body = await request_recovery.retry_request(
                     error,
                     provider_authentication_status(error),
@@ -679,6 +803,8 @@ class OpenAIChatTransport:
                     provider_failure_override=self._behavior.failure_override,
                 )
                 if not decision.retry_allowed:
+                    if decision.error is not error:
+                        raise decision.error from error
                     raise
             finally:
                 if not retain_attempt:
@@ -721,9 +847,7 @@ class OpenAIChatTransport:
                 return retry_body
 
         if "provider_specific" not in used_retry_kinds:
-            retry_body = self._behavior.retry_request_body(
-                error, dict(sent_body) if sent_body is not None else body
-            )
+            retry_body = self._behavior.retry_request_body(error, body)
             if retry_body is not None:
                 used_retry_kinds.add("provider_specific")
                 return retry_body
@@ -763,6 +887,62 @@ class OpenAIChatTransport:
         )
         return clamped
 
+    def stream_chat(
+        self,
+        request: ChatRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        model_info: ProviderModelInfo | None = None,
+        endpoint_context: EndpointContext | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[StreamOutput]:
+        raw = request.body()
+        raw.pop("stream", None)
+        if not request.stream:
+            raw["stream_options"] = {
+                **(request.stream_options or {}),
+                "include_usage": True,
+            }
+        # Ingress is JSON wire data, not SDK kwargs. A literal extra_body or
+        # extra_headers extension must stay in the JSON rather than overriding
+        # request fields or HTTP headers inside the SDK.
+        sdk_fields = CompletionCreateParamsStreaming.__annotations__
+        body = {key: value for key, value in raw.items() if key in sdk_fields}
+        extensions = {key: value for key, value in raw.items() if key not in sdk_fields}
+        if extensions:
+            body["extra_body"] = extensions
+        # Explicit routing overrides have priority. Otherwise native controls stay
+        # exactly as supplied, including vendor extensions and explicit nulls.
+        if reasoning != DEFAULT_REASONING_POLICY:
+            self._profile.apply_reasoning_to_body(body, reasoning)
+        validate_history(body)
+        public_model = response_model or request.model
+        options = body.get("stream_options") or {}
+        return _OpenAIChatStreamRunner(
+            self,
+            body=body,
+            tool_names=OpenAIToolNameCodec.from_names(()),
+            reserved_tool_ids=frozenset(),
+            output_factory=lambda: NativeChatStreamOutput(
+                model=public_model,
+                input_tokens=input_tokens,
+                include_usage=isinstance(options, dict)
+                and bool(options.get("include_usage")),
+            ),
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=public_model,
+            reasoning=reasoning,
+            endpoint_context=endpoint_context,
+            extra_headers=extra_headers,
+            continuation=continuation,
+            native_chat=True,
+        ).run()
+
     def stream_messages(
         self,
         request: MessagesRequest,
@@ -775,7 +955,7 @@ class OpenAIChatTransport:
         endpoint_context: EndpointContext | None = None,
         extra_headers: Mapping[str, str] | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Stream response in Anthropic SSE format."""
         prepared_request, wire_reasoning = self._prepare_messages_reasoning(
             request, reasoning, model_info
@@ -800,7 +980,6 @@ class OpenAIChatTransport:
             self,
             body=body,
             tool_names=tool_names,
-            tool_schemas=tool_schemas_by_name(request),
             reserved_tool_ids=_reserved_anthropic_tool_ids(request),
             output_factory=lambda: AnthropicChatStreamOutput(
                 message_id=message_id,
@@ -821,6 +1000,61 @@ class OpenAIChatTransport:
         )
         return runner.run()
 
+    def stream_gemini(
+        self,
+        request: GeminiRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        model_info: ProviderModelInfo | None = None,
+        endpoint_context: EndpointContext | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[StreamOutput]:
+        try:
+            prepared = build_gemini_chat_request(request)
+        except GeminiConversionError as error:
+            raise InvalidRequestError(str(error)) from error
+        body = prepared.body
+        body.pop("stream", None)
+        policy = self._profile.request_policy
+        for key in policy.unsupported_body_keys:
+            if key in body:
+                raise InvalidRequestError(
+                    f"{self._provider_name} cannot represent Gemini control {key}"
+                )
+        if "max_tokens" not in body and policy.default_max_tokens is not None:
+            body["max_tokens"] = policy.default_max_tokens
+        apply_openai_chat_body_policy(body, policy)
+        self._profile.apply_reasoning_to_body(body, reasoning)
+        body = self._behavior.finalize_chat_body(body, reasoning=reasoning)
+        public_model = request.model if response_model is None else response_model
+        response_id = f"fcc_{uuid.uuid4().hex}"
+        runner = _OpenAIChatStreamRunner(
+            self,
+            body=body,
+            tool_names=prepared.tool_names,
+            reserved_tool_ids=prepared.reserved_tool_ids,
+            output_factory=lambda: GeminiChatStreamOutput(
+                response_id=response_id,
+                model=public_model,
+                include_thoughts=request.include_thoughts,
+                tool_names=prepared.declared_names,
+                input_tokens=input_tokens,
+            ),
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=public_model,
+            reasoning=reasoning,
+            endpoint_context=endpoint_context,
+            extra_headers=extra_headers,
+            continuation=continuation,
+            call_replay=prepared.call_replay,
+        )
+        return runner.run()
+
     def stream_responses(
         self,
         request: OpenAIResponsesRequest,
@@ -832,19 +1066,14 @@ class OpenAIChatTransport:
         endpoint_context: EndpointContext | None = None,
         extra_headers: Mapping[str, str] | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Stream a Chat upstream directly as OpenAI Responses SSE."""
         translated = self._build_responses_request_body(request, reasoning=reasoning)
         public_model = request.model if response_model is None else response_model
-        tool_schemas = {
-            name: ToolSchema(name=name, input_schema=schema)
-            for name, schema in translated.tool_schemas.items()
-        }
         runner = _OpenAIChatStreamRunner(
             self,
             body=translated.body,
             tool_names=translated.tool_names,
-            tool_schemas=tool_schemas,
             reserved_tool_ids=translated.reserved_tool_ids,
             output_factory=lambda: ResponsesChatStreamOutput(
                 translated.tool_adapter,
@@ -871,7 +1100,6 @@ class _OpenAIChatStreamRunner:
         *,
         body: dict[str, Any],
         tool_names: OpenAIToolNameCodec,
-        tool_schemas: dict[str, ToolSchema],
         reserved_tool_ids: frozenset[str],
         output_factory: _ChatOutputFactory,
         input_tokens: int,
@@ -882,13 +1110,16 @@ class _OpenAIChatStreamRunner:
         extra_headers: Mapping[str, str] | None = None,
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
+        call_replay: tuple[CallReplay, ...] = (),
+        native_chat: bool = False,
     ) -> None:
         self._transport = transport
+        self._native_chat = native_chat
         self._body = body
         self._continuation = continuation
+        self._call_replay = call_replay
         self._tool_argument_aliases = transport._behavior.tool_argument_aliases(body)
         self._tool_names = tool_names
-        self._tool_schemas = tool_schemas
         self._reserved_tool_ids = reserved_tool_ids
         self._output_factory = output_factory
         self._input_tokens = input_tokens
@@ -903,16 +1134,18 @@ class _OpenAIChatStreamRunner:
             RequestEndpoint(endpoint_context) if endpoint_context is not None else None
         )
 
-    async def run(self) -> AsyncIterator[str]:
+    async def run(self) -> AsyncIterator[StreamOutput]:
         """Convert the upstream OpenAI-chat stream into Anthropic SSE."""
+        model = self._body["model"]
+        extra_body = self._body.get("extra_body")
+        # The SDK merges allowed extra_body fields over the top-level request.
+        if isinstance(extra_body, dict) and isinstance(extra_body.get("model"), str):
+            model = extra_body["model"]
         execution = self._transport._admission.start_execution(
-            request_id=self._request_id
+            request_id=self._request_id, model=str(model)
         )
-        recovery = RecoveryController(execution.delivery)
-        request_recovery = RequestRecovery(
-            execution, endpoint=self._endpoint, stream=recovery
-        )
-        provider_stream = self._run_execution(request_recovery, recovery)
+        request_recovery = RequestRecovery(execution, endpoint=self._endpoint)
+        provider_stream = self._run_execution(request_recovery)
         try:
             async for event in provider_stream:
                 yield event
@@ -938,25 +1171,24 @@ class _OpenAIChatStreamRunner:
     async def _run_execution(
         self,
         request_recovery: RequestRecovery,
-        recovery: RecoveryController,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Run one provider execution while retaining transport-owned state."""
         tag = self._transport._provider_name
         req_tag = f" request_id={self._request_id}" if self._request_id else ""
         execution = request_recovery.execution
 
-        def hold_event(event: str) -> Iterator[str]:
-            yield from recovery.push(event)
+        def packet(event: str) -> Iterator[StreamOutput]:
+            if event:
+                yield StreamOutput((event,))
 
-        body = self._body
+        body = resolve_history_overrides(self._body)
         continuation_request = ContinuationRequest("chat")
         operation_kind = ProviderOperationKind.GENERATION
         if self._continuation is not None:
-            body = continuation_request.build(
-                body, self._continuation.text, self._continuation.thinking
-            )
+            body = continuation_request.build(body, self._continuation)
             operation_kind = ProviderOperationKind.CONTINUATION
-        request_stream_usage(body)
+        if not self._native_chat:
+            request_stream_usage(body)
         output_reasoning = self._reasoning.output_enabled
         corrections = RequestCorrections("chat", self._reasoning_correction)
         trace_event(
@@ -975,16 +1207,23 @@ class _OpenAIChatStreamRunner:
 
         source: SourceRecoveryState | None = None
         while True:
-            assembler = self._new_stream_assembler(output_reasoning=output_reasoning)
+            presenter = self._new_stream_presenter(output_reasoning=output_reasoning)
             source = SourceRecoveryState(execution, previous=source)
 
             def observe_chunk(
                 chunk: Any,
-                assembler: _OpenAIChatStreamAssembler = assembler,
+                presenter: _ChatStreamPresenter = presenter,
                 source: SourceRecoveryState = source,
                 operation_kind: ProviderOperationKind = operation_kind,
             ) -> None:
-                assembler.observe_upstream_chunk(chunk)
+                presenter.observe_upstream_chunk(chunk)
+                if self._native_chat:
+                    source.observe(
+                        "chat",
+                        chunk.model_dump(mode="json", exclude_unset=True),
+                        continuing=operation_kind is ProviderOperationKind.CONTINUATION,
+                    )
+                    return
                 source.observe(
                     "chat",
                     {
@@ -1028,6 +1267,9 @@ class _OpenAIChatStreamRunner:
                     request_client=self._request_client,
                     extra_headers=self._extra_headers,
                     on_event=observe_chunk,
+                    on_origin=partial(setattr, presenter.output, "replay_origin"),
+                    call_replay=self._call_replay,
+                    native_chat=self._native_chat,
                 )
                 scope = ProviderAttemptScope(
                     attempt,
@@ -1035,30 +1277,31 @@ class _OpenAIChatStreamRunner:
                     request_id=self._request_id,
                 )
                 stream = scope.retain(stream)
-                assembler.bind_tool_argument_aliases(self._tool_argument_aliases)
-                async with recovery.read_stream(stream) as chunks:
-                    async for chunk in chunks:
-                        if chunk is HoldbackSignal.EXPIRED:
-                            for event in recovery.flush():
-                                yield event
-                            continue
-                        if not scope.attempt.accepted:
-                            await scope.attempt.accept()
-                        for event in assembler.start_events():
-                            for out_event in hold_event(event):
-                                yield out_event
-                        for event in assembler.feed(chunk):
-                            for out_event in hold_event(event):
-                                yield out_event
+                presenter.bind_tool_argument_aliases(self._tool_argument_aliases)
+                async for chunk in stream:
+                    if not scope.attempt.accepted:
+                        await scope.attempt.accept()
+                    for event in presenter.start_events():
+                        for out_event in packet(event):
+                            yield out_event
+                    for output in presenter.feed(chunk):
+                        yield output
 
-                for event in assembler.finish_upstream():
-                    for out_event in hold_event(event):
+                for event in presenter.finish_upstream():
+                    for out_event in packet(event):
                         yield out_event
                 break
 
             except asyncio.CancelledError, GeneratorExit:
                 raise
             except Exception as error:
+                if not (
+                    isinstance(error, ExecutionFailure)
+                    and error.stream_context
+                    and error.stream_context.source.unsafe_reason
+                ):
+                    for output in presenter.abandon():
+                        yield output
                 if scope is not None:
                     corrected_body = await request_recovery.retry_request(
                         error,
@@ -1066,7 +1309,7 @@ class _OpenAIChatStreamRunner:
                         scope.attempt,
                         body,
                         operation_kind=operation_kind,
-                        normal_stop_seen=assembler.normal_stop_seen,
+                        normal_stop_seen=presenter.normal_stop_seen,
                         propose_correction=partial(
                             corrections.next_body,
                             error,
@@ -1078,7 +1321,6 @@ class _OpenAIChatStreamRunner:
                     )
                     if corrected_body is not None:
                         body = corrected_body
-                        recovery.discard()
                         continue
                 if (
                     execution.delivery is not None
@@ -1091,11 +1333,10 @@ class _OpenAIChatStreamRunner:
                         body=body,
                         request=continuation_request,
                         retryable=is_retryable_stream_error(error),
-                        normal_stop_seen=assembler.normal_stop_seen,
+                        normal_stop_seen=presenter.normal_stop_seen,
                         source=source,
                     )
                     if recovered is not None:
-                        recovery.discard()
                         if recovered.body is None:
                             return
                         body = recovered.body
@@ -1107,20 +1348,14 @@ class _OpenAIChatStreamRunner:
                 resolution = await self._resolve_attempt_failure(
                     error=error,
                     scope=scope,
-                    assembler=assembler,
+                    presenter=presenter,
                     source=source,
                     body=body,
                     request_recovery=request_recovery,
-                    recovery=recovery,
                     req_tag=req_tag,
                 )
                 if resolution.outcome is _OpenAIChatFailureOutcome.RETRY:
                     continue
-                for event in resolution.events:
-                    yield event
-                if resolution.outcome is _OpenAIChatFailureOutcome.COMPLETE:
-                    self._terminal_failure = resolution.failure
-                    return
                 if resolution.failure is None:
                     raise AssertionError(
                         "raise resolution requires a failure"
@@ -1130,12 +1365,13 @@ class _OpenAIChatStreamRunner:
                 if scope is not None:
                     await scope.aclose(active_error=sys.exception())
 
-        for event in assembler.prepare_completion(
+        for event in presenter.prepare_completion(
             pad_empty=operation_kind is ProviderOperationKind.GENERATION
+            and presenter.output.pad_empty
         ):
-            for out_event in hold_event(event):
+            for out_event in packet(event):
                 yield out_event
-        completion = assembler.completion
+        completion = presenter.completion
         if completion.provider_input_tokens is not None:
             logger.debug(
                 "TOKEN_ESTIMATE: our={} provider={} diff={:+d}",
@@ -1159,43 +1395,69 @@ class _OpenAIChatStreamRunner:
             prompt_tokens_estimate=self._input_tokens,
         )
         usage = ChatStreamUsage(
+            finish_reason=str(completion.finish_reason)
+            if completion.finish_reason is not None
+            else None,
+            reported={
+                key: value
+                for key, value in (
+                    ("prompt_tokens", usage_int(presenter.usage_info, "prompt_tokens")),
+                    (
+                        "completion_tokens",
+                        usage_int(presenter.usage_info, "completion_tokens"),
+                    ),
+                    ("total_tokens", usage_int(presenter.usage_info, "total_tokens")),
+                    (
+                        "cached_tokens",
+                        self._transport._behavior.cached_input_tokens(
+                            presenter.usage_info
+                        ),
+                    ),
+                    (
+                        "reasoning_tokens",
+                        nested_usage_int(
+                            presenter.usage_info,
+                            "completion_tokens_details",
+                            "reasoning_tokens",
+                        ),
+                    ),
+                )
+                if value is not None
+            },
             input_tokens=completion.input_tokens,
             output_tokens=completion.output_tokens,
             cached_tokens=self._transport._behavior.cached_input_tokens(
-                assembler.usage_info
+                presenter.usage_info
             )
             or 0,
             cache_write_tokens=self._transport._behavior.cache_write_input_tokens(
-                assembler.usage_info
+                presenter.usage_info
             ),
             reasoning_tokens=(
                 nested_usage_int(
-                    assembler.usage_info,
+                    presenter.usage_info,
                     "completion_tokens_details",
                     "reasoning_tokens",
                 )
                 or 0
             ),
             anthropic_fields=self._transport._behavior.anthropic_usage_fields(
-                assembler.usage_info
+                presenter.usage_info
             ),
         )
-        for event in assembler.terminal_events(usage=usage):
-            for out_event in hold_event(event):
+        for event in presenter.terminal_events(usage=usage):
+            for out_event in packet(event):
                 yield out_event
-        for event in recovery.flush():
-            yield event
 
     async def _resolve_attempt_failure(
         self,
         *,
         error: Exception,
         scope: ProviderAttemptScope | None,
-        assembler: _OpenAIChatStreamAssembler,
+        presenter: _ChatStreamPresenter,
         source: SourceRecoveryState,
         body: dict[str, Any],
         request_recovery: RequestRecovery,
-        recovery: RecoveryController,
         req_tag: str,
     ) -> _OpenAIChatFailureResolution:
         """Resolve one failed generation attempt without owning retry policy."""
@@ -1203,7 +1465,7 @@ class _OpenAIChatStreamRunner:
         attempt_failure = None
         if scope is not None and not scope.attempt.accepted:
             if (
-                assembler.normal_stop_seen
+                presenter.normal_stop_seen
                 and execution.delivery is not None
                 and not execution.delivery.content_released
             ):
@@ -1211,50 +1473,28 @@ class _OpenAIChatStreamRunner:
                 # Do not reserve a retry probe for this terminal execution.
                 await scope.attempt.accept()
             else:
-                attempt_failure = await scope.attempt.fail(
+                attempt_failure = await scope.fail(
                     error,
                     provider_failure_override=self._transport._behavior.failure_override,
                 )
+                error = attempt_failure.error
 
         retryable = (
             attempt_failure.retryable
             if attempt_failure is not None
             else is_retryable_stream_error(error)
         )
-        generated_output = assembler.generated_output
-        identity_failure = isinstance(error, AmbiguousToolCallIdentityError)
-        complete_tool_salvageable = (
-            not identity_failure and assembler.complete_tool_salvageable
-        )
-        if identity_failure and execution.delivery is None:
-            # Schema-valid arguments cannot prove which call owned a fragment.
-            # Only private output still held here can be discarded and replayed.
-            action = RecoveryFailureAction.FINAL_ERROR
-            if (
-                retryable
-                and not recovery.committed
-                and not assembler.normal_stop_seen
-                and execution.can_attempt
-            ):
-                recovery.discard()
-                action = RecoveryFailureAction.EARLY_RETRY
-            decision = RecoveryDecision(
-                action=action,
+        retry_allowed = (
+            can_retry_undelivered_stream(
+                execution.delivery,
                 retryable=retryable,
-                committed=recovery.committed,
-                has_buffered=recovery.has_buffered,
-            )
-        else:
-            decision = recovery.advance_failure(
-                retryable=retryable,
-                stream_opened=scope is not None,
-                generated_output=generated_output,
-                complete_tool_salvageable=complete_tool_salvageable,
                 attempts_remaining=execution.attempts_remaining,
-                normal_stop_seen=assembler.normal_stop_seen,
+                normal_stop_seen=presenter.normal_stop_seen,
             )
+            and scope is not None
+        )
         tag = self._transport._provider_name
-        if decision.action == RecoveryFailureAction.EARLY_RETRY:
+        if retry_allowed:
             trace_event(
                 stage="provider",
                 event="provider.recovery.early_retry",
@@ -1267,51 +1507,6 @@ class _OpenAIChatStreamRunner:
             )
             return _OpenAIChatFailureResolution(outcome=_OpenAIChatFailureOutcome.RETRY)
 
-        if (
-            decision.action == RecoveryFailureAction.MIDSTREAM_RECOVERY
-            and execution.delivery is None
-        ):
-            if scope is not None:
-                await scope.aclose(active_error=error)
-            try:
-                recovery_events = await self._recovery_events(
-                    body=body,
-                    assembler=assembler,
-                    error=error,
-                    tool_argument_alias_buffers=(assembler.tool_argument_alias_buffers),
-                    output_reasoning=self._reasoning.output_enabled,
-                    request_recovery=request_recovery,
-                )
-            except Exception as recovery_error:
-                trace_event(
-                    stage="provider",
-                    event="provider.recovery.failed",
-                    source="provider",
-                    provider=tag,
-                    request_id=self._request_id,
-                    exc_type=type(recovery_error).__name__,
-                )
-                recovery_failure = classify_provider_failure(
-                    underlying_provider_error(recovery_error),
-                    provider_name=tag,
-                    read_timeout_s=self._transport._read_timeout_s,
-                    request_id=self._request_id,
-                    provider_failure_override=(
-                        self._transport._behavior.failure_override
-                    ),
-                )
-                if recovery_failure.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED:
-                    error = recovery_failure
-                recovery_events = None
-            if recovery_events is not None:
-                return _OpenAIChatFailureResolution(
-                    outcome=_OpenAIChatFailureOutcome.COMPLETE,
-                    events=(
-                        *recovery.flush_uncommitted(decision),
-                        *recovery_events,
-                    ),
-                )
-
         reported_error = underlying_provider_error(error)
         self._transport._log_stream_transport_error(
             tag,
@@ -1320,7 +1515,7 @@ class _OpenAIChatStreamRunner:
             request_id=self._request_id,
         )
         failure = classify_provider_failure(
-            reported_error,
+            error,
             provider_name=tag,
             read_timeout_s=self._transport._read_timeout_s,
             request_id=self._request_id,
@@ -1341,352 +1536,19 @@ class _OpenAIChatStreamRunner:
             error_trace["error_message"] = failure.message
         trace_event(**error_trace)
 
-        if execution.delivery is not None:
-            recovery.discard()
-            return _OpenAIChatFailureResolution(
-                outcome=_OpenAIChatFailureOutcome.RAISE,
-                failure=public_stream_failure(
-                    failure,
-                    source=source,
-                    body=body,
-                    protocol="chat",
-                    normal_stop_seen=assembler.normal_stop_seen,
-                    responses_failure_payload=assembler.output.failure_payload(failure),
-                ),
-            )
-
-        failure_events: list[str] = []
-        if (
-            not decision.committed
-            and decision.has_buffered
-            and complete_tool_salvageable
-        ):
-            failure_events.extend(recovery.flush())
-        elif not decision.committed:
-            recovery.discard()
-            return _OpenAIChatFailureResolution(
-                outcome=_OpenAIChatFailureOutcome.RAISE,
-                failure=failure,
-            )
-        output = assembler.output
-        if output.consumes_terminal_failure:
-            failure_events.extend(output.finish_failure(failure))
-            return _OpenAIChatFailureResolution(
-                outcome=_OpenAIChatFailureOutcome.COMPLETE,
-                events=tuple(failure_events),
-                failure=failure,
-            )
-        failure_events.extend(output.close_unclosed_blocks())
         return _OpenAIChatFailureResolution(
             outcome=_OpenAIChatFailureOutcome.RAISE,
-            events=tuple(failure_events),
-            failure=failure,
+            failure=public_stream_failure(
+                failure,
+                source=source,
+                body=body,
+                protocol="chat",
+                normal_stop_seen=presenter.normal_stop_seen,
+                responses_failure_payload=presenter.output.failure_payload(failure),
+            ),
         )
 
-    async def _collect_recovery_output(
-        self,
-        body: dict[str, Any],
-        *,
-        include_reasoning: bool,
-        request_recovery: RequestRecovery,
-        operation_kind: ProviderOperationKind,
-        corrections: RequestCorrections | None = None,
-    ) -> _CollectedRecoveryOutput:
-        """Collect one complete buffered continuation response."""
-        execution = request_recovery.execution
-        if corrections is None:
-            corrections = RequestCorrections("chat")
-        last_error: Exception | None = None
-        while execution.can_attempt:
-            scope: ProviderAttemptScope | None = None
-            terminal_seen = False
-            try:
-                (
-                    stream,
-                    body,
-                    attempt,
-                    _sent_body,
-                ) = await self._transport._create_stream(
-                    body,
-                    request_recovery,
-                    operation_kind,
-                    corrections=corrections,
-                    endpoint=self._endpoint,
-                    request_client=self._request_client,
-                    extra_headers=self._extra_headers,
-                )
-                scope = ProviderAttemptScope(
-                    attempt,
-                    provider_name=self._transport._provider_name,
-                    request_id=self._request_id,
-                )
-                stream = scope.retain(stream)
-                text_parts: list[str] = []
-                thinking_parts: list[str] = []
-                tool_calls = OpenAIToolCallCollector()
-                async for chunk in stream:
-                    if not scope.attempt.accepted:
-                        await scope.attempt.accept()
-                    if not getattr(chunk, "choices", None):
-                        continue
-                    choice = chunk.choices[0]
-                    finish_reason = choice.finish_reason
-                    if is_context_window_finish_reason(finish_reason):
-                        raise context_window_exceeded_provider_failure()
-                    if finish_reason is not None:
-                        terminal_seen = True
-                    delta = choice.delta
-                    if delta is None:
-                        continue
-                    if include_reasoning:
-                        reasoning = self._transport._profile.reasoning_delta(delta)
-                        if reasoning:
-                            thinking_parts.append(reasoning)
-                    content = getattr(delta, "content", None)
-                    if isinstance(content, str) and content:
-                        text_parts.append(content)
-                    native_tool_calls = getattr(delta, "tool_calls", None)
-                    if isinstance(native_tool_calls, list | tuple):
-                        for tool_call in native_tool_calls:
-                            tool_calls.add(tool_call)
-
-                completed_tool_calls = tool_calls.completed_calls(
-                    self._tool_schemas,
-                    tool_names=self._tool_names,
-                    tool_argument_aliases=self._tool_argument_aliases,
-                )
-                if tool_calls.has_calls and completed_tool_calls is None:
-                    raise TruncatedProviderStreamError(
-                        "Recovery stream ended with an incomplete tool call."
-                    )
-                if not terminal_seen and not completed_tool_calls:
-                    raise TruncatedProviderStreamError(
-                        "Recovery stream ended without finish_reason."
-                    )
-                return _CollectedRecoveryOutput(
-                    text="".join(text_parts),
-                    thinking="".join(thinking_parts),
-                    tool_calls=completed_tool_calls or (),
-                    request_body=body,
-                )
-            except Exception as error:
-                last_error = error
-                retryable = is_retryable_stream_error(error)
-                if scope is not None and not scope.attempt.accepted:
-                    failure = await scope.attempt.fail(
-                        error,
-                        provider_failure_override=(
-                            self._transport._behavior.failure_override
-                        ),
-                    )
-                    retryable = failure.retryable
-                if (
-                    not retryable
-                    or not execution.can_attempt
-                    or (
-                        isinstance(error, AmbiguousToolCallIdentityError)
-                        and terminal_seen
-                    )
-                ):
-                    raise
-                trace_event(
-                    stage="provider",
-                    event="provider.recovery.retry",
-                    source="provider",
-                    provider=self._transport._provider_name,
-                    recovery_kind="openai_text",
-                    attempts_started=execution.attempts_started,
-                    max_attempts=execution.max_attempts,
-                    exc_type=type(error).__name__,
-                )
-            finally:
-                if scope is not None:
-                    await scope.aclose(active_error=sys.exception())
-        if last_error is not None:
-            raise last_error
-        return _CollectedRecoveryOutput(
-            text="",
-            thinking="",
-            tool_calls=(),
-            request_body=body,
-        )
-
-    async def _recovery_events(
-        self,
-        *,
-        body: dict[str, Any],
-        assembler: _OpenAIChatStreamAssembler,
-        error: Exception,
-        tool_argument_alias_buffers: Mapping[int, str],
-        output_reasoning: bool,
-        request_recovery: RequestRecovery,
-    ) -> list[str] | None:
-        """Build terminal recovery events when the interrupted stream permits it."""
-        output = assembler.output
-        if output.has_emitted_tool_block():
-            if not output.can_salvage_tool_use(self._tool_schemas):
-                repair_events = await self._repair_tool_args(
-                    body=body,
-                    output=output,
-                    tool_argument_alias_buffers=tool_argument_alias_buffers,
-                    request_recovery=request_recovery,
-                )
-                if repair_events is None:
-                    return None
-            else:
-                repair_events = []
-            events = list(repair_events)
-            events.extend(
-                output.finish_success(
-                    stop_reason="end_turn",
-                    usage=ChatStreamUsage(
-                        input_tokens=self._input_tokens,
-                        output_tokens=output.estimate_output_tokens(),
-                    ),
-                )
-            )
-            trace_event(
-                stage="provider",
-                event="provider.recovery.tool_salvaged",
-                source="provider",
-                provider=self._transport._provider_name,
-                request_id=self._request_id,
-            )
-            return events
-
-        partial_text = output.accumulated_text
-        partial_thinking = output.accumulated_reasoning
-        if not partial_text and not partial_thinking:
-            return None
-
-        if isinstance(error, RetryableToolProtocolError):
-            recovery_body = make_response_recovery_body(
-                body,
-                partial_text,
-                partial_thinking,
-            )
-        else:
-            recovery_body = make_text_recovery_body(
-                body,
-                partial_text,
-                partial_thinking,
-            )
-        recovered = await self._collect_recovery_output(
-            recovery_body,
-            include_reasoning=output_reasoning,
-            request_recovery=request_recovery,
-            operation_kind=ProviderOperationKind.CONTINUATION,
-        )
-        text_suffix = continuation_suffix(partial_text, recovered.text)
-        thinking_suffix = continuation_suffix(partial_thinking, recovered.thinking)
-        if not (thinking_suffix or text_suffix or recovered.tool_calls):
-            return None
-        events = output.flush_reasoning_replay(completed=False)
-        if thinking_suffix:
-            events.extend(output.ensure_reasoning_block())
-            events.append(output.emit_reasoning_delta(thinking_suffix))
-        if text_suffix:
-            events.extend(output.ensure_text_block())
-            events.append(output.emit_text_delta(text_suffix))
-        if recovered.tool_calls:
-            events.extend(output.close_content_blocks())
-            events.extend(assembler.recovered_tool_call_events(recovered.tool_calls))
-        if not events:
-            return None
-        events.extend(
-            output.finish_success(
-                stop_reason="end_turn",
-                usage=ChatStreamUsage(
-                    input_tokens=self._input_tokens,
-                    output_tokens=output.estimate_output_tokens(),
-                ),
-            )
-        )
-        trace_event(
-            stage="provider",
-            event="provider.recovery.continued",
-            source="provider",
-            provider=self._transport._provider_name,
-            request_id=self._request_id,
-        )
-        return events
-
-    async def _repair_tool_args(
-        self,
-        *,
-        body: dict[str, Any],
-        output: ChatStreamOutput,
-        tool_argument_alias_buffers: Mapping[int, str],
-        request_recovery: RequestRecovery,
-    ) -> list[str] | None:
-        execution = request_recovery.execution
-        schemas = self._tool_schemas
-        events: list[str] = []
-        for tool_index, state in output.started_tool_states():
-            block = output.tool_block_for_tool_index(tool_index)
-            emitted_prefix = block.content if block is not None else ""
-            repair_prefix = emitted_prefix
-            if not repair_prefix and tool_index in tool_argument_alias_buffers:
-                repair_prefix = tool_argument_alias_buffers[tool_index]
-            if (
-                parse_complete_tool_input(repair_prefix, state.name, schemas)
-                is not None
-            ):
-                if not emitted_prefix and repair_prefix:
-                    events.append(output.emit_tool_delta(tool_index, repair_prefix))
-                continue
-
-            schema = schemas.get(state.name)
-            recovery_body = make_tool_repair_body(
-                body,
-                tool_name=state.name,
-                prefix=repair_prefix,
-                input_schema=schema.input_schema if schema is not None else None,
-            )
-            accepted_suffix: str | None = None
-            repair_attempt = 0
-            corrections = RequestCorrections("chat")
-            while execution.can_attempt:
-                repair_attempt += 1
-                recovered = await self._collect_recovery_output(
-                    recovery_body,
-                    include_reasoning=False,
-                    request_recovery=request_recovery,
-                    operation_kind=ProviderOperationKind.TOOL_REPAIR,
-                    corrections=corrections,
-                )
-                repair = accept_tool_json_repair(
-                    repair_prefix,
-                    recovered.text,
-                    tool_name=state.name,
-                    schemas=schemas,
-                )
-                if repair is not None:
-                    accepted_suffix = repair.suffix
-                    trace_event(
-                        stage="provider",
-                        event="provider.recovery.tool_repaired",
-                        source="provider",
-                        provider=self._transport._provider_name,
-                        tool_name=state.name,
-                        attempt=repair_attempt,
-                    )
-                    break
-                recovery_body = recovered.request_body
-            if accepted_suffix is None:
-                return None
-            to_emit = (
-                accepted_suffix if emitted_prefix else repair_prefix + accepted_suffix
-            )
-            if to_emit:
-                events.append(output.emit_tool_delta(tool_index, to_emit))
-        if not output.can_salvage_tool_use(schemas):
-            return None
-        return events
-
-    def _new_stream_assembler(
-        self, *, output_reasoning: bool
-    ) -> _OpenAIChatStreamAssembler:
+    def _new_stream_presenter(self, *, output_reasoning: bool) -> _ChatStreamPresenter:
         def extra_reasoning_events(
             delta: Any, output: ChatStreamOutput
         ) -> Iterator[str]:
@@ -1696,16 +1558,28 @@ class _OpenAIChatStreamRunner:
                 output_reasoning=output_reasoning,
             )
 
-        return _OpenAIChatStreamAssembler(
-            output=self._output_factory(),
+        output = self._output_factory()
+
+        def record_extra_content(
+            tool_call_id: str, extra_content: dict[str, Any]
+        ) -> None:
+            assert output.replay_origin is not None
+            self._transport._behavior.record_tool_call_extra_content(
+                tool_call_id, extra_content, origin=output.replay_origin
+            )
+
+        assembler_type = (
+            partial(_NativeChatStreamPresenter, choices=int(self._body.get("n") or 1))
+            if self._native_chat
+            else _ChatStreamPresenter
+        )
+        return assembler_type(
+            output=output,
             profile=self._transport._profile,
             provider_name=self._transport._provider_name,
             output_reasoning=output_reasoning,
             tool_names=self._tool_names,
-            tool_schemas=self._tool_schemas,
-            tool_calls=OpenAIToolCallAssembler(
-                reserved_tool_ids=self._reserved_tool_ids,
-                record_extra_content=self._transport._behavior.record_tool_call_extra_content,
-            ),
+            reserved_tool_ids=self._reserved_tool_ids,
+            record_extra_content=record_extra_content,
             extra_reasoning_events=extra_reasoning_events,
         )

@@ -1,7 +1,6 @@
 """Reasoning stays complete and attached while answers stream."""
 
 import json
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -17,6 +16,7 @@ from free_claude_code.providers.history_replay import (
     normalize_messages_history,
     replay_origin,
 )
+from free_claude_code.providers.openai_chat import CompletedToolCall
 from free_claude_code.providers.openai_chat.reasoning_details import (
     StructuredReasoningStream,
 )
@@ -24,14 +24,12 @@ from free_claude_code.providers.openai_chat.stream_output import (
     AnthropicChatStreamOutput,
     ChatStreamUsage,
 )
-from free_claude_code.providers.openai_chat.transport import _OpenAIChatStreamRunner
 from tests.providers.test_history_transports import (
     _carrier,
     _chat_reasoning_events,
     _harness,
     _saved_reply,
 )
-from tests.providers.test_streaming_errors import _recovery_output
 
 
 @pytest.mark.asyncio
@@ -105,8 +103,9 @@ async def test_late_metadata_uses_open_indices_and_closes_final_text_last():
     )
     async with _harness("chat", lambda _: (200, events)) as (send, bodies, _):
         stream = [
-            chunk
+            frame
             async for chunk in send("messages", [{"role": "user", "content": "hello"}])
+            for frame in chunk.frames
         ]
         parsed = parse_sse_text("".join(stream))
         _assert_indexed(parsed)
@@ -196,6 +195,32 @@ def _messages_writer():
     return output, reasoning
 
 
+def test_native_thinking_streams_before_late_structured_alias():
+    output, reasoning = _messages_writer()
+    early = list(reasoning.events({}, output, native_reasoning="Plan."))
+    parsed = parse_sse_text("".join(early))
+    assert any(
+        event.data.get("delta", {}).get("thinking") == "Plan." for event in parsed
+    )
+    late = list(
+        reasoning.events(
+            {
+                "reasoning_details": [
+                    {"type": "reasoning.text", "text": "Plan.", "index": 0}
+                ]
+            },
+            output,
+            native_reasoning=None,
+        )
+    )
+    late.extend(reasoning.finish(output))
+    parsed = parse_sse_text("".join([*early, *late]))
+    assert (
+        "".join(event.data.get("delta", {}).get("thinking", "") for event in parsed)
+        == "Plan."
+    )
+
+
 def _readable(reasoning, output, text="Plan.", data="first"):
     return list(
         reasoning.events(
@@ -239,8 +264,9 @@ def test_immediate_text_and_late_replay_survive_every_exit(terminal):
     assert not any(e.event == "message_stop" for e in early)
     if terminal == "tool":
         frames += output.close_content_blocks()
-        frames.append(output.start_tool_block(0, "call_a", "lookup"))
-        frames.append(output.emit_tool_delta(0, '{"query":"x"}'))
+        frames += output.emit_complete_tool(
+            0, CompletedToolCall("call_a", "lookup", '{"query":"x"}')
+        )
     frames += list(
         reasoning.events(
             {
@@ -325,7 +351,7 @@ def test_request_copy_preserves_routing_and_does_not_join_across_messages():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("committed", [False, True])
-async def test_structured_replay_respects_retry_and_continuation_boundary(
+async def test_private_replacement_discards_prior_reasoning_for_any_draft_size(
     wire, committed
 ):
     prefix = "x" * 66000 if committed else "partial"
@@ -358,15 +384,10 @@ async def test_structured_replay_respects_retry_and_continuation_boundary(
             send(wire, [{"role": "user", "content": "hello"}]), wire
         )
     assert len(bodies) == 2
-    if committed:
-        assert "Original thought." in json.dumps(saved)
-        assert 'original"' not in json.dumps(saved)
-    else:
-        assert "Recovery thought." in json.dumps(saved)
-        assert _carrier(saved, wire) == "replacement"
+    assert "Recovery thought." in json.dumps(saved)
+    assert _carrier(saved, wire) == "replacement"
     assert "continued" in json.dumps(saved)
-    if not committed:
-        assert "Original thought." not in json.dumps(saved)
+    assert "Original thought." not in json.dumps(saved)
 
 
 @pytest.mark.asyncio
@@ -385,8 +406,9 @@ async def test_first_metadata_after_text_does_not_invent_earlier_reasoning(wire)
     async with _harness("chat", lambda _: (200, events)) as (send, _, _):
         if wire == "messages":
             frames = [
-                part
+                frame
                 async for part in send(wire, [{"role": "user", "content": "hello"}])
+                for frame in part.frames
             ]
             _assert_indexed(parse_sse_text("".join(frames)))
         saved = await _saved_reply(
@@ -397,34 +419,3 @@ async def test_first_metadata_after_text_does_not_invent_earlier_reasoning(wire)
         if wire == "responses"
         else saved[0]["content"][0]["type"] == "text"
     )
-
-
-@pytest.mark.asyncio
-async def test_finishing_replay_does_not_make_empty_continuation_successful():
-    events = _chat_reasoning_events(
-        [
-            {
-                "reasoning_content": "Plan.",
-                "reasoning_details": [
-                    {"type": "reasoning.encrypted", "data": "opaque", "index": 0}
-                ],
-            },
-            {"content": "x" * 66000},
-        ]
-    )[:-1]
-    async with _harness("chat", lambda _: (200, events)) as (send, _, _):
-        with patch.object(
-            _OpenAIChatStreamRunner,
-            "_collect_recovery_output",
-            new_callable=AsyncMock,
-            return_value=_recovery_output(),
-        ):
-            frames = [
-                frame
-                async for frame in send(
-                    "responses", [{"role": "user", "content": "hello"}]
-                )
-            ]
-    parsed = parse_sse_text("".join(frames))
-    assert parsed[-1].event == "response.failed"
-    assert not any(event.event == "response.completed" for event in parsed)

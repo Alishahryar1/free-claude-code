@@ -13,6 +13,7 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.history_replay import ReplayRecord, encode_replay
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.providers.history_replay import replay_origin
 from tests.providers.test_anthropic_messages_transport import Wire, _events, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
@@ -20,10 +21,11 @@ from tests.providers.test_anthropic_provider import native_body, provider
 
 async def collect(p, body=None, **kwargs):
     return [
-        event
+        frame
         async for event in p.stream_native_messages(
             NativeMessagesRequest(body or native_body()), **kwargs
         )
+        for frame in event.frames
     ]
 
 
@@ -35,7 +37,7 @@ async def test_native_omissions_helpers_controls_and_cookie_isolation():
         received.append(request)
         return httpx.Response(
             200,
-            json={"type": "message", "content": []},
+            json={"stop_reason": "end_turn", "type": "message", "content": []},
             headers={"set-cookie": "upstream=session"},
         )
 
@@ -222,7 +224,11 @@ async def test_http_failure_status_evidence_and_bounded_recovery(streaming, stat
 async def test_connection_recovery_before_output_closes_failed_response(streaming):
     first = Wire([httpx.ReadError("connection closed")])
     second = Wire(
-        [_sse(*_events()) if streaming else b'{"type":"message","content":[]}']
+        [
+            _sse(*_events())
+            if streaming
+            else b'{"type":"message","content":[],"stop_reason":"end_turn"}'
+        ]
     )
     wires = iter([first, second])
     p = provider(
@@ -265,7 +271,9 @@ async def test_leading_ping_does_not_accept_attempt_or_prevent_retry(failure):
         output = parse_sse_text(
             "".join(await collect(p, native_body(True), response_model="native"))
         )
-        assert [event.data for event in output] == events
+        assert [event.data for event in output] == [
+            event for event in events if event["type"] != "ping"
+        ]
         assert first.closed and second.closed
     finally:
         await p.cleanup()
@@ -293,9 +301,12 @@ async def test_malformed_or_incomplete_stream_after_output_never_replays(bad_tai
     p = provider(handle)
     try:
         stream = p.stream_native_messages(NativeMessagesRequest(native_body(True)))
-        assert "message_start" in await anext(stream)
+        assert "message_start" in "".join((await anext(stream)).frames)
+        state = current_stream_delivery()
+        assert state is not None
+        state.release_content()
         with pytest.raises(ExecutionFailure):
-            await anext(stream)
+            _ = [packet async for packet in stream]
         assert len(calls) == 1
         assert wire.closed
     finally:
@@ -361,7 +372,9 @@ async def test_native_history_restores_matching_fcc_carriers_and_rejects_foreign
 
     def handle(request):
         received.append(json.loads(request.content))
-        return httpx.Response(200, json={"type": "message", "content": []})
+        return httpx.Response(
+            200, json={"stop_reason": "end_turn", "type": "message", "content": []}
+        )
 
     p = provider(handle)
     native: JsonObject = {

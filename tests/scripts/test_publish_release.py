@@ -26,6 +26,8 @@ def releases_template(tmp_path_factory):
     tmp_path = tmp_path_factory.mktemp("publish-release-template")
     git(tmp_path, "init", "--template=", "-b", "main")
     write(tmp_path, "src/file.py", "base")
+    write(tmp_path, "scripts/build_macos_launcher.py", "# target builder")
+    write(tmp_path, "scripts/validate_release.py", "# target validator")
     base = commit(tmp_path)
     git(tmp_path, "tag", "v1.2.3")
     git(tmp_path, "update-ref", "refs/remotes/origin/main", base)
@@ -72,6 +74,7 @@ class FakeRemote:
         self.calls = []
         self.fail = None
         self.builds = 0
+        self.native_builds = []
         self.uploaded = {}
         self.real_command = publishing.command
 
@@ -147,6 +150,8 @@ class FakeRemote:
         elif args[:2] == ["uv", "build"]:
             self.builds += 1
             assert cwd is not None
+            if (Path(cwd) / "scripts/build_macos_launcher.py").is_file():
+                assert self.native_builds[-1] == git(Path(cwd), "rev-parse", "HEAD")
             version = git(Path(cwd), "describe", "--tags", "--exact-match")[1:]
             out = Path(args[args.index("--out-dir") + 1])
             for name in publishing.distribution_names(version):
@@ -161,7 +166,12 @@ class FakeRemote:
                     self.fail = None
                     raise RuntimeError("interrupted publication")
         elif args[0] == publishing.sys.executable:
-            pass  # Archive validation is exercised separately using real archives.
+            assert cwd is not None
+            assert Path(args[1]).parent == Path(cwd) / "scripts"
+            if Path(args[1]).name == "build_macos_launcher.py":
+                assert Path(args[1]).read_text() == "# target builder"
+                self.native_builds.append(git(Path(cwd), "rev-parse", "HEAD"))
+            # Archive validation is exercised separately using real archives.
         else:
             raise AssertionError(args)
         return ""
@@ -182,6 +192,33 @@ def test_nonrelease_never_allocates_or_builds(releases):
     remote.publisher().publish(head)
     assert remote.builds == 0
     assert not any(c[:2] == ["git", "push"] for c in remote.calls)
+
+
+def test_native_preparation_uses_release_commit_despite_dirty_current_checkout(
+    releases,
+):
+    repo, remote = releases
+    head = remote.advance()
+    write(
+        repo, "scripts/build_macos_launcher.py", "# unrelated work in current checkout"
+    )
+    remote.publisher().publish(head)
+    assert remote.native_builds == [head]
+    assert (
+        repo / "scripts/build_macos_launcher.py"
+    ).read_text() == "# unrelated work in current checkout"
+
+
+def test_historical_release_without_native_builder_can_resume(releases):
+    repo, remote = releases
+    git(repo, "rm", "scripts/build_macos_launcher.py")
+    head = remote.advance()
+    remote.fail = "publish"
+    with pytest.raises(RuntimeError, match="interrupted publication"):
+        remote.publisher().publish(head)
+    remote.publisher().publish(head)
+    assert remote.native_builds == []
+    assert remote.builds == 1
 
 
 @pytest.mark.parametrize("existing_draft", [False, True])
@@ -222,6 +259,7 @@ def test_retries_keep_version_and_published_bytes(releases, failure):
     assert not remote.releases["v1.2.4"]["draft"]
     assert git(repo, "rev-parse", "v1.2.4") == head
     assert remote.builds == (2 if failure == "stage" else 1)
+    assert remote.native_builds == [head] * remote.builds
     assert all(remote.uploaded[name] == value for name, value in first_uploaded.items())
     builds = remote.builds
     remote.publisher().publish(head)

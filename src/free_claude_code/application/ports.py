@@ -7,9 +7,12 @@ from typing import Protocol
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
+from free_claude_code.core.chat_completions.request import ChatRequest
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 
 from .model_metadata import ProviderModelInfo
@@ -17,6 +20,32 @@ from .model_metadata import ProviderModelInfo
 
 class ProviderPort(Protocol):
     """Minimal provider capability required to execute one request."""
+
+    def stream_chat(
+        self,
+        request: ChatRequest,
+        *,
+        input_tokens: int,
+        request_id: str,
+        response_model: str,
+        reasoning: ReasoningPolicy,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[StreamOutput]: ...
+
+    def stream_gemini(
+        self,
+        request: GeminiRequest,
+        *,
+        input_tokens: int,
+        request_id: str,
+        response_model: str,
+        reasoning: ReasoningPolicy,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[StreamOutput]: ...
 
     def stream_native_messages(
         self,
@@ -27,7 +56,7 @@ class ProviderPort(Protocol):
         request_headers: Mapping[str, str] | None = None,
         reasoning_override: ReasoningPolicy | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]: ...
+    ) -> AsyncIterator[StreamOutput]: ...
 
     def stream_messages(
         self,
@@ -40,7 +69,7 @@ class ProviderPort(Protocol):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]: ...
+    ) -> AsyncIterator[StreamOutput]: ...
 
     def stream_responses(
         self,
@@ -53,7 +82,7 @@ class ProviderPort(Protocol):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]: ...
+    ) -> AsyncIterator[StreamOutput]: ...
 
 
 ProviderResolver = Callable[[str, int], Awaitable[ProviderPort]]
@@ -126,7 +155,9 @@ class RequestRuntimePort(ModelCatalogPort, Protocol):
 
     async def acquire(self) -> RequestRuntimeLease: ...
 
-    async def wait_for_catalog(self) -> ModelCatalogSnapshot: ...
+    def catalog_snapshot(self) -> ModelCatalogSnapshot: ...
+
+    async def wait_for_model_catalog(self, model: str) -> ModelCatalogSnapshot: ...
 
     def catalog_status(self) -> JsonObject: ...
 

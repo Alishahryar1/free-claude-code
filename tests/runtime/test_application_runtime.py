@@ -21,6 +21,7 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.messaging.command_context import StopOutcome
 from free_claude_code.messaging.platforms.ports import (
@@ -41,7 +42,9 @@ from tests.providers.support import make_provider_config
 
 
 class TrackingRuntime(ProviderRuntime):
-    def __init__(self, settings: Settings, admission_registry) -> None:
+    def __init__(
+        self, settings: Settings, admission_registry, history_cache=None
+    ) -> None:
         super().__init__(settings, admission_registry)
         self.cleanup_calls = 0
 
@@ -85,9 +88,9 @@ class AdminModelProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         if False:
-            yield ""
+            yield StreamOutput(("",))
 
     async def stream_responses(
         self,
@@ -100,9 +103,9 @@ class AdminModelProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         if False:
-            yield ""
+            yield StreamOutput(("",))
 
 
 class TrackingFactory:
@@ -111,7 +114,9 @@ class TrackingFactory:
         self.fail = False
         self.events: list[str] = []
 
-    def __call__(self, settings: Settings, admission_registry) -> ProviderRuntime:
+    def __call__(
+        self, settings: Settings, admission_registry, history_cache=None
+    ) -> ProviderRuntime:
         self.events.append(f"construct:{settings.model}")
         if self.fail:
             raise RuntimeError("candidate failed")
@@ -240,10 +245,13 @@ def _runtime_with_admin_provider(
     )
     manager = ProviderRuntimeManager(
         settings,
-        runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
-            snapshot,
-            admission_registry,
-            {("nvidia_nim", 1): provider},
+        runtime_factory=lambda snapshot, admission_registry, history_cache=None: (
+            ProviderRuntime(
+                snapshot,
+                admission_registry,
+                None,
+                {("nvidia_nim", 1): provider},
+            )
         ),
     )
     return ApplicationRuntime(
@@ -290,10 +298,7 @@ async def test_provider_check_returns_stable_failure_for_application_error() -> 
     assert result == {
         "provider_id": "nvidia_nim",
         "ok": False,
-        "message": (
-            "Could not refresh this provider's models. "
-            "Verify its configuration and access."
-        ),
+        "message": "The provider is unavailable. Check its configuration and access.",
     }
     assert "error_type" not in result
     await manager.close()
@@ -315,14 +320,12 @@ async def test_provider_check_never_returns_unrecognized_credentials(
     assert result == {
         "provider_id": "nvidia_nim",
         "ok": False,
-        "message": (
-            "Could not refresh this provider's models. "
-            "Verify its configuration and access."
-        ),
+        "message": "Could not load models. Check the provider's settings and retry.",
     }
     log_text = " | ".join(record.getMessage() for record in caplog.records)
     assert "provider=nvidia_nim" in log_text
-    assert "RuntimeError" in log_text
+    assert isinstance(result["message"], str)
+    assert result["message"] in log_text
     assert secret not in log_text
     assert "error_type" not in result
     await manager.close()

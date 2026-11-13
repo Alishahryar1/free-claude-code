@@ -9,10 +9,9 @@ import httpx2
 import pytest
 from openai import AsyncOpenAI
 
-from free_claude_code.application.execution import ProviderExecutor
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.stream_delivery import current_stream_delivery
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
+from free_claude_code.core.stream_output import completed_output
 from tests.api.test_delivered_stream_recovery import public_text, text_events
 from tests.api.test_hidden_stream_retries import delivered
 from tests.api.test_stream_delivery import drained
@@ -29,52 +28,27 @@ async def test_continuation_timeout_retains_delivered_output(
     monkeypatch, protocol, wire, metadata_first
 ):
     module = httpx if protocol == "messages" else httpx2
-    native_transport = module.MockTransport
     closed = []
 
-    class WaitingStream(httpx.AsyncByteStream, httpx2.AsyncByteStream):
+    class TimedOutStream(httpx.AsyncByteStream, httpx2.AsyncByteStream):
         async def __aiter__(self):
             if metadata_first:
                 start = text_events(protocol, "")[0]
                 yield ("data: " + json.dumps(start) + "\n\n").encode()
-            await asyncio.Event().wait()
-            yield b""
+            raise module.ReadTimeout("Continuation read timed out")
 
         async def aclose(self):
             closed.append(True)
 
-    def transport(handler):
-        calls = 0
+    def reply(bodies):
+        if len(bodies) == 1:
+            return 200, text_events(protocol, "Hello ", complete=False)
+        return 200, TimedOutStream()
 
-        async def handle(request):
-            nonlocal calls
-            response = handler(request)
-            calls += 1
-            if calls > 1:
-                await response.aclose()
-                return module.Response(
-                    200,
-                    headers={"content-type": "text/event-stream"},
-                    stream=WaitingStream(),
-                )
-            return response
-
-        return native_transport(handle)
-
-    def executor(*args, **kwargs):
-        kwargs["progress_timeout_seconds"] = 0.2
-        return ProviderExecutor(*args, **kwargs)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(module, "MockTransport", transport)
-        patch.setattr("tests.api.test_hidden_stream_retries.ProviderExecutor", executor)
-        patch.setattr(
-            "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-            lambda: RecoveryHoldbackBuffer(max_bytes=1),
-        )
+    with monkeypatch.context():
         async with _harness(
             protocol,
-            lambda _: (200, text_events(protocol, "Hello ", complete=False)),
+            reply,
             max_attempts=3,
         ) as (send, bodies, _):
             raw = await delivered(
@@ -82,7 +56,7 @@ async def test_continuation_timeout_retains_delivered_output(
             )
 
     events = parse_sse_text(raw)
-    assert len(bodies) == 2 and closed == [True]
+    assert len(bodies) == 3 and closed == [True, True]
     assert public_text(events, wire) == "Hello "
     failure_type = "error" if wire == "messages" else "response.failed"
     assert events[-1].event == failure_type
@@ -91,7 +65,8 @@ async def test_continuation_timeout_retains_delivered_output(
         event.event in {"message_stop", "response.completed"} for event in events
     )
     failure = events[-1].data if wire == "messages" else events[-1].data["response"]
-    assert failure["error"]["type"] == "timeout_error"
+    assert failure["error"]["type"] == "api_error"
+    assert "Continuation read timed out" in failure["error"]["message"]
     if wire == "messages":
         return
 
@@ -143,7 +118,9 @@ async def test_pending_recovery_failure_does_not_require_successful_closures(han
 
     async def source():
         for payload in prefix:
-            yield f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n"
+            yield completed_output(
+                (f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n",)
+            )
         state = current_stream_delivery()
         assert state is not None
         state.begin_continuation(handoff=handoff)
@@ -170,7 +147,9 @@ async def test_cancellation_during_pending_continuation_emits_no_failure():
     async def source():
         try:
             for payload in text_events("responses", "Hello ", complete=False):
-                yield f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n"
+                yield completed_output(
+                    (f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n",)
+                )
             state = current_stream_delivery()
             assert state is not None
             state.begin_continuation()

@@ -9,7 +9,6 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.open_router import OpenRouterProvider
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_delivered_stream_recovery import (
     after_text,
     assert_completed,
@@ -22,21 +21,18 @@ from tests.api.test_response_streams import _serve
 from tests.api.test_tool_call_buffer import _response
 from tests.api.test_tool_call_buffer_transports import _tools
 from tests.application.test_execution import _routed_request, _target
-from tests.providers.support import make_provider_config
+from tests.providers.support import (
+    assistant_history_text,
+    make_provider_config,
+    without_empty_reasoning,
+)
 from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
 
 
-@pytest.fixture(autouse=True)
-def release_provider_events(monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
-
-
-async def delivered_candidates(senders, wire, *, tools=None, progress_timeout=10):
-    history = [{"role": "user", "content": "greet"}]
+async def delivered_candidates(senders, wire, *, tools=None, history=None):
+    if history is None:
+        history = [{"role": "user", "content": "greet"}]
 
     async def open_candidate(index, candidate, continuation=None):
         return senders[index](
@@ -53,9 +49,7 @@ async def delivered_candidates(senders, wire, *, tools=None, progress_timeout=10
             for index in range(1, len(senders))
         )
     )
-    body = ProviderExecutor(
-        AsyncMock(), progress_timeout_seconds=progress_timeout
-    )._stream_candidates(
+    body = ProviderExecutor(AsyncMock())._stream_candidates(
         resolved=routed.resolved,
         reasoning=ReasoningPolicy.provider_default(),
         wire_api=wire,
@@ -70,6 +64,60 @@ async def delivered_candidates(senders, wire, *, tools=None, progress_timeout=10
     response = await _response(wire, body)
     messages = await _serve(response)
     return b"".join(message.get("body", b"") for message in messages).decode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize(
+    "case",
+    ["full", "summary", "summary_empty_text", "text_empty_part", "summary_whitespace"],
+)
+async def test_messages_fallback_accepts_partial_output_slots(wire, case):
+    prefix = (
+        "Half"
+        if case == "text_empty_part"
+        else "   "
+        if case == "summary_whitespace"
+        else ""
+    )
+    if case == "text_empty_part":
+        first = text_events("responses", prefix, complete=False)
+        first.append({**first[2], "content_index": 1})
+    else:
+        first = reasoning_events(
+            field="content" if case == "full" else "summary", closed=False
+        )
+        if case in {"summary_empty_text", "summary_whitespace"}:
+            tail = text_events("responses", prefix, complete=False)[1:]
+            for event in tail:
+                event["output_index"] = 1
+            first.extend(tail)
+    first = [{**event, "sequence_number": index} for index, event in enumerate(first)]
+    async with (
+        _harness("responses", lambda _: (200, first), max_attempts=1) as (
+            primary,
+            _,
+            _,
+        ),
+        _harness(
+            "messages",
+            lambda _: (200, text_events("messages", "Recovered.")),
+            max_attempts=1,
+        ) as (fallback, bodies, _),
+    ):
+        raw = await delivered_candidates([primary, fallback], wire)
+    events = parse_sse_text(raw)
+    assert len(bodies) == 1
+    assert_completed(events, wire)
+    assert public_text(events, wire) == prefix + "Recovered."
+    for message in bodies[0]["messages"]:
+        if message.get("role") == "assistant":
+            assert all(
+                block.get("text") != ""
+                for block in message["content"]
+                if block.get("type") == "text"
+            )
+    assert ("Find 17." in str(bodies[0]["messages"])) is (case != "text_empty_part")
 
 
 @pytest.mark.asyncio
@@ -100,9 +148,10 @@ async def test_exhausted_model_continues_on_next_candidate(source, target, wire)
     assert_completed(events, wire)
     assert public_text(events, wire) == "Hello there. Done."
     body = second_bodies[0]
-    history = body.get("messages", body.get("input"))
-    assert len(history) == 3
-    assert "Hello there. " in str(history[-2])
+    history = without_empty_reasoning(body.get("messages", body.get("input")))
+    assert history[0]["role"] == "user" and "greet" in str(history[0]["content"])
+    assert assistant_history_text(history) == "Hello there. "
+    assert sum(row.get("role") == "user" for row in history) == 2
     assert body["tools"]
     if wire == "responses":
         assert (
@@ -138,7 +187,8 @@ async def test_fallback_preserves_readable_reasoning_without_a_heading(target, w
     history = bodies[0].get("messages", bodies[0].get("input"))
     content = history[-1]["content"]
     instruction = content if isinstance(content, str) else content[0]["text"]
-    assert instruction.split("\n\n", 1)[0] == "Find 17."
+    assert "Find 17." not in instruction
+    assert "Find 17." in str(history[:-1])
     events = parse_sse_text(raw)
     assert_completed(events, wire)
     assert public_text(events, wire) == "Hello world."
@@ -201,9 +251,9 @@ async def test_each_model_receives_the_latest_prefix_and_its_own_budget(wire):
         (second_bodies[1], "One two "),
         (third_bodies[0], "One two three "),
     ]:
-        history = body.get("messages", body.get("input"))
-        assert len(history) == 3
-        assert expected in str(history[-2])
+        history = without_empty_reasoning(body.get("messages", body.get("input")))
+        assert sum(row.get("role") == "user" for row in history) == 2
+        assert assistant_history_text(history) == expected
     events = parse_sse_text(raw)
     assert_completed(events, wire)
     assert public_text(events, wire) == "One two three four."
@@ -246,7 +296,11 @@ async def test_permanent_rejection_advances_without_erasing_incoming_prefix(
         ) as (third, third_bodies, _),
     ):
         raw = await delivered_candidates([first, second, third], wire)
-    assert [len(first_bodies), len(second_bodies), len(third_bodies)] == [1, 1, 1]
+    assert [len(first_bodies), len(second_bodies), len(third_bodies)] == [
+        1,
+        2 if status == 400 else 1,
+        1,
+    ]
     assert "Hello " in str(third_bodies[0]["messages"][-2])
     assert_completed(parse_sse_text(raw), wire)
     assert public_text(parse_sse_text(raw), wire) == "Hello world."
@@ -396,9 +450,15 @@ async def test_released_calls_handoff_only_for_retryable_failure(
         ),
     ):
         raw = await delivered_candidates([first, second], wire, tools=_tools(wire))
-    assert len(first_bodies) == 1 and not second_bodies
+    assert len(first_bodies) == 1
+    # Messages block stop alone has no complete call to hand off.
+    if protocol == "messages":
+        assert len(second_bodies) == 1
+        assert "call_probe" not in raw
+    else:
+        assert not second_bodies
     events = parse_sse_text(raw)
-    if permanent:
+    if permanent and protocol != "messages":
         assert events[-1].event == (
             "error" if wire == "messages" else "response.failed"
         )
@@ -466,15 +526,44 @@ async def test_hidden_hosted_activity_remains_a_model_boundary_after_local_retry
         ),
     ):
         raw = await delivered_candidates([first, second], wire, tools=_tools(wire))
-    assert len(first_bodies) == 2
+    assert len(first_bodies) == (1 if wire == "responses" else 2)
     assert not second_bodies
     events = parse_sse_text(raw)
-    if later_failure:
+    if later_failure or wire == "responses":
         assert events[-1].event == (
             "error" if wire == "messages" else "response.failed"
         )
     else:
         assert_completed(events, wire)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
+@pytest.mark.parametrize("partial", [False, True])
+async def test_exhausted_model_allows_another_model_on_same_client(
+    protocol, wire, partial
+):
+    def reply(bodies):
+        if bodies[-1]["model"] == "model-1":
+            return 200, text_events(protocol, "world.")
+        if partial and len(bodies) == 1:
+            return 200, text_events(protocol, "Hello ", complete=False)
+        return 503, {"type": "server_error", "message": "Unavailable"}
+
+    async with _harness(protocol, reply, max_attempts=2 if partial else 1) as (
+        send,
+        bodies,
+        provider,
+    ):
+        provider._admission._base_delay = 60
+        provider._admission._max_delay = 60
+        raw = await delivered_candidates([send, send], wire)
+    expected_models = ["provider-model"] * (2 if partial else 1) + ["model-1"]
+    assert [body["model"] for body in bodies] == expected_models
+    events = parse_sse_text(raw)
+    assert_completed(events, wire)
+    assert public_text(events, wire) == ("Hello world." if partial else "world.")
 
 
 @pytest.mark.asyncio
@@ -520,7 +609,11 @@ async def test_shared_cooldown_skips_candidate_with_zero_calls_and_keeps_seed(
             _,
         ),
     ):
-        raw = await delivered_candidates([first, first, third], wire)
+
+        def same_model(*args, **kwargs):
+            return first(*args, **{**kwargs, "model": "provider-model"})
+
+        raw = await delivered_candidates([first, same_model, third], wire)
     assert [execution.attempts_started for execution in executions] == [2, 0]
     assert len(shared_bodies) == 2 and len(third_bodies) == 1
     assert "Hello " in str(third_bodies[0]["messages"][-2])

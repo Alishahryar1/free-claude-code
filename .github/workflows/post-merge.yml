@@ -1,7 +1,6 @@
 name: Post merge
 
 env:
-  CI_UV_VERSION: "0.12.13"
   UV_MALWARE_CHECK: "1"
   UV_PREVIEW_FEATURES: "malware-check"
 
@@ -22,7 +21,7 @@ concurrency:
 
 jobs:
   warm-dependency-cache:
-    name: Warm dependency cache (${{ matrix.os }})
+    name: Warm dependency cache (${{ matrix.runner }})
     if: github.ref == 'refs/heads/main'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
@@ -48,7 +47,6 @@ jobs:
         id: environment
         uses: ./.github/actions/ci-environment
         with:
-          uv-version: ${{ env.CI_UV_VERSION }}
           runner-label: ${{ matrix.runner }}
           lookup-only: "true"
           sync-dependencies: "false"
@@ -82,7 +80,7 @@ jobs:
   publish:
     name: Publish to PyPI
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 15
     environment: pypi
     permissions:
@@ -98,8 +96,7 @@ jobs:
         id: environment
         uses: ./.github/actions/ci-environment
         with:
-          uv-version: ${{ env.CI_UV_VERSION }}
-          runner-label: ubuntu-latest
+          runner-label: macos-latest
           lookup-only: "true"
           sync-dependencies: "false"
 

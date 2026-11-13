@@ -19,7 +19,11 @@ from .ids import (
     new_reasoning_item_id,
     new_response_id,
 )
-from .messages_request import ResponsesMessagesRequest, build_responses_messages_request
+from .messages_request import (
+    ResponsesMessagesRequest,
+    build_responses_messages_request,
+    build_responses_messages_suffix,
+)
 from .messages_stream import AnthropicToResponsesStream
 from .models import OpenAIResponsesRequest
 from .native import NativeResponsesRelay, build_native_responses_request
@@ -44,6 +48,7 @@ from .tool_adaptation import (
     ResponsesToolEventAdapter,
     ResponsesToolPolicy,
 )
+from .tool_calls import ResponsesToolCallBuffer, is_client_call
 from .tool_search import is_client_search
 from .tools import (
     ResponsesToolIdentity,
@@ -65,6 +70,7 @@ __all__ = [
     "ResponsesProviderStream",
     "ResponsesStreamFailure",
     "ResponsesToolAdapter",
+    "ResponsesToolCallBuffer",
     "ResponsesToolEventAdapter",
     "ResponsesToolIdentity",
     "ResponsesToolPolicy",
@@ -73,11 +79,13 @@ __all__ = [
     "build_native_responses_request",
     "build_responses_chat_request",
     "build_responses_messages_request",
+    "build_responses_messages_suffix",
     "build_responses_provider_request",
     "committed_response_failure_frame",
     "estimate_responses_input_tokens",
     "flatten_responses_tool_name",
     "format_response_sse_event",
+    "is_client_call",
     "is_client_search",
     "new_call_id",
     "new_message_item_id",

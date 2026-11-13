@@ -8,7 +8,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.config.settings import Settings
-from free_claude_code.providers.admission import ProviderAdmissionController
+from free_claude_code.providers.admission import (
+    UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
+    ProviderAdmissionController,
+)
 from tests.api.support import create_test_app
 from tests.api.test_delivered_stream_recovery import text_events
 from tests.providers.test_anthropic_messages_transport import _sse
@@ -145,6 +148,10 @@ def test_fallback_sequence_uses_each_rows_selected_key(
         if not index or token != tokens[index - 1]
     ] == KEYS
     if failure_status == 429:
-        assert tokens == [KEYS[0]] * 5 + [KEYS[1]] * 5 + [KEYS[2]]
+        assert tokens == (
+            [KEYS[0]] * UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+            + [KEYS[1]] * UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+            + [KEYS[2]]
+        )
     assert all(body["model"] == "same-model" for _, body in calls)
     assert all(key not in result.text for key in KEYS)

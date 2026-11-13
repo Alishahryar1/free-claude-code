@@ -11,8 +11,10 @@ from pydantic import TypeAdapter
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import (
+    NativeResponsesRelay,
     OpenAIResponsesRequest,
     ResponsesConversionError,
     ResponsesToolAdapter,
@@ -22,6 +24,7 @@ from free_claude_code.core.openai_responses import (
 from free_claude_code.core.openai_tool_names import encode_openai_chat_tool_names
 from free_claude_code.providers.openai_chat.stream_output import (
     ChatStreamUsage,
+    CompletedToolCall,
     ResponsesChatStreamOutput,
 )
 from free_claude_code.providers.openai_responses.presentation import (
@@ -63,7 +66,7 @@ def test_chat_exposes_client_search_as_a_callable_function() -> None:
         model="example", input="Find an agent", tools=[SEARCH]
     )
     translated = build_responses_chat_request(
-        request, reasoning_replay=ReasoningReplayMode.DISABLED
+        request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
     )
     functions = cast(list[dict[str, Any]], translated.body.get("tools", []))
     assert len(functions) == 1
@@ -94,7 +97,7 @@ def test_chat_discovery_preserves_pairing_and_activates_returned_tool() -> None:
     )
     original = request.model_dump()
     body = build_responses_chat_request(
-        request, reasoning_replay=ReasoningReplayMode.DISABLED
+        request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
     ).body
     functions = {
         t["function"]["name"]: t["function"]
@@ -456,7 +459,7 @@ def test_interrupted_discovery_is_excluded_before_tool_activation(
         assert [tool["name"] for tool in prepared.tools or []] == ["fcc_tool_search"]
     else:
         body = build_responses_chat_request(
-            request, reasoning_replay=ReasoningReplayMode.DISABLED
+            request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
         ).body
         assert body["messages"] == [user, retry]
         assert [
@@ -517,7 +520,7 @@ def test_interrupted_discovery_keeps_completed_occurrences_of_reused_id(
         names = [tool["name"] for tool in prepared.tools or []]
     else:
         body = build_responses_chat_request(
-            request, reasoning_replay=ReasoningReplayMode.DISABLED
+            request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
         ).body
         messages = cast(list[dict[str, Any]], body["messages"])
         calls = [
@@ -673,7 +676,7 @@ def test_interrupted_discovery_cannot_leave_empty_provider_input(native: bool) -
             ResponsesToolAdapter(request, ResponsesToolPolicy(client_tool_search=True))
         else:
             build_responses_chat_request(
-                request, reasoning_replay=ReasoningReplayMode.DISABLED
+                request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
             )
 
 
@@ -1010,6 +1013,8 @@ def test_native_original_arguments_agree_across_the_stream(prefix: str) -> None:
             },
         )
     )
+    relay = NativeResponsesRelay(public_model="example")
+    events = [(kind, relay.project(kind, data)) for kind, data in events]
     completed = cast(dict[str, Any], events[-1][1]["item"])
     delta = "".join(
         str(data["delta"])
@@ -1113,7 +1118,7 @@ def test_chat_forced_namespaced_custom_choice_is_lowered_once(discovery: bool) -
         tool_choice={"type": "custom", "namespace": "editor", "name": "edit"},
     )
     body = build_responses_chat_request(
-        request, reasoning_replay=ReasoningReplayMode.DISABLED
+        request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
     ).body
     assert body.get("tool_choice") == {
         "type": "function",
@@ -1166,7 +1171,7 @@ def test_generic_choice_uses_declared_tool_kind(
         assert prepared.tools and prepared.tools[0]["name"] == wire_name
     else:
         body = build_responses_chat_request(
-            request, reasoning_replay=ReasoningReplayMode.DISABLED
+            request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
         ).body
         assert body["tool_choice"] == {
             "type": "function",
@@ -1223,7 +1228,7 @@ def test_discovery_optional_status_preserves_valid_tools(
         assert items[-1]["call_id"] == "search"
     else:
         body = build_responses_chat_request(
-            request, reasoning_replay=ReasoningReplayMode.DISABLED
+            request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
         ).body
         definitions = cast(list[dict[str, Any]], body["tools"])
         names = [tool["function"]["name"] for tool in definitions]
@@ -1284,7 +1289,7 @@ def test_discovery_execution_is_inferred_from_the_matching_record(
         assert "spawn_agent" in items[-1]["output"]
     else:
         body = build_responses_chat_request(
-            request, reasoning_replay=ReasoningReplayMode.DISABLED
+            request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
         ).body
         items = cast(list[dict[str, Any]], body["messages"])
         assert items[-2]["tool_calls"][0]["id"] == "search"
@@ -1354,7 +1359,7 @@ def test_discovery_rejects_conflicting_execution_for_one_call(native: bool) -> N
             ResponsesToolAdapter(request, ResponsesToolPolicy(client_tool_search=True))
         else:
             build_responses_chat_request(
-                request, reasoning_replay=ReasoningReplayMode.DISABLED
+                request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
             )
 
 
@@ -1389,15 +1394,20 @@ def _completed_tool_events(
                 {"response": {"output": [completed], "status": "completed"}},
             ),
         ]
+        relay = NativeResponsesRelay(public_model="example")
         return [
-            data for kind, payload in payloads for _, data in events.feed(kind, payload)
+            relay.project(kind, data)
+            for event, payload in payloads
+            for kind, data in events.feed(event, payload)
         ]
     adapter = build_responses_chat_request(
-        request, reasoning_replay=ReasoningReplayMode.DISABLED
+        request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
     ).tool_adapter
     writer = ResponsesChatStreamOutput(adapter, input_tokens=1)
-    frames = [*writer.start_events(), writer.start_tool_block(0, "call_test", name)]
-    frames.append(writer.emit_tool_delta(0, arguments))
+    frames = [
+        *writer.start_events(),
+        *writer.emit_complete_tool(0, CompletedToolCall("call_test", name, arguments)),
+    ]
     frames.extend(
         writer.finish_success(
             stop_reason="tool_calls",
@@ -1514,7 +1524,7 @@ def test_nested_function_definition_and_choice_use_one_provider_name(
         assert prepared.tool_choice == {"type": "function", "name": "group__lookup"}
     else:
         body = build_responses_chat_request(
-            request, reasoning_replay=ReasoningReplayMode.DISABLED
+            request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
         ).body
         definition = cast(list[dict[str, Any]], body["tools"])[0]["function"]
         assert definition["name"] == "group__lookup"
@@ -1583,7 +1593,7 @@ def test_discovery_preserves_outer_namespace_in_nested_tools(
         assert prepared.tool_choice == {"type": "function", "name": "agents__run"}
     else:
         body = build_responses_chat_request(
-            request, reasoning_replay=ReasoningReplayMode.DISABLED
+            request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
         ).body
         assert {
             tool["function"]["name"]
@@ -1617,14 +1627,13 @@ def test_discovery_preserves_outer_namespace_in_nested_tools(
 
 
 def test_chat_does_not_turn_missing_search_arguments_into_a_successful_call() -> None:
-    events = _completed_tool_events(
-        OpenAIResponsesRequest(model="example", input="Search", tools=[SEARCH]),
-        native=False,
-        name="fcc_tool_search",
-        arguments="",
-    )
-    assert events[-1]["type"] == "response.failed"
-    assert events[-1]["response"]["output"] == []
+    with pytest.raises(ExecutionFailure, match="cannot be represented"):
+        _completed_tool_events(
+            OpenAIResponsesRequest(model="example", input="Search", tools=[SEARCH]),
+            native=False,
+            name="fcc_tool_search",
+            arguments="",
+        )
 
 
 @pytest.mark.parametrize("native", [False, True])
@@ -1677,7 +1686,7 @@ def test_malformed_namespace_is_not_silently_dropped(native: bool) -> None:
             ResponsesToolAdapter(request, ResponsesToolPolicy(flatten_namespaces=True))
         else:
             build_responses_chat_request(
-                request, reasoning_replay=ReasoningReplayMode.DISABLED
+                request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
             )
 
 
@@ -1775,17 +1784,19 @@ def test_interleaved_tool_kinds_keep_arguments_and_terminal_output_consistent(
                 {"response": {"output": completed, "status": "completed"}},
             )
         )
+        relay = NativeResponsesRelay(public_model="example")
+        events = [relay.project(str(event["type"]), event) for event in events]
     else:
         prepared = build_responses_chat_request(
-            request, reasoning_replay=ReasoningReplayMode.DISABLED
+            request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
         )
         writer = ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=1)
         frames = [*writer.start_events()]
         for i, name in enumerate(names):
-            frames.append(writer.start_tool_block(i, f"call_{i}", name))
-        for part in range(2):
             frames.extend(
-                writer.emit_tool_delta(i, fragments[i][part]) for i in range(3)
+                writer.emit_complete_tool(
+                    i, CompletedToolCall(f"call_{i}", name, "".join(fragments[i]))
+                )
             )
         frames.extend(
             writer.finish_success(
@@ -1839,7 +1850,7 @@ def test_chat_preserves_custom_result_text_serialization() -> None:
         ],
     )
     body = build_responses_chat_request(
-        request, reasoning_replay=ReasoningReplayMode.DISABLED
+        request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
     ).body
     messages = cast(list[dict[str, Any]], body["messages"])
     assert len(messages) == 2
@@ -1867,11 +1878,10 @@ def test_non_finite_arguments_are_opaque_except_in_object_conversion(
                 request, native=native, name=name, arguments=arguments
             )
     elif search:
-        events = _completed_tool_events(
-            request, native=native, name=name, arguments=arguments
-        )
-        assert events[-1]["type"] == "response.failed"
-        assert events[-1]["response"]["output"] == []
+        with pytest.raises(ExecutionFailure, match="cannot be represented"):
+            _completed_tool_events(
+                request, native=native, name=name, arguments=arguments
+            )
     else:
         events = _completed_tool_events(
             request, native=native, name=name, arguments=arguments
@@ -1984,13 +1994,12 @@ def test_argument_numbers_survive_sse_serialization(
         )
     else:
         adapter = build_responses_chat_request(
-            request, reasoning_replay=ReasoningReplayMode.DISABLED
+            request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
         ).tool_adapter
         writer = ResponsesChatStreamOutput(adapter, input_tokens=1)
         frames = [
             *writer.start_events(),
-            writer.start_tool_block(0, "call", name),
-            writer.emit_tool_delta(0, arguments),
+            *writer.emit_complete_tool(0, CompletedToolCall("call", name, arguments)),
         ]
         frames.extend(
             writer.finish_success(

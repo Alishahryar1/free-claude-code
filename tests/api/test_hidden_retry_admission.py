@@ -12,6 +12,11 @@ from free_claude_code.api.response_streams import (
     anthropic_sse_streaming_response,
     openai_responses_sse_streaming_response,
 )
+from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.stream_delivery import (
+    StreamDeliveryState,
+    bind_stream_delivery,
+)
 from free_claude_code.providers.anthropic_messages.passthrough import (
     stream_native_messages,
 )
@@ -115,7 +120,7 @@ async def test_stopped_first_messages_event_releases_admission(
         assert failed.status_code == 502
         assert len(bodies) == 1 + probe
         assert all(item.close_calls == 1 for item in wires)
-        assert admission._episode is None
+        assert not admission._episodes
         recovered = await asyncio.wait_for(_response(source(), wire), timeout=1)
         assert isinstance(recovered, StreamingResponse)
         await _serve(recovered)
@@ -141,7 +146,7 @@ async def test_unstopped_first_messages_event_still_retries(route):
         await _serve(result)
         assert len(bodies) == 2 and bodies[0] == bodies[1]
         assert all(item.close_calls == 1 for item in wires)
-        assert admission._episode is None
+        assert not admission._episodes
 
 
 @pytest.mark.asyncio
@@ -167,7 +172,16 @@ async def test_stopped_first_responses_event_releases_admission(wire, terminal):
         transport._event_adapter_factory = lambda: adapter
         history = [{"role": "user", "content": "hi"}]
         failed = await _response(send(wire, history), wire)
-        assert failed.status_code == 502 and len(bodies) == 1
+        if wire == "messages":
+            assert failed.status_code == 200
+            sent = await _serve(failed)
+            output = parse_sse_text(
+                b"".join(item.get("body", b"") for item in sent).decode()
+            )
+            assert output[-1].event == "error"
+        else:
+            assert failed.status_code == 502
+        assert len(bodies) == 1
         recovered = await asyncio.wait_for(
             _response(send(wire, history), wire), timeout=1
         )
@@ -192,13 +206,14 @@ async def test_stopped_messages_cannot_close_another_executions_recovery(route):
     async with _messages_path(
         route, lambda _: (200, ConcurrentWire(_sse({"type": "message_stop"})))
     ) as (source, _bodies, _wires, admission):
-        other = admission.start_execution()
+        with bind_stream_delivery(StreamDeliveryState()):
+            other = admission.start_execution(model="native")
         leader = await _open(other)
         result = await _response(
             source(), "responses" if route == "responses" else "messages"
         )
         assert result.status_code == 502
-        assert admission._episode is not None and admission._episode.leader is other
+        assert admission._episodes["native"].leader is other
         probe = await asyncio.wait_for(_open(other), timeout=1)
         await probe.accept()
         await probe.aclose()

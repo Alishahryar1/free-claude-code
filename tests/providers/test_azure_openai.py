@@ -100,7 +100,7 @@ def test_reasoning_uses_azure_supported_provider_vocabulary(
     assert body["reasoning_effort"] == expected
 
 
-def test_reasoning_history_replays_as_portable_think_tags() -> None:
+def test_reasoning_history_replays_in_native_field() -> None:
     request = make_messages_request(
         AZURE_OPENAI_DEPLOYMENT,
         temperature=None,
@@ -122,10 +122,9 @@ def test_reasoning_history_replays_as_portable_think_tags() -> None:
         message for message in body["messages"] if message["role"] == "assistant"
     )
 
-    assert assistant["content"] == (
-        "<think>\nInspect the repository.\n</think>\n\nI found the file."
-    )
-    assert "reasoning_content" not in assistant
+    assert assistant["content"] == "I found the file."
+    assert assistant["reasoning_content"] == "Inspect the repository."
+    assert assistant["reasoning_content"] == "Inspect the repository."
     assert "reasoning" not in assistant
 
 

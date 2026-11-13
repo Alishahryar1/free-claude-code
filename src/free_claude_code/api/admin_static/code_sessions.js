@@ -14,9 +14,15 @@
     catalogLoaded = false,
     catalogPhase = "starting",
     catalogVersion = null,
+    catalogTarget = null,
+    catalogProviders = {},
     catalogInstance = null,
     catalogRequest = 0,
     settingsPending = false;
+  let catalogFlight = null,
+    catalogAgain = false,
+    catalogRetryTimer = null,
+    catalogController = null;
   let visibleIds = [],
     query = "",
     libraryToken = 0,
@@ -364,32 +370,60 @@
     record.nextBefore = data.next_before;
     render(!before && outputChanged);
   }
-  function olderCatalog(candidate) {
-    return candidate && catalogVersion && (candidate.generation_id < catalogVersion.generation_id ||
-      (candidate.generation_id === catalogVersion.generation_id && candidate.catalog_revision < catalogVersion.catalog_revision));
+  function olderCatalog(candidate, version = catalogTarget) {
+    return candidate && version && (candidate.generation_id < version.generation_id ||
+      (candidate.generation_id === version.generation_id && candidate.catalog_revision < version.catalog_revision));
   }
-  async function bootstrap() {
+  async function readBootstrap() {
     const token = syncToken;
     const request = ++catalogRequest;
+    const controller = new AbortController();
+    catalogController = controller;
     try {
-      const data = await api(`${base}/bootstrap`);
-      if (request !== catalogRequest || token !== syncToken || (epoch && data.epoch !== epoch) || olderCatalog(data.startup)) return false;
+      const data = await api(`${base}/bootstrap`, { signal: controller.signal });
+      if (request !== catalogRequest || token !== syncToken || (epoch && data.epoch !== epoch) || olderCatalog(data.startup) || olderCatalog(data.startup, catalogVersion)) return false;
       if (data.startup) catalogVersion = data.startup;
       available = data.available;
       catalogPhase = data.startup?.catalog || "ready";
-      if (catalogPhase === "ready" || !catalogLoaded) {
-        catalog = data.models;
-        harnesses = data.harnesses;
-      }
-      if (catalogPhase === "ready") catalogLoaded = true;
+      catalogProviders = data.startup?.providers || {};
+      catalog = data.models;
+      harnesses = data.harnesses;
+      catalogLoaded = true;
       availabilityNotice = data.message || "";
       return true;
     } catch (error) {
-      if (request === catalogRequest && token === syncToken) {
+      if (error.name !== "AbortError" && request === catalogRequest && token === syncToken) {
         availabilityNotice = error.message;
         if (!catalogLoaded) catalogPhase = "failed";
       }
-      throw error;
+      return false;
+    } finally {
+      if (catalogController === controller) catalogController = null;
+    }
+  }
+
+  async function bootstrap() {
+    if (!api || document.hidden) return false;
+    catalogAgain = true;
+    clearTimeout(catalogRetryTimer);
+    catalogRetryTimer = null;
+    if (catalogFlight) return catalogFlight;
+    catalogFlight = (async () => {
+      while (catalogAgain && !document.hidden) {
+        catalogAgain = false;
+        const refreshed = await readBootstrap();
+        render();
+        if (!refreshed && !catalogAgain) {
+          if (!document.hidden) catalogRetryTimer = setTimeout(() => void bootstrap(), 500);
+          return false;
+        }
+      }
+      return true;
+    })();
+    try {
+      return await catalogFlight;
+    } finally {
+      catalogFlight = null;
     }
   }
 
@@ -402,6 +436,7 @@
     if (epoch !== readyData.epoch) {
       if (epoch) {
         catalogVersion = null;
+        catalogTarget = null;
         catalogLoaded = false;
         catalogPhase = "starting";
       }
@@ -429,7 +464,7 @@
     for (const summary of readyData.sessions)
       merge({ ...summary, cursor: readyData.cursor });
     render();
-    void bootstrap().then(() => render()).catch(() => render());
+    void bootstrap();
     try {
       const results = await Promise.allSettled([
         list(),
@@ -479,17 +514,12 @@
       source.addEventListener(type, (event) => {
         if (feed === source) receive(type, event);
       });
-    const disconnected = async () => {
+    const disconnected = () => {
       if (feed !== source) return;
       restart();
       // A stopped store cannot open its event feed. Read its availability
       // so that the retry screen can explain why it is unavailable.
-      try {
-        await bootstrap();
-        render();
-      } catch {
-        /* The scheduled connection retries the reads. */
-      }
+      void bootstrap();
     };
     source.addEventListener("feed.resync_required", disconnected);
     source.onerror = disconnected;
@@ -591,11 +621,7 @@
         if (selected === id) notice = error.message;
       }
       if (error.status === 400 || error.status === 409) {
-        try {
-          await bootstrap();
-        } catch (failure) {
-          restart(failure.message);
-        }
+        await bootstrap();
       }
     } finally {
       sends.delete(id);
@@ -837,13 +863,21 @@
     if (providerDraft) return "Choose a model for the selected provider.";
     if (!catalogLoaded) return catalogPhase === "starting" ? "Models are loading…" : "Model list unavailable.";
     const model = catalog.find((model) => model.id === record.session.model);
-    if (!model) return "Selected model is unavailable. Choose another model.";
+    if (!model) return catalogProviders[record.session.provider_id] === "starting"
+      ? "Models for the selected provider are loading…"
+      : "Selected model is unavailable. Choose another model.";
     if (
       record.session.reasoning_effort &&
       !model.reasoning_efforts.includes(record.session.reasoning_effort)
     )
       return "Selected effort is unavailable. Choose another effort.";
     return "";
+  }
+
+  function selectionLoading(record) {
+    if (!catalogLoaded) return catalogPhase === "starting";
+    return !!record?.session && !catalog.some((model) => model.id === record.session.model) &&
+      catalogProviders[record.session.provider_id] === "starting";
   }
 
   function remove() {
@@ -1241,8 +1275,8 @@
     stop.hidden = !isBusy;
     stop.disabled = !connected || record?.run?.stop_requested;
     send.textContent = saved(selected).pending ? "Retry Send" : "Send";
-    send.classList.toggle("startup-busy", !catalogLoaded && catalogPhase === "starting");
-    send.setAttribute("aria-busy", String(!catalogLoaded && catalogPhase === "starting"));
+    send.classList.toggle("startup-busy", selectionLoading(record));
+    send.setAttribute("aria-busy", String(selectionLoading(record)));
     send.disabled =
       !ready(record) ||
       !available ||
@@ -1268,12 +1302,12 @@
       record.session?.status === "deleting" ||
       isBusy ||
       pending(record);
-    const disabled =
+    const sessionDisabled =
       !ready(record) ||
       isBusy ||
       pending(record) ||
-      settingsPending ||
-      !catalogLoaded;
+      settingsPending;
+    const disabled = sessionDisabled || !catalogLoaded || !catalog.length;
     const provider =
       providerDraft?.provider || record?.session?.provider_id || "";
     if (modelControl.group.dataset.provider !== provider) {
@@ -1298,7 +1332,7 @@
     );
     harnessControl.select.disabled = true;
     modeControl.select.value = record?.session?.mode || "config";
-    modeControl.select.disabled = disabled;
+    modeControl.select.disabled = sessionDisabled;
     const model = catalog.find((model) => model.id === record?.session?.model),
       effort =
         record?.session?.reasoning_effort ||
@@ -1661,6 +1695,18 @@
     dismissDialog();
   }
   window.addEventListener("pagehide", deactivate);
+  function pauseCatalog() {
+    clearTimeout(catalogRetryTimer);
+    catalogRetryTimer = null;
+    catalogAgain = false;
+    ++catalogRequest;
+    catalogController?.abort();
+  }
+  window.addEventListener("pagehide", pauseCatalog);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) pauseCatalog();
+    else void bootstrap();
+  });
   window.CodeSessions = {
     setProviderNames(providers) {
       providerNames = new Map(providers.map((provider) => [provider.provider_id, provider.display_name]));
@@ -1675,18 +1721,15 @@
     async refresh(status) {
       if (!api) return false;
       if (status?.startup) {
-        if (catalogInstance !== status.instance_id) catalogVersion = null;
+        if (catalogInstance !== status.instance_id) {
+          catalogTarget = null;
+          catalogVersion = null;
+          ++catalogRequest;
+        }
         catalogInstance = status.instance_id;
-        if (!olderCatalog(status.startup)) catalogVersion = status.startup;
+        if (!olderCatalog(status.startup)) catalogTarget = status.startup;
       }
-      try {
-        const refreshed = await bootstrap();
-        render();
-        return refreshed;
-      } catch {
-        render();
-        return false;
-      }
+      return bootstrap();
     },
   };
   document.addEventListener("pointerdown", (event) => {

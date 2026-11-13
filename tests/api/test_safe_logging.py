@@ -49,8 +49,7 @@ async def test_create_message_skips_full_payload_debug_log_by_default(caplog):
 
 @pytest.mark.asyncio
 async def test_create_message_logs_full_payload_when_opt_in(caplog):
-    settings = Settings()
-    settings.log_raw_api_payloads = True
+    settings = Settings(log_raw_api_payloads=True)
     mock_provider = MagicMock()
 
     async def fake_stream(*_a, **_kw):

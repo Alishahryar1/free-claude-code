@@ -8,6 +8,7 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -21,8 +22,18 @@ from tests.providers.support import immediate_admission, make_provider_config
 
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("prefix", ["", "anthropic/", "claude-3-freecc-no-thinking/"])
-def test_retired_model_ingress_calls_default_provider(client, stream, prefix):
-    original = f"{prefix}github_models/vendor/opus"
+@pytest.mark.parametrize(
+    "ref,upstream",
+    [
+        ("github_models/vendor/opus", DEFAULT_MODEL.split("/", 1)[1]),
+        (
+            "nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
+            "nvidia/nemotron-3-ultra-550b-a55b",
+        ),
+    ],
+)
+def test_retired_model_ingress_calls_replacement(client, stream, prefix, ref, upstream):
+    original = f"{prefix}{ref}"
     _stream_messages_calls.clear()
     response = client.post(
         "/v1/messages",
@@ -36,7 +47,7 @@ def test_retired_model_ingress_calls_default_provider(client, stream, prefix):
     assert response.status_code == 200
     assert len(_stream_messages_calls) == 1
     args, kwargs = _stream_messages_calls[0]
-    assert args[0].model == DEFAULT_MODEL.split("/", 1)[1]
+    assert args[0].model == upstream
     assert kwargs["response_model"] == original
     if prefix == "claude-3-freecc-no-thinking/":
         assert kwargs["reasoning"] == ReasoningPolicy.off()
@@ -57,8 +68,16 @@ _stream_messages_calls: list = []
 async def _mock_stream_messages(*args, **kwargs):
     """Minimal async generator for streaming tests."""
     _stream_messages_calls.append((args, kwargs))
-    yield "event: message_start\ndata: {}\n\n"
-    yield "[DONE]\n\n"
+    yield StreamOutput(
+        (
+            'event: message_start\ndata: {"type":"message_start","message":{"type":"message","id":"m","role":"assistant","content":[],"model":"test"}}\n\n',
+        )
+    )
+    yield StreamOutput(
+        (
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n',
+        )
+    )
 
 
 async def _mock_pre_start_rate_limit(*args, **kwargs):
@@ -70,14 +89,14 @@ async def _mock_pre_start_rate_limit(*args, **kwargs):
         message="upstream is busy",
         retryable=True,
     )
-    yield "unreachable"
+    yield StreamOutput(("unreachable",))
 
 
 async def _mock_empty_stream(*args, **kwargs):
     """Provider stream that completes without a protocol frame."""
     _stream_messages_calls.append((args, kwargs))
     if False:
-        yield "unreachable"
+        yield StreamOutput(("unreachable",))
 
 
 def _terminal_json_error(response, *, status_code: int):
@@ -126,7 +145,7 @@ def test_models_list(client: TestClient):
     data = response.json()
     assert data["has_more"] is False
     ids = [item["id"] for item in data["data"]]
-    assert "claude-sonnet-4-20250514" in ids
+    assert "claude-sonnet-5-5" in ids
     assert data["first_id"] == ids[0]
     assert data["last_id"] == ids[-1]
     assert response.headers["x-request-id"] == response.headers["request-id"]
@@ -222,7 +241,7 @@ def test_create_message_rejects_unportable_image_as_invalid_request() -> None:
             profile=OpenAIChatProfile(
                 OpenAIChatRequestPolicy(
                     provider_name="TEST_CHAT",
-                    reasoning_replay=ReasoningReplayMode.DISABLED,
+                    reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
                 ),
                 NO_REASONING,
             ),

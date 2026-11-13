@@ -9,11 +9,14 @@ LEGACY_XDG_CONFIG_DIRNAME = ".config"
 MESSAGING_STATE_DIRNAME = "agent_workspace"
 FCC_LOGS_DIRNAME = "logs"
 SERVER_LOG_FILENAME = "server.log"
+SERVER_STARTUP_LOG_FILENAME = "startup.log"
 CODEX_MODEL_CATALOG_FILENAME = "codex-model-catalog.json"
 AUTH_DIRNAME = "auth"
 OPENAI_AUTH_FILENAME = "openai.json"
 OPENAI_AUTH_LOCK_FILENAME = "openai.lock"
 CONFIG_LOCK_FILENAME = "config.lock"
+SERVER_STARTUP_LOCK_FILENAME = "server.startup.lock"
+SERVER_OWNER_LOCK_FILENAME = "server.owner.lock"
 FCC_TEMP_DIRNAME = "tmp"
 LAUNCHER_TEMP_DIRNAME = "launchers"
 CODE_STATE_DIRNAME = "code"
@@ -38,6 +41,18 @@ def config_lock_path() -> Path:
     """Return the cross-process managed-config migration lock path."""
 
     return config_dir_path() / CONFIG_LOCK_FILENAME
+
+
+def server_startup_lock_path() -> Path:
+    """Return the lock launchers hold while starting one shared fcc-server."""
+
+    return config_dir_path() / SERVER_STARTUP_LOCK_FILENAME
+
+
+def server_owner_lock_path() -> Path:
+    """Return the lock held by one server through all configuration restarts."""
+
+    return config_dir_path() / SERVER_OWNER_LOCK_FILENAME
 
 
 def launcher_temp_dir_path() -> Path:
@@ -81,6 +96,12 @@ def server_log_path() -> Path:
     """Return the canonical server log path."""
 
     return config_dir_path() / FCC_LOGS_DIRNAME / SERVER_LOG_FILENAME
+
+
+def server_startup_log_path() -> Path:
+    """Return the latest automatic owner's output before runtime logging starts."""
+
+    return config_dir_path() / FCC_LOGS_DIRNAME / SERVER_STARTUP_LOG_FILENAME
 
 
 def codex_model_catalog_path() -> Path:

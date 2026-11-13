@@ -10,15 +10,19 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.chat_completions.request import ChatRequest
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesToolPolicy,
 )
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.endpoint_types import EndpointContext
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.http import close_provider_stream
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -83,9 +87,10 @@ class OpenCodeProvider(BaseProvider):
         *,
         profile: OpenCodeProfile,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         catalog_client: httpx.AsyncClient | None = None,
     ) -> None:
-        super().__init__(config)
+        super().__init__(config, history_cache=history_cache)
         self._client = create_chat_client(
             config,
             base_url=profile.chat_profile.base_url(config.base_url).rstrip("/"),
@@ -95,6 +100,7 @@ class OpenCodeProvider(BaseProvider):
         self._chat = OpenAIChatTransport(
             client=self._client,
             admission=admission,
+            history_cache=self._history_cache,
             behavior=OpenAIChatBehavior(profile.chat_profile),
             read_timeout_s=config.http_read_timeout,
             log_raw_sse_events=config.log_raw_sse_events,
@@ -111,6 +117,7 @@ class OpenCodeProvider(BaseProvider):
         self._responses = OpenAIResponsesTransport(
             client=self._client,
             admission=admission,
+            history_cache=self._history_cache,
             provider_name=profile.provider_name,
             read_timeout_s=config.http_read_timeout,
             log_raw_sse_events=config.log_raw_sse_events,
@@ -180,7 +187,7 @@ class OpenCodeProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._dispatch_stream(
             request,
             input_tokens=input_tokens,
@@ -203,11 +210,11 @@ class OpenCodeProvider(BaseProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         snapshot = await self._catalog.snapshot(request_id=request_id)
         route = self._require_route(snapshot, request.model)
         routed = _routed_messages_request(request, route)
-        selected_stream: AsyncIterator[str] | None = None
+        selected_stream: AsyncIterator[StreamOutput] | None = None
         try:
             if route.transport is OpenCodeUpstreamTransport.RESPONSES:
                 selected_stream = self._responses.stream_messages(
@@ -244,6 +251,54 @@ class OpenCodeProvider(BaseProvider):
                     request_id=request_id,
                 )
 
+    def stream_chat(
+        self,
+        request: ChatRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        endpoint_context: EndpointContext | None = None,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[StreamOutput]:
+        return self._dispatch_openai_stream(
+            request,
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=response_model or request.model,
+            reasoning=reasoning,
+            endpoint_context=endpoint_context,
+            request_headers=request_headers,
+            continuation=continuation,
+        )
+
+    def stream_gemini(
+        self,
+        request: GeminiRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        endpoint_context: EndpointContext | None = None,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[StreamOutput]:
+        return self._dispatch_openai_stream(
+            request,
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=response_model or request.model,
+            reasoning=reasoning,
+            endpoint_context=endpoint_context,
+            request_headers=request_headers,
+            continuation=continuation,
+        )
+
     def stream_responses(
         self,
         request: OpenAIResponsesRequest,
@@ -256,8 +311,8 @@ class OpenCodeProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
-        return self._dispatch_responses_stream(
+    ) -> AsyncIterator[StreamOutput]:
+        return self._dispatch_openai_stream(
             request,
             input_tokens=input_tokens,
             request_id=request_id,
@@ -268,9 +323,9 @@ class OpenCodeProvider(BaseProvider):
             continuation=continuation,
         )
 
-    async def _dispatch_responses_stream(
+    async def _dispatch_openai_stream(
         self,
-        request: OpenAIResponsesRequest,
+        request: OpenAIResponsesRequest | GeminiRequest | ChatRequest,
         *,
         input_tokens: int,
         request_id: str | None,
@@ -279,13 +334,47 @@ class OpenCodeProvider(BaseProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         snapshot = await self._catalog.snapshot(request_id=request_id)
         route = self._require_route(snapshot, request.model)
-        routed = _routed_responses_request(request, route)
-        selected_stream: AsyncIterator[str] | None = None
+        routed = request.model_copy(
+            update={"model": route.upstream_model_id}, deep=True
+        )
+        selected_stream: AsyncIterator[StreamOutput] | None = None
         try:
-            if route.transport is OpenCodeUpstreamTransport.RESPONSES:
+            if isinstance(routed, ChatRequest):
+                transport = (
+                    self._responses
+                    if route.transport is OpenCodeUpstreamTransport.RESPONSES
+                    else self._chat
+                )
+                selected_stream = transport.stream_chat(
+                    routed,
+                    input_tokens=input_tokens,
+                    request_id=request_id,
+                    response_model=response_model,
+                    reasoning=reasoning,
+                    endpoint_context=endpoint_context,
+                    extra_headers=self._upstream_headers(request_headers or {}),
+                    continuation=continuation,
+                )
+            elif isinstance(routed, GeminiRequest):
+                transport = (
+                    self._responses
+                    if route.transport is OpenCodeUpstreamTransport.RESPONSES
+                    else self._chat
+                )
+                selected_stream = transport.stream_gemini(
+                    routed,
+                    input_tokens=input_tokens,
+                    request_id=request_id,
+                    response_model=response_model,
+                    reasoning=reasoning,
+                    endpoint_context=endpoint_context,
+                    extra_headers=self._upstream_headers(request_headers or {}),
+                    continuation=continuation,
+                )
+            elif route.transport is OpenCodeUpstreamTransport.RESPONSES:
                 selected_stream = self._responses.stream_responses(
                     routed,
                     input_tokens=input_tokens,
@@ -336,6 +425,7 @@ def create_opencode_provider(
     provider_id: str,
     config: ProviderConfig,
     admission: ProviderAdmissionController,
+    history_cache: HistoryModeCache | None = None,
     *,
     catalog_client: httpx.AsyncClient | None = None,
 ) -> OpenCodeProvider:
@@ -347,6 +437,7 @@ def create_opencode_provider(
         config,
         profile=profile,
         admission=admission,
+        history_cache=history_cache,
         catalog_client=catalog_client,
     )
 
@@ -355,16 +446,6 @@ def _routed_messages_request(
     request: MessagesRequest,
     route: OpenCodeModelRoute,
 ) -> MessagesRequest:
-    return request.model_copy(
-        update={"model": route.upstream_model_id},
-        deep=True,
-    )
-
-
-def _routed_responses_request(
-    request: OpenAIResponsesRequest,
-    route: OpenCodeModelRoute,
-) -> OpenAIResponsesRequest:
     return request.model_copy(
         update={"model": route.upstream_model_id},
         deep=True,

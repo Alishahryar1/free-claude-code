@@ -25,6 +25,8 @@ def release(tmp_path):
         "LICENSE": "license",
         "scripts/update/fcc-update": "#!/bin/sh\n",
         "scripts/update/fcc-update.cmd": "@echo off\n",
+        "scripts/build_macos_launcher.py": "# native build\n",
+        "scripts/macos/launcher.m": "// launcher\n",
         "src/free_claude_code/__init__.py": "",
         "src/free_claude_code/cli.py": "",
         "src/free_claude_code/desktop.py": "",
@@ -34,6 +36,11 @@ def release(tmp_path):
     for name, content in files.items():
         write(repo, name, content)
     git(repo, "add", ".")
+    # Generated templates are deliberately absent from git ls-files.
+    for architecture in ("arm64", "x86_64"):
+        files[f"src/free_claude_code/assets/macos/fcc-desktop-{architecture}"] = (
+            architecture
+        )
     metadata = "Name: free-claude-code\nVersion: 1.2.3\n"
     wheel = {
         name.removeprefix("src/"): content
@@ -87,7 +94,14 @@ def test_complete_release_passes(release, tmp_path):
 @pytest.mark.parametrize("archive", [1, 2])
 @pytest.mark.parametrize(
     "suffix",
-    ["assets/icon.png", "scripts/fcc-update.cmd", "entry_points.txt", "METADATA"],
+    [
+        "assets/icon.png",
+        "scripts/fcc-update.cmd",
+        "entry_points.txt",
+        "METADATA",
+        "assets/macos/fcc-desktop-arm64",
+        "assets/macos/fcc-desktop-x86_64",
+    ],
 )
 def test_missing_wheel_or_sdist_content_fails(release, tmp_path, archive, suffix):
     if archive == 2:
@@ -120,3 +134,20 @@ def test_mismatched_metadata_fails(release, tmp_path):
     result = validate(release, tmp_path)
     assert result.returncode != 0
     assert "metadata" in result.stdout.lower()
+
+
+def test_mismatched_native_templates_fail(release, tmp_path):
+    release[1]["free_claude_code/assets/macos/fcc-desktop-arm64"] = "different"
+    result = validate(release, tmp_path)
+    assert result.returncode != 0
+    assert "template" in result.stdout.lower()
+
+
+@pytest.mark.parametrize(
+    "name", ["scripts/macos/launcher.m", "scripts/build_macos_launcher.py"]
+)
+def test_native_sources_required_in_sdist(release, tmp_path, name):
+    del release[2][f"free_claude_code-1.2.3/{name}"]
+    result = validate(release, tmp_path)
+    assert result.returncode != 0
+    assert "missing" in result.stdout.lower()

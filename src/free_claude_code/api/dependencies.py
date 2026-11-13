@@ -109,6 +109,35 @@ def require_anthropic_proxy_auth(
         )
 
 
+def require_gemini_proxy_auth(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> None:
+    keys = request.query_params.getlist("key")
+    if len(keys) > 1:
+        raise HTTPException(
+            status_code=400, detail="Repeated key query credentials are unsupported"
+        )
+    if not settings.proxy_auth_enabled:
+        return
+    credential = request.headers.get("authorization")
+    bearer = credential is not None
+    if credential is None:
+        credential = request.headers.get("x-goog-api-key")
+    if credential is None:
+        credential = keys[0] if keys else None
+    if credential is None:
+        raise HTTPException(
+            status_code=401, detail="Missing proxy authentication token"
+        )
+    if not _proxy_token_matches(
+        credential, settings.proxy_auth_token, require_bearer=bearer
+    ):
+        raise HTTPException(
+            status_code=401, detail="Invalid proxy authentication token"
+        )
+
+
 def _proxy_token_matches(
     credential: str,
     configured_token: str,

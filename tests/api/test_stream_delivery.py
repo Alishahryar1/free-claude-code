@@ -11,6 +11,7 @@ from starlette.responses import StreamingResponse
 from free_claude_code.api.response_streams import anthropic_sse_streaming_response
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.stream_delivery import current_stream_delivery
+from free_claude_code.core.stream_output import completed_output
 from tests.api.test_response_streams import _json_error, _serve
 from tests.api.test_tool_call_buffer import _call, _end, _frames, _response, _start
 from tests.api.test_web_server_tools import (
@@ -41,23 +42,27 @@ async def test_messages_start_is_published_only_with_committed_activity(ending):
     )
 
     async def source():
-        yield start
-        yield harmless
+        yield completed_output((start,))
+        yield completed_output((harmless,))
         if ending == "activity":
-            yield activity
+            yield completed_output((activity,))
         if ending in {"activity", "empty"}:
-            yield "".join(_frames("messages", _end("messages")))
+            yield completed_output(("".join(_frames("messages", _end("messages"))),))
         elif ending == "stop":
-            yield 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+            yield completed_output(
+                ('event: message_stop\ndata: {"type":"message_stop"}\n\n',)
+            )
         elif ending == "error":
-            yield "".join(_frames("messages", _end("messages", failed=True)))
+            yield completed_output(
+                ("".join(_frames("messages", _end("messages", failed=True))),)
+            )
         elif ending == "raise":
             raise RuntimeError("stream interrupted")
 
     response = await _response("messages", source())
     try:
         iterator = aiter(response.body_iterator)
-        assert str(await anext(iterator)) + str(await anext(iterator)) == harmless
+        assert str(await anext(iterator)) == harmless
         remaining = "".join([str(chunk) async for chunk in iterator])
         if ending in {"activity", "empty", "stop"}:
             assert remaining.startswith(start)
@@ -79,7 +84,7 @@ async def test_messages_deferral_preserves_duplicate_starts_within_one_attempt()
     )
 
     async def source():
-        yield raw
+        yield completed_output((raw,))
 
     assert await drained(source(), "messages") == raw
 
@@ -101,9 +106,9 @@ async def test_unicode_metadata_preserves_bytes_and_retry_eligibility(
     async def source():
         state = current_stream_delivery()
         assert state is not None
-        yield raw
+        yield completed_output((raw,))
         released.append(state.content_released)
-        yield "".join(_frames(wire, _end(wire)))
+        yield completed_output(("".join(_frames(wire, _end(wire))),))
 
     result = await drained(source(), wire)
     assert released == [False]
@@ -123,9 +128,11 @@ async def test_unicode_comment_does_not_release_content(separator):
     async def source():
         state = current_stream_delivery()
         assert state is not None
-        yield raw
+        yield completed_output((raw,))
         released.append(state.content_released)
-        yield "".join(_frames("messages", [_start("messages"), *_end("messages")]))
+        yield completed_output(
+            ("".join(_frames("messages", [_start("messages"), *_end("messages")])),)
+        )
 
     assert (await drained(source(), "messages")).startswith(raw)
     assert released == [False]
@@ -141,9 +148,9 @@ async def test_unicode_meaningful_frame_still_releases_content(separator):
     async def source():
         state = current_stream_delivery()
         assert state is not None
-        yield raw
+        yield completed_output((raw,))
         released.append(state.content_released)
-        yield "".join(_frames("messages", _end("messages")))
+        yield completed_output(("".join(_frames("messages", _end("messages"))),))
 
     assert (await drained(source(), "messages")).startswith(raw)
     assert released == [True]
@@ -161,70 +168,53 @@ async def test_unicode_meaningful_frame_still_releases_content(separator):
         },
     ],
 )
-async def test_opaque_frame_closes_eligibility_without_changing_bytes(payload):
+async def test_opaque_frame_closes_eligibility_and_preserves_payload_fields(payload):
     raw = _frames("responses", [_start("responses")])[0]
     raw += "event: future\ndata: " + json.dumps(payload) + "\n\n"
     seen = []
 
     async def source():
         seen.append(current_stream_delivery())
-        yield raw
+        yield completed_output((raw,))
 
-    assert await drained(source(), "responses") == raw
+    output = await drained(source(), "responses")
+    assert json.loads(output.split("data: ")[-1]) == {**payload, "sequence_number": 1}
     assert seen[0].content_released
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_retry_drops_hidden_group_tail_and_reused_call_aliases(wire):
-    async def source():
-        delivery = current_stream_delivery()
-        assert delivery is not None
-        delivery.begin_attempt()
-        yield "".join(_frames(wire, [_start(wire)]))
-        first, second = _call(wire, 0), _call(wire, 1)
-        yield "".join(_frames(wire, [first[0], second[0], *first[1:], second[1]]))
-        yield 'event: content_block_delta\ndata: {"index":1,'
-        assert not delivery.content_released
-        delivery.begin_attempt()
-        winner = _call(wire, 0, '{"path":"winning"}')
-        yield "".join(_frames(wire, [_start(wire), *winner, *_end(wire)]))
-
-    output = await drained(source(), wire)
-    assert "call_1" not in output
-    assert "winning" in output
-    assert ("message_stop" if wire == "messages" else "response.completed") in output
-    assert (
-        output.count(
-            '"type": "message_start"'
-            if wire == "messages"
-            else '"type": "response.created"'
-        )
-        == 1
-    )
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("separator", ["", "\u2028", "\u2029", "\x85"])
-async def test_retry_sequence_offset_preserves_decimal_extensions_and_call_ids(
+async def test_public_sequence_preserves_decimal_extensions_and_call_ids(
     separator,
 ):
     async def source():
         state = current_stream_delivery()
         assert state is not None
         state.begin_attempt()
-        yield 'event: response.created\r\ndata: {"type":"response.created","sequence_number":40,"response":{"id":"resp_old","created_at":7,"status":"in_progress","output":[]}}\r\n\r\n'
+        yield completed_output(
+            (
+                'event: response.created\r\ndata: {"type":"response.created","sequence_number":40,"response":{"id":"resp_old","created_at":7,"status":"in_progress","output":[]}}\r\n\r\n',
+            )
+        )
         state.begin_attempt()
-        yield 'event: response.created\r\ndata: {"type":"response.created","sequence_number":0,"response":{"id":"resp_new","created_at":9,"status":"in_progress","output":[]}}\r\n\r\n'
+        yield completed_output(
+            (
+                'event: response.created\r\ndata: {"type":"response.created","sequence_number":0,"response":{"id":"resp_new","created_at":9,"status":"in_progress","output":[]}}\r\n\r\n',
+            )
+        )
         yield (
-            'id: native-event\r\nevent: response.completed\r\ndata: {"type":"response.completed","sequence_number":3,"response_id":"resp_new","response":{"id":"resp_new","created_at":9,"status":"completed","output":[]},"native":1.234567890123456789,"call_id":"resp_new","extension":"a'
-            + separator
-            + 'b"}\r\n\r\n'
+            completed_output(
+                (
+                    'id: native-event\r\nevent: response.completed\r\ndata: {"type":"response.completed","sequence_number":3,"response_id":"resp_new","response":{"id":"resp_new","created_at":9,"status":"completed","output":[]},"native":1.234567890123456789,"call_id":"resp_new","extension":"a'
+                    + separator
+                    + 'b"}\r\n\r\n',
+                )
+            )
         )
 
     output = await drained(source(), "responses")
     payload = simplejson.loads(output.split("data: ")[-1], use_decimal=True)
-    assert payload["sequence_number"] == 41
+    assert payload["sequence_number"] == 1
     assert payload["response_id"] == payload["response"]["id"] == "resp_old"
     assert payload["response"]["created_at"] == 7
     assert payload["call_id"] == "resp_new"
@@ -240,14 +230,22 @@ async def test_classifier_resets_projection_when_hidden_attempt_is_replaced():
         state = current_stream_delivery()
         assert state is not None
         state.begin_attempt()
-        yield "".join(_frames("messages", [_start("messages")]))
-        yield 'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"hidden"}}\n\n'
-        yield "event: content_block_delta\ndata: {"
+        yield completed_output(("".join(_frames("messages", [_start("messages")])),))
+        yield completed_output(
+            (
+                'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"hidden"}}\n\n',
+            )
+        )
+        yield completed_output(("event: content_block_delta\ndata: {",))
         state.begin_attempt()
-        yield "".join(
-            _frames(
-                "messages",
-                [_start("messages"), *_call("messages", 0), *_end("messages")],
+        yield completed_output(
+            (
+                "".join(
+                    _frames(
+                        "messages",
+                        [_start("messages"), *_call("messages", 0), *_end("messages")],
+                    )
+                ),
             )
         )
 
@@ -275,9 +273,11 @@ async def test_prefetch_read_and_close_can_migrate_tasks_without_context_leak():
         state = current_stream_delivery()
         seen.append(state)
         try:
-            yield "".join(_frames("messages", [_start("messages")]))
+            yield completed_output(
+                ("".join(_frames("messages", [_start("messages")])),)
+            )
             assert current_stream_delivery() is state
-            yield "".join(_frames("messages", _end("messages")))
+            yield completed_output(("".join(_frames("messages", _end("messages"))),))
         finally:
             closed.append(current_stream_delivery())
 
@@ -319,7 +319,9 @@ async def test_private_web_search_masks_public_observer_during_read_and_close():
     messages = await _serve(response)
     output = b"".join(message.get("body", b"") for message in messages).decode()
     assert "private decision" in output
-    assert seen == closed == [None]
+    assert seen == closed
+    assert len(seen) == 1 and seen[0] is not None
+    assert not seen[0].content_released
     assert len(provider.requests) == 1 and provider.close_count == 1
     assert current_stream_delivery() is None
 
@@ -335,9 +337,9 @@ async def test_concurrent_responses_do_not_share_delivery_or_call_aliases():
         assert state is not None
         states[label] = state
         state.begin_attempt()
-        yield "".join(_frames("messages", [_start("messages")]))
+        yield completed_output(("".join(_frames("messages", [_start("messages")])),))
         call = _call("messages", 0, '{"path":"' + label + '"}')
-        yield "".join(_frames("messages", call[:2]))
+        yield completed_output(("".join(_frames("messages", call[:2])),))
         if len(states) == 2:
             both.set()
         await both.wait()
@@ -345,11 +347,19 @@ async def test_concurrent_responses_do_not_share_delivery_or_call_aliases():
             await other_done.wait()
             assert not state.content_released
             state.begin_attempt()
-            yield "".join(
-                _frames("messages", [_start("messages"), *call, *_end("messages")])
+            yield completed_output(
+                (
+                    "".join(
+                        _frames(
+                            "messages", [_start("messages"), *call, *_end("messages")]
+                        )
+                    ),
+                )
             )
         else:
-            yield "".join(_frames("messages", [call[2], *_end("messages")]))
+            yield completed_output(
+                ("".join(_frames("messages", [call[2], *_end("messages")])),)
+            )
             other_done.set()
 
     alpha, beta = await asyncio.gather(

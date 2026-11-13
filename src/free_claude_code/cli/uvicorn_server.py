@@ -1,17 +1,45 @@
 """Uvicorn adapter imported only by the server worker."""
 
+import logging
 import socket
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
+from urllib.parse import parse_qsl, urlencode
 
 import uvicorn
 
 from free_claude_code.config.logging_config import InterceptHandler
 
 
+class QueryCredentialFilter(logging.Filter):
+    """Mask query API keys before either Uvicorn output handler sees them."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if (
+            record.name == "uvicorn.access"
+            and isinstance(record.args, tuple)
+            and len(record.args) == 5
+        ):
+            address, method, target, version, status = record.args
+            if isinstance(target, str) and "?" in target:
+                path, _, query = target.partition("?")
+                pairs = parse_qsl(query, keep_blank_values=True)
+                if any(key == "key" for key, _ in pairs):
+                    query = urlencode(
+                        [
+                            (key, "[REDACTED]" if key == "key" else value)
+                            for key, value in pairs
+                        ]
+                    )
+                    record.args = (address, method, f"{path}?{query}", version, status)
+        return True
+
+
 def uvicorn_log_config(*, console: bool) -> dict[str, object]:
     """Send Uvicorn records to FCC's file and optional standard console handlers."""
     config = deepcopy(uvicorn.config.LOGGING_CONFIG)
+    config["filters"] = {"query_credentials": {"()": QueryCredentialFilter}}
+    config["loggers"]["uvicorn.access"]["filters"] = ["query_credentials"]
     if not console:
         config["formatters"] = {}
         config["handlers"] = {}

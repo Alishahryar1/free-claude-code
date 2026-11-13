@@ -228,7 +228,7 @@ async def test_streamed_tool_turn_replays_reasoning_after_tool_result() -> None:
         )
         first = "".join(
             [
-                event
+                "".join(event.frames)
                 async for event in provider.stream_messages(
                     MessagesRequest.model_validate(
                         {
@@ -245,7 +245,7 @@ async def test_streamed_tool_turn_replays_reasoning_after_tool_result() -> None:
         )
         second = "".join(
             [
-                event
+                "".join(event.frames)
                 async for event in provider.stream_messages(
                     MessagesRequest.model_validate(
                         {

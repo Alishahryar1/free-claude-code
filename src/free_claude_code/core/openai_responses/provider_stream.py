@@ -1,10 +1,16 @@
 """Translate upstream OpenAI Responses events into Anthropic Messages SSE."""
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from free_claude_code.core.anthropic.streaming import AnthropicStreamLedger
 from free_claude_code.core.anthropic.usage import anthropic_input_usage_fields
+from free_claude_code.core.history_replay import (
+    ReplayOrigin,
+    ReplayRecord,
+    encode_replay,
+)
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 
 
@@ -44,11 +50,6 @@ class _ReasoningState:
     parts: dict[tuple[str, int], str] = field(default_factory=dict)
     stopped: bool = False
 
-    def text(self, field_name: str) -> str:
-        return "".join(
-            text for (name, _), text in sorted(self.parts.items()) if name == field_name
-        )
-
 
 class ResponsesProviderStream:
     """Stateful one-way adapter for one upstream response."""
@@ -59,6 +60,7 @@ class ResponsesProviderStream:
         message_id: str,
         model: str,
         input_tokens: int,
+        origin: ReplayOrigin,
         log_raw_events: bool = False,
         tool_names: OpenAIToolNameCodec | None = None,
         pad_empty: bool = True,
@@ -70,6 +72,7 @@ class ResponsesProviderStream:
             log_raw_events=log_raw_events,
         )
         self.completed = False
+        self._origin = origin
         self._pad_empty = pad_empty
         self.generated_output = False
         self._tool_names = tool_names or OpenAIToolNameCodec.from_names(())
@@ -169,13 +172,11 @@ class ResponsesProviderStream:
                 for index, part in enumerate(parts)
                 if isinstance(part, dict) and isinstance(part.get("text"), str)
             ]
-            full_text = "".join(text for _, text in text_parts)
-            alternate = state.text("summary" if field_name == "content" else "content")
             for index, text in text_parts:
                 key = (field_name, index)
                 previous = state.parts.get(key, "")
                 state.parts[key] = text
-                if not text or full_text == alternate:
+                if not text:
                     continue
                 remaining = text.removeprefix(previous)
                 if remaining:
@@ -259,6 +260,11 @@ class ResponsesProviderStream:
             encrypted = item.get("encrypted_content")
             events = self._item_readable(item, completed=True)
             state = self._reasoning[item_id]
+            carrier = (
+                encode_replay(ReplayRecord(self._origin, cast(JsonObject, item)))
+                if encrypted
+                else None
+            )
             if (
                 state.block_index is None
                 and isinstance(encrypted, str)
@@ -272,12 +278,10 @@ class ResponsesProviderStream:
             ):
                 events.extend(self._ensure_reasoning_started(state, completed=True))
             if state.block_index is not None:
-                if isinstance(encrypted, str) and encrypted:
+                if carrier:
                     events.append(
                         self.ledger.content_block_delta(
-                            state.block_index,
-                            "signature_delta",
-                            encrypted,
+                            state.block_index, "signature_delta", carrier
                         )
                     )
                 events.append(self.ledger.content_block_stop(state.block_index))
@@ -287,7 +291,7 @@ class ResponsesProviderStream:
                 index = self.ledger.blocks.allocate_index()
                 events.append(
                     self.ledger.content_block_start(
-                        index, "redacted_thinking", data=encrypted
+                        index, "redacted_thinking", data=carrier
                     )
                 )
                 events.append(self.ledger.content_block_stop(index))

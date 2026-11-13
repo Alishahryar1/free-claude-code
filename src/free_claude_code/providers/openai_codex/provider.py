@@ -13,8 +13,11 @@ from packaging.version import Version
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.chat_completions.request import ChatRequest
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -23,6 +26,7 @@ from free_claude_code.providers.admission import (
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.failure_policy import provider_authentication_status
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.http import ProviderAttemptScope
 from free_claude_code.providers.model_listing import (
     optional_input_modalities,
@@ -52,9 +56,10 @@ class OpenAICodexProvider(BaseProvider):
         *,
         auth: OpenAIAuthManager,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
-        super().__init__(config)
+        super().__init__(config, history_cache=history_cache)
         self._auth = auth
         self._admission = admission
         self._client_headers = {
@@ -82,6 +87,7 @@ class OpenAICodexProvider(BaseProvider):
         self._responses = OpenAIResponsesTransport(
             client=self._client,
             admission=admission,
+            history_cache=self._history_cache,
             provider_name="OpenAI",
             read_timeout_s=config.http_read_timeout,
             log_raw_sse_events=config.log_raw_sse_events,
@@ -106,7 +112,7 @@ class OpenAICodexProvider(BaseProvider):
 
     async def _list_models_payload(self) -> Any:
         """Admit each catalog GET while borrowing request-scoped SDK credentials."""
-        execution = self._admission.start_execution()
+        execution = self._admission.start_execution(model=None)
         endpoint = RequestEndpoint(self._endpoint())
         request_client = OpenAIRequestClient(self._pool)
         recovery = RequestRecovery(execution, endpoint=endpoint)
@@ -147,6 +153,8 @@ class OpenAICodexProvider(BaseProvider):
                             decision = await scope.attempt.fail(error)
                             if decision.retry_allowed:
                                 continue
+                            if decision.error is not error:
+                                raise decision.error from error
                     execution.fail(error)
                     raise
                 finally:
@@ -172,7 +180,7 @@ class OpenAICodexProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._responses.stream_messages(
             request,
             input_tokens=input_tokens,
@@ -181,6 +189,50 @@ class OpenAICodexProvider(BaseProvider):
             reasoning=reasoning,
             endpoint_context=self._endpoint(session_id=str(uuid.uuid4())),
             model_info=model_info,
+            continuation=continuation,
+        )
+
+    def stream_chat(
+        self,
+        request: ChatRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[StreamOutput]:
+        return self._responses.stream_chat(
+            request,
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=response_model or request.model,
+            reasoning=reasoning,
+            endpoint_context=self._endpoint(session_id=str(uuid.uuid4())),
+            continuation=continuation,
+        )
+
+    def stream_gemini(
+        self,
+        request: GeminiRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[StreamOutput]:
+        return self._responses.stream_gemini(
+            request,
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=response_model or request.model,
+            reasoning=reasoning,
+            endpoint_context=self._endpoint(session_id=str(uuid.uuid4())),
             continuation=continuation,
         )
 
@@ -195,7 +247,7 @@ class OpenAICodexProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._responses.stream_responses(
             request,
             input_tokens=input_tokens,

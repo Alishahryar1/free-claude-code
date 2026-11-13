@@ -1,7 +1,7 @@
 """Concurrent readers and exclusive writers with preference for queued writes."""
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from .async_tasks import wait_owned
@@ -15,7 +15,7 @@ class AsyncReadWriteLock:
         self._waiting_writers = 0
 
     @asynccontextmanager
-    async def read(self) -> AsyncIterator[None]:
+    async def read(self) -> AsyncGenerator[None]:
         async with self._condition:
             await self._condition.wait_for(
                 lambda: not self._writer and not self._waiting_writers
@@ -27,7 +27,7 @@ class AsyncReadWriteLock:
             await wait_owned(asyncio.create_task(self._release(writer=False)))
 
     @asynccontextmanager
-    async def write(self) -> AsyncIterator[None]:
+    async def write(self) -> AsyncGenerator[None]:
         async with self._condition:
             self._waiting_writers += 1
             try:

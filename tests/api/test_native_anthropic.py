@@ -12,6 +12,7 @@ from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.base import BaseProvider
 from tests.api.support import create_test_app
+from tests.providers.support import without_empty_reasoning
 from tests.providers.test_anthropic_fallback_reasoning import model_metadata
 from tests.providers.test_anthropic_provider import native_body, provider
 
@@ -31,7 +32,13 @@ def test_native_fallback_applies_selected_effort_after_passthrough_primary(effor
                 json={"error": {"type": "permission_error", "message": "unavailable"}},
             )
         return httpx.Response(
-            200, json={"type": "message", "model": "backup", "content": []}
+            200,
+            json={
+                "stop_reason": "end_turn",
+                "type": "message",
+                "model": "backup",
+                "content": [],
+            },
         )
 
     app = create_test_app(
@@ -48,10 +55,13 @@ def test_native_fallback_applies_selected_effort_after_passthrough_primary(effor
         response = client.post("/v1/messages", json=body)
     assert response.status_code == 200, response.text
     assert response.json()["model"] == body["model"]
-    assert sent[0] == body | {"model": "primary"}
-    assert sent[1]["messages"] == body["messages"] and sent[1]["tools"] == body["tools"]
+    assert without_empty_reasoning(sent[0]) == body | {"model": "primary"}
+    assert (
+        without_empty_reasoning(sent[1]["messages"]) == body["messages"]
+        and sent[1]["tools"] == body["tools"]
+    )
     if effort in {"inherit", "client"}:
-        assert sent[1] == body | {"model": "backup"}
+        assert without_empty_reasoning(sent[1]) == body | {"model": "backup"}
     elif effort == "off":
         assert sent[1]["thinking"] == {"type": "disabled"}
         assert sent[1]["output_config"] == {"format": {"type": "json_schema"}}
@@ -86,10 +96,6 @@ def test_native_ingress_preserves_extensions_and_bypasses_local_processing():
     body["model"] = "claude-sonnet-client-alias"
     with (
         patch(
-            "free_claude_code.api.handlers.messages.try_optimizations",
-            side_effect=AssertionError("native optimization"),
-        ),
-        patch(
             "free_claude_code.runtime.provider_manager.ProviderGenerationLease.wait_for_token_estimation",
             side_effect=AssertionError("native token wait"),
         ),
@@ -107,7 +113,7 @@ def test_native_ingress_preserves_extensions_and_bypasses_local_processing():
     assert response.status_code == 200, response.text
     assert response.json()["model"] == body["model"]
     assert response.json()["stop_reason"] == "pause_turn"
-    assert sent == [{**body, "model": "claude-test"}]
+    assert without_empty_reasoning(sent) == [{**body, "model": "claude-test"}]
 
 
 def test_native_fallback_excludes_compatibility_and_preserves_alias():
@@ -125,7 +131,13 @@ def test_native_fallback_excludes_compatibility_and_preserves_alias():
                 },
             )
         return httpx.Response(
-            200, json={"type": "message", "model": "backup", "content": []}
+            200,
+            json={
+                "stop_reason": "end_turn",
+                "type": "message",
+                "model": "backup",
+                "content": [],
+            },
         )
 
     settings = Settings(
@@ -268,7 +280,9 @@ def test_native_proxy_auth_remains_separate_from_upstream_key():
 
     def handle(request):
         calls.append(request)
-        return httpx.Response(200, json={"type": "message", "content": []})
+        return httpx.Response(
+            200, json={"stop_reason": "end_turn", "type": "message", "content": []}
+        )
 
     settings = Settings(
         MODEL="anthropic/selected",

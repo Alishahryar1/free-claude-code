@@ -1,7 +1,7 @@
 """Canonical managed-config loading, precedence, provenance, and caching."""
 
 import os
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
@@ -65,7 +65,7 @@ class ManagedConfigStore:
         self._lock_path = config_lock_path()
 
     @contextmanager
-    def _storage_lock(self) -> Iterator[None]:
+    def _storage_lock(self) -> Generator[None]:
         lock = InterprocessFileLock(self._lock_path)
         if not lock.acquire(wait=True, timeout=10.0):
             raise TimeoutError(
@@ -207,8 +207,6 @@ def clear_settings_cache() -> None:
 def _settings_aliases() -> dict[str, str]:
     aliases: dict[str, str] = {}
     for name, field in Settings.model_fields.items():
-        if name == "nim":
-            continue
         alias = field.validation_alias
         if not isinstance(alias, str):
             raise AssertionError(f"Settings field {name!r} needs one string alias")

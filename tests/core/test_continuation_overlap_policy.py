@@ -30,6 +30,37 @@ def test_empty_delta_stays_invisible_with_no_prior_answer_text(wire):
     assert ContinuationOverlap("").feed(event) == []
 
 
+@pytest.mark.parametrize("channel", ["text", "thinking", "summary"])
+def test_complete_prefix_match_releases_other_channels_before_item_closes(channel):
+    kind = {
+        "text": "response.output_text.delta",
+        "thinking": "response.reasoning_text.delta",
+        "summary": "response.reasoning_summary_text.delta",
+    }[channel]
+    overlap = ContinuationOverlap("Plan", channel=channel)
+    prefix = {
+        "type": kind,
+        "output_index": 0,
+        "item_id": "prefix",
+        "delta": "Pl",
+    }
+    assert overlap.feed(prefix) == []
+    assert overlap.feed({**prefix, "delta": "an"}) == []
+    other = {
+        "type": (
+            "response.reasoning_text.delta"
+            if channel == "text"
+            else "response.output_text.delta"
+        ),
+        "output_index": 1,
+        "item_id": "other",
+        "delta": "Answer",
+    }
+    assert overlap.feed(other) == [other]
+    more = {**prefix, "delta": " then act"}
+    assert overlap.feed(more) == [more]
+
+
 def retained_parts(prefix, parts):
     text = "".join(parts)
     overlap = max(
@@ -166,7 +197,7 @@ def test_late_snapshot_cannot_rewrite_a_decided_prefix(change):
         extra = deepcopy(items[0])
         extra["id"] = "msg_late"
         items.insert(0, extra)
-    with pytest.raises(ExecutionFailure, match="observed answer prefix"):
+    with pytest.raises(ExecutionFailure, match=r"observed .* prefix"):
         overlap.feed(terminal)
 
 
@@ -176,7 +207,7 @@ def test_terminal_cannot_omit_pending_source_text():
     for event in source[:-1]:
         overlap.feed(event)
     source[-1]["response"]["output"] = []
-    with pytest.raises(ExecutionFailure, match="observed answer prefix"):
+    with pytest.raises(ExecutionFailure, match=r"observed .* prefix"):
         overlap.feed(source[-1])
 
 

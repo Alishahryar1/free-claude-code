@@ -296,20 +296,6 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
     ),
     CapabilityContract(
         "request_behavior",
-        "local_optimizations",
-        "request_optimization",
-        "free_claude_code.api.optimization_handlers",
-        "Claude Code probe/title/suggestion/filepath requests",
-        "local MessagesResponse without provider call",
-        "falls through to provider when unmatched/disabled",
-        (
-            "tests/api/test_optimization_handlers.py",
-            "tests/api/test_routes_optimizations.py",
-        ),
-        ("test_optimization_fast_paths_do_not_need_provider",),
-    ),
-    CapabilityContract(
-        "request_behavior",
         "claude_auto_mode_classifier",
         "claude_auto_mode_classifier",
         "free_claude_code.api.handlers.messages.MessagesHandler",

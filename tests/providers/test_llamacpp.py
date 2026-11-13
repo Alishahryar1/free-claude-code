@@ -15,6 +15,7 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
     reasoning_for,
+    sdk_chat_chunk,
 )
 
 LLAMACPP_MODEL = "llamacpp-community/qwen2.5-7b-instruct"
@@ -107,7 +108,8 @@ def test_replay_is_independent_of_current_turn_reasoning_control(
 
     body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
 
-    assert body["messages"][1]["content"] == ("<think>\nprivate\n</think>\n\nvisible")
+    assert body["messages"][1]["content"] == "visible"
+    assert body["messages"][1]["reasoning_content"] == "private"
     assert body["extra_body"]["thinking_budget_tokens"] == 0
 
 
@@ -129,7 +131,7 @@ async def test_stream_messages_uses_shared_openai_chat_provider(
     chunk.usage = MagicMock(prompt_tokens=8, completion_tokens=4)
 
     async def stream():
-        yield chunk
+        yield sdk_chat_chunk(chunk)
 
     with patch.object(
         provider._client.chat.completions,
@@ -139,10 +141,11 @@ async def test_stream_messages_uses_shared_openai_chat_provider(
     ) as create:
         output = "".join(
             [
-                event
+                frame
                 async for event in provider.stream_messages(
                     make_messages_request(LLAMACPP_MODEL)
                 )
+                for frame in event.frames
             ]
         )
 

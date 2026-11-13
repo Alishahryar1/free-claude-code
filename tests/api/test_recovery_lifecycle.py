@@ -10,7 +10,6 @@ import pytest
 
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.delivered_response import DeliveredResponse
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_delivered_stream_recovery import (
     assert_completed,
     public_text,
@@ -22,20 +21,8 @@ from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
 
 
-@pytest.fixture(autouse=True)
-def release_events(monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
-
-
 @pytest.mark.asyncio
-async def test_partial_closure_with_default_holdback(monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        RecoveryHoldbackBuffer,
-    )
+async def test_partial_closure_with_delayed_source_frames(monkeypatch):
     original_transport = httpx2.MockTransport
 
     class PacedStream(httpx2.AsyncByteStream):

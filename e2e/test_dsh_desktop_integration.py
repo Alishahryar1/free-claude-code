@@ -77,21 +77,36 @@ def test_setup_error_and_retry_remain_in_dialog(page, admin_base_url, tmp_path):
 def test_superseded_connect_notice_matches_real_disconnect(
     page, admin_base_url, tmp_path, monkeypatch
 ):
-    from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+    from contextlib import asynccontextmanager
+
+    from free_claude_code.runtime.integration_service import IntegrationService
 
     home = install(tmp_path)
     page.goto(admin_base_url + "/admin/integrations")
     opener = page.locator("#openDshDesktopIntegration")
     expect(opener).to_have_text("Connect")
     entered, release = threading.Event(), threading.Event()
-    original = ProviderRuntimeManager.wait_for_catalog
+    original = IntegrationService._dsh_desktop
 
-    async def held(manager):
-        entered.set()
-        assert await asyncio.to_thread(release.wait, 10)
-        return await original(manager)
+    async def held(service, action):
+        if action == "connect":
+            write = service._dsh_update.access.write
+            first = True
 
-    monkeypatch.setattr(ProviderRuntimeManager, "wait_for_catalog", held)
+            @asynccontextmanager
+            async def held_write():
+                nonlocal first
+                if first:
+                    first = False
+                    entered.set()
+                    assert await asyncio.to_thread(release.wait, 10)
+                async with write():
+                    yield
+
+            monkeypatch.setattr(service._dsh_update.access, "write", held_write)
+        return await original(service, action)
+
+    monkeypatch.setattr(IntegrationService, "_dsh_desktop", held)
     endpoint = admin_base_url + "/admin/api/integrations/dsh-desktop"
     try:
         opener.click()

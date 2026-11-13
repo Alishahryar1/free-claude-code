@@ -264,7 +264,7 @@ class OpenCodeCatalog:
             finally:
                 await response.aclose()
 
-        execution = self._admission.start_execution(request_id=request_id)
+        execution = self._admission.start_execution(request_id=request_id, model=None)
         snapshot = await execution.run_call(
             request,
             operation_kind=ProviderOperationKind.MODEL_DISCOVERY,

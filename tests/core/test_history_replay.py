@@ -8,8 +8,8 @@ import pytest
 
 from free_claude_code.core.history_replay import (
     AssociatedReplayRecord,
+    HistoryMode,
     HistoryReplayError,
-    HistoryScope,
     ReplayOrigin,
     ReplayRecord,
     decode_replay,
@@ -169,7 +169,7 @@ def test_legacy_naked_opaque_history_is_tried_unchanged():
 
 
 @pytest.mark.parametrize("native_text", ["Full reasoning.", "Short summary."])
-def test_chat_replay_keeps_full_text_and_summary_meaning(native_text):
+def test_legacy_chat_replay_materializes_all_readable_thinking_once(native_text):
     native = {
         "reasoning_content": native_text,
         "reasoning_details": [
@@ -189,13 +189,15 @@ def test_chat_replay_keeps_full_text_and_summary_meaning(native_text):
     original = deepcopy(body)
     result = cast(
         dict[str, Any],
-        prepare_history(body, _origin("b", "chat"), scope=HistoryScope.ALL),
+        prepare_history(body, _origin("b", "chat"), scope=HistoryMode.ALL),
     )["messages"][0]
-    assert result["content"] == "answer\n\nShort summary."
-    if native_text == "Short summary.":
-        assert "reasoning_content" not in result
-    else:
-        assert result["reasoning_content"] == "Full reasoning."
+    assert result["content"] == "answer"
+    assert "reasoning_details" not in result
+    assert result["reasoning_content"] == (
+        "Short summary."
+        if native_text == "Short summary."
+        else "Full reasoning.\nShort summary."
+    )
     assert body == original
 
 
@@ -217,7 +219,8 @@ def test_plain_reasoning_context_preserves_original_text_and_history(thinking):
     assert result["messages"] == [
         {
             "role": "assistant",
-            "content": "Answer." + (f"\n\n{thinking}" if thinking else ""),
+            "content": "Answer.",
+            "reasoning_content": thinking,
         },
         {"role": "user", "content": "Continue."},
     ]

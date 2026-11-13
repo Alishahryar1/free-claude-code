@@ -16,3 +16,4 @@ llama_cache
 .smoke-results
 /test-results/
 .vscode
+/src/free_claude_code/assets/macos/fcc-desktop-*

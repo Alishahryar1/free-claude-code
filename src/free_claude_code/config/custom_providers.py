@@ -87,6 +87,11 @@ class CustomProviderDefinition(BaseModel):
 
     @model_validator(mode="after")
     def validate_formats(self) -> CustomProviderDefinition:
+        if self.api_format == "openai_chat" and self.reasoning_history_format in {
+            "disabled",
+            "think_tags",
+        }:
+            object.__setattr__(self, "reasoning_history_format", "reasoning_content")
         if self.reasoning_format not in REASONING_FORMATS[self.api_format]:
             raise ValueError("Reasoning format is not supported by this API format")
         if (

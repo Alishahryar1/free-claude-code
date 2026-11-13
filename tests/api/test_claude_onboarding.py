@@ -22,7 +22,7 @@ def onboarding():
 
 def test_passive_status_and_independent_completion(onboarding):
     client, runtime, path = onboarding
-    runtime.provider_manager.wait_for_catalog = AsyncMock(
+    runtime.provider_manager.wait_for_model_catalog = AsyncMock(
         side_effect=AssertionError("No model discovery needed")
     )
     runtime._integrations._claude_update.state = "failed"
@@ -50,7 +50,7 @@ def test_passive_status_and_independent_completion(onboarding):
     assert path.stat().st_mtime_ns == before
     assert runtime._integrations._claude_update.state == "failed"
     assert runtime._integrations._claude_update.message == "VS Code unavailable"
-    runtime.provider_manager.wait_for_catalog.assert_not_awaited()
+    runtime.provider_manager.wait_for_model_catalog.assert_not_awaited()
 
 
 @pytest.mark.parametrize("action", ["", "/complete"])

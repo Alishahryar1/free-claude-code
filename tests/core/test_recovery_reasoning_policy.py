@@ -62,7 +62,7 @@ def carrier(protocol, native):
                     ]
                 },
             ),
-            False,
+            True,
         ),
         ("native-ciphertext", False),
         ("fcc:history:v1:malformed", False),

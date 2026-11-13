@@ -224,19 +224,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="provider_max_concurrency",
     ),
     ConfigFieldSpec(
-        "PROVIDER_PROGRESS_TIMEOUT",
-        "Provider Progress Timeout",
-        "runtime",
-        "number",
-        settings_attr="provider_progress_timeout",
-        description=(
-            "Maximum seconds without a non-empty protocol event, including "
-            "provider admission, retries, and backoff. Independent of HTTP Read "
-            "Timeout."
-        ),
-        advanced=True,
-    ),
-    ConfigFieldSpec(
         "HTTP_READ_TIMEOUT",
         "HTTP Read Timeout",
         "runtime",
@@ -386,46 +373,6 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         "voice",
         settings_attr="whisper_model",
         session_sensitive=True,
-    ),
-    ConfigFieldSpec(
-        "FAST_PREFIX_DETECTION",
-        "Fast Prefix Detection",
-        "runtime",
-        "boolean",
-        settings_attr="fast_prefix_detection",
-        advanced=True,
-    ),
-    ConfigFieldSpec(
-        "ENABLE_NETWORK_PROBE_MOCK",
-        "Network Probe Mock",
-        "runtime",
-        "boolean",
-        settings_attr="enable_network_probe_mock",
-        advanced=True,
-    ),
-    ConfigFieldSpec(
-        "ENABLE_TITLE_GENERATION_SKIP",
-        "Title Generation Skip",
-        "runtime",
-        "boolean",
-        settings_attr="enable_title_generation_skip",
-        advanced=True,
-    ),
-    ConfigFieldSpec(
-        "ENABLE_SUGGESTION_MODE_SKIP",
-        "Suggestion Mode Skip",
-        "runtime",
-        "boolean",
-        settings_attr="enable_suggestion_mode_skip",
-        advanced=True,
-    ),
-    ConfigFieldSpec(
-        "ENABLE_FILEPATH_EXTRACTION_MOCK",
-        "Filepath Extraction Mock",
-        "runtime",
-        "boolean",
-        settings_attr="enable_filepath_extraction_mock",
-        advanced=True,
     ),
     ConfigFieldSpec(
         "ENABLE_WEB_SERVER_TOOLS",

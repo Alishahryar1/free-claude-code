@@ -1,5 +1,6 @@
 """Contracts for pure Settings and canonical source composition."""
 
+import json
 from enum import Enum
 from pathlib import Path
 from unittest.mock import patch
@@ -10,9 +11,7 @@ from pydantic import SecretStr, ValidationError
 from free_claude_code.application.routing import ModelRouter
 from free_claude_code.config import loader
 from free_claude_code.config.constants import (
-    ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     DEFAULT_MODEL,
-    HTTP_CONNECT_TIMEOUT_DEFAULT,
 )
 from free_claude_code.config.env_files import dotenv_values_from_file
 from free_claude_code.config.loader import (
@@ -25,10 +24,10 @@ from free_claude_code.config.loader import (
 from free_claude_code.config.model_refs import (
     ModelFallback,
     configured_chat_model_refs,
+    normalize_retired_model_settings,
     parse_model_name,
     parse_provider_type,
 )
-from free_claude_code.config.nim import NimSettings
 from free_claude_code.config.paths import (
     managed_env_path,
     messaging_state_dir_path,
@@ -36,6 +35,151 @@ from free_claude_code.config.paths import (
 )
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.config.settings import Settings
+
+_SUPER_REF = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
+_ULTRA_REF = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
+
+
+def test_default_claude_aliases_use_hosted_ultra():
+    settings = compose_settings_snapshot({}, {}).settings
+    router = ModelRouter(settings)
+    for tier in ("fable", "opus", "sonnet", "haiku"):
+        assert (
+            router.resolve(f"claude-{tier}-test").primary.provider_model_ref
+            == _ULTRA_REF
+        )
+
+
+@pytest.mark.parametrize("source", [ConfigSource.MANAGED, ConfigSource.PROCESS])
+@pytest.mark.parametrize(
+    "key", ["MODEL", "MODEL_FABLE", "MODEL_OPUS", "MODEL_SONNET", "MODEL_HAIKU"]
+)
+def test_super_migration_preserves_explicit_selection_and_source(source, key):
+    values = {
+        key: f" {_SUPER_REF} ",
+        "REASONING_POLICY": "high",
+        "REASONING_OPUS": "off",
+    }
+    managed = {"MODEL": "groq/default", key: "groq/managed"}
+    process = {}
+    if source is ConfigSource.MANAGED:
+        managed.update(values)
+    else:
+        process.update(values)
+    before = managed.copy(), process.copy()
+    snapshot = compose_settings_snapshot(managed, process)
+    assert getattr(snapshot.settings, key.lower()) == _ULTRA_REF
+    assert snapshot.sources[key.lower()] is source
+    assert snapshot.settings.reasoning_policy is ReasoningPreference.HIGH
+    assert snapshot.settings.reasoning_opus is ReasoningPreference.OFF
+    if key != "MODEL":
+        assert snapshot.settings.model == "groq/default"
+    assert (managed, process) == before
+
+
+@pytest.mark.parametrize("source", [ConfigSource.MANAGED, ConfigSource.PROCESS])
+@pytest.mark.parametrize("super_first", [True, False])
+def test_super_fallback_migration_preserves_order_reasoning_and_distinct_keys(
+    source, super_first
+):
+    first, second = (
+        (_SUPER_REF, _ULTRA_REF) if super_first else (_ULTRA_REF, _SUPER_REF)
+    )
+    values = {
+        "MODEL": _SUPER_REF,
+        "NVIDIA_NIM_API_KEY": '["key-one", "key-two"]',
+        "MODEL_FALLBACKS": json.dumps(
+            [
+                {"model": first, "reasoning": "low"},
+                {"model": second, "reasoning": "high"},
+                {"model": _SUPER_REF, "reasoning": "off", "api_key_number": 2},
+                {"model": "groq/backup", "reasoning": "medium"},
+            ]
+        ),
+    }
+    snapshot = compose_settings_snapshot(
+        values if source is ConfigSource.MANAGED else {},
+        values if source is ConfigSource.PROCESS else {},
+    )
+    assert snapshot.settings.model_fallbacks == (
+        ModelFallback(model=_ULTRA_REF, reasoning=ReasoningPreference.LOW),
+        ModelFallback(
+            model=_ULTRA_REF, reasoning=ReasoningPreference.OFF, api_key_number=2
+        ),
+        ModelFallback(model="groq/backup", reasoning=ReasoningPreference.MEDIUM),
+    )
+    assert snapshot.sources["model_fallbacks"] is source
+    route = ModelRouter(snapshot.settings).resolve("claude-opus-test")
+    assert [
+        (entry.target.provider_model_ref, entry.target.api_key_number)
+        for entry in route.fallbacks
+    ] == [
+        (_ULTRA_REF, 2),
+        ("groq/backup", 1),
+    ]
+
+
+@pytest.mark.parametrize(
+    "refs",
+    [
+        [_SUPER_REF, _SUPER_REF, _ULTRA_REF],
+        [_SUPER_REF, _ULTRA_REF, _ULTRA_REF],
+        [_SUPER_REF, "groq/backup", "groq/backup"],
+    ],
+)
+def test_super_migration_does_not_hide_preexisting_fallback_duplicates(refs):
+    with pytest.raises(ValidationError, match="duplicate model/key pairs"):
+        compose_settings_snapshot({"MODEL_FALLBACKS": json.dumps(refs)}, {})
+
+
+@pytest.mark.parametrize(
+    "fallbacks",
+    [
+        f"{_SUPER_REF},",
+        "[invalid",
+        '[{"model":"groq/a","api_key_number":0}]',
+        '[{"model":"groq/a","reasoning":"invalid"}]',
+    ],
+)
+def test_super_migration_keeps_invalid_settings_invalid(fallbacks):
+    with pytest.raises(ValidationError):
+        compose_settings_snapshot(
+            {"MODEL": _SUPER_REF, "MODEL_FALLBACKS": fallbacks}, {}
+        )
+
+
+def test_model_repairs_leave_unaffected_fallback_text_unchanged():
+    values = {
+        "MODEL_FALLBACKS": '[{"model":"groq/backup","reasoning":"inherit","api_key_number":1}]',
+        "UNKNOWN": "keep",
+    }
+    assert (
+        normalize_retired_model_settings(values, preserve_empty_overrides=False)
+        == values
+    )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "open_router/nvidia/nemotron-3-super-120b-a12b",
+        "custom_00000000000000000000000000000000/nvidia/nemotron-3-super-120b-a12b",
+        _SUPER_REF + "-successor",
+    ],
+)
+def test_super_migration_leaves_other_endpoints_unchanged(model):
+    values = {
+        "MODEL": model,
+        "MODEL_OPUS": model,
+        "MODEL_FALLBACKS": json.dumps(
+            [{"model": model, "reasoning": "inherit", "api_key_number": 1}],
+            separators=(",", ":"),
+        ),
+    }
+    assert (
+        normalize_retired_model_settings(values, preserve_empty_overrides=False)
+        == values
+    )
 
 
 def test_builtin_effort_is_from_client_with_inherited_tier_efforts():
@@ -144,16 +288,30 @@ def test_direct_settings_still_reject_retired_provider():
         Settings(MODEL="github_models/openai/old")
 
 
+@pytest.mark.parametrize("value", ["0.01", "0", "invalid"])
+@pytest.mark.parametrize("source", ["managed", "process"])
+def test_retired_progress_timeout_is_ignored(value, source):
+    managed = {"HTTP_READ_TIMEOUT": "120"}
+    process = {"HTTP_CONNECT_TIMEOUT": "30"}
+    (managed if source == "managed" else process)["PROVIDER_PROGRESS_TIMEOUT"] = value
+    snapshot = compose_settings_snapshot(managed, process)
+
+    assert "provider_progress_timeout" not in snapshot.settings.model_dump()
+    assert snapshot.settings.http_read_timeout == 120
+    assert snapshot.settings.http_connect_timeout == 30
+    assert snapshot.sources["http_read_timeout"] is ConfigSource.MANAGED
+    assert snapshot.sources["http_connect_timeout"] is ConfigSource.PROCESS
+
+
 def test_settings_defaults_are_valid_and_nonempty() -> None:
     settings = Settings()
 
     assert settings.provider_rate_limit == 1
     assert settings.provider_rate_window == 2
     assert settings.provider_max_concurrency == 2
-    assert settings.provider_progress_timeout == 600.0
     assert settings.http_read_timeout == 120.0
-    assert settings.http_write_timeout == 10.0
-    assert settings.http_connect_timeout == HTTP_CONNECT_TIMEOUT_DEFAULT
+    assert settings.http_write_timeout == 30.0
+    assert settings.http_connect_timeout == 30.0
     assert settings.voice_note_enabled is True
     assert settings.whisper_device == "cpu"
     assert settings.whisper_model == "base"
@@ -171,14 +329,9 @@ def test_settings_defaults_are_valid_and_nonempty() -> None:
 
 
 def test_every_external_setting_has_one_explicit_alias() -> None:
-    aliases = [
-        field.validation_alias
-        for name, field in Settings.model_fields.items()
-        if name != "nim"
-    ]
+    aliases = [field.validation_alias for field in Settings.model_fields.values()]
     assert all(isinstance(alias, str) for alias in aliases)
     assert len(aliases) == len(set(aliases))
-    assert Settings.model_fields["nim"].validation_alias is None
 
 
 def test_direct_settings_construction_performs_no_environment_io(
@@ -198,12 +351,6 @@ def test_direct_settings_construction_performs_no_environment_io(
     [
         ("MODEL", "model", "deepseek/deepseek-chat", "deepseek/deepseek-chat"),
         ("PROVIDER_RATE_LIMIT", "provider_rate_limit", "20", 20),
-        (
-            "PROVIDER_PROGRESS_TIMEOUT",
-            "provider_progress_timeout",
-            "900",
-            900.0,
-        ),
         ("HTTP_READ_TIMEOUT", "http_read_timeout", "600", 600.0),
         ("FCC_OPEN_BROWSER", "open_admin_browser", "false", False),
         ("REASONING_POLICY", "reasoning_policy", "off", ReasoningPreference.OFF),
@@ -221,31 +368,6 @@ def test_process_values_are_parsed_at_the_loader_boundary(
 
     assert getattr(snapshot.settings, attribute) == expected
     assert snapshot.sources[attribute] is ConfigSource.PROCESS
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        0.0,
-        -1.0,
-        float("inf"),
-        float("-inf"),
-        float("nan"),
-        float(1 << 64),
-    ],
-)
-def test_provider_progress_timeout_must_be_representable(value: float) -> None:
-    with pytest.raises(ValidationError):
-        Settings(provider_progress_timeout=value)
-
-
-@pytest.mark.parametrize(
-    "value",
-    ["0", "-1", "inf", "-inf", "nan", str(1 << 64)],
-)
-def test_loader_rejects_invalid_provider_progress_timeout(value: str) -> None:
-    with pytest.raises(ValidationError):
-        compose_settings_snapshot({}, {"PROVIDER_PROGRESS_TIMEOUT": value})
 
 
 @pytest.mark.parametrize(
@@ -603,25 +725,30 @@ def test_paths_are_owned_by_fcc_home(monkeypatch: pytest.MonkeyPatch, tmp_path) 
     assert server_log_path() == tmp_path / ".fcc" / "logs" / "server.log"
 
 
-def test_nim_settings_keep_request_local_validation() -> None:
-    settings = NimSettings.model_validate(
-        {
-            "max_tokens": "1024",
-            "temperature": "0.5",
-            "seed": "7",
-            "stop": "",
-        }
+@pytest.mark.parametrize("operation", ("assign", "delete"))
+def test_settings_reject_normal_mutation(operation: str) -> None:
+    settings = Settings()
+    original = settings.model
+
+    with pytest.raises(ValidationError, match="frozen_instance"):
+        if operation == "assign":
+            settings.__setattr__("model", "nvidia_nim/changed")
+        else:
+            delattr(settings, "model")
+
+    assert settings.model == original
+
+
+def test_settings_validated_replacement_preserves_original() -> None:
+    original = Settings()
+    replacement = Settings.model_validate(
+        original.model_dump() | {"model": "nvidia_nim/changed"}
     )
 
-    assert settings.max_tokens == 1024
-    assert settings.temperature == 0.5
-    assert settings.seed == 7
-    assert settings.stop is None
-    assert NimSettings().max_tokens == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
-    assert NimSettings().top_p == 0.95
-    for unsupported_top_p in (0.0, 0.9, 1.0):
-        with pytest.raises(ValidationError):
-            NimSettings(top_p=unsupported_top_p)
+    assert replacement.model == "nvidia_nim/changed"
+    assert original.model == DEFAULT_MODEL
+    with pytest.raises(ValidationError):
+        Settings.model_validate(original.model_dump() | {"model": "unknown/model"})
 
 
 def test_settings_defaults_do_not_contain_empty_enum_strings() -> None:

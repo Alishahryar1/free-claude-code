@@ -1,5 +1,6 @@
 param(
     [switch] $DryRun,
+    [switch] $KeepIntegrations,
     [switch] $Help,
     [Parameter(ValueFromRemainingArguments = $true)]
     [object[]] $RemainingArgs = @()
@@ -24,6 +25,7 @@ $FccCommands = @(
     "fcc-grok",
     "fcc-muse",
     "fcc-aider",
+    "fcc-agy",
     "fcc-doctor",
     "fcc-update",
     "fcc-init",
@@ -37,10 +39,11 @@ function Show-Usage {
 Usage: uninstall.ps1 [options]
 
 Removes the Free Claude Code uv tool and deletes ~/.fcc/ after removal is verified.
-Does not remove uv, Claude Code, Codex, Pi, OpenCode, Cline, Hermes Agent, DeepSeek Harness, Grok Build, Muse Code, Aider, the uv-managed Python runtime, or shared PATH entries.
+Does not remove uv, Claude Code, Codex, Pi, OpenCode, Cline, Hermes Agent, DeepSeek Harness, Grok Build, Muse Code, Aider, Antigravity CLI, the uv-managed Python runtime, or shared PATH entries.
 
 Options:
   -DryRun                Print commands without running them.
+  -KeepIntegrations      Leave editor/app integrations unchanged.
   -Help                  Show this help text.
 "@
 }
@@ -199,6 +202,35 @@ function Uninstall-FreeClaudeCode {
     throw "uv tool uninstall $PackageName failed with exit code $($result.ExitCode); ~/.fcc was not deleted."
 }
 
+function Disconnect-FccIntegrations {
+    if ($KeepIntegrations) {
+        return
+    }
+    if ($DryRun) {
+        Write-Host "+ fcc-doctor --disconnect-integrations"
+        return
+    }
+    $doctorPath = $null
+    foreach ($extension in @(".exe", ".cmd", ".bat", "")) {
+        $candidate = Join-Path $script:UvToolBin "fcc-doctor$extension"
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            $doctorPath = $candidate
+            break
+        }
+    }
+    if (-not $doctorPath) {
+        throw "FCC's integration cleanup command is unavailable. Update FCC first, or disconnect editor/app integrations manually and rerun with -KeepIntegrations. FCC data was not deleted."
+    }
+    Write-Host "+ $(Format-Command -FilePath $doctorPath -Arguments @('--disconnect-integrations'))"
+    $result = Invoke-NativeResult -FilePath $doctorPath -Arguments @("--disconnect-integrations")
+    if (-not [string]::IsNullOrWhiteSpace($result.Output)) {
+        Write-Host $result.Output
+    }
+    if ($result.ExitCode -ne 0) {
+        throw "Editor/app integration cleanup failed. Correct the reported problem and retry. For older FCC versions, update first or disconnect manually and rerun with -KeepIntegrations. FCC and its data were not deleted."
+    }
+}
+
 function Confirm-FccCommandsRemoved {
     if ($DryRun) {
         Write-Host "+ verify all Free Claude Code entry points are absent from the uv tool bin directory"
@@ -323,6 +355,9 @@ Assert-NoFccProcessesRunning
 
 Write-Step "Locating the uv-managed Free Claude Code installation"
 Initialize-UvContext
+
+Write-Step "Disconnecting FCC editor/app integrations"
+Disconnect-FccIntegrations
 
 Write-Step "Removing the Free Claude Code uv tool"
 Uninstall-FreeClaudeCode

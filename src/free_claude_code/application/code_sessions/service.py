@@ -2,7 +2,7 @@
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Callable, Coroutine, Sequence
+from collections.abc import AsyncGenerator, Callable, Coroutine, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -251,7 +251,7 @@ class CodeService:
             del self._gates[session_id]
 
     @asynccontextmanager
-    async def _locked(self, owner: _SessionRuntime) -> AsyncIterator[None]:
+    async def _locked(self, owner: _SessionRuntime) -> AsyncGenerator[None]:
         async with owner.lock:
             try:
                 yield

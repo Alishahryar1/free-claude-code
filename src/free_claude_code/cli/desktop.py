@@ -114,15 +114,20 @@ class DesktopController:
         self._server_run()
 
 
-def launch_desktop(tray_factory: DesktopTrayFactory) -> None:
+def launch_desktop(
+    tray_factory: DesktopTrayFactory, *, auto_started: bool = False
+) -> None:
     """Show the tray before acquiring configuration, singleton and server ownership."""
     supervisor = ServerSupervisor(console_logging=False)
 
     def reuse_existing(settings) -> bool:
-        reused = open_admin_when_ready(settings, stop_event=supervisor.stop_event)
-        if reused:
+        if auto_started:
             controller.quit()
-        return reused
+            return True
+        try:
+            return open_admin_when_ready(settings, stop_event=supervisor.stop_event)
+        finally:
+            controller.quit()
 
     def run_server() -> None:
         instance_lock = InterprocessFileLock(config_dir_path() / "desktop.lock")
@@ -134,9 +139,10 @@ def launch_desktop(tray_factory: DesktopTrayFactory) -> None:
             return
         if not acquired:
             try:
-                open_admin_when_ready(
-                    load_server_settings(), stop_event=supervisor.stop_event
-                )
+                if not auto_started:
+                    open_admin_when_ready(
+                        load_server_settings(), stop_event=supervisor.stop_event
+                    )
             finally:
                 controller.quit()
             return

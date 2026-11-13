@@ -13,8 +13,75 @@ from free_claude_code.core.anthropic.models import (
     MessagesRequest,
     TokenCountRequest,
 )
+from free_claude_code.core.gateway_model_ids import desktop_model_id
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningControl, ReasoningEffort
+
+
+@pytest.mark.parametrize(
+    "encoding,off",
+    [
+        ("", False),
+        ("anthropic/", False),
+        ("claude-3-freecc-no-thinking/", True),
+        ("desktop", False),
+        ("desktop", True),
+    ],
+)
+def test_retired_super_direct_ids_route_to_ultra_not_configured_default(encoding, off):
+    old = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
+    new = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
+    original = (
+        desktop_model_id(old, no_thinking=off)
+        if encoding == "desktop"
+        else encoding + old
+    )
+    settings = Settings(
+        MODEL="groq/default",
+        REASONING_POLICY="high",
+        MODEL_FALLBACKS=(
+            ModelFallback(model=new),
+            ModelFallback(model="groq/backup"),
+        ),
+    )
+    router = ModelRouter(settings)
+    route = router.resolve(original)
+    assert route.original_model == original
+    assert route.primary.provider_model_ref == new
+    assert route.primary.api_key_number == 1
+    assert [entry.target.provider_model_ref for entry in route.fallbacks] == [
+        "groq/backup"
+    ]
+    assert route.reasoning_preference is (
+        ReasoningPreference.OFF if off else ReasoningPreference.HIGH
+    )
+    messages = MessagesRequest(
+        model=original, max_tokens=100, messages=[Message(role="user", content="hi")]
+    )
+    responses = OpenAIResponsesRequest(model=original, input="hi")
+    count = TokenCountRequest(
+        model=original, messages=[Message(role="user", content="hi")]
+    )
+    for routed in (
+        router.resolve_messages_request(messages),
+        router.resolve_responses_request(responses),
+        router.resolve_token_count_request(count),
+    ):
+        assert routed.request.model == "nvidia/nemotron-3-ultra-550b-a55b"
+        assert routed.resolved == route
+    assert messages.model == responses.model == count.model == original
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "open_router/nvidia/nemotron-3-super-120b-a12b",
+        "nvidia_nim/nvidia/nemotron-3-super-120b-a12b-successor",
+    ],
+)
+def test_super_replacement_does_not_redirect_other_endpoints(ref):
+    route = ModelRouter(Settings()).resolve("anthropic/" + ref)
+    assert route.primary.provider_model_ref == ref
 
 
 @pytest.mark.parametrize(
@@ -69,17 +136,18 @@ def test_retired_direct_ids_route_to_default_before_family_aliases(prefix, off, 
 
 @pytest.fixture
 def settings():
-    settings = Settings()
-    settings.model = "nvidia_nim/fallback-model"
-    settings.model_fable = None
-    settings.model_opus = None
-    settings.model_sonnet = None
-    settings.model_haiku = None
-    settings.reasoning_policy = ReasoningPreference.CLIENT
-    settings.reasoning_fable = ReasoningPreference.INHERIT
-    settings.reasoning_opus = ReasoningPreference.INHERIT
-    settings.reasoning_sonnet = ReasoningPreference.INHERIT
-    settings.reasoning_haiku = ReasoningPreference.INHERIT
+    settings = Settings(
+        model="nvidia_nim/fallback-model",
+        model_fable=None,
+        model_opus=None,
+        model_sonnet=None,
+        model_haiku=None,
+        reasoning_policy=ReasoningPreference.CLIENT,
+        reasoning_fable=ReasoningPreference.INHERIT,
+        reasoning_opus=ReasoningPreference.INHERIT,
+        reasoning_sonnet=ReasoningPreference.INHERIT,
+        reasoning_haiku=ReasoningPreference.INHERIT,
+    )
     return settings
 
 
@@ -95,7 +163,9 @@ def test_model_router_resolves_default_model(settings):
 
 
 def test_model_router_applies_opus_override(settings):
-    settings.model_opus = "open_router/deepseek/deepseek-r1"
+    settings = Settings.model_validate(
+        settings.model_dump() | {"model_opus": "open_router/deepseek/deepseek-r1"}
+    )
 
     request = MessagesRequest(
         model="claude-opus-4-20250514",
@@ -114,7 +184,9 @@ def test_model_router_applies_opus_override(settings):
 
 
 def test_model_router_applies_fable_override(settings):
-    settings.model_fable = "open_router/anthropic/claude-fable-5"
+    settings = Settings.model_validate(
+        settings.model_dump() | {"model_fable": "open_router/anthropic/claude-fable-5"}
+    )
 
     routed = ModelRouter(settings).resolve_messages_request(
         MessagesRequest(
@@ -133,10 +205,15 @@ def test_model_router_applies_fable_override(settings):
 
 
 def test_model_router_resolves_route_reasoning_preferences(settings):
-    settings.reasoning_policy = ReasoningPreference.OFF
-    settings.reasoning_fable = ReasoningPreference.HIGH
-    settings.reasoning_opus = ReasoningPreference.MAX
-    settings.reasoning_haiku = ReasoningPreference.OFF
+    settings = Settings.model_validate(
+        settings.model_dump()
+        | {
+            "reasoning_policy": ReasoningPreference.OFF,
+            "reasoning_fable": ReasoningPreference.HIGH,
+            "reasoning_opus": ReasoningPreference.MAX,
+            "reasoning_haiku": ReasoningPreference.OFF,
+        }
+    )
 
     router = ModelRouter(settings)
 
@@ -160,7 +237,9 @@ def test_model_router_resolves_route_reasoning_preferences(settings):
 
 
 def test_model_router_applies_haiku_override(settings):
-    settings.model_haiku = "lmstudio/qwen2.5-7b"
+    settings = Settings.model_validate(
+        settings.model_dump() | {"model_haiku": "lmstudio/qwen2.5-7b"}
+    )
 
     routed = ModelRouter(settings).resolve_messages_request(
         MessagesRequest(
@@ -175,7 +254,10 @@ def test_model_router_applies_haiku_override(settings):
 
 
 def test_model_router_applies_sonnet_override(settings):
-    settings.model_sonnet = "nvidia_nim/meta/llama-3.3-70b-instruct"
+    settings = Settings.model_validate(
+        settings.model_dump()
+        | {"model_sonnet": "nvidia_nim/meta/llama-3.3-70b-instruct"}
+    )
 
     routed = ModelRouter(settings).resolve_messages_request(
         MessagesRequest(
@@ -294,8 +376,13 @@ def test_model_router_routes_no_thinking_gateway_model_directly(settings):
 
 
 def test_direct_provider_model_uses_root_policy_without_model_name_guessing(settings):
-    settings.reasoning_policy = ReasoningPreference.LOW
-    settings.reasoning_opus = ReasoningPreference.MAX
+    settings = Settings.model_validate(
+        settings.model_dump()
+        | {
+            "reasoning_policy": ReasoningPreference.LOW,
+            "reasoning_opus": ReasoningPreference.MAX,
+        }
+    )
 
     routed = ModelRouter(settings).resolve_messages_request(
         MessagesRequest(
@@ -310,7 +397,9 @@ def test_direct_provider_model_uses_root_policy_without_model_name_guessing(sett
 
 
 def test_model_router_routes_token_count_request(settings):
-    settings.model_haiku = "lmstudio/qwen2.5-7b"
+    settings = Settings.model_validate(
+        settings.model_dump() | {"model_haiku": "lmstudio/qwen2.5-7b"}
+    )
 
     request = TokenCountRequest(
         model="claude-3-haiku-20240307",
@@ -323,7 +412,10 @@ def test_model_router_routes_token_count_request(settings):
 
 
 def test_model_router_routes_responses_request_without_protocol_conversion(settings):
-    settings.model_fallbacks = (ModelFallback(model="open_router/vendor/fallback"),)
+    settings = Settings.model_validate(
+        settings.model_dump()
+        | {"model_fallbacks": (ModelFallback(model="open_router/vendor/fallback"),)}
+    )
     request = OpenAIResponsesRequest(
         model="opencode_zen/responses-model",
         input=[{"role": "user", "content": "hello"}],
@@ -348,10 +440,15 @@ def test_model_router_routes_responses_request_without_protocol_conversion(setti
 
 
 def test_model_router_appends_global_fallbacks_and_skips_only_primary(settings):
-    settings.model_fallbacks = (
-        ModelFallback(model="nvidia_nim/fallback-model"),
-        ModelFallback(model="nvidia_nim/alternate-model"),
-        ModelFallback(model="open_router/vendor/model-b"),
+    settings = Settings.model_validate(
+        settings.model_dump()
+        | {
+            "model_fallbacks": (
+                ModelFallback(model="nvidia_nim/fallback-model"),
+                ModelFallback(model="nvidia_nim/alternate-model"),
+                ModelFallback(model="open_router/vendor/model-b"),
+            )
+        }
     )
 
     resolved = ModelRouter(settings).resolve("claude-2.1")
@@ -413,9 +510,14 @@ def test_same_model_fallbacks_keep_alternate_keys_and_their_efforts(requested):
 def test_direct_gateway_route_preserves_original_and_deduplicates_canonical_target(
     settings,
 ):
-    settings.model_fallbacks = (
-        ModelFallback(model="nvidia_nim/deepseek-ai/deepseek-v4-pro"),
-        ModelFallback(model="groq/vendor/model-b"),
+    settings = Settings.model_validate(
+        settings.model_dump()
+        | {
+            "model_fallbacks": (
+                ModelFallback(model="nvidia_nim/deepseek-ai/deepseek-v4-pro"),
+                ModelFallback(model="groq/vendor/model-b"),
+            )
+        }
     )
     model = "anthropic/nvidia_nim/deepseek-ai/deepseek-v4-pro"
 
@@ -442,7 +544,7 @@ def test_model_router_logs_mapping(settings):
 
 
 def test_model_router_preserves_typed_error_for_unknown_mapped_provider(settings):
-    settings.model = "unknown/model"
+    settings = settings.model_copy(update={"model": "unknown/model"})
 
     with pytest.raises(UnknownProviderError) as exc_info:
         ModelRouter(settings).resolve("claude-2.1")

@@ -30,7 +30,6 @@ def test_portable_names_at_boundaries_remain_unchanged() -> None:
     assert codec.has_aliases is False
     assert [codec.encode(name) for name in names] == list(names)
     assert [codec.decode(name) for name in names] == list(names)
-    assert all(codec.is_unchanged_name(name) for name in names)
 
 
 def test_long_and_invalid_names_round_trip_through_portable_aliases() -> None:
@@ -138,17 +137,14 @@ def test_codec_collects_forced_choice_and_history_names_without_mutation() -> No
     assert request.model_dump() == snapshot
 
 
-def test_only_generated_aliases_are_decoded_and_prefixes_are_detected() -> None:
+def test_only_complete_generated_aliases_are_decoded() -> None:
     name = "mcp__fragmented__" + "x" * 70
     codec = OpenAIToolNameCodec.from_request(_request(name))
     alias = codec.encode(name)
 
-    assert codec.is_alias(alias) is True
-    assert codec.is_alias(alias[:20]) is False
-    assert codec.is_unchanged_name(alias) is False
-    assert codec.is_alias_prefix(alias[:20]) is True
-    assert codec.is_alias_prefix(alias) is False
-    assert codec.is_alias_prefix("unrelated") is False
+    assert codec.decode(alias) == name
+    assert codec.decode(alias[:20]) == alias[:20]
+    assert codec.decode(name) == name
     assert codec.decode("unknown_tool") == "unknown_tool"
 
 

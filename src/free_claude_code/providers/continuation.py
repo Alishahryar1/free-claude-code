@@ -1,17 +1,20 @@
 """Same-provider continuation using evidence from the public delivery boundary."""
 
-from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Any
 
+from free_claude_code.core.continuation_request import (
+    ContinuationRequest,
+    UpstreamProtocol,
+)
 from free_claude_code.core.delivered_response import (
-    client_call,
     is_structured_text_format,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.history_replay import protected_reasoning
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.openai_responses import is_client_call
 from free_claude_code.core.stream_recovery import (
-    ContinuationSeed,
     RecoveryAction,
     SourceRecoverySnapshot,
     StreamFailureContext,
@@ -20,8 +23,6 @@ from free_claude_code.core.stream_recovery import (
 from free_claude_code.core.trace import trace_event
 
 from .admission import ProviderExecution
-
-type UpstreamProtocol = Literal["chat", "messages", "responses"]
 
 
 class SourceRecoveryState:
@@ -87,10 +88,45 @@ class SourceRecoveryState:
                 attempt=self._execution.attempts_started,
                 usage=usage,
             )
-        if protocol == "chat":
+        if protocol == "gemini":
+            # The final native replay carrier is published only after the source
+            # completes. A call alone cannot prove its late signature is complete.
+            self._handoff_blocked = True
+            for candidate in payload.get("candidates", []):
+                for part in candidate.get("content", {}).get("parts", []):
+                    if part.get("thoughtSignature") and self.unsafe_reason is None:
+                        self.unsafe_reason = "signed_thinking"
+                    if any(
+                        key
+                        not in {"text", "thought", "thoughtSignature", "functionCall"}
+                        for key in part
+                    ):
+                        self.unsafe_reason = "native_content"
+        elif protocol == "chat":
+            if len(payload.get("choices", [])) > 1 or any(
+                choice.get("index", 0) != 0 or choice.get("logprobs")
+                for choice in payload.get("choices", [])
+            ):
+                self.unsafe_reason = "native_content"
+                self._handoff_blocked = True
             for choice in payload.get("choices", []):
                 delta = choice.get("delta") or {}
-                if delta.get("reasoning_details") or delta.get("audio"):
+                if protected_reasoning({"extra_content": delta.get("extra_content")}):
+                    self.unsafe_reason = "native_content"
+                details = delta.get("reasoning_details")
+                if delta.get("audio") or (
+                    details
+                    and (
+                        not isinstance(details, list)
+                        or any(
+                            not isinstance(detail, dict)
+                            or detail.get("type")
+                            not in {"reasoning.text", "reasoning.summary"}
+                            or protected_reasoning(detail)
+                            for detail in details
+                        )
+                    )
+                ):
                     self.unsafe_reason = "native_content"
                     self._handoff_blocked = True
         elif protocol == "messages":
@@ -157,7 +193,11 @@ class SourceRecoveryState:
             if kind == "response.output_text.annotation.added":
                 self.unsafe_reason = "native_content"
                 self._handoff_blocked = True
-        if continuing and self.unsafe_reason:
+        if (
+            continuing
+            and self.unsafe_reason
+            and not (protocol == "gemini" and self.unsafe_reason == "signed_thinking")
+        ):
             raise ExecutionFailure(
                 kind=FailureKind.UPSTREAM,
                 status_code=502,
@@ -166,7 +206,9 @@ class SourceRecoveryState:
             )
 
     def _response_item(self, item: dict[str, Any], *, completed: bool) -> None:
-        if item.get("type") not in {"message", "reasoning"} and not client_call(item):
+        if item.get("type") not in {"message", "reasoning"} and not is_client_call(
+            item
+        ):
             self.unsafe_reason = "hosted_or_native_content"
             self._handoff_blocked = True
         if item.get("encrypted_content"):
@@ -190,57 +232,6 @@ class PublicRecovery:
     body: dict[str, Any] | None = None
 
 
-class ContinuationRequest:
-    """Replace our private history suffix while retaining accepted corrections."""
-
-    def __init__(self, protocol: UpstreamProtocol) -> None:
-        self.protocol = protocol
-        self._injected_rows = 0
-
-    def build(self, body: dict[str, Any], text: str, thinking: str) -> dict[str, Any]:
-        result = deepcopy(body)
-        responses = self.protocol == "responses"
-        field = "input" if responses else "messages"
-        history = result.get(field, [])
-        if responses and isinstance(history, str):
-            history = [{"role": "user", "content": history}]
-        if self._injected_rows:
-            # Request corrections preserve these trailing plain-text turns.
-            history = history[: -self._injected_rows]
-        tail = continuation_tail(
-            ContinuationSeed(text, thinking), tools=bool(result.get("tools"))
-        )
-        if responses:
-            tail = [
-                {
-                    "role": row["role"],
-                    "content": [
-                        {
-                            "type": "output_text"
-                            if row["role"] == "assistant"
-                            else "input_text",
-                            "text": row["content"],
-                        }
-                    ],
-                }
-                for row in tail
-            ]
-        result[field] = [*history, *tail]
-        self._injected_rows = len(tail)
-        return result
-
-
-def continuation_tail(seed: ContinuationSeed, *, tools: bool) -> list[dict[str, Any]]:
-    """Materialize the same private context for construction and estimation."""
-    instruction = "The previous provider stream was interrupted. Continue the assistant response exactly where it stopped. Do not repeat text already written."
-    if tools:
-        instruction += " No tool calls from this interrupted assistant turn were delivered or executed. Any unfinished calls were discarded. Emit the required tool calls using the provided tools."
-    if seed.thinking:
-        instruction = f"{seed.thinking}\n\n{instruction}"
-    tail = [{"role": "assistant", "content": seed.text}] if seed.text else []
-    return [*tail, {"role": "user", "content": instruction}]
-
-
 def public_stream_failure(
     failure: ExecutionFailure,
     *,
@@ -251,21 +242,38 @@ def public_stream_failure(
     responses_failure_payload: JsonObject | None = None,
 ) -> ExecutionFailure:
     """Retain source evidence until routing has decided the public outcome."""
+    snapshot = source.snapshot(
+        body=body,
+        protocol=protocol,
+        normal_stop_seen=normal_stop_seen,
+        for_model_fallback=True,
+    )
+    if (
+        failure.stream_context is not None
+        and failure.stream_context.source.unsafe_reason
+    ):
+        snapshot = replace(
+            snapshot, unsafe_reason=failure.stream_context.source.unsafe_reason
+        )
     return replace(
         failure,
-        stream_context=StreamFailureContext(
-            source.snapshot(
-                body=body,
-                protocol=protocol,
-                normal_stop_seen=normal_stop_seen,
-                for_model_fallback=True,
-            ),
-            responses_failure_payload,
-        ),
+        stream_context=StreamFailureContext(snapshot, responses_failure_payload),
     )
 
 
 def _structured_output(body: dict[str, Any], protocol: UpstreamProtocol) -> bool:
+    if protocol == "gemini":
+        config = body.get("generationConfig") or {}
+        text = (config.get("responseFormat") or {}).get("text") or {}
+        return (
+            config.get("responseMimeType") == "application/json"
+            or text.get("mimeType") == "APPLICATION_JSON"
+            or bool(
+                config.get("responseSchema")
+                or config.get("responseJsonSchema")
+                or text.get("schema")
+            )
+        )
     if protocol == "chat":
         extra = body.get("extra_body") or {}
         value = extra.get("response_format", body.get("response_format"))
@@ -329,7 +337,7 @@ def public_recovery(
     seed = assessment.seed
     if seed is None:
         return None
-    replacement = request.build(body, seed.text, seed.thinking)
+    replacement = request.build(body, seed)
     delivery.begin_continuation()
     trace_event(
         stage="provider",

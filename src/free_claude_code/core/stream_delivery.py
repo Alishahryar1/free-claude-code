@@ -1,6 +1,6 @@
 """Request-local evidence of public stream delivery, independent of wire format."""
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Literal
@@ -60,7 +60,7 @@ def current_stream_delivery() -> StreamDeliveryState | None:
 
 
 @contextmanager
-def bind_stream_delivery(state: StreamDeliveryState | None) -> Iterator[None]:
+def bind_stream_delivery(state: StreamDeliveryState | None) -> Generator[None]:
     """Bind only for an iterator operation, or mask a private stream consumer."""
     token = _delivery.set(state)
     try:

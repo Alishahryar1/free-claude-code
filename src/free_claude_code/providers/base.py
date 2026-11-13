@@ -8,17 +8,20 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
+from free_claude_code.core.chat_completions.request import ChatRequest
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 
 
 @dataclass(frozen=True, slots=True)
 class ProviderConfig:
     """Resolved immutable configuration for one provider instance.
 
-    Base fields apply to all providers. Provider-specific parameters
-    (e.g. NIM temperature, top_p) are passed by the provider constructor.
+    Base fields apply to all providers.
     """
 
     api_key: str | None
@@ -34,8 +37,13 @@ class ProviderConfig:
 class BaseProvider(ABC):
     """Base class for all providers. Extend this to add your own."""
 
-    def __init__(self, config: ProviderConfig):
+    def __init__(
+        self, config: ProviderConfig, *, history_cache: HistoryModeCache | None = None
+    ):
         self._config = config
+        self._history_cache = (
+            history_cache if history_cache is not None else HistoryModeCache()
+        )
 
     @abstractmethod
     async def cleanup(self) -> None:
@@ -54,10 +62,38 @@ class BaseProvider(ABC):
         request_headers: Mapping[str, str] | None = None,
         reasoning_override: ReasoningPolicy | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         raise InvalidRequestError(
             "This provider does not support native Messages execution."
         )
+
+    def stream_chat(
+        self,
+        request: ChatRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[StreamOutput]:
+        raise InvalidRequestError("This provider does not support Chat execution.")
+
+    def stream_gemini(
+        self,
+        request: GeminiRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[StreamOutput]:
+        raise InvalidRequestError("This provider does not support Gemini execution.")
 
     @abstractmethod
     def stream_messages(
@@ -71,7 +107,7 @@ class BaseProvider(ABC):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Validate the request before yielding a response in Anthropic SSE format."""
 
     @abstractmethod
@@ -86,5 +122,5 @@ class BaseProvider(ABC):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Validate the request before yielding OpenAI Responses SSE events."""

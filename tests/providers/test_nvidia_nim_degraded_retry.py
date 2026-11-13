@@ -6,7 +6,6 @@ import httpx2
 import openai
 import pytest
 
-from free_claude_code.config.nim import NimSettings
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.providers.admission import (
     UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
@@ -21,7 +20,11 @@ from free_claude_code.providers.failure_policy import (
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.open_router import OpenRouterProvider
 from tests.providers.request_factory import make_messages_request
-from tests.providers.support import SDKStreamDouble, make_provider_config
+from tests.providers.support import (
+    SDKStreamDouble,
+    make_provider_config,
+    sdk_chat_chunk,
+)
 
 _FUNCTION_ID = "87ea0ddc-cff1-4bca-bf8b-3bd98a35ddd0"
 _DEGRADED_DETAIL = f"Function id '{_FUNCTION_ID}': DEGRADED function cannot be invoked"
@@ -107,7 +110,7 @@ def _successful_stream(text: str = "Recovered"):
     chunk.usage = None
 
     async def stream():
-        yield chunk
+        yield sdk_chat_chunk(chunk)
 
     return SDKStreamDouble(stream())
 
@@ -115,7 +118,6 @@ def _successful_stream(text: str = "Recovered"):
 def _nim(admission: ProviderAdmissionController) -> NvidiaNimProvider:
     return NvidiaNimProvider(
         _config("https://integrate.api.nvidia.com/v1"),
-        nim_settings=NimSettings(),
         admission=admission,
     )
 
@@ -134,10 +136,11 @@ async def test_degraded_function_retries_unchanged_request_then_succeeds() -> No
         ) as create,
     ):
         events = [
-            event
+            frame
             async for event in provider.stream_messages(
                 make_messages_request(), request_id="req_recovered"
             )
+            for frame in event.frames
         ]
 
     assert create.await_count == 2
@@ -170,10 +173,11 @@ async def test_degraded_function_exhaustion_is_detailed_redacted_overload() -> N
         pytest.raises(ExecutionFailure) as exc_info,
     ):
         [
-            event
+            frame
             async for event in provider.stream_messages(
                 make_messages_request(), request_id="req_degraded"
             )
+            for frame in event.frames
         ]
 
     assert create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
@@ -217,10 +221,11 @@ async def test_negative_derived_max_tokens_is_context_window_failure(
         pytest.raises(ExecutionFailure) as exc_info,
     ):
         [
-            event
+            frame
             async for event in provider.stream_messages(
                 make_messages_request(), request_id="req_context"
             )
+            for frame in event.frames
         ]
 
     assert create.await_count == 1
@@ -253,10 +258,11 @@ async def test_negative_derived_max_tokens_is_context_window_failure_on_500(
         pytest.raises(ExecutionFailure) as exc_info,
     ):
         [
-            event
+            frame
             async for event in provider.stream_messages(
                 make_messages_request(), request_id="req_context_500"
             )
+            for frame in event.frames
         ]
 
     assert create.await_count == 1
@@ -296,7 +302,11 @@ async def test_other_nim_max_token_errors_remain_invalid_requests(
         ) as create,
         pytest.raises(ExecutionFailure) as exc_info,
     ):
-        [event async for event in provider.stream_messages(make_messages_request())]
+        [
+            frame
+            async for event in provider.stream_messages(make_messages_request())
+            for frame in event.frames
+        ]
 
     assert create.await_count == 1
     assert exc_info.value.kind is FailureKind.INVALID_REQUEST
@@ -327,7 +337,11 @@ async def test_unrelated_nim_bad_request_is_not_retried(detail: str) -> None:
         ) as create,
         pytest.raises(ExecutionFailure) as exc_info,
     ):
-        [event async for event in provider.stream_messages(make_messages_request())]
+        [
+            frame
+            async for event in provider.stream_messages(make_messages_request())
+            for frame in event.frames
+        ]
 
     assert create.await_count == 1
     assert exc_info.value.kind is FailureKind.INVALID_REQUEST
@@ -354,7 +368,11 @@ async def test_degraded_wording_remains_non_retryable_for_other_providers() -> N
         ) as create,
         pytest.raises(ExecutionFailure) as exc_info,
     ):
-        [event async for event in provider.stream_messages(make_messages_request())]
+        [
+            frame
+            async for event in provider.stream_messages(make_messages_request())
+            for frame in event.frames
+        ]
 
     assert create.await_count == 1
     assert exc_info.value.kind is FailureKind.INVALID_REQUEST

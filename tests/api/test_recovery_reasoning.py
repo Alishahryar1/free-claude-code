@@ -6,7 +6,6 @@ import pytest
 
 from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_delivered_stream_recovery import (
     assert_completed,
     public_text,
@@ -14,14 +13,6 @@ from tests.api.test_delivered_stream_recovery import (
 )
 from tests.api.test_hidden_stream_retries import delivered
 from tests.providers.test_history_transports import _events_for, _harness
-
-
-@pytest.fixture(autouse=True)
-def immediate_events(monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
 
 
 def reasoning_events(*, field="summary", seeded="", closed=True):
@@ -107,9 +98,8 @@ async def test_readable_reasoning_continues_from_released_content(field, closed,
     assert public_text(events, wire) == "Hello world."
     assert "Find 17." in str(bodies[1]["input"])
     assert "Hello " in str(bodies[1]["input"])
-    assert (
-        bodies[1]["input"][-1]["content"][0]["text"].split("\n\n", 1)[0] == "Find 17."
-    )
+    assert "Find 17." not in str(bodies[1]["input"][-1])
+    assert any(item.get("type") == "reasoning" for item in bodies[1]["input"])
 
 
 @pytest.mark.asyncio

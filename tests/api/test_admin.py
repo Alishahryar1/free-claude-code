@@ -1,5 +1,6 @@
 import json
 import mimetypes
+import os
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -114,6 +115,49 @@ def test_admin_retirement_preview_apply_and_runtime_agree(monkeypatch, tmp_path)
         ModelFallback(model="groq/a"),
         ModelFallback(model="deepseek/b"),
     )
+
+
+def test_admin_super_migration_preview_apply_and_runtime_agree(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    _clear_process_config(monkeypatch)
+    old = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
+    new = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
+    env_file = tmp_path / ".fcc" / ".env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text(
+        "FCC_CONFIG_SCHEMA=2\nMODEL=groq/default\nMODEL_OPUS=groq/managed\nPRIVATE=hidden\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MODEL_OPUS", old)
+    app = create_test_app()
+    client = _local_client(app)
+    submission = {
+        "values": {
+            "MODEL": old,
+            "MODEL_SONNET": old,
+            "MODEL_OPUS": "deepseek/cannot-unlock",
+            "MODEL_FALLBACKS": f"{old},{new},groq/backup",
+            "REASONING_SONNET": "off",
+        }
+    }
+    response = post_config(client, "/admin/api/config/apply", json=submission)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["applied"]
+    assert old not in body["env_preview"]
+    assert "PRIVATE=********" in body["env_preview"]
+    values = dotenv_values_from_file(env_file)
+    assert values["MODEL"] == values["MODEL_SONNET"] == new
+    assert values["MODEL_OPUS"] == "groq/managed"
+    assert values["REASONING_SONNET"] == "off"
+    assert values["PRIVATE"] == "hidden"
+    effective = provider_manager_for_app(app).current_settings()
+    assert effective.model == effective.model_sonnet == effective.model_opus == new
+    assert effective.model_fallbacks == (
+        ModelFallback(model=new),
+        ModelFallback(model="groq/backup"),
+    )
+    assert os.environ["MODEL_OPUS"] == old
 
 
 @pytest.fixture(autouse=True)
@@ -767,17 +811,7 @@ def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):
     assert open_browser_field["type"] == "boolean"
     assert open_browser_field["value"] == "true"
     assert open_browser_field["restart_required"] is False
-    progress_timeout_field = next(
-        field for field in body["fields"] if field["key"] == "PROVIDER_PROGRESS_TIMEOUT"
-    )
-    assert progress_timeout_field["label"] == "Provider Progress Timeout"
-    assert progress_timeout_field["section"] == "runtime"
-    assert progress_timeout_field["type"] == "number"
-    assert progress_timeout_field["value"] == "600.0"
-    assert progress_timeout_field["advanced"] is True
-    assert progress_timeout_field["restart_required"] is False
-    assert "non-empty protocol event" in progress_timeout_field["description"]
-    assert "Independent of HTTP Read Timeout" in progress_timeout_field["description"]
+    assert "PROVIDER_PROGRESS_TIMEOUT" not in {field["key"] for field in body["fields"]}
     model_field_types = {
         field["key"]: field["type"]
         for field in body["fields"]
@@ -853,10 +887,11 @@ def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):
 
 
 def test_admin_models_include_configured_and_cached_canonical_slugs():
-    settings = Settings()
-    settings.model = "nvidia_nim/configured-model"
-    settings.model_opus = "open_router/anthropic/configured-opus"
-    settings.open_router_api_keys = normalize_api_keys("open-router-key")
+    settings = Settings(
+        model="nvidia_nim/configured-model",
+        model_opus="open_router/anthropic/configured-opus",
+        open_router_api_keys=normalize_api_keys("open-router-key"),
+    )
     app = create_test_app(settings)
     provider_manager_for_app(app).cache_model_infos(
         "open_router",
@@ -882,9 +917,10 @@ def test_admin_models_include_configured_and_cached_canonical_slugs():
 
 
 def test_admin_model_refresh_returns_the_updated_canonical_catalog():
-    settings = Settings()
-    settings.model = "deepseek/deepseek-chat"
-    settings.deepseek_api_keys = normalize_api_keys("deepseek-key")
+    settings = Settings(
+        model="deepseek/deepseek-chat",
+        deepseek_api_keys=normalize_api_keys("deepseek-key"),
+    )
     app = create_test_app(settings)
     runtime = app.state.services.admin
 
@@ -910,8 +946,7 @@ def test_admin_model_refresh_returns_the_updated_canonical_catalog():
 
 
 def test_admin_model_refresh_reports_partial_provider_failures():
-    settings = Settings()
-    settings.model = "deepseek/deepseek-chat"
+    settings = Settings(model="deepseek/deepseek-chat")
     app = create_test_app(settings)
     runtime = app.state.services.admin
     runtime.refresh_models = AsyncMock(
@@ -974,30 +1009,6 @@ def test_admin_apply_persists_open_browser_for_next_launch(monkeypatch, tmp_path
     assert "FCC_OPEN_BROWSER=false" in managed_env.read_text(encoding="utf-8")
 
 
-def test_admin_apply_hot_publishes_provider_progress_timeout(monkeypatch, tmp_path):
-    _set_home(monkeypatch, tmp_path)
-    _clear_process_config(monkeypatch)
-    app = create_test_app()
-
-    response = post_config(
-        _local_client(app),
-        "/admin/api/config/apply",
-        json={"values": {"PROVIDER_PROGRESS_TIMEOUT": 900}},
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["applied"] is True
-    assert body["pending_fields"] == []
-    assert body["restart"]["required"] is False
-    assert (
-        provider_manager_for_app(app).current_settings().provider_progress_timeout
-        == 900.0
-    )
-    managed_env = tmp_path / ".fcc" / ".env"
-    assert "PROVIDER_PROGRESS_TIMEOUT=900" in managed_env.read_text(encoding="utf-8")
-
-
 def test_admin_apply_hot_publishes_ordered_model_fallbacks(monkeypatch, tmp_path):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -1056,7 +1067,7 @@ def test_admin_apply_null_removes_model_fallbacks(monkeypatch, tmp_path):
     assert "MODEL_FALLBACKS=" not in env_file.read_text(encoding="utf-8")
 
 
-def test_admin_rejects_invalid_provider_progress_timeout_without_writing(
+def test_admin_ignores_retired_progress_setting_without_writing(
     monkeypatch,
     tmp_path,
 ):
@@ -1072,9 +1083,12 @@ def test_admin_rejects_invalid_provider_progress_timeout_without_writing(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["applied"] is False
-    assert body["valid"] is False
-    assert any("PROVIDER_PROGRESS_TIMEOUT" in error for error in body["errors"])
+    assert body["applied"] is True
+    assert body["valid"] is True
+    assert body["errors"] == []
+    assert "provider_progress_timeout" not in (
+        provider_manager_for_app(app).current_settings().model_dump()
+    )
     managed_env = tmp_path / ".fcc" / ".env"
     assert "PROVIDER_PROGRESS_TIMEOUT=" not in managed_env.read_text(encoding="utf-8")
 
@@ -1891,6 +1905,51 @@ def test_admin_apply_preserves_unrecognized_managed_assignments(monkeypatch, tmp
     assert "CLAUDE_CLI_BIN=claude-custom" in text
 
 
+@pytest.mark.parametrize("already_saved", [True, False])
+def test_admin_ignores_retired_request_settings_and_preserves_saved_values(
+    monkeypatch, tmp_path, already_saved
+):
+    _set_home(monkeypatch, tmp_path)
+    _clear_process_config(monkeypatch)
+    retired = {
+        "FAST_PREFIX_DETECTION": "true",
+        "ENABLE_NETWORK_PROBE_MOCK": "false",
+        "ENABLE_TITLE_GENERATION_SKIP": "obsolete-invalid-boolean",
+        "ENABLE_SUGGESTION_MODE_SKIP": "true",
+        "ENABLE_FILEPATH_EXTRACTION_MOCK": "false",
+    }
+    saved = {"UNRELATED_CUSTOM_SETTING": "keep-me"}
+    if already_saved:
+        saved.update(retired)
+    env_file = tmp_path / ".fcc" / ".env"
+    env_file.parent.mkdir(parents=True)
+    env_file.write_text(
+        "\n".join(f"{key}={value}" for key, value in saved.items()) + "\n",
+        encoding="utf-8",
+    )
+    with _local_client(create_test_app()) as client:
+        response = client.get("/admin/api/config")
+        assert response.status_code == 200
+        fields = {field["key"] for field in response.json()["fields"]}
+        assert not fields.intersection(retired)
+
+        response = post_config(
+            client,
+            "/admin/api/config/apply",
+            json={"values": {**dict.fromkeys(retired, "false"), "LOG_LEVEL": "DEBUG"}},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["applied"] is True
+    values = dotenv_values_from_text(env_file.read_text(encoding="utf-8"))
+    assert values["LOG_LEVEL"] == "DEBUG"
+    if not already_saved:
+        assert not values.keys() & retired.keys()
+    for key, value in saved.items():
+        assert values[key] == value
+        assert f"{key}=********" in response.json()["env_preview"]
+
+
 def test_admin_apply_restart_required_reports_automatic_restart(monkeypatch, tmp_path):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -2131,7 +2190,7 @@ def test_admin_never_reads_arbitrary_current_directory_env(monkeypatch, tmp_path
 
     config = _local_client(app).get("/admin/api/config").json()
     model_field = next(field for field in config["fields"] if field["key"] == "MODEL")
-    assert model_field["value"] == "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
+    assert model_field["value"] == "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
     assert model_field["source"] == "default"
 
     response = post_config(
@@ -2379,7 +2438,9 @@ def test_admin_local_provider_failure_does_not_return_exception_text(
     )
     assert "CREDENTIAL[unrecognized-format-987654321]" not in provider["message"]
     assert "RuntimeError" not in provider["message"]
-    assert "error_type" not in provider
+    assert provider["error_type"] == "unexpected_error"
+    assert "CREDENTIAL[unrecognized-format-987654321]" not in response.text
+    assert "RuntimeError" not in response.text
 
 
 @pytest.mark.parametrize(
@@ -2408,6 +2469,26 @@ def test_admin_provider_test_route_preserves_runtime_result(
 
     assert response.status_code == 200
     assert response.json() == result
+
+
+def test_admin_provider_test_exposes_completed_attempt_failure():
+    app = create_test_app()
+    manager = provider_manager_for_app(app)
+    message = "The model-list request returned HTTP 403."
+    result = ProviderModelRefreshResult(
+        failed_provider_ids=("nvidia_nim",),
+        failure_messages={"nvidia_nim": message},
+    )
+    with patch.object(manager, "refresh_provider", new=AsyncMock(return_value=result)):
+        response = _local_client(app).post(
+            "/admin/api/providers/nvidia_nim/test", json={}
+        )
+    assert response.status_code == 200
+    assert response.json() == {
+        "provider_id": "nvidia_nim",
+        "ok": False,
+        "message": message,
+    }
 
 
 def test_admin_launch_url_uses_loopback_for_wildcard_host():

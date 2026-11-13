@@ -7,14 +7,15 @@ import openai
 import pytest
 from httpx2 import Request, Response
 
-from free_claude_code.config.nim import NimSettings
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.providers.admission import UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     SDKStreamDouble,
     immediate_admission,
     make_provider_config,
+    sdk_chat_chunk,
 )
 
 
@@ -46,7 +47,6 @@ async def test_nim_stream_retries_on_openai_5xx_then_streams(status_code):
     )
     provider = NvidiaNimProvider(
         config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
     req = make_messages_request()
@@ -61,7 +61,7 @@ async def test_nim_stream_retries_on_openai_5xx_then_streams(status_code):
     mock_chunk.usage = None
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with (
         patch.object(
@@ -74,7 +74,9 @@ async def test_nim_stream_retries_on_openai_5xx_then_streams(status_code):
             _internal_5xx(status_code),
             SDKStreamDouble(mock_stream()),
         ]
-        events = [e async for e in provider.stream_messages(req)]
+        events = [
+            frame async for e in provider.stream_messages(req) for frame in e.frames
+        ]
 
     assert mock_create.await_count == 2
     assert any("Hi" in e for e in events)
@@ -91,7 +93,6 @@ async def test_nim_stream_retries_on_pre_stream_connection_error_then_streams():
     )
     provider = NvidiaNimProvider(
         config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
     req = make_messages_request()
@@ -106,7 +107,7 @@ async def test_nim_stream_retries_on_pre_stream_connection_error_then_streams():
     mock_chunk.usage = None
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with (
         patch.object(
@@ -116,7 +117,9 @@ async def test_nim_stream_retries_on_pre_stream_connection_error_then_streams():
         ) as mock_create,
     ):
         mock_create.side_effect = [_connection_error(), SDKStreamDouble(mock_stream())]
-        events = [e async for e in provider.stream_messages(req)]
+        events = [
+            frame async for e in provider.stream_messages(req) for frame in e.frames
+        ]
 
     assert mock_create.await_count == 2
     assert any("Recovered" in e for e in events)
@@ -133,7 +136,6 @@ async def test_nim_stream_connection_error_exhausted_emits_cause_chain():
     )
     provider = NvidiaNimProvider(
         config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
     req = make_messages_request()
@@ -149,9 +151,13 @@ async def test_nim_stream_connection_error_exhausted_emits_cause_chain():
         patch("free_claude_code.providers.openai_chat.transport.trace_event") as trace,
         pytest.raises(ExecutionFailure) as exc_info,
     ):
-        [e async for e in provider.stream_messages(req, request_id="req_conn")]
+        [
+            frame
+            async for e in provider.stream_messages(req, request_id="req_conn")
+            for frame in e.frames
+        ]
 
-    assert mock_create.await_count == 5
+    assert mock_create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
     error_traces = [
         call.kwargs
         for call in trace.call_args_list
@@ -186,7 +192,6 @@ async def test_nim_stream_openai_5xx_exhausted_emits_user_message(
     )
     provider = NvidiaNimProvider(
         config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
     req = make_messages_request()
@@ -200,7 +205,7 @@ async def test_nim_stream_openai_5xx_exhausted_emits_user_message(
     ):
         mock_create.side_effect = _internal_5xx(status_code)
         with pytest.raises(ExecutionFailure) as exc_info:
-            [e async for e in provider.stream_messages(req)]
+            [frame async for e in provider.stream_messages(req) for frame in e.frames]
 
-    assert mock_create.await_count == 5
+    assert mock_create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
     assert expect_substr in exc_info.value.message.lower()

@@ -19,7 +19,7 @@ const state = {
   startupRequest: null,
   startupTimer: null,
   startupAgain: false,
-  codeCatalogRetry: false,
+  configRequest: 0,
   modelOptionsRequest: 0,
   activeView: viewFromLocation(),
 };
@@ -142,6 +142,7 @@ function renderStartup() {
     renderProviderCheckResult(provider.provider_id);
   });
   renderClaudeIntegration();
+  renderAntigravityIntegration();
   renderVSCodeChatIntegration();
   renderJetBrainsIntegration();
   renderCodexIntegration();
@@ -177,8 +178,8 @@ async function refreshStartup() {
     const changed = !previous || previous.instance_id !== result.instance_id ||
       JSON.stringify(previous.startup) !== JSON.stringify(current);
     if (changed) void hydrateModelOptions();
-    if (changed || state.codeCatalogRetry) state.codeCatalogRetry = await window.CodeSessions?.refresh(result) === false;
-    pending = state.codeCatalogRetry || current.catalog === "starting" || current.catalog_file === "starting" ||
+    if (changed) void window.CodeSessions?.refresh(result);
+    pending = current.catalog === "starting" || current.catalog_file === "starting" ||
       current.code?.state === "starting" || current.messaging?.state === "starting" ||
       Object.values(current.integrations || {}).some((update) => update.state === "starting") ||
       Object.values(current.providers || {}).includes("starting");
@@ -209,11 +210,13 @@ window.addEventListener("pagehide", () => {
 });
 
 async function load({ providersOnly = false } = {}) {
+  const request = ++state.configRequest;
   state.localStatusRequest = null;
   state.startupRequest?.controller.abort();
   state.startupRequest = null;
   showMessage("Loading admin config");
   const config = await api("/admin/api/config");
+  if (request !== state.configRequest) return;
   config.custom_providers ||= [];
   config.provider_status.push(...config.custom_providers.map((provider) => ({ ...provider, kind: "custom", status: "configured", settings_keys: [], missing_configuration_keys: [] })));
   state.config = config;
@@ -229,11 +232,10 @@ async function load({ providersOnly = false } = {}) {
   byId("configPath").textContent = config.paths.managed;
   void refreshLocalStatus(config);
   void refreshStartup();
-  await Promise.all([
-    refreshConnectedAccounts(),
-    hydrateModelOptions(),
-    providersOnly ? window.CodeSessions.refresh() : window.CodeSessions.initialize(api),
-  ]);
+  void refreshConnectedAccounts();
+  void hydrateModelOptions();
+  if (providersOnly) void window.CodeSessions.refresh();
+  else window.CodeSessions.initialize(api);
   if (state.config !== config) return;
   updateDirtyState();
   showMessage("");
@@ -265,7 +267,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
   state.activeView = activeView.id;
   byId("pageTitle").textContent = activeView.title;
   renderStartup();
-  if (activeView.id === "code") state.codeCatalogRetry = true;
+  if (activeView.id === "code") void window.CodeSessions.refresh();
   void refreshStartup();
   const sessionActive = activeView.id === "code";
   document.querySelector(".app-shell").classList.toggle("session-active", sessionActive);
@@ -295,6 +297,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
   if (activeView.id === "code") window.CodeSessions.activate(window.location.pathname);
   else window.CodeSessions.deactivate();
   if (activeView.id === "integrations") {
+    refreshAntigravityIntegration();
     refreshClaudeIntegration();
     refreshClaudeOnboarding();
     refreshVSCodeChatIntegration();
@@ -407,6 +410,10 @@ function updateProviderCard(provider) {
   result.className = "provider-check-result";
   result.dataset.providerCheckResult = provider.provider_id;
   result.hidden = true;
+  const availability = document.createElement("span");
+  availability.className = "provider-availability-result";
+  availability.dataset.providerAvailabilityResult = provider.provider_id;
+  availability.hidden = true;
   const actions = document.createElement("div");
   actions.className = "provider-actions";
   if (oauth) populateConnectedAccountActions(provider, status, actions);
@@ -418,7 +425,7 @@ function updateProviderCard(provider) {
     settings.setAttribute("aria-controls", "providerDialog");
     actions.appendChild(settings);
   }
-  card.replaceChildren(title, meta, result, actions);
+  card.replaceChildren(title, meta, result, availability, actions);
   const next = [...grid.children].find((other) => other !== card &&
     connectedAccountName(provider).localeCompare(providerDisplayName(other.dataset.provider), "en", { sensitivity: "base" }) < 0);
   if (card.parentElement !== grid || card.nextElementSibling !== (next || null)) grid.insertBefore(card, next || null);
@@ -482,13 +489,14 @@ const CUSTOM_LABELS = {
 async function openCustomProviderDialog(providerId = null) {
   if (!await refreshProviderConfig()) return;
   const provider = state.config.custom_providers.find((item) => item.provider_id === providerId) || {
-    display_name: "", base_url: "", api_keys: { revision: null, entries: [] }, api_format: "openai_chat", reasoning_format: "provider_default", reasoning_history_format: "disabled", model_ids: [],
+    display_name: "", base_url: "", api_keys: { revision: null, entries: [] }, api_format: "openai_chat", reasoning_format: "provider_default", reasoning_history_format: "reasoning_content", model_ids: [],
   };
   state.providerId = providerId || "__custom_new__";
   state.customProvider = provider;
   byId("providerDialogTitle").textContent = providerId ? provider.display_name : "Add provider";
   byId("providerMessage").textContent = "";
   byId("providerDialogCheck").hidden = true;
+  renderProviderCheckMessage(byId("providerDialogAvailability"), null);
   const fields = byId("providerFields");
   fields.replaceChildren();
   const formats = (state.config.custom_reasoning_formats || {})[provider.api_format] || ["provider_default"];
@@ -498,12 +506,12 @@ async function openCustomProviderDialog(providerId = null) {
     ["api_keys", "API keys", "api_key_list", [], "Key 1 is used. Leave the list empty for endpoints that do not require a key."],
     ["api_format", "API format", "select", [["openai_chat", "Chat Completions"], ["openai_responses", "Responses"], ["anthropic_messages", "Anthropic Messages"]], "Select the API exposed by your endpoint."],
     ["reasoning_format", "Reasoning format", "select", formats.map((value) => [value, CUSTOM_LABELS[value]]), "How FCC sends reasoning controls. Provider default leaves computation to the upstream."],
-    ["reasoning_history_format", "Reasoning history format", "select", [["disabled", "Text context"], ["reasoning_content", "reasoning_content"], ["reasoning", "reasoning"], ["think_tags", "Think tags"]], "How previous reasoning is sent to a Chat Completions endpoint."],
+    ["reasoning_history_format", "Reasoning history format", "select", [["reasoning_content", "reasoning_content"], ["reasoning", "reasoning"]], "How previous reasoning is sent to a Chat Completions endpoint."],
     ["model_ids", "Model IDs", "textarea", [], "Optional, one upstream model ID per line. Leave empty to discover models automatically."],
   ];
   for (const [key, label, type, options, description] of definitions) {
     fields.appendChild(renderField({ key, label, type, options: options.map(([value, label]) => ({value, label})), description,
-      value: key === "model_ids" ? provider.model_ids.join("\n") : provider[key], nullable: key === "api_keys", secret: key === "api_keys",
+      value: key === "model_ids" ? provider.model_ids.join("\n") : key === "reasoning_history_format" && provider.api_format !== "openai_chat" ? "reasoning_content" : provider[key], nullable: key === "api_keys", secret: key === "api_keys",
       configured: key === "api_keys" && !!provider.api_keys?.entries.length, locked: !!state.config.custom_providers_locked, source: state.config.custom_providers_locked ? "process" : "managed_env" }));
   }
   const format = byId("field-api_format");
@@ -516,7 +524,6 @@ async function openCustomProviderDialog(providerId = null) {
     reasoning.replaceChildren(...allowed.map((value) => option(value, CUSTOM_LABELS[value])));
     reasoning.value = allowed.includes(previous) ? previous : "provider_default";
     history.closest(".field").hidden = format.value !== "openai_chat";
-    if (format.value !== "openai_chat") history.value = "disabled";
     updateDirtyState();
   });
   const actions = byId("providerDialogActions");
@@ -553,10 +560,8 @@ function renderProviderDialogActions(provider) {
     actions.appendChild(button);
   }
   const check = oauth ? null : providerCheckResult(provider.provider_id);
-  const result = byId("providerDialogCheck");
-  result.className = `provider-check-result ${check?.status || ""}`;
-  result.textContent = check?.message || "";
-  result.hidden = !check?.message;
+  renderProviderCheckMessage(byId("providerDialogCheck"), check);
+  renderProviderCheckMessage(byId("providerDialogAvailability"), check?.availability);
   byId("saveProvider").hidden = !provider.settings_keys?.length;
   renderStartup();
 }
@@ -779,14 +784,22 @@ function providerCheckResult(providerId) {
   // An explicit check takes precedence over background discovery and reachability.
   if (check?.source === "manual") return check;
   const discovery = state.startup?.startup?.providers?.[providerId];
-  if (discovery === "starting") return { status: "checking", message: "Checking models…" };
-  if (discovery === "failed") {
-    return { status: "error", message: "Could not load models. Check the provider's settings and retry." };
+  let result;
+  if (discovery === "starting") {
+    result = { status: "checking", message: "Checking models…" };
+  } else if (discovery === "failed") {
+    result = { status: "error", message: state.startup.startup.provider_errors?.[providerId] || "Could not load models. Check the provider's settings and retry." };
+  } else if (discovery === "ready") {
+    result = { status: "ok", message: modelCountMessage(state.startup.cached_models[providerId]?.length || 0) };
+  } else if (discovery === "unavailable") {
+    return {
+      status: "",
+      message: "Local server unavailable",
+      availability: check ? { ...check, status: "" } : undefined,
+    };
   }
-  if (discovery === "ready") {
-    return { status: "ok", message: modelCountMessage(state.startup.cached_models[providerId]?.length || 0) };
-  }
-  return check;
+  // Model discovery and endpoint reachability are separate observations.
+  return result ? { ...result, availability: check } : check;
 }
 
 function updateProviderCheckResult(providerId, status, message, source = "manual") {
@@ -794,8 +807,17 @@ function updateProviderCheckResult(providerId, status, message, source = "manual
   renderProviderCheckResult(providerId);
 }
 
+function renderProviderCheckMessage(element, check) {
+  for (const status of ["ok", "error", "checking"]) {
+    element.classList.toggle(status, check?.status === status);
+  }
+  element.textContent = check?.message || "";
+  element.hidden = !check?.message;
+}
+
 function renderProviderCheckResult(providerId) {
-  const { status = "", message = "" } = providerCheckResult(providerId) || {};
+  const check = providerCheckResult(providerId);
+  const { status = "" } = check || {};
   const card = document.querySelector(`[data-provider="${providerId}"]`);
   if (!card) return;
   const provider = connectedAccountDescriptor(providerId);
@@ -810,15 +832,11 @@ function renderProviderCheckResult(providerId) {
     if (account?.state === "error") meta.classList.add("error");
     return;
   }
-  const result = card.querySelector(".provider-check-result");
-  result.className = `provider-check-result ${status}`;
-  result.textContent = message;
-  result.hidden = !message;
+  renderProviderCheckMessage(card.querySelector(".provider-check-result"), check);
+  renderProviderCheckMessage(card.querySelector(".provider-availability-result"), check?.availability);
   if (state.providerId === providerId) {
-    const modalResult = byId("providerDialogCheck");
-    modalResult.className = result.className;
-    modalResult.textContent = message;
-    modalResult.hidden = !message;
+    renderProviderCheckMessage(byId("providerDialogCheck"), check);
+    renderProviderCheckMessage(byId("providerDialogAvailability"), check?.availability);
   }
 }
 
@@ -1544,7 +1562,7 @@ async function showRestartNotice() {
 async function restoreSavedProvider(providerId, checks) {
   if (!connectedAccountDescriptor(providerId)) return;
   await openProviderDialog(providerId);
-  showCredentialErrors(checks);
+  showCredentialErrors(checks.map((check) => ({ ...check, message: `Key saved. ${check.message}` })));
   byId("providerMessage").textContent = "Saved. Some keys could not be verified.";
   byId("providerMessage").className = "message-area warn";
 }
@@ -1575,6 +1593,9 @@ async function apply(providerId = null, customAction = null) {
   }
   let mutation = null;
   if (custom) {
+    const selectedFormat = values.api_format || custom.api_format;
+    if (selectedFormat !== "openai_chat") values.reasoning_history_format = "disabled";
+    else if ("api_format" in values) values.reasoning_history_format = byId("field-reasoning_history_format").value;
     if ("model_ids" in values) values.model_ids = values.model_ids.split(/\r?\n/).map((id) => id.trim()).filter(Boolean);
     mutation = { action, values: action === "delete" ? {} : values };
     if (custom.provider_id) mutation.provider_id = custom.provider_id;
@@ -1598,7 +1619,7 @@ async function apply(providerId = null, customAction = null) {
     applied = true;
     const warningChecks = checks.filter((check) => check.status === "unverified");
     const warnings = warningChecks.map((check) =>
-      `${state.fields.get(check.key)?.label || "API keys"}, Key ${check.index + 1}: ${check.message}`
+      `${state.fields.get(check.key)?.label || "API keys"}, Key ${check.index + 1}: Key saved. ${check.message}`
     );
     const savedProviderId = warnings.length && providerId && mutation?.action !== "delete" ? result.custom_provider_id || providerId : null;
     if (providerId && !savedProviderId) byId("providerDialog").close();
@@ -1653,8 +1674,14 @@ async function refreshLocalStatus(config) {
         const provider = await api(`/admin/api/providers/${providerId}/local-status`);
         if (state.localStatusRequest !== request || !request.providerIds.has(providerId)) return;
         if (provider.status === "missing_url") return;
+        const diagnostics = [];
+        if (provider.probe_path) diagnostics.push(`GET ${provider.probe_path}`);
+        if (typeof provider.latency_ms === "number" && Number.isFinite(provider.latency_ms)) {
+          diagnostics.push(`${provider.latency_ms} ms`);
+        }
+        const suffix = diagnostics.length ? ` (${diagnostics.join(", ")})` : "";
         if (provider.status === "reachable") {
-          updateProviderCheckResult(providerId, "ok", `Reachable: ${provider.base_url}`, "availability");
+          updateProviderCheckResult(providerId, "ok", `Reachable: ${provider.base_url}${suffix}`, "availability");
           return;
         }
         const detail = provider.message
@@ -1662,7 +1689,7 @@ async function refreshLocalStatus(config) {
           : provider.status_code
             ? `${provider.base_url} returned HTTP ${provider.status_code}`
             : "The local provider did not respond.";
-        updateProviderCheckResult(providerId, "error", `Unavailable: ${detail}`, "availability");
+        updateProviderCheckResult(providerId, "error", `Unavailable: ${detail}${suffix}`, "availability");
       } catch {
         if (state.localStatusRequest !== request || !request.providerIds.has(providerId)) return;
         updateProviderCheckResult(providerId, "error", "Availability check failed. Use Test to retry.", "availability");
@@ -1693,7 +1720,7 @@ async function testProvider(providerId, button) {
         "ok",
         modelCountMessage(result.models.length),
       );
-      await hydrateModelOptions();
+      void hydrateModelOptions();
     } else {
       updateProviderCheckResult(
         providerId,
@@ -1733,7 +1760,7 @@ async function loadModelOptions(refresh = false) {
     method: refresh ? "POST" : "GET",
   });
   if (request === state.modelOptionsRequest && config === state.config) { state.modelLabels = new Map(Object.entries(result.model_labels || {})); setModelOptions(result.models); }
-  if (refresh && window.CodeSessions) await window.CodeSessions.refresh();
+  if (refresh && window.CodeSessions) void window.CodeSessions.refresh();
   return result;
 }
 
@@ -2074,6 +2101,112 @@ claudeIntegrationDialog.addEventListener("click", (event) => {
   const bounds = claudeIntegrationDialog.getBoundingClientRect();
   if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
     claudeIntegrationDialog.close();
+  }
+});
+
+const antigravityIntegrationDialog = byId("antigravityIntegrationDialog");
+const antigravityIntegration = { connected: null, canDisconnect: false, disconnecting: false, busy: false, paths: null };
+const antigravityIntegrationPath = "/admin/api/integrations/antigravity";
+
+function renderAntigravityIntegration() {
+  const { connected, canDisconnect, disconnecting, busy, paths } = antigravityIntegration;
+  const action = connected ? "Disconnect" : "Connect";
+  byId("openAntigravityIntegration").textContent = busy ? "Loading…" : connected === null ? "Retry" : action;
+  byId("openAntigravityIntegration").disabled = busy;
+  byId("openAntigravityIntegration").setAttribute("aria-busy", String(busy));
+  byId("openAntigravityIntegration").className = connected && !busy ? "danger-button" : "primary-button";
+  byId("disconnectAntigravityIntegration").hidden = connected !== false || !canDisconnect;
+  byId("disconnectAntigravityIntegration").disabled = busy;
+  byId("confirmAntigravityIntegration").textContent = busy ? "Saving…" : disconnecting ? "Disconnect" : "Connect";
+  byId("confirmAntigravityIntegration").disabled = busy || connected === null;
+  byId("confirmAntigravityIntegration").className = disconnecting ? "danger-button" : "primary-button";
+  byId("antigravityIntegrationDescription").textContent = disconnecting
+    ? connected
+      ? "Restore Antigravity CLI's previous provider and remove FCC's models. Running sessions can continue. Connect again before your next fcc-agy launch."
+      : "Remove FCC's saved connection and models. Keep your current Antigravity CLI provider."
+    : "Switch Antigravity CLI to the Gemini API provider and add FCC's models. Then launch with fcc-agy.";
+  const files = byId("antigravityIntegrationFiles");
+  files.replaceChildren();
+  for (const path of Object.values(paths || {})) {
+    const item = document.createElement("li");
+    const code = document.createElement("code");
+    code.textContent = path;
+    item.appendChild(code);
+    files.appendChild(item);
+  }
+}
+
+async function refreshAntigravityIntegration() {
+  const request = beginIntegrationCheck(antigravityIntegration);
+  if (!request) return;
+  integrationMessage("antigravityIntegrationMessage", "");
+  renderAntigravityIntegration();
+  try {
+    const result = await api(antigravityIntegrationPath);
+    if (!currentIntegrationCheck(antigravityIntegration, request)) return;
+    antigravityIntegration.connected = result.connected;
+    antigravityIntegration.canDisconnect = result.can_disconnect;
+    antigravityIntegration.paths = result.paths;
+  } catch (error) {
+    if (!currentIntegrationCheck(antigravityIntegration, request)) return;
+    antigravityIntegration.connected = null;
+    integrationMessage("antigravityIntegrationMessage", error.message, true);
+  } finally {
+    finishIntegrationCheck(antigravityIntegration, request, renderAntigravityIntegration);
+  }
+}
+
+function openAntigravityIntegration(disconnect) {
+  antigravityIntegration.disconnecting = disconnect;
+  renderAntigravityIntegration();
+  integrationMessage("antigravityIntegrationDialogMessage", "");
+  antigravityIntegrationDialog.showModal();
+}
+
+byId("openAntigravityIntegration").addEventListener("click", () => {
+  if (antigravityIntegration.connected === null) {
+    void refreshAntigravityIntegration();
+    return;
+  }
+  openAntigravityIntegration(antigravityIntegration.connected);
+});
+byId("disconnectAntigravityIntegration").addEventListener("click", () => openAntigravityIntegration(true));
+byId("confirmAntigravityIntegration").addEventListener("click", async () => {
+  if (byId("confirmAntigravityIntegration").disabled) return;
+  const disconnect = antigravityIntegration.disconnecting;
+  const config = state.config;
+  let failed = false;
+  antigravityIntegration.busy = true;
+  renderAntigravityIntegration();
+  integrationMessage("antigravityIntegrationDialogMessage", "");
+  integrationMessage("antigravityIntegrationMessage", "");
+  try {
+    const result = await api(`${antigravityIntegrationPath}/${disconnect ? "disconnect" : "connect"}`, { method: "POST" });
+    if (config !== state.config) return;
+    antigravityIntegration.connected = result.connected;
+    antigravityIntegration.canDisconnect = result.can_disconnect;
+    antigravityIntegration.paths = result.paths;
+    antigravityIntegrationDialog.close();
+    integrationMessage("antigravityIntegrationMessage", disconnect
+      ? "Disconnected. FCC's connection removed."
+      : "Connected. Launch Antigravity CLI with fcc-agy.");
+  } catch (error) {
+    if (config !== state.config) return;
+    failed = true;
+    integrationMessage("antigravityIntegrationDialogMessage", error.message, true);
+    integrationMessage("antigravityIntegrationMessage", error.message, true);
+  } finally {
+    antigravityIntegration.busy = false;
+    renderAntigravityIntegration();
+    if (failed || config !== state.config) void refreshAntigravityIntegration();
+  }
+});
+byId("closeAntigravityIntegration").addEventListener("click", () => antigravityIntegrationDialog.close());
+antigravityIntegrationDialog.addEventListener("click", (event) => {
+  if (event.target !== antigravityIntegrationDialog) return;
+  const bounds = antigravityIntegrationDialog.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) {
+    antigravityIntegrationDialog.close();
   }
 });
 

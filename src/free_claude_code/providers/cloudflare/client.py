@@ -16,6 +16,7 @@ from free_claude_code.providers.admission import (
     ProviderOperationKind,
 )
 from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.http import maybe_await_aclose
 from free_claude_code.providers.model_listing import (
     ModelListResponseError,
@@ -89,6 +90,7 @@ class CloudflareProvider(OpenAIChatProvider):
         *,
         account_id: str,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
     ):
         base_url = cloudflare_ai_base_url(config.base_url, account_id)
         self._model_search_url = _cloudflare_model_search_url(
@@ -107,6 +109,7 @@ class CloudflareProvider(OpenAIChatProvider):
             replace(config, base_url=base_url),
             behavior=CloudflareChatBehavior(_PROFILE),
             admission=admission,
+            history_cache=history_cache,
         )
 
     async def cleanup(self) -> None:
@@ -130,7 +133,7 @@ class CloudflareProvider(OpenAIChatProvider):
                 raise
             return response
 
-        execution = self._admission.start_execution()
+        execution = self._admission.start_execution(model=None)
         response = await execution.run_call(
             request,
             operation_kind=ProviderOperationKind.MODEL_DISCOVERY,

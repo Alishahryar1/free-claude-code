@@ -7,6 +7,7 @@ import pytest
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from tests.providers.support import without_empty_reasoning
 from tests.providers.test_anthropic_native_transport import collect
 from tests.providers.test_anthropic_provider import native_body, provider
 
@@ -51,7 +52,9 @@ async def test_native_override_replaces_controls_and_preserves_extensions(
         received.append(request)
         if len(received) == 1:
             return httpx.Response(529, json={"error": {"type": "overloaded_error"}})
-        return httpx.Response(200, json={"type": "message", "content": []})
+        return httpx.Response(
+            200, json={"type": "message", "content": [], "stop_reason": "end_turn"}
+        )
 
     p = provider(handle)
     body = native_body()
@@ -86,7 +89,7 @@ async def test_native_override_replaces_controls_and_preserves_extensions(
         assert sent == retried and body == original
         assert sent["max_tokens"] == 10000
         assert (
-            sent["messages"] == original["messages"]
+            without_empty_reasoning(sent["messages"]) == original["messages"]
             and sent["tools"] == original["tools"]
         )
         assert sent["future_option"] == original["future_option"]
@@ -160,7 +163,9 @@ async def test_native_inherit_preserves_unknown_controls_without_metadata():
     def handle(request):
         assert request.method == "POST"
         sent.append(json.loads(request.content))
-        return httpx.Response(200, json={"type": "message", "content": []})
+        return httpx.Response(
+            200, json={"type": "message", "content": [], "stop_reason": "end_turn"}
+        )
 
     p = provider(handle)
     body = native_body()
@@ -168,6 +173,6 @@ async def test_native_inherit_preserves_unknown_controls_without_metadata():
     body["output_config"] = {"effort": "future_effort", "future": True}
     try:
         await collect(p, body, reasoning_override=None)
-        assert sent == [body]
+        assert without_empty_reasoning(sent) == [body]
     finally:
         await p.cleanup()

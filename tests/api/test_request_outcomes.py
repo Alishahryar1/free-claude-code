@@ -17,6 +17,7 @@ from free_claude_code.core.request_outcomes import (
     current_request_outcome,
     record_request_route,
 )
+from free_claude_code.core.stream_output import StreamOutput
 from tests.api.support import create_test_app
 from tests.api.test_request_lifetime import _http_scope
 
@@ -58,9 +59,17 @@ class OutcomeProvider:
         if self.result == "pre_start":
             raise failure
         if wire_api == "responses":
-            yield 'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_test","object":"response","status":"in_progress","output":[]}}\n\n'
+            yield StreamOutput(
+                (
+                    'event: response.created\ndata: {"type":"response.created","response":{"id":"resp_test","object":"response","status":"in_progress","output":[]}}\n\n',
+                )
+            )
         else:
-            yield 'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[]}}\n\n'
+            yield StreamOutput(
+                (
+                    'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[]}}\n\n',
+                )
+            )
         if self.result == "exception":
             raise failure
         if self.result == "wait_after_start":
@@ -76,10 +85,22 @@ class OutcomeProvider:
                 }
             frame = f"event: {event}\ndata: {json.dumps(data)}\n\n"
             # Framing must work even when a wire event is split between chunks.
-            yield frame[:12]
-            yield frame[12:]
+            yield StreamOutput((frame[:12], frame[12:]))
+        elif wire_api == "responses":
+            yield StreamOutput(
+                (
+                    'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_test","status":"completed","output":[]}}\n\n',
+                )
+            )
         else:
-            yield 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+            yield StreamOutput(
+                (
+                    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n',
+                )
+            )
+            yield StreamOutput(
+                ('event: message_stop\ndata: {"type":"message_stop"}\n\n',)
+            )
 
 
 @pytest.mark.parametrize("wire_api", ["messages", "responses"])

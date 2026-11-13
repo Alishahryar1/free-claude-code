@@ -11,6 +11,7 @@ from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
 from free_claude_code.providers.openai_chat.stream_output import (
     AnthropicChatStreamOutput,
     ChatStreamUsage,
+    CompletedToolCall,
     ResponsesChatStreamOutput,
 )
 
@@ -33,7 +34,7 @@ def _responses_output(
     request: OpenAIResponsesRequest, *, input_tokens: int
 ) -> ResponsesChatStreamOutput:
     prepared = build_responses_chat_request(
-        request, reasoning_replay=ReasoningReplayMode.DISABLED
+        request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
     )
     return ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=input_tokens)
 
@@ -63,10 +64,11 @@ def test_anthropic_chat_output_preserves_existing_wire_lifecycle() -> None:
     frames.extend(output.ensure_text_block())
     frames.append(output.emit_text_delta("answer"))
     frames.extend(output.close_content_blocks())
-    output.ensure_tool_state(0)
-    output.register_tool_name(0, "lookup")
-    frames.append(output.start_tool_block(0, "call_1", "lookup"))
-    frames.append(output.emit_tool_delta(0, '{"q":"fcc"}'))
+    frames.extend(
+        output.emit_complete_tool(
+            0, CompletedToolCall("call_1", "lookup", '{"q":"fcc"}')
+        )
+    )
     frames.extend(output.close_all_blocks())
     frames.extend(
         output.finish_success(
@@ -94,9 +96,10 @@ def test_anthropic_chat_output_preserves_existing_wire_lifecycle() -> None:
     assert events[-2][1]["usage"] == {"input_tokens": 9, "output_tokens": 4}
     assert output.accumulated_reasoning == "think"
     assert output.accumulated_text == "answer"
-    tool_block = output.tool_block_for_tool_index(0)
-    assert tool_block is not None
-    assert tool_block.content == '{"q":"fcc"}'
+    assert any(
+        _object_dict(data.get("delta", {})).get("partial_json") == '{"q":"fcc"}'
+        for _, data in events
+    )
 
 
 def test_responses_chat_output_emits_one_native_lifecycle_with_exact_usage() -> None:
@@ -131,10 +134,11 @@ def test_responses_chat_output_emits_one_native_lifecycle_with_exact_usage() -> 
     frames.extend(output.ensure_text_block())
     frames.append(output.emit_text_delta("answer"))
     frames.extend(output.close_content_blocks())
-    output.ensure_tool_state(0)
-    output.register_tool_name(0, "mcp__lookup")
-    frames.append(output.start_tool_block(0, "call_1", "mcp__lookup"))
-    frames.append(output.emit_tool_delta(0, '{"q":"fcc"}'))
+    frames.extend(
+        output.emit_complete_tool(
+            0, CompletedToolCall("call_1", "mcp__lookup", '{"q":"fcc"}')
+        )
+    )
     frames.extend(output.close_all_blocks())
     frames.extend(
         output.finish_success(
@@ -335,8 +339,14 @@ def test_responses_chat_output_preserves_custom_tool_free_form_input() -> None:
     )
 
     frames = [*output.start_events()]
-    frames.append(output.start_tool_block(0, "call_patch", "apply_patch"))
-    frames.append(output.emit_tool_delta(0, "*** Begin Patch\n*** End Patch"))
+    frames.extend(
+        output.emit_complete_tool(
+            0,
+            CompletedToolCall(
+                "call_patch", "apply_patch", "*** Begin Patch\n*** End Patch"
+            ),
+        )
+    )
     frames.extend(
         output.finish_success(
             stop_reason="tool_calls",
@@ -396,8 +406,9 @@ def test_responses_chat_output_completes_malformed_function_call_once() -> None:
     )
 
     frames = [*output.start_events()]
-    frames.append(output.start_tool_block(0, "call_bad", "lookup"))
-    frames.append(output.emit_tool_delta(0, '{"q":'))
+    frames.extend(
+        output.emit_complete_tool(0, CompletedToolCall("call_bad", "lookup", '{"q":'))
+    )
     frames.extend(
         output.finish_success(
             stop_reason="tool_calls",

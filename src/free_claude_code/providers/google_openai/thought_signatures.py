@@ -18,7 +18,7 @@ def apply_google_thought_signatures(
     messages = body.get("messages")
     if not isinstance(messages, list):
         return
-    _apply_message_thought_signatures(messages)
+    apply_native_message_signatures(messages)
     _apply_cached_tool_call_signatures(messages, tool_call_extra_content_by_id or {})
     _apply_missing_current_turn_signatures(messages)
 
@@ -49,7 +49,8 @@ def _set_thought_signature(tool_call: dict[str, Any], signature: str) -> None:
     google["thought_signature"] = signature
 
 
-def _apply_message_thought_signatures(messages: list[Any]) -> None:
+def apply_native_message_signatures(messages: list[Any]) -> None:
+    """Translate caller-native signatures, leaving FCC provenance carriers intact."""
     for message in messages:
         if not isinstance(message, dict) or message.get("role") != "assistant":
             continue

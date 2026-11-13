@@ -6,7 +6,10 @@ from typing import Any
 
 from loguru import logger
 
-from free_claude_code.core.token_estimation import estimate_text_tokens
+from free_claude_code.core.token_estimation import (
+    estimate_image_tokens,
+    estimate_text_tokens,
+)
 
 from .content import get_block_attr, get_block_type
 from .models import Message, NativeTokenCountMessage, SystemContent, Tool
@@ -27,8 +30,8 @@ def _image_tokens(block: Any) -> int:
     if isinstance(source, dict):
         data = source.get("data") or source.get("base64") or ""
         if isinstance(data, str) and data:
-            return max(85, len(data) // 3000)
-    return 765
+            return estimate_image_tokens(len(data))
+    return estimate_image_tokens()
 
 
 def get_token_count(

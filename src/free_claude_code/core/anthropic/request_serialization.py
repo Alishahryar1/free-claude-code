@@ -55,3 +55,22 @@ def serialize_tool_result_content(content: Any) -> str:
                 parts.append(str(item))
         return "\n".join(parts)
     return str(content)
+
+
+def is_noop_context_management(
+    context_management: dict[str, Any] | None,
+) -> bool:
+    if not context_management:
+        return True
+    if set(context_management) != {"edits"}:
+        return False
+    edits = context_management["edits"]
+    return isinstance(edits, list) and all(
+        isinstance(edit, dict)
+        and edit
+        == {
+            "type": "clear_thinking_20251015",
+            "keep": "all",
+        }
+        for edit in edits
+    )

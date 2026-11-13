@@ -17,11 +17,17 @@ from free_claude_code.core.request_outcomes import (
     record_request_failure,
 )
 
+from .generation_paths import generation_api
+
 _FAILURE_EVENTS = frozenset({"error", "response.error", "response.failed"})
 
 
 def _observe_event(event: SSEEvent) -> None:
-    kind = event.event or event.data.get("type")
+    kind = (
+        event.event
+        or event.data.get("type")
+        or ("error" if "error" in event.data else None)
+    )
     if not isinstance(kind, str) or kind not in _FAILURE_EVENTS:
         return
     response = event.data.get("response")
@@ -42,7 +48,7 @@ class RequestOutcomeMiddleware:
         if (
             scope["type"] != "http"
             or scope.get("method") != "POST"
-            or scope.get("path") not in {"/v1/messages", "/v1/responses"}
+            or generation_api(scope.get("path", "")) is None
         ):
             await self._app(scope, receive, send)
             return
@@ -75,7 +81,11 @@ class RequestOutcomeMiddleware:
                     .get("content-type", "")
                     .startswith("text/event-stream")
                 ):
-                    decoder = AnthropicSSEDecoder(event_names=_FAILURE_EVENTS)
+                    decoder = AnthropicSSEDecoder(
+                        event_names=None
+                        if generation_api(scope["path"]) == "gemini"
+                        else _FAILURE_EVENTS
+                    )
             elif message["type"] == "http.response.body":
                 completed = not message.get("more_body", False)
                 if decoder is not None:
@@ -114,9 +124,7 @@ class RequestOutcomeMiddleware:
                 result = "success"
             logger.bind(
                 event="request.completed",
-                wire_api="responses"
-                if scope["path"] == "/v1/responses"
-                else "messages",
+                wire_api=generation_api(scope["path"]),
                 provider_id=outcome.provider_id,
                 model=outcome.model,
                 status_code=status_code,

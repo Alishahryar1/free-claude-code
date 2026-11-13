@@ -105,6 +105,8 @@ def test_lifecycle_preserves_other_agents_and_refreshes_owned_settings(files):
     assert entry["env"]["ANTHROPIC_AUTH_TOKEN"] == "token"
     assert entry["env"]["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0"
     entry["env"]["KEEP"] = "yes"
+    entry["env"]["CLAUDE_CODE_MAX_RETRIES"] = "10"
+    entry["env"]["API_TIMEOUT_MS"] = "1000"
     entry["use_idea_mcp"] = False
     write(config, saved)
     _, updated = install(registry, systems, version="0.80.0")
@@ -113,6 +115,11 @@ def test_lifecycle_preserves_other_agents_and_refreshes_owned_settings(files):
     assert refreshed["args"][0] == str(updated)
     assert refreshed["env"]["ANTHROPIC_AUTH_TOKEN"] == "rotated"
     assert refreshed["env"]["KEEP"] == "yes"
+    assert refreshed["env"]["CLAUDE_CODE_MAX_RETRIES"] == "10"
+    assert refreshed["env"]["API_TIMEOUT_MS"] == "2147483647"
+    assert refreshed["env"]["CLAUDE_ENABLE_STREAM_WATCHDOG"] == "0"
+    assert refreshed["env"]["CLAUDE_ENABLE_BYTE_WATCHDOG"] == "0"
+    assert refreshed["env"]["API_FORCE_IDLE_TIMEOUT"] == "0"
     assert refreshed["use_idea_mcp"] is False
     before = config.stat().st_mtime_ns
     assert not jb.refresh_connected(config, "http://localhost:9090", "rotated")

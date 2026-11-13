@@ -78,6 +78,80 @@ def test_stream_retry_classification_distinguishes_protocol_and_status() -> None
 
 
 @pytest.mark.parametrize(
+    "body",
+    [
+        {"type": "invalid_request_error", "code": 400},
+        {"type": "invalid_request_error"},
+        {"code": "invalid_request_error"},
+        {"code": "400"},
+        {"status": 400},
+        {"status_code": 400},
+        {"error": {"type": "invalid_request_error", "code": 400}},
+    ],
+)
+def test_structured_invalid_request_is_terminal_despite_transient_prose(body) -> None:
+    error = _statusless_openai_error("overloaded: rate limit", body)
+    failure = classify_provider_failure(
+        error, provider_name="TEST", read_timeout_s=1, request_id="req_invalid"
+    )
+    assert (failure.kind, failure.status_code, failure.retryable) == (
+        FailureKind.INVALID_REQUEST,
+        400,
+        False,
+    )
+    assert not is_retryable_provider_error(error)
+    assert not is_retryable_stream_error(error)
+    assert retryable_upstream_status(error) is None
+    assert "req_invalid" in failure.message
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _openai_status_error(
+            openai.RateLimitError,
+            status_code=429,
+            message="rate limited",
+            body={"type": "invalid_request_error", "code": 400},
+        ),
+        _statusless_openai_error(
+            "rate limited", {"code": 429, "type": "invalid_request_error"}
+        ),
+        _statusless_openai_error(
+            "rate limited", {"status": 429, "error": {"code": 400}}
+        ),
+    ],
+)
+def test_authoritative_rate_limit_status_beats_invalid_request_body(error) -> None:
+    failure = classify_provider_failure(
+        error, provider_name="TEST", read_timeout_s=1, request_id=None
+    )
+    assert (failure.kind, failure.status_code, failure.retryable) == (
+        FailureKind.RATE_LIMIT,
+        429,
+        True,
+    )
+    assert is_retryable_provider_error(error)
+    assert is_retryable_stream_error(error)
+
+
+def test_http_bad_request_beats_transient_body() -> None:
+    error = _openai_status_error(
+        openai.BadRequestError,
+        status_code=400,
+        message="overloaded",
+        body={"code": 429, "type": "rate_limit_error"},
+    )
+    assert retryable_upstream_status(error) is None
+    failure = classify_provider_failure(
+        error, provider_name="TEST", read_timeout_s=1, request_id=None
+    )
+    assert failure.kind is FailureKind.INVALID_REQUEST
+    assert failure.status_code == 400
+    assert not failure.retryable
+
+
+@pytest.mark.parametrize(
     "error_name",
     [
         "ReadError",
@@ -504,8 +578,8 @@ _CASES = (
                 "code": 400,
             },
         ),
-        FailureKind.UPSTREAM,
-        500,
+        FailureKind.INVALID_REQUEST,
+        400,
         False,
     ),
     _ClassificationCase(
@@ -806,3 +880,12 @@ def test_shared_recovery_exhaustion_preserves_last_provider_failure() -> None:
     assert "Request ID: req_exhausted" in failure.message
     assert retryable_upstream_status(exhausted) is None
     assert not is_retryable_provider_error(exhausted)
+
+
+@pytest.mark.parametrize("deadline", [None, 1234.0])
+def test_recovery_rewrap_preserves_selected_cause_and_deadline(deadline):
+    cause = RuntimeError("selected upstream error")
+    first = ProviderRecoveryExhausted(cause, retry_not_before=deadline)
+    copied = ProviderRecoveryExhausted(first)
+    assert copied.last_error is cause
+    assert copied.retry_not_before == deadline

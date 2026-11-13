@@ -1,7 +1,9 @@
 """Provider-owned SDK classification and retry qualification."""
 
 import json
+import math
 import ssl
+import time
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import replace
@@ -50,19 +52,30 @@ _CONTEXT_WINDOW_FINISH_REASON = "model_context_window_exceeded"
 
 
 class ProviderRecoveryExhausted(RuntimeError):
-    """A shared provider recovery episode exhausted its single probe budget."""
+    """The fixed cause and retry deadline selected when recovery stops execution."""
 
-    def __init__(self, last_error: Exception) -> None:
+    def __init__(
+        self, error: Exception, *, retry_not_before: float | None = None
+    ) -> None:
         super().__init__("Provider recovery retry budget was exhausted.")
-        self.last_error = last_error
+        if isinstance(error, ProviderRecoveryExhausted):
+            self._last_error = error.last_error
+            self._retry_not_before = error.retry_not_before
+        else:
+            self._last_error = error
+            self._retry_not_before = retry_not_before
+
+    @property
+    def last_error(self) -> Exception:
+        return self._last_error
+
+    @property
+    def retry_not_before(self) -> float | None:
+        return self._retry_not_before
 
 
 class RetryableProviderProtocolError(RuntimeError):
     """A malformed upstream protocol result eligible for provider retry."""
-
-
-class RetryableToolProtocolError(RetryableProviderProtocolError):
-    """A malformed tool response whose continuation still requires tools."""
 
 
 def classify_provider_failure(
@@ -74,10 +87,14 @@ def classify_provider_failure(
     provider_failure_override: ProviderFailureOverride | None = None,
 ) -> ExecutionFailure:
     """Return one detailed canonical failure after provider retries are exhausted."""
-    exc = underlying_provider_error(exc)
+    remaining = 0
+    if isinstance(exc, ProviderRecoveryExhausted):
+        exc, retry_not_before = exc.last_error, exc.retry_not_before
+        if retry_not_before is not None:
+            remaining = math.ceil(retry_not_before - time.monotonic())
     if isinstance(exc, ExecutionFailure):
         failure = exc
-        message = failure.message
+        message = _with_cooldown(failure.message, remaining)
         request_id_line = f"Request ID: {request_id}" if request_id else None
         if request_id_line and request_id_line not in message:
             message = f"{message}\n\n{request_id_line}"
@@ -93,6 +110,7 @@ def classify_provider_failure(
             exc,
             read_timeout_s=read_timeout_s,
         )
+    failure = replace(failure, message=_with_cooldown(failure.message, remaining))
     message = format_execution_failure_message(
         failure,
         extract_upstream_error_detail(exc),
@@ -100,6 +118,16 @@ def classify_provider_failure(
         request_id=request_id,
     )
     return replace(failure, message=message)
+
+
+def _with_cooldown(message: str, remaining: int) -> str:
+    if remaining <= 0:
+        return message
+    message = message.removesuffix(" Please retry shortly.").removesuffix(
+        " Please retry."
+    )
+    unit = "second" if remaining == 1 else "seconds"
+    return f"{message} Retry this provider route in {remaining} {unit}."
 
 
 def overloaded_provider_failure() -> ExecutionFailure:
@@ -176,7 +204,7 @@ def retryable_transient_status(exc: BaseException) -> int | None:
         return status if exc.retryable and _is_retryable_status(status) else None
     if _reports_context_window_exceeded(exc):
         return None
-    if _reported_status(exc) == 413:
+    if _is_invalid_request_error(exc) or _reported_status(exc) == 413:
         return None
     if isinstance(exc, openai.RateLimitError):
         return 429
@@ -342,6 +370,11 @@ def _classify_provider_failure(
     if _reports_context_window_exceeded(exc):
         return context_window_exceeded_provider_failure()
 
+    if _is_invalid_request_error(exc):
+        return _failure(
+            FailureKind.INVALID_REQUEST, 400, _INVALID_REQUEST_MESSAGE, False
+        )
+
     if _reported_status(exc) == 413:
         return _failure(
             FailureKind.INVALID_REQUEST,
@@ -458,6 +491,22 @@ def _stable_upstream(status_code: int) -> str:
     if status_code in (502, 503, 504):
         return "Provider is temporarily unavailable. Please retry."
     return "Provider API request failed."
+
+
+def _is_invalid_request_error(exc: BaseException) -> bool:
+    """Recognize invalid requests without masking status or credential failures."""
+    status = _reported_status(exc)
+    if status is not None:
+        return status == 400
+    if isinstance(exc, Exception) and provider_authentication_status(exc) is not None:
+        return False
+    return any(
+        isinstance(value, str) and anthropic_status_for_error_type(value.lower()) == 400
+        for item in _body_candidates(getattr(exc, "body", None))
+        if isinstance(item, Mapping)
+        for key in ("type", "code")
+        if (value := item.get(key)) is not None
+    )
 
 
 def _status_from_exception(exc: BaseException) -> int | None:

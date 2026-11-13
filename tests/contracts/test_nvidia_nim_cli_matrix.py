@@ -87,14 +87,11 @@ def test_cli_matrix_normalizes_missing_captured_output(
         command: list[str],
         **_kwargs: object,
     ) -> subprocess.CompletedProcess[str]:
-        return cast(
-            subprocess.CompletedProcess[str],
-            subprocess.CompletedProcess(
-                args=command,
-                returncode=0,
-                stdout=None,
-                stderr=None,
-            ),
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=None,
+            stderr=None,
         )
 
     monkeypatch.setattr(

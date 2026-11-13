@@ -5,7 +5,7 @@ import io
 import os
 import stat
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -131,7 +131,7 @@ def write_yaml(
 
 
 @contextmanager
-def file_lock(path: Path, *, wait: float) -> Iterator[None]:
+def file_lock(path: Path, *, wait: float) -> Generator[None]:
     """Honor DSH's exclusive PID-file lock; leave stale takeover to DSH."""
     deadline = time.monotonic() + wait
     delay = 0.02

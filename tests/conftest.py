@@ -10,7 +10,12 @@ import pytest_asyncio
 
 from free_claude_code.config import env_migrations, paths
 from free_claude_code.config.loader import clear_settings_cache
+from free_claude_code.core.stream_delivery import (
+    StreamDeliveryState,
+    bind_stream_delivery,
+)
 from free_claude_code.harnesses import (
+    antigravity_integration,
     claude_desktop_integration,
     claude_integration,
     claude_onboarding,
@@ -32,10 +37,25 @@ os.environ["ANTHROPIC_AUTH_TOKEN"] = ""
 
 
 @pytest.fixture(autouse=True)
+def _response_delivery_context(request):
+    """Direct provider tests run inside an unreleased private response context."""
+    if "api" in request.node.path.relative_to(Path(__file__).parent).parts:
+        yield
+        return
+    with bind_stream_delivery(StreamDeliveryState()):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _isolate_managed_config(monkeypatch, tmp_path):
     """Keep every test away from real home, checkout, and running-server config."""
 
     config_dir = tmp_path / ".fcc"
+    monkeypatch.setattr(
+        antigravity_integration,
+        "config_path",
+        lambda: tmp_path / ".gemini/antigravity-cli/settings.json",
+    )
     monkeypatch.setenv("DSH_HOME", str(tmp_path / ".dsh"))
     monkeypatch.delenv("FCC_DSH_DESKTOP_API_KEY", raising=False)
     monkeypatch.setattr(
@@ -99,12 +119,10 @@ def provider_config():
 
 @pytest.fixture
 def nim_provider(provider_config):
-    from free_claude_code.config.nim import NimSettings
     from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 
     return NvidiaNimProvider(
         provider_config,
-        nim_settings=NimSettings(),
         admission=immediate_admission(),
     )
 

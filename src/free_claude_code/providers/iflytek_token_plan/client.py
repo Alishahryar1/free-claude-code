@@ -8,6 +8,7 @@ from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.reasoning import ReasoningCapability
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.openai_chat import (
     OpenAIChatProfile,
     OpenAIChatProvider,
@@ -36,8 +37,15 @@ class IFlytekTokenPlanProvider(OpenAIChatProvider):
         *,
         admission: ProviderAdmissionController,
         client: AsyncOpenAI | None = None,
+        history_cache: HistoryModeCache | None = None,
     ) -> None:
-        super().__init__(config, profile=_PROFILE, admission=admission, client=client)
+        super().__init__(
+            config,
+            profile=_PROFILE,
+            admission=admission,
+            client=client,
+            history_cache=history_cache,
+        )
 
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
         """List the native Spark models documented for Token Plan."""

@@ -6,10 +6,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from free_claude_code.application.model_catalog import read_model_catalog
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.api_keys import normalize_api_keys
+from free_claude_code.config.loader import compose_settings_snapshot
 from free_claude_code.config.model_refs import ModelFallback
-from free_claude_code.config.nim import NimSettings
 from free_claude_code.config.provider_catalog import (
     DEEPSEEK_DEFAULT_BASE,
     NVIDIA_NIM_DEFAULT_BASE,
@@ -18,6 +19,7 @@ from free_claude_code.config.provider_catalog import (
 )
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.deepseek import DeepSeekProvider
@@ -73,13 +75,25 @@ def _manager(
     settings: Settings,
     providers: dict[str, BaseProvider] | None = None,
 ) -> ProviderRuntimeManager:
-    providers = providers or {}
+    providers = {
+        **{
+            provider_id: FakeProvider(error=ConnectionError("Local fixture is offline"))
+            for provider_id in ("lmstudio", "llamacpp", "ollama")
+        },
+        **(providers or {}),
+    }
     return ProviderRuntimeManager(
         settings,
-        runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
-            snapshot,
-            admission_registry,
-            {(provider_id, 1): provider for provider_id, provider in providers.items()},
+        runtime_factory=lambda snapshot, admission_registry, history_cache=None: (
+            ProviderRuntime(
+                snapshot,
+                admission_registry,
+                None,
+                {
+                    (provider_id, 1): provider
+                    for provider_id, provider in providers.items()
+                },
+            )
         ),
     )
 
@@ -97,9 +111,7 @@ def test_provider_catalog_contract_is_metadata_only() -> None:
 async def test_nim_lists_openai_compatible_model_infos() -> None:
     config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
-        provider = NvidiaNimProvider(
-            config, nim_settings=NimSettings(), admission=immediate_admission()
-        )
+        provider = NvidiaNimProvider(config, admission=immediate_admission())
 
     with patch.object(
         provider._client.models,
@@ -108,6 +120,123 @@ async def test_nim_lists_openai_compatible_model_infos() -> None:
         return_value=SimpleNamespace(data=[SimpleNamespace(id="nvidia/model")]),
     ):
         assert await provider.list_model_infos() == _infos("nvidia/model")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_id,provider_base_url,filtered",
+    [
+        ("nvidia_nim", NVIDIA_NIM_DEFAULT_BASE, True),
+        ("nvidia_nim", NVIDIA_NIM_DEFAULT_BASE + "/", True),
+        ("nvidia_nim", "https://private-nim.example/v1", False),
+        ("deepseek", NVIDIA_NIM_DEFAULT_BASE, False),
+    ],
+)
+async def test_nim_exclusions_apply_only_to_hosted_nim_discovery(
+    provider_id, provider_base_url, filtered
+) -> None:
+    config = make_provider_config(api_key="test-key", base_url=provider_base_url)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = (
+            NvidiaNimProvider(config, admission=immediate_admission())
+            if provider_id == "nvidia_nim"
+            else DeepSeekProvider(config, admission=immediate_admission())
+        )
+    excluded = (
+        "01-ai/yi-large",  # Observed model-specific 404.
+        "meta/muse-glimmer-30b",
+        "nvidia/cosmos-reason2-8b",
+        "nvidia/nemotron-3-super-120b-a12b",  # Deprecated hosted endpoint.
+        "nvidia/ising-calibration-1-35b-a3b",  # Explicit retirement 410.
+        "nvidia/llama-nemotron-embed-vl-1b-v2",  # Working embedding service.
+        "nvidia/ai-synthetic-video-detector",
+    )
+    retained = (
+        "nvidia/nemotron-3-ultra-550b-a55b",
+        "nvidia/future-chat-model",
+        "01-ai/yi-large-successor",  # Exact IDs, not substring matching.
+        "deepseek-ai/deepseek-v4.1-flash",  # Timeouts are not exclusions.
+        "meta/llama-3.2-90b-vision-instruct",
+        "meta/llama-guard-4-12b",
+        "nvidia/llama-3.1-nemoguard-8b-content-safety",
+        "nvidia/llama-3.1-nemoguard-8b-topic-control",  # Upstream 500.
+    )
+    ids = (*excluded, *retained)
+    with patch.object(
+        provider._client.models,
+        "list",
+        new_callable=AsyncMock,
+        return_value=SimpleNamespace(data=[SimpleNamespace(id=id_) for id_ in ids]),
+    ) as mock_list:
+        assert await provider.list_model_infos() == _infos(
+            *(retained if filtered else ids)
+        )
+    mock_list.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_super_migration_and_hosted_discovery_publish_ultra_catalog():
+    old = "nvidia/nemotron-3-super-120b-a12b"
+    new = "nvidia/nemotron-3-ultra-550b-a55b"
+    config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = NvidiaNimProvider(config, admission=immediate_admission())
+    with patch.object(
+        provider._client.models,
+        "list",
+        new_callable=AsyncMock,
+        return_value=SimpleNamespace(
+            data=[SimpleNamespace(id=old), SimpleNamespace(id=new)]
+        ),
+    ):
+        infos = await provider.list_model_infos()
+    settings = compose_settings_snapshot({"MODEL": "nvidia_nim/" + old}, {}).settings
+    manager = _manager(settings)
+    manager.cache_model_infos("nvidia_nim", infos)
+    catalog = read_model_catalog(manager)
+    assert catalog.default_model_id == "nvidia_nim/" + new
+    assert [model.provider_model_ref for model in catalog.models] == [
+        "nvidia_nim/" + new
+    ]
+
+
+@pytest.mark.asyncio
+async def test_nim_exclusions_preserve_retained_metadata() -> None:
+    config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = NvidiaNimProvider(config, admission=immediate_admission())
+    retained = ProviderModelInfo(
+        "nvidia/future-chat-model",
+        supports_thinking=True,
+        context_window_tokens=131072,
+        max_output_tokens=8192,
+    )
+    with patch.object(
+        OpenAIChatProvider,
+        "list_model_infos",
+        return_value=frozenset({ProviderModelInfo("01-ai/yi-large"), retained}),
+    ):
+        infos = await provider.list_model_infos()
+    assert len(infos) == 1
+    assert next(iter(infos)) is retained
+
+
+@pytest.mark.asyncio
+async def test_nim_exclusions_preserve_discovery_errors() -> None:
+    config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = NvidiaNimProvider(config, admission=immediate_admission())
+    with (
+        patch.object(
+            provider._client.models,
+            "list",
+            new_callable=AsyncMock,
+            return_value=SimpleNamespace(data=[SimpleNamespace(id=None)]),
+        ) as mock_list,
+        pytest.raises(ModelListResponseError),
+    ):
+        await provider.list_model_infos()
+    mock_list.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio
@@ -388,9 +517,9 @@ class FakeProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         if False:
-            yield ""
+            yield StreamOutput(("",))
 
     async def stream_responses(
         self,
@@ -403,9 +532,9 @@ class FakeProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         if False:
-            yield ""
+            yield StreamOutput(("",))
 
 
 @pytest.mark.asyncio
@@ -480,7 +609,8 @@ async def test_runtime_warm_reports_query_failures_without_blocking() -> None:
     assert runtime.cached_model_ids() == {"nvidia_nim": frozenset({"nim-model"})}
     logged = " ".join(str(arg) for call in warning.call_args_list for arg in call.args)
     assert "open_router" in logged
-    assert "malformed model-list response: bad model-list shape" in logged
+    assert "The provider returned an invalid model list." in logged
+    assert "bad model-list shape" not in logged
 
 
 @pytest.mark.asyncio
@@ -549,7 +679,7 @@ async def test_failed_startup_discovery_remains_eligible_for_explicit_refresh() 
 
 
 @pytest.mark.asyncio
-async def test_runtime_refresh_model_list_cache_uses_configured_remote_keys_and_referenced_local() -> (
+async def test_runtime_refresh_model_list_cache_uses_configured_remote_keys_and_all_locals() -> (
     None
 ):
     settings = _settings(
@@ -570,8 +700,9 @@ async def test_runtime_refresh_model_list_cache_uses_configured_remote_keys_and_
     assert runtime.cached_model_ids() == {
         "open_router": frozenset({"anthropic/claude-sonnet"}),
         "lmstudio": frozenset({"local-qwen"}),
+        "ollama": frozenset({"llama3.1"}),
     }
-    assert result.refreshed_provider_ids == ("lmstudio", "open_router")
+    assert result.refreshed_provider_ids == ("lmstudio", "open_router", "ollama")
     assert result.failed_provider_ids == ()
 
 

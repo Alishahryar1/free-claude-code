@@ -171,7 +171,10 @@ def test_warning_save_refreshes_masks_and_is_clean_then_rechecks_retained_rows(
     expect(page.locator("#saveProvider")).to_be_disabled()
     expect(dialog.locator(".api-key-row input").nth(1)).to_have_value("")
     dialog.locator("#field-NVIDIA_NIM_PROXY").fill("http://localhost:8888")
-    dialog.get_by_role("button", name="Save", exact=True).click()
+    with page.expect_response("**/admin/api/config/apply") as saved:
+        dialog.get_by_role("button", name="Save", exact=True).click()
+    assert saved.value.ok
+    expect(dialog.locator("#providerMessage")).to_contain_text("Saved")
     expect(page.locator("#saveProvider")).to_be_disabled()
     assert checked == [
         ["warning-first", "warning-second"],

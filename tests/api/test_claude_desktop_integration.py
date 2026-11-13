@@ -80,8 +80,15 @@ def test_desktop_routes_connect_disconnect_and_hide_credentials(client):
         json.loads(profile.read_text())["inferenceGatewayBaseUrl"]
         == "http://127.0.0.1:4321"
     )
+    config = json.loads(profile.read_text())
+    models = [desktop_model_id("nvidia_nim/one")]
+    config["inferenceModels"] = models
+    profile.write_text(json.dumps(config))
     before = {path: path.stat().st_mtime_ns for path in root.rglob("*.json")}
-    assert client.get(ROOT).json()["connected"] is True
+    response = client.get(ROOT)
+    assert response.json()["connected"] is True
+    assert "desktop-secret" not in response.text
+    assert json.loads(profile.read_text())["inferenceModels"] == models
     assert before == {path: path.stat().st_mtime_ns for path in root.rglob("*.json")}
     assert client.post(ROOT + "/disconnect").json()["connected"] is False
     assert not profile.exists()

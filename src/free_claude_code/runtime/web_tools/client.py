@@ -1,6 +1,7 @@
 """Outbound HTTP for web_search / web_fetch with operation-scoped resources."""
 
 import asyncio
+import codecs
 import socket
 from collections.abc import AsyncIterator
 from urllib.parse import urljoin, urlparse
@@ -142,6 +143,16 @@ async def _drain_aiohttp_body_capped(
             break
 
 
+def _text_encoding(charset: str | None) -> str:
+    """Return a usable codec name from a Content-Type charset, defaulting to utf-8."""
+    if isinstance(charset, str) and charset:
+        try:
+            return codecs.lookup(charset).name
+        except LookupError, ValueError:
+            pass
+    return "utf-8"
+
+
 class HTTPWebToolsClient:
     """Stateless adapter; each call owns its HTTP resources until completion."""
 
@@ -213,7 +224,7 @@ class HTTPWebToolsClient:
                     response.raise_for_status()
                     content_type = response.headers.get("content-type", "text/plain")
                     final_url = str(response.url)
-                    encoding = response.get_encoding() or "utf-8"
+                    encoding = _text_encoding(response.charset)
                     body_bytes = await _read_aiohttp_body_capped(
                         response, constants._MAX_WEB_FETCH_RESPONSE_BYTES
                     )

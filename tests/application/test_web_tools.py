@@ -12,6 +12,7 @@ from free_claude_code.application.web_tools.ports import WebFetchEgressPolicy
 from free_claude_code.application.web_tools.service import WebToolService
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import Message, MessagesRequest, Tool
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.web_tools import WebFetchResult
 from tests.web_tools_support import StubWebToolsClient
 
@@ -24,7 +25,7 @@ def _service(settings, client, *, token_counter=lambda *_: 5):
     return WebToolService(
         settings=settings,
         client=client,
-        executor=ProviderExecutor(_no_provider, progress_timeout_seconds=30),
+        executor=ProviderExecutor(_no_provider),
         token_counter=token_counter,
     )
 
@@ -49,8 +50,8 @@ def _request(tool, *, typed=True):
     )
 
 
-async def _drain(body: AsyncIterator[str]) -> str:
-    return "".join([chunk async for chunk in body])
+async def _drain(body: AsyncIterator[StreamOutput]) -> str:
+    return "".join([frame async for packet in body for frame in packet.frames])
 
 
 def test_ordinary_client_tool_needs_no_web_or_token_work():

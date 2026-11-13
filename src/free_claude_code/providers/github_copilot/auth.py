@@ -6,7 +6,7 @@ import os
 import tempfile
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -276,7 +276,7 @@ class CopilotAuthManager:
             raise self.account_failure(error, broker, revision) from None
 
     @asynccontextmanager
-    async def lease(self, model_id: str) -> AsyncIterator[AuthenticatedLease]:
+    async def lease(self, model_id: str) -> AsyncGenerator[AuthenticatedLease]:
         broker: CopilotBroker | None = None
         revision = self._revision
         try:

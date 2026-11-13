@@ -18,7 +18,7 @@ from free_claude_code.harnesses.launch import NativeCheck, PreparedLaunch
 from free_claude_code.harnesses.resources import LaunchResources
 
 from .catalog_http import fetch_proxy_model_catalog
-from .common import preflight_proxy, resolve_client_binary, run_client_process
+from .common import ensure_proxy_available, resolve_client_binary, run_client_process
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,11 +114,8 @@ def launch_harness(spec: HarnessSpec, argv: Sequence[str] | None = None) -> None
         if not auth_token:
             raise LaunchError("Free Claude Code proxy authentication token is empty.")
         proxy_root_url = local_proxy_root_url(settings)
-        if error := preflight_proxy(proxy_root_url):
-            raise LaunchError(
-                f"Free Claude Code proxy is not reachable at {proxy_root_url}: {error}\n"
-                "Start it in another terminal with: fcc-server"
-            )
+        if error := ensure_proxy_available(proxy_root_url, env=base_env):
+            raise LaunchError(error)
         catalog = None
         if spec.catalog_view is not None:
             stage = "prepare model catalog"

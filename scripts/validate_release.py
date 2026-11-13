@@ -10,6 +10,11 @@ import zipfile
 from email.parser import BytesParser
 from pathlib import Path
 
+MACOS_TEMPLATES = {
+    f"src/free_claude_code/assets/macos/fcc-desktop-{architecture}"
+    for architecture in ("arm64", "x86_64")
+}
+
 
 def require_files(names: set[str], expected: set[str]) -> None:
     missing = expected - names
@@ -47,6 +52,7 @@ def validate(directory: Path, version: str) -> None:
     sources = set(filter(None, tracked.split("\0")))
     if "src/free_claude_code/__init__.py" not in sources:
         raise ValueError("Missing tracked FCC package sources")
+    sources |= MACOS_TEMPLATES
     with zipfile.ZipFile(wheel_path) as archive:
         wheel = {
             file: archive.read(file)
@@ -73,9 +79,22 @@ def validate(directory: Path, version: str) -> None:
         | {f"{stem}/scripts/update/{script}" for script in updater_names}
         | {
             f"{stem}/{file}"
-            for file in ("pyproject.toml", "README.md", "LICENSE", "PKG-INFO")
+            for file in (
+                "pyproject.toml",
+                "README.md",
+                "LICENSE",
+                "PKG-INFO",
+                "scripts/build_macos_launcher.py",
+                "scripts/macos/launcher.m",
+            )
         },
     )
+    for template in MACOS_TEMPLATES:
+        data = wheel[template.removeprefix("src/")]
+        if not data or data != source[f"{stem}/{template}"]:
+            raise ValueError(
+                f"Native template differs between wheel and sdist: {template}"
+            )
     for data in (wheel[f"{wheel_info}/METADATA"], source[f"{stem}/PKG-INFO"]):
         metadata = BytesParser().parsebytes(data)
         if metadata["Name"] != name or metadata["Version"] != version:

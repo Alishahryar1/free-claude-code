@@ -9,6 +9,8 @@ import subprocess
 from typing import Any
 from urllib.parse import urlsplit
 
+import httpx
+
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.paths import (
     claude_desktop_disconnect_path,
@@ -28,7 +30,10 @@ from free_claude_code.harnesses import (
 from free_claude_code.providers.github_copilot.auth import CopilotAuthManager
 from free_claude_code.providers.openai_codex.auth import saved_connection_state
 from free_claude_code.providers.runtime.config import has_provider_configuration
-from free_claude_code.providers.runtime.discovery import referenced_provider_ids
+from free_claude_code.providers.runtime.discovery import (
+    referenced_provider_ids,
+    safe_discovery_failure_message,
+)
 
 RUNTIME_FIELDS = (
     "host",
@@ -38,15 +43,9 @@ RUNTIME_FIELDS = (
     "provider_rate_limit",
     "provider_rate_window",
     "provider_max_concurrency",
-    "provider_progress_timeout",
     "http_read_timeout",
     "http_write_timeout",
     "http_connect_timeout",
-    "fast_prefix_detection",
-    "enable_network_probe_mock",
-    "enable_title_generation_skip",
-    "enable_suggestion_mode_skip",
-    "enable_filepath_extraction_mock",
     "log_level",
     "log_raw_api_payloads",
     "log_raw_sse_events",
@@ -83,20 +82,6 @@ WEB_FIELDS = (
     "enable_web_server_tools",
     "web_fetch_allowed_schemes",
     "web_fetch_allow_private_networks",
-)
-NIM_FIELDS = (
-    "temperature",
-    "top_p",
-    "top_k",
-    "max_tokens",
-    "presence_penalty",
-    "frequency_penalty",
-    "min_p",
-    "repetition_penalty",
-    "seed",
-    "parallel_tool_calls",
-    "ignore_eos",
-    "min_tokens",
 )
 EXCLUDED_FIELDS = {
     "proxy_auth_token",
@@ -137,7 +122,7 @@ def classified_settings() -> set[str]:
         set(RUNTIME_FIELDS + ROUTING_FIELDS + REASONING_FIELDS + WEB_FIELDS)
         | EXCLUDED_FIELDS
         | URL_FIELDS
-        | {"nim", "vertex_location", "custom_providers"}
+        | {"vertex_location", "custom_providers"}
     )
 
 
@@ -195,7 +180,6 @@ def settings_report(settings: Settings, accounts: dict[str, str]) -> dict[str, A
         }
     runtime = {name: getattr(settings, name) for name in RUNTIME_FIELDS}
     runtime["telegram_proxy"] = _url_summary(settings.telegram_proxy_url)
-    runtime["nim"] = {name: getattr(settings.nim, name) for name in NIM_FIELDS}
     return {
         "providers": providers,
         "runtime": runtime,
@@ -293,6 +277,46 @@ def harness_report() -> dict[str, Any]:
     return result
 
 
+def model_discovery_report(settings: Settings) -> dict[str, Any]:
+    """Read a safe snapshot from an existing local server without refreshing it."""
+    unavailable = {"status": "unavailable", "source": "running_server"}
+    try:
+        url = local_proxy_root_url(settings)
+        if urlsplit(url).hostname not in {"127.0.0.1", "localhost", "::1"}:
+            return unavailable
+        response = httpx.get(
+            f"{url}/admin/api/status",
+            timeout=2.0,
+            trust_env=False,
+            follow_redirects=False,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except httpx.HTTPError, httpx.InvalidURL, ValueError:
+        return unavailable
+    if not isinstance(payload, dict) or payload.get("status") != "running":
+        return unavailable
+    startup = payload.get("startup")
+    if not isinstance(startup, dict):
+        return unavailable
+    states, errors = startup.get("providers"), startup.get("provider_errors")
+    if not isinstance(states, dict) or not isinstance(errors, dict):
+        return unavailable
+    providers = {}
+    for provider_id, state in states.items():
+        if provider_id not in PROVIDER_CATALOG and not re.fullmatch(
+            r"custom_[a-f0-9]{32}", provider_id
+        ):
+            continue
+        if state not in ("starting", "ready", "failed", "unavailable"):
+            continue
+        row = {"state": state}
+        if state == "failed":
+            row["message"] = safe_discovery_failure_message(errors.get(provider_id))
+        providers[provider_id] = row
+    return {"status": "available", "source": "running_server", "providers": providers}
+
+
 def collect_report() -> dict[str, Any]:
     report = {
         "version": package_version(),
@@ -314,6 +338,7 @@ def collect_report() -> dict[str, Any]:
         "web_tools": None,
         "integrations": None,
         "harnesses": {},
+        "model_discovery": {"status": "unavailable", "source": "running_server"},
         "errors": [],
     }
     store = ManagedConfigStore()
@@ -334,6 +359,7 @@ def collect_report() -> dict[str, Any]:
             copilot if copilot in {"connected", "disconnected"} else "unavailable"
         )
         report.update(settings_report(settings, accounts))
+        report["model_discovery"] = model_discovery_report(settings)
         report["integrations"] = integration_report(settings)
         for name, state in accounts.items():
             if state not in {"connected", "disconnected"}:

@@ -3,7 +3,9 @@
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 
+from .history_replay import readable_reasoning
 from .json_types import JsonObject
 
 
@@ -15,12 +17,47 @@ class DeliveredPrefix:
     eligible: bool
     can_handoff: bool
     unsafe_reason: str | None
+    retained_bytes: int = 0
+    continuation: ContinuationSeed | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ContinuationSeed:
-    text: str
-    thinking: str
+    """A snapshot of delivered output in the client's own protocol."""
+
+    wire_api: Literal["messages", "responses", "gemini", "chat"]
+    items: tuple[JsonObject, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "items", deepcopy(self.items))
+
+    def readable_text(self, channel: Literal["text", "thinking"]) -> str:
+        """Read the ordinary text already delivered in the client protocol."""
+        values: list[str] = []
+        for item in self.items:
+            if self.wire_api == "chat":
+                if channel == "text":
+                    values.append(str(item.get("content") or ""))
+                else:
+                    values.extend(text for text, _ in readable_reasoning(item))
+            elif self.wire_api == "messages":
+                if item.get("type") == channel:
+                    values.append(str(item.get(channel) or ""))
+            elif self.wire_api == "gemini":
+                if bool(item.get("thought")) == (channel == "thinking"):
+                    values.append(str(item.get("text") or ""))
+            elif item.get("type") == ("message" if channel == "text" else "reasoning"):
+                for field in (
+                    ("content",) if channel == "text" else ("content", "summary")
+                ):
+                    parts = item.get(field)
+                    if isinstance(parts, list):
+                        values.extend(
+                            str(part.get("text") or "")
+                            for part in parts
+                            if isinstance(part, dict)
+                        )
+        return "".join(values)
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,8 +136,26 @@ def assess_recovery(
         return RecoveryAssessment(RecoveryAction.STOP, reason=reason or "unsafe_prefix")
     if not (prefix.text or prefix.thinking):
         return RecoveryAssessment(RecoveryAction.STOP, reason="empty_prefix")
+    if prefix.continuation is None:
+        return RecoveryAssessment(RecoveryAction.STOP, reason="missing_native_prefix")
     return RecoveryAssessment(
         RecoveryAction.CONTINUE,
-        ContinuationSeed(prefix.text, prefix.thinking),
+        prefix.continuation,
         reason="portable_prefix",
     )
+
+
+@dataclass(frozen=True, slots=True)
+class CompletedCall:
+    protocol: Literal["messages", "responses", "chat", "gemini"]
+    position: tuple[int, ...]
+    call_id: str | None
+    item_id: str | None = None
+
+    @property
+    def identity(self) -> tuple[object, ...]:
+        if self.protocol == "responses" and self.item_id is not None:
+            return self.protocol, self.item_id
+        if self.protocol in {"messages", "gemini"} and self.call_id is not None:
+            return self.protocol, self.call_id
+        return self.protocol, self.position, self.call_id

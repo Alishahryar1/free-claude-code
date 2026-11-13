@@ -11,6 +11,7 @@ from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.history_replay import ReplayOrigin, decode_replay
 from free_claude_code.core.openai_responses.chat_request import (
     build_responses_chat_request,
 )
@@ -22,13 +23,15 @@ from free_claude_code.core.openai_responses.provider_stream import (
     ResponsesProviderStream,
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.providers.gemini import GeminiProvider
+from free_claude_code.core.stream_output import StreamOutput
+from free_claude_code.providers.google_openai import GoogleOpenAIProvider
 from free_claude_code.providers.openai_chat.reasoning_details import (
     StructuredReasoningStream,
 )
 from free_claude_code.providers.openai_chat.stream_output import (
     AnthropicChatStreamOutput,
 )
+from free_claude_code.providers.vertex.client import _PROFILE as GOOGLE_PROFILE
 from tests.api.test_hidden_stream_retries import delivered
 from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_history_transports import (
@@ -65,8 +68,9 @@ async def test_plain_reasoning_emits_no_artificial_replay_state(wire, thinking):
     async with _harness("chat", lambda _: (200, upstream)) as (send, _, _):
         stream = "".join(
             [
-                chunk
+                frame
                 async for chunk in send(wire, [{"role": "user", "content": "hello"}])
+                for frame in chunk.frames
             ]
         )
     assert "fcc:history:" not in stream
@@ -75,9 +79,9 @@ async def test_plain_reasoning_emits_no_artificial_replay_state(wire, thinking):
         starts = [
             event.data for event in events if event.event == "content_block_start"
         ]
-        assert [event["content_block"]["type"] for event in starts] == ["text"] + (
+        assert [event["content_block"]["type"] for event in starts] == (
             ["thinking"] if thinking else []
-        )
+        ) + ["text"]
         stops = [
             event.data["index"]
             for event in events
@@ -90,9 +94,9 @@ async def test_plain_reasoning_emits_no_artificial_replay_state(wire, thinking):
         )
     else:
         output = events[-1].data["response"]["output"]
-        assert [item["type"] for item in output] == ["message"] + (
+        assert [item["type"] for item in output] == (
             ["reasoning"] if thinking else []
-        )
+        ) + ["message"]
         assert all(not item.get("encrypted_content") for item in output)
 
 
@@ -124,8 +128,9 @@ async def test_late_opaque_metadata_finishes_before_answer(wire):
     async with _harness("chat", lambda _: (200, upstream)) as (send, _, _):
         stream = "".join(
             [
-                chunk
+                frame
                 async for chunk in send(wire, [{"role": "user", "content": "hello"}])
+                for frame in chunk.frames
             ]
         )
     assert "fcc:history:" not in stream
@@ -200,10 +205,11 @@ async def test_google_message_signature_round_trips_in_its_native_field(
         upstream.reverse()
 
     def factory():
-        return GeminiProvider(
+        return GoogleOpenAIProvider(
             make_provider_config(
                 api_key="test-key", base_url="https://provider.invalid/v1"
             ),
+            profile=GOOGLE_PROFILE,
             admission=immediate_admission(),
         )
 
@@ -255,10 +261,11 @@ async def test_interrupted_opaque_only_state_keeps_hidden_retry_eligible(
             await asyncio.sleep(0.9)
 
     def factory():
-        return GeminiProvider(
+        return GoogleOpenAIProvider(
             make_provider_config(
                 api_key="test-key", base_url="https://provider.invalid/v1"
             ),
+            profile=GOOGLE_PROFILE,
             admission=immediate_admission(max_attempts=2),
         )
 
@@ -362,10 +369,11 @@ async def test_responses_late_cipher_preserves_thinking_and_final_answer():
     async with _harness("responses", lambda _: (200, upstream)) as (send, _, _):
         stream = "".join(
             [
-                chunk
+                frame
                 async for chunk in send(
                     "messages", [{"role": "user", "content": "hello"}]
                 )
+                for frame in chunk.frames
             ]
         )
     events = parse_sse_text(stream)
@@ -377,7 +385,7 @@ async def test_responses_late_cipher_preserves_thinking_and_final_answer():
         event.data["index"] for event in events if event.event == "content_block_stop"
     ][-1] == text_index
     assert [
-        event.data["delta"]["signature"]
+        decode_replay(event.data["delta"]["signature"]).native["encrypted_content"]
         for event in events
         if event.data.get("delta", {}).get("type") == "signature_delta"
     ] == ["opaque-original"]
@@ -450,7 +458,7 @@ async def test_hiding_readable_thinking_preserves_opaque_replay_state(wire):
                 input_tokens=0,
                 reasoning=ReasoningPolicy.off(),
             )
-        output = "".join([chunk async for chunk in stream])
+        output = "".join([frame async for chunk in stream for frame in chunk.frames])
     assert "Hidden thought." not in output
     assert "opaque-kept" in output
 
@@ -503,7 +511,10 @@ def test_responses_summary_maps_to_structured_chat_summary():
 
 def test_existing_responses_tool_delta_does_not_close_final_text():
     stream = ResponsesProviderStream(
-        message_id="msg_test", model="native", input_tokens=1
+        origin=ReplayOrigin("test", "responses", "", "", "m"),
+        message_id="msg_test",
+        model="native",
+        input_tokens=1,
     )
     frames = stream.start()
     frames += stream.feed(
@@ -681,11 +692,12 @@ async def test_completed_full_reasoning_survives_streamed_summary(answer_before_
         frames = [
             frame
             async for frame in send("messages", [{"role": "user", "content": "hello"}])
+            for frame in frame.frames
         ]
 
         async def saved_frames():
             for frame in frames:
-                yield frame
+                yield StreamOutput((frame,))
 
         saved = await _saved_reply(saved_frames(), "messages")
         await _saved_reply(
@@ -713,7 +725,10 @@ async def test_completed_full_reasoning_survives_streamed_summary(answer_before_
 @pytest.mark.parametrize("summary", [False, True])
 def test_responses_seeded_reasoning_and_fragments_are_completed_once(summary):
     stream = ResponsesProviderStream(
-        message_id="msg_test", model="native", input_tokens=1
+        origin=ReplayOrigin("test", "responses", "", "", "m"),
+        message_id="msg_test",
+        model="native",
+        input_tokens=1,
     )
     field = "summary" if summary else "content"
     part = "summary_text" if summary else "reasoning_text"

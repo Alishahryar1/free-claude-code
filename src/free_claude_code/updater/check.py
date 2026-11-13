@@ -1,34 +1,49 @@
 """Standalone version preflight for the native update launchers."""
 
+import argparse
+import re
 import sys
 from importlib.metadata import PackageNotFoundError, version
 
 import httpx
 from packaging.version import Version
 
-PYPI_URL = "https://pypi.org/pypi/free-claude-code/json"
+RELEASE_URL = "https://github.com/Alishahryar1/free-claude-code/releases/"
+PYPI_URL = "https://pypi.org/pypi/free-claude-code/{version}/json"
 UPDATE_AVAILABLE = 10
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """Return 10 to authorize installation, 0 to skip, or 1 on check failure."""
+    parser = argparse.ArgumentParser(prog="_fcc-update-check")
+    parser.add_argument("--print-version", action="store_true")
+    arguments = parser.parse_args(argv)
     try:
         installed = Version(version("free-claude-code"))
         if str(installed) == "0+unknown":
             raise ValueError("installed FCC version is unknown")
-        with httpx.Client(timeout=10.0) as client:
-            response = client.get(PYPI_URL)
+        with httpx.Client(
+            timeout=10.0, follow_redirects=True, max_redirects=5
+        ) as client:
+            response = client.get(RELEASE_URL + "latest")
+            response.raise_for_status()
+            selected = re.fullmatch(
+                re.escape(RELEASE_URL)
+                + r"tag/v((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))",
+                str(response.url),
+            )
+            if selected is None:
+                raise ValueError("GitHub did not return a canonical FCC release URL")
+            published = selected[1]
+            response = client.get(PYPI_URL.format(version=published))
             response.raise_for_status()
             metadata = response.json()
-        latest = Version(metadata["info"]["version"])
+        if metadata["info"]["version"] != published:
+            raise ValueError("PyPI metadata does not match the selected FCC release")
+        latest = Version(published)
         files = metadata["urls"]
-        if (
-            latest.is_prerelease
-            or latest.is_devrelease
-            or not isinstance(files, list)
-            or not any(
-                isinstance(file, dict) and file.get("yanked") is False for file in files
-            )
+        if not isinstance(files, list) or not any(
+            isinstance(file, dict) and file.get("yanked") is False for file in files
         ):
             raise ValueError("PyPI did not return an available stable FCC release")
     except (
@@ -41,13 +56,20 @@ def main() -> int:
         print(f"Could not check for FCC updates: {exc}. Please retry.", file=sys.stderr)
         return 1
 
+    output = sys.stderr if arguments.print_version else sys.stdout
     if installed == latest:
-        print(f"FCC {installed} is already up to date.")
+        print(f"FCC {installed} is already up to date.", file=output)
         return 0
     if installed > latest:
         print(
-            f"FCC {installed} is newer than the published version {latest}. No update needed."
+            f"FCC {installed} is newer than the published version {latest}. No update needed.",
+            file=output,
         )
         return 0
-    print(f"FCC update available: {installed} -> {latest}. Running the installer.")
+    print(
+        f"FCC update available: {installed} -> {latest}. Running the installer.",
+        file=output,
+    )
+    if arguments.print_version:
+        print(published)
     return UPDATE_AVAILABLE

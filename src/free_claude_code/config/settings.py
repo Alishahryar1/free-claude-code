@@ -16,7 +16,6 @@ from .api_keys import ApiKeyList
 from .constants import DEFAULT_MODEL, HTTP_CONNECT_TIMEOUT_DEFAULT
 from .custom_providers import CustomProviderDefinition, decode_custom_providers
 from .model_refs import ModelFallback, ModelFallbacks
-from .nim import NimSettings
 from .provider_catalog import (
     BEDROCK_DEFAULT_BASE,
     PROVIDER_CATALOG,
@@ -58,6 +57,7 @@ class Settings(BaseModel):
     """Validated application settings with no file or process I/O."""
 
     model_config = ConfigDict(
+        frozen=True,
         validate_default=True,
         populate_by_name=True,
         extra="ignore",
@@ -616,15 +616,6 @@ class Settings(BaseModel):
     provider_max_concurrency: int = Field(
         default=2, gt=0, validation_alias="PROVIDER_MAX_CONCURRENCY"
     )
-    provider_progress_timeout: float = Field(
-        default=600.0,
-        gt=0,
-        # Responses metadata adds 60 seconds before encoding this as a u64.
-        # The next representable float below 2**64 leaves more than that margin.
-        lt=float(1 << 64),
-        allow_inf_nan=False,
-        validation_alias="PROVIDER_PROGRESS_TIMEOUT",
-    )
     reasoning_policy: ReasoningPreference = Field(
         default=ReasoningPreference.CLIENT,
         validation_alias="REASONING_POLICY",
@@ -651,35 +642,11 @@ class Settings(BaseModel):
         default=120.0, validation_alias="HTTP_READ_TIMEOUT"
     )
     http_write_timeout: float = Field(
-        default=10.0, validation_alias="HTTP_WRITE_TIMEOUT"
+        default=30.0, validation_alias="HTTP_WRITE_TIMEOUT"
     )
     http_connect_timeout: float = Field(
         default=HTTP_CONNECT_TIMEOUT_DEFAULT,
         validation_alias="HTTP_CONNECT_TIMEOUT",
-    )
-
-    # ==================== Fast Prefix Detection ====================
-    fast_prefix_detection: bool = Field(
-        default=True,
-        validation_alias="FAST_PREFIX_DETECTION",
-    )
-
-    # ==================== Optimizations ====================
-    enable_network_probe_mock: bool = Field(
-        default=True,
-        validation_alias="ENABLE_NETWORK_PROBE_MOCK",
-    )
-    enable_title_generation_skip: bool = Field(
-        default=True,
-        validation_alias="ENABLE_TITLE_GENERATION_SKIP",
-    )
-    enable_suggestion_mode_skip: bool = Field(
-        default=True,
-        validation_alias="ENABLE_SUGGESTION_MODE_SKIP",
-    )
-    enable_filepath_extraction_mock: bool = Field(
-        default=True,
-        validation_alias="ENABLE_FILEPATH_EXTRACTION_MOCK",
     )
 
     # ==================== Local web server tools (web_search / web_fetch) ====================
@@ -728,9 +695,6 @@ class Settings(BaseModel):
     debug_subagent_stack: bool = Field(
         default=False, validation_alias="DEBUG_SUBAGENT_STACK"
     )
-
-    # ==================== NIM Settings ====================
-    nim: NimSettings = Field(default_factory=NimSettings)
 
     # ==================== Voice Note Transcription ====================
     voice_note_enabled: bool = Field(

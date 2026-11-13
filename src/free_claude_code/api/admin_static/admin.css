@@ -361,7 +361,8 @@ button.startup-busy::before,
 .provider-dialog .field-grid { grid-template-columns: minmax(0, 1fr); }
 .provider-dialog .field.advanced-field { display: flex; }
 .provider-dialog .provider-actions:not(:empty),
-.provider-dialog .provider-check-result:not([hidden]) { margin-bottom: 20px; }
+.provider-dialog .provider-check-result:not([hidden]),
+.provider-dialog .provider-availability-result:not([hidden]) { margin-bottom: 20px; }
 .provider-dialog .message-area:empty { display: none; }
 .provider-dialog-footer { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; }
 
@@ -411,24 +412,28 @@ button.startup-busy::before,
   overflow-wrap: anywhere;
 }
 
-.provider-check-result {
+.provider-check-result,
+.provider-availability-result {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
 
-.provider-check-result.ok {
+.provider-check-result.ok,
+.provider-availability-result.ok {
   color: var(--ok);
 }
 
-.provider-check-result.error {
+.provider-check-result.error,
+.provider-availability-result.error {
   color: var(--error);
 }
 
 .provider-meta.error { color: var(--error); }
 
-.provider-check-result.checking {
+.provider-check-result.checking,
+.provider-availability-result.checking {
   color: var(--info);
 }
 

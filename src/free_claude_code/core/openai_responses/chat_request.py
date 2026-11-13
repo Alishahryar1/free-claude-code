@@ -12,6 +12,7 @@ from free_claude_code.core.history_replay import (
     readable_reasoning,
     reasoning_detail,
     tool_history_context,
+    unprotected_replay,
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_chat import (
@@ -55,7 +56,6 @@ class ResponsesChatRequest:
 
     body: dict[str, object]
     tool_names: OpenAIToolNameCodec
-    tool_schemas: dict[str, JsonObject]
     reserved_tool_ids: frozenset[str]
     tool_adapter: ResponsesToolAdapter
 
@@ -209,8 +209,6 @@ class _ResponsesChatInputBuilder:
                 "function": {"name": name, "arguments": arguments},
             }
         )
-        if self._reasoning_replay is ReasoningReplayMode.REASONING_CONTENT:
-            message.setdefault("reasoning_content", "")
 
     def _add_tool_output(
         self, item: Mapping[str, JsonValue], *, source_type: str | None
@@ -303,6 +301,13 @@ class _ResponsesChatInputBuilder:
         details: list[JsonValue] = []
         for item in self._pending_reasoning.take():
             encrypted = encrypted_reasoning_from_item(item)
+            unsigned = unprotected_replay(encrypted)
+            if unsigned is not None or not encrypted:
+                for text, _ in readable_reasoning(
+                    unsigned.native if unsigned else item
+                ):
+                    _apply_reasoning_text(message, text, self._reasoning_replay)
+                continue
             if encrypted and has_readable_replay(encrypted):
                 details.extend(reasoning_detail(encrypted))
                 continue
@@ -342,7 +347,7 @@ class _ResponsesChatInputBuilder:
                     continue
                 if self._structured_reasoning_details:
                     details.append({"type": "reasoning.summary", "summary": text})
-                else:
+                elif encrypted:
                     contexts.append(text)
             if encrypted and not signed:
                 details.extend(reasoning_detail(encrypted))
@@ -432,14 +437,12 @@ def build_responses_chat_request(
     if response_format := _chat_response_format(extra.get("text")):
         body["response_format"] = response_format
 
-    tool_schemas = _body_tool_schemas(body)
     reserved_tool_ids = frozenset(_body_tool_call_ids(body))
     tool_names = OpenAIToolNameCodec.from_names(_body_tool_names(body))
     builder.encode_discovery_outputs(tool_names)
     return ResponsesChatRequest(
         body=body,
         tool_names=tool_names,
-        tool_schemas=tool_schemas,
         reserved_tool_ids=reserved_tool_ids,
         tool_adapter=adapter,
     )
@@ -572,22 +575,13 @@ def _rich_function_output_parts(
 def _apply_reasoning_text(
     message: dict[str, object], text: str, mode: ReasoningReplayMode
 ) -> None:
-    if mode in {ReasoningReplayMode.REASONING_CONTENT, ReasoningReplayMode.REASONING}:
-        previous = message.get(mode.value)
-        message[mode.value] = combine_reasoning(
-            previous if isinstance(previous, str) else None, text
-        )
-        return
-    replay = (
-        f"<think>\n{text}\n</think>" if mode is ReasoningReplayMode.THINK_TAGS else text
+    field = (
+        "reasoning" if mode is ReasoningReplayMode.REASONING else "reasoning_content"
     )
-    if not replay:
-        return
-    content = message.get("content")
-    if isinstance(content, str) and content:
-        message["content"] = f"{replay}\n\n{content}"
-    else:
-        message["content"] = replay
+    previous = message.get(field)
+    message[field] = combine_reasoning(
+        previous if isinstance(previous, str) else None, text
+    )
 
 
 def _chat_tools(
@@ -715,24 +709,6 @@ def _body_tool_names(body: Mapping[str, object]) -> list[str]:
         if isinstance(function, Mapping) and isinstance(function.get("name"), str):
             names.append(function["name"])
     return names
-
-
-def _body_tool_schemas(body: Mapping[str, object]) -> dict[str, JsonObject]:
-    schemas: dict[str, JsonObject] = {}
-    tools = body.get("tools")
-    if not isinstance(tools, list):
-        return schemas
-    for tool in tools:
-        if not isinstance(tool, Mapping):
-            continue
-        function = tool.get("function")
-        if not isinstance(function, Mapping):
-            continue
-        name = function.get("name")
-        parameters = function.get("parameters")
-        if isinstance(name, str) and isinstance(parameters, Mapping):
-            schemas[name] = dict(parameters)
-    return schemas
 
 
 def _body_tool_call_ids(body: Mapping[str, object]) -> list[str]:

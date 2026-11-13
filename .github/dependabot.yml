@@ -3,12 +3,14 @@ updates:
   - package-ecosystem: "uv"
     directory: "/"
     versioning-strategy: increase
+    commit-message:
+      prefix: "patch"
     schedule:
-      interval: "weekly"
+      interval: "daily"
     groups:
-      minor-and-patch:
-        update-types: ["minor", "patch"]
+      dependencies:
+        patterns: ["*"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "daily"

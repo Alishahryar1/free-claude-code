@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from free_claude_code.config.paths import claude_desktop_disconnect_path
+from free_claude_code.core.gateway_model_ids import desktop_model_id
 from free_claude_code.harnesses import claude_desktop_integration as desktop
 from free_claude_code.harnesses.claude_desktop_integration import (
     check_unmanaged,
@@ -170,6 +171,8 @@ def test_fresh_connection_and_disconnect_preserve_native_library(tmp_path):
     assert read(meta(root))["appliedId"] == desktop.FCC_ID
     assert read(mode(root))["deploymentMode"] == "3p"
     assert read(profile(root))["inferenceGatewayApiKey"] == TOKEN
+    assert read(profile(root))["modelDiscoveryEnabled"] is True
+    assert "inferenceModels" not in read(profile(root))
     assert read(profile(root))["coworkEgressAllowedHosts"] == ["*"]
     before = {p: p.read_bytes() for p in root.rglob("*.json")}
     assert (
@@ -237,16 +240,71 @@ def test_connection_defaults_missing_egress_and_preserves_explicit_policy(
     assert not desktop.refresh_connected(tmp_path, URL, TOKEN, disconnect_path=record)
 
 
+@pytest.mark.parametrize("reconnect", [False, True])
+@pytest.mark.parametrize(
+    "models",
+    [
+        [desktop_model_id("nvidia_nim/one"), desktop_model_id("nvidia_nim/two")],
+        [
+            {
+                "name": desktop_model_id("nvidia_nim/two"),
+                "labelOverride": "Preferred model",
+                "maxEffort": "high",
+            },
+            {"name": desktop_model_id("nvidia_nim/one")},
+        ],
+    ],
+)
+def test_model_override_survives_refresh_and_connect(tmp_path, reconnect, models):
+    record = claude_desktop_disconnect_path()
+    desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
+    config = read(profile(tmp_path))
+    config["inferenceModels"] = models
+    write(profile(tmp_path), config)
+    before = profile(tmp_path).read_bytes(), profile(tmp_path).stat().st_mtime_ns
+
+    assert desktop.configure(tmp_path, URL, TOKEN, disconnect_path=record)["connected"]
+    if reconnect:
+        assert desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)[
+            "connected"
+        ]
+    else:
+        assert not desktop.refresh_connected(
+            tmp_path, URL, TOKEN, disconnect_path=record
+        )
+
+    assert read(profile(tmp_path))["inferenceModels"] == models
+    assert (
+        profile(tmp_path).read_bytes(),
+        profile(tmp_path).stat().st_mtime_ns,
+    ) == before
+    config.pop("inferenceModels")
+    write(profile(tmp_path), config)
+    assert not desktop.refresh_connected(tmp_path, URL, TOKEN, disconnect_path=record)
+    assert "inferenceModels" not in read(profile(tmp_path))
+
+
 def test_refresh_rotates_credentials_without_reactivating(tmp_path):
     desktop.configure(
         tmp_path, URL, TOKEN, True, disconnect_path=claude_desktop_disconnect_path()
     )
+    config = read(profile(tmp_path))
+    models = [
+        {"name": desktop_model_id("nvidia_nim/two"), "labelOverride": "Preferred"},
+        {"name": desktop_model_id("nvidia_nim/one"), "maxEffort": "high"},
+    ]
+    config["inferenceModels"] = models
+    write(profile(tmp_path), config)
     assert desktop.refresh_connected(
         tmp_path,
         "http://localhost:9000",
         "new-token",
         disconnect_path=claude_desktop_disconnect_path(),
     )
+    refreshed = read(profile(tmp_path))
+    assert refreshed["inferenceModels"] == models
+    assert refreshed["inferenceGatewayBaseUrl"] == "http://localhost:9000"
+    assert refreshed["inferenceGatewayApiKey"] == "new-token"
     assert desktop.configure(
         tmp_path,
         "http://localhost:9000",
@@ -382,7 +440,7 @@ def test_other_profiles_and_unknown_settings_are_preserved(tmp_path):
     )
     assert read(profile(tmp_path))["keep"] is True
     assert read(profile(tmp_path))["inferenceCustomHeaders"]["X-Other"] == "value"
-    assert "inferenceModels" not in read(profile(tmp_path))
+    assert read(profile(tmp_path))["inferenceModels"] == config["inferenceModels"]
     metadata = read(meta(tmp_path))
     metadata["appliedId"] = other
     metadata["hybridPointer"] = {"bootstrapUrl": "https://example.test"}

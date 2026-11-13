@@ -19,6 +19,7 @@ from free_claude_code.core.history_replay import (
     ReplayRecord,
     decode_replay,
     encode_replay,
+    readable_reasoning,
     resolve_messages_replay,
 )
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -30,7 +31,11 @@ from tests.application.test_execution import (
     _routed_request,
     _target,
 )
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    without_empty_reasoning,
+)
 from tests.providers.test_anthropic_messages_transport import Endpoint, _events
 from tests.providers.test_anthropic_messages_transport import (
     _transport as messages_transport,
@@ -229,12 +234,60 @@ async def _harness(
 
 
 async def _saved_reply(stream, wire):
+    from free_claude_code.application.response_collection import collected_frames
+
+    stream = collected_frames(stream, protocol=wire)
     if wire == "messages":
         message, error, saw_stop = await aggregate_anthropic_sse_to_message(stream)
         assert error is None and saw_stop
         return [{"role": "assistant", "content": message["content"]}]
     events = parse_sse_text("".join([event async for event in stream]))
     return events[-1].data["response"]["output"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("opaque_only", [False, True])
+async def test_responses_messages_roundtrip_preserves_bound_reasoning(opaque_only):
+    native = [
+        {
+            "type": "reasoning",
+            "id": f"rs_original_{i}",
+            "summary": []
+            if opaque_only
+            else [{"type": "summary_text", "text": f"Plan {i}."}],
+            "content": [],
+            "encrypted_content": f"cipher-bound-to-original-{i}",
+        }
+        for i in range(2)
+    ]
+    completed = _completed_response(model="requested")
+    completed["output"] = native
+    events = [
+        {"type": "response.created", "response": {**completed, "output": []}},
+        *[
+            {"type": "response.output_item.done", "output_index": i, "item": item}
+            for i, item in enumerate(native)
+        ],
+        {"type": "response.completed", "response": completed},
+    ]
+
+    def responder(bodies):
+        if len(bodies) > 1:
+            replayed = [x for x in bodies[-1]["input"] if x.get("type") == "reasoning"]
+            assert replayed == native
+        return 200, events
+
+    async with _harness("responses", responder) as (send, bodies, _):
+        saved = await _saved_reply(
+            send("messages", [{"role": "user", "content": "hello"}]), "messages"
+        )
+        history = json.loads(
+            json.dumps([*saved, {"role": "user", "content": "continue"}])
+        )
+        original = deepcopy(history)
+        await _saved_reply(send("messages", history), "messages")
+        assert history == original
+        assert len(bodies) == 2
 
 
 def _carrier(history, wire):
@@ -251,6 +304,68 @@ def _carrier(history, wire):
         and block["type"] in {"thinking", "redacted_thinking"}
         and block.get("signature", block.get("data"))
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_attempts", [2, 5])
+async def test_old_raw_thinking_recovers_named_rejections_within_budget(max_attempts):
+    history = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "Keep first context",
+                    "signature": "old-first",
+                },
+                {
+                    "type": "thinking",
+                    "thinking": "Keep second context",
+                    "signature": "old-second",
+                },
+                {"type": "text", "text": "Keep answer"},
+            ],
+        },
+        {"role": "user", "content": "continue"},
+    ]
+    original = deepcopy(history)
+
+    def responder(bodies):
+        body = bodies[-1]
+        items = [
+            x
+            for x in without_empty_reasoning(body["input"])
+            if x.get("type") == "reasoning"
+        ]
+        for item in items:
+            assert "content" not in item
+        for text in ("Keep first context", "Keep second context", "Keep answer"):
+            assert json.dumps(body).count(text) == 1
+        if items:
+            return 400, {
+                "code": "invalid_encrypted_content",
+                "param": None,
+                "message": f"The encrypted content for item {items[0]['id']} could not be verified. Reason: Encrypted content item_id did not match the target item id.",
+            }
+        return 200, _events_for("responses")
+
+    async with _harness("responses", responder, max_attempts=max_attempts) as (
+        send,
+        bodies,
+        _,
+    ):
+        if max_attempts == 2:
+            with pytest.raises(ExecutionFailure):
+                await _saved_reply(send("messages", history), "messages")
+        else:
+            await _saved_reply(send("messages", history), "messages")
+        assert len(bodies) == min(max_attempts, 3)
+        assert [
+            x["encrypted_content"]
+            for x in bodies[1]["input"]
+            if x.get("type") == "reasoning"
+        ] == ["old-second"]
+        assert history == original
 
 
 @pytest.mark.asyncio
@@ -354,7 +469,7 @@ async def test_legacy_responses_id_then_cipher_rejection_recovers_without_changi
         assert len(bodies) == 3
         assert ":" not in bodies[1]["input"][0]["id"]
         assert bodies[1]["input"][0]["encrypted_content"] == "opaque-original"
-        assert bodies[2]["input"][0] == {
+        assert without_empty_reasoning(bodies[2]["input"])[0] == {
             "role": "assistant",
             "content": "Find 17.",
         }
@@ -400,7 +515,7 @@ async def test_explicit_legacy_rejection_corrects_only_history_before_commit(pro
 async def test_stream_history_rejection_respects_the_public_commit_boundary(
     protocol, committed
 ):
-    visible = "already visible " * 5000  # Exceeds the existing holdback budget.
+    visible = "already visible"
     error = {
         "code": "invalid_signature"
         if protocol == "messages"
@@ -452,11 +567,15 @@ async def test_stream_history_rejection_respects_the_public_commit_boundary(
     ]
     async with _harness(protocol, responder) as (send, bodies, _):
         if committed:
-            output = ""
-            with pytest.raises(ExecutionFailure):
-                async for event in send("messages", history):
-                    output += event
+            from tests.api.test_tool_call_buffer import _response
+
+            response = await _response("messages", send("messages", history))
+            try:
+                output = "".join([str(chunk) async for chunk in response.body_iterator])
+            finally:
+                await response.aclose()
             assert visible in output
+            assert any(event.event == "error" for event in parse_sse_text(output))
             assert len(bodies) == 1
         else:
             await _saved_reply(send("messages", history), "messages")
@@ -505,7 +624,6 @@ async def test_successful_fallback_preserves_raw_state_and_gets_unmodified_input
                 primary if name == "provider" else provider
             )
         ),
-        progress_timeout_seconds=10,
     )
     try:
         saved = await _saved_reply(
@@ -721,7 +839,7 @@ async def test_chat_encrypted_only_completion_does_not_add_blank_text(wire):
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("committed", [False, True])
 async def test_chat_pending_reasoning_is_discarded_on_failure_or_retry(wire, committed):
-    text = "Plan." * (30000 if committed else 1)
+    text = "Plan."
     first = {"type": "reasoning.encrypted", "data": "first", "index": 0}
     second = {"type": "reasoning.encrypted", "data": "second", "index": 1}
     readable = (
@@ -750,11 +868,14 @@ async def test_chat_pending_reasoning_is_discarded_on_failure_or_retry(wire, com
             assert len(bodies) == 2
             assert _carrier(saved, wire) == "opaque-original"
             return
+        from tests.api.test_tool_call_buffer import _response
+
+        response = await _response(wire, stream)
+        try:
+            output = "".join([str(chunk) async for chunk in response.body_iterator])
+        finally:
+            await response.aclose()
         if wire == "messages":
-            output = ""
-            with pytest.raises(ExecutionFailure):
-                async for frame in stream:
-                    output += frame
 
             async def replay_frames():
                 yield output
@@ -765,10 +886,9 @@ async def test_chat_pending_reasoning_is_discarded_on_failure_or_retry(wire, com
             assert not saw_stop
             saved = [{"role": "assistant", "content": message["content"]}]
         else:
-            frames = [frame async for frame in stream]
-            response = parse_sse_text("".join(frames))[-1].data["response"]
-            assert response["status"] == "failed"
-            saved = response["output"]
+            final = parse_sse_text(output)[-1].data["response"]
+            assert final["status"] == "failed"
+            saved = final["output"]
         assert len(bodies) == 1
         assert text in json.dumps(saved)
         assert "first" not in json.dumps(saved)
@@ -867,6 +987,48 @@ async def test_chat_summary_fragments_remain_readable_in_native_fields(wire, enc
         await _saved_reply(source(wire, history), wire)
         assert json.dumps(sent[-1]).count("Short summary.") == 1
         assert json.dumps(sent[-1]).count("opaque-only") == int(encrypted)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("independent_signed", [False, True])
+async def test_scalar_first_summary_keeps_text_once_without_capturing_other_records(
+    wire, independent_signed
+):
+    details = [
+        {"type": "reasoning.summary", "summary": "Short summary.", "index": 0},
+        {
+            "type": "reasoning.text",
+            "text": "Independent thought.",
+            "index": 1,
+            **({"signature": "independent-signature"} if independent_signed else {}),
+        },
+        {"type": "reasoning.summary", "summary": "Another summary.", "index": 2},
+    ]
+    events = _chat_reasoning_events(
+        [{"reasoning_content": "Short summary."}, {"reasoning_details": details}]
+    )
+    async with _harness("chat", lambda _: (200, events)) as (send, bodies, _):
+        saved = await _saved_reply(
+            send(wire, [{"role": "user", "content": "hello"}]), wire
+        )
+        history = [*saved, {"role": "user", "content": "next"}]
+        original = deepcopy(history)
+        await _saved_reply(send(wire, history), wire)
+    parts = [
+        part
+        for message in bodies[-1]["messages"]
+        for part in readable_reasoning(message)
+    ]
+    text = "".join(text for text, _ in parts)
+    assert all(
+        text.count(value) == 1
+        for value in ("Short summary.", "Another summary.", "Independent thought.")
+    )
+    assert json.dumps(bodies[-1]).count("independent-signature") == int(
+        independent_signed
+    )
+    assert history == original
 
 
 @pytest.mark.asyncio

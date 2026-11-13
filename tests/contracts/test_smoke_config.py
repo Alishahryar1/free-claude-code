@@ -881,14 +881,13 @@ def test_azure_openai_provider_configuration_requires_key_and_resource_url(
     monkeypatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_AZURE_OPENAI", raising=False)
-    config = _smoke_config(
-        settings=_settings(
-            model="ollama/llama3.1",
-            ollama_base_url="",
-            azure_openai_api_keys="azure-key",
-            azure_openai_base_url=("https://resource.openai.azure.com/openai/v1/"),
-        )
+    settings = _settings(
+        model="ollama/llama3.1",
+        ollama_base_url="",
+        azure_openai_api_keys="azure-key",
+        azure_openai_base_url="https://resource.openai.azure.com/openai/v1/",
     )
+    config = _smoke_config(settings=settings)
 
     assert config.has_provider_configuration("azure_openai")
     models = config.provider_smoke_models()
@@ -896,7 +895,7 @@ def test_azure_openai_provider_configuration_requires_key_and_resource_url(
     assert models[0].full_model == "azure_openai/gpt-5.1"
     assert models[0].source == "provider_default"
 
-    config.settings.azure_openai_base_url = ""
+    settings.azure_openai_base_url = ""
     assert not config.has_provider_configuration("azure_openai")
 
 
@@ -1230,8 +1229,8 @@ def test_nvidia_nim_cli_default_models_are_normalized() -> None:
     assert tuple(refs) == (
         "nvidia_nim/nvidia/nemotron-3.5-lightning-30b-a3b",
         "nvidia_nim/moonshotai/kimi-k3",
-        "nvidia_nim/minimaxai/minimax-m3",
-        "nvidia_nim/nvidia/nemotron-3-super-120b-a12b",
+        "nvidia_nim/minimaxai/minimax-m3.1-flash",
+        "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b",
     )
     assert set(refs.values()) == {"nvidia_nim_cli_default"}
 

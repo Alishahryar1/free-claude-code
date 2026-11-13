@@ -2,7 +2,7 @@
 
 import asyncio
 import time
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from types import MappingProxyType
@@ -196,7 +196,7 @@ class CopilotBroker:
             return self._models
 
     @asynccontextmanager
-    async def lease(self, model_id: str) -> AsyncIterator[CopilotLease]:
+    async def lease(self, model_id: str) -> AsyncGenerator[CopilotLease]:
         await self.snapshot()
         async with self._condition:
             if self._closing:

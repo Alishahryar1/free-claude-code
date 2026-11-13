@@ -1,17 +1,17 @@
 """Local FCC transport must never escape through an outbound proxy."""
 
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from free_claude_code.cli.launchers.common import preflight_proxy
+from free_claude_code.cli.launchers.common import ensure_proxy_available
 
 
 @contextmanager
-def _status_server(status_code: int) -> Iterator[tuple[str, list[str]]]:
+def _status_server(status_code: int) -> Generator[tuple[str, list[str]]]:
     hits: list[str] = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -44,7 +44,7 @@ def test_proxy_preflight_connects_directly_when_http_proxy_is_configured(
         monkeypatch.delenv("no_proxy", raising=False)
 
         with _status_server(200) as (fcc_url, fcc_hits):
-            assert preflight_proxy(fcc_url) is None
+            assert ensure_proxy_available(fcc_url, env={}) is None
 
     assert fcc_hits == ["/health"]
     assert forward_proxy_hits == []

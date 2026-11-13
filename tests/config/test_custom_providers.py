@@ -76,3 +76,21 @@ def test_duplicate_names_and_missing_route_targets_are_rejected():
 def test_format_and_reasoning_must_match():
     with pytest.raises(ValidationError):
         definition(api_format="anthropic_messages", reasoning_format="openai_effort")
+
+
+@pytest.mark.parametrize("saved", ["disabled", "think_tags"])
+def test_saved_chat_prose_formats_normalize_without_mutating_input(saved):
+    payload = {
+        "provider_id": ID,
+        "display_name": "Legacy",
+        "base_url": "https://gateway.test/v1",
+        "reasoning_history_format": saved,
+    }
+    parsed = CustomProviderDefinition.model_validate(payload)
+    assert parsed.reasoning_history_format == "reasoning_content"
+    assert payload["reasoning_history_format"] == saved
+
+
+@pytest.mark.parametrize("api_format", ["openai_responses", "anthropic_messages"])
+def test_nonchat_unused_history_sentinel_is_preserved(api_format):
+    assert definition(api_format=api_format).reasoning_history_format == "disabled"

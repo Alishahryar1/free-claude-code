@@ -10,6 +10,7 @@ from httpx2 import Request, Response
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import MISTRAL_DEFAULT_BASE
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.providers.mistral import MistralProvider
 from tests.providers.request_factory import make_messages_request
@@ -19,6 +20,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     reasoning_for,
+    sdk_chat_chunk,
 )
 
 
@@ -163,6 +165,10 @@ def test_build_request_body_replays_prior_thinking_as_mistral_chunks(
 
     body = mistral_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
 
+    assert body["messages"][0]["reasoning_content"] == "Need the tool."
+    body = mistral_provider._behavior.prepare_history_body(
+        body, ReplayOrigin("MISTRAL", "chat", "", "", "model")
+    )
     assistant = body["messages"][0]
     assert "reasoning_content" not in assistant
     assert assistant["content"] == [
@@ -241,6 +247,10 @@ def test_reasoning_off_keeps_replay_separate_from_new_turn_compute():
     body = provider._chat._build_request_body(req, reasoning=REASONING_OFF)
 
     assert body["reasoning_effort"] == "none"
+    assert body["messages"][0]["reasoning_content"] == "Hidden."
+    body = provider._behavior.prepare_history_body(
+        body, ReplayOrigin("MISTRAL", "chat", "", "", "model")
+    )
     assert body["messages"][0]["content"] == [
         {
             "type": "thinking",
@@ -269,14 +279,18 @@ async def test_stream_messages_text(mistral_provider):
     mock_chunk.usage = MagicMock(completion_tokens=5, prompt_tokens=10)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in mistral_provider.stream_messages(req)]
+        events = [
+            frame
+            async for event in mistral_provider.stream_messages(req)
+            for frame in event.frames
+        ]
 
         assert any(
             '"text_delta"' in event and "Hello back!" in event for event in events
@@ -302,14 +316,18 @@ async def test_stream_messages_reasoning_content(mistral_provider):
     mock_chunk.usage = MagicMock(completion_tokens=2, prompt_tokens=10)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in mistral_provider.stream_messages(req)]
+        events = [
+            frame
+            async for event in mistral_provider.stream_messages(req)
+            for frame in event.frames
+        ]
 
         assert any(
             '"thinking_delta"' in event and "Thinking..." in event for event in events
@@ -339,14 +357,18 @@ async def test_stream_messages_native_mistral_thinking_chunk(mistral_provider):
     mock_chunk.usage = MagicMock(completion_tokens=2, prompt_tokens=10)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in mistral_provider.stream_messages(req)]
+        events = [
+            frame
+            async for event in mistral_provider.stream_messages(req)
+            for frame in event.frames
+        ]
 
     assert any(
         '"thinking_delta"' in event and "Native thought." in event for event in events
@@ -371,14 +393,18 @@ async def test_stream_messages_native_mistral_text_chunk(mistral_provider):
     mock_chunk.usage = MagicMock(completion_tokens=2, prompt_tokens=10)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in mistral_provider.stream_messages(req)]
+        events = [
+            frame
+            async for event in mistral_provider.stream_messages(req)
+            for frame in event.frames
+        ]
 
     assert any('"text_delta"' in event and "Native text." in event for event in events)
 
@@ -389,30 +415,36 @@ async def test_stream_messages_preserves_native_thinking_and_string_text(
 ):
     req = make_request()
 
-    mock_chunk = SimpleNamespace(
-        choices=[
-            SimpleNamespace(
-                delta=SimpleNamespace(
-                    content="Visible token.",
-                    thinking="Native thought.",
-                    reasoning_content=None,
-                    tool_calls=None,
+    mock_chunk = sdk_chat_chunk(
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content="Visible token.",
+                        thinking="Native thought.",
+                        reasoning_content=None,
+                        tool_calls=None,
+                    ),
+                    finish_reason="stop",
                 ),
-                finish_reason="stop",
-            ),
-        ],
-        usage=MagicMock(completion_tokens=2, prompt_tokens=10),
+            ],
+            usage=MagicMock(completion_tokens=2, prompt_tokens=10),
+        )
     )
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in mistral_provider.stream_messages(req)]
+        events = [
+            frame
+            async for event in mistral_provider.stream_messages(req)
+            for frame in event.frames
+        ]
 
     event_text = "\n".join(events)
     assert '"thinking_delta"' in event_text
@@ -427,30 +459,36 @@ async def test_stream_messages_preserves_native_reasoning_and_string_text(
 ):
     req = make_request()
 
-    mock_chunk = SimpleNamespace(
-        choices=[
-            SimpleNamespace(
-                delta=SimpleNamespace(
-                    content="Visible token.",
-                    reasoning="Native reasoning.",
-                    reasoning_content=None,
-                    tool_calls=None,
-                ),
-                finish_reason="stop",
-            )
-        ],
-        usage=MagicMock(completion_tokens=2, prompt_tokens=10),
+    mock_chunk = sdk_chat_chunk(
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content="Visible token.",
+                        reasoning="Native reasoning.",
+                        reasoning_content=None,
+                        tool_calls=None,
+                    ),
+                    finish_reason="stop",
+                )
+            ],
+            usage=MagicMock(completion_tokens=2, prompt_tokens=10),
+        )
     )
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in mistral_provider.stream_messages(req)]
+        events = [
+            frame
+            async for event in mistral_provider.stream_messages(req)
+            for frame in event.frames
+        ]
 
     event_text = "\n".join(events)
     assert "Native reasoning." in event_text
@@ -483,14 +521,18 @@ async def test_stream_messages_preserves_mixed_native_content_array(
     mock_chunk.usage = MagicMock(completion_tokens=2, prompt_tokens=10)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in mistral_provider.stream_messages(req)]
+        events = [
+            frame
+            async for event in mistral_provider.stream_messages(req)
+            for frame in event.frames
+        ]
 
     event_text = "\n".join(events)
     assert "Native thought." in event_text
@@ -522,14 +564,18 @@ async def test_stream_messages_ignores_unknown_native_content_chunks(
     mock_chunk.usage = MagicMock(completion_tokens=1, prompt_tokens=1)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
-        events = [event async for event in mistral_provider.stream_messages(req)]
+        events = [
+            frame
+            async for event in mistral_provider.stream_messages(req)
+            for frame in event.frames
+        ]
 
     event_text = "\n".join(events)
     assert "reference_ids" not in event_text
@@ -562,7 +608,7 @@ async def test_stream_messages_suppresses_native_mistral_thinking_when_disabled(
     mock_chunk.usage = MagicMock(completion_tokens=2, prompt_tokens=10)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
@@ -570,10 +616,11 @@ async def test_stream_messages_suppresses_native_mistral_thinking_when_disabled(
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
-            event
+            frame
             async for event in mistral_provider.stream_messages(
                 req, reasoning=REASONING_OFF
             )
+            for frame in event.frames
         ]
 
     event_text = "\n".join(events)
@@ -625,7 +672,7 @@ async def test_stream_messages_retries_without_mistral_reasoning_on_rejection(
     mock_chunk.usage = MagicMock(completion_tokens=5, prompt_tokens=10)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     error = _make_bad_request_error("Unsupported field: reasoning_effort")
 
@@ -635,10 +682,11 @@ async def test_stream_messages_retries_without_mistral_reasoning_on_rejection(
         mock_create.side_effect = [error, SDKStreamDouble(mock_stream())]
 
         events = [
-            e
+            frame
             async for e in mistral_provider.stream_messages(
                 req, reasoning=reasoning_for(req)
             )
+            for frame in e.frames
         ]
 
     assert mock_create.await_count == 2
@@ -647,7 +695,7 @@ async def test_stream_messages_retries_without_mistral_reasoning_on_rejection(
     assert first_call["reasoning_effort"] == "high"
     assert first_call["messages"][0]["content"][0]["type"] == "thinking"
     assert "reasoning_effort" not in second_call
-    assert second_call["messages"][0]["content"] == ""
+    assert second_call["messages"] == first_call["messages"]
     assert second_call["messages"][0]["tool_calls"][0]["id"] == "toolu_reasoning"
     assert any("Recovered" in event for event in events)
     assert any("message_stop" in event for event in events)
@@ -696,7 +744,7 @@ async def test_stream_messages_reasoning_retry_preserves_visible_text_and_tools(
     mock_chunk.usage = MagicMock(completion_tokens=5, prompt_tokens=10)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     error = _make_bad_request_error("Unsupported field: reasoning_effort")
 
@@ -706,14 +754,15 @@ async def test_stream_messages_reasoning_retry_preserves_visible_text_and_tools(
         mock_create.side_effect = [error, SDKStreamDouble(mock_stream())]
 
         events = [
-            e
+            frame
             async for e in mistral_provider.stream_messages(
                 req, reasoning=reasoning_for(req)
             )
+            for frame in e.frames
         ]
 
     second_call = mock_create.await_args_list[1].kwargs
-    assert second_call["messages"][0]["content"] == "Visible history."
+    assert second_call["messages"] == mock_create.await_args_list[0].kwargs["messages"]
     assert second_call["messages"][0]["tool_calls"][0]["id"] == "toolu_reasoning"
     assert any("Recovered" in event for event in events)
 
@@ -734,7 +783,7 @@ async def test_stream_messages_retries_on_mistral_422_reasoning_rejection(
     mock_chunk.usage = MagicMock(completion_tokens=5, prompt_tokens=10)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     error = _StatusError(
         "body.messages.assistant.thinking extra_forbidden",
@@ -748,10 +797,11 @@ async def test_stream_messages_retries_on_mistral_422_reasoning_rejection(
         mock_create.side_effect = [error, SDKStreamDouble(mock_stream())]
 
         events = [
-            e
+            frame
             async for e in mistral_provider.stream_messages(
                 req, reasoning=reasoning_for(req)
             )
+            for frame in e.frames
         ]
 
     assert mock_create.await_count == 2
@@ -786,25 +836,20 @@ async def test_stream_messages_retries_when_model_disables_reasoning_input(
     mock_chunk.usage = MagicMock(completion_tokens=5, prompt_tokens=10)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
-    error = _StatusError(
-        "Reasoning input is not enabled for this model",
-        status_code=400,
-        body={
-            "object": "error",
-            "message": "Reasoning input is not enabled for this model",
-            "type": "invalid_request_invalid_args",
-            "code": "3051",
-        },
-    )
+    error = _make_bad_request_error("Reasoning input is not enabled for this model")
 
     with patch.object(
         mistral_provider._client.chat.completions, "create", new_callable=AsyncMock
     ) as mock_create:
         mock_create.side_effect = [error, SDKStreamDouble(mock_stream())]
 
-        events = [e async for e in mistral_provider.stream_messages(req)]
+        events = [
+            frame
+            async for e in mistral_provider.stream_messages(req)
+            for frame in e.frames
+        ]
 
     assert mock_create.await_count == 2
     second_call = mock_create.await_args_list[1].kwargs
@@ -824,7 +869,11 @@ async def test_stream_messages_unrelated_bad_request_does_not_retry(mistral_prov
         mock_create.side_effect = error
 
         with pytest.raises(ExecutionFailure) as exc_info:
-            [e async for e in mistral_provider.stream_messages(req)]
+            [
+                frame
+                async for e in mistral_provider.stream_messages(req)
+                for frame in e.frames
+            ]
 
     assert mock_create.await_count == 1
     assert "Invalid request sent to provider" in exc_info.value.message
@@ -843,7 +892,11 @@ async def test_stream_messages_generic_thinking_error_does_not_retry(
         mock_create.side_effect = error
 
         with pytest.raises(ExecutionFailure) as exc_info:
-            [e async for e in mistral_provider.stream_messages(req)]
+            [
+                frame
+                async for e in mistral_provider.stream_messages(req)
+                for frame in e.frames
+            ]
 
     assert mock_create.await_count == 1
     assert "Invalid request sent to provider" in exc_info.value.message

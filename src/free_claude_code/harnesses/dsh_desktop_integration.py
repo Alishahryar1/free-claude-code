@@ -2,7 +2,7 @@
 
 import copy
 import os
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
@@ -78,7 +78,7 @@ def has_provider(home: Path) -> bool:
 
 
 @contextmanager
-def _locked(home: Path) -> Iterator[None]:
+def _locked(home: Path) -> Generator[None]:
     # Use DSH's locks so a native edit cannot lose unrelated settings during our write.
     _read(home)
     with ExitStack() as locks:
@@ -93,12 +93,11 @@ def _locked(home: Path) -> Iterator[None]:
         yield
 
 
-def _provider(catalog: ModelCatalog, url: str, timeout: float) -> JsonObject:
+def _provider(catalog: ModelCatalog, url: str) -> JsonObject:
     return build_dsh_provider(
         catalog.models,
         proxy_root_url=url,
         credential_ref=DSH_DESKTOP_API_KEY,
-        provider_progress_timeout=timeout,
     )
 
 
@@ -107,8 +106,6 @@ def status(
     proxy_root_url: str,
     auth_token: str,
     catalog: ModelCatalog,
-    *,
-    provider_progress_timeout: float,
 ) -> JsonObject:
     home = home.resolve()
     rows, credentials = _read(home)
@@ -120,7 +117,7 @@ def status(
         and providers
         and defaults
         and _providers(providers[-1]).get(DSH_PROVIDER_ID)
-        == _provider(catalog, proxy_root_url, provider_progress_timeout)
+        == _provider(catalog, proxy_root_url)
         and defaults[-1]
         == {"provider": DSH_PROVIDER_ID, "model": catalog.default_model_id}
         and refs.get(DSH_DESKTOP_API_KEY) == auth_token
@@ -135,7 +132,6 @@ def configure(
     auth_token: str,
     catalog: ModelCatalog,
     *,
-    provider_progress_timeout: float,
     only_existing: bool = False,
 ) -> JsonObject:
     home = home.resolve()
@@ -151,7 +147,7 @@ def configure(
                 "Install and open DeepSeek Harness Desktop once, then retry Connect."
             )
         rows, credentials = _read(home)
-        provider = _provider(catalog, proxy_root_url, provider_progress_timeout)
+        provider = _provider(catalog, proxy_root_url)
         for config in _configs(rows, "llm-pi-ai", create=True):
             providers = _providers(config)
             providers[DSH_PROVIDER_ID] = CommentedMap(copy.deepcopy(provider))
@@ -174,7 +170,6 @@ def configure(
         proxy_root_url,
         auth_token,
         catalog,
-        provider_progress_timeout=provider_progress_timeout,
     ) | {"changed": changed}
 
 
@@ -210,15 +205,12 @@ def refresh_connected(
     proxy_root_url: str,
     auth_token: str,
     catalog: ModelCatalog,
-    *,
-    provider_progress_timeout: float,
 ) -> bool:
     result = configure(
         home,
         proxy_root_url,
         auth_token,
         catalog,
-        provider_progress_timeout=provider_progress_timeout,
         only_existing=True,
     )
     return result["changed"] is True

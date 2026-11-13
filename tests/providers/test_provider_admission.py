@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
@@ -14,6 +15,7 @@ import openai
 import pytest
 
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.providers import admission, failure_policy
 from free_claude_code.providers.admission import (
     UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
     ProviderAdmissionController,
@@ -25,6 +27,7 @@ from free_claude_code.providers.admission import (
     _retry_after_seconds,
 )
 from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
+from free_claude_code.providers.http import ProviderAttemptScope
 from free_claude_code.providers.stream_recovery import TruncatedProviderStreamError
 
 
@@ -67,6 +70,15 @@ def _status_error(
 
 async def _open(execution: ProviderExecution) -> ProviderAttempt:
     return await execution.open_attempt(ProviderOperationKind.GENERATION)
+
+
+@pytest.fixture
+def recovery_clock(monkeypatch):
+    clock = SimpleNamespace(now=100.0)
+    monotonic_time = SimpleNamespace(monotonic=lambda: clock.now)
+    monkeypatch.setattr(admission, "time", monotonic_time)
+    monkeypatch.setattr(failure_policy, "time", monotonic_time)
+    return clock
 
 
 @pytest.mark.parametrize(
@@ -292,8 +304,10 @@ async def test_attempt_cancellation_releases_concurrency() -> None:
     [_status_error(503), ssl.SSLWantReadError("read would block")],
     ids=["http_503", "tls_want_read"],
 )
-async def test_run_call_uses_one_five_attempt_budget(error: Exception) -> None:
-    controller = _controller()
+async def test_run_call_uses_one_ten_attempt_budget(error: Exception) -> None:
+    controller = ProviderAdmissionController(
+        provider_name="TEST", base_delay=0.0, max_delay=0.0, jitter=0.0
+    )
     attempts = 0
 
     async def fail() -> None:
@@ -307,7 +321,7 @@ async def test_run_call_uses_one_five_attempt_budget(error: Exception) -> None:
             operation_kind=ProviderOperationKind.GENERATION,
         )
 
-    assert attempts == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+    assert attempts == 10
     assert exc_info.value is error
 
 
@@ -324,7 +338,7 @@ async def test_run_call_succeeds_without_multiplying_attempts(error: Exception) 
     async def recover() -> str:
         nonlocal attempts
         attempts += 1
-        if attempts < 3:
+        if attempts < 10:
             raise error
         return "recovered"
 
@@ -338,7 +352,7 @@ async def test_run_call_succeeds_without_multiplying_attempts(error: Exception) 
         )
         == "recovered"
     )
-    assert attempts == 3
+    assert attempts == 10
 
 
 @pytest.mark.asyncio
@@ -564,9 +578,9 @@ async def test_provider_override_can_classify_retryable_semantics() -> None:
 
 
 @pytest.mark.asyncio
-async def test_discovery_and_generation_share_provider_recovery_health() -> None:
+async def test_discovery_requests_share_recovery_health() -> None:
     controller = _controller()
-    discovery = controller.start_execution()
+    discovery = controller.start_execution(model=None)
     discovery_attempt = await discovery.open_attempt(
         ProviderOperationKind.MODEL_DISCOVERY
     )
@@ -574,24 +588,24 @@ async def test_discovery_and_generation_share_provider_recovery_health() -> None
     assert (await discovery_attempt.fail(_status_error(503))).retry_allowed
     await discovery_attempt.aclose()
 
-    generation = controller.start_execution()
-    generation_wait = asyncio.create_task(
-        generation.open_attempt(ProviderOperationKind.GENERATION)
+    follower = controller.start_execution(model=None)
+    discovery_wait = asyncio.create_task(
+        follower.open_attempt(ProviderOperationKind.MODEL_DISCOVERY)
     )
     await asyncio.sleep(0)
-    assert not generation_wait.done()
+    assert not discovery_wait.done()
 
     probe = await discovery.open_attempt(ProviderOperationKind.MODEL_DISCOVERY)
     await probe.accept()
     await probe.aclose()
 
-    generation_attempt = await asyncio.wait_for(generation_wait, timeout=1)
-    await generation_attempt.accept()
-    await generation_attempt.aclose()
+    follower_attempt = await asyncio.wait_for(discovery_wait, timeout=1)
+    await follower_attempt.accept()
+    await follower_attempt.aclose()
 
 
 @pytest.mark.asyncio
-async def test_one_leader_backs_off_while_followers_coalesce() -> None:
+async def test_one_leader_backs_off_while_followers_coalesce(recovery_clock) -> None:
     controller = _controller(base_delay=2.0, max_delay=60.0)
     leader_execution = controller.start_execution()
     follower_execution = controller.start_execution()
@@ -604,37 +618,20 @@ async def test_one_leader_backs_off_while_followers_coalesce() -> None:
     await leader.aclose()
     await follower.aclose()
 
-    real_sleep = asyncio.sleep
-    sleep_started = asyncio.Event()
-    release_sleep = asyncio.Event()
-    delays: list[float] = []
+    leader_probe_task = asyncio.create_task(_open(leader_execution))
+    follower_attempt_task = asyncio.create_task(_open(follower_execution))
+    await asyncio.sleep(0)
+    assert not leader_probe_task.done()
+    assert not follower_attempt_task.done()
 
-    async def controlled_sleep(delay: float) -> None:
-        delays.append(delay)
-        sleep_started.set()
-        await release_sleep.wait()
+    recovery_clock.now += 2
+    controller._notify_recovery_waiters()
+    leader_probe = await asyncio.wait_for(leader_probe_task, timeout=1)
+    assert not follower_attempt_task.done()
 
-    with patch(
-        "free_claude_code.providers.admission.asyncio.sleep",
-        side_effect=controlled_sleep,
-    ):
-        leader_probe_task = asyncio.create_task(_open(leader_execution))
-        await sleep_started.wait()
-        follower_attempt_task = asyncio.create_task(_open(follower_execution))
-        await real_sleep(0)
-
-        assert len(delays) == 1
-        assert 1.9 <= delays[0] <= 2.0
-        assert not follower_attempt_task.done()
-
-        release_sleep.set()
-        leader_probe = await asyncio.wait_for(leader_probe_task, timeout=1)
-        await real_sleep(0)
-        assert not follower_attempt_task.done()
-
-        await leader_probe.accept()
-        await leader_probe.aclose()
-        resumed_follower = await asyncio.wait_for(follower_attempt_task, timeout=1)
+    await leader_probe.accept()
+    await leader_probe.aclose()
+    resumed_follower = await asyncio.wait_for(follower_attempt_task, timeout=1)
 
     await resumed_follower.accept()
     await resumed_follower.aclose()
@@ -655,7 +652,7 @@ async def test_cancelled_follower_leaves_recovery_episode() -> None:
 
     follower_wait = asyncio.create_task(_open(follower_execution))
     await asyncio.sleep(0)
-    episode = controller._episode
+    episode = controller._episodes.get(None)
     assert episode is not None
     assert follower_execution in episode.waiters
 
@@ -667,7 +664,7 @@ async def test_cancelled_follower_leaves_recovery_episode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancelled_backoff_leader_transfers_to_a_waiter() -> None:
+async def test_cancelled_backoff_leader_transfers_to_a_waiter(recovery_clock) -> None:
     controller = _controller(base_delay=2.0, max_delay=60.0)
     leader_execution = controller.start_execution()
     follower_execution = controller.start_execution()
@@ -679,38 +676,19 @@ async def test_cancelled_backoff_leader_transfers_to_a_waiter() -> None:
     await leader.aclose()
     await follower.aclose()
 
-    real_sleep = asyncio.sleep
-    first_sleep_started = asyncio.Event()
-    second_sleep_started = asyncio.Event()
-    release_second_sleep = asyncio.Event()
-    sleep_calls = 0
+    leader_task = asyncio.create_task(_open(leader_execution))
+    follower_task = asyncio.create_task(_open(follower_execution))
+    await asyncio.sleep(0)
 
-    async def controlled_sleep(delay: float) -> None:
-        nonlocal sleep_calls
-        assert 1.9 <= delay <= 2.0
-        sleep_calls += 1
-        if sleep_calls == 1:
-            first_sleep_started.set()
-            await asyncio.Event().wait()
-        second_sleep_started.set()
-        await release_second_sleep.wait()
+    leader_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await leader_task
 
-    with patch(
-        "free_claude_code.providers.admission.asyncio.sleep",
-        side_effect=controlled_sleep,
-    ):
-        leader_task = asyncio.create_task(_open(leader_execution))
-        await first_sleep_started.wait()
-        follower_task = asyncio.create_task(_open(follower_execution))
-        await real_sleep(0)
-
-        leader_task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await leader_task
-
-        await second_sleep_started.wait()
-        release_second_sleep.set()
-        probe = await asyncio.wait_for(follower_task, timeout=1)
+    await asyncio.sleep(0)
+    assert not follower_task.done()
+    recovery_clock.now += 2
+    controller._notify_recovery_waiters()
+    probe = await asyncio.wait_for(follower_task, timeout=1)
 
     await probe.accept()
     await probe.aclose()
@@ -766,56 +744,56 @@ async def test_abandoned_probe_transfers_leadership() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancelled_probe_resolution_remains_abandonable() -> None:
+async def test_cancelled_probe_capacity_wait_remains_abandonable() -> None:
     controller = _controller(max_concurrency=1)
     leader_execution = controller.start_execution()
-    follower_execution = controller.start_execution()
     leader = await _open(leader_execution)
-
     assert (await leader.fail(_status_error(503))).retry_allowed
     await leader.aclose()
 
-    probe = await _open(leader_execution)
-    await controller._condition.acquire()
-    resolution = asyncio.create_task(probe.accept())
+    blocker = await _open(controller.start_execution(model="other"))
+    queued = asyncio.create_task(_open(leader_execution))
     await asyncio.sleep(0)
-    resolution.cancel()
-    controller._condition.release()
+    assert controller._episodes[None].probe_active
+    queued.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await resolution
+        await queued
+    await blocker.aclose()
 
-    follower = asyncio.create_task(_open(follower_execution))
-    await probe.aclose()
-    replacement = await asyncio.wait_for(follower, timeout=1)
+    replacement = await asyncio.wait_for(_open(controller.start_execution()), 1)
     await replacement.accept()
     await replacement.aclose()
+    assert controller._capacity._active_attempts == 0
 
 
 @pytest.mark.asyncio
 async def test_cancelled_probe_close_releases_slot_and_transfers_leadership() -> None:
     controller = _controller(max_concurrency=1)
     leader_execution = controller.start_execution()
-    follower_execution = controller.start_execution()
     leader = await _open(leader_execution)
-
     assert (await leader.fail(_status_error(503))).retry_allowed
     await leader.aclose()
+    closing = asyncio.Event()
+
+    class Resource:
+        async def aclose(self):
+            closing.set()
+            await asyncio.Event().wait()
 
     probe = await _open(leader_execution)
-    await controller._condition.acquire()
-    close = asyncio.create_task(probe.aclose())
-    await asyncio.sleep(0)
+    scope = ProviderAttemptScope(probe, provider_name="TEST", request_id=None)
+    scope.retain(Resource())
+    follower = asyncio.create_task(_open(controller.start_execution()))
+    close = asyncio.create_task(scope.aclose(active_error=None))
+    await asyncio.wait_for(closing.wait(), 1)
     close.cancel()
-    controller._condition.release()
     with pytest.raises(asyncio.CancelledError):
         await close
-
-    replacement = await asyncio.wait_for(
-        _open(follower_execution),
-        timeout=1,
-    )
+    await probe.aclose()
+    replacement = await asyncio.wait_for(follower, 1)
     await replacement.accept()
     await replacement.aclose()
+    assert controller._capacity._active_attempts == 0
 
 
 @pytest.mark.asyncio
@@ -944,33 +922,328 @@ async def test_late_in_flight_failure_keeps_exhausted_generation_outcome() -> No
 
 
 @pytest.mark.asyncio
-async def test_retry_after_is_a_minimum_backoff() -> None:
-    controller = _controller(max_attempts=2)
-    attempts = 0
+@pytest.mark.parametrize("hint", ["7", "60", "invalid", None])
+async def test_retry_after_within_ceiling_keeps_coordinated_backoff(
+    hint, recovery_clock
+):
+    controller = _controller(max_attempts=2, base_delay=1, max_delay=60)
+    execution = controller.start_execution()
+    attempt = await _open(execution)
+    assert (await attempt.fail(_status_error(429, retry_after=hint))).retry_allowed
+    await attempt.aclose()
 
-    async def recover() -> str:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise _status_error(429, retry_after="7")
-        return "ok"
+    delay = float(hint) if hint in {"7", "60"} else 1.0
+    pending = asyncio.create_task(_open(execution))
+    await asyncio.sleep(0)
+    recovery_clock.now += delay - 0.5
+    controller._notify_recovery_waiters()
+    await asyncio.sleep(0)
+    assert not pending.done()
 
-    with patch(
-        "free_claude_code.providers.admission.asyncio.sleep",
-        return_value=None,
-    ) as sleep:
-        assert (
-            await controller.start_execution().run_call(
-                recover,
-                operation_kind=ProviderOperationKind.GENERATION,
-            )
-            == "ok"
+    recovery_clock.now += 0.5
+    controller._notify_recovery_waiters()
+    probe = await asyncio.wait_for(pending, timeout=1)
+    await probe.accept()
+    await probe.aclose()
+
+
+@pytest.mark.asyncio
+async def test_long_http_date_stops_retry_and_reopens_at_deadline(recovery_clock):
+    controller = _controller(max_delay=60)
+    future = format_datetime(datetime.now(UTC) + timedelta(hours=1), usegmt=True)
+    error = _status_error(503, retry_after=future)
+
+    async def fail() -> None:
+        raise error
+
+    execution = controller.start_execution(model="primary")
+    with pytest.raises(ProviderRecoveryExhausted) as exc_info:
+        await asyncio.wait_for(
+            execution.run_call(fail, operation_kind=ProviderOperationKind.GENERATION),
+            timeout=1,
         )
+    assert execution.attempts_started == 1
+    assert exc_info.value.last_error is error
+    deadline = exc_info.value.retry_not_before
+    assert deadline is not None
+    assert 3598 <= deadline - recovery_clock.now <= 3600
 
-    sleep.assert_awaited_once()
-    await_args = sleep.await_args
-    assert await_args is not None
-    assert 6.9 <= await_args.args[0] <= 7.0
+    recovery_clock.now = deadline - 0.5
+    denied = controller.start_execution(model="primary")
+    with pytest.raises(ProviderRecoveryExhausted) as blocked:
+        await _open(denied)
+    assert blocked.value.retry_not_before == deadline
+    assert denied.attempts_started == 0
+
+    recovery_clock.now = deadline
+    admitted = await _open(controller.start_execution(model="primary"))
+    await admitted.accept()
+    await admitted.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("leader_wait", ["backoff", "capacity", "in_flight"])
+async def test_long_hint_supersedes_short_recovery_and_releases_waiters(
+    leader_wait, recovery_clock
+):
+    controller = _controller(max_concurrency=3, base_delay=10, max_delay=60)
+    leader = controller.start_execution(model="primary")
+    first = await _open(leader)
+    long_source = await _open(controller.start_execution(model="primary"))
+    shorter_source = await _open(controller.start_execution(model="primary"))
+
+    assert (await first.fail(_status_error(503))).retry_allowed
+    await first.aclose()
+    holder = None
+    leader_task = None
+    if leader_wait == "capacity":
+        holder = await _open(controller.start_execution(model="other"))
+    if leader_wait != "backoff":
+        recovery_clock.now += 10
+    if leader_wait == "in_flight":
+        probe = await _open(leader)
+    else:
+        leader_task = asyncio.create_task(_open(leader))
+
+    follower = controller.start_execution(model="primary")
+    follower_task = asyncio.create_task(_open(follower))
+    await asyncio.sleep(0)
+    assert not follower_task.done()
+    if leader_task is not None:
+        assert not leader_task.done()
+
+    error = _status_error(429, retry_after="3600")
+    decision = await long_source.fail(error)
+    assert decision.retryable and not decision.retry_allowed
+    deadline = recovery_clock.now + 3600
+    for task in (follower_task, leader_task):
+        if task is not None:
+            with pytest.raises(ProviderRecoveryExhausted) as blocked:
+                await asyncio.wait_for(task, timeout=1)
+            assert blocked.value.last_error is error
+            assert blocked.value.retry_not_before == deadline
+
+    shorter = await shorter_source.fail(_status_error(503, retry_after="120"))
+    assert not shorter.retry_allowed
+    assert isinstance(shorter.error, ProviderRecoveryExhausted)
+    assert shorter.error.last_error is error
+    assert shorter.error.retry_not_before == deadline
+    if leader_wait == "in_flight":
+        await probe.accept()
+        await probe.aclose()
+
+    with pytest.raises(ProviderRecoveryExhausted) as blocked:
+        await _open(controller.start_execution(model="primary"))
+    assert blocked.value.last_error is error
+    assert blocked.value.retry_not_before == deadline
+
+    await long_source.aclose()
+    await shorter_source.aclose()
+    if holder is not None:
+        await holder.accept()
+        await holder.aclose()
+    healthy = [
+        await asyncio.wait_for(_open(controller.start_execution(model="other")), 1)
+        for _ in range(3)
+    ]
+    for attempt in healthy:
+        await attempt.accept()
+        await attempt.aclose()
+    controller.close()
+
+
+@pytest.mark.parametrize("elapsed", [0, 30, 120, 3600])
+@pytest.mark.asyncio
+async def test_terminal_waiters_keep_captured_failure(elapsed, recovery_clock):
+    controller = _controller(base_delay=10, max_delay=60)
+    queued_execution = controller.start_execution(model="primary")
+    between_attempts = controller.start_execution(model="primary")
+    leader = await _open(controller.start_execution(model="primary"))
+    follower = await _open(between_attempts)
+    shorter = await _open(controller.start_execution(model="primary"))
+    longer = await _open(controller.start_execution(model="primary"))
+    try:
+        assert (await leader.fail(_status_error(503))).retry_allowed
+        assert (await follower.fail(_status_error(503))).retry_allowed
+        await leader.aclose()
+        await follower.aclose()
+
+        queued = asyncio.create_task(_open(queued_execution))
+        await asyncio.sleep(0)
+        assert not queued.done()
+
+        original_error = _status_error(429, retry_after="120")
+        original_deadline = recovery_clock.now + 120
+        original_decision = await shorter.fail(original_error)
+        assert isinstance(original_decision.error, ProviderRecoveryExhausted)
+        assert original_decision.error.retry_not_before == recovery_clock.now + 120
+        later_error = _status_error(503, retry_after="3600")
+        await longer.fail(later_error)
+        deadline = recovery_clock.now + 3600
+        await shorter.aclose()
+        await longer.aclose()
+        with pytest.raises(ProviderRecoveryExhausted) as current:
+            await _open(controller.start_execution(model="primary"))
+        assert current.value.last_error is later_error
+        assert current.value.retry_not_before == deadline
+
+        recovery_clock.now += elapsed
+        if elapsed == 3600:
+            new_attempt = await _open(controller.start_execution(model="primary"))
+            await new_attempt.fail(_status_error(429, retry_after="120"))
+            await new_attempt.aclose()
+        else:
+            with pytest.raises(ProviderRecoveryExhausted) as still_blocked:
+                await _open(controller.start_execution(model="primary"))
+            assert still_blocked.value.last_error is later_error
+            assert still_blocked.value.retry_not_before == deadline
+
+        with pytest.raises(ProviderRecoveryExhausted) as waiting:
+            await asyncio.wait_for(queued, 1)
+        assert queued_execution.attempts_started == 0
+
+        async def unexpected_call() -> None:
+            pytest.fail("a terminal waiter started another upstream call")
+
+        with pytest.raises(ProviderRecoveryExhausted) as coalesced:
+            await between_attempts.run_call(
+                unexpected_call, operation_kind=ProviderOperationKind.GENERATION
+            )
+        assert between_attempts.attempts_started == 1
+
+        for failure in (original_decision.error, waiting.value, coalesced.value):
+            assert failure.last_error is original_error
+            assert failure.retry_not_before == original_deadline
+            classified = failure_policy.classify_provider_failure(
+                failure, provider_name="TEST", read_timeout_s=None, request_id=None
+            )
+            assert "HTTP 429" in classified.message
+            if elapsed >= 120:
+                assert "Retry this provider route" not in classified.message
+            else:
+                assert f"{120 - elapsed} seconds" in classified.message
+    finally:
+        controller.close()
+
+
+@pytest.mark.parametrize("late_budget", [1, 2])
+@pytest.mark.parametrize("long_first", [False, True])
+@pytest.mark.asyncio
+async def test_terminal_episode_selects_late_attempt_failure(
+    recovery_clock, late_budget, long_first
+):
+    controller = _controller(max_attempts=2, max_delay=60)
+    leader = controller.start_execution(model="primary")
+    late = ProviderExecution(
+        controller, max_attempts=late_budget, request_id=None, model="primary"
+    )
+    first = await _open(leader)
+    late_attempt = await _open(late)
+    extending = await _open(controller.start_execution(model="primary"))
+    try:
+        await first.fail(_status_error(503))
+        await first.aclose()
+        probe = await _open(leader)
+        ordinary = _status_error(503, retry_after="2")
+        cooldown = _status_error(429, retry_after="3600")
+        if long_first:
+            await extending.fail(cooldown)
+        else:
+            await probe.fail(ordinary)
+        decision = await late_attempt.fail(_status_error(502))
+        assert not decision.retry_allowed
+        assert isinstance(decision.error, ProviderRecoveryExhausted)
+        assert decision.error is late.last_failure
+        assert decision.error.last_error is (cooldown if long_first else ordinary)
+        assert decision.error.retry_not_before == (
+            recovery_clock.now + 3600 if long_first else None
+        )
+        if long_first:
+            await probe.fail(ordinary)
+        else:
+            await extending.fail(cooldown)
+        await probe.aclose()
+        await extending.aclose()
+        await late_attempt.aclose()
+        # Repeated failure reporting and cleanup cannot replace the terminal cause.
+        repeated = await late_attempt.fail(_status_error(400))
+        assert repeated.error is decision.error
+        assert decision.error.last_error is (cooldown if long_first else ordinary)
+        with pytest.raises(ProviderRecoveryExhausted) as blocked:
+            await _open(controller.start_execution(model="primary"))
+        assert blocked.value.last_error is cooldown
+    finally:
+        controller.close()
+
+
+@pytest.mark.asyncio
+async def test_gate_rejection_stays_terminal_after_route_reopens(recovery_clock):
+    controller = _controller(max_delay=60)
+    source = await _open(controller.start_execution(model="primary"))
+    try:
+        error = _status_error(429, retry_after="120")
+        await source.fail(error)
+        await source.aclose()
+        rejected = controller.start_execution(model="primary")
+        with pytest.raises(ProviderRecoveryExhausted) as first:
+            await _open(rejected)
+        assert rejected.state is ProviderExecutionState.FAILED
+        assert rejected.attempts_started == 0
+        assert rejected.last_failure is first.value
+        recovery_clock.now += 120
+        with pytest.raises(ProviderRecoveryExhausted) as repeated:
+            await _open(rejected)
+        assert repeated.value.last_error is error
+        assert repeated.value.retry_not_before == first.value.retry_not_before
+        assert rejected.attempts_started == 0
+        fresh = await _open(controller.start_execution(model="primary"))
+        await fresh.accept()
+        await fresh.aclose()
+    finally:
+        controller.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_scope_rechecks_retry_after_cleanup_and_releases_capacity_once():
+    controller = _controller(max_concurrency=3, base_delay=2, max_delay=60)
+    closing = asyncio.Event()
+    release = asyncio.Event()
+    close_count = 0
+
+    class Resource:
+        async def aclose(self):
+            nonlocal close_count
+            close_count += 1
+            closing.set()
+            await release.wait()
+
+    leader, follower, extending = [
+        await _open(controller.start_execution(model="primary")) for _ in range(3)
+    ]
+    scope = ProviderAttemptScope(follower, provider_name="TEST", request_id=None)
+    scope.retain(Resource())
+    assert (await leader.fail(_status_error(503))).retry_allowed
+    await leader.aclose()
+
+    async with asyncio.timeout(1), asyncio.TaskGroup() as tasks:
+        pending = tasks.create_task(scope.fail(_status_error(503)))
+        await closing.wait()
+        try:
+            cooldown = _status_error(429, retry_after="3600")
+            await extending.fail(cooldown)
+            await extending.aclose()
+            assert controller._capacity._active_attempts == 1
+        finally:
+            release.set()
+
+    failure = pending.result()
+    assert failure.retryable and not failure.retry_allowed
+    assert isinstance(failure.error, ProviderRecoveryExhausted)
+    assert failure.error.last_error is cooldown
+    await scope.aclose(active_error=None)
+    assert close_count == 1
+    assert controller._capacity._active_attempts == 0
+    controller.close()
 
 
 def test_retry_after_accepts_http_date_and_rejects_invalid_values() -> None:

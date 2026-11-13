@@ -21,7 +21,11 @@ from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
-from free_claude_code.providers.admission import ProviderAdmissionController
+from free_claude_code.core.stream_output import StreamOutput
+from free_claude_code.providers.admission import (
+    UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
+    ProviderAdmissionController,
+)
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.openai_codex import provider as codex_provider_module
 from free_claude_code.providers.openai_codex.auth import (
@@ -184,8 +188,8 @@ def _complete_stream(text: str) -> str:
     )
 
 
-async def _collect(stream: AsyncIterator[str]) -> str:
-    return "".join([chunk async for chunk in stream])
+async def _collect(stream: AsyncIterator[StreamOutput]) -> str:
+    return "".join([frame async for chunk in stream for frame in chunk.frames])
 
 
 @pytest.mark.asyncio
@@ -639,6 +643,7 @@ async def test_provider_round_trips_portable_tool_name_alias() -> None:
                 "response.output_item.added",
                 {
                     "type": "response.output_item.added",
+                    "output_index": 0,
                     "item": {
                         "type": "function_call",
                         "id": "fc_1",
@@ -651,6 +656,7 @@ async def test_provider_round_trips_portable_tool_name_alias() -> None:
                 "response.output_item.done",
                 {
                     "type": "response.output_item.done",
+                    "output_index": 0,
                     "item": {
                         "type": "function_call",
                         "id": "fc_1",
@@ -1127,7 +1133,7 @@ async def test_final_attempt_unauthorized_preserves_the_provider_401() -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal attempts
         attempts += 1
-        status = 503 if attempts < 5 else 401
+        status = 503 if attempts < UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS else 401
         return httpx2.Response(
             status,
             json={"error": {"message": f"attempt {attempts}"}},
@@ -1149,7 +1155,7 @@ async def test_final_attempt_unauthorized_preserves_the_provider_401() -> None:
             )
         )
 
-    assert attempts == 5
+    assert attempts == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
     assert auth.recovery_calls == 0
     assert exc_info.value.status_code == 401
     assert "Request ID: req_final_401" in str(exc_info.value)

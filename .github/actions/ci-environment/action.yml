@@ -2,9 +2,6 @@ name: CI environment
 description: Restore managed Python and uv dependencies using the same cache identity on every runner.
 
 inputs:
-  uv-version:
-    description: Pinned uv version
-    required: true
   runner-label:
     description: GitHub runner image label
     required: true
@@ -62,13 +59,25 @@ runs:
         CI_RUNNER: ${{ inputs.runner-label }}
         CI_OS: ${{ runner.os }}
         CI_ARCH: ${{ runner.arch }}
-        CI_UV: ${{ inputs.uv-version }}
       run: |
         set -euo pipefail
-        version="$(python -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["requires-python"].removeprefix("=="))')"
-        [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Expected an exact requires-python pin in pyproject.toml' >&2; exit 1; }
+        versions="$(python - <<'PY'
+        import pathlib
+        import re
+        import tomllib
+
+        project = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
+        stable = r"((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))"
+        python = re.fullmatch("==" + stable, project["project"]["requires-python"])
+        uv = re.fullmatch(">=" + stable, project["tool"]["uv"]["required-version"])
+        if python is None or uv is None:
+            raise SystemExit("Expected exact ==Python and minimum >=uv versions in pyproject.toml")
+        print(python[1], uv[1])
+        PY
+        )"
+        read -r version uv_version <<< "$versions"
         cache_root="${CI_TEMP//\\//}"
-        identity="$CI_RUNNER-$CI_OS-$CI_ARCH-py-$version-uv-$CI_UV"
+        identity="$CI_RUNNER-$CI_OS-$CI_ARCH-py-$version-uv-$uv_version"
         {
           echo "UV_CACHE_DIR=$cache_root/fcc-uv-cache"
           echo "UV_PYTHON_INSTALL_DIR=$cache_root/fcc-uv-python"
@@ -76,6 +85,7 @@ runs:
         } >> "$GITHUB_ENV"
         {
           echo "python-version=$version"
+          echo "uv-version=$uv_version"
           echo "python-path=$cache_root/fcc-uv-python"
           echo "python-key=uv-python-v2-$identity"
           echo "dependencies-path=$cache_root/fcc-uv-cache"
@@ -92,7 +102,7 @@ runs:
     - name: Install uv
       uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
       with:
-        version: ${{ inputs.uv-version }}
+        version: ${{ steps.identity.outputs.uv-version }}
         enable-cache: false
 
     - name: Install Python

@@ -417,7 +417,7 @@ async def test_inert_constructor_preserves_native_profile_and_disables_overrides
     assert options["use_logged_in_user"] is True
     assert options["log_level"] == "error"
     assert options["connection"] == sdk.RuntimeConnection.for_stdio(
-        path="copilot", args=("--disable-builtin-mcps",)
+        path="copilot", args=("--no-auto-update", "--disable-builtin-mcps")
     )
     assert options["env"]["COPILOT_HOME"] == "native-profile"
     assert options["env"]["COPILOT_ALLOW_GET_PROVIDER_ENDPOINT"] == "true"
@@ -695,7 +695,11 @@ async def test_cli_version_accepts_actual_pinned_cli_output(
     env = {"PATH": "native-path"}
     assert await native_cli.verified_cli_path(env) == "verified-copilot"
     locate.assert_called_once_with("copilot", path="native-path")
-    assert launch.call_args.args == ("verified-copilot", "--version")
+    assert launch.call_args.args == (
+        "verified-copilot",
+        "--no-auto-update",
+        "--version",
+    )
     assert launch.call_args.kwargs["env"] == env
     process.kill.assert_not_called()
 
