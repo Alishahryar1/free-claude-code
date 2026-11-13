@@ -35,6 +35,7 @@ from .request_options import (
 )
 from .retry import (
     clone_body_without_chat_template,
+    clone_body_without_reasoning_effort,
 )
 from .tool_schema import (
     body_without_nim_tool_argument_aliases,
@@ -115,6 +116,14 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
             logger.warning("NIM_STREAM: retrying without chat_template after 400 error")
             return retry_body
 
+        if _is_nim_reasoning_rejection(error_text):
+            retry_body = clone_body_without_reasoning_effort(body)
+            if retry_body is not None:
+                logger.warning(
+                    "NIM_STREAM: retrying without reasoning_effort after 400 error"
+                )
+                return retry_body
+
         return None
 
     def failure_override(self, error: Exception) -> ExecutionFailure | None:
@@ -191,4 +200,14 @@ def _is_degraded_function(body: Mapping[str, Any]) -> bool:
         and function_ref.startswith("function id ")
         and function_id
         and state.strip() == _DEGRADED_FUNCTION_STATE
+    )
+
+
+def _is_nim_reasoning_rejection(error_text: str) -> bool:
+    if "must be one of" in error_text:
+        return False
+    return (
+        "reasoning_effort" in error_text
+        or "invalid request" in error_text
+        or "invalid_request" in error_text
     )

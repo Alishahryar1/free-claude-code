@@ -10,6 +10,21 @@ def clone_body_without_chat_template(body: dict[str, Any]) -> dict[str, Any] | N
     return _clone_strip_extra_body(body, _strip_chat_template_fields)
 
 
+def clone_body_without_reasoning_effort(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Clone a request body and strip NIM reasoning_effort."""
+    removed = False
+    cloned_body = deepcopy(body)
+    if cloned_body.pop("reasoning_effort", None) is not None:
+        removed = True
+    extra_body = cloned_body.get("extra_body")
+    if isinstance(extra_body, dict):
+        if extra_body.pop("reasoning_effort", None) is not None:
+            removed = True
+        if not extra_body:
+            cloned_body.pop("extra_body", None)
+    return cloned_body if removed else None
+
+
 def _clone_strip_extra_body(
     body: dict[str, Any],
     strip: Callable[[dict[str, Any]], bool],

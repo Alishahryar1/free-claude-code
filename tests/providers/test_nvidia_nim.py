@@ -18,7 +18,7 @@ from free_claude_code.core.history_replay import (
     encode_replay,
 )
 from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
-from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.admission import UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.nvidia_nim.client import _PROFILE as NIM_PROFILE
@@ -828,6 +828,66 @@ async def test_stream_messages_retries_without_chat_template_kwargs_issue_993(
     second_extra = second_kwargs.get("extra_body") or {}
     assert "chat_template" not in second_extra
     assert "chat_template_kwargs" not in second_extra
+
+    event_text = "".join(events)
+    assert "event: error" not in event_text
+    assert "OK" in event_text
+
+
+@pytest.mark.parametrize(
+    "error_message",
+    [
+        "Invalid request",
+        "reasoning_effort is not supported",
+    ],
+)
+@pytest.mark.asyncio
+async def test_stream_messages_retries_without_reasoning_effort_issue_2374(
+    provider_config,
+    error_message,
+):
+    provider = NvidiaNimProvider(
+        provider_config,
+        admission=immediate_admission(),
+    )
+    req = make_request(
+        model="deepseek-ai/deepseek-v4.1-flash",
+    )
+
+    mock_chunk = MagicMock()
+    mock_chunk.choices = [
+        MagicMock(
+            delta=MagicMock(content="OK", reasoning_content=""),
+            finish_reason="stop",
+        )
+    ]
+    mock_chunk.usage = MagicMock(completion_tokens=2)
+
+    async def mock_stream():
+        yield sdk_chat_chunk(mock_chunk)
+
+    first_error = _make_bad_request_error(error_message)
+
+    with patch.object(
+        provider._client.chat.completions, "create", new_callable=AsyncMock
+    ) as mock_create:
+        mock_create.side_effect = [first_error, SDKStreamDouble(mock_stream())]
+
+        events = [
+            frame
+            async for e in provider.stream_messages(
+                req, reasoning=ReasoningPolicy(effort=ReasoningEffort.MEDIUM)
+            )
+            for frame in e.frames
+        ]
+
+    assert mock_create.await_count == 2
+
+    first_body = mock_create.call_args_list[0].kwargs
+    second_body = mock_create.call_args_list[1].kwargs
+
+    assert first_body["reasoning_effort"] == "medium"
+    assert "reasoning_effort" not in second_body
 
     event_text = "".join(events)
     assert "event: error" not in event_text
