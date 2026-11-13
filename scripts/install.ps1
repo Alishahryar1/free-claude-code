@@ -2251,3 +2251,5 @@ finally {
 }
 
 if ($DryRun) { Write-Host "Dry run complete. No changes were made." }
+if__name__=="__main__":
+    print("--Instalments--") #Ensures, what the code does
