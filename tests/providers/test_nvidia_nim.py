@@ -895,6 +895,216 @@ async def test_stream_messages_retries_without_reasoning_effort_issue_2374(
 
 
 @pytest.mark.asyncio
+async def test_stream_messages_consecutive_rejections_chat_template_then_reasoning(
+    provider_config,
+):
+    provider = NvidiaNimProvider(
+        provider_config,
+        admission=immediate_admission(),
+    )
+    req = make_request(
+        model="deepseek-ai/deepseek-v4.1-flash",
+        extra_body={"chat_template": "custom_template"},
+    )
+
+    mock_chunk = MagicMock()
+    mock_chunk.choices = [
+        MagicMock(
+            delta=MagicMock(content="OK", reasoning_content=""),
+            finish_reason="stop",
+        )
+    ]
+    mock_chunk.usage = MagicMock(completion_tokens=2)
+
+    async def mock_stream():
+        yield sdk_chat_chunk(mock_chunk)
+
+    first_error = _make_bad_request_error(
+        "chat_template is not supported for Mistral tokenizers."
+    )
+    second_error = _make_bad_request_error("Invalid request")
+
+    with patch.object(
+        provider._client.chat.completions, "create", new_callable=AsyncMock
+    ) as mock_create:
+        mock_create.side_effect = [
+            first_error,
+            second_error,
+            SDKStreamDouble(mock_stream()),
+        ]
+
+        events = [
+            frame
+            async for e in provider.stream_messages(
+                req, reasoning=ReasoningPolicy(effort=ReasoningEffort.MEDIUM)
+            )
+            for frame in e.frames
+        ]
+
+    assert mock_create.await_count == 3
+
+    call0 = mock_create.call_args_list[0].kwargs
+    call1 = mock_create.call_args_list[1].kwargs
+    call2 = mock_create.call_args_list[2].kwargs
+
+    assert call0.get("extra_body", {}).get("chat_template") == "custom_template"
+    assert call0.get("reasoning_effort") == "medium"
+
+    assert "chat_template" not in call1.get("extra_body", {})
+    assert call1.get("reasoning_effort") == "medium"
+
+    assert "chat_template" not in call2.get("extra_body", {})
+    assert "reasoning_effort" not in call2
+
+    event_text = "".join(events)
+    assert "event: error" not in event_text
+    assert "OK" in event_text
+
+
+@pytest.mark.asyncio
+async def test_stream_messages_consecutive_rejections_reasoning_then_chat_template(
+    provider_config,
+):
+    provider = NvidiaNimProvider(
+        provider_config,
+        admission=immediate_admission(),
+    )
+    req = make_request(
+        model="deepseek-ai/deepseek-v4.1-flash",
+        extra_body={"chat_template": "custom_template"},
+    )
+
+    mock_chunk = MagicMock()
+    mock_chunk.choices = [
+        MagicMock(
+            delta=MagicMock(content="OK", reasoning_content=""),
+            finish_reason="stop",
+        )
+    ]
+    mock_chunk.usage = MagicMock(completion_tokens=2)
+
+    async def mock_stream():
+        yield sdk_chat_chunk(mock_chunk)
+
+    first_error = _make_bad_request_error("Invalid request")
+    second_error = _make_bad_request_error(
+        "chat_template is not supported for Mistral tokenizers."
+    )
+
+    with patch.object(
+        provider._client.chat.completions, "create", new_callable=AsyncMock
+    ) as mock_create:
+        mock_create.side_effect = [
+            first_error,
+            second_error,
+            SDKStreamDouble(mock_stream()),
+        ]
+
+        events = [
+            frame
+            async for e in provider.stream_messages(
+                req, reasoning=ReasoningPolicy(effort=ReasoningEffort.MEDIUM)
+            )
+            for frame in e.frames
+        ]
+
+    assert mock_create.await_count == 3
+
+    call0 = mock_create.call_args_list[0].kwargs
+    call1 = mock_create.call_args_list[1].kwargs
+    call2 = mock_create.call_args_list[2].kwargs
+
+    assert call0.get("extra_body", {}).get("chat_template") == "custom_template"
+    assert call0.get("reasoning_effort") == "medium"
+
+    assert call1.get("extra_body", {}).get("chat_template") == "custom_template"
+    assert "reasoning_effort" not in call1
+
+    assert "chat_template" not in call2.get("extra_body", {})
+    assert "reasoning_effort" not in call2
+
+    event_text = "".join(events)
+    assert "event: error" not in event_text
+    assert "OK" in event_text
+
+
+@pytest.mark.asyncio
+async def test_stream_messages_strict_off_does_not_retry_when_none_rejected(
+    provider_config,
+):
+    provider = NvidiaNimProvider(
+        provider_config,
+        admission=immediate_admission(),
+    )
+    req = make_request(model="deepseek-ai/deepseek-v4.1-flash")
+
+    first_error = _make_bad_request_error("Invalid request")
+
+    with patch.object(
+        provider._client.chat.completions, "create", new_callable=AsyncMock
+    ) as mock_create:
+        mock_create.side_effect = first_error
+
+        with pytest.raises(ExecutionFailure) as exc_info:
+            [
+                frame
+                async for e in provider.stream_messages(
+                    req, reasoning=ReasoningPolicy.off()
+                )
+                for frame in e.frames
+            ]
+
+    assert mock_create.await_count == 1
+    assert "Invalid request sent to provider" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_stream_messages_prefer_off_retries_when_none_rejected(
+    provider_config,
+):
+    provider = NvidiaNimProvider(
+        provider_config,
+        admission=immediate_admission(),
+    )
+    req = make_request(model="deepseek-ai/deepseek-v4.1-flash")
+
+    mock_chunk = MagicMock()
+    mock_chunk.choices = [
+        MagicMock(
+            delta=MagicMock(content="OK", reasoning_content=""),
+            finish_reason="stop",
+        )
+    ]
+    mock_chunk.usage = MagicMock(completion_tokens=2)
+
+    async def mock_stream():
+        yield sdk_chat_chunk(mock_chunk)
+
+    first_error = _make_bad_request_error("Invalid request")
+
+    with patch.object(
+        provider._client.chat.completions, "create", new_callable=AsyncMock
+    ) as mock_create:
+        mock_create.side_effect = [first_error, SDKStreamDouble(mock_stream())]
+
+        events = [
+            frame
+            async for e in provider.stream_messages(
+                req, reasoning=ReasoningPolicy.prefer_off()
+            )
+            for frame in e.frames
+        ]
+
+    assert mock_create.await_count == 2
+    assert mock_create.call_args_list[0].kwargs["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in mock_create.call_args_list[1].kwargs
+
+    event_text = "".join(events)
+    assert "event: error" not in event_text
+    assert "OK" in event_text
+
+
+@pytest.mark.asyncio
 async def test_stream_messages_does_not_retry_unrelated_bad_request(provider_config):
     provider = NvidiaNimProvider(
         provider_config,

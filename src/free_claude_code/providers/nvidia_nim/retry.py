@@ -11,16 +11,23 @@ def clone_body_without_chat_template(body: dict[str, Any]) -> dict[str, Any] | N
 
 
 def clone_body_without_reasoning_effort(body: dict[str, Any]) -> dict[str, Any] | None:
-    """Clone a request body and strip NIM reasoning_effort."""
+    """Clone a request body and strip NIM reasoning_effort when not disabling reasoning."""
+    effort = body.get("reasoning_effort")
+    extra_body = body.get("extra_body")
+    extra_effort = (
+        extra_body.get("reasoning_effort") if isinstance(extra_body, dict) else None
+    )
+    if effort == "none" or extra_effort == "none":
+        return None
     removed = False
     cloned_body = deepcopy(body)
     if cloned_body.pop("reasoning_effort", None) is not None:
         removed = True
-    extra_body = cloned_body.get("extra_body")
-    if isinstance(extra_body, dict):
-        if extra_body.pop("reasoning_effort", None) is not None:
+    cloned_extra = cloned_body.get("extra_body")
+    if isinstance(cloned_extra, dict):
+        if cloned_extra.pop("reasoning_effort", None) is not None:
             removed = True
-        if not extra_body:
+        if not cloned_extra:
             cloned_body.pop("extra_body", None)
     return cloned_body if removed else None
 

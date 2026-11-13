@@ -93,28 +93,47 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         """Return NIM tool argument aliases captured while building this request."""
         return nim_tool_argument_aliases_from_body(body)
 
+    def retry_request_kind(
+        self,
+        error: Exception,
+        body: dict[str, Any],
+        used_retry_kinds: set[str] | None = None,
+    ) -> str | None:
+        status_code = getattr(error, "status_code", None)
+        if not (isinstance(error, openai.BadRequestError) or status_code == 400):
+            return None
+        error_text = _error_text(error)
+        used = used_retry_kinds or set()
+        if "nim_chat_template" not in used and "chat_template" in error_text:
+            return "nim_chat_template"
+        if "nim_reasoning_effort" not in used and _is_nim_reasoning_rejection(
+            error_text
+        ):
+            return "nim_reasoning_effort"
+        if "chat_template" in error_text:
+            return "nim_chat_template"
+        if _is_nim_reasoning_rejection(error_text):
+            return "nim_reasoning_effort"
+        return "provider_specific"
+
     def retry_request_body(self, error: Exception, body: dict) -> dict | None:
         """Retry once with a downgraded body when NIM rejects a known field."""
         status_code = getattr(error, "status_code", None)
         bad_request_like = isinstance(error, openai.BadRequestError) or (
             status_code == 400
         )
-
-        error_text = str(error)
-        error_body = getattr(error, "body", None)
-        if error_body is not None:
-            error_text = f"{error_text} {json.dumps(error_body, default=str)}"
-        error_text = error_text.lower()
-
         if not bad_request_like:
             return None
 
+        error_text = _error_text(error)
+
         if "chat_template" in error_text:
             retry_body = clone_body_without_chat_template(body)
-            if retry_body is None:
-                return None
-            logger.warning("NIM_STREAM: retrying without chat_template after 400 error")
-            return retry_body
+            if retry_body is not None:
+                logger.warning(
+                    "NIM_STREAM: retrying without chat_template after 400 error"
+                )
+                return retry_body
 
         if _is_nim_reasoning_rejection(error_text):
             retry_body = clone_body_without_reasoning_effort(body)
@@ -125,6 +144,11 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
                 return retry_body
 
         return None
+
+    def reasoning_disable_rejected(self, error: Exception) -> bool:
+        """Recognize NIM rejection when disabling reasoning."""
+        error_text = _error_text(error)
+        return _is_nim_reasoning_rejection(error_text)
 
     def failure_override(self, error: Exception) -> ExecutionFailure | None:
         """Classify NVIDIA-specific 400/500 responses by their actual semantics."""
@@ -201,6 +225,14 @@ def _is_degraded_function(body: Mapping[str, Any]) -> bool:
         and function_id
         and state.strip() == _DEGRADED_FUNCTION_STATE
     )
+
+
+def _error_text(error: Exception) -> str:
+    error_text = str(error)
+    error_body = getattr(error, "body", None)
+    if error_body is not None:
+        error_text = f"{error_text} {json.dumps(error_body, default=str)}"
+    return error_text.lower()
 
 
 def _is_nim_reasoning_rejection(error_text: str) -> bool:

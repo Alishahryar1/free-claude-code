@@ -513,6 +513,23 @@ class TestBuildRequestBody:
 
         assert clone_body_without_reasoning_effort(body) is None
 
+    def test_clone_body_without_reasoning_effort_returns_none_when_disabled_none(self):
+        body = {
+            "model": "test",
+            "reasoning_effort": "none",
+            "messages": [],
+        }
+
+        assert clone_body_without_reasoning_effort(body) is None
+
+        extra_body = {
+            "model": "test",
+            "extra_body": {"reasoning_effort": "none"},
+            "messages": [],
+        }
+
+        assert clone_body_without_reasoning_effort(extra_body) is None
+
     def test_no_chat_template_kwargs_when_thinking_disabled(self):
         req = make_messages_request(
             model="test",
