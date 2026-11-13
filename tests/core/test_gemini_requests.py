@@ -290,6 +290,61 @@ def test_gemini_schema_proto_names_and_string_integers_preserve_constraints():
     }
 
 
+def test_gemini_schema_property_ordering_orders_properties_and_maps_example():
+    value = request(
+        generationConfig={
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "OBJECT",
+                "properties": {
+                    "name": {"type": "STRING", "example": "Ada"},
+                    "age": {"type": "INTEGER"},
+                    "tags": {"type": "ARRAY", "items": {"type": "STRING"}},
+                },
+                "required": ["name", "age", "tags"],
+                "property_ordering": ["age", "name"],
+            },
+        }
+    )
+    output = build_gemini_chat_request(value).body["response_format"]
+    assert isinstance(output, dict)
+    wrapper = output["json_schema"]
+    assert isinstance(wrapper, dict)
+    schema = wrapper["schema"]
+    assert isinstance(schema, dict)
+    assert schema == {
+        "type": "object",
+        "properties": {
+            "age": {"type": "integer"},
+            "name": {"type": "string", "examples": ["Ada"]},
+            "tags": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["name", "age", "tags"],
+    }
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    assert list(properties) == ["age", "name", "tags"]
+
+
+@pytest.mark.parametrize(
+    "ordering",
+    [
+        "name",
+        ["name", "name"],
+        ["missing"],
+    ],
+)
+def test_gemini_schema_rejects_invalid_property_ordering(ordering):
+    with pytest.raises(GeminiConversionError, match="propertyOrdering"):
+        json_schema(
+            {
+                "type": "OBJECT",
+                "properties": {"name": {"type": "STRING"}},
+                "propertyOrdering": ordering,
+            }
+        )
+
+
 def test_conflicting_echoed_replay_bundles_are_not_silently_deduplicated():
     origin = ReplayOrigin("test", "responses", "endpoint", "account", "model")
     first = ReplayBundle(

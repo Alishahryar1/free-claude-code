@@ -32,6 +32,8 @@ _FIELDS = frozenset(
         "maxLength",
         "pattern",
         "anyOf",
+        "propertyOrdering",
+        "example",
     }
 )
 
@@ -46,6 +48,7 @@ def json_schema(schema: JsonObject) -> JsonObject:
         "max_length": "maxLength",
         "any_of": "anyOf",
         "additional_properties": "additionalProperties",
+        "property_ordering": "propertyOrdering",
     }
     result: JsonObject = {}
     for key, value in schema.items():
@@ -98,6 +101,12 @@ def json_schema(schema: JsonObject) -> JsonObject:
         result["properties"] = {
             name: _subschema(value) for name, value in properties.items()
         }
+    if "propertyOrdering" in result:
+        result["properties"] = _ordered_properties(
+            result.get("properties"), result.pop("propertyOrdering")
+        )
+    if "example" in result:
+        result["examples"] = [result.pop("example")]
     for name in ("items", "additionalProperties"):
         if isinstance(result.get(name), dict):
             result[name] = _subschema(result[name])
@@ -116,3 +125,20 @@ def _subschema(value: JsonValue) -> JsonObject:
     if not isinstance(value, dict):
         raise GeminiConversionError("A schema must be an object")
     return json_schema(value)
+
+
+def _ordered_properties(properties: JsonValue, ordering: JsonValue) -> JsonObject:
+    if not isinstance(ordering, list):
+        raise GeminiConversionError("Schema propertyOrdering must be a string array")
+    names = [name for name in ordering if isinstance(name, str)]
+    if len(names) != len(ordering):
+        raise GeminiConversionError("Schema propertyOrdering must be a string array")
+    if not isinstance(properties, dict):
+        raise GeminiConversionError("Schema propertyOrdering requires properties")
+    if len(set(names)) != len(names) or not set(names) <= set(properties):
+        raise GeminiConversionError(
+            "Schema propertyOrdering must list distinct property names"
+        )
+    ordered: JsonObject = {name: properties[name] for name in names}
+    ordered.update(properties)
+    return ordered
