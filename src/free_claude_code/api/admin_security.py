@@ -80,6 +80,28 @@ def _origin_matches_host(origin: str | None, host: str | None) -> bool:
     )
 
 
+def _host_is_ip_address(host: str | None) -> bool:
+    """Return True when the Host header is a bare IP address or localhost.
+
+    Prevents DNS-rebinding attacks in remote mode: a browser visiting
+    attacker.com cannot pass this check because attacker.com is not an IP
+    address.  Administrators accessing the Admin UI via a LAN IP
+    (e.g. http://10.0.0.5:8082) are unaffected.  Loopback hostnames
+    (localhost) are also accepted for consistency with the local-only path.
+    """
+    if not host:
+        return False
+    try:
+        parsed = urlsplit(f"//{host}")
+        hostname = (parsed.hostname or "").strip("[]").lower()
+        if hostname == "localhost":
+            return True
+        ipaddress.ip_address(hostname)
+        return True
+    except ValueError:
+        return False
+
+
 def _admin_allow_remote(request: Request) -> bool:
     """Read the admin_allow_remote setting from app state if available."""
     try:
@@ -104,6 +126,16 @@ def require_loopback_admin(request: Request) -> None:
     if _admin_allow_remote(request):
         origin = request.headers.get("origin")
         host = request.headers.get("host")
+        # Require a bare IP (or localhost) in Host to defeat DNS-rebinding:
+        # a malicious site cannot control a Host value that is itself an IP.
+        if not _host_is_ip_address(host):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Admin UI remote access requires a bare IP address or localhost "
+                    "in the Host header (DNS-rebinding protection)"
+                ),
+            )
         if not _origin_matches_host(origin, host):
             raise HTTPException(
                 status_code=403,
