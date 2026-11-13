@@ -9,7 +9,6 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.open_router import OpenRouterProvider
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.test_delivered_stream_recovery import (
     after_text,
     assert_completed,
@@ -29,14 +28,6 @@ from tests.providers.support import (
 )
 from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
-
-
-@pytest.fixture(autouse=True)
-def release_provider_events(monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
 
 
 async def delivered_candidates(senders, wire, *, tools=None, history=None):
@@ -459,9 +450,15 @@ async def test_released_calls_handoff_only_for_retryable_failure(
         ),
     ):
         raw = await delivered_candidates([first, second], wire, tools=_tools(wire))
-    assert len(first_bodies) == 1 and not second_bodies
+    assert len(first_bodies) == 1
+    # Messages block stop alone has no complete call to hand off.
+    if protocol == "messages":
+        assert len(second_bodies) == 1
+        assert "call_probe" not in raw
+    else:
+        assert not second_bodies
     events = parse_sse_text(raw)
-    if permanent:
+    if permanent and protocol != "messages":
         assert events[-1].event == (
             "error" if wire == "messages" else "response.failed"
         )
@@ -529,10 +526,10 @@ async def test_hidden_hosted_activity_remains_a_model_boundary_after_local_retry
         ),
     ):
         raw = await delivered_candidates([first, second], wire, tools=_tools(wire))
-    assert len(first_bodies) == 2
+    assert len(first_bodies) == (1 if wire == "responses" else 2)
     assert not second_bodies
     events = parse_sse_text(raw)
-    if later_failure:
+    if later_failure or wire == "responses":
         assert events[-1].event == (
             "error" if wire == "messages" else "response.failed"
         )

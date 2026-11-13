@@ -17,6 +17,7 @@ from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -152,6 +153,8 @@ class OpenAICodexProvider(BaseProvider):
                             decision = await scope.attempt.fail(error)
                             if decision.retry_allowed:
                                 continue
+                            if decision.error is not error:
+                                raise decision.error from error
                     execution.fail(error)
                     raise
                 finally:
@@ -177,7 +180,7 @@ class OpenAICodexProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._responses.stream_messages(
             request,
             input_tokens=input_tokens,
@@ -200,7 +203,7 @@ class OpenAICodexProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._responses.stream_chat(
             request,
             input_tokens=input_tokens,
@@ -222,7 +225,7 @@ class OpenAICodexProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._responses.stream_gemini(
             request,
             input_tokens=input_tokens,
@@ -244,7 +247,7 @@ class OpenAICodexProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._responses.stream_responses(
             request,
             input_tokens=input_tokens,

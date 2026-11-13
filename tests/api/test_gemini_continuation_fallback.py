@@ -13,7 +13,6 @@ from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.gemini import GeminiProvider
 from free_claude_code.providers.open_router import OpenRouterProvider
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.support import create_test_app
 from tests.api.test_delivered_stream_recovery import text_events
 from tests.api.test_four_protocol_matrix import response_value
@@ -23,10 +22,6 @@ from tests.providers.support import immediate_admission, make_provider_config
 
 @pytest.mark.parametrize("wire", ["messages", "chat", "responses", "gemini"])
 def test_fallback_into_gemini_and_followup(wire, monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
     calls = []
 
     def chat_reply(request):

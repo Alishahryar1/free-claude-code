@@ -38,6 +38,7 @@ from free_claude_code.core.request_outcomes import (
     record_request_failure,
 )
 from free_claude_code.core.stream_delivery import StreamDeliveryState
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.trace import close_stream_input, trace_event
 
 from .stream_delivery import DeliveryObservedStream, PublicResponseStream
@@ -234,7 +235,7 @@ def trace_terminal_execution_error(
 
 
 async def _first_chunk_streaming_response(
-    body: AsyncIterator[str],
+    body: AsyncIterator[StreamOutput],
     *,
     wire_api: WireApi,
     headers: Mapping[str, str],
@@ -280,7 +281,7 @@ async def _first_chunk_streaming_response(
 
 
 async def _close_pre_start_body(
-    body: AsyncIterator[str],
+    body: AsyncIterator[StreamOutput],
     *,
     preserved_error: BaseException,
 ) -> None:
@@ -296,18 +297,20 @@ async def _close_pre_start_body(
     await _wait_for_cleanup(task)
 
 
-class _PrefetchedStream(AsyncIterator[str]):
+class _PrefetchedStream(AsyncIterator[StreamOutput]):
     """Replay the raw prefetched chunk and retain ownership of the tail."""
 
-    def __init__(self, first_chunk: str, body: AsyncIterator[str]) -> None:
-        self._first_chunk: str | None = first_chunk
+    def __init__(
+        self, first_chunk: StreamOutput, body: AsyncIterator[StreamOutput]
+    ) -> None:
+        self._first_chunk: StreamOutput | None = first_chunk
         self._body = body
         self._closed = False
 
     def __aiter__(self) -> _PrefetchedStream:
         return self
 
-    async def __anext__(self) -> str:
+    async def __anext__(self) -> StreamOutput:
         if self._closed:
             raise StopAsyncIteration
         if self._first_chunk is not None:
@@ -325,7 +328,7 @@ class _PrefetchedStream(AsyncIterator[str]):
 
 
 async def anthropic_sse_streaming_response(
-    body: AsyncIterator[str],
+    body: AsyncIterator[StreamOutput],
     *,
     pre_start_error_response: PreStartErrorResponse,
     request_id: str,
@@ -377,7 +380,7 @@ def _trace_anthropic_terminal_failure(
 
 
 async def openai_responses_sse_streaming_response(
-    body: AsyncIterator[str],
+    body: AsyncIterator[StreamOutput],
     *,
     headers: Mapping[str, str],
     pre_start_error_response: PreStartErrorResponse,
@@ -398,7 +401,7 @@ async def openai_responses_sse_streaming_response(
 
 
 async def gemini_sse_streaming_response(
-    body: AsyncIterator[str],
+    body: AsyncIterator[StreamOutput],
     *,
     pre_start_error_response: PreStartErrorResponse,
     request_id: str,
@@ -433,7 +436,7 @@ async def gemini_sse_streaming_response(
 
 
 async def chat_sse_streaming_response(
-    body: AsyncIterator[str],
+    body: AsyncIterator[StreamOutput],
     *,
     pre_start_error_response: PreStartErrorResponse,
     request_id: str,

@@ -234,6 +234,9 @@ async def _harness(
 
 
 async def _saved_reply(stream, wire):
+    from free_claude_code.application.response_collection import collected_frames
+
+    stream = collected_frames(stream, protocol=wire)
     if wire == "messages":
         message, error, saw_stop = await aggregate_anthropic_sse_to_message(stream)
         assert error is None and saw_stop
@@ -512,7 +515,7 @@ async def test_explicit_legacy_rejection_corrects_only_history_before_commit(pro
 async def test_stream_history_rejection_respects_the_public_commit_boundary(
     protocol, committed
 ):
-    visible = "already visible " * 5000  # Exceeds the existing holdback budget.
+    visible = "already visible"
     error = {
         "code": "invalid_signature"
         if protocol == "messages"
@@ -564,11 +567,15 @@ async def test_stream_history_rejection_respects_the_public_commit_boundary(
     ]
     async with _harness(protocol, responder) as (send, bodies, _):
         if committed:
-            output = ""
-            with pytest.raises(ExecutionFailure):
-                async for event in send("messages", history):
-                    output += event
+            from tests.api.test_tool_call_buffer import _response
+
+            response = await _response("messages", send("messages", history))
+            try:
+                output = "".join([str(chunk) async for chunk in response.body_iterator])
+            finally:
+                await response.aclose()
             assert visible in output
+            assert any(event.event == "error" for event in parse_sse_text(output))
             assert len(bodies) == 1
         else:
             await _saved_reply(send("messages", history), "messages")
@@ -832,7 +839,7 @@ async def test_chat_encrypted_only_completion_does_not_add_blank_text(wire):
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("committed", [False, True])
 async def test_chat_pending_reasoning_is_discarded_on_failure_or_retry(wire, committed):
-    text = "Plan." * (30000 if committed else 1)
+    text = "Plan."
     first = {"type": "reasoning.encrypted", "data": "first", "index": 0}
     second = {"type": "reasoning.encrypted", "data": "second", "index": 1}
     readable = (
@@ -861,11 +868,14 @@ async def test_chat_pending_reasoning_is_discarded_on_failure_or_retry(wire, com
             assert len(bodies) == 2
             assert _carrier(saved, wire) == "opaque-original"
             return
+        from tests.api.test_tool_call_buffer import _response
+
+        response = await _response(wire, stream)
+        try:
+            output = "".join([str(chunk) async for chunk in response.body_iterator])
+        finally:
+            await response.aclose()
         if wire == "messages":
-            output = ""
-            with pytest.raises(ExecutionFailure):
-                async for frame in stream:
-                    output += frame
 
             async def replay_frames():
                 yield output
@@ -876,10 +886,9 @@ async def test_chat_pending_reasoning_is_discarded_on_failure_or_retry(wire, com
             assert not saw_stop
             saved = [{"role": "assistant", "content": message["content"]}]
         else:
-            frames = [frame async for frame in stream]
-            response = parse_sse_text("".join(frames))[-1].data["response"]
-            assert response["status"] == "failed"
-            saved = response["output"]
+            final = parse_sse_text(output)[-1].data["response"]
+            assert final["status"] == "failed"
+            saved = final["output"]
         assert len(bodies) == 1
         assert text in json.dumps(saved)
         assert "first" not in json.dumps(saved)

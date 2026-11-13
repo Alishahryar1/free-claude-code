@@ -143,3 +143,19 @@ def assess_recovery(
         prefix.continuation,
         reason="portable_prefix",
     )
+
+
+@dataclass(frozen=True, slots=True)
+class CompletedCall:
+    protocol: Literal["messages", "responses", "chat", "gemini"]
+    position: tuple[int, ...]
+    call_id: str | None
+    item_id: str | None = None
+
+    @property
+    def identity(self) -> tuple[object, ...]:
+        if self.protocol == "responses" and self.item_id is not None:
+            return self.protocol, self.item_id
+        if self.protocol in {"messages", "gemini"} and self.call_id is not None:
+            return self.protocol, self.call_id
+        return self.protocol, self.position, self.call_id

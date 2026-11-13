@@ -19,6 +19,7 @@ from free_claude_code.core.anthropic.native import (
     build_native_messages_request,
 )
 from free_claude_code.core.anthropic.native_stream import NativeMessagesRelay
+from free_claude_code.core.anthropic.tool_calls import MessagesToolCallBuffer
 from free_claude_code.core.chat_completions.messages_stream import ChatMessagesStream
 from free_claude_code.core.chat_completions.request import (
     ChatRequest,
@@ -42,6 +43,7 @@ from free_claude_code.core.reasoning import (
     ReasoningControl,
     ReasoningPolicy,
 )
+from free_claude_code.core.stream_output import StreamOutput, completed_output
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.core.trace import trace_event
 from free_claude_code.providers.admission import (
@@ -81,9 +83,7 @@ from free_claude_code.providers.request_recovery import (
     RequestRecovery,
 )
 from free_claude_code.providers.stream_recovery import (
-    HoldbackSignal,
-    RecoveryController,
-    RecoveryFailureAction,
+    can_retry_undelivered_stream,
 )
 
 from .request_policy import (
@@ -198,7 +198,7 @@ class AnthropicMessagesTransport:
         model_info: ProviderModelInfo | None = None,
         preserve_native_controls: bool = False,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         capabilities = self._effective_capabilities(model_info)
         if preserve_native_controls:
             reasoning = ReasoningPolicy.provider_default()
@@ -245,7 +245,7 @@ class AnthropicMessagesTransport:
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         try:
             options = resolve_messages_options(
                 model=request.model,
@@ -269,7 +269,7 @@ class AnthropicMessagesTransport:
                 include_thoughts=request.include_thoughts,
                 origin=origin,
                 tool_names=prepared.tool_names,
-                declared_names=frozenset(prepared.tool_schemas),
+                declared_names=prepared.declared_names,
                 reserved_tool_ids=prepared.reserved_tool_ids,
             ),
         )
@@ -285,7 +285,7 @@ class AnthropicMessagesTransport:
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         try:
             translated = MessagesRequest.model_validate(chat_messages_body(request))
             prepared = self._messages_body(
@@ -319,7 +319,7 @@ class AnthropicMessagesTransport:
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         prepared = self._responses_body(
             request, reasoning, self._effective_capabilities(model_info)
         )
@@ -346,7 +346,7 @@ class AnthropicMessagesTransport:
         presenter_factory: Callable[[ReplayOrigin], _Presenter],
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         execution = self._admission.start_execution(
             request_id=request_id, model=str(body["model"])
         )
@@ -383,12 +383,9 @@ class AnthropicMessagesTransport:
         presenter_factory: Callable[[ReplayOrigin], _Presenter],
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
-        recovery = RecoveryController(execution.delivery)
+    ) -> AsyncIterator[StreamOutput]:
         request_endpoint = RequestEndpoint(endpoint_context)
-        request_recovery = RequestRecovery(
-            execution, endpoint=request_endpoint, stream=recovery
-        )
+        request_recovery = RequestRecovery(execution, endpoint=request_endpoint)
         corrections = RequestCorrections("messages", reasoning_correction)
         continuation_request = ContinuationRequest("messages")
         operation_kind = ProviderOperationKind.GENERATION
@@ -398,9 +395,9 @@ class AnthropicMessagesTransport:
         source: SourceRecoveryState | None = None
         while execution.can_attempt:
             normal_stop_seen = False
+            tool_buffer = MessagesToolCallBuffer()
             source = SourceRecoveryState(execution, previous=source)
             scope: ProviderAttemptScope | None = None
-            stream_opened = False
             sent_body = body
             presenter: _Presenter | None = None
             try:
@@ -461,50 +458,61 @@ class AnthropicMessagesTransport:
                     raise RetryableProviderProtocolError(
                         "Messages upstream did not return an SSE stream."
                     )
-                stream_opened = True
                 upstream = messages_events(
                     response, read_timeout_s=self._read_timeout_s
                 )
                 try:
-                    async with recovery.read_stream(upstream) as events:
-                        async for item in events:
-                            if item is HoldbackSignal.EXPIRED:
-                                for held in recovery.flush():
-                                    yield held
-                                continue
-                            event_type, payload = item
-                            normal_stop_seen |= is_messages_stop(event_type, payload)
-                            check_messages_failure(event_type, payload)
-                            source.observe(
-                                "messages",
-                                payload,
-                                continuing=operation_kind
-                                is ProviderOperationKind.CONTINUATION,
-                            )
-                            output = presenter.feed(event_type, payload)
-                            if event_type != "ping":
-                                corrections.accepted_history()
-                                if not attempt.accepted:
-                                    await attempt.accept()
-                            for event in (
-                                (output,) if isinstance(output, str) else output
-                            ):
-                                for held in recovery.push(event):
-                                    yield held
-                            if presenter.completed:
-                                break
+                    async for item in upstream:
+                        event_type, payload = item
+                        normal_stop_seen |= is_messages_stop(event_type, payload)
+                        check_messages_failure(event_type, payload)
+                        source.observe(
+                            "messages",
+                            payload,
+                            continuing=operation_kind
+                            is ProviderOperationKind.CONTINUATION,
+                        )
+                        if event_type != "ping":
+                            corrections.accepted_history()
+                            if not attempt.accepted:
+                                await attempt.accept()
+                        for group in tool_buffer.feed(event_type, payload):
+                            frames = []
+                            for kind, value in group:
+                                output = presenter.feed(kind, value)
+                                frames.extend(
+                                    (output,)
+                                    if isinstance(output, str)
+                                    else output or ()
+                                )
+                            if frames:
+                                yield completed_output(frames)
+                        if presenter.completed:
+                            break
                 finally:
                     await maybe_await_aclose(upstream)
                 if not presenter.completed:
                     raise RetryableProviderProtocolError(
                         "Messages stream ended without message_stop."
                     )
-                for event in recovery.flush():
-                    yield event
                 return
             except asyncio.CancelledError, GeneratorExit:
                 raise
             except Exception as raw_error:
+                if presenter is not None and not (
+                    isinstance(raw_error, ExecutionFailure)
+                    and raw_error.stream_context
+                    and raw_error.stream_context.source.unsafe_reason
+                ):
+                    for group in tool_buffer.abandon():
+                        frames = []
+                        for kind, value in group:
+                            output = presenter.feed(kind, value)
+                            frames.extend(
+                                (output,) if isinstance(output, str) else output or ()
+                            )
+                        if frames:
+                            yield completed_output(frames)
                 error = (
                     RetryableProviderProtocolError(str(raw_error))
                     if isinstance(raw_error, NativeMessagesError)
@@ -536,7 +544,6 @@ class AnthropicMessagesTransport:
                     )
                     if corrected_body is not None:
                         body = corrected_body
-                        recovery.discard()
                         continue
                 if scope is not None and not scope.attempt.accepted:
                     if (
@@ -546,22 +553,22 @@ class AnthropicMessagesTransport:
                     ):
                         await scope.attempt.accept()
                     else:
-                        attempt_failure = await scope.attempt.fail(error)
+                        attempt_failure = await scope.fail(error)
+                        error = attempt_failure.error
                 if attempt_failure is not None and attempt_failure.retry_allowed:
-                    recovery.discard()
                     continue
-                decision = recovery.advance_failure(
-                    retryable=attempt_failure.retryable
+                retryable = (
+                    attempt_failure.retryable
                     if attempt_failure is not None
-                    else is_retryable_stream_error(error),
-                    stream_opened=stream_opened,
-                    generated_output=recovery.committed,
-                    complete_tool_salvageable=False,
+                    else is_retryable_stream_error(error)
+                )
+                retry_allowed = can_retry_undelivered_stream(
+                    execution.delivery,
+                    retryable=retryable,
                     attempts_remaining=execution.attempts_remaining,
                     normal_stop_seen=normal_stop_seen,
                 )
-                if decision.action is RecoveryFailureAction.EARLY_RETRY:
-                    recovery.discard()
+                if retry_allowed:
                     continue
                 if scope is not None:
                     await scope.aclose(active_error=error)
@@ -569,16 +576,15 @@ class AnthropicMessagesTransport:
                     execution,
                     body=body,
                     request=continuation_request,
-                    retryable=decision.retryable,
+                    retryable=retryable,
                     normal_stop_seen=normal_stop_seen,
                     source=source,
                 )
                 if recovered is not None:
-                    recovery.discard()
                     if recovered.body is None:
                         if isinstance(presenter, GeminiMessagesStream):
                             for event in presenter.handoff():
-                                yield event
+                                yield StreamOutput((event,))
                         return
                     body = recovered.body
                     operation_kind = ProviderOperationKind.CONTINUATION
@@ -600,7 +606,6 @@ class AnthropicMessagesTransport:
                     failure_kind=failure.kind.value,
                 )
                 if execution.delivery is not None:
-                    recovery.discard()
                     raise public_stream_failure(
                         failure,
                         source=source,
@@ -613,14 +618,6 @@ class AnthropicMessagesTransport:
                             else None
                         ),
                     ) from raw_error
-                if decision.committed and isinstance(
-                    presenter, AnthropicToResponsesStream
-                ):
-                    execution.fail(failure)
-                    for event in presenter.terminal_failure(failure):
-                        yield event
-                    return
-                recovery.discard()
                 raise failure from raw_error
             finally:
                 if scope is not None:

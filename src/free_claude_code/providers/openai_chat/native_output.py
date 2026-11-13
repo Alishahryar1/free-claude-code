@@ -4,7 +4,7 @@ from free_claude_code.core.chat_completions.response import ChatOutput, chat_fra
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.openai_responses import openai_error_from_failure
 
-from .stream_output import ChatStreamOutput, ChatStreamUsage, ChatToolState
+from .stream_output import ChatStreamOutput, ChatStreamUsage, CompletedToolCall
 
 
 class NativeChatStreamOutput(ChatStreamOutput):
@@ -50,24 +50,10 @@ class NativeChatStreamOutput(ChatStreamOutput):
     def _stop_text_block(self) -> list[str]:
         return []
 
-    def _start_tool_block(self, tool_index: int, state: ChatToolState) -> str:
-        return "".join(self.chat.tool(tool_index, state.tool_id, state.name, ""))
-
-    def _emit_tool_delta(
-        self, tool_index: int, state: ChatToolState, partial_json: str
-    ) -> str:
-        return "".join(
-            self.chat.delta(
-                {
-                    "tool_calls": [
-                        {"index": tool_index, "function": {"arguments": partial_json}}
-                    ]
-                }
-            )
-        )
-
-    def _stop_tool_block(self, tool_index: int, state: ChatToolState) -> list[str]:
-        return []
+    def _emit_complete_tool(
+        self, tool_index: int, call: CompletedToolCall
+    ) -> list[str]:
+        return self.chat.tool(tool_index, call.tool_id, call.name, call.content)
 
     def _finish_success(self, *, stop_reason: str, usage: ChatStreamUsage) -> list[str]:
         reason = {

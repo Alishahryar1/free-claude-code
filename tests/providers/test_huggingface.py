@@ -17,6 +17,7 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     profiled_provider,
+    sdk_chat_chunk,
 )
 
 
@@ -258,7 +259,7 @@ async def test_stream_messages_text(huggingface_provider):
     mock_chunk.usage = MagicMock(completion_tokens=5, prompt_tokens=10)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with patch.object(
         huggingface_provider._client.chat.completions, "create", new_callable=AsyncMock
@@ -266,8 +267,9 @@ async def test_stream_messages_text(huggingface_provider):
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
-            event
+            frame
             async for event in huggingface_provider.stream_messages(make_request())
+            for frame in event.frames
         ]
 
     assert any(
@@ -292,7 +294,7 @@ async def test_stream_messages_reasoning_content(huggingface_provider):
     mock_chunk.usage = MagicMock(completion_tokens=2, prompt_tokens=10)
 
     async def mock_stream():
-        yield mock_chunk
+        yield sdk_chat_chunk(mock_chunk)
 
     with patch.object(
         huggingface_provider._client.chat.completions, "create", new_callable=AsyncMock
@@ -300,8 +302,9 @@ async def test_stream_messages_reasoning_content(huggingface_provider):
         mock_create.return_value = SDKStreamDouble(mock_stream())
 
         events = [
-            event
+            frame
             async for event in huggingface_provider.stream_messages(make_request())
+            for frame in event.frames
         ]
 
     assert any(

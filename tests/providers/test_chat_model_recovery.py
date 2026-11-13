@@ -39,12 +39,13 @@ async def test_allowed_model_override_uses_effective_wire_model_for_recovery():
 
         async def send(model, override, public_model):
             return [
-                event
+                frame
                 async for event in provider.stream_messages(
                     make_messages_request(model, extra_body={"model": override}),
                     reasoning=ReasoningPolicy.provider_default(),
                     response_model=public_model,
                 )
+                for frame in event.frames
             ]
 
         with pytest.raises(ExecutionFailure):

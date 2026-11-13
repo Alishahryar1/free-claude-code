@@ -12,31 +12,10 @@ from .history_replay import (
     readable_reasoning,
     unprotected_replay,
 )
-from .openai_responses import is_client_search
+from .openai_responses import is_client_call
 from .recovery_limits import RECOVERY_RETENTION_BYTES
-from .stream_recovery import ContinuationSeed, DeliveredPrefix
+from .stream_recovery import CompletedCall, ContinuationSeed, DeliveredPrefix
 from .token_estimation import estimate_text_tokens
-
-CLIENT_CALL_TYPES = frozenset(
-    {
-        "function_call",
-        "custom_tool_call",
-        "computer_call",
-        "local_shell_call",
-        "apply_patch_call",
-    }
-)
-
-
-def client_call(item: dict[str, Any]) -> bool:
-    kind = item.get("type")
-    if kind == "tool_search_call":
-        return is_client_search(item)
-    return kind in CLIENT_CALL_TYPES or (
-        kind == "shell_call"
-        and isinstance(item.get("environment"), dict)
-        and item["environment"].get("type") == "local"
-    )
 
 
 def is_structured_text_format(value: object) -> bool:
@@ -79,13 +58,13 @@ class DeliveredResponse:
         self._text_closed: set[tuple[int, str, int]] = set()
         self._part_closed: set[tuple[int, str, int]] = set()
         self.header: dict[str, Any] = {}
-        self.sequence = -1
         self.unsafe_reason: str | None = None
         self._text_constraint: str | None = None
         self._bytes = 0
         self._limited = False
         self._limited_output_tokens = 0
         self.progress = 0
+        self._completed_calls: set[CompletedCall] = set()
         self._chat_response = ChatResponseAccumulator() if wire_api == "chat" else None
 
     def _retain(self, value: object) -> bool:
@@ -101,6 +80,7 @@ class DeliveredResponse:
             self._limited = True
             self.unsafe_reason = "retention_limit"
             self.items.clear()
+            self._completed_calls.clear()
             self.closed.clear()
             self._text_closed.clear()
             self._part_closed.clear()
@@ -122,9 +102,6 @@ class DeliveredResponse:
         if not isinstance(kind, str):
             self.unsafe_reason = "unknown_event"
             return
-        sequence = data.get("sequence_number")
-        if isinstance(sequence, int):
-            self.sequence = max(self.sequence, sequence)
         if kind in {"message_start", "response.created"} and not self.header:
             self.header = deepcopy(data.get("message", data.get("response", {})))
         delta = data.get("delta", "")
@@ -153,7 +130,7 @@ class DeliveredResponse:
             or (kind == "content_block_start" and block.get("type") == "tool_use")
             or (
                 kind == "response.output_item.done"
-                and client_call(data.get("item", {}))
+                and is_client_call(data.get("item", {}))
             )
         ):
             self.progress += 1
@@ -363,7 +340,7 @@ class DeliveredResponse:
             if not self._retain(item):
                 return
             self.items[index] = deepcopy(item)
-            if item.get("type") not in {"message", "reasoning"} and not client_call(
+            if item.get("type") not in {"message", "reasoning"} and not is_client_call(
                 item
             ):
                 self.unsafe_reason = "native_content"
@@ -482,34 +459,38 @@ class DeliveredResponse:
         }:
             self.unsafe_reason = "unknown_event"
 
+    def complete_calls(self, calls: tuple[CompletedCall, ...]) -> None:
+        if not self._limited:
+            self._completed_calls.update(calls)
+
     def snapshot(self) -> DeliveredPrefix:
         text: list[str] = []
         thinking: list[str] = []
-        has_calls = False
-        for index, item in sorted(self.items.items()):
+        has_calls = bool(self._completed_calls)
+        for _, item in sorted(self.items.items()):
             kind = item.get("type")
             if self.wire_api == "chat":
                 if isinstance(item.get("content"), str):
                     text.append(item["content"])
                 thinking.extend(value for value, _ in readable_reasoning(item))
-                has_calls |= bool(item.get("tool_calls")) and index in self.closed
+
             elif self.wire_api == "gemini":
                 if "text" in item:
                     (thinking if item.get("thought") else text).append(item["text"])
-                if "functionCall" in item:
-                    has_calls = True
+
             elif self.wire_api == "messages":
                 if kind == "text":
                     text.append(item.get("text", ""))
                 elif kind == "thinking":
                     thinking.append(item.get("thinking", ""))
-                elif kind == "redacted_thinking":
-                    if (record := unprotected_replay(item.get("data"))) is not None:
-                        thinking.extend(
-                            text for text, _ in readable_reasoning(record.native)
-                        )
-                elif kind == "tool_use" and index in self.closed:
-                    has_calls = True
+                elif (
+                    kind == "redacted_thinking"
+                    and (record := unprotected_replay(item.get("data"))) is not None
+                ):
+                    thinking.extend(
+                        text for text, _ in readable_reasoning(record.native)
+                    )
+
             elif kind == "message":
                 text.extend(part.get("text", "") for part in item.get("content") or [])
             elif kind == "reasoning":
@@ -520,8 +501,7 @@ class DeliveredResponse:
                         record.native if record else item
                     )
                 )
-            elif client_call(item) and index in self.closed:
-                has_calls = True
+
         unsafe_reason = self._text_constraint or self.unsafe_reason
         return DeliveredPrefix(
             "".join(text),
@@ -549,8 +529,6 @@ class DeliveredResponse:
 
     @property
     def can_handoff(self) -> bool:
-        if self.wire_api == "chat":
-            return False
         if self._text_constraint or self.unsafe_reason not in {
             None,
             "opaque_reasoning",
@@ -621,6 +599,15 @@ class DeliveredResponse:
 
     def handoff_events(self) -> list[dict[str, Any]]:
         """Signal handoff; the public writer fills output and usage after closure."""
+        if self.wire_api == "chat":
+            return [
+                {
+                    **deepcopy(self.header),
+                    "choices": [
+                        {"index": 0, "delta": {}, "finish_reason": "tool_calls"}
+                    ],
+                }
+            ]
         if self.wire_api == "gemini":
             return [
                 {

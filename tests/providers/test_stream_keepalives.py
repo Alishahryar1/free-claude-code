@@ -321,7 +321,9 @@ async def test_pings_are_discarded_before_and_during_valid_responses(egress):
     wire = Frames([raw[index : index + 7] for index in range(0, len(raw), 7)])
     async with upstream(egress, lambda: wire, timeout=1) as (stream, _):
         async with asyncio.timeout(2):
-            result = "".join(await collect(stream()))
+            result = "".join(
+                frame for packet in await collect(stream()) for frame in packet.frames
+            )
         assert "hello" in result
         assert '"ping"' not in result
         assert wire.closed
@@ -365,7 +367,7 @@ async def test_chat_buffered_recovery_read_also_times_out():
     bodies = iter([first, recovery])
     async with upstream("chat", lambda: next(bodies), attempts=2) as (stream, _):
         # A failed buffered repair preserves the original truncation failure.
-        with pytest.raises(ExecutionFailure, match="without finish_reason"):
+        with pytest.raises(ExecutionFailure, match="timed out"):
             async with asyncio.timeout(2):
                 await collect(stream())
         assert first.closed and recovery.closed

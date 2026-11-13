@@ -8,7 +8,6 @@ import pytest
 from free_claude_code.core.anthropic.streaming import (
     AnthropicStreamLedger,
     StreamBlockLedger,
-    ToolSchema,
     map_stop_reason,
 )
 
@@ -80,25 +79,6 @@ def test_ensure_block_switches_close_the_previous_kind() -> None:
     ]
     assert not ledger.blocks.thinking_started
     assert ledger.blocks.text_started
-
-
-def test_tool_blocks_drive_stop_reason_and_salvage() -> None:
-    ledger = AnthropicStreamLedger("msg_1", "model")
-    ledger.start_tool_block(0, "toolu_1", "Read")
-    ledger.emit_tool_delta(0, '{"path":"test.py"}')
-
-    assert ledger.final_stop_reason("end_turn") == "tool_use"
-    assert ledger.can_salvage_tool_use(
-        {
-            "Read": ToolSchema(
-                name="Read",
-                input_schema={
-                    "type": "object",
-                    "properties": {"path": {"type": "string"}},
-                },
-            )
-        }
-    )
 
 
 def test_failure_cleanup_closes_text_without_completing_unfinished_tool() -> None:

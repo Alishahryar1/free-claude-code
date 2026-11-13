@@ -22,6 +22,7 @@ from tests.providers.support import (
     SDKStreamDouble,
     immediate_admission,
     make_provider_config,
+    sdk_chat_chunk,
 )
 
 _MODEL = "openai/gpt-oss-120b"
@@ -120,18 +121,20 @@ def _provider(*, max_attempts: int = 5) -> GroqProvider:
 
 
 def _chunk(*, content: str | None = None, finish_reason: str | None = None):
-    return MagicMock(
-        choices=[
-            MagicMock(
-                delta=MagicMock(
-                    content=content,
-                    reasoning_content=None,
-                    tool_calls=None,
-                ),
-                finish_reason=finish_reason,
-            )
-        ],
-        usage=None,
+    return sdk_chat_chunk(
+        MagicMock(
+            choices=[
+                MagicMock(
+                    delta=MagicMock(
+                        content=content,
+                        reasoning_content=None,
+                        tool_calls=None,
+                    ),
+                    finish_reason=finish_reason,
+                )
+            ],
+            usage=None,
+        )
     )
 
 
@@ -288,11 +291,12 @@ async def test_tpm_correction_emits_one_downstream_lifecycle() -> None:
     with patch.object(provider._client.chat.completions, "create", create):
         raw = "".join(
             [
-                event
+                frame
                 async for event in provider.stream_messages(
                     request,
                     reasoning=ReasoningPolicy.off(),
                 )
+                for frame in event.frames
             ]
         )
 
@@ -417,7 +421,7 @@ async def test_distinct_bodies_get_independent_tpm_corrections() -> None:
         ) = await provider._chat._create_stream(
             _body(20_000),
             RequestRecovery(execution),
-            ProviderOperationKind.TOOL_REPAIR,
+            ProviderOperationKind.CONTINUATION,
         )
         await second_attempt.aclose()
 

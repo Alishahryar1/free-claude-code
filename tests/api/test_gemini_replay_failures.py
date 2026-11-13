@@ -7,7 +7,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.support import provider_manager_for_app
 from tests.api.test_four_protocol_matrix import ingress_request, matrix_app
 from tests.api.test_gemini_continuation_replay import native
@@ -21,10 +20,6 @@ from tests.api.test_gemini_continuation_replay import native
 def test_failed_signed_continuation_stops_and_releases_attempt(
     wire, failure, monkeypatch
 ):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
     calls = []
     closed = []
 

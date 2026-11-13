@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
+from free_claude_code.application.response_collection import collected_frames
 from free_claude_code.config.provider_catalog import GEMINI_DEFAULT_BASE
 from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
 from free_claude_code.core.anthropic.models import MessagesRequest
@@ -74,10 +75,12 @@ def _request(wire, history=None):
 
 async def _collect(wire, stream):
     if wire == "messages":
-        message, error, stopped = await aggregate_anthropic_sse_to_message(stream)
+        message, error, stopped = await aggregate_anthropic_sse_to_message(
+            collected_frames(stream, protocol="messages")
+        )
         assert error is None and stopped
         return message
-    chunks = [chunk async for chunk in stream]
+    chunks = [frame async for chunk in stream for frame in chunk.frames]
     events = parse_sse_text("".join(chunks))
     if wire == "responses":
         return events[-1].data["response"]
@@ -476,8 +479,9 @@ async def test_native_empty_signed_part_does_not_emit_empty_text_block():
         events = parse_sse_text(
             "".join(
                 [
-                    chunk
+                    frame
                     async for chunk in provider.stream_messages(_request("messages"))
+                    for frame in chunk.frames
                 ]
             )
         )

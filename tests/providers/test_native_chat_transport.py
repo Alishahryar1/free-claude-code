@@ -51,10 +51,11 @@ async def test_direct_chat_preserves_native_request_and_stream_through_sdk():
     ]
     async with _harness("chat", lambda bodies: (200, events)) as (_, bodies, provider):
         chunks = [
-            event
+            frame
             async for event in provider.stream_chat(
                 ChatRequest.model_validate(request), response_model="public"
             )
+            for frame in event.frames
         ]
         assert bodies == [request]
         assert json.loads(chunks[0].removeprefix("data: ")) == {

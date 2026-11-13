@@ -238,7 +238,7 @@ def test_native_request_applies_fcc_reasoning_override(
     assert body["reasoning"] == expected
 
 
-def test_native_relay_preserves_payload_and_rewrites_only_response_model() -> None:
+def test_native_relay_preserves_payload_and_assigns_public_model_and_sequence() -> None:
     relay = NativeResponsesRelay(public_model="gateway-model")
     created = {
         "type": "response.created",
@@ -298,7 +298,13 @@ def test_native_relay_preserves_payload_and_rewrites_only_response_model() -> No
         **created["response"],
         "model": "gateway-model",
     }
-    assert event_types_and_payloads[1][1] == item
+    assert event_types_and_payloads[1][1] == {**item, "sequence_number": 1}
+    assert [payload["sequence_number"] for _, payload in event_types_and_payloads] == [
+        0,
+        1,
+        2,
+    ]
+    assert item["sequence_number"] == 8
     assert event_types_and_payloads[2][1]["response"] == {
         **completed["response"],
         "model": "gateway-model",

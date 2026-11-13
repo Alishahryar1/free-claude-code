@@ -33,6 +33,7 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
     reasoning_for,
+    sdk_chat_chunk,
 )
 
 
@@ -87,7 +88,7 @@ def _chunk(
         tool_calls=None,
     )
     choice = SimpleNamespace(delta=delta, finish_reason=finish_reason)
-    return SimpleNamespace(choices=[choice], usage=None)
+    return sdk_chat_chunk(SimpleNamespace(choices=[choice], usage=None))
 
 
 def test_init_uses_documented_endpoint(
@@ -336,7 +337,11 @@ async def test_stream_preserves_signed_details_without_duplicating_reasoning(
         return_value=stream,
     ):
         event_text = "".join(
-            [event async for event in zenmux_provider.stream_messages(_request())]
+            [
+                frame
+                async for event in zenmux_provider.stream_messages(_request())
+                for frame in event.frames
+            ]
         )
 
     events = parse_sse_text(event_text)

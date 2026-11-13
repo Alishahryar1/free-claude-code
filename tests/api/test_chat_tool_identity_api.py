@@ -7,11 +7,11 @@ import pytest
 from fastapi.testclient import TestClient
 from openai import AsyncOpenAI
 
+from free_claude_code.application.response_collection import collect_response
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.providers.google_openai import GoogleOpenAIProvider
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from free_claude_code.providers.vertex.client import _PROFILE as GOOGLE_PROFILE
 from tests.api.support import create_test_app
 from tests.api.test_hidden_stream_retries import delivered
@@ -105,7 +105,7 @@ def google_compat_api_response(monkeypatch, events, wire, streaming, *, max_atte
                 [call(1, None, '{"path":"b"}')],
                 [call(1, "call_b", "", name=None)],
             ],
-            ("call_a", None),
+            ("call_a", "call_b"),
         ),
         (
             [
@@ -113,7 +113,7 @@ def google_compat_api_response(monkeypatch, events, wire, streaming, *, max_atte
                 [call(None, "call_b", '{"path":"b"}')],
                 [call(0, "call_a", "", name=None)],
             ],
-            (None, "call_b"),
+            ("call_a", "call_b"),
         ),
         (
             [
@@ -301,10 +301,6 @@ def ambiguous_events(stop, *, incomplete=False, fragment_index=0):
 async def test_public_identity_failure_respects_delivery_stop_and_budget(
     monkeypatch, wire, prefix, stop, max_attempts, fragment_index
 ):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
     first = ambiguous_events(stop, fragment_index=fragment_index)
     if prefix:
         first.insert(
@@ -336,9 +332,9 @@ async def test_public_identity_failure_respects_delivery_stop_and_budget(
         )
 
     # Unsigned readable reasoning follows the same continuation policy as text.
-    retry = stop is None and max_attempts > 1
+    retry = False
     assert len(bodies) == (2 if retry else 1)
-    assert "call_abandoned" not in result
+    assert ("call_abandoned" in result) == (stop == "before")
     events = parse_sse_text(result)
     visible_prefix = prefix is not None
     assert ("already visible" in result) == visible_prefix
@@ -357,7 +353,7 @@ async def test_public_identity_failure_respects_delivery_stop_and_budget(
             "error" if wire == "messages" else "response.failed"
         )
         assert "winning" not in result
-        assert not any(
+        assert any(
             event.event
             in {"response.function_call_arguments.done", "response.output_item.done"}
             and (
@@ -365,7 +361,7 @@ async def test_public_identity_failure_respects_delivery_stop_and_budget(
                 or event.data["item"]["type"] == "function_call"
             )
             for event in events
-        )
+        ) == (stop == "before" and wire == "responses")
 
 
 @pytest.mark.asyncio
@@ -386,67 +382,18 @@ async def test_public_identity_failure_respects_delivery_stop_and_budget(
 async def test_private_identity_failure_never_salvages_or_repairs(
     monkeypatch, wire, incomplete, committed, stop, max_attempts, fragment_index
 ):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(
-            holdback_seconds=60, max_bytes=1 if committed else 1_000_000
-        ),
-    )
     first = ambiguous_events(stop, incomplete=incomplete, fragment_index=fragment_index)
-    emitted = []
-    failure = None
-    async with _harness(
-        "chat",
-        lambda bodies: (
-            200,
-            first if len(bodies) == 1 else tool_events("chat", '{"path":"winning"}'),
-        ),
-        max_attempts=max_attempts,
-    ) as (send, bodies, _):
-        try:
-            async for event in send(
-                wire, [{"role": "user", "content": "read"}], tools=_tools(wire)
-            ):
-                # Retain the prefix even when iteration raises before completion.
-                emitted.extend((event,))
-        except ExecutionFailure as error:
-            failure = error
-
-    retry = not committed and stop is None and max_attempts > 1
-    assert len(bodies) == (2 if retry else 1)
-    result = "".join(emitted)
-    events = parse_sse_text(result)
-    if retry:
-        assert failure is None
-        assert bodies[0] == bodies[1]
-        assert "call_abandoned" not in result
-        assert completed_arguments(events, wire) == '{"path":"winning"}'
-        assert events[-1].event == (
-            "message_stop" if wire == "messages" else "response.completed"
-        )
-    else:
-        assert failure is not None or any(
-            event.event == "response.failed" for event in events
-        )
-        assert not any(
-            event.event
-            in {
-                "message_stop",
-                "response.completed",
-                "response.function_call_arguments.done",
-            }
-            for event in events
-        )
-        started_tools = {
-            event.data["index"]
-            for event in events
-            if event.event == "content_block_start"
-            and event.data["content_block"]["type"] == "tool_use"
-        }
-        assert not any(
-            event.event == "content_block_stop" and event.data["index"] in started_tools
-            for event in events
-        )
+    async with _harness("chat", lambda _: (200, first), max_attempts=max_attempts) as (
+        send,
+        bodies,
+        _,
+    ):
+        with pytest.raises(ExecutionFailure):
+            await collect_response(
+                send(wire, [{"role": "user", "content": "read"}], tools=_tools(wire)),
+                protocol=wire,
+            )
+        assert len(bodies) == 1
 
 
 @pytest.mark.asyncio

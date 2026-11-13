@@ -126,6 +126,7 @@ async def test_completed_only_reasoning_keeps_final_answer_open(field):
         frames = [
             frame
             async for frame in send("messages", [{"role": "user", "content": "hello"}])
+            for frame in frame.frames
         ]
     events = parse_sse_text("".join(frames))
     starts = {

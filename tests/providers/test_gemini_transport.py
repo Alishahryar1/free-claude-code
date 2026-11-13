@@ -8,6 +8,7 @@ import httpx2
 import pytest
 from openai import AsyncOpenAI
 
+from free_claude_code.application.response_collection import collected_frames
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.gemini import GeminiRequest
@@ -77,12 +78,16 @@ def chat_response(deltas, *, finish="stop", usage=None):
     )
 
 
-async def collect(stream):
+async def collect_frames(stream):
     aggregate = GeminiResponseAccumulator()
-    chunks = [chunk async for chunk in stream]
+    chunks = [frame async for frame in stream]
     for event in parse_sse_text("".join(chunks)):
         aggregate.feed(event.data)
     return aggregate.result(), chunks
+
+
+async def collect(stream):
+    return await collect_frames(collected_frames(stream, protocol="gemini"))
 
 
 @pytest.mark.asyncio
@@ -153,7 +158,7 @@ async def test_chat_gemini_never_releases_invalid_executable_arguments(arguments
         request = gemini_request(tools=[{"functionDeclarations": [{"name": "read"}]}])
         with pytest.raises(ExecutionFailure):
             async for chunk in _transport(client).stream_gemini(request):
-                assert "functionCall" not in chunk
+                assert "functionCall" not in "".join(chunk.frames)
 
 
 @pytest.mark.asyncio
@@ -607,5 +612,5 @@ async def test_unknown_upstream_function_is_rejected(protocol):
                 reasoning=ReasoningPolicy.provider_default(),
                 **options,
             ):
-                assert "functionCall" not in chunk
+                assert "functionCall" not in "".join(chunk.frames)
         assert len(bodies) == 1

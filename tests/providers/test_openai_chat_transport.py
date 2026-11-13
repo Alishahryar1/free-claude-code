@@ -71,7 +71,7 @@ async def _consume(transport: OpenAIChatTransport, wire: str) -> str:
             OpenAIResponsesRequest(model="model", input="hello")
         )
     )
-    return "".join([event async for event in stream])
+    return "".join([frame async for event in stream for frame in event.frames])
 
 
 async def test_error_shaped_model_text_is_not_a_protocol_error() -> None:

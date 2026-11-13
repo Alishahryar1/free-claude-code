@@ -10,6 +10,10 @@ import pytest_asyncio
 
 from free_claude_code.config import env_migrations, paths
 from free_claude_code.config.loader import clear_settings_cache
+from free_claude_code.core.stream_delivery import (
+    StreamDeliveryState,
+    bind_stream_delivery,
+)
 from free_claude_code.harnesses import (
     antigravity_integration,
     claude_desktop_integration,
@@ -30,6 +34,16 @@ os.environ.setdefault("MODEL", "nvidia_nim/test-model")
 os.environ["PTB_TIMEDELTA"] = "1"
 # Tests keep proxy authentication disabled unless a case enables it explicitly.
 os.environ["ANTHROPIC_AUTH_TOKEN"] = ""
+
+
+@pytest.fixture(autouse=True)
+def _response_delivery_context(request):
+    """Direct provider tests run inside an unreleased private response context."""
+    if "api" in request.node.path.relative_to(Path(__file__).parent).parts:
+        yield
+        return
+    with bind_stream_delivery(StreamDeliveryState()):
+        yield
 
 
 @pytest.fixture(autouse=True)

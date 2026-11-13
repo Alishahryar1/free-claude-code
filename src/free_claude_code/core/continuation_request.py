@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any, Literal, cast
 
+from .anthropic.content import streamed_tool_arguments
 from .anthropic.conversion import AnthropicToOpenAIConverter, ReasoningReplayMode
 from .anthropic.models import Message, MessagesRequest
 from .anthropic.native import NativeMessagesOptions
@@ -127,7 +128,11 @@ class ContinuationRequest:
                 # Completed public tool blocks retain their streamed JSON deltas.
                 for item in items:
                     if item.get("type") == "tool_use" and "partial_json" in item:
-                        item["input"] = json.loads(cast(str, item.pop("partial_json")))
+                        item["input"] = json.loads(
+                            streamed_tool_arguments(
+                                cast(str, item.pop("partial_json")), item.get("input")
+                            )
+                        )
                 return cast(
                     list[Any],
                     messages_to_gemini(
@@ -229,31 +234,3 @@ class ContinuationRequest:
             for index, content in enumerate(cast(list[JsonObject], body["contents"]))
             if cast(int, source_paths[("contents", index)][1]) >= start
         )
-
-
-def make_text_recovery_body(
-    body: dict[str, Any],
-    partial_text: str,
-    partial_thinking: str = "",
-) -> dict[str, Any]:
-    """Build a text-only continuation request for an OpenAI-chat upstream."""
-    recovery = make_response_recovery_body(body, partial_text, partial_thinking)
-    recovery.pop("tools", None)
-    recovery.pop("tool_choice", None)
-    return recovery
-
-
-def make_response_recovery_body(
-    body: dict[str, Any],
-    partial_text: str,
-    partial_thinking: str = "",
-) -> dict[str, Any]:
-    """Build a continuation request that retains the original tool contract."""
-    blocks: list[JsonObject] = []
-    if partial_thinking:
-        blocks.append({"type": "thinking", "thinking": partial_thinking})
-    if partial_text:
-        blocks.append({"type": "text", "text": partial_text})
-    return ContinuationRequest("chat").build(
-        body, ContinuationSeed("messages", tuple(blocks))
-    )

@@ -16,6 +16,7 @@ from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecode
 from free_claude_code.core.continuation_request import ContinuationRequest
 from free_claude_code.core.history_replay import HistoryReplayError
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.stream_output import StreamOutput, completed_output
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -45,9 +46,7 @@ from free_claude_code.providers.request_recovery import (
 )
 from free_claude_code.providers.stream_read import read_stream_event
 from free_claude_code.providers.stream_recovery import (
-    HoldbackSignal,
-    RecoveryController,
-    RecoveryFailureAction,
+    can_retry_undelivered_stream,
 )
 
 from .stream import GeminiStream
@@ -105,7 +104,7 @@ class GeminiTransport:
         include_thoughts: bool = True,
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         execution = self._admission.start_execution(
             request_id=request_id, model=str(body["model"])
         )
@@ -144,12 +143,9 @@ class GeminiTransport:
         include_thoughts: bool,
         reasoning_correction: ReasoningCorrection | None,
         continuation: ContinuationSeed | None,
-    ) -> AsyncIterator[str]:
-        recovery = RecoveryController(execution.delivery)
+    ) -> AsyncIterator[StreamOutput]:
         endpoint = RequestEndpoint(endpoint_context)
-        request_recovery = RequestRecovery(
-            execution, endpoint=endpoint, stream=recovery
-        )
+        request_recovery = RequestRecovery(execution, endpoint=endpoint)
         corrections = RequestCorrections("gemini", reasoning=reasoning_correction)
         continuation_request = ContinuationRequest("gemini")
         operation = ProviderOperationKind.GENERATION
@@ -162,7 +158,6 @@ class GeminiTransport:
             scope: ProviderAttemptScope | None = None
             presenter: GeminiStream | None = None
             sent_body = body
-            opened = False
             try:
                 attempt = await execution.open_attempt(operation)
                 scope = ProviderAttemptScope(
@@ -212,7 +207,6 @@ class GeminiTransport:
                     raise RetryableProviderProtocolError(
                         "Gemini upstream did not return an SSE stream"
                     )
-                opened = True
                 declarations = [
                     function
                     for tool in body.get("tools", [])
@@ -248,25 +242,18 @@ class GeminiTransport:
                 )
                 upstream = _events(response, read_timeout=self._read_timeout)
                 try:
-                    async with recovery.read_stream(upstream) as events:
-                        async for payload in events:
-                            if payload is HoldbackSignal.EXPIRED:
-                                for event in recovery.flush():
-                                    yield event
-                                continue
-                            source.observe(
-                                "gemini",
-                                payload,
-                                continuing=operation
-                                is ProviderOperationKind.CONTINUATION,
-                            )
-                            output = presenter.feed(payload)
-                            corrections.accepted_history()
-                            if not attempt.accepted:
-                                await attempt.accept()
-                            for event in output:
-                                for held in recovery.push(event):
-                                    yield held
+                    async for payload in upstream:
+                        source.observe(
+                            "gemini",
+                            payload,
+                            continuing=operation is ProviderOperationKind.CONTINUATION,
+                        )
+                        output = presenter.feed(payload)
+                        corrections.accepted_history()
+                        if not attempt.accepted:
+                            await attempt.accept()
+                        if output:
+                            yield completed_output(output)
                 finally:
                     await maybe_await_aclose(upstream)
                 if not presenter.normal_stop_seen:
@@ -274,10 +261,7 @@ class GeminiTransport:
                         "Gemini stream ended without finishReason"
                     )
                 for event in presenter.finish():
-                    for held in recovery.push(event):
-                        yield held
-                for event in recovery.flush():
-                    yield event
+                    yield StreamOutput((event,))
                 return
             except asyncio.CancelledError, GeneratorExit:
                 raise
@@ -305,25 +289,24 @@ class GeminiTransport:
                     )
                     if corrected is not None:
                         body = corrected
-                        recovery.discard()
                         continue
                     if not scope.attempt.accepted:
-                        attempt_failure = await scope.attempt.fail(error)
+                        attempt_failure = await scope.fail(error)
+                        error = attempt_failure.error
                 if attempt_failure is not None and attempt_failure.retry_allowed:
-                    recovery.discard()
                     continue
-                decision = recovery.advance_failure(
-                    retryable=attempt_failure.retryable
+                retryable = (
+                    attempt_failure.retryable
                     if attempt_failure
-                    else is_retryable_stream_error(error),
-                    stream_opened=opened,
-                    generated_output=recovery.committed,
-                    complete_tool_salvageable=False,
+                    else is_retryable_stream_error(error)
+                )
+                retry_allowed = can_retry_undelivered_stream(
+                    execution.delivery,
+                    retryable=retryable,
                     attempts_remaining=execution.attempts_remaining,
                     normal_stop_seen=normal_stop,
                 )
-                if decision.action is RecoveryFailureAction.EARLY_RETRY:
-                    recovery.discard()
+                if retry_allowed:
                     continue
                 if scope is not None:
                     await scope.aclose(active_error=error)
@@ -331,12 +314,11 @@ class GeminiTransport:
                     execution,
                     body=body,
                     request=continuation_request,
-                    retryable=decision.retryable,
+                    retryable=retryable,
                     normal_stop_seen=normal_stop,
                     source=source,
                 )
                 if recovered is not None:
-                    recovery.discard()
                     if recovered.body is None:
                         return
                     body = recovered.body
@@ -351,7 +333,6 @@ class GeminiTransport:
                     read_timeout_s=self._read_timeout,
                     request_id=execution.request_id,
                 )
-                recovery.discard()
                 if execution.delivery is not None:
                     raise public_stream_failure(
                         failure,
