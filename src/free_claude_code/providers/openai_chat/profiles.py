@@ -819,6 +819,24 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         model_listing=OpenAIModelListing(path="/models"),
     ),
+    # Measured against api.apiko.app/v1 across Claude, GPT, DeepSeek, GLM, Kimi,
+    # Gemini, Grok and Qwen chat models: ``low``, ``medium`` and ``high`` are
+    # accepted, and tool turns accept replayed ``reasoning_content``. Image and
+    # video task models are also listed under the ``openai`` endpoint type, so the
+    # catalog asks for ``expand=parameters`` and keeps only ``category: chat``.
+    "apiko": OpenAIChatProfile(
+        _policy(
+            "APIKO",
+            ReasoningReplayMode.REASONING_CONTENT,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NamedEffortReasoning(_LOW_MEDIUM_HIGH, enabled_value="medium"),
+        model_listing=OpenAIModelListing(
+            path="/models",
+            query_params=(("expand", "parameters"),),
+            required_path_values=((("category",), ("chat",)),),
+        ),
+    ),
     "ollama_cloud": OpenAIChatProfile(
         _policy(
             "OLLAMA_CLOUD",

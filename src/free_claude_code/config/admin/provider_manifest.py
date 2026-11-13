@@ -232,6 +232,13 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "tool-capable models across its EU-hosted model pools."
         ),
     },
+    "APIKO_API_KEY": {
+        "label": "APIKO API Keys",
+        "description": (
+            "APIKO OpenAI-compatible multi-provider gateway API key for "
+            "api.apiko.app/v1; create one at apiko.app/dashboard/apikeys."
+        ),
+    },
     "SCW_SECRET_KEY": {
         "label": "Scaleway API Keys",
         "description": (
