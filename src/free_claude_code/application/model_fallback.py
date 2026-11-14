@@ -102,7 +102,11 @@ async def stream_model_candidates(
         recovery_reason = "no_candidate_output"
         context = candidate_failure.stream_context
         if context is None:
-            if delivery.content_released:
+            # Without stream evidence, only a candidate that produced nothing
+            # leaves the delivered prefix, and so the current seed, intact.
+            if delivery.content_released and (
+                candidate_committed or continuation is None
+            ):
                 raise candidate_failure
         else:
             assessment = assess_recovery(

@@ -270,7 +270,7 @@ async def test_last_candidate_failure_raises():
 
 
 @pytest.mark.asyncio
-async def test_silent_continuation_failure_without_context_stops_the_chain():
+async def test_silent_continuation_failure_without_context_keeps_the_seed():
     # Candidate 1 continues from "a", then fails before producing anything and
     # without stream context. The "a" seed is still valid for candidate 2.
     outcome = await _run(
@@ -280,9 +280,25 @@ async def test_silent_continuation_failure_without_context_stops_the_chain():
     )
 
     assert outcome == Outcome(
-        opened=[(0, None), (1, "a")],
-        frames=["a"],
-        raised=429,
+        opened=[(0, None), (1, "a"), (2, "a")],
+        frames=["a", "c"],
         transition="continue",
-        fallbacks=[("continue", "portable_prefix")],
+        fallbacks=[
+            ("continue", "portable_prefix"),
+            ("continue", "no_candidate_output"),
+        ],
+        selected=[3],
     )
+
+
+@pytest.mark.asyncio
+async def test_continuation_failure_without_context_after_own_output_raises():
+    outcome = await _run(
+        fails_after("a", failure=_failure(CLEAN)),
+        fails_after("b", failure=_failure(NO_CONTEXT, status=429)),
+        ok("c"),
+    )
+
+    assert outcome.opened == [(0, None), (1, "a")]
+    assert outcome.frames == ["a", "b"]
+    assert outcome.raised == 429
