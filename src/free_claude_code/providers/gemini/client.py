@@ -82,9 +82,6 @@ class GeminiProvider(BaseProvider):
             read_timeout=config.http_read_timeout,
         )
 
-    async def endpoint(self, *, force_refresh: bool = False) -> HttpEndpoint:
-        return self._snapshot
-
     async def cleanup(self) -> None:
         await self._http.aclose()
 
@@ -180,7 +177,7 @@ class GeminiProvider(BaseProvider):
         message_id = f"msg_{uuid4().hex}"
         return self._gemini.stream(
             body,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=public_model,
             include_thoughts=reasoning.output_enabled,
@@ -215,7 +212,7 @@ class GeminiProvider(BaseProvider):
         adapter = ResponsesToolAdapter(request, ResponsesToolPolicy())
         return self._gemini.stream(
             body,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=public_model,
             include_thoughts=reasoning.output_enabled,
@@ -245,7 +242,7 @@ class GeminiProvider(BaseProvider):
         public_model = response_model or request.model
         return self._gemini.stream(
             body,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=public_model,
             include_thoughts=reasoning.output_enabled,
@@ -278,7 +275,7 @@ class GeminiProvider(BaseProvider):
 
         return self._gemini.stream(
             body,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=public_model,
             include_thoughts=reasoning.output_enabled,
