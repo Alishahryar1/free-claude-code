@@ -192,9 +192,6 @@ class CustomProvider(BaseProvider):
                     endpoint_transport=openai_transport,
                 )
 
-    async def endpoint(self, *, force_refresh: bool = False) -> HttpEndpoint:
-        return self._snapshot
-
     async def cleanup(self) -> None:
         if self._sdk is not None:
             await self._sdk.close()
@@ -248,7 +245,7 @@ class CustomProvider(BaseProvider):
         if self._messages is not None:
             return self._messages.stream_messages(
                 request,
-                endpoint_context=self,
+                endpoint_context=self._snapshot,
                 request_id=request_id,
                 response_model=response_model,
                 reasoning=reasoning,
@@ -262,7 +259,7 @@ class CustomProvider(BaseProvider):
         return transport.stream_messages(
             request,
             input_tokens=input_tokens,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=response_model or request.model,
             reasoning=reasoning,
@@ -286,7 +283,7 @@ class CustomProvider(BaseProvider):
         if self._messages is not None:
             return self._messages.stream_chat(
                 request,
-                endpoint_context=self,
+                endpoint_context=self._snapshot,
                 request_id=request_id,
                 response_model=response_model,
                 reasoning=reasoning,
@@ -298,7 +295,7 @@ class CustomProvider(BaseProvider):
         return transport.stream_chat(
             request,
             input_tokens=input_tokens,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=response_model or request.model,
             reasoning=reasoning,
@@ -321,7 +318,7 @@ class CustomProvider(BaseProvider):
         if self._messages is not None:
             return self._messages.stream_gemini(
                 request,
-                endpoint_context=self,
+                endpoint_context=self._snapshot,
                 request_id=request_id,
                 response_model=response_model,
                 reasoning=reasoning,
@@ -333,7 +330,7 @@ class CustomProvider(BaseProvider):
         return transport.stream_gemini(
             request,
             input_tokens=input_tokens,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=response_model or request.model,
             reasoning=reasoning,
@@ -374,7 +371,7 @@ class CustomProvider(BaseProvider):
         if self._messages is not None:
             return self._messages.stream_responses(
                 request,
-                endpoint_context=self,
+                endpoint_context=self._snapshot,
                 request_id=request_id,
                 response_model=response_model,
                 reasoning=reasoning,
@@ -386,7 +383,7 @@ class CustomProvider(BaseProvider):
         return transport.stream_responses(
             request,
             input_tokens=input_tokens,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=response_model or request.model,
             reasoning=reasoning,

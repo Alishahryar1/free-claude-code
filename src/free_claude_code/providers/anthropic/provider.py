@@ -130,9 +130,6 @@ class AnthropicProvider(BaseProvider):
         self._records: Mapping[str, AnthropicModelRecord] = MappingProxyType({})
         self._model_lock = asyncio.Lock()
 
-    async def endpoint(self, *, force_refresh: bool = False) -> HttpEndpoint:
-        return self._snapshot
-
     async def cleanup(self) -> None:
         await self._http.aclose()
 
@@ -227,7 +224,7 @@ class AnthropicProvider(BaseProvider):
         def open_stream() -> AsyncIterator[StreamOutput]:
             return self._transport().forward_messages(
                 body,
-                endpoint_context=self,
+                endpoint_context=self._snapshot,
                 headers=headers,
                 public_model=response_model or request.model,
                 request_id=request_id,
@@ -272,7 +269,7 @@ class AnthropicProvider(BaseProvider):
         record = await self.model_record(request.model)
         stream = self._transport(record).stream_messages(
             request,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=response_model,
             reasoning=reasoning,
@@ -300,7 +297,7 @@ class AnthropicProvider(BaseProvider):
         record = await self.model_record(request.model)
         stream = self._transport(record).stream_chat(
             request,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=response_model,
             reasoning=reasoning,
@@ -328,7 +325,7 @@ class AnthropicProvider(BaseProvider):
         record = await self.model_record(request.model)
         stream = self._transport(record).stream_gemini(
             request,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=response_model,
             reasoning=reasoning,
@@ -356,7 +353,7 @@ class AnthropicProvider(BaseProvider):
         record = await self.model_record(request.model)
         stream = self._transport(record).stream_responses(
             request,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=response_model,
             reasoning=reasoning,
