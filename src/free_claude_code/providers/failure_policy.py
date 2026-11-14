@@ -445,6 +445,10 @@ def _classify_provider_failure(
         exc, ssl.SSLWantReadError | httpx.NetworkError | httpx2.NetworkError
     ):
         kind = FailureKind.UNAVAILABLE
+    elif retryable_transient_status(exc) == 429:
+        return _failure(FailureKind.RATE_LIMIT, 429, _RATE_LIMIT_MESSAGE, True)
+    elif is_transient_overload_error(exc):
+        return overloaded_provider_failure()
     return _failure(
         kind,
         502,

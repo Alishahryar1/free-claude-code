@@ -310,11 +310,11 @@ _ROWS: dict[str, tuple[Callable[[], Exception], Observed]] = {
     # Unknown exceptions are judged by their text.
     "generic_rate_limit_text": (
         _transport(RuntimeError, "rate limit exceeded"),
-        _o(K.UPSTREAM, 502, True, transient=429),
+        _o(K.RATE_LIMIT, 429, True, transient=429),
     ),
     "generic_overload_text": (
         _transport(RuntimeError, "model overloaded"),
-        _o(K.UPSTREAM, 502, True, transient=503),
+        _o(K.OVERLOADED, 529, True, transient=503),
     ),
     "generic_unknown": (_transport(RuntimeError, "boom"), _o(K.UPSTREAM, 502, False)),
     # Structured context-window codes are terminal on any exception type.
