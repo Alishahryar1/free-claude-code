@@ -193,7 +193,8 @@ def history_retry_body(
             "invalid_signature",
         } or bool(
             re.search(
-                r"invalid signature in thinking block|referenced reasoning item .+ (?:not found|expired)",
+                r"invalid signature in thinking block|referenced reasoning item .+ (?:not found|expired)"
+                r"|encrypted content.*(?:could not be verified|could not be decrypted or parsed)",
                 message,
                 re.I,
             )

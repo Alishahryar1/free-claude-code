@@ -65,6 +65,37 @@ def test_legacy_invalid_id_then_ciphertext_rejection_keeps_original():
     assert body == original
 
 
+@pytest.mark.parametrize("code", [None, "invalid_request_error"])
+def test_named_ciphertext_rejection_without_specific_error_code(code):
+    body = {
+        "input": [
+            {"type": "reasoning", "id": "rs_other", "encrypted_content": "keep"},
+            {
+                "type": "reasoning",
+                "id": "rs_rejected",
+                "encrypted_content": "rejected",
+                "summary": [{"type": "summary_text", "text": "Saved context"}],
+            },
+            {"role": "assistant", "content": "Answer"},
+        ]
+    }
+    original = deepcopy(body)
+    corrected = history_retry_body(
+        _error(
+            "The encrypted content for item rs_rejected could not be verified. "
+            "Reason: Encrypted content could not be decrypted or parsed.",
+            code=code,
+        ),
+        body,
+        "responses",
+    )
+    assert corrected is not None
+    assert corrected["input"][0] == original["input"][0]
+    assert corrected["input"][1] == {"role": "assistant", "content": "Saved context"}
+    assert corrected["input"][2] == original["input"][2]
+    assert body == original
+
+
 @pytest.mark.parametrize(
     "message,code",
     [
