@@ -60,3 +60,4 @@ The LLaMA.cpp icon comes from the upstream llama.cpp repository; its MIT license
 | `xai.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/xai.svg |
 | `zai.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/zai.svg |
 | `zenmux.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/zenmux.svg |
+| `rapid-mlx.png` | https://github.com/raullenchai/Rapid-MLX/blob/main/apps/rapid-mac/Sources/Rapid/Resources/Assets.xcassets/RapidLogo.imageset/RapidLogo%403x.png (Apache-2.0) |

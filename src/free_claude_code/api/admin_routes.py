@@ -24,12 +24,14 @@ from free_claude_code.application.model_catalog import read_model_catalog
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
 from free_claude_code.config.admin.custom_providers import CustomProviderMutation
 from free_claude_code.config.admin.manifest import FIELD_BY_KEY
+from free_claude_code.config.api_keys import first_api_key, normalize_api_keys
 from free_claude_code.config.errors import ConfigConflictError
 from free_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
     ProviderAuthKind,
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.urls import openai_v1_base_url
 from free_claude_code.core.version import package_version
 
 from .admin_security import require_loopback_admin
@@ -69,6 +71,7 @@ LOCAL_PROVIDER_PATHS = {
     "lmstudio": "/models",
     "llamacpp": "/models",
     "ollama": "/api/tags",
+    "rapid_mlx": "/models",
 }
 _LOCAL_PROVIDER_CHECK_FAILURE_MESSAGE = (
     "Could not connect. Verify the URL and that the local provider is running."
@@ -180,6 +183,9 @@ async def local_provider_status(
         provider_id,
         _local_provider_url(provider_id, values),
         LOCAL_PROVIDER_PATHS[provider_id],
+        api_key=first_api_key(normalize_api_keys(values.get("RAPID_MLX_API_KEY", "")))
+        if provider_id == "rapid_mlx"
+        else None,
     )
 
 
@@ -565,11 +571,13 @@ def _local_provider_url(provider_id: str, values: dict[str, str]) -> str:
         return values.get("LLAMACPP_BASE_URL", "")
     if provider_id == "ollama":
         return values.get("OLLAMA_BASE_URL", "")
+    if provider_id == "rapid_mlx":
+        return values.get("RAPID_MLX_BASE_URL", "")
     return ""
 
 
 async def _check_local_provider(
-    provider_id: str, base_url: str, path: str
+    provider_id: str, base_url: str, path: str, *, api_key: str | None = None
 ) -> JsonObject:
     clean_url = base_url.strip().rstrip("/")
     if not clean_url:
@@ -583,11 +591,17 @@ async def _check_local_provider(
             "error_type": None,
         }
 
+    if provider_id == "rapid_mlx":
+        clean_url = openai_v1_base_url(clean_url)
     url = f"{clean_url}{path}"
     started = perf_counter()
     try:
         async with httpx.AsyncClient(timeout=1.5) as client:
-            response = await client.get(url)
+            response = (
+                await client.get(url, headers={"Authorization": f"Bearer {api_key}"})
+                if api_key
+                else await client.get(url)
+            )
         ok = 200 <= response.status_code < 300
         return {
             "provider_id": provider_id,

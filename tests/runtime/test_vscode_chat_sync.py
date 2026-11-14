@@ -36,7 +36,7 @@ async def runtime(request):
     )
 
     async def construct(provider_id, *_):
-        if provider_id in {"lmstudio", "llamacpp", "ollama"}:
+        if provider_id in {"lmstudio", "llamacpp", "ollama", "rapid_mlx"}:
             raise ConnectionError()
         return provider
 

@@ -276,6 +276,7 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 | [LM Studio](https://lmstudio.ai/) | `LM_STUDIO_BASE_URL` | `lmstudio/<model-id>` |
 | [llama.cpp](https://github.com/ggml-org/llama.cpp) | `LLAMACPP_BASE_URL` | `llamacpp/<model-id>` |
 | [Ollama](https://ollama.com/) | `OLLAMA_BASE_URL` | `ollama/<model-tag>` |
+| [Rapid-MLX](https://rapidmlx.com/) | `RAPID_MLX_BASE_URL`, optional `RAPID_MLX_API_KEY` | `rapid_mlx/<model-id>` |
 
 </details>
 
@@ -350,6 +351,19 @@ ollama serve
 ```
 
 Use the tag shown by `ollama list` with the `ollama/` prefix. `OLLAMA_BASE_URL` defaults to `http://localhost:11434`.
+
+### Rapid-MLX (Apple Silicon)
+
+[Rapid-MLX](https://rapidmlx.com/docs/) is an open-source local LLM inference server for Apple Silicon built on MLX.
+
+```bash
+brew install rapid-mlx
+rapid-mlx serve qwen3.5-4b-4bit
+```
+
+In the Admin UI, select Rapid-MLX and a model discovered from `/v1/models`, using the `rapid_mlx/` prefix (for example, `rapid_mlx/mlx-community/Qwen3.5-4B-MLX-4bit`). `RAPID_MLX_BASE_URL` defaults to `http://localhost:8000/v1`. When port 8000 is busy, Rapid-MLX selects the first free port through 8009; set the base URL to the port printed by the server, or start it with an explicit `--port`.
+
+No API key is required by default; keep the `not-needed` placeholder. If server authentication is enabled, set `RAPID_MLX_API_KEY` to the same key. `RAPID_MLX_PROXY` optionally configures a network proxy.
 
 Provider cards show the checked endpoint and response time, with a useful message when a local server is unavailable. After starting the server or correcting its settings, click **Test** to refresh its models.
 
