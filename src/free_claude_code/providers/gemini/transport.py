@@ -287,8 +287,16 @@ class GeminiTransport:
                         body = corrected
                         continue
                     if not scope.attempt.accepted:
-                        attempt_failure = await scope.fail(error)
-                        error = attempt_failure.error
+                        if (
+                            normal_stop
+                            and execution.delivery is not None
+                            and not execution.delivery.content_released
+                        ):
+                            # The model stopped; the failure is ours, not upstream's.
+                            await scope.attempt.accept()
+                        else:
+                            attempt_failure = await scope.fail(error)
+                            error = attempt_failure.error
                 if attempt_failure is not None and attempt_failure.retry_allowed:
                     continue
                 retryable = (

@@ -151,7 +151,7 @@ async def test_messages_stop_rejected_before_acceptance_accepts_the_attempt(trac
 
 
 @pytest.mark.asyncio
-async def test_gemini_stop_rejected_before_acceptance(traces):
+async def test_gemini_stop_rejected_before_acceptance_accepts_the_attempt(traces):
     calls = 0
 
     def reply(request):
@@ -174,7 +174,7 @@ async def test_gemini_stop_rejected_before_acceptance(traces):
 
     assert calls == 1
     assert "grounding" in caught.value.message
-    assert _outcomes(traces) == [("generation", "rejected")]
+    assert _outcomes(traces) == [("generation", "accepted")]
 
 
 @pytest.mark.asyncio
