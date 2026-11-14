@@ -1,6 +1,8 @@
 """The attempt loop every streaming provider transport shares."""
 
-from collections.abc import AsyncIterator, Iterator
+import asyncio
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -10,13 +12,22 @@ from loguru import logger
 from free_claude_code.core.continuation_request import ContinuationRequest
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.stream_delivery import (
+    StreamDeliveryState,
+    bind_stream_delivery,
+)
 from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import (
+    ContinuationSeed,
+    DeliveredPrefix,
     SourceRecoverySnapshot,
     StreamFailureContext,
 )
 from free_claude_code.core.trace import TRACE_PAYLOAD_BINDING
-from free_claude_code.providers.admission import ProviderOperationKind
+from free_claude_code.providers.admission import (
+    ProviderExecution,
+    ProviderOperationKind,
+)
 from free_claude_code.providers.attempt_loop import (
     AttemptContext,
     AttemptPlan,
@@ -35,6 +46,8 @@ from free_claude_code.providers.stream_failure_resolution import (
     StreamFailureResolver,
 )
 from tests.providers.support import immediate_admission
+
+BODY: JsonObject = {"model": "m", "n": 0, "messages": []}
 
 
 class _Unresolvable(Exception):
@@ -106,9 +119,11 @@ async def _run(
     *steps: Step,
     correction: CorrectionStep | None = None,
     max_attempts: int = 3,
+    delivery: StreamDeliveryState | None = None,
 ) -> tuple[list[str], BaseException | None]:
     admission = immediate_admission(max_attempts=max_attempts)
-    execution = admission.start_execution(request_id="loop", model="m")
+    with bind_stream_delivery(delivery) if delivery else nullcontext():
+        execution = admission.start_execution(request_id="loop", model="m")
     script = iter(steps)
 
     class Scripted(TransportAttempt):
@@ -142,38 +157,43 @@ async def _run(
         def abandon(self, error: Exception) -> tuple[StreamOutput, ...]:
             return (StreamOutput(("abandoned",)),) if self.streamed else ()
 
-    continuation = ContinuationRequest("messages")
-    resolver = StreamFailureResolver(
-        StreamFailurePolicy(
-            provider_name="TEST",
-            read_timeout_s=30,
-            request_id="loop",
-            raise_unfinalized=(_Unfinalized,),
-        ),
-        recovery=RequestRecovery(execution, endpoint=None),
-        continuation=continuation,
-    )
-    plan = AttemptPlan(
-        body={"model": "m", "n": 0},
-        operation_kind=ProviderOperationKind.GENERATION,
-        execution=execution,
-        resolver=resolver,
-        corrector=lambda: RequestCorrector(
-            "messages", steps=(correction,) if correction is not None else ()
-        ),
-        start=Scripted,
-        provider_name="TEST",
-        transport="messages",
-        gateway_model="public",
-    )
     frames: list[str] = []
     raised: BaseException | None = None
     try:
-        async for output in run_attempts(plan):
+        async for output in run_attempts(_plan(execution, Scripted, correction)):
             frames.extend(output.frames)
     except Exception as error:
         raised = error
     return frames, raised
+
+
+def _plan(
+    execution: ProviderExecution,
+    start: Callable[[AttemptContext], TransportAttempt],
+    correction: CorrectionStep | None = None,
+) -> AttemptPlan:
+    return AttemptPlan(
+        body=BODY,
+        operation_kind=ProviderOperationKind.GENERATION,
+        execution=execution,
+        resolver=StreamFailureResolver(
+            StreamFailurePolicy(
+                provider_name="TEST",
+                read_timeout_s=30,
+                request_id="loop",
+                raise_unfinalized=(_Unfinalized,),
+            ),
+            recovery=RequestRecovery(execution, endpoint=None),
+            continuation=ContinuationRequest("messages"),
+        ),
+        corrector=lambda: RequestCorrector(
+            "messages", steps=(correction,) if correction is not None else ()
+        ),
+        start=start,
+        provider_name="TEST",
+        transport="messages",
+        gateway_model="public",
+    )
 
 
 @pytest.mark.asyncio
@@ -205,7 +225,7 @@ async def test_retryable_failure_before_acceptance_retries_the_same_body(record)
     frames, raised = await _run(record, Step(error=_failure(503)), Step(frames=("ok",)))
 
     assert (frames, raised) == (["abandoned", "ok"], None)
-    assert record.bodies == [{"model": "m", "n": 0}] * 2
+    assert record.bodies == [BODY] * 2
     assert record.attempts_at_prepare == [0, 1]
     assert record.outcomes == ["retryable_failure", "accepted"]
 
@@ -226,10 +246,8 @@ async def test_corrected_rejection_retries_with_the_corrected_body(record):
     )
 
     assert (frames, raised) == (["abandoned", "ok"], None)
-    assert record.bodies == [{"model": "m", "n": 0}, {"model": "m", "n": 1}]
-    assert [rejection.sent_body for rejection in rejections] == [
-        {"model": "m", "n": 0, "sent": True}
-    ]
+    assert record.bodies == [BODY, {**BODY, "n": 1}]
+    assert [rejection.sent_body for rejection in rejections] == [{**BODY, "sent": True}]
 
 
 @pytest.mark.asyncio
@@ -271,3 +289,51 @@ async def test_unfinalized_failure_is_raised_as_itself(record):
 
     assert raised is error
     assert raised.__cause__ is None
+
+
+def _delivered(text: str) -> StreamDeliveryState:
+    state = StreamDeliveryState()
+    state.bind_prefix(
+        lambda: DeliveredPrefix(
+            text=text,
+            thinking="",
+            has_calls=False,
+            eligible=True,
+            can_handoff=True,
+            unsafe_reason=None,
+            continuation=ContinuationSeed(
+                "messages", ({"type": "text", "text": text},)
+            ),
+        )
+    )
+    state.release_content()
+    return state
+
+
+@pytest.mark.asyncio
+async def test_early_close_finishes_transport_cleanup_before_releasing_admission():
+    events: list[str] = []
+
+    class Resource:
+        async def aclose(self) -> None:
+            events.append("scope resource closed")
+
+    class Held(TransportAttempt):
+        async def stream(
+            self, scope: ProviderAttemptScope
+        ) -> AsyncIterator[StreamOutput]:
+            scope.retain(Resource())
+            await scope.attempt.accept()
+            try:
+                yield StreamOutput(("a",))
+                yield StreamOutput(("b",))
+            finally:
+                await asyncio.sleep(0)
+                events.append("transport cleanup finished")
+
+    execution = immediate_admission().start_execution(request_id="close", model="m")
+    outputs = run_attempts(_plan(execution, Held))
+    assert (await anext(outputs)).frames == ("a",)
+    await outputs.aclose()
+
+    assert events == ["transport cleanup finished", "scope resource closed"]

@@ -2,7 +2,7 @@
 
 import asyncio
 import sys
-from collections.abc import AsyncGenerator, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, assert_never
@@ -10,7 +10,7 @@ from typing import Any, assert_never
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_output import StreamOutput
-from free_claude_code.core.trace import trace_event
+from free_claude_code.core.trace import close_stream_input, trace_event
 from free_claude_code.providers.admission import (
     ProviderExecution,
     ProviderOperationKind,
@@ -79,6 +79,7 @@ async def run_attempts(plan: AttemptPlan) -> AsyncGenerator[StreamOutput]:
         source = SourceRecoveryState(execution, previous=source)
         attempt = plan.start(AttemptContext(body, operation_kind, corrections, source))
         scope: ProviderAttemptScope | None = None
+        stream: AsyncIterator[StreamOutput] | None = None
         try:
             await attempt.prepare()
             scope = ProviderAttemptScope(
@@ -86,7 +87,8 @@ async def run_attempts(plan: AttemptPlan) -> AsyncGenerator[StreamOutput]:
                 provider_name=plan.provider_name,
                 request_id=execution.request_id,
             )
-            async for output in attempt.stream(scope):
+            stream = attempt.stream(scope)
+            async for output in stream:
                 yield output
             trace_event(
                 stage="provider",
@@ -139,8 +141,20 @@ async def run_attempts(plan: AttemptPlan) -> AsyncGenerator[StreamOutput]:
                 case _:
                     assert_never(resolution)
         finally:
-            if scope is not None:
-                await scope.aclose(active_error=sys.exception())
+            active_error = sys.exception()
+            try:
+                # A consumer that closes early leaves the transport's reader
+                # suspended; finish its cleanup before admission is released.
+                if stream is not None:
+                    await close_stream_input(
+                        stream,
+                        owner="attempt_loop",
+                        source="provider",
+                        preserved_error=active_error,
+                    )
+            finally:
+                if scope is not None:
+                    await scope.aclose(active_error=active_error)
     if execution.last_failure is not None:
         raise execution.last_failure
     raise RuntimeError(f"{plan.transport} execution ended without a terminal result")
