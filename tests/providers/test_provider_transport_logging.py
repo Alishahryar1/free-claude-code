@@ -33,7 +33,7 @@ async def test_stream_failure_default_logs_exclude_exception_text(caplog) -> Non
     with (
         patch.object(
             provider._chat,
-            "_create_stream",
+            "_open_stream",
             new_callable=AsyncMock,
             side_effect=RuntimeError("SECRET_OPENAI_COMPAT"),
         ),
@@ -61,7 +61,7 @@ async def test_stream_failure_default_logs_cause_types_only(caplog) -> None:
     with (
         patch.object(
             provider._chat,
-            "_create_stream",
+            "_open_stream",
             new_callable=AsyncMock,
             side_effect=error,
         ),
@@ -86,7 +86,7 @@ async def test_stream_failure_verbose_traceback_redacts_credentials(caplog) -> N
     with (
         patch.object(
             provider._chat,
-            "_create_stream",
+            "_open_stream",
             new_callable=AsyncMock,
             side_effect=RuntimeError(
                 "api_key=SECRET_OPENAI_COMPAT useful traceback detail"

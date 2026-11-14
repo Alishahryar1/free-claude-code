@@ -62,7 +62,6 @@ from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.core.trace import provider_chat_body_snapshot, trace_event
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
-    ProviderAttempt,
     ProviderOperationKind,
 )
 from free_claude_code.providers.canonical_failures import (
@@ -75,7 +74,6 @@ from free_claude_code.providers.continuation import (
 )
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
-from free_claude_code.providers.failure_classification import classify
 from free_claude_code.providers.history_negotiation import (
     HistoryModeCache,
     resolve_history_overrides,
@@ -86,7 +84,6 @@ from free_claude_code.providers.history_replay import (
 )
 from free_claude_code.providers.http import (
     ProviderAttemptScope,
-    close_provider_stream,
     maybe_await_aclose,
 )
 from free_claude_code.providers.openai_client import OpenAIRequestClient
@@ -168,6 +165,25 @@ def _reserved_anthropic_tool_ids(request: MessagesRequest) -> frozenset[str]:
         for block in message.content
         if isinstance(block, ContentBlockToolUse) and block.id.strip()
     )
+
+
+def _sdk_create_body(create_body: dict[str, Any]) -> dict[str, Any]:
+    """Move fields the SDK does not declare into ``extra_body``."""
+    sdk_fields = CompletionCreateParamsStreaming.__annotations__
+    passthrough = {"extra_body", "extra_headers"}
+    extras = {
+        key: value
+        for key, value in create_body.items()
+        if key not in sdk_fields and key not in passthrough
+    }
+    sent = {
+        key: value
+        for key, value in create_body.items()
+        if key in sdk_fields or key in passthrough
+    }
+    if extras:
+        sent["extra_body"] = {**extras, **sent.get("extra_body", {})}
+    return sent
 
 
 class _ChatStreamPresenter:
@@ -622,198 +638,113 @@ class OpenAIChatTransport:
             tool_adapter=translated.tool_adapter,
         )
 
-    async def _create_stream(
+    async def _prepare_create(
         self,
         body: dict,
-        request_recovery: RequestRecovery,
         operation_kind: ProviderOperationKind,
         *,
-        corrections: RequestCorrections | None = None,
+        corrections: RequestCorrections,
         endpoint: RequestEndpoint | None = None,
         request_client: OpenAIRequestClient | None = None,
         extra_headers: Mapping[str, str] | None = None,
-        on_event: Callable[[Any], None] | None = None,
         on_origin: Callable[[ReplayOrigin], None] | None = None,
         call_replay: tuple[CallReplay, ...] = (),
         native_chat: bool = False,
-    ) -> tuple[Any, dict, ProviderAttempt, dict]:
-        """Create a streaming chat completion with bounded request fallbacks."""
-        execution = request_recovery.execution
+    ) -> tuple[dict, dict[str, Any], AsyncOpenAI]:
+        """Return the intended body, the body to send, and the client to send it."""
         body = self._apply_learned_output_cap(body)
-        if corrections is None:
-            corrections = RequestCorrections("chat")
-
-        while execution.can_attempt:
-            attempt = await execution.open_attempt(operation_kind)
-            stream: Any | None = None
-            retain_attempt = False
-            create_body = body
-            validating = False
-            try:
-                create_body = cast(
-                    dict[str, Any],
-                    resolve_history_overrides(
-                        body
-                        if native_chat
-                        else self._behavior.prepare_create_body(body)
-                    ),
-                )
-                client = self._client
-                if endpoint is not None:
-                    assert request_client is not None
-                    client = request_client.for_endpoint(
-                        self._client, await endpoint.resolve()
-                    )
-                elif self._api_key_provider is not None:
-                    # A borrowed view pins the same credential for provenance and
-                    # inference, without owning or closing the provider's HTTP pool.
-                    client = self._client.with_options(
-                        api_key=await self._api_key_provider()
-                    )
-                if extra_headers or endpoint is not None:
-                    create_body = create_body.copy()
-                    create_body["extra_headers"] = {
-                        **(create_body.get("extra_headers") or {}),
-                        **(extra_headers or {}),
-                        **(
-                            request_client.openai_headers()
-                            if request_client is not None
-                            else {}
-                        ),
-                    }
-                origin = replay_origin(
-                    self._provider_name,
-                    "chat",
-                    str(create_body["model"]),
-                    client=client,
-                    endpoint=endpoint.snapshot if endpoint is not None else None,
-                )
-                if on_origin is not None:
-                    on_origin(origin)
-                create_body = cast(
-                    dict[str, Any],
-                    corrections.prepare_history(
-                        create_body,
+        create_body = cast(
+            dict[str, Any],
+            resolve_history_overrides(
+                body if native_chat else self._behavior.prepare_create_body(body)
+            ),
+        )
+        client = self._client
+        if endpoint is not None:
+            assert request_client is not None
+            client = request_client.for_endpoint(self._client, await endpoint.resolve())
+        elif self._api_key_provider is not None:
+            # A borrowed view pins the same credential for provenance and
+            # inference, without owning or closing the provider's HTTP pool.
+            client = self._client.with_options(api_key=await self._api_key_provider())
+        if extra_headers or endpoint is not None:
+            create_body = create_body.copy()
+            create_body["extra_headers"] = {
+                **(create_body.get("extra_headers") or {}),
+                **(extra_headers or {}),
+                **(
+                    request_client.openai_headers()
+                    if request_client is not None
+                    else {}
+                ),
+            }
+        origin = replay_origin(
+            self._provider_name,
+            "chat",
+            str(create_body["model"]),
+            client=client,
+            endpoint=endpoint.snapshot if endpoint is not None else None,
+        )
+        if on_origin is not None:
+            on_origin(origin)
+        create_body = cast(
+            dict[str, Any],
+            corrections.prepare_history(
+                create_body,
+                origin,
+                self._history_cache,
+                reasoning_field=self._profile.request_policy.reasoning_replay.value,
+                structured_details=self._profile.structured_reasoning_details,
+                native_chat=native_chat,
+                continuation=operation_kind is ProviderOperationKind.CONTINUATION,
+                finalize=lambda projected, origin=origin: (
+                    self._behavior.prepare_history_body(
+                        cast(
+                            dict[str, Any],
+                            apply_call_replay(projected, origin, call_replay),
+                        )
+                        if call_replay
+                        else projected,
                         origin,
-                        self._history_cache,
-                        reasoning_field=self._profile.request_policy.reasoning_replay.value,
-                        structured_details=self._profile.structured_reasoning_details,
-                        native_chat=native_chat,
-                        continuation=operation_kind
-                        is ProviderOperationKind.CONTINUATION,
-                        finalize=lambda projected, origin=origin: (
-                            self._behavior.prepare_history_body(
-                                cast(
-                                    dict[str, Any],
-                                    apply_call_replay(projected, origin, call_replay),
-                                )
-                                if call_replay
-                                else projected,
-                                origin,
-                            )
-                        ),
-                    ),
-                )
-                if self._validate_prepared_body is not None:
-                    validating = True
-                    await self._validate_prepared_body(create_body)
-                    validating = False
+                    )
+                ),
+            ),
+        )
+        return body, create_body, client
 
-                def observed(event: Any) -> None:
-                    if (
-                        getattr(event, "choices", None)
-                        or getattr(event, "usage", None) is not None
-                    ):
-                        corrections.accepted_history()
-                    if on_event is not None:
-                        on_event(event)
+    async def _open_stream(
+        self,
+        scope: ProviderAttemptScope,
+        client: AsyncOpenAI,
+        create_body: dict[str, Any],
+        body: dict,
+        *,
+        corrections: RequestCorrections,
+        on_event: Callable[[Any], None] | None = None,
+        native_chat: bool = False,
+    ) -> Any:
+        """Open one streaming chat completion owned by an admitted attempt."""
 
-                if native_chat:
-                    sdk_fields = CompletionCreateParamsStreaming.__annotations__
-                    extras = {
-                        key: value
-                        for key, value in create_body.items()
-                        if key not in sdk_fields
-                        and key not in {"extra_body", "extra_headers"}
-                    }
-                    create_body = {
-                        key: value
-                        for key, value in create_body.items()
-                        if key in sdk_fields or key in {"extra_body", "extra_headers"}
-                    }
-                    if extras:
-                        create_body["extra_body"] = {
-                            **extras,
-                            **create_body.get("extra_body", {}),
-                        }
-                stream = OpenAIStreamAdapter(
-                    await client.chat.completions.create(
-                        **create_body,
-                        stream=True,
-                    ),
-                    read_timeout_s=self._read_timeout_s,
-                    on_event=observed,
-                    transform_event=self._behavior.normalize_chunk,
-                )
-                if not native_chat:
-                    stream = self._behavior.normalize_stream(stream, body)
-                retain_attempt = True
-                return stream, body, attempt, create_body
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                if validating:
-                    # No upstream response occurred. Abandon the permit without
-                    # teaching correction or recovery state about a rejection.
-                    raise
-                retry_body = await request_recovery.retry_request(
-                    error,
-                    classify(error).auth_status,
-                    attempt,
-                    body,
-                    operation_kind=operation_kind,
-                    propose_correction=partial(
-                        corrections.next_body,
-                        error,
-                        body,
-                        sent_body=create_body,
-                        reasoning_error=error,
-                        reasoning_sent_body=create_body,
-                        after_common=partial(
-                            self._next_chat_retry_body,
-                            error,
-                            body,
-                            sent_body=create_body,
-                        ),
-                    ),
-                )
-                if retry_body is not None:
-                    body = self._apply_learned_output_cap(retry_body)
-                    continue
-                decision = await attempt.fail(
-                    error,
-                    provider_failure_override=self._behavior.failure_override,
-                )
-                if not decision.retry_allowed:
-                    if decision.error is not error:
-                        raise decision.error from error
-                    raise
-            finally:
-                if not retain_attempt:
-                    try:
-                        if stream is not None:
-                            await close_provider_stream(
-                                stream,
-                                active_error=sys.exception(),
-                                provider_name=self._provider_name,
-                                request_id=execution.request_id,
-                            )
-                    finally:
-                        await attempt.aclose()
+        def observed(event: Any) -> None:
+            if (
+                getattr(event, "choices", None)
+                or getattr(event, "usage", None) is not None
+            ):
+                corrections.accepted_history()
+            if on_event is not None:
+                on_event(event)
 
-        if execution.last_failure is not None:
-            raise execution.last_failure
-        raise RuntimeError("provider execution ended without a final error")
+        stream = scope.retain(
+            OpenAIStreamAdapter(
+                await client.chat.completions.create(**create_body, stream=True),
+                read_timeout_s=self._read_timeout_s,
+                on_event=observed,
+                transform_event=self._behavior.normalize_chunk,
+            )
+        )
+        if native_chat:
+            return stream
+        return scope.adopt(self._behavior.normalize_stream(stream, body))
 
     def _next_chat_retry_body(
         self,
@@ -1267,26 +1198,43 @@ class _OpenAIChatStreamRunner:
                 )
 
             scope: ProviderAttemptScope | None = None
+            validating = False
             try:
-                stream, body, attempt, sent_body = await self._transport._create_stream(
+                if not execution.can_attempt:
+                    if execution.last_failure is not None:
+                        raise execution.last_failure
+                    raise RuntimeError("provider execution ended without a final error")
+                scope = ProviderAttemptScope(
+                    await execution.open_attempt(operation_kind),
+                    provider_name=tag,
+                    request_id=self._request_id,
+                )
+                body, sent_body, client = await self._transport._prepare_create(
                     body,
-                    request_recovery,
                     operation_kind,
                     corrections=corrections,
                     endpoint=self._endpoint,
                     request_client=self._request_client,
                     extra_headers=self._extra_headers,
-                    on_event=observe_chunk,
                     on_origin=partial(setattr, presenter.output, "replay_origin"),
                     call_replay=self._call_replay,
                     native_chat=self._native_chat,
                 )
-                scope = ProviderAttemptScope(
-                    attempt,
-                    provider_name=tag,
-                    request_id=self._request_id,
+                if self._transport._validate_prepared_body is not None:
+                    validating = True
+                    await self._transport._validate_prepared_body(sent_body)
+                    validating = False
+                if self._native_chat:
+                    sent_body = _sdk_create_body(sent_body)
+                stream = await self._transport._open_stream(
+                    scope,
+                    client,
+                    sent_body,
+                    body,
+                    corrections=corrections,
+                    on_event=observe_chunk,
+                    native_chat=self._native_chat,
                 )
-                stream = scope.retain(stream)
                 presenter.bind_tool_argument_aliases(self._tool_argument_aliases)
                 async for chunk in stream:
                     if not scope.attempt.accepted:
@@ -1305,6 +1253,10 @@ class _OpenAIChatStreamRunner:
             except asyncio.CancelledError, GeneratorExit:
                 raise
             except Exception as error:
+                if validating:
+                    # No upstream response occurred. Abandon the permit without
+                    # teaching correction or recovery state about a rejection.
+                    raise
                 if not (
                     isinstance(error, ExecutionFailure)
                     and error.stream_context
@@ -1327,6 +1279,12 @@ class _OpenAIChatStreamRunner:
                             sent_body=sent_body,
                             reasoning_error=error,
                             reasoning_sent_body=sent_body,
+                            after_common=partial(
+                                self._transport._next_chat_retry_body,
+                                error,
+                                body,
+                                sent_body=sent_body,
+                            ),
                         ),
                         failure_payload=presenter.output.failure_payload,
                     )
