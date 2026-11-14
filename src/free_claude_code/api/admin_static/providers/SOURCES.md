@@ -34,6 +34,7 @@ The LLaMA.cpp icon comes from the upstream llama.cpp repository; its MIT license
 | `lmstudio.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/lmstudio.svg |
 | `minimax-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/minimax-color.svg |
 | `mistral-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/mistral-color.svg |
+| `modelscope-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/modelscope-color.svg |
 | `nararoute.png` | https://router.bynara.id/logo_light.png |
 | `nebius.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/nebius.svg |
 | `novita-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/novita-color.svg |
