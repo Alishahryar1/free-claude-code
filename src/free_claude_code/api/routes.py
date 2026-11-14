@@ -275,6 +275,30 @@ async def _create_responses_response(
     return await bind_response_lifetime(response, lease.release)
 
 
+def _filter_tool_addition_blocks(data: dict[str, Any]) -> dict[str, Any]:
+    """Remove CLI/proxy notification blocks (tool_addition) from message content."""
+    if not isinstance(data.get("messages"), list):
+        return data
+    result = dict(data)
+    messages = []
+    for message in data["messages"]:
+        if not isinstance(message, dict):
+            messages.append(message)
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            filtered = [
+                block for block in content
+                if isinstance(block, dict) and block.get("type") != "tool_addition"
+            ]
+            if len(filtered) != len(content):
+                message = dict(message)
+                message["content"] = filtered
+        messages.append(message)
+    result["messages"] = messages
+    return result
+
+
 def _probe_response(allow: str) -> Response:
     return Response(status_code=204, headers={"Allow": allow})
 
@@ -287,9 +311,10 @@ async def create_message(
     _auth=Depends(require_anthropic_proxy_auth),
 ):
     """Create a message (JSON by default; stream=true returns Anthropic SSE)."""
+    filtered_data = _filter_tool_addition_blocks(request_data)
     return await _create_messages_response(
         services,
-        cast(JsonObject, request_data),
+        cast(JsonObject, filtered_data),
         request_id=get_request_id(request),
         request_headers=request.headers,
     )
