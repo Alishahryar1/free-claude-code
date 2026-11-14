@@ -218,7 +218,7 @@ _CHAT_SHAPE = {
         ]
     ],
 }
-_RESPONSES_SHAPE = {
+_SHARED_SHAPE = {
     "provider.recovery.early_retry": [
         ["attempts_started", "max_attempts", "provider", "request_id", "transport"]
     ],
@@ -234,12 +234,6 @@ _RESPONSES_SHAPE = {
         ]
     ],
 }
-_MESSAGES_SHAPE = {
-    "provider.recovery.early_retry": [],
-    "provider.response.error": [
-        ["failure_kind", "provider", "request_id", "transport"]
-    ],
-}
 
 
 @pytest.mark.asyncio
@@ -247,8 +241,8 @@ _MESSAGES_SHAPE = {
     ("protocol", "shape"),
     [
         ("chat", _CHAT_SHAPE),
-        ("messages", _MESSAGES_SHAPE),
-        ("responses", _RESPONSES_SHAPE),
+        ("messages", _SHARED_SHAPE),
+        ("responses", _SHARED_SHAPE),
     ],
 )
 async def test_exhausted_undelivered_stream_traces(protocol, shape, traces):
