@@ -17,6 +17,7 @@ from loguru import logger
 from free_claude_code.config.provider_catalog import GEMINI_DEFAULT_BASE
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.trace import TRACE_PAYLOAD_BINDING
+from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.gemini import GeminiProvider
 from tests.api.test_delivered_stream_recovery import text_events
 from tests.api.test_hidden_stream_retries import delivered
@@ -178,18 +179,28 @@ async def test_gemini_stop_rejected_before_acceptance_accepts_the_attempt(traces
 
 @pytest.mark.asyncio
 async def test_gemini_inband_authentication_failure_refreshes_once(traces):
-    calls = 0
+    keys: list[str] = []
+    refreshes: list[bool] = []
 
     def reply(request):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
+        keys.append(request.headers["x-goog-api-key"])
+        if len(keys) == 1:
             return _gemini_payloads({"error": {"code": 401, "message": "expired"}})
         return gemini_sse([{"text": "ok"}])
 
-    await _drain_gemini(_gemini(reply, max_attempts=3))
+    provider = _gemini(reply, max_attempts=3)
 
-    assert calls == 2
+    async def endpoint(*, force_refresh: bool = False) -> HttpEndpoint:
+        refreshes.append(force_refresh)
+        return HttpEndpoint(
+            GEMINI_DEFAULT_BASE, {}, "fresh-key" if force_refresh else "key"
+        )
+
+    provider.endpoint = endpoint
+    await _drain_gemini(provider)
+
+    assert refreshes == [False, True]
+    assert keys == ["key", "fresh-key"]
 
 
 def _trace_shape(traces: list[dict[str, Any]]) -> dict[str, list[list[str]]]:
