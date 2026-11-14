@@ -53,6 +53,7 @@ FACADE_ONLY_BOUNDARIES = {
     "free_claude_code.application.model_fallback",
     "free_claude_code.core.openai_responses",
     "free_claude_code.messaging.trees",
+    "free_claude_code.providers.attempt_loop",
     "free_claude_code.providers.failure_classification",
     "free_claude_code.providers.openai_chat",
     "free_claude_code.providers.request_correction",
