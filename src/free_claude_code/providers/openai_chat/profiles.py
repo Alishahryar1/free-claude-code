@@ -819,6 +819,43 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         model_listing=OpenAIModelListing(path="/models"),
     ),
+    # TensorX documents ``reasoning_effort`` per model family
+    # (docs.tensorx.ai/api-reference/reasoning). ``high`` and ``none`` are a 400 on
+    # Qwen 3.8, and ``enable_thinking: false`` is rejected there too, so efforts map
+    # onto ``low``/``medium``/``xhigh`` and "off" sends no field. ``max_tokens`` is
+    # reserved against the key's TPM allowance while a request is in flight, so no
+    # default is injected when the client omits it. ``/model/info`` is the
+    # documented source for per-model token limits and capability flags.
+    "tensorx": OpenAIChatProfile(
+        _policy(
+            "TENSORX",
+            ReasoningReplayMode.REASONING_CONTENT,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+        ),
+        NamedEffortReasoning(
+            (
+                (ReasoningEffort.MINIMAL, "low"),
+                (ReasoningEffort.LOW, "low"),
+                (ReasoningEffort.MEDIUM, "medium"),
+                (ReasoningEffort.HIGH, "xhigh"),
+                (ReasoningEffort.XHIGH, "xhigh"),
+                (ReasoningEffort.MAX, "xhigh"),
+            ),
+            enabled_value="medium",
+        ),
+        model_listing=OpenAIModelListing(
+            path="/model/info",
+            id_field="model_name",
+            thinking_boolean_path=("model_info", "supports_reasoning"),
+            fixed_input_modalities=_TEXT_INPUT_MODALITIES,
+            input_modality_boolean_paths=(
+                (ModelInputModality.IMAGE, ("model_info", "supports_vision")),
+            ),
+            context_window_tokens_path=("model_info", "max_input_tokens"),
+            max_output_tokens_path=("model_info", "max_output_tokens"),
+        ),
+    ),
     "ollama_cloud": OpenAIChatProfile(
         _policy(
             "OLLAMA_CLOUD",

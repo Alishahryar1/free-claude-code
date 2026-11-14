@@ -315,6 +315,13 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "Create one at xkiro.com/dashboard/api/keys."
         ),
     },
+    "TENSORX_API_KEY": {
+        "label": "TensorX API Keys",
+        "description": (
+            "TensorX OpenAI-compatible gateway API key for api.tensorx.ai/v1. "
+            "Keys begin with sk-; create one at app.tensorx.ai/dashboard."
+        ),
+    },
     "AGNES_API_KEY": {
         "label": "Agnes AI API Keys",
         "description": (

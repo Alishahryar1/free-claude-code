@@ -97,6 +97,8 @@ ATLASCLOUD_DEFAULT_BASE = "https://api.atlascloud.ai/v1"
 XKIRO_DEFAULT_BASE = "https://api.xkiro.com/v1"
 # Opper OpenAI-compatible Chat Completions gateway.
 OPPER_DEFAULT_BASE = "https://api.opper.ai/v3/compat"
+# TensorX OpenAI-compatible Chat Completions gateway; the /v1 suffix is required.
+TENSORX_DEFAULT_BASE = "https://api.tensorx.ai/v1"
 # Agnes AI OpenAI-compatible Chat Completions API.
 AGNES_DEFAULT_BASE = "https://apihub.agnes-ai.com/v1"
 # ZenMux OpenAI-compatible Chat Completions gateway.
@@ -777,6 +779,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="opper_api_keys",
         default_base_url=OPPER_DEFAULT_BASE,
         proxy_attr="opper_proxy",
+    ),
+    "tensorx": ProviderDescriptor(
+        provider_id="tensorx",
+        display_name="TensorX",
+        website_url="https://tensorx.ai/",
+        logo_filename="tensorx.svg",
+        credential_env="TENSORX_API_KEY",
+        credential_url="https://app.tensorx.ai/dashboard",
+        credential_attr="tensorx_api_keys",
+        default_base_url=TENSORX_DEFAULT_BASE,
+        proxy_attr="tensorx_proxy",
     ),
     "ollama_cloud": ProviderDescriptor(
         provider_id="ollama_cloud",

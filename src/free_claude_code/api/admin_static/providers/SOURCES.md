@@ -46,6 +46,7 @@ The LLaMA.cpp icon comes from the upstream llama.cpp repository; its MIT license
 | `atlascloud.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/atlascloud.svg |
 | `xkiro.png` | https://xkiro.com/images/logo/logo-xt-green.png |
 | `opper.svg` | https://opper.ai/ (provided by Opper, single-colour `currentColor` mark) |
+| `tensorx.svg` | Neutral "TX" lettermark drawn for FCC as a placeholder; not TensorX's brand mark. Replace with the official asset from https://tensorx.ai/ |
 | `poolside-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/poolside-color.svg |
 | `qwen-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/qwen-color.svg |
 | `sambanova-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/sambanova-color.svg |

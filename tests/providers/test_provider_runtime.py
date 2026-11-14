@@ -37,6 +37,7 @@ from free_claude_code.config.provider_catalog import (
     SCALEWAY_DEFAULT_BASE,
     SILICONFLOW_DEFAULT_BASE,
     SUPPORTED_PROVIDER_IDS,
+    TENSORX_DEFAULT_BASE,
     TOGETHER_DEFAULT_BASE,
     VERCEL_AI_GATEWAY_DEFAULT_BASE,
     WANDB_INFERENCE_DEFAULT_BASE,
@@ -134,6 +135,7 @@ def _make_settings(**overrides):
     mock.orcarouter_api_keys = "test_orcarouter_key"
     mock.atlascloud_api_keys = "test_atlascloud_key"
     mock.xkiro_api_keys = "test_xkiro_key"
+    mock.tensorx_api_keys = "test_tensorx_key"
     mock.nvidia_nim_proxy = None
     mock.open_router_proxy = None
     mock.lmstudio_proxy = None
@@ -186,6 +188,7 @@ def _make_settings(**overrides):
     mock.orcarouter_proxy = None
     mock.atlascloud_proxy = None
     mock.xkiro_proxy = None
+    mock.tensorx_proxy = None
     mock.kilo_api_keys = "test_kilo_key"
     mock.kilo_proxy = None
     mock.openai_proxy = None
@@ -706,6 +709,35 @@ async def test_opper_provider_config_uses_key_base_and_proxy() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tensorx_provider_config_uses_key_base_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["tensorx"]
+    settings = _make_settings(
+        tensorx_api_keys="tensorx-token",
+        tensorx_proxy="http://proxy.test:8080",
+    )
+
+    config = build_provider_config(descriptor, settings)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider(
+            "tensorx",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
+
+    assert descriptor.display_name == "TensorX"
+    assert descriptor.credential_env == "TENSORX_API_KEY"
+    assert descriptor.credential_attr == "tensorx_api_keys"
+    assert descriptor.credential_url == "https://app.tensorx.ai/dashboard"
+    assert descriptor.default_base_url == TENSORX_DEFAULT_BASE
+    assert descriptor.base_url_attr is None
+    assert descriptor.proxy_attr == "tensorx_proxy"
+    assert config.api_key == "tensorx-token"
+    assert config.base_url == "https://api.tensorx.ai/v1"
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+
+
+@pytest.mark.asyncio
 async def test_chutes_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["chutes"]
     settings = _make_settings(
@@ -1210,6 +1242,7 @@ async def test_create_provider_instantiates_each_builtin():
         "orcarouter": OpenAIChatProvider,
         "atlascloud": OpenAIChatProvider,
         "xkiro": OpenAIChatProvider,
+        "tensorx": OpenAIChatProvider,
         "opencode_go": OpenCodeProvider,
         "vercel": OpenAIChatProvider,
         "bedrock": OpenAIChatProvider,

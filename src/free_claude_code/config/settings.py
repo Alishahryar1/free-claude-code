@@ -254,6 +254,9 @@ class Settings(BaseModel):
     # ==================== Opper (OpenAI-compatible) ====================
     opper_api_keys: ApiKeyList = Field(default=(), validation_alias="OPPER_API_KEY")
 
+    # ==================== TensorX (OpenAI-compatible gateway) ====================
+    tensorx_api_keys: ApiKeyList = Field(default=(), validation_alias="TENSORX_API_KEY")
+
     # ==================== Fireworks AI Config ====================
     fireworks_api_keys: ApiKeyList = Field(
         default=(), validation_alias="FIREWORKS_API_KEY"
@@ -567,6 +570,9 @@ class Settings(BaseModel):
     )
     opper_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="OPPER_PROXY"
+    )
+    tensorx_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="TENSORX_PROXY"
     )
     fireworks_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_PROXY"
