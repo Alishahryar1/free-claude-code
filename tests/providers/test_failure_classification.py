@@ -260,8 +260,16 @@ _ROWS: dict[str, tuple[Callable[[], Exception], Observed]] = {
         _http_status(httpx2, 401),
         _o(K.AUTHENTICATION, 401, False, auth=401),
     ),
-    "httpx2_429": (_http_status(httpx2, 429), _o(K.UPSTREAM, 502, False)),
-    "httpx2_503": (_http_status(httpx2, 503), _o(K.UPSTREAM, 502, False)),
+    "httpx2_402": (_http_status(httpx2, 402), _o(K.PERMISSION, 402, False)),
+    "httpx2_404": (_http_status(httpx2, 404), _o(K.UPSTREAM, 404, False)),
+    "httpx2_429": (
+        _http_status(httpx2, 429),
+        _o(K.RATE_LIMIT, 429, True, transient=429),
+    ),
+    "httpx2_503": (
+        _http_status(httpx2, 503),
+        _o(K.OVERLOADED, 529, True, transient=503),
+    ),
     # Transport failures.
     "httpx_read_timeout": (_transport(httpx.ReadTimeout), _o(K.TIMEOUT, 502, True)),
     "httpx2_read_timeout": (_transport(httpx2.ReadTimeout), _o(K.TIMEOUT, 502, True)),

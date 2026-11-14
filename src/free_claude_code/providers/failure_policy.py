@@ -220,7 +220,7 @@ def retryable_transient_status(exc: BaseException) -> int | None:
         return None
     if isinstance(exc, openai.RateLimitError):
         return 429
-    if isinstance(exc, httpx.HTTPStatusError):
+    if isinstance(exc, httpx.HTTPStatusError | httpx2.HTTPStatusError):
         status = exc.response.status_code
         return status if _is_retryable_status(status) else None
 
@@ -413,7 +413,7 @@ def _classify_provider_failure(
             _transport_retryable(exc),
         )
 
-    if isinstance(exc, httpx.HTTPStatusError):
+    if isinstance(exc, httpx.HTTPStatusError | httpx2.HTTPStatusError):
         status = exc.response.status_code
         if status == 401:
             return _failure(
