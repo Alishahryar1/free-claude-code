@@ -137,7 +137,7 @@ class OpenAIChatBehavior:
         )
 
     def retry_after_standard_corrections(
-        self, error: Exception, body: dict[str, Any], used_retry_kinds: set[str]
+        self, error: Exception, body: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """Offer a provider correction after the standard correction sequence."""
+        """Offer one provider correction after the standard correction sequence."""
         return None

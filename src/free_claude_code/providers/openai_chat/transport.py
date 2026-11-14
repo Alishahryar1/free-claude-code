@@ -42,6 +42,7 @@ from free_claude_code.core.gemini import GeminiConversionError, GeminiRequest
 from free_claude_code.core.gemini.replay import CallReplay, apply_call_replay
 from free_claude_code.core.gemini.request import build_gemini_chat_request
 from free_claude_code.core.history_replay import ReplayOrigin
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesChatRequest,
@@ -92,8 +93,12 @@ from free_claude_code.providers.reasoning_compatibility import (
     ReasoningCorrection,
     prepare_messages_reasoning,
 )
+from free_claude_code.providers.request_correction import (
+    CorrectionStep,
+    Rejection,
+    RequestCorrector,
+)
 from free_claude_code.providers.request_recovery import (
-    RequestCorrections,
     RequestRecovery,
 )
 from free_claude_code.providers.stream_failure_resolution import (
@@ -112,7 +117,7 @@ from free_claude_code.providers.stream_recovery import (
 from .behavior import OpenAIChatBehavior
 from .gemini_output import GeminiChatStreamOutput
 from .native_output import NativeChatStreamOutput
-from .output_cap import clamp_output_tokens, parse_output_token_cap
+from .output_cap import OutputCapMemory
 from .profiles import OpenAIChatProfile
 from .reasoning_details import StructuredReasoningStream
 from .request_policy import (
@@ -184,6 +189,41 @@ def _sdk_create_body(create_body: dict[str, Any]) -> dict[str, Any]:
     if extras:
         sent["extra_body"] = {**extras, **sent.get("extra_body", {})}
     return sent
+
+
+def _correction_steps(
+    provider_name: str, behavior: OpenAIChatBehavior, output_caps: OutputCapMemory
+) -> tuple[CorrectionStep, ...]:
+    """Chat's own corrections, in the order they are tried."""
+
+    def without_stream_usage(rejection: Rejection) -> JsonObject | None:
+        if not is_stream_usage_rejection(rejection.error):
+            return None
+        corrected = clone_without_stream_usage(rejection.body)
+        if corrected is not None:
+            logger.warning(
+                "{}_STREAM: retrying without stream_options.include_usage "
+                "after upstream rejection",
+                provider_name,
+            )
+        return corrected
+
+    return (
+        CorrectionStep(None, output_caps.correct),
+        CorrectionStep("stream_usage", without_stream_usage),
+        CorrectionStep(
+            "provider_specific",
+            lambda rejection: behavior.retry_request_body(
+                rejection.error, rejection.body
+            ),
+        ),
+        CorrectionStep(
+            "provider_late",
+            lambda rejection: behavior.retry_after_standard_corrections(
+                rejection.error, rejection.body
+            ),
+        ),
+    )
 
 
 class _ChatStreamPresenter:
@@ -536,7 +576,10 @@ class OpenAIChatTransport:
         self._endpoint_transport = endpoint_transport
         self._api_key_provider = api_key_provider
         self._validate_prepared_body = validate_prepared_body
-        self._model_output_caps: dict[str, int] = {}
+        self._output_caps = OutputCapMemory(self._provider_name)
+        self._correction_steps = _correction_steps(
+            self._provider_name, behavior, self._output_caps
+        )
 
     def _log_stream_transport_error(
         self,
@@ -643,7 +686,7 @@ class OpenAIChatTransport:
         body: dict,
         operation_kind: ProviderOperationKind,
         *,
-        corrections: RequestCorrections,
+        corrections: RequestCorrector,
         endpoint: RequestEndpoint | None = None,
         request_client: OpenAIRequestClient | None = None,
         extra_headers: Mapping[str, str] | None = None,
@@ -652,7 +695,7 @@ class OpenAIChatTransport:
         native_chat: bool = False,
     ) -> tuple[dict, dict[str, Any], AsyncOpenAI]:
         """Return the intended body, the body to send, and the client to send it."""
-        body = self._apply_learned_output_cap(body)
+        body = self._output_caps.clamp(body)
         create_body = cast(
             dict[str, Any],
             resolve_history_overrides(
@@ -719,7 +762,7 @@ class OpenAIChatTransport:
         create_body: dict[str, Any],
         body: dict,
         *,
-        corrections: RequestCorrections,
+        corrections: RequestCorrector,
         on_event: Callable[[Any], None] | None = None,
         native_chat: bool = False,
     ) -> Any:
@@ -746,69 +789,12 @@ class OpenAIChatTransport:
             return stream
         return scope.adopt(self._behavior.normalize_stream(stream, body))
 
-    def _next_chat_retry_body(
-        self,
-        error: Exception,
-        body: dict,
-        used_retry_kinds: set[str],
-        *,
-        sent_body: Mapping[str, Any] | None = None,
-    ) -> dict | None:
-        retry_body = self._retry_body_for_output_cap(error, body)
-        if retry_body is not None:
-            return retry_body
-
-        if "stream_usage" not in used_retry_kinds and is_stream_usage_rejection(error):
-            retry_body = clone_without_stream_usage(body)
-            if retry_body is not None:
-                used_retry_kinds.add("stream_usage")
-                logger.warning(
-                    "{}_STREAM: retrying without stream_options.include_usage "
-                    "after upstream rejection",
-                    self._provider_name,
-                )
-                return retry_body
-
-        if "provider_specific" not in used_retry_kinds:
-            retry_body = self._behavior.retry_request_body(error, body)
-            if retry_body is not None:
-                used_retry_kinds.add("provider_specific")
-                return retry_body
-
-        return self._behavior.retry_after_standard_corrections(
-            error, body, used_retry_kinds
+    def _corrector(
+        self, reasoning: ReasoningCorrection | None = None
+    ) -> RequestCorrector:
+        return RequestCorrector(
+            "chat", reasoning=reasoning, steps=self._correction_steps
         )
-
-    def _apply_learned_output_cap(self, body: dict) -> dict:
-        """Clamp output tokens to a previously learned cap for this model."""
-        model = body.get("model")
-        if not isinstance(model, str):
-            return body
-        cap = self._model_output_caps.get(model)
-        if cap is None:
-            return body
-        clamped = clamp_output_tokens(body, cap)
-        return clamped if clamped is not None else body
-
-    def _retry_body_for_output_cap(self, error: Exception, body: dict) -> dict | None:
-        """Learn an upstream output-token cap from a 400 and clamp for one retry."""
-        cap = parse_output_token_cap(error)
-        if cap is None:
-            return None
-        model = body.get("model")
-        if isinstance(model, str):
-            previous = self._model_output_caps.get(model)
-            cap = cap if previous is None else min(previous, cap)
-            self._model_output_caps[model] = cap
-        clamped = clamp_output_tokens(body, cap)
-        if clamped is None:
-            return None
-        logger.warning(
-            "{}_STREAM: clamping output tokens to {} after upstream cap rejection",
-            self._provider_name,
-            cap,
-        )
-        return clamped
 
     def stream_chat(
         self,
@@ -1113,7 +1099,7 @@ class _OpenAIChatStreamRunner:
         if not self._native_chat:
             request_stream_usage(body)
         output_reasoning = self._reasoning.output_enabled
-        corrections = RequestCorrections("chat", self._reasoning_correction)
+        corrections = self._transport._corrector(self._reasoning_correction)
         trace_event(
             lambda: {"body": provider_chat_body_snapshot(body)},
             stage="provider",
@@ -1273,18 +1259,7 @@ class _OpenAIChatStreamRunner:
                         normal_stop_seen=presenter.normal_stop_seen,
                         source=source,
                         propose_correction=partial(
-                            corrections.next_body,
-                            error,
-                            body,
-                            sent_body=sent_body,
-                            reasoning_error=error,
-                            reasoning_sent_body=sent_body,
-                            after_common=partial(
-                                self._transport._next_chat_retry_body,
-                                error,
-                                body,
-                                sent_body=sent_body,
-                            ),
+                            corrections.correct, Rejection(error, body, sent_body)
                         ),
                         failure_payload=presenter.output.failure_payload,
                     )
@@ -1296,8 +1271,8 @@ class _OpenAIChatStreamRunner:
                     case Continue(body=next_body):
                         body = next_body
                         operation_kind = ProviderOperationKind.CONTINUATION
-                        corrections = RequestCorrections(
-                            "chat", self._reasoning_correction
+                        corrections = self._transport._corrector(
+                            self._reasoning_correction
                         )
                         continue
                     case Handoff():

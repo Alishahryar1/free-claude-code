@@ -77,8 +77,11 @@ from free_claude_code.providers.reasoning_compatibility import (
     prepare_messages_reasoning,
 )
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
+from free_claude_code.providers.request_correction import (
+    Rejection,
+    RequestCorrector,
+)
 from free_claude_code.providers.request_recovery import (
-    RequestCorrections,
     RequestRecovery,
 )
 from free_claude_code.providers.stream_failure_resolution import (
@@ -471,7 +474,7 @@ class AnthropicMessagesTransport:
         request_recovery = RequestRecovery(
             execution, endpoint=None if native else request_endpoint
         )
-        corrections = RequestCorrections("messages", reasoning_correction)
+        corrections = RequestCorrector("messages", reasoning=reasoning_correction)
         continuation_request = ContinuationRequest("messages")
         operation_kind = ProviderOperationKind.GENERATION
         if continuation is not None:
@@ -628,11 +631,7 @@ class AnthropicMessagesTransport:
                         normal_stop_seen=normal_stop_seen,
                         source=source,
                         propose_correction=partial(
-                            corrections.next_body,
-                            raw_error,
-                            body,
-                            sent_body=sent_body,
-                            reasoning_error=error,
+                            corrections.correct, Rejection(raw_error, body, sent_body)
                         ),
                         failure_payload=(
                             presenter.failure_payload
@@ -648,8 +647,8 @@ class AnthropicMessagesTransport:
                     case Continue(body=next_body):
                         body = next_body
                         operation_kind = ProviderOperationKind.CONTINUATION
-                        corrections = RequestCorrections(
-                            "messages", reasoning_correction
+                        corrections = RequestCorrector(
+                            "messages", reasoning=reasoning_correction
                         )
                         continue
                     case Handoff():

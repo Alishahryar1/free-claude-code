@@ -548,7 +548,10 @@ async def test_native_messages_negotiates_stream_and_json_and_reuses_cache(strea
 
 def test_precise_native_repair_keeps_other_records_in_same_carrier():
     from free_claude_code.core.history_replay import ReplayRecord, encode_replay
-    from free_claude_code.providers.request_recovery import RequestCorrections
+    from free_claude_code.providers.request_correction import (
+        Rejection,
+        RequestCorrector,
+    )
 
     origin = cache_origin()
     first = {"type": "reasoning.text", "text": "First", "signature": "first-sig"}
@@ -566,7 +569,7 @@ def test_precise_native_repair_keeps_other_records_in_same_carrier():
             }
         ],
     }
-    corrections = RequestCorrections("chat")
+    corrections = RequestCorrector("chat")
     sent = corrections.prepare_history(source, origin, HistoryModeCache())
     response = httpx.Response(
         400,
@@ -582,9 +585,7 @@ def test_precise_native_repair_keeps_other_records_in_same_carrier():
     error = httpx.HTTPStatusError(
         "rejected", request=response.request, response=response
     )
-    corrected = corrections.next_body(
-        error, source, sent_body=sent, reasoning_error=error
-    )
+    corrected = corrections.correct(Rejection(error, source, sent))
     assert corrected is not None
     retried = cast(
         dict[str, Any],

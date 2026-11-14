@@ -37,6 +37,11 @@ class RequestCorrector:
         ) + tuple(steps)
         self._used: set[str] = set()
 
+    @property
+    def history(self) -> HistoryNegotiation | None:
+        """This request's history negotiation, once history has been prepared."""
+        return self._history
+
     def prepare_history(
         self,
         body: Mapping[str, Any],
