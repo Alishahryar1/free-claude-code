@@ -121,10 +121,9 @@ async def test_continuation_failure_before_first_event_reaches_admission(
         )
 
     assert len(bodies) == 3
-    failed_continuation = "abandoned" if protocol == "chat" else "retryable_failure"
     assert _outcomes(traces) == [
         ("generation", "accepted"),
-        ("continuation", failed_continuation),
+        ("continuation", "retryable_failure"),
         ("continuation", "accepted"),
     ]
 
@@ -203,21 +202,6 @@ def _trace_shape(traces: list[dict[str, Any]]) -> dict[str, list[list[str]]]:
     }
 
 
-_CHAT_SHAPE = {
-    "provider.recovery.early_retry": [
-        ["attempts_started", "max_attempts", "provider", "request_id", "retryable"]
-    ],
-    "provider.response.error": [
-        [
-            "exc_type",
-            "failure_kind",
-            "provider",
-            "provider_retryable",
-            "request_id",
-            "status_code",
-        ]
-    ],
-}
 _SHARED_SHAPE = {
     "provider.recovery.early_retry": [
         ["attempts_started", "max_attempts", "provider", "request_id", "transport"]
@@ -240,7 +224,7 @@ _SHARED_SHAPE = {
 @pytest.mark.parametrize(
     ("protocol", "shape"),
     [
-        ("chat", _CHAT_SHAPE),
+        ("chat", _SHARED_SHAPE),
         ("messages", _SHARED_SHAPE),
         ("responses", _SHARED_SHAPE),
     ],
