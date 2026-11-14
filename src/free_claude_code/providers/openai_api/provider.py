@@ -26,12 +26,12 @@ from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.model_listing import extract_openai_model_infos
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
+from free_claude_code.providers.request_correction import CorrectionStep, Rejection
 
 
-def _sampling_retry_body(
-    error: Exception, body: JsonObject, sent_body: JsonObject
-) -> JsonObject | None:
+def _sampling_retry_body(rejection: Rejection) -> JsonObject | None:
     """Omit only a sampling field explicitly rejected on this outbound attempt."""
+    error, body, sent_body = rejection.error, rejection.body, rejection.sent_body
     if not isinstance(error, APIError | ResponsesStreamFailure):
         return None
     if isinstance(error, APIStatusError) and error.status_code != 400:
@@ -105,7 +105,7 @@ class OpenAIAPIProvider(BaseProvider):
             provider_name="OpenAI API",
             read_timeout_s=config.http_read_timeout,
             log_raw_sse_events=config.log_raw_sse_events,
-            request_correction=_sampling_retry_body,
+            correction_steps=(CorrectionStep(None, _sampling_retry_body),),
         )
 
     async def cleanup(self) -> None:

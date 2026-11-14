@@ -96,6 +96,18 @@ class SDKStreamDouble[EventT](AsyncIterator[EventT]):
                 await self._close()
 
 
+def completed_chat_stream(text: str = "ok") -> SDKStreamDouble[ChatCompletionChunk]:
+    """Return an SDK stream that completes one text reply."""
+
+    async def chunks() -> AsyncIterator[ChatCompletionChunk]:
+        yield sdk_chat_chunk(
+            {"choices": [{"delta": {"role": "assistant", "content": text}}]}
+        )
+        yield sdk_chat_chunk({"choices": [{"delta": {}, "finish_reason": "stop"}]})
+
+    return SDKStreamDouble(chunks())
+
+
 def make_provider_config(
     api_key: str | None,
     base_url: str,

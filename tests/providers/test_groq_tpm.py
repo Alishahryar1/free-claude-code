@@ -9,14 +9,12 @@ import pytest
 
 from free_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.failures import FailureKind
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
-from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.failure_reporting import finalize_provider_failure
 from free_claude_code.providers.groq import GroqProvider
 from free_claude_code.providers.groq.client import GroqChatBehavior
 from free_claude_code.providers.groq.tpm import correct_tpm_completion_budget
-from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     SDKStreamDouble,
@@ -141,6 +139,22 @@ def _chunk(*, content: str | None = None, finish_reason: str | None = None):
 async def _successful_stream():
     yield _chunk(content="working")
     yield _chunk(finish_reason="stop")
+
+
+async def _drain(
+    provider: GroqProvider,
+    *,
+    max_tokens: int = _ORIGINAL_MAX,
+    reasoning: ReasoningPolicy = ReasoningPolicy.off(),
+) -> None:
+    _ = [
+        frame
+        async for event in provider.stream_messages(
+            make_messages_request(_MODEL, max_tokens=max_tokens),
+            reasoning=reasoning,
+        )
+        for frame in event.frames
+    ]
 
 
 @pytest.mark.parametrize("wrapped", [False, True], ids=["sdk-detail", "wire-wrapper"])
@@ -311,19 +325,15 @@ async def test_tpm_correction_emits_one_downstream_lifecycle() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tpm_correction_is_one_shot_per_stream_creation() -> None:
+async def test_tpm_correction_is_one_shot_per_request() -> None:
     provider = _provider()
     create = AsyncMock(side_effect=[_status_error(), _status_error()])
 
     with (
         patch.object(provider._client.chat.completions, "create", create),
-        pytest.raises(openai.APIStatusError),
+        pytest.raises(ExecutionFailure),
     ):
-        await provider._chat._create_stream(
-            _body(),
-            RequestRecovery(provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
+        await _drain(provider)
 
     assert create.await_count == 2
 
@@ -335,13 +345,9 @@ async def test_tpm_correction_respects_physical_attempt_ceiling() -> None:
 
     with (
         patch.object(provider._client.chat.completions, "create", create),
-        pytest.raises(openai.APIStatusError),
+        pytest.raises(ExecutionFailure),
     ):
-        await provider._chat._create_stream(
-            _body(),
-            RequestRecovery(provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
+        await _drain(provider)
 
     assert create.await_count == 1
 
@@ -360,71 +366,47 @@ async def test_tpm_and_reasoning_corrections_compose(
     errors: tuple[str, str],
 ) -> None:
     provider = _provider()
-    request = make_messages_request(_MODEL, max_tokens=_ORIGINAL_MAX)
-    body = provider._chat._build_request_body(
-        request,
-        reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
-    )
     failures = {
         "tpm": _status_error(),
         "reasoning": _reasoning_error(),
     }
-    create = AsyncMock(side_effect=[*(failures[name] for name in errors), object()])
-    execution = provider._admission.start_execution()
+    create = AsyncMock(
+        side_effect=[
+            *(failures[name] for name in errors),
+            SDKStreamDouble(_successful_stream()),
+        ]
+    )
 
     with patch.object(provider._client.chat.completions, "create", create):
-        (
-            _stream,
-            accepted_body,
-            attempt,
-            _sent_body,
-        ) = await provider._chat._create_stream(
-            body,
-            RequestRecovery(execution),
-            ProviderOperationKind.GENERATION,
+        await _drain(
+            provider, reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
         )
-        await attempt.aclose()
 
     assert create.await_count == 3
-    assert execution.attempts_started == 3
-    assert accepted_body["max_completion_tokens"] == _CORRECTED_MAX
-    assert accepted_body["reasoning_effort"] == "default"
+    accepted = create.await_args_list[2].kwargs
+    assert accepted["max_completion_tokens"] == _CORRECTED_MAX
+    assert accepted["reasoning_effort"] == "default"
 
 
 @pytest.mark.asyncio
-async def test_distinct_bodies_get_independent_tpm_corrections() -> None:
+async def test_distinct_requests_get_independent_tpm_corrections() -> None:
     provider = _provider()
-    execution = provider._admission.start_execution()
     second_error = _status_error(
         detail=_detail("tokens per minute (TPM): Limit 8000, Requested 22000")
     )
-    create = AsyncMock(side_effect=[_status_error(), object(), second_error, object()])
+    create = AsyncMock(
+        side_effect=[
+            _status_error(),
+            SDKStreamDouble(_successful_stream()),
+            second_error,
+            SDKStreamDouble(_successful_stream()),
+        ]
+    )
 
     with patch.object(provider._client.chat.completions, "create", create):
-        (
-            _stream,
-            first_body,
-            first_attempt,
-            _sent_body,
-        ) = await provider._chat._create_stream(
-            _body(),
-            RequestRecovery(execution),
-            ProviderOperationKind.CONTINUATION,
-        )
-        await first_attempt.accept()
-        await first_attempt.aclose()
-        (
-            _stream,
-            second_body,
-            second_attempt,
-            _sent_body,
-        ) = await provider._chat._create_stream(
-            _body(20_000),
-            RequestRecovery(execution),
-            ProviderOperationKind.CONTINUATION,
-        )
-        await second_attempt.aclose()
+        await _drain(provider)
+        await _drain(provider, max_tokens=20_000)
 
-    assert execution.attempts_started == 4
-    assert first_body["max_completion_tokens"] == _CORRECTED_MAX
-    assert second_body["max_completion_tokens"] == 6_000
+    assert create.await_count == 4
+    assert create.await_args_list[1].kwargs["max_completion_tokens"] == _CORRECTED_MAX
+    assert create.await_args_list[3].kwargs["max_completion_tokens"] == 6_000

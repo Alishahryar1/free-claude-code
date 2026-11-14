@@ -14,7 +14,7 @@ from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
-from free_claude_code.providers.request_recovery import RequestCorrections
+from free_claude_code.providers.request_correction import RequestCorrector
 from tests.api.support import create_test_app, provider_manager_for_app
 from tests.api.test_hidden_stream_retries import delivered, partial_tool
 from tests.api.test_tool_call_buffer import _response
@@ -501,7 +501,7 @@ async def test_stopped_continuation_cannot_request_another_body_correction(
         corrections.append(True)
         return None
 
-    monkeypatch.setattr(RequestCorrections, "next_body", correction)
+    monkeypatch.setattr(RequestCorrector, "correct", correction)
 
     def adapter(kind, payload):
         if kind == "response.completed":
