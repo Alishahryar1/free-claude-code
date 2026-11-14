@@ -90,6 +90,12 @@ def apply_nim_request_options(
 
     NIM_REASONING.encode(body, reasoning)
 
+    # Enable multimodal processing if requested via environment variable.
+    import os
+
+    if os.getenv("FCC_ENABLE_MULTIMODAL", "0").lower() in {"1", "true", "yes"}:
+        body["multimodal"] = True
+
     if extra_body:
         body["extra_body"] = extra_body
     else:
