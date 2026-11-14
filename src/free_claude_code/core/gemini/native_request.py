@@ -332,6 +332,8 @@ def messages_to_gemini(
     if body.get("system"):
         system = [{"text": part["text"]} for part in content_parts(body["system"])]
     calls: dict[str, str] = {}
+    result_parts: list[dict[str, Any]] | None = None
+    result_order: dict[str, int] = {}
     for message in body["messages"]:
         role = message["role"]
         parts: list[dict[str, Any]] = []
@@ -367,6 +369,20 @@ def messages_to_gemini(
                 call_id = str(block["tool_use_id"])
                 if call_id not in calls:
                     raise GeminiConversionError("Orphaned tool result")
+                if parts:
+                    raise GeminiConversionError(
+                        "Tool results must precede other user content"
+                    )
+                if result_parts is None:
+                    result_order = {
+                        pending: index for index, pending in enumerate(calls)
+                    }
+                    result_parts = []
+                    contents.append({"role": "user", "parts": result_parts})
+                elif contents[-1]["parts"] is not result_parts:
+                    raise GeminiConversionError(
+                        "Parallel tool results must be consecutive"
+                    )
                 value = block.get("content")
                 output = [] if isinstance(value, dict) else content_parts(value)
                 text = (
@@ -390,16 +406,26 @@ def messages_to_gemini(
                     raise GeminiConversionError("Unsupported tool result content")
                 if images:
                     result["parts"] = images
-                parts.append({"functionResponse": result})
+                result_parts.append({"functionResponse": result})
             else:
                 raise GeminiConversionError(f"Unsupported Messages content {kind!r}")
+        if result_parts is not None:
+            result_parts.sort(
+                key=lambda part: result_order[part["functionResponse"]["id"]]
+            )
         if role == "system":
             system.extend(parts)
         elif parts:
+            if role == "user" and calls:
+                raise GeminiConversionError(
+                    "Unresolved tool calls before user follow-up"
+                )
             # A tool result and a later user prompt are distinct Gemini turns.
             contents.append(
                 {"role": "model" if role == "assistant" else "user", "parts": parts}
             )
+        if not calls:
+            result_parts = None
     if calls and not allow_pending_calls:
         raise GeminiConversionError("Unresolved tool calls in history")
     config: dict[str, Any] = {}
