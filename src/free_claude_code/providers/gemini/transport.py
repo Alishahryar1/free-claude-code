@@ -269,9 +269,7 @@ class GeminiTransport:
                 if scope is not None:
                     corrected = await request_recovery.retry_request(
                         error,
-                        error.response.status_code
-                        if isinstance(error, httpx.HTTPStatusError)
-                        else None,
+                        classify(error).auth_status,
                         scope.attempt,
                         body,
                         operation_kind=operation,

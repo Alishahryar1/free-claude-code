@@ -178,7 +178,7 @@ async def test_gemini_stop_rejected_before_acceptance(traces):
 
 
 @pytest.mark.asyncio
-async def test_gemini_inband_authentication_failure(traces):
+async def test_gemini_inband_authentication_failure_refreshes_once(traces):
     calls = 0
 
     def reply(request):
@@ -188,11 +188,9 @@ async def test_gemini_inband_authentication_failure(traces):
             return _gemini_payloads({"error": {"code": 401, "message": "expired"}})
         return gemini_sse([{"text": "ok"}])
 
-    with pytest.raises(ExecutionFailure) as caught:
-        await _drain_gemini(_gemini(reply, max_attempts=3))
+    await _drain_gemini(_gemini(reply, max_attempts=3))
 
-    assert calls == 1
-    assert caught.value.kind is FailureKind.AUTHENTICATION
+    assert calls == 2
 
 
 def _trace_shape(traces: list[dict[str, Any]]) -> dict[str, list[list[str]]]:
