@@ -216,9 +216,9 @@ class ChatToolCallBuffer:
                 raise chat_failure("Chat chunk repeated a choice index")
             seen.add(index)
             if index in self._finished:
-                if not isinstance(
-                    payload.get("usage"), Mapping
-                ) or not _accounting_choice(choice, self._finished[index]):
+                # An empty repeat of the final chunk is ignored with or without usage:
+                # OpenRouter :free routes send one without usage.
+                if not _accounting_choice(choice, self._finished[index]):
                     raise chat_failure("Chat choice changed after completion")
             else:
                 active.append(choice)
