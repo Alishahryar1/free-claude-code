@@ -57,7 +57,7 @@ def test_pending_disconnect_survives_runtime_restart(monkeypatch):
 @pytest.fixture
 def client():
     app = create_test_app(
-        Settings(host="0.0.0.0", port=4321, proxy_auth_token="desktop-secret")
+        Settings(host="0.0.0.0", port=4321, proxy_auth_token="desktop-secret", proxy_auth_enabled=True)
     )
     with TestClient(
         app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000)

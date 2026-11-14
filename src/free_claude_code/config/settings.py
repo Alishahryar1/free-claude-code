@@ -53,6 +53,14 @@ def _validate_model_ref(value: str) -> str:
     return value
 
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return True when the bind host only exposes the proxy to the local machine."""
+    return host.strip().lower() in _LOOPBACK_HOSTS
+
+
 class Settings(BaseModel):
     """Validated application settings with no file or process I/O."""
 
@@ -731,7 +739,7 @@ class Settings(BaseModel):
     )
 
     # ==================== Server ====================
-    host: NonEmptyString = Field(default="0.0.0.0", validation_alias="HOST")
+    host: NonEmptyString = Field(default="127.0.0.1", validation_alias="HOST")
     port: int = Field(default=8082, validation_alias="PORT")
     open_admin_browser: bool = Field(default=True, validation_alias="FCC_OPEN_BROWSER")
     proxy_auth_enabled: bool = Field(
@@ -742,6 +750,24 @@ class Settings(BaseModel):
         default="freecc",
         validation_alias="ANTHROPIC_AUTH_TOKEN",
     )
+
+    @model_validator(mode="after")
+    def require_auth_for_non_loopback_bind(self) -> "Settings":
+        """Fail closed when the proxy would be exposed without authentication.
+
+        Binding to a non-loopback address with ``PROXY_AUTH_ENABLED`` off turns
+        the server into an unauthenticated relay of the configured provider API
+        keys (CWE-306). Require auth whenever the server is reachable beyond
+        localhost.
+        """
+        if not _is_loopback_host(self.host) and not self.proxy_auth_enabled:
+            raise ValueError(
+                "PROXY_AUTH_ENABLED must be true when the proxy binds to a "
+                f"non-loopback address (HOST={self.host!r}). Set HOST=127.0.0.1 "
+                "for local-only use, or enable PROXY_AUTH_ENABLED to expose the "
+                "proxy beyond localhost."
+            )
+        return self
 
     @field_validator("max_message_log_entries_per_chat", mode="before")
     @classmethod
