@@ -1,5 +1,5 @@
 """Explicit web-client double for tests that do not perform outbound requests."""
-
+from typing import NoReturn
 import pytest
 
 from free_claude_code.application.web_tools.ports import WebFetchEgressPolicy
