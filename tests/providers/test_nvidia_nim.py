@@ -1267,6 +1267,88 @@ async def test_stream_messages_does_not_retry_unrelated_bad_request(provider_con
 
 
 @pytest.mark.asyncio
+async def test_stream_messages_does_not_retry_tool_schema_bad_request(provider_config):
+    provider = NvidiaNimProvider(
+        provider_config,
+        admission=immediate_admission(),
+    )
+    req = make_request(model="deepseek-ai/deepseek-v4.1-flash")
+
+    resp = Response(
+        status_code=400,
+        request=Request("POST", f"{NVIDIA_NIM_DEFAULT_BASE}/chat/completions"),
+    )
+    tool_error = openai.BadRequestError(
+        "Invalid schema for tool",
+        response=resp,
+        body={
+            "error": {
+                "message": "tools.0.function.parameters is invalid",
+                "param": "tools",
+                "type": "invalid_request_error",
+                "code": 400,
+            }
+        },
+    )
+
+    with patch.object(
+        provider._client.chat.completions, "create", new_callable=AsyncMock
+    ) as mock_create:
+        mock_create.side_effect = tool_error
+
+        with pytest.raises(ExecutionFailure) as exc_info:
+            [
+                frame
+                async for e in provider.stream_messages(
+                    req, reasoning=ReasoningPolicy(effort=ReasoningEffort.MEDIUM)
+                )
+                for frame in e.frames
+            ]
+
+    assert mock_create.await_count == 1
+    assert "Invalid request sent to provider" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_stream_messages_multimodal_flag_passed_in_extra_body(
+    provider_config, monkeypatch
+):
+    monkeypatch.setenv("FCC_ENABLE_MULTIMODAL", "1")
+    provider = NvidiaNimProvider(
+        provider_config,
+        admission=immediate_admission(),
+    )
+    req = make_request(model="meta/llama-3.2-11b-vision-instruct")
+
+    mock_chunk = MagicMock()
+    mock_chunk.choices = [
+        MagicMock(
+            delta=MagicMock(content="OK", reasoning_content=""),
+            finish_reason="stop",
+        )
+    ]
+    mock_chunk.usage = MagicMock(completion_tokens=2)
+
+    async def mock_stream():
+        yield sdk_chat_chunk(mock_chunk)
+
+    with patch.object(
+        provider._client.chat.completions, "create", new_callable=AsyncMock
+    ) as mock_create:
+        mock_create.return_value = SDKStreamDouble(mock_stream())
+
+        events = [
+            frame async for e in provider.stream_messages(req) for frame in e.frames
+        ]
+
+    assert mock_create.await_count == 1
+    kwargs = mock_create.call_args.kwargs
+    assert "multimodal" not in kwargs
+    assert kwargs.get("extra_body", {}).get("multimodal") is True
+    assert "OK" in "".join(events)
+
+
+@pytest.mark.asyncio
 async def test_tool_call_stream(nim_provider):
     """Test streaming tool calls."""
     req = make_request()

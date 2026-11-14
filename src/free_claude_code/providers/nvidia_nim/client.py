@@ -107,12 +107,12 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         if "nim_chat_template" not in used and "chat_template" in error_text:
             return "nim_chat_template"
         if "nim_reasoning_effort" not in used and _is_nim_reasoning_rejection(
-            error_text
+            error, error_text=error_text
         ):
             return "nim_reasoning_effort"
         if "chat_template" in error_text:
             return "nim_chat_template"
-        if _is_nim_reasoning_rejection(error_text):
+        if _is_nim_reasoning_rejection(error, error_text=error_text):
             return "nim_reasoning_effort"
         return "provider_specific"
 
@@ -135,7 +135,7 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
                 )
                 return retry_body
 
-        if _is_nim_reasoning_rejection(error_text):
+        if _is_nim_reasoning_rejection(error, error_text=error_text):
             retry_body = clone_body_without_reasoning_effort(body)
             if retry_body is not None:
                 logger.warning(
@@ -153,7 +153,7 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         error_text = _error_text(error)
         if _identifies_other_rejected_field(error, error_text):
             return False
-        return _is_nim_reasoning_rejection(error_text)
+        return _is_nim_reasoning_rejection(error, error_text=error_text)
 
     def failure_override(self, error: Exception) -> ExecutionFailure | None:
         """Classify NVIDIA-specific 400/500 responses by their actual semantics."""
@@ -248,13 +248,33 @@ def _identifies_other_rejected_field(error: Exception, error_text: str) -> bool:
     return "chat_template" in error_text
 
 
-def _is_nim_reasoning_rejection(error_text: str) -> bool:
-    if "must be one of" in error_text:
+def _is_nim_reasoning_rejection(
+    error: Exception | str, *, error_text: str | None = None
+) -> bool:
+    """Recognize NIM rejection of reasoning_effort by message or named field."""
+    if isinstance(error, str):
+        text = error.lower()
+        if "must be one of" in text or "chat_template" in text:
+            return False
+        return "reasoning_effort" in text or "invalid request" in text
+
+    bodies = _nim_error_bodies(error)
+    for body in bodies:
+        param = body.get("param")
+        if param == "reasoning_effort":
+            message = str(body.get("message", "")).lower()
+            return "must be one of" not in message
+        if isinstance(param, str) and param:
+            return False
+
+    text = error_text if error_text is not None else _error_text(error)
+    if "must be one of" in text or "chat_template" in text:
         return False
-    if "chat_template" in error_text:
-        return False
-    return (
-        "reasoning_effort" in error_text
-        or "invalid request" in error_text
-        or "invalid_request" in error_text
-    )
+    if "reasoning_effort" in text:
+        return True
+
+    for body in bodies:
+        message = body.get("message")
+        if isinstance(message, str) and message.strip().lower() == "invalid request":
+            return True
+    return False

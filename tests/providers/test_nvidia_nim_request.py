@@ -698,3 +698,19 @@ class TestBuildRequestBody:
         assert assistant["reasoning_content"] == "secret"
         assert assistant["content"] == "answer"
         assert "<think>" not in assistant["content"]
+
+
+def test_build_nim_request_body_multimodal_env_flag(monkeypatch):
+    req = make_messages_request(
+        model="test", messages=[{"role": "user", "content": "hi"}]
+    )
+
+    monkeypatch.setenv("FCC_ENABLE_MULTIMODAL", "1")
+    body = build_request_body(req, reasoning=REASONING_OFF)
+    assert body.get("extra_body", {}).get("multimodal") is True
+    assert "multimodal" not in body
+
+    monkeypatch.setenv("FCC_ENABLE_MULTIMODAL", "0")
+    body = build_request_body(req, reasoning=REASONING_OFF)
+    assert "multimodal" not in body.get("extra_body", {})
+    assert "multimodal" not in body
