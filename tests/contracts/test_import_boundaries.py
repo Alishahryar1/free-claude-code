@@ -50,6 +50,7 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
 }
 
 FACADE_ONLY_BOUNDARIES = {
+    "free_claude_code.application.model_fallback",
     "free_claude_code.core.openai_responses",
     "free_claude_code.messaging.trees",
     "free_claude_code.providers.failure_classification",
@@ -218,6 +219,24 @@ def test_stream_failure_decision_is_pure() -> None:
     ]
     assert not offenders, (
         "Stream failure decisions must depend on nothing but their inputs:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_model_fallback_decision_is_pure() -> None:
+    owner = f"{_PACKAGE_NAME}.application.model_fallback.decision"
+    allowed = {"collections", "dataclasses", f"{_PACKAGE_NAME}.core.stream_recovery"}
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if record.importer == owner
+        and not any(
+            record.imported == prefix or record.imported.startswith(f"{prefix}.")
+            for prefix in allowed
+        )
+    ]
+    assert not offenders, (
+        "Model fallback decisions must depend on nothing but recovery evidence:\n"
         + "\n".join(offenders)
     )
 

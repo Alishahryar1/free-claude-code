@@ -615,7 +615,9 @@ async def test_retryable_preframe_failure_selects_fallback_after_closing_primary
     )
     routed = _routed_request(_target("fallback", "fallback-model"))
 
-    with patch("free_claude_code.application.model_fallback.trace_event") as trace_mock:
+    with patch(
+        "free_claude_code.application.model_fallback.traces.trace_event"
+    ) as trace_mock:
         chunks = [
             chunk
             async for chunk in executor.stream_messages(
@@ -825,7 +827,9 @@ async def test_nonretryable_provider_failure_selects_fallback_before_first_frame
         request_id="req_rejected",
     )
 
-    with patch("free_claude_code.application.model_fallback.trace_event") as trace_mock:
+    with patch(
+        "free_claude_code.application.model_fallback.traces.trace_event"
+    ) as trace_mock:
         chunks = [chunk async for chunk in stream]
 
     assert chunks == [StreamOutput(("fallback-frame",))]
