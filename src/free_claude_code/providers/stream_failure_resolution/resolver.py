@@ -84,21 +84,26 @@ class StreamFailureResolver:
         delivery = execution.delivery
         content_released = None if delivery is None else delivery.content_released
 
-        if scope is not None:
-            corrected = await self._recovery.retry_request(
-                error,
-                classify(error).auth_status,
-                scope.attempt,
-                failure.body,
-                operation_kind=failure.operation_kind,
-                normal_stop_seen=failure.normal_stop_seen,
-                propose_correction=failure.propose_correction,
-            )
-            if corrected is not None:
-                return Retry(corrected)
+        if scope is None:
+            # Preparation failed before any provider call, so no attempt was
+            # spent. Neither admission nor public recovery may repeat it: the
+            # failure ends this execution.
+            return Fail(self._terminal(error, failure))
+
+        corrected = await self._recovery.retry_request(
+            error,
+            classify(error).auth_status,
+            scope.attempt,
+            failure.body,
+            operation_kind=failure.operation_kind,
+            normal_stop_seen=failure.normal_stop_seen,
+            propose_correction=failure.propose_correction,
+        )
+        if corrected is not None:
+            return Retry(corrected)
 
         admission: ProviderFailureDecision | None = None
-        if scope is not None and not scope.attempt.accepted:
+        if not scope.attempt.accepted:
             if is_hidden_stop(
                 normal_stop_seen=failure.normal_stop_seen,
                 content_released=content_released,
@@ -116,7 +121,6 @@ class StreamFailureResolver:
             else classify(error).retryable_mid_stream
         )
         step = next_step(
-            attempted=scope is not None,
             admission_retry_allowed=(
                 None if admission is None else admission.retry_allowed
             ),
@@ -135,7 +139,7 @@ class StreamFailureResolver:
             )
             return Retry(failure.body)
 
-        if scope is not None and content_released:
+        if content_released:
             # Free the attempt before public recovery reuses the execution. A
             # terminal failure leaves cleanup to the transport, which closes
             # with the error the caller actually receives.

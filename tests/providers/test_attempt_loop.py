@@ -311,6 +311,28 @@ def _delivered(text: str) -> StreamDeliveryState:
 
 
 @pytest.mark.asyncio
+async def test_preparation_failure_after_delivered_content_is_terminal(record):
+    # The first attempt delivers text and fails, so the loop continues. A
+    # retryable credential failure while preparing that continuation must end
+    # the execution: it spent no attempt, so continuing again would never stop.
+    frames, raised = await _run(
+        record,
+        Step(frames=("a",), error=_failure(503)),
+        Step(prepare_error=_failure(503)),
+        Step(prepare_error=_failure(503)),
+        max_attempts=5,
+        delivery=_delivered("a"),
+    )
+
+    assert isinstance(raised, ExecutionFailure) and raised.status_code == 503
+    assert frames == ["a", "abandoned"]
+    assert record.kinds == [
+        ProviderOperationKind.GENERATION,
+        ProviderOperationKind.CONTINUATION,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_early_close_finishes_transport_cleanup_before_releasing_admission():
     events: list[str] = []
 

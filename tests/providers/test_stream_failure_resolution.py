@@ -51,7 +51,6 @@ REJECTED = ExecutionFailure(FailureKind.INVALID_REQUEST, 400, "bad request", Fal
 
 @dataclass(frozen=True, slots=True)
 class Row:
-    attempted: bool = True
     admission: bool | None = None
     retryable: bool = True
     released: bool | None = False
@@ -62,7 +61,6 @@ class Row:
 @pytest.mark.parametrize(
     ("row", "expected"),
     [
-        (Row(attempted=False), NextStep.RECOVER),
         (Row(admission=True), NextStep.RETRY),
         (Row(admission=False), NextStep.RECOVER),
         # Admission's verdict is final even when delivery evidence would allow it.
@@ -78,7 +76,6 @@ class Row:
 def test_next_step(row: Row, expected: NextStep) -> None:
     assert (
         next_step(
-            attempted=row.attempted,
             admission_retry_allowed=row.admission,
             retryable=row.retryable,
             content_released=row.released,

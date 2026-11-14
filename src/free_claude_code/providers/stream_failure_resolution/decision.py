@@ -37,7 +37,6 @@ def can_restart(
 
 def next_step(
     *,
-    attempted: bool,
     admission_retry_allowed: bool | None,
     retryable: bool,
     content_released: bool | None,
@@ -50,8 +49,6 @@ def next_step(
     ``admission_retry_allowed`` is ``None`` once the attempt was accepted; then
     only delivery evidence can justify a clean restart.
     """
-    if not attempted:
-        return NextStep.RECOVER
     if admission_retry_allowed is not None:
         return NextStep.RETRY if admission_retry_allowed else NextStep.RECOVER
     if can_restart(
