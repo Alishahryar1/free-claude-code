@@ -147,6 +147,9 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
 
     def reasoning_disable_rejected(self, error: Exception) -> bool:
         """Recognize NIM rejection when disabling reasoning."""
+        status_code = getattr(error, "status_code", None)
+        if not (isinstance(error, openai.BadRequestError) or status_code == 400):
+            return False
         error_text = _error_text(error)
         return _is_nim_reasoning_rejection(error_text)
 
