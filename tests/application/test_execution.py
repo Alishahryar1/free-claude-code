@@ -615,7 +615,7 @@ async def test_retryable_preframe_failure_selects_fallback_after_closing_primary
     )
     routed = _routed_request(_target("fallback", "fallback-model"))
 
-    with patch("free_claude_code.application.execution.trace_event") as trace_mock:
+    with patch("free_claude_code.application.model_fallback.trace_event") as trace_mock:
         chunks = [
             chunk
             async for chunk in executor.stream_messages(
@@ -825,7 +825,7 @@ async def test_nonretryable_provider_failure_selects_fallback_before_first_frame
         request_id="req_rejected",
     )
 
-    with patch("free_claude_code.application.execution.trace_event") as trace_mock:
+    with patch("free_claude_code.application.model_fallback.trace_event") as trace_mock:
         chunks = [chunk async for chunk in stream]
 
     assert chunks == [StreamOutput(("fallback-frame",))]
@@ -1089,6 +1089,8 @@ async def test_cleanup_warning_names_preserved_provider_failure(caplog) -> None:
     warnings = [record for record in caplog.records if record.levelname == "WARNING"]
     assert len(warnings) == 1
     assert warnings[0].extra["event"] == "stream.input.close_failed"
+    assert warnings[0].extra["owner"] == "model_fallback"
+    assert warnings[0].extra["source"] == "application"
     assert warnings[0].extra["close_exc_type"] == "RuntimeError"
     assert warnings[0].extra["preserved_exc_type"] == "ExecutionFailure"
     assert str(warnings[0].exc_info[1]) == "close failed"
