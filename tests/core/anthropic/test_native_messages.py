@@ -145,16 +145,46 @@ def test_extra_body_cannot_override_owned_or_explicit_fields(extra: JsonObject) 
         build_native_messages_request(request, options=NativeMessagesOptions("m", 1024))
 
 
-def test_late_system_and_unsigned_compatibility_reasoning_rejected() -> None:
-    for messages in (
-        [{"role": "user", "content": "hi"}, {"role": "system", "content": "late"}],
-        [{"role": "assistant", "content": "hi", "reasoning_content": "unsigned"}],
-    ):
-        request = MessagesRequest.model_validate({"model": "m", "messages": messages})
-        with pytest.raises(NativeMessagesError):
-            build_native_messages_request(
-                request, options=NativeMessagesOptions("m", 1024)
-            )
+def test_trailing_system_messages_merge_into_system() -> None:
+    request = MessagesRequest.model_validate(
+        {
+            "model": "m",
+            "system": "top",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "system", "content": "late"},
+                {"role": "assistant", "content": "ok"},
+                {"role": "system", "content": [{"type": "text", "text": "later"}]},
+            ],
+        }
+    )
+    prepared = build_native_messages_request(
+        request, options=NativeMessagesOptions("m", 1024)
+    )
+    assert prepared.body["system"] == [
+        {"type": "text", "text": "top"},
+        {"type": "text", "text": "late"},
+        {"type": "text", "text": "later"},
+    ]
+    messages = prepared.body["messages"]
+    assert isinstance(messages, list)
+    assert [m["role"] for m in messages if isinstance(m, dict)] == [
+        "user",
+        "assistant",
+    ]
+
+
+def test_unsigned_compatibility_reasoning_rejected() -> None:
+    request = MessagesRequest.model_validate(
+        {
+            "model": "m",
+            "messages": [
+                {"role": "assistant", "content": "hi", "reasoning_content": "unsigned"}
+            ],
+        }
+    )
+    with pytest.raises(NativeMessagesError):
+        build_native_messages_request(request, options=NativeMessagesOptions("m", 1024))
 
 
 def test_forced_tool_with_manual_thinking_rejected() -> None:

@@ -145,10 +145,6 @@ def build_native_messages_request(
             )
         raw = cast(JsonObject, message.model_dump(mode="json", exclude_none=True))
         if message.role == "system":
-            if messages:
-                raise NativeMessagesError(
-                    "Native Messages supports only leading system messages."
-                )
             content = raw["content"]
             if isinstance(content, str):
                 system.append({"type": "text", "text": content})
