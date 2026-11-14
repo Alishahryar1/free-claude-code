@@ -5,6 +5,7 @@ import sys
 import textwrap
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -185,3 +186,59 @@ def test_failed_smoke_start_cleans_private_state(smoke_config, monkeypatch, fail
     ):
         pytest.fail("startup should fail")
     assert not Path(captured["FCC_SMOKE_CONFIG_DIR"]).exists()
+
+
+def test_smoke_cleanup_waits_for_windows_handle_release(smoke_config, monkeypatch):
+    from smoke.lib import server_runtime
+
+    cleanup = server_runtime.TemporaryDirectory.cleanup
+    attempts = []
+
+    def sharing_violation_once(directory):
+        attempts.append(directory.name)
+        if len(attempts) == 1:
+            error = PermissionError("file is still held by terminating child")
+            error.winerror = 32
+            raise error
+        cleanup(directory)
+
+    monkeypatch.setattr(
+        server_runtime.TemporaryDirectory, "cleanup", sharing_violation_once
+    )
+    with server_runtime.server_environment({}, caller_home=False) as env:
+        private = Path(env["FCC_SMOKE_CONFIG_DIR"])
+        assert private.is_dir()
+    assert len(attempts) == 2
+    assert not private.exists()
+
+
+@pytest.mark.parametrize("winerror", [5, 32])
+def test_smoke_cleanup_does_not_hide_permanent_failures(
+    smoke_config, monkeypatch, winerror
+):
+    from smoke.lib import server_runtime
+
+    cleanup = server_runtime.TemporaryDirectory.cleanup
+    retained = []
+
+    def fail(directory):
+        retained.append(directory)
+        error = PermissionError("cleanup failed")
+        error.winerror = winerror
+        raise error
+
+    clock = iter([0.0, 6.0])
+    monkeypatch.setattr(server_runtime.TemporaryDirectory, "cleanup", fail)
+    monkeypatch.setattr(
+        server_runtime, "time", SimpleNamespace(monotonic=lambda: next(clock))
+    )
+    try:
+        with (
+            pytest.raises(PermissionError, match="cleanup failed"),
+            server_runtime.server_environment({}, caller_home=False),
+        ):
+            pass
+        assert len(retained) == 1
+    finally:
+        for directory in retained:
+            cleanup(directory)

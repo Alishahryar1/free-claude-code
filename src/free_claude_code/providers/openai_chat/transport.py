@@ -762,6 +762,7 @@ class OpenAIChatTransport:
                     ),
                     read_timeout_s=self._read_timeout_s,
                     on_event=observed,
+                    transform_event=self._behavior.normalize_chunk,
                 )
                 if not native_chat:
                     stream = self._behavior.normalize_stream(stream, body)

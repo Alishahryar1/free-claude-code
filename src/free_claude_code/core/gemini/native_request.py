@@ -395,8 +395,11 @@ def messages_to_gemini(
                 raise GeminiConversionError(f"Unsupported Messages content {kind!r}")
         if role == "system":
             system.extend(parts)
-        else:
-            _append(contents, "model" if role == "assistant" else "user", parts)
+        elif parts:
+            # A tool result and a later user prompt are distinct Gemini turns.
+            contents.append(
+                {"role": "model" if role == "assistant" else "user", "parts": parts}
+            )
     if calls and not allow_pending_calls:
         raise GeminiConversionError("Unresolved tool calls in history")
     config: dict[str, Any] = {}
