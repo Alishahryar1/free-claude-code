@@ -1,11 +1,8 @@
 """Provider execution shared by inbound API adapters."""
 
-import asyncio
 import json
-import sys
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from types import MappingProxyType
-from typing import Literal
 
 from loguru import logger
 
@@ -15,28 +12,22 @@ from free_claude_code.core.anthropic import (
     get_token_count,
 )
 from free_claude_code.core.anthropic.tokens import TokenCounter
-from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.gemini.tokens import estimate_gemini_input_tokens
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     estimate_responses_input_tokens,
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.core.request_outcomes import record_request_route
 from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.core.stream_output import StreamOutput
-from free_claude_code.core.stream_recovery import (
-    ContinuationSeed,
-    RecoveryAction,
-    assess_recovery,
-)
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.core.token_estimation import estimate_text_tokens
 from free_claude_code.core.trace import (
-    close_stream_input,
     trace_event,
     traced_async_stream,
 )
 
+from .model_fallback import CandidateStreamOpener, WireApi, stream_model_candidates
 from .ports import ModelInfoLookup, ProviderResolver
 from .reasoning import (
     client_chat_reasoning_policy,
@@ -47,7 +38,6 @@ from .reasoning import (
 )
 from .routing import (
     ProviderModelCandidate,
-    ProviderModelTarget,
     ResolvedModelRoute,
     RoutedChatRequest,
     RoutedGeminiRequest,
@@ -57,15 +47,10 @@ from .routing import (
 )
 
 ResponsesTokenCounter = Callable[[OpenAIResponsesRequest], int]
-WireApi = Literal["messages", "responses", "gemini", "chat"]
-CandidateStreamOpener = Callable[
-    [int, ProviderModelCandidate, ContinuationSeed | None],
-    Awaitable[AsyncIterator[StreamOutput]],
-]
 
 
 class ProviderExecutor:
-    """Resolve a provider and execute one routed Anthropic Messages stream."""
+    """Prepare routed requests and compose their model execution streams."""
 
     def __init__(
         self,
@@ -85,76 +70,6 @@ class ProviderExecutor:
         self._generation_id = generation_id
         self._log_raw_payloads = log_raw_payloads
         self._request_headers = MappingProxyType(dict(request_headers or {}))
-
-    def _trace_fallback_started(
-        self,
-        *,
-        request_id: str,
-        wire_api: WireApi,
-        failed: ProviderModelTarget,
-        selected: ProviderModelTarget,
-        failure: ExecutionFailure,
-        candidate_index: int,
-        candidate_count: int,
-        recovery_action: str,
-        recovery_reason: str | None,
-    ) -> None:
-        fields: dict[str, object] = {
-            "stage": "execution",
-            "event": "free_claude_code.model_fallback.started",
-            "source": "application",
-            "request_id": request_id,
-            "wire_api": wire_api,
-            "from_provider_model_ref": failed.provider_model_ref,
-            "to_provider_model_ref": selected.provider_model_ref,
-            "from_api_key_number": failed.api_key_number,
-            "to_api_key_number": selected.api_key_number,
-            "candidate_index": candidate_index,
-            "candidate_count": candidate_count,
-            "failure_kind": failure.kind.value,
-            "status_code": failure.status_code,
-            "provider_retryable": failure.retryable,
-            "recovery_action": recovery_action,
-            "recovery_reason": recovery_reason,
-        }
-        if self._generation_id is not None:
-            fields["generation_id"] = self._generation_id
-        trace_event(**fields)
-        logger.info(
-            "Model fallback: request_id={} from={} to={} candidate={}/{} "
-            "failure_kind={} status_code={}",
-            request_id,
-            failed.provider_model_ref,
-            selected.provider_model_ref,
-            candidate_index,
-            candidate_count,
-            failure.kind.value,
-            failure.status_code,
-        )
-
-    def _trace_fallback_selected(
-        self,
-        *,
-        request_id: str,
-        wire_api: WireApi,
-        selected: ProviderModelTarget,
-        candidate_index: int,
-        candidate_count: int,
-    ) -> None:
-        fields: dict[str, object] = {
-            "stage": "execution",
-            "event": "free_claude_code.model_fallback.selected",
-            "source": "application",
-            "request_id": request_id,
-            "wire_api": wire_api,
-            "selected_provider_model_ref": selected.provider_model_ref,
-            "api_key_number": selected.api_key_number,
-            "candidate_index": candidate_index,
-            "candidate_count": candidate_count,
-        }
-        if self._generation_id is not None:
-            fields["generation_id"] = self._generation_id
-        trace_event(**fields)
 
     def stream_native_messages(
         self,
@@ -193,7 +108,7 @@ class ProviderExecutor:
 
         messages = routed.request.body["messages"]
         assert isinstance(messages, list)
-        return self._stream_candidates(
+        return self._response_stream(
             resolved=routed.resolved,
             reasoning=native_reasoning,
             wire_api="messages",
@@ -262,7 +177,7 @@ class ProviderExecutor:
                 continuation=continuation,
             )
 
-        return self._stream_candidates(
+        return self._response_stream(
             resolved=routed.resolved,
             reasoning=routed.reasoning,
             wire_api="messages",
@@ -329,7 +244,7 @@ class ProviderExecutor:
             if isinstance(raw_input, list)
             else int(raw_input is not None)
         )
-        return self._stream_candidates(
+        return self._response_stream(
             resolved=routed.resolved,
             reasoning=routed.reasoning,
             wire_api="responses",
@@ -391,7 +306,7 @@ class ProviderExecutor:
                 ),
             )
 
-        return self._stream_candidates(
+        return self._response_stream(
             resolved=routed.resolved,
             reasoning=routed.reasoning,
             wire_api="gemini",
@@ -451,7 +366,7 @@ class ProviderExecutor:
                 ),
             )
 
-        return self._stream_candidates(
+        return self._response_stream(
             resolved=routed.resolved,
             reasoning=routed.reasoning,
             wire_api="chat",
@@ -467,7 +382,7 @@ class ProviderExecutor:
             open_candidate=open_candidate,
         )
 
-    def _stream_candidates(
+    def _response_stream(
         self,
         *,
         resolved: ResolvedModelRoute,
@@ -481,7 +396,7 @@ class ProviderExecutor:
         request_id: str,
         open_candidate: CandidateStreamOpener,
     ) -> AsyncIterator[StreamOutput]:
-        """Start and consume candidates through one protocol-blind lifecycle."""
+        """Compose request observations and the candidate response stream."""
 
         primary = resolved.primary
         candidates = (ProviderModelCandidate(primary), *resolved.fallbacks)
@@ -529,105 +444,6 @@ class ProviderExecutor:
                 f"{raw_log_label} [{{}}]: {{}}", lambda: request_id, raw_log_payload
             )
 
-        async def provider_body() -> AsyncIterator[StreamOutput]:
-            delivery = current_stream_delivery()
-            if delivery is None:
-                raise RuntimeError("Generation requires a response delivery context")
-            continuation: ContinuationSeed | None = None
-            for index, candidate in enumerate(candidates):
-                if index:
-                    # A replacement can fail before its provider opens an attempt.
-                    delivery.begin_attempt()
-                target = candidate.target
-                record_request_route(target.provider_id, target.provider_model)
-                provider_stream: AsyncIterator[StreamOutput] | None = None
-                candidate_committed = False
-                candidate_failure: ExecutionFailure | None = None
-                try:
-                    try:
-                        provider_stream = await open_candidate(
-                            index, candidate, continuation
-                        )
-                    except ExecutionFailure as failure:
-                        candidate_failure = failure
-
-                    if provider_stream is None and candidate_failure is None:
-                        raise TypeError(
-                            "provider stream method must return an async iterator"
-                        )
-                    while provider_stream is not None:
-                        try:
-                            chunk = await anext(provider_stream)
-                        except StopAsyncIteration:
-                            break
-                        except ExecutionFailure as failure:
-                            candidate_failure = failure
-                            break
-                        if not any(chunk.frames) and not chunk.completed_calls:
-                            await asyncio.sleep(0)
-                            continue
-                        if not candidate_committed:
-                            candidate_committed = True
-                            if index > 0:
-                                self._trace_fallback_selected(
-                                    request_id=request_id,
-                                    wire_api=wire_api,
-                                    selected=target,
-                                    candidate_index=index + 1,
-                                    candidate_count=len(candidates),
-                                )
-                        yield chunk
-                finally:
-                    if provider_stream is not None:
-                        active_error = sys.exception()
-                        preserved_error = active_error or candidate_failure
-                        await close_stream_input(
-                            provider_stream,
-                            owner="provider_executor",
-                            source="api",
-                            preserved_error=preserved_error,
-                        )
-
-                if candidate_failure is None:
-                    return
-                recovery_action = "continue" if continuation is not None else "restart"
-                recovery_reason = "no_candidate_output"
-                context = candidate_failure.stream_context
-                if context is None:
-                    if delivery.content_released:
-                        raise candidate_failure
-                else:
-                    assessment = assess_recovery(
-                        content_released=delivery.content_released,
-                        prefix=delivery.prefix,
-                        source=context.source,
-                        retryable=candidate_failure.retryable,
-                    )
-                    if assessment.action is RecoveryAction.STOP:
-                        raise candidate_failure
-                    if assessment.action is RecoveryAction.HANDOFF:
-                        delivery.begin_continuation(handoff=True)
-                        return
-                    continuation = assessment.seed
-                    recovery_action = assessment.action.value
-                    recovery_reason = assessment.reason
-                if index + 1 >= len(candidates):
-                    raise candidate_failure
-                if delivery is not None and continuation is not None:
-                    delivery.begin_continuation()
-                next_target = candidates[index + 1].target
-                self._trace_fallback_started(
-                    request_id=request_id,
-                    wire_api=wire_api,
-                    failed=target,
-                    selected=next_target,
-                    failure=candidate_failure,
-                    candidate_index=index + 2,
-                    candidate_count=len(candidates),
-                    recovery_action=recovery_action,
-                    recovery_reason=recovery_reason,
-                )
-
         stream_trace: dict[str, object] = {
             "request_id": request_id,
             "initial_provider_id": primary.provider_id,
@@ -637,7 +453,14 @@ class ProviderExecutor:
             stream_trace["generation_id"] = self._generation_id
 
         return traced_async_stream(
-            provider_body(),
+            stream_model_candidates(
+                candidates,
+                open_candidate,
+                get_delivery=current_stream_delivery,
+                request_id=request_id,
+                wire_api=wire_api,
+                generation_id=self._generation_id,
+            ),
             stage="egress",
             source="api",
             complete_event=(
