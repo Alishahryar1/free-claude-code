@@ -20,10 +20,12 @@ class OpenAIStreamAdapter[EventT](AsyncIterator[EventT]):
         *,
         read_timeout_s: float,
         on_event: Callable[[EventT], None] | None = None,
+        transform_event: Callable[[EventT], EventT] | None = None,
     ) -> None:
         self._stream = stream
         self._read_timeout_s = read_timeout_s
         self._on_event = on_event
+        self._transform_event = transform_event
 
     def __aiter__(self) -> AsyncIterator[EventT]:
         return self
@@ -32,6 +34,8 @@ class OpenAIStreamAdapter[EventT](AsyncIterator[EventT]):
         event = await read_stream_event(
             self._stream, timeout=self._read_timeout_s, is_keepalive=_is_keepalive
         )
+        if self._transform_event is not None:
+            event = self._transform_event(event)
         if self._on_event is not None:
             self._on_event(event)
         return event

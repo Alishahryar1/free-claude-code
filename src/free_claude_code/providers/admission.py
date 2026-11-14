@@ -17,6 +17,7 @@ from typing import TypeVar
 
 from loguru import logger
 
+from free_claude_code.core.diagnostics import reported_http_status
 from free_claude_code.core.stream_delivery import (
     StreamDeliveryState,
     current_stream_delivery,
@@ -24,12 +25,9 @@ from free_claude_code.core.stream_delivery import (
 from free_claude_code.core.trace import trace_event
 from free_claude_code.providers.admission_capacity import ProviderCapacityLimiter
 from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
-from free_claude_code.providers.failure_policy import (
-    ProviderFailureOverride,
-    ProviderRecoveryExhausted,
-    is_retryable_provider_error,
-    retryable_upstream_status,
-)
+from free_claude_code.providers.canonical_failures import ProviderFailureOverride
+from free_claude_code.providers.failure_classification import classify
+from free_claude_code.providers.recovery_errors import ProviderRecoveryExhausted
 
 T = TypeVar("T")
 
@@ -358,7 +356,7 @@ class ProviderAttempt:
         if self._resolved or self._closed:
             return ProviderCorrectionAction.FINAL
         self._execution._record_failure(error)
-        status = _exception_status(error)
+        status = reported_http_status(error)
         if self._execution.can_attempt:
             await self._controller._attempt_corrected(self._execution, self._permit)
             self._resolve("corrected", status=status, error=error)
@@ -386,8 +384,9 @@ class ProviderAttempt:
         )
         if effective_error is None:
             effective_error = error
-        status = retryable_upstream_status(effective_error)
-        retryable = is_retryable_provider_error(effective_error)
+        verdict = classify(effective_error)
+        status = verdict.transient_status
+        retryable = verdict.retryable
         self._execution._record_failure(error)
         if not retryable:
             await self._controller._attempt_rejected(self._execution, self._permit)
@@ -1138,12 +1137,3 @@ def _retry_after_seconds(error: Exception) -> float | None:
     if not math.isfinite(seconds):
         return None
     return max(0.0, seconds)
-
-
-def _exception_status(error: BaseException) -> int | None:
-    status = getattr(error, "status_code", None)
-    if isinstance(status, int):
-        return status
-    response = getattr(error, "response", None)
-    response_status = getattr(response, "status_code", None)
-    return response_status if isinstance(response_status, int) else None

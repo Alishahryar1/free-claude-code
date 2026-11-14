@@ -1,6 +1,7 @@
 """Private smoke runtime state with the developer's original credential ownership."""
 
 import os
+import time
 from collections.abc import Generator, Mapping
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
@@ -27,12 +28,28 @@ def server_environment(
         return
 
     snapshot = ManagedConfigStore().read()
-    with TemporaryDirectory(prefix="fcc-smoke-") as directory:
-        private = Path(directory)
+    directory = TemporaryDirectory(prefix="fcc-smoke-")
+    try:
+        private = Path(directory.name)
         atomic_write_managed_config(snapshot.managed, path=private / ".env")
         child_env[_CONFIG_DIR] = str(private)
         child_env[_SOURCE_DIR] = str(snapshot.path.parent)
         yield child_env
+    finally:
+        # Windows can release child database/lock handles just after taskkill
+        # returns. Retry only that sharing violation, never hide cleanup failure.
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                directory.cleanup()
+                break
+            except PermissionError as error:
+                if (
+                    getattr(error, "winerror", None) != 32
+                    or time.monotonic() >= deadline
+                ):
+                    raise
+                time.sleep(0.05)
 
 
 def serve() -> None:

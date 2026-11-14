@@ -15,12 +15,12 @@ from free_claude_code.core.diagnostics import (
     attach_upstream_error_body,
 )
 from free_claude_code.core.json_types import JsonObject
-from free_claude_code.providers.failure_policy import (
-    RetryableProviderProtocolError,
+from free_claude_code.providers.canonical_failures import (
     context_window_exceeded_provider_failure,
     is_context_window_error_code,
     is_context_window_finish_reason,
 )
+from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
 from free_claude_code.providers.stream_read import read_stream_event
 
 

@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import aclosing
 from dataclasses import replace
 from functools import partial
+from typing import assert_never
 
 import httpx
 
@@ -34,23 +35,27 @@ from free_claude_code.providers.admission import (
 from free_claude_code.providers.continuation import (
     ContinuationRequest,
     SourceRecoveryState,
-    public_recovery,
     public_stream_failure,
 )
 from free_claude_code.providers.endpoint_types import HttpEndpoint
-from free_claude_code.providers.failure_policy import (
-    RetryableProviderProtocolError,
-    classify_provider_failure,
-    is_retryable_stream_error,
-)
+from free_claude_code.providers.failure_reporting import finalize_provider_failure
 from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.history_replay import replay_origin
 from free_claude_code.providers.http import ProviderAttemptScope
+from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
 from free_claude_code.providers.request_recovery import (
     RequestCorrections,
     RequestRecovery,
 )
-from free_claude_code.providers.stream_recovery import can_retry_undelivered_stream
+from free_claude_code.providers.stream_failure_resolution import (
+    Continue,
+    Fail,
+    Handoff,
+    Retry,
+    StreamFailure,
+    StreamFailurePolicy,
+    StreamFailureResolver,
+)
 
 from .wire import (
     check_messages_failure,
@@ -92,6 +97,17 @@ async def stream_native_messages(
         if continuation is not None:
             body = continuation_request.build(body, continuation)
             operation_kind = ProviderOperationKind.CONTINUATION
+        resolver = StreamFailureResolver(
+            StreamFailurePolicy(
+                provider_name=provider_name,
+                read_timeout_s=read_timeout_s,
+                request_id=request_id,
+                # The outer handler finalizes with the native error detail.
+                finalize=False,
+            ),
+            recovery=request_recovery,
+            continuation=continuation_request,
+        )
         while execution.can_attempt:
             relay = None
             tool_buffer = MessagesToolCallBuffer()
@@ -231,14 +247,14 @@ async def stream_native_messages(
                     if isinstance(raw_error, NativeMessagesError)
                     else raw_error
                 )
-                if scope is not None:
-                    corrected = await request_recovery.retry_request(
-                        error,
-                        None,
-                        scope.attempt,
-                        body,
+                resolution = await resolver.resolve(
+                    StreamFailure(
+                        error=error,
+                        scope=scope,
+                        body=body,
                         operation_kind=operation_kind,
                         normal_stop_seen=normal_stop_seen,
+                        source=source,
                         propose_correction=partial(
                             corrections.next_body,
                             raw_error,
@@ -247,49 +263,25 @@ async def stream_native_messages(
                             reasoning_error=error,
                         ),
                     )
-                    if corrected is not None:
-                        body = corrected
-                        continue
-                retryable = is_retryable_stream_error(error)
-                if scope is not None:
-                    hidden_stop = (
-                        normal_stop_seen
-                        and execution.delivery is not None
-                        and not execution.delivery.content_released
-                    )
-                    if hidden_stop:
-                        await scope.attempt.accept()
-                    else:
-                        decision = await scope.fail(error)
-                        error = decision.error
-                        if can_retry_undelivered_stream(
-                            execution.delivery,
-                            retryable=retryable,
-                            attempts_remaining=execution.attempts_remaining,
-                            normal_stop_seen=normal_stop_seen,
-                        ):
-                            continue
-                if scope is not None:
-                    await scope.aclose(active_error=error)
-                recovered = public_recovery(
-                    execution,
-                    body=body,
-                    request=continuation_request,
-                    retryable=retryable,
-                    normal_stop_seen=normal_stop_seen,
-                    source=source,
                 )
-                if recovered is not None:
-                    if recovered.body is None:
+                match resolution:
+                    case Retry(body=next_body):
+                        body = next_body
+                        continue
+                    case Continue(body=next_body):
+                        body = next_body
+                        corrections = RequestCorrections("messages")
+                        operation_kind = ProviderOperationKind.CONTINUATION
+                        continue
+                    case Handoff():
                         execution.succeed()
                         return
-                    body = recovered.body
-                    corrections = RequestCorrections("messages")
-                    operation_kind = ProviderOperationKind.CONTINUATION
-                    continue
-                if error is not raw_error:
-                    raise error from raw_error
-                raise
+                    case Fail(error=failure) if failure is raw_error:
+                        raise
+                    case Fail(error=failure):
+                        raise failure from raw_error
+                    case _:
+                        assert_never(resolution)
             finally:
                 if scope is not None:
                     await scope.aclose(active_error=sys.exception())
@@ -309,7 +301,7 @@ async def stream_native_messages(
                 ),
             )
         else:
-            failure = classify_provider_failure(
+            failure = finalize_provider_failure(
                 error,
                 provider_name=provider_name,
                 read_timeout_s=read_timeout_s,
