@@ -6,9 +6,12 @@ evidence reach the upstream or the client unchanged.
 """
 
 import json
+from collections.abc import Iterator
+from typing import Any
 
 import httpx
 import pytest
+from loguru import logger
 
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
@@ -18,8 +21,25 @@ from free_claude_code.core.stream_delivery import (
     StreamDeliveryState,
     bind_stream_delivery,
 )
+from free_claude_code.core.trace import TRACE_PAYLOAD_BINDING
 from tests.providers.test_anthropic_messages_transport import Wire, _events, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
+
+
+@pytest.fixture
+def traces() -> Iterator[list[dict[str, Any]]]:
+    payloads: list[dict[str, Any]] = []
+
+    def sink(message: Any) -> None:
+        payload = message.record["extra"].get(TRACE_PAYLOAD_BINDING)
+        if isinstance(payload, dict):
+            payloads.append(payload)
+
+    handle = logger.add(sink, level="DEBUG")
+    try:
+        yield payloads
+    finally:
+        logger.remove(handle)
 
 
 async def _forward(p, body, **kwargs) -> list[str]:
@@ -88,7 +108,7 @@ async def test_context_window_stop_reaches_the_client_as_a_stop():
 
 
 @pytest.mark.asyncio
-async def test_error_event_failure_carries_upstream_evidence():
+async def test_error_event_failure_carries_upstream_evidence(traces):
     error: JsonObject = {
         "type": "error",
         "error": {"type": "invalid_request_error", "message": "native evidence"},
@@ -105,3 +125,6 @@ async def test_error_event_failure_carries_upstream_evidence():
     assert message.startswith("Upstream provider anthropic returned HTTP 400.")
     assert json.dumps(error, separators=(",", ":")) in message
     assert "local-request" in message
+    (trace,) = [p for p in traces if p["event"] == "provider.response.error"]
+    assert trace["transport"] == "messages"
+    assert trace["status_code"] == 400

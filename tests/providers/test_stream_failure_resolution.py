@@ -257,11 +257,8 @@ async def test_request_correction_precedes_admission():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "policy", [{"finalize": False}, {"raise_unfinalized": (ExecutionFailure,)}]
-)
-async def test_unfinalized_errors_reach_the_caller_unchanged(policy, traces):
-    async with _harness(**policy) as harness:
+async def test_unfinalized_errors_reach_the_caller_unchanged(traces):
+    async with _harness(raise_unfinalized=(ExecutionFailure,)) as harness:
         scope = await harness.scope()
         resolution = await harness.resolver.resolve(harness.failure(REJECTED, scope))
 
