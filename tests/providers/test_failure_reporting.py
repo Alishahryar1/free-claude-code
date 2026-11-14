@@ -1,4 +1,4 @@
-"""Raw provider failure classification into the canonical neutral model."""
+"""Final provider failures: canonical meaning, stable wording, and diagnostics."""
 
 import ssl
 from collections.abc import Callable
@@ -14,14 +14,14 @@ from free_claude_code.core.diagnostics import (
     attach_upstream_error_body,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.providers.failure_policy import (
-    ProviderRecoveryExhausted,
-    classify_provider_failure,
-    is_retryable_provider_error,
-    is_retryable_stream_error,
-    retryable_upstream_status,
-)
+from free_claude_code.providers.failure_classification import classify
+from free_claude_code.providers.failure_reporting import finalize_provider_failure
+from free_claude_code.providers.recovery_errors import ProviderRecoveryExhausted
 from free_claude_code.providers.stream_recovery import TruncatedProviderStreamError
+
+
+def _retryable_mid_stream(exc: Exception) -> bool:
+    return classify(exc).retryable_mid_stream
 
 
 def _openai_status_error(
@@ -71,10 +71,10 @@ class _CodedError(RuntimeError):
 
 
 def test_stream_retry_classification_distinguishes_protocol_and_status() -> None:
-    assert is_retryable_stream_error(TruncatedProviderStreamError("truncated"))
-    assert is_retryable_stream_error(httpx.ReadError("disconnected"))
-    assert is_retryable_stream_error(_http_status_error(503, "unavailable"))
-    assert not is_retryable_stream_error(_http_status_error(400, "bad request"))
+    assert _retryable_mid_stream(TruncatedProviderStreamError("truncated"))
+    assert _retryable_mid_stream(httpx.ReadError("disconnected"))
+    assert _retryable_mid_stream(_http_status_error(503, "unavailable"))
+    assert not _retryable_mid_stream(_http_status_error(400, "bad request"))
 
 
 @pytest.mark.parametrize(
@@ -91,7 +91,7 @@ def test_stream_retry_classification_distinguishes_protocol_and_status() -> None
 )
 def test_structured_invalid_request_is_terminal_despite_transient_prose(body) -> None:
     error = _statusless_openai_error("overloaded: rate limit", body)
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         error, provider_name="TEST", read_timeout_s=1, request_id="req_invalid"
     )
     assert (failure.kind, failure.status_code, failure.retryable) == (
@@ -99,9 +99,9 @@ def test_structured_invalid_request_is_terminal_despite_transient_prose(body) ->
         400,
         False,
     )
-    assert not is_retryable_provider_error(error)
-    assert not is_retryable_stream_error(error)
-    assert retryable_upstream_status(error) is None
+    assert not classify(error).retryable
+    assert not classify(error).retryable_mid_stream
+    assert classify(error).transient_status is None
     assert "req_invalid" in failure.message
 
 
@@ -123,7 +123,7 @@ def test_structured_invalid_request_is_terminal_despite_transient_prose(body) ->
     ],
 )
 def test_authoritative_rate_limit_status_beats_invalid_request_body(error) -> None:
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         error, provider_name="TEST", read_timeout_s=1, request_id=None
     )
     assert (failure.kind, failure.status_code, failure.retryable) == (
@@ -131,8 +131,8 @@ def test_authoritative_rate_limit_status_beats_invalid_request_body(error) -> No
         429,
         True,
     )
-    assert is_retryable_provider_error(error)
-    assert is_retryable_stream_error(error)
+    assert classify(error).retryable
+    assert classify(error).retryable_mid_stream
 
 
 def test_http_bad_request_beats_transient_body() -> None:
@@ -142,8 +142,8 @@ def test_http_bad_request_beats_transient_body() -> None:
         message="overloaded",
         body={"code": 429, "type": "rate_limit_error"},
     )
-    assert retryable_upstream_status(error) is None
-    failure = classify_provider_failure(
+    assert classify(error).transient_status is None
+    failure = finalize_provider_failure(
         error, provider_name="TEST", read_timeout_s=1, request_id=None
     )
     assert failure.kind is FailureKind.INVALID_REQUEST
@@ -172,27 +172,26 @@ def test_http_client_network_errors_have_the_same_failure_policy(
         for module in (httpx, httpx2)
     ]
     failures = [
-        classify_provider_failure(
+        finalize_provider_failure(
             error, provider_name="TEST", read_timeout_s=10, request_id="request"
         )
         for error in errors
     ]
     assert asdict(failures[0]) == asdict(failures[1])
-    assert is_retryable_provider_error(errors[0]) == is_retryable_provider_error(
-        errors[1]
+    assert classify(errors[0]).retryable == classify(errors[1]).retryable
+    assert (
+        classify(errors[0]).retryable_mid_stream
+        == classify(errors[1]).retryable_mid_stream
     )
-    assert is_retryable_stream_error(errors[0]) == is_retryable_stream_error(errors[1])
 
 
 def test_stream_retry_classification_only_accepts_post_open_timeouts() -> None:
     request = httpx.Request("POST", "https://provider.test/v1/messages")
 
-    assert is_retryable_stream_error(httpx.ReadTimeout("read", request=request))
-    assert not is_retryable_stream_error(
-        httpx.ConnectTimeout("connect", request=request)
-    )
-    assert not is_retryable_stream_error(httpx.WriteTimeout("write", request=request))
-    assert not is_retryable_stream_error(httpx.PoolTimeout("pool", request=request))
+    assert _retryable_mid_stream(httpx.ReadTimeout("read", request=request))
+    assert not _retryable_mid_stream(httpx.ConnectTimeout("connect", request=request))
+    assert not _retryable_mid_stream(httpx.WriteTimeout("write", request=request))
+    assert not _retryable_mid_stream(httpx.PoolTimeout("pool", request=request))
 
 
 @pytest.mark.parametrize("read_timeout_s", [None, 120])
@@ -201,9 +200,9 @@ def test_ssl_want_read_error_uses_stream_failure_policy(
 ) -> None:
     error = ssl.SSLWantReadError("the operation did not complete")
 
-    assert is_retryable_stream_error(error)
-    assert is_retryable_provider_error(error)
-    failure = classify_provider_failure(
+    assert classify(error).retryable_mid_stream
+    assert classify(error).retryable
+    failure = finalize_provider_failure(
         error, provider_name="NIM", read_timeout_s=read_timeout_s, request_id="request"
     )
     assert failure.kind is FailureKind.UNAVAILABLE
@@ -239,11 +238,11 @@ def test_stream_retry_classification_accepts_statusless_transients(
     message: str,
     body: object,
 ) -> None:
-    assert is_retryable_stream_error(_statusless_openai_error(message, body))
+    assert _retryable_mid_stream(_statusless_openai_error(message, body))
 
 
 def test_stream_retry_classification_rejects_openai_bad_request() -> None:
-    assert not is_retryable_stream_error(
+    assert not _retryable_mid_stream(
         _openai_status_error(
             openai.BadRequestError,
             status_code=400,
@@ -267,11 +266,11 @@ def test_http_413_status_wins_over_rate_limit_markers() -> None:
         headers={"retry-after": "67", "x-should-retry": "false"},
     )
 
-    assert not is_retryable_provider_error(error)
-    assert not is_retryable_stream_error(error)
-    assert retryable_upstream_status(error) is None
+    assert not classify(error).retryable
+    assert not classify(error).retryable_mid_stream
+    assert classify(error).transient_status is None
 
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         error,
         provider_name="GROQ",
         read_timeout_s=60.0,
@@ -304,11 +303,11 @@ def test_http_413_status_wins_over_rate_limit_markers() -> None:
     ids=["httpx_status", "structured_body_status"],
 )
 def test_http_413_sources_are_terminal_invalid_requests(error: Exception) -> None:
-    assert not is_retryable_provider_error(error)
-    assert not is_retryable_stream_error(error)
-    assert retryable_upstream_status(error) is None
+    assert not classify(error).retryable
+    assert not classify(error).retryable_mid_stream
+    assert classify(error).transient_status is None
 
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         error,
         provider_name="TEST_PROVIDER",
         read_timeout_s=60.0,
@@ -346,11 +345,11 @@ def test_http_413_sources_are_terminal_invalid_requests(error: Exception) -> Non
 def test_structured_context_window_signals_are_canonical_and_terminal(
     error: Exception,
 ) -> None:
-    assert not is_retryable_provider_error(error)
-    assert not is_retryable_stream_error(error)
-    assert retryable_upstream_status(error) is None
+    assert not classify(error).retryable
+    assert not classify(error).retryable_mid_stream
+    assert classify(error).transient_status is None
 
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         error,
         provider_name="TEST_PROVIDER",
         read_timeout_s=60.0,
@@ -393,7 +392,7 @@ def test_structured_context_window_signals_are_canonical_and_terminal(
 def test_ambiguous_large_request_signals_are_not_context_exhaustion(
     error: Exception,
 ) -> None:
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         error,
         provider_name="TEST_PROVIDER",
         read_timeout_s=60.0,
@@ -411,8 +410,8 @@ def test_nonstandard_capacity_status_remains_retryable() -> None:
         body={"error": {"code": "capacity_exceeded"}},
     )
 
-    assert retryable_upstream_status(error) == 503
-    failure = classify_provider_failure(
+    assert classify(error).transient_status == 503
+    failure = finalize_provider_failure(
         error,
         provider_name="GROQ",
         read_timeout_s=60.0,
@@ -675,7 +674,7 @@ _CASES = (
 def test_raw_provider_failure_maps_to_canonical_failure(
     case: _ClassificationCase,
 ) -> None:
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         case.error(),
         provider_name="TEST_PROVIDER",
         read_timeout_s=30.0,
@@ -699,7 +698,7 @@ def test_classification_preserves_useful_body_while_redacting_credentials() -> N
         "unsupported model format authorization: Bearer AUTH_SECRET",
     )
 
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         error,
         provider_name="LOCAL",
         read_timeout_s=60.0,
@@ -729,7 +728,7 @@ def test_auth_failure_preserves_model_error_body_instead_of_masking_it() -> None
         },
     )
 
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         error,
         provider_name="OPENCODE_GO",
         read_timeout_s=60.0,
@@ -756,7 +755,7 @@ def test_permission_failure_preserves_actionable_upstream_diagnostic() -> None:
         },
     )
 
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         error,
         provider_name="NIM",
         read_timeout_s=60.0,
@@ -766,7 +765,7 @@ def test_permission_failure_preserves_actionable_upstream_diagnostic() -> None:
     assert failure.kind is FailureKind.PERMISSION
     assert failure.status_code == 403
     assert failure.retryable is False
-    assert not is_retryable_provider_error(error)
+    assert not classify(error).retryable
     assert "Upstream provider NIM returned HTTP 403." in failure.message
     assert "Category: permission" in failure.message
     assert (
@@ -786,7 +785,7 @@ def test_empty_http_error_body_is_reported_explicitly() -> None:
         response=response,
     )
 
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         error,
         provider_name="EMPTY",
         read_timeout_s=30.0,
@@ -800,7 +799,7 @@ def test_empty_http_error_body_is_reported_explicitly() -> None:
 
 
 def test_http_405_diagnostic_names_rejected_upstream_endpoint() -> None:
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         _http_status_error(405, "Method Not Allowed"),
         provider_name="LOCAL",
         read_timeout_s=30.0,
@@ -825,7 +824,7 @@ def test_connection_cause_chain_is_redacted_and_capped() -> None:
         request=request,
     )
 
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         error,
         provider_name="NIM",
         read_timeout_s=30.0,
@@ -852,7 +851,7 @@ def test_attached_streamed_error_body_remains_bounded() -> None:
         "x" * (ERROR_DETAIL_DISPLAY_CAP_BYTES + 10),
     )
 
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         error,
         provider_name="LONG",
         read_timeout_s=30.0,
@@ -867,7 +866,7 @@ def test_shared_recovery_exhaustion_preserves_last_provider_failure() -> None:
     raw_error = _http_status_error(503, "provider still unavailable")
     exhausted = ProviderRecoveryExhausted(raw_error)
 
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         exhausted,
         provider_name="SHARED",
         read_timeout_s=30.0,
@@ -878,8 +877,8 @@ def test_shared_recovery_exhaustion_preserves_last_provider_failure() -> None:
     assert failure.status_code == 529
     assert "provider still unavailable" in failure.message
     assert "Request ID: req_exhausted" in failure.message
-    assert retryable_upstream_status(exhausted) is None
-    assert not is_retryable_provider_error(exhausted)
+    assert classify(exhausted).transient_status is None
+    assert not classify(exhausted).retryable
 
 
 @pytest.mark.parametrize("deadline", [None, 1234.0])

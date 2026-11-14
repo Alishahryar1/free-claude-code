@@ -19,7 +19,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
 )
 from free_claude_code.core.failures import FailureKind
 from free_claude_code.core.model_capabilities import ModelInputModality
-from free_claude_code.providers.failure_policy import classify_provider_failure
+from free_claude_code.providers.failure_reporting import finalize_provider_failure
 from free_claude_code.providers.open_router import OpenRouterProvider
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.request_factory import make_messages_request
@@ -63,7 +63,7 @@ def test_image_routing_failure_explains_unsupported_input(
 ):
     body = {**image_routing_error_body(), "message": message}
     error = routing_error({"error": body} if wrapped else body)
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         error,
         provider_name="OPENROUTER",
         read_timeout_s=30,
@@ -79,7 +79,7 @@ def test_image_routing_failure_explains_unsupported_input(
     assert "HTTP 404" in failure.message
     assert "req_image" in failure.message
     assert (
-        classify_provider_failure(
+        finalize_provider_failure(
             error, provider_name="OTHER", read_timeout_s=30, request_id=None
         ).status_code
         == 404
@@ -110,7 +110,7 @@ def test_unrelated_routing_errors_keep_shared_policy(open_router_provider, body)
     error = routing_error(body)
     override = open_router_provider._chat._behavior.failure_override
     assert override(error) is None
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         error,
         provider_name="OPENROUTER",
         read_timeout_s=30,

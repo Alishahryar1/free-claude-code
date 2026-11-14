@@ -15,12 +15,10 @@ from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.providers.failure_policy import (
-    RetryableProviderProtocolError,
-)
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.nvidia_nim.client import NvidiaNimChatBehavior
 from free_claude_code.providers.openai_chat.transport import _ChatStreamPresenter
+from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
 from tests.api.test_response_streams import _serve
 from tests.api.test_tool_call_buffer import _response
 from tests.api.test_tool_call_buffer_transports import _tools

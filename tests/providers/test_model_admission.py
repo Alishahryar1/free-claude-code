@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from free_claude_code.providers.admission import ProviderOperationKind
-from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
+from free_claude_code.providers.recovery_errors import ProviderRecoveryExhausted
 from tests.providers.test_provider_admission import _controller, _open, _status_error
 
 

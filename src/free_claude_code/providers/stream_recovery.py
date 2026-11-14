@@ -2,7 +2,7 @@
 
 from free_claude_code.core.stream_delivery import StreamDeliveryState
 
-from .failure_policy import RetryableProviderProtocolError
+from .recovery_errors import RetryableProviderProtocolError
 
 
 class TruncatedProviderStreamError(RetryableProviderProtocolError):

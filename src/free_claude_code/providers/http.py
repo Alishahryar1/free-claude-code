@@ -11,7 +11,7 @@ from free_claude_code.providers.admission import (
     ProviderAttempt,
     ProviderFailureDecision,
 )
-from free_claude_code.providers.failure_policy import ProviderFailureOverride
+from free_claude_code.providers.canonical_failures import ProviderFailureOverride
 
 _ResourceT = TypeVar("_ResourceT")
 
