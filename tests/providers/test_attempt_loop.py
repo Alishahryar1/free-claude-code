@@ -6,10 +6,12 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
 import pytest
 from loguru import logger
 
 from free_claude_code.core.continuation_request import ContinuationRequest
+from free_claude_code.core.diagnostics import attach_upstream_error_body
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_delivery import (
@@ -31,23 +33,22 @@ from free_claude_code.providers.admission import (
 from free_claude_code.providers.attempt_loop import (
     AttemptContext,
     AttemptPlan,
+    FailureReporting,
     TransportAttempt,
     run_attempts,
 )
+from free_claude_code.providers.attempt_loop import loop as loop_module
+from free_claude_code.providers.continuation import PublicRecovery
 from free_claude_code.providers.http import ProviderAttemptScope
 from free_claude_code.providers.request_correction import (
     CorrectionStep,
     Rejection,
     RequestCorrector,
 )
-from free_claude_code.providers.request_recovery import RequestRecovery
-from free_claude_code.providers.stream_failure_resolution import (
-    StreamFailurePolicy,
-    StreamFailureResolver,
-)
 from tests.providers.support import immediate_admission
 
 BODY: JsonObject = {"model": "m", "n": 0, "messages": []}
+TIMEOUT = httpx.ReadTimeout("quiet upstream")
 
 
 class _Unresolvable(Exception):
@@ -79,6 +80,7 @@ class Step:
     prepare_error: Exception | None = None
     frames: tuple[str, ...] = ()
     error: Exception | None = None
+    normal_stop: bool = False
 
 
 @dataclass
@@ -120,6 +122,7 @@ async def _run(
     correction: CorrectionStep | None = None,
     max_attempts: int = 3,
     delivery: StreamDeliveryState | None = None,
+    **reporting: Any,
 ) -> tuple[list[str], BaseException | None]:
     admission = immediate_admission(max_attempts=max_attempts)
     with bind_stream_delivery(delivery) if delivery else nullcontext():
@@ -130,6 +133,7 @@ async def _run(
         def __init__(self, context: AttemptContext) -> None:
             super().__init__(context)
             self.streamed = False
+            self.stopped = False
             self.step = next(script)
             record.bodies.append(context.body)
             record.kinds.append(context.operation_kind)
@@ -148,8 +152,13 @@ async def _run(
                 if not scope.attempt.accepted:
                     await scope.attempt.accept()
                 yield StreamOutput((frame,))
+            self.stopped = self.step.normal_stop
             if self.step.error is not None:
                 raise self.step.error
+
+        @property
+        def normal_stop_seen(self) -> bool:
+            return self.stopped
 
         def resolvable(self, error: Exception) -> bool:
             return not isinstance(error, _Unresolvable)
@@ -157,10 +166,14 @@ async def _run(
         def abandon(self, error: Exception) -> tuple[StreamOutput, ...]:
             return (StreamOutput(("abandoned",)),) if self.streamed else ()
 
+        def handoff(self) -> tuple[StreamOutput, ...]:
+            return (StreamOutput(("handoff",)),)
+
     frames: list[str] = []
     raised: BaseException | None = None
     try:
-        async for output in run_attempts(_plan(execution, Scripted, correction)):
+        plan = _plan(execution, Scripted, correction, **reporting)
+        async for output in run_attempts(plan):
             frames.extend(output.frames)
     except Exception as error:
         raised = error
@@ -171,25 +184,20 @@ def _plan(
     execution: ProviderExecution,
     start: Callable[[AttemptContext], TransportAttempt],
     correction: CorrectionStep | None = None,
+    **reporting: Any,
 ) -> AttemptPlan:
     return AttemptPlan(
         body=BODY,
         operation_kind=ProviderOperationKind.GENERATION,
         execution=execution,
-        resolver=StreamFailureResolver(
-            StreamFailurePolicy(
-                provider_name="TEST",
-                read_timeout_s=30,
-                request_id="loop",
-                raise_unfinalized=(_Unfinalized,),
-            ),
-            recovery=RequestRecovery(execution, endpoint=None),
-            continuation=ContinuationRequest("messages"),
-        ),
+        continuation=ContinuationRequest("messages"),
         corrector=lambda: RequestCorrector(
             "messages", steps=(correction,) if correction is not None else ()
         ),
         start=start,
+        reporting=FailureReporting(
+            read_timeout_s=30, raise_unfinalized=(_Unfinalized,), **reporting
+        ),
         provider_name="TEST",
         transport="messages",
         gateway_model="public",
@@ -228,6 +236,7 @@ async def test_retryable_failure_before_acceptance_retries_the_same_body(record)
     assert record.bodies == [BODY] * 2
     assert record.attempts_at_prepare == [0, 1]
     assert record.outcomes == ["retryable_failure", "accepted"]
+    assert len(record.events("provider.recovery.early_retry")) == 1
 
 
 @pytest.mark.asyncio
@@ -248,6 +257,8 @@ async def test_corrected_rejection_retries_with_the_corrected_body(record):
     assert (frames, raised) == (["abandoned", "ok"], None)
     assert record.bodies == [BODY, {**BODY, "n": 1}]
     assert [rejection.sent_body for rejection in rejections] == [{**BODY, "sent": True}]
+    # The correction is authorized before admission could judge the rejection.
+    assert record.outcomes == ["corrected", "accepted"]
 
 
 @pytest.mark.asyncio
@@ -258,7 +269,9 @@ async def test_exhausted_attempts_raise_the_resolved_failure(record):
 
     assert isinstance(raised, ExecutionFailure) and raised.status_code == 503
     assert frames == ["abandoned", "abandoned"]
-    assert len(record.events("provider.response.error")) == 1
+    [error] = record.events("provider.response.error")
+    assert error["transport"] == "messages"
+    assert "error_message" not in error
 
 
 @pytest.mark.asyncio
@@ -359,3 +372,95 @@ async def test_early_close_finishes_transport_cleanup_before_releasing_admission
     await outputs.aclose()
 
     assert events == ["transport cleanup finished", "scope resource closed"]
+
+
+@pytest.mark.asyncio
+async def test_hidden_stop_accepts_and_never_restarts(record):
+    frames, raised = await _run(
+        record,
+        Step(error=TIMEOUT, normal_stop=True),
+        Step(frames=("ok",)),
+        delivery=StreamDeliveryState(),
+    )
+
+    assert isinstance(raised, ExecutionFailure)
+    assert frames == ["abandoned"]
+    assert record.outcomes == ["accepted"]
+    assert len(record.bodies) == 1
+
+
+@pytest.mark.asyncio
+async def test_accepted_undelivered_attempt_restarts_cleanly(record):
+    frames, raised = await _run(
+        record,
+        Step(frames=("a",), error=TIMEOUT),
+        Step(frames=("ok",)),
+        delivery=StreamDeliveryState(),
+    )
+
+    assert (frames, raised) == (["a", "abandoned", "ok"], None)
+    assert record.bodies == [BODY] * 2
+    assert len(record.events("provider.recovery.early_retry")) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("recovered", "frames", "kinds"),
+    [
+        (
+            PublicRecovery({**BODY, "continued": True}),
+            ["a", "abandoned", "ok"],
+            [ProviderOperationKind.GENERATION, ProviderOperationKind.CONTINUATION],
+        ),
+        (
+            PublicRecovery(),
+            ["a", "abandoned", "handoff"],
+            [ProviderOperationKind.GENERATION],
+        ),
+    ],
+)
+async def test_delivered_content_recovers_publicly(
+    monkeypatch, record, recovered, frames, kinds
+):
+    monkeypatch.setattr(loop_module, "public_recovery", lambda *_, **__: recovered)
+    outputs, raised = await _run(
+        record,
+        Step(frames=("a",), error=TIMEOUT),
+        Step(frames=("ok",)),
+        delivery=_delivered("a"),
+    )
+
+    assert (outputs, raised) == (frames, None)
+    assert record.kinds == kinds
+
+
+@pytest.mark.asyncio
+async def test_terminal_report_and_message_trace_are_opt_in(record):
+    reported: list[Exception] = []
+    rejected = _failure(400)
+    _, raised = await _run(
+        record,
+        Step(error=rejected),
+        report_terminal_error=reported.append,
+        trace_error_message=True,
+    )
+
+    assert isinstance(raised, ExecutionFailure)
+    assert reported == [rejected]
+    [error] = record.events("provider.response.error")
+    assert error["error_message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream_evidence", [False, True])
+async def test_upstream_evidence_is_reported_only_when_requested(
+    record, upstream_evidence
+):
+    rejected = _failure(400)
+    attach_upstream_error_body(rejected, '{"type":"error","detail":"evidence"}')
+    _, raised = await _run(
+        record, Step(error=rejected), upstream_evidence=upstream_evidence
+    )
+
+    assert isinstance(raised, ExecutionFailure)
+    assert ('"detail":"evidence"' in raised.message) is upstream_evidence

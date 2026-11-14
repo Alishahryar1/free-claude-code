@@ -25,6 +25,7 @@ from free_claude_code.providers.admission import (
 from free_claude_code.providers.attempt_loop import (
     AttemptContext,
     AttemptPlan,
+    FailureReporting,
     TransportAttempt,
     run_attempts,
 )
@@ -38,13 +39,6 @@ from free_claude_code.providers.reasoning_compatibility import ReasoningCorrecti
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
 from free_claude_code.providers.request_correction import (
     RequestCorrector,
-)
-from free_claude_code.providers.request_recovery import (
-    RequestRecovery,
-)
-from free_claude_code.providers.stream_failure_resolution import (
-    StreamFailurePolicy,
-    StreamFailureResolver,
 )
 from free_claude_code.providers.stream_read import read_stream_event
 
@@ -149,23 +143,12 @@ class GeminiTransport:
         if continuation is not None:
             body = continuation_request.build(body, continuation)
             operation = ProviderOperationKind.CONTINUATION
-        resolver = StreamFailureResolver(
-            StreamFailurePolicy(
-                provider_name="GEMINI",
-                read_timeout_s=self._read_timeout,
-                request_id=execution.request_id,
-                # History the caller sent cannot be replayed; that is their error.
-                raise_unfinalized=(InvalidRequestError,),
-            ),
-            recovery=RequestRecovery(execution, endpoint=endpoint),
-            continuation=continuation_request,
-        )
         return run_attempts(
             AttemptPlan(
                 body=body,
                 operation_kind=operation,
                 execution=execution,
-                resolver=resolver,
+                continuation=continuation_request,
                 corrector=partial(
                     RequestCorrector, "gemini", reasoning=reasoning_correction
                 ),
@@ -178,9 +161,15 @@ class GeminiTransport:
                     output_factory=output_factory,
                     include_thoughts=include_thoughts,
                 ),
+                reporting=FailureReporting(
+                    read_timeout_s=self._read_timeout,
+                    # History the caller sent cannot be replayed; that is their error.
+                    raise_unfinalized=(InvalidRequestError,),
+                ),
                 provider_name="GEMINI",
                 transport="gemini",
                 gateway_model=response_model,
+                refreshable=endpoint,
             )
         )
 

@@ -62,11 +62,13 @@ from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.core.trace import provider_chat_body_snapshot, trace_event
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
+    ProviderExecution,
     ProviderOperationKind,
 )
 from free_claude_code.providers.attempt_loop import (
     AttemptContext,
     AttemptPlan,
+    FailureReporting,
     TransportAttempt,
     run_attempts,
 )
@@ -101,13 +103,6 @@ from free_claude_code.providers.request_correction import (
     CorrectionStep,
     Rejection,
     RequestCorrector,
-)
-from free_claude_code.providers.request_recovery import (
-    RequestRecovery,
-)
-from free_claude_code.providers.stream_failure_resolution import (
-    StreamFailurePolicy,
-    StreamFailureResolver,
 )
 from free_claude_code.providers.stream_recovery import (
     TruncatedProviderStreamError,
@@ -1051,8 +1046,7 @@ class _OpenAIChatStreamRunner:
         execution = self._transport._admission.start_execution(
             request_id=self._request_id, model=str(model)
         )
-        request_recovery = RequestRecovery(execution, endpoint=self._endpoint)
-        provider_stream = self._run_execution(request_recovery)
+        provider_stream = self._run_execution(execution)
         try:
             async for event in provider_stream:
                 yield event
@@ -1073,8 +1067,7 @@ class _OpenAIChatStreamRunner:
                     execution.abandon()
 
     def _run_execution(
-        self,
-        request_recovery: RequestRecovery,
+        self, execution: ProviderExecution
     ) -> AsyncIterator[StreamOutput]:
         """Run one provider execution while retaining transport-owned state."""
         tag = self._transport._provider_name
@@ -1087,36 +1080,31 @@ class _OpenAIChatStreamRunner:
             operation_kind = ProviderOperationKind.CONTINUATION
         if not self._native_chat:
             request_stream_usage(body)
-        resolver = StreamFailureResolver(
-            StreamFailurePolicy(
-                provider_name=tag,
-                read_timeout_s=self._transport._read_timeout_s,
-                request_id=self._request_id,
-                failure_override=self._transport._behavior.failure_override,
-                trace_error_message=self._transport._log_api_error_tracebacks,
-                report_terminal_error=partial(
-                    self._transport._log_stream_transport_error,
-                    tag,
-                    req_tag,
-                    request_id=self._request_id,
-                ),
-            ),
-            recovery=request_recovery,
-            continuation=continuation_request,
-        )
         return run_attempts(
             AttemptPlan(
                 body=body,
                 operation_kind=operation_kind,
-                execution=request_recovery.execution,
-                resolver=resolver,
+                execution=execution,
+                continuation=continuation_request,
                 corrector=partial(
                     self._transport._corrector, self._reasoning_correction
                 ),
                 start=partial(_ChatAttempt, runner=self),
+                reporting=FailureReporting(
+                    read_timeout_s=self._transport._read_timeout_s,
+                    failure_override=self._transport._behavior.failure_override,
+                    trace_error_message=self._transport._log_api_error_tracebacks,
+                    report_terminal_error=partial(
+                        self._transport._log_stream_transport_error,
+                        tag,
+                        req_tag,
+                        request_id=self._request_id,
+                    ),
+                ),
                 provider_name=tag,
                 transport="chat",
                 gateway_model=self._response_model,
+                refreshable=self._endpoint,
                 sent_fields={
                     "message_count": len(body.get("messages", [])),
                     "tool_count": len(body.get("tools", [])),

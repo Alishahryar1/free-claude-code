@@ -58,6 +58,7 @@ from free_claude_code.providers.admission import (
 from free_claude_code.providers.attempt_loop import (
     AttemptContext,
     AttemptPlan,
+    FailureReporting,
     TransportAttempt,
     run_attempts,
 )
@@ -83,13 +84,6 @@ from free_claude_code.providers.reasoning_compatibility import (
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
 from free_claude_code.providers.request_correction import (
     RequestCorrector,
-)
-from free_claude_code.providers.request_recovery import (
-    RequestRecovery,
-)
-from free_claude_code.providers.stream_failure_resolution import (
-    StreamFailurePolicy,
-    StreamFailureResolver,
 )
 
 from .request_policy import (
@@ -481,23 +475,12 @@ class AnthropicMessagesTransport:
         if continuation is not None:
             body = continuation_request.build(body, continuation)
             operation_kind = ProviderOperationKind.CONTINUATION
-        resolver = StreamFailureResolver(
-            StreamFailurePolicy(
-                provider_name=self._provider_name,
-                read_timeout_s=self._read_timeout_s,
-                request_id=execution.request_id,
-                upstream_evidence=native,
-            ),
-            # Forwarding reports an authentication rejection instead of resending.
-            recovery=RequestRecovery(execution, endpoint=None if native else endpoint),
-            continuation=continuation_request,
-        )
         return run_attempts(
             AttemptPlan(
                 body=body,
                 operation_kind=operation_kind,
                 execution=execution,
-                resolver=resolver,
+                continuation=continuation_request,
                 corrector=partial(
                     RequestCorrector, "messages", reasoning=reasoning_correction
                 ),
@@ -509,9 +492,14 @@ class AnthropicMessagesTransport:
                     betas=betas,
                     forwarding=forwarding,
                 ),
+                reporting=FailureReporting(
+                    read_timeout_s=self._read_timeout_s, upstream_evidence=native
+                ),
                 provider_name=self._provider_name,
                 transport="messages",
                 gateway_model=response_model,
+                # Forwarding reports an authentication rejection instead of resending.
+                refreshable=None if native else endpoint,
             )
         )
 

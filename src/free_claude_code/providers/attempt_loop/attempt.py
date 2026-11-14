@@ -52,11 +52,11 @@ class TransportAttempt:
         raise NotImplementedError
 
     def resolvable(self, error: Exception) -> bool:
-        """Whether ``error`` is a provider failure the resolver should decide."""
+        """Whether ``error`` is a provider failure the loop should resolve."""
         return True
 
     def resolution_error(self, error: Exception) -> Exception:
-        """The error the resolver classifies in place of the raised one."""
+        """The error the loop classifies in place of the raised one."""
         return error
 
     def abandon(self, error: Exception) -> Iterable[StreamOutput]:
