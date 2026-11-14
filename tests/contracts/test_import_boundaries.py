@@ -54,6 +54,7 @@ FACADE_ONLY_BOUNDARIES = {
     "free_claude_code.messaging.trees",
     "free_claude_code.providers.failure_classification",
     "free_claude_code.providers.openai_chat",
+    "free_claude_code.providers.stream_failure_resolution",
 }
 
 DEFERRED_IMPORT_OWNERS = {
@@ -203,6 +204,19 @@ def test_failure_classification_is_pure() -> None:
     ]
     assert not offenders, (
         "Failure classification must not log, sleep, read clocks, or own recovery:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_stream_failure_decision_is_pure() -> None:
+    owner = f"{_PACKAGE_NAME}.providers.stream_failure_resolution.decision"
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if record.importer == owner and record.imported.split(".")[0] != "enum"
+    ]
+    assert not offenders, (
+        "Stream failure decisions must depend on nothing but their inputs:\n"
         + "\n".join(offenders)
     )
 
