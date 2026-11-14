@@ -2,12 +2,11 @@
 
 import asyncio
 import json
-import sys
 import uuid
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import Protocol, assert_never
+from typing import Protocol
 
 import httpx
 
@@ -56,9 +55,15 @@ from free_claude_code.providers.admission import (
     ProviderExecution,
     ProviderOperationKind,
 )
+from free_claude_code.providers.attempt_loop import (
+    AttemptContext,
+    AttemptPlan,
+    FailureReporting,
+    TransportAttempt,
+    run_attempts,
+)
 from free_claude_code.providers.continuation import (
     ContinuationRequest,
-    SourceRecoveryState,
 )
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
@@ -78,20 +83,7 @@ from free_claude_code.providers.reasoning_compatibility import (
 )
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
 from free_claude_code.providers.request_correction import (
-    Rejection,
     RequestCorrector,
-)
-from free_claude_code.providers.request_recovery import (
-    RequestRecovery,
-)
-from free_claude_code.providers.stream_failure_resolution import (
-    Continue,
-    Fail,
-    Handoff,
-    Retry,
-    StreamFailure,
-    StreamFailurePolicy,
-    StreamFailureResolver,
 )
 
 from .request_policy import (
@@ -287,6 +279,7 @@ class AnthropicMessagesTransport:
             betas=prepared.betas,
             endpoint_context=endpoint_context,
             request_id=request_id,
+            response_model=response_model or request.model,
             presenter_factory=lambda origin: NativeMessagesRelay(
                 public_model=response_model or request.model
             ),
@@ -309,6 +302,7 @@ class AnthropicMessagesTransport:
             betas=(),
             endpoint_context=endpoint_context,
             request_id=request_id,
+            response_model=public_model,
             presenter_factory=lambda origin: NativeMessagesPassthrough(public_model),
             continuation=continuation,
             forwarding=_Forwarding(
@@ -343,6 +337,7 @@ class AnthropicMessagesTransport:
             betas=(),
             endpoint_context=endpoint_context,
             request_id=request_id,
+            response_model=response_model or request.model,
             continuation=continuation,
             presenter_factory=lambda origin: GeminiMessagesStream(
                 response_id=response_id,
@@ -380,6 +375,7 @@ class AnthropicMessagesTransport:
             betas=prepared.betas,
             endpoint_context=endpoint_context,
             request_id=request_id,
+            response_model=response_model or request.model,
             continuation=continuation,
             presenter_factory=lambda origin: ChatMessagesStream(
                 model=response_model or request.model,
@@ -409,6 +405,7 @@ class AnthropicMessagesTransport:
             betas=(),
             endpoint_context=endpoint_context,
             request_id=request_id,
+            response_model=response_model or request.model,
             presenter_factory=lambda origin: AnthropicToResponsesStream(
                 request,
                 public_model=response_model or request.model,
@@ -424,6 +421,7 @@ class AnthropicMessagesTransport:
         betas: tuple[str, ...],
         endpoint_context: EndpointContext,
         request_id: str | None,
+        response_model: str,
         presenter_factory: Callable[[ReplayOrigin], _Presenter],
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
@@ -438,6 +436,7 @@ class AnthropicMessagesTransport:
             betas=betas,
             endpoint_context=endpoint_context,
             execution=execution,
+            response_model=response_model,
             presenter_factory=presenter_factory,
             continuation=continuation,
             forwarding=forwarding,
@@ -456,213 +455,204 @@ class AnthropicMessagesTransport:
             await maybe_await_aclose(run)
             execution.abandon()
 
-    async def _run(
+    def _run(
         self,
         body: JsonObject,
         *,
         betas: tuple[str, ...],
         endpoint_context: EndpointContext,
         execution: ProviderExecution,
+        response_model: str,
         presenter_factory: Callable[[ReplayOrigin], _Presenter],
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
         forwarding: _Forwarding | None = None,
     ) -> AsyncIterator[StreamOutput]:
         native = forwarding is not None
-        request_endpoint = RequestEndpoint(endpoint_context)
-        # Forwarding reports an authentication rejection instead of resending.
-        request_recovery = RequestRecovery(
-            execution, endpoint=None if native else request_endpoint
-        )
-        corrections = RequestCorrector("messages", reasoning=reasoning_correction)
+        endpoint = RequestEndpoint(endpoint_context)
         continuation_request = ContinuationRequest("messages")
         operation_kind = ProviderOperationKind.GENERATION
         if continuation is not None:
             body = continuation_request.build(body, continuation)
             operation_kind = ProviderOperationKind.CONTINUATION
-        resolver = StreamFailureResolver(
-            StreamFailurePolicy(
-                provider_name=self._provider_name,
-                read_timeout_s=self._read_timeout_s,
-                request_id=execution.request_id,
-                upstream_evidence=native,
-            ),
-            recovery=request_recovery,
-            continuation=continuation_request,
-        )
-        source: SourceRecoveryState | None = None
-        while execution.can_attempt:
-            normal_stop_seen = False
-            tool_buffer = MessagesToolCallBuffer()
-            source = SourceRecoveryState(execution, previous=source)
-            scope: ProviderAttemptScope | None = None
-            sent_body = body
-            presenter: _Presenter | None = None
-            try:
-                attempt = await execution.open_attempt(operation_kind)
-                scope = ProviderAttemptScope(
-                    attempt,
-                    provider_name=self._provider_name,
-                    request_id=execution.request_id,
-                )
-                endpoint = await request_endpoint.resolve()
-                body = resolve_history_overrides(body)
-                origin = replay_origin(
-                    self._replay_scope,
-                    "messages",
-                    str(body["model"]),
+        return run_attempts(
+            AttemptPlan(
+                body=body,
+                operation_kind=operation_kind,
+                execution=execution,
+                continuation=continuation_request,
+                corrector=partial(
+                    RequestCorrector, "messages", reasoning=reasoning_correction
+                ),
+                start=partial(
+                    _MessagesAttempt,
+                    transport=self,
                     endpoint=endpoint,
+                    presenter_factory=presenter_factory,
+                    betas=betas,
+                    forwarding=forwarding,
+                ),
+                reporting=FailureReporting(
+                    read_timeout_s=self._read_timeout_s, upstream_evidence=native
+                ),
+                provider_name=self._provider_name,
+                transport="messages",
+                gateway_model=response_model,
+                # Forwarding reports an authentication rejection instead of resending.
+                refreshable=None if native else endpoint,
+            )
+        )
+
+
+class _MessagesAttempt(TransportAttempt):
+    """One Messages attempt, streamed or forwarded."""
+
+    def __init__(
+        self,
+        context: AttemptContext,
+        *,
+        transport: AnthropicMessagesTransport,
+        endpoint: RequestEndpoint,
+        presenter_factory: Callable[[ReplayOrigin], _Presenter],
+        betas: tuple[str, ...],
+        forwarding: _Forwarding | None,
+    ) -> None:
+        super().__init__(context)
+        self._transport = transport
+        self._endpoint = endpoint
+        self._presenter_factory = presenter_factory
+        self._betas = betas
+        self._forwarding = forwarding
+        self._presenter: _Presenter | None = None
+        self._request: httpx.Request | None = None
+        self._tool_buffer = MessagesToolCallBuffer()
+        self._stopped = False
+
+    @property
+    def normal_stop_seen(self) -> bool:
+        return self._stopped
+
+    async def prepare(self) -> None:
+        transport = self._transport
+        forwarding = self._forwarding
+        endpoint = await self._endpoint.resolve()
+        self.body = resolve_history_overrides(self.body)
+        origin = replay_origin(
+            transport._replay_scope,
+            "messages",
+            str(self.body["model"]),
+            endpoint=endpoint,
+        )
+        self.sent_body = self.context.corrections.prepare_history(
+            self.body,
+            origin,
+            transport._history_cache,
+            continuation=self.context.continuing,
+        )
+        self._presenter = self._presenter_factory(origin)
+        headers = httpx.Headers({"anthropic-version": "2023-06-01"})
+        if forwarding is None:
+            headers["Accept"] = "text/event-stream"
+        headers.update(endpoint.headers)
+        if forwarding is not None:
+            headers.update(forwarding.headers)
+        if endpoint.api_key and not any(
+            key.lower() in {"authorization", "x-api-key"} for key in headers
+        ):
+            headers["x-api-key"] = endpoint.api_key
+        if self._betas:
+            existing = headers.pop("anthropic-beta", "")
+            headers["anthropic-beta"] = ",".join(
+                dict.fromkeys([*filter(None, existing.split(",")), *self._betas])
+            )
+        self._request = transport._client.build_request(
+            "POST",
+            f"{endpoint.base_url.rstrip('/')}/messages",
+            json=self.sent_body,
+            headers=headers,
+        )
+
+    async def stream(self, scope: ProviderAttemptScope) -> AsyncIterator[StreamOutput]:
+        assert self._request is not None and self._presenter is not None
+        presenter = self._presenter
+        forwarding = self._forwarding
+        corrections = self.context.corrections
+        attempt = scope.attempt
+        response = scope.retain(
+            await self._transport._client.send(self._request, stream=True)
+        )
+        if not response.is_success:
+            raise await messages_status_error(response)
+        if forwarding is not None and not forwarding.streaming:
+            message = await _read_message(response)
+            self._stopped = True
+            output = _present_message(message, forwarding.public_model)
+            corrections.accepted_history()
+            await attempt.accept()
+            yield StreamOutput((output,))
+            return
+        content_type = response.headers.get("content-type", "")
+        if "text/event-stream" not in content_type.lower():
+            raise RetryableProviderProtocolError(
+                "Messages upstream did not return an SSE stream."
+            )
+        upstream = messages_events(
+            response, read_timeout_s=self._transport._read_timeout_s
+        )
+        try:
+            async for event_type, payload in upstream:
+                self._stopped |= is_messages_stop(event_type, payload)
+                check_messages_failure(
+                    event_type, payload, native=forwarding is not None
                 )
-                sent_body = corrections.prepare_history(
-                    body,
-                    origin,
-                    self._history_cache,
-                    continuation=operation_kind is ProviderOperationKind.CONTINUATION,
+                self.context.source.observe(
+                    "messages", payload, continuing=self.context.continuing
                 )
-                presenter = presenter_factory(origin)
-                headers = httpx.Headers({"anthropic-version": "2023-06-01"})
-                if not native:
-                    headers["Accept"] = "text/event-stream"
-                headers.update(endpoint.headers)
-                if forwarding is not None:
-                    headers.update(forwarding.headers)
-                if endpoint.api_key and not any(
-                    key.lower() in {"authorization", "x-api-key"} for key in headers
-                ):
-                    headers["x-api-key"] = endpoint.api_key
-                if betas:
-                    existing = headers.pop("anthropic-beta", "")
-                    headers["anthropic-beta"] = ",".join(
-                        dict.fromkeys([*filter(None, existing.split(",")), *betas])
-                    )
-                base_url = endpoint.base_url.rstrip("/")
-                path = "/messages"
-                response = scope.retain(
-                    await self._client.send(
-                        self._client.build_request(
-                            "POST",
-                            f"{base_url}{path}",
-                            json=sent_body,
-                            headers=headers,
-                        ),
-                        stream=True,
-                    )
-                )
-                if not response.is_success:
-                    raise await messages_status_error(response)
-                if forwarding is not None and not forwarding.streaming:
-                    message = await _read_message(response)
-                    normal_stop_seen = True
-                    output = _present_message(message, forwarding.public_model)
-                    corrections.accepted_history()
+                corrections.accepted_history()
+                if not attempt.accepted:
                     await attempt.accept()
-                    yield StreamOutput((output,))
-                    return
-                content_type = response.headers.get("content-type", "")
-                if "text/event-stream" not in content_type.lower():
-                    raise RetryableProviderProtocolError(
-                        "Messages upstream did not return an SSE stream."
-                    )
-                upstream = messages_events(
-                    response, read_timeout_s=self._read_timeout_s
-                )
-                try:
-                    async for item in upstream:
-                        event_type, payload = item
-                        normal_stop_seen |= is_messages_stop(event_type, payload)
-                        check_messages_failure(event_type, payload, native=native)
-                        source.observe(
-                            "messages",
-                            payload,
-                            continuing=operation_kind
-                            is ProviderOperationKind.CONTINUATION,
-                        )
-                        corrections.accepted_history()
-                        if not attempt.accepted:
-                            await attempt.accept()
-                        for group in tool_buffer.feed(event_type, payload):
-                            frames = []
-                            for kind, value in group:
-                                output = presenter.feed(kind, value)
-                                frames.extend(
-                                    (output,)
-                                    if isinstance(output, str)
-                                    else output or ()
-                                )
-                            if frames:
-                                yield completed_output(frames)
-                        if presenter.completed:
-                            break
-                finally:
-                    await maybe_await_aclose(upstream)
-                if not presenter.completed:
-                    raise RetryableProviderProtocolError(
-                        "Messages stream ended without message_stop."
-                    )
-                return
-            except asyncio.CancelledError, GeneratorExit:
-                raise
-            except Exception as raw_error:
-                if presenter is not None and not (
-                    isinstance(raw_error, ExecutionFailure)
-                    and raw_error.stream_context
-                    and raw_error.stream_context.source.unsafe_reason
-                ):
-                    for group in tool_buffer.abandon():
-                        frames = []
-                        for kind, value in group:
-                            output = presenter.feed(kind, value)
-                            frames.extend(
-                                (output,) if isinstance(output, str) else output or ()
-                            )
-                        if frames:
-                            yield completed_output(frames)
-                error = (
-                    RetryableProviderProtocolError(str(raw_error))
-                    if isinstance(raw_error, NativeMessagesError)
-                    else raw_error
-                )
-                resolution = await resolver.resolve(
-                    StreamFailure(
-                        error=error,
-                        scope=scope,
-                        body=body,
-                        operation_kind=operation_kind,
-                        normal_stop_seen=normal_stop_seen,
-                        source=source,
-                        propose_correction=partial(
-                            corrections.correct, Rejection(raw_error, body, sent_body)
-                        ),
-                        failure_payload=(
-                            presenter.failure_payload
-                            if isinstance(presenter, AnthropicToResponsesStream)
-                            else None
-                        ),
-                    )
-                )
-                match resolution:
-                    case Retry(body=next_body):
-                        body = next_body
-                        continue
-                    case Continue(body=next_body):
-                        body = next_body
-                        operation_kind = ProviderOperationKind.CONTINUATION
-                        corrections = RequestCorrector(
-                            "messages", reasoning=reasoning_correction
-                        )
-                        continue
-                    case Handoff():
-                        if isinstance(presenter, GeminiMessagesStream):
-                            for event in presenter.handoff():
-                                yield StreamOutput((event,))
-                        return
-                    case Fail(error=failure):
-                        raise failure from raw_error
-                    case _:
-                        assert_never(resolution)
-            finally:
-                if scope is not None:
-                    await scope.aclose(active_error=sys.exception())
-        if execution.last_failure is not None:
-            raise execution.last_failure
-        raise RuntimeError("Messages execution ended without a terminal result.")
+                for group in self._tool_buffer.feed(event_type, payload):
+                    if frames := _present(presenter, group):
+                        yield completed_output(frames)
+                if presenter.completed:
+                    break
+        finally:
+            await maybe_await_aclose(upstream)
+        if not presenter.completed:
+            raise RetryableProviderProtocolError(
+                "Messages stream ended without message_stop."
+            )
+
+    def resolution_error(self, error: Exception) -> Exception:
+        if isinstance(error, NativeMessagesError):
+            return RetryableProviderProtocolError(str(error))
+        return error
+
+    def abandon(self, error: Exception) -> Iterator[StreamOutput]:
+        if self._presenter is None:
+            return
+        for group in self._tool_buffer.abandon():
+            if frames := _present(self._presenter, group):
+                yield completed_output(frames)
+
+    def failure_payload(
+        self, error: Exception, failure: ExecutionFailure
+    ) -> JsonObject | None:
+        if isinstance(self._presenter, AnthropicToResponsesStream):
+            return self._presenter.failure_payload(failure)
+        return None
+
+    def handoff(self) -> Iterator[StreamOutput]:
+        if isinstance(self._presenter, GeminiMessagesStream):
+            for event in self._presenter.handoff():
+                yield StreamOutput((event,))
+
+
+def _present(
+    presenter: _Presenter, group: Iterable[tuple[str, Mapping[str, JsonValue]]]
+) -> list[str]:
+    frames: list[str] = []
+    for kind, value in group:
+        output = presenter.feed(kind, value)
+        frames.extend((output,) if isinstance(output, str) else output or ())
+    return frames

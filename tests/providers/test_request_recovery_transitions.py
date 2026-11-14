@@ -442,24 +442,12 @@ async def test_credential_resolution_preserves_admission_order(protocol, refresh
         wires,
         _,
     ):
-        if protocol == "responses":
-            with pytest.raises(
-                ExecutionFailure, match="credential service unavailable"
-            ):
-                _ = [
-                    event
-                    async for event in _stream(provider, endpoint, _request(protocol))
-                ]
-            assert endpoint.calls == ([False, True] if refresh else [False])
-            assert len(bodies) == int(refresh)
-        else:
-            assert [
+        with pytest.raises(ExecutionFailure, match="credential service unavailable"):
+            _ = [
                 event async for event in _stream(provider, endpoint, _request(protocol))
             ]
-            assert endpoint.calls == (
-                [False, True, True] if refresh else [False, False]
-            )
-            assert len(bodies) == 1 + int(refresh)
+        assert endpoint.calls == ([False, True] if refresh else [False])
+        assert len(bodies) == int(refresh)
         assert all(wire.close_calls == 1 for wire in wires)
 
 

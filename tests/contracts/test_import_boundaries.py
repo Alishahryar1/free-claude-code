@@ -53,6 +53,7 @@ FACADE_ONLY_BOUNDARIES = {
     "free_claude_code.application.model_fallback",
     "free_claude_code.core.openai_responses",
     "free_claude_code.messaging.trees",
+    "free_claude_code.providers.attempt_loop",
     "free_claude_code.providers.failure_classification",
     "free_claude_code.providers.openai_chat",
     "free_claude_code.providers.request_correction",
@@ -153,11 +154,8 @@ def test_api_configuration_access_goes_through_runtime() -> None:
     )
 
 
-def test_request_recovery_policy_has_no_client_or_transport_binding() -> None:
-    owners = {
-        f"{_PACKAGE_NAME}.providers.request_recovery",
-        f"{_PACKAGE_NAME}.providers.endpoint",
-    }
+def test_request_endpoint_has_no_client_or_transport_binding() -> None:
+    owners = {f"{_PACKAGE_NAME}.providers.endpoint"}
     forbidden = (
         "openai",
         "httpx",
@@ -176,8 +174,8 @@ def test_request_recovery_policy_has_no_client_or_transport_binding() -> None:
             for prefix in forbidden
         )
     ]
-    assert not offenders, (
-        "Request recovery policy depends on an adapter:\n" + "\n".join(offenders)
+    assert not offenders, "Request endpoint depends on an adapter:\n" + "\n".join(
+        offenders
     )
 
 
@@ -210,15 +208,17 @@ def test_failure_classification_is_pure() -> None:
     )
 
 
-def test_stream_failure_decision_is_pure() -> None:
-    owner = f"{_PACKAGE_NAME}.providers.stream_failure_resolution.decision"
+def test_stream_failure_resolution_is_pure() -> None:
+    owner = f"{_PACKAGE_NAME}.providers.stream_failure_resolution"
     offenders = [
         record.describe()
         for record in _scan_imports(_PACKAGE_ROOT)
-        if record.importer == owner and record.imported.split(".")[0] != "enum"
+        if (record.importer == owner or record.importer.startswith(f"{owner}."))
+        and record.imported.split(".")[0] != "enum"
+        and not record.imported.startswith(f"{owner}.")
     ]
     assert not offenders, (
-        "Stream failure decisions must depend on nothing but their inputs:\n"
+        "Stream failure resolution must depend on nothing but its inputs:\n"
         + "\n".join(offenders)
     )
 
