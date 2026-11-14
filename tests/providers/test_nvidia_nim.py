@@ -21,7 +21,12 @@ from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.admission import UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
-from free_claude_code.providers.nvidia_nim.client import _PROFILE as NIM_PROFILE
+from free_claude_code.providers.nvidia_nim.client import (
+    _PROFILE as NIM_PROFILE,
+)
+from free_claude_code.providers.nvidia_nim.client import (
+    NvidiaNimChatBehavior,
+)
 from free_claude_code.providers.nvidia_nim.tool_schema import (
     NIM_TOOL_ARGUMENT_ALIASES_KEY,
 )
@@ -1098,6 +1103,143 @@ async def test_stream_messages_prefer_off_retries_when_none_rejected(
     assert mock_create.await_count == 2
     assert mock_create.call_args_list[0].kwargs["reasoning_effort"] == "none"
     assert "reasoning_effort" not in mock_create.call_args_list[1].kwargs
+
+    event_text = "".join(events)
+    assert "event: error" not in event_text
+    assert "OK" in event_text
+
+
+def test_reasoning_disable_rejected_requires_bad_request():
+    behavior = NvidiaNimChatBehavior()
+    bad_req = _make_bad_request_error("reasoning_effort is not supported")
+    internal_err = _make_internal_server_error("reasoning_effort error")
+
+    assert behavior.reasoning_disable_rejected(bad_req) is True
+    assert behavior.reasoning_disable_rejected(internal_err) is False
+
+
+def test_reasoning_disable_rejected_excludes_other_rejected_fields():
+    behavior = NvidiaNimChatBehavior()
+    template_err = _make_bad_request_error(
+        "chat_template is not supported for Mistral tokenizers."
+    )
+    resp = Response(
+        status_code=400,
+        request=Request("POST", f"{NVIDIA_NIM_DEFAULT_BASE}/chat/completions"),
+    )
+    param_err = openai.BadRequestError(
+        "Invalid parameter",
+        response=resp,
+        body={"error": {"message": "Invalid parameter", "param": "tools", "code": 400}},
+    )
+    opaque_err = _make_bad_request_error("Invalid request")
+
+    assert behavior.reasoning_disable_rejected(template_err) is False
+    assert behavior.reasoning_disable_rejected(param_err) is False
+    assert behavior.reasoning_disable_rejected(opaque_err) is True
+
+
+@pytest.mark.asyncio
+async def test_stream_messages_prefer_off_does_not_strip_reasoning_on_chat_template_error(
+    provider_config,
+):
+    provider = NvidiaNimProvider(
+        provider_config,
+        admission=immediate_admission(),
+    )
+    req = make_request(
+        model="deepseek-ai/deepseek-v4.1-flash",
+        extra_body={"chat_template": "custom_template"},
+    )
+
+    mock_chunk = MagicMock()
+    mock_chunk.choices = [
+        MagicMock(
+            delta=MagicMock(content="OK", reasoning_content=""),
+            finish_reason="stop",
+        )
+    ]
+    mock_chunk.usage = MagicMock(completion_tokens=2)
+
+    async def mock_stream():
+        yield sdk_chat_chunk(mock_chunk)
+
+    template_error = _make_bad_request_error(
+        "chat_template is not supported for Mistral tokenizers."
+    )
+
+    with patch.object(
+        provider._client.chat.completions, "create", new_callable=AsyncMock
+    ) as mock_create:
+        mock_create.side_effect = [template_error, SDKStreamDouble(mock_stream())]
+
+        events = [
+            frame
+            async for e in provider.stream_messages(
+                req, reasoning=ReasoningPolicy.prefer_off()
+            )
+            for frame in e.frames
+        ]
+
+    assert mock_create.await_count == 2
+    assert mock_create.call_args_list[0].kwargs["reasoning_effort"] == "none"
+    assert (
+        mock_create.call_args_list[0].kwargs.get("extra_body", {}).get("chat_template")
+        == "custom_template"
+    )
+
+    assert mock_create.call_args_list[1].kwargs["reasoning_effort"] == "none"
+    assert "chat_template" not in mock_create.call_args_list[1].kwargs.get(
+        "extra_body", {}
+    )
+
+    event_text = "".join(events)
+    assert "event: error" not in event_text
+    assert "OK" in event_text
+
+
+@pytest.mark.asyncio
+async def test_stream_messages_prefer_off_does_not_strip_reasoning_on_server_error(
+    provider_config,
+):
+    provider = NvidiaNimProvider(
+        provider_config,
+        admission=immediate_admission(),
+    )
+    req = make_request(model="deepseek-ai/deepseek-v4.1-flash")
+
+    mock_chunk = MagicMock()
+    mock_chunk.choices = [
+        MagicMock(
+            delta=MagicMock(content="OK", reasoning_content=""),
+            finish_reason="stop",
+        )
+    ]
+    mock_chunk.usage = MagicMock(completion_tokens=2)
+
+    async def mock_stream():
+        yield sdk_chat_chunk(mock_chunk)
+
+    server_error = _make_internal_server_error(
+        "Internal server error regarding reasoning_effort"
+    )
+
+    with patch.object(
+        provider._client.chat.completions, "create", new_callable=AsyncMock
+    ) as mock_create:
+        mock_create.side_effect = [server_error, SDKStreamDouble(mock_stream())]
+
+        events = [
+            frame
+            async for e in provider.stream_messages(
+                req, reasoning=ReasoningPolicy.prefer_off()
+            )
+            for frame in e.frames
+        ]
+
+    assert mock_create.await_count == 2
+    assert mock_create.call_args_list[0].kwargs["reasoning_effort"] == "none"
+    assert mock_create.call_args_list[1].kwargs["reasoning_effort"] == "none"
 
     event_text = "".join(events)
     assert "event: error" not in event_text
