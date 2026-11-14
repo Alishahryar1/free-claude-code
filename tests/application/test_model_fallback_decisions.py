@@ -3,6 +3,7 @@
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
+import httpx2
 import pytest
 from loguru import logger
 
@@ -12,13 +13,21 @@ from free_claude_code.application.routing import (
     ProviderModelTarget,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.core.stream_delivery import StreamDeliveryState
+from free_claude_code.core.stream_delivery import (
+    StreamDeliveryState,
+    bind_stream_delivery,
+)
 from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import (
     ContinuationSeed,
     DeliveredPrefix,
     SourceRecoverySnapshot,
     StreamFailureContext,
+)
+from tests.providers.test_lmstudio import (
+    make_request,
+    metadata_response,
+    provider_with_http,
 )
 
 NO_CONTEXT = None
@@ -302,3 +311,69 @@ async def test_continuation_failure_without_context_after_own_output_raises():
     assert outcome.opened == [(0, None), (1, "a")]
     assert outcome.frames == ["a", "b"]
     assert outcome.raised == 429
+
+
+@pytest.mark.asyncio
+async def test_lmstudio_budget_rejection_of_a_continuation_keeps_the_seed():
+    # LM Studio checks the prepared body against its loaded context before
+    # sending. A continuation body carries the delivered prefix, so it can fail
+    # that check locally, without stream context, before producing anything.
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "GET":
+            return metadata_response(context=1000)
+        raise AssertionError("LM Studio must not send an over-budget body")
+
+    delivered = "word " * 1000
+    state = StreamDeliveryState()
+    state.bind_prefix(
+        lambda: DeliveredPrefix(
+            text=delivered,
+            thinking="",
+            has_calls=False,
+            eligible=True,
+            can_handoff=True,
+            unsafe_reason=None,
+            continuation=ContinuationSeed(
+                "messages", ({"type": "text", "text": delivered},)
+            ),
+        )
+    )
+
+    async def first() -> AsyncIterator[StreamOutput]:
+        yield StreamOutput(("first",))
+        state.release_content()
+        raise _failure(CLEAN)
+
+    async def last() -> AsyncIterator[StreamOutput]:
+        yield StreamOutput(("last",))
+
+    seeds: list[str | None] = []
+    async with provider_with_http(handler) as lmstudio:
+
+        async def open_candidate(index, _candidate, continuation):
+            seeds.append(continuation.readable_text("text") if continuation else None)
+            if index == 1:
+                return lmstudio.stream_messages(
+                    make_request(), continuation=continuation
+                )
+            return first() if index == 0 else last()
+
+        candidates = tuple(
+            ProviderModelCandidate(ProviderModelTarget("p", f"m{i}", f"p/m{i}"))
+            for i in range(3)
+        )
+        with bind_stream_delivery(state):
+            frames = [
+                frame
+                async for chunk in stream_model_candidates(
+                    candidates,
+                    open_candidate,
+                    get_delivery=lambda: state,
+                    request_id="lmstudio-budget",
+                    wire_api="messages",
+                )
+                for frame in chunk.frames
+            ]
+
+    assert seeds == [None, delivered, delivered]
+    assert frames == ["first", "last"]
