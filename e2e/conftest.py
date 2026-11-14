@@ -262,7 +262,7 @@ def admin_base_url(
             name: _ModelListingProvider(
                 error=ConnectionError("Local fixture is offline")
             )
-            for name in ("lmstudio", "llamacpp", "ollama")
+            for name in ("lmstudio", "llamacpp", "ollama", "rapid_mlx")
         },
         "nvidia_nim": _ModelListingProvider(),
         "open_router": _ModelListingProvider(
@@ -344,6 +344,8 @@ def admin_base_url(
         provider_id: str,
         base_url: str,
         path: str,
+        *,
+        api_key: str | None = None,
     ) -> dict[str, object]:
         return {
             "provider_id": provider_id,

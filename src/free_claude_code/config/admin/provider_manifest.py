@@ -18,6 +18,12 @@ class ProviderFieldOverride(TypedDict, total=False):
 
 
 _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
+    "RAPID_MLX_API_KEY": {
+        "description": "Local Rapid-MLX needs no key by default; keep not-needed. If server authentication is enabled, use its configured API key.",
+    },
+    "RAPID_MLX_BASE_URL": {
+        "description": "OpenAI-compatible Rapid-MLX URL. Defaults to http://localhost:8000/v1; use the port printed by your server.",
+    },
     "ANTHROPIC_API_KEY": {
         "description": "Anthropic API access with separate usage billing. Messages requests use Anthropic tools and client thinking controls. Native fallback uses other Anthropic models. FCC local web tools apply to compatibility routes.",
     },
