@@ -5,7 +5,7 @@ import sys
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import aclosing
 from functools import partial
-from typing import Any
+from typing import Any, assert_never
 from urllib.parse import quote
 
 import httpx
@@ -25,13 +25,9 @@ from free_claude_code.providers.admission import (
 )
 from free_claude_code.providers.continuation import (
     SourceRecoveryState,
-    public_recovery,
-    public_stream_failure,
 )
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
-from free_claude_code.providers.failure_classification import classify
-from free_claude_code.providers.failure_reporting import finalize_provider_failure
 from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.history_replay import replay_origin
 from free_claude_code.providers.http import ProviderAttemptScope, maybe_await_aclose
@@ -42,10 +38,16 @@ from free_claude_code.providers.request_recovery import (
     RequestCorrections,
     RequestRecovery,
 )
-from free_claude_code.providers.stream_read import read_stream_event
-from free_claude_code.providers.stream_recovery import (
-    can_retry_undelivered_stream,
+from free_claude_code.providers.stream_failure_resolution import (
+    Continue,
+    Fail,
+    Handoff,
+    Retry,
+    StreamFailure,
+    StreamFailurePolicy,
+    StreamFailureResolver,
 )
+from free_claude_code.providers.stream_read import read_stream_event
 
 from .stream import GeminiStream
 
@@ -150,6 +152,17 @@ class GeminiTransport:
         if continuation is not None:
             body = continuation_request.build(body, continuation)
             operation = ProviderOperationKind.CONTINUATION
+        resolver = StreamFailureResolver(
+            StreamFailurePolicy(
+                provider_name="GEMINI",
+                read_timeout_s=self._read_timeout,
+                request_id=execution.request_id,
+                # History the caller sent cannot be replayed; that is their error.
+                raise_unfinalized=(InvalidRequestError,),
+            ),
+            recovery=request_recovery,
+            continuation=continuation_request,
+        )
         source: SourceRecoveryState | None = None
         while execution.can_attempt:
             source = SourceRecoveryState(execution, previous=source)
@@ -264,16 +277,16 @@ class GeminiTransport:
             except asyncio.CancelledError, GeneratorExit:
                 raise
             except Exception as error:
-                normal_stop = presenter.normal_stop_seen if presenter else False
-                attempt_failure = None
-                if scope is not None:
-                    corrected = await request_recovery.retry_request(
-                        error,
-                        classify(error).auth_status,
-                        scope.attempt,
-                        body,
+                resolution = await resolver.resolve(
+                    StreamFailure(
+                        error=error,
+                        scope=scope,
+                        body=body,
                         operation_kind=operation,
-                        normal_stop_seen=normal_stop,
+                        normal_stop_seen=(
+                            presenter.normal_stop_seen if presenter else False
+                        ),
+                        source=source,
                         propose_correction=partial(
                             corrections.next_body,
                             error,
@@ -283,69 +296,24 @@ class GeminiTransport:
                             reasoning_sent_body=sent_body,
                         ),
                     )
-                    if corrected is not None:
-                        body = corrected
+                )
+                match resolution:
+                    case Retry(body=next_body):
+                        body = next_body
                         continue
-                    if not scope.attempt.accepted:
-                        if (
-                            normal_stop
-                            and execution.delivery is not None
-                            and not execution.delivery.content_released
-                        ):
-                            # The model stopped; the failure is ours, not upstream's.
-                            await scope.attempt.accept()
-                        else:
-                            attempt_failure = await scope.fail(error)
-                            error = attempt_failure.error
-                if attempt_failure is not None and attempt_failure.retry_allowed:
-                    continue
-                retryable = (
-                    attempt_failure.retryable
-                    if attempt_failure
-                    else classify(error).retryable_mid_stream
-                )
-                retry_allowed = can_retry_undelivered_stream(
-                    execution.delivery,
-                    retryable=retryable,
-                    attempts_remaining=execution.attempts_remaining,
-                    normal_stop_seen=normal_stop,
-                )
-                if retry_allowed:
-                    continue
-                if scope is not None:
-                    await scope.aclose(active_error=error)
-                recovered = public_recovery(
-                    execution,
-                    body=body,
-                    request=continuation_request,
-                    retryable=retryable,
-                    normal_stop_seen=normal_stop,
-                    source=source,
-                )
-                if recovered is not None:
-                    if recovered.body is None:
+                    case Continue(body=next_body):
+                        body = next_body
+                        operation = ProviderOperationKind.CONTINUATION
+                        corrections = RequestCorrections("gemini")
+                        continue
+                    case Handoff():
                         return
-                    body = recovered.body
-                    operation = ProviderOperationKind.CONTINUATION
-                    corrections = RequestCorrections("gemini")
-                    continue
-                if isinstance(error, InvalidRequestError):
-                    raise
-                failure = finalize_provider_failure(
-                    error,
-                    provider_name="GEMINI",
-                    read_timeout_s=self._read_timeout,
-                    request_id=execution.request_id,
-                )
-                if execution.delivery is not None:
-                    raise public_stream_failure(
-                        failure,
-                        source=source,
-                        body=body,
-                        protocol="gemini",
-                        normal_stop_seen=normal_stop,
-                    ) from error
-                raise failure from error
+                    case Fail(error=failure) if failure is error:
+                        raise
+                    case Fail(error=failure):
+                        raise failure from error
+                    case _:
+                        assert_never(resolution)
             finally:
                 if scope is not None:
                     await scope.aclose(active_error=sys.exception())

@@ -275,7 +275,4 @@ async def test_gemini_exhausted_undelivered_stream_traces(traces):
         await _drain_gemini(_gemini(reply, max_attempts=2))
 
     assert calls == 2
-    assert _trace_shape(traces) == {
-        "provider.recovery.early_retry": [],
-        "provider.response.error": [],
-    }
+    assert _trace_shape(traces) == _SHARED_SHAPE
