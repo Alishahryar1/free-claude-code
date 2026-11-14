@@ -17,9 +17,6 @@ from free_claude_code.core.stream_delivery import (
     StreamDeliveryState,
     bind_stream_delivery,
 )
-from free_claude_code.providers.anthropic_messages.passthrough import (
-    stream_native_messages,
-)
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
 from tests.api.test_response_streams import _json_error, _serve
 from tests.providers.test_anthropic_messages_transport import (
@@ -71,19 +68,15 @@ async def _messages_path(route, respond, *, max_attempts=3):
 
         def source():
             if route == "native":
-                return stream_native_messages(
-                    client,
-                    admission,
-                    base_url="https://native.invalid/v1",
-                    headers={},
-                    body={
+                return transport.forward_messages(
+                    {
                         "model": "native",
                         "stream": True,
                         "messages": [{"role": "user", "content": "hi"}],
                     },
+                    endpoint_context=Endpoint(),
+                    headers={},
                     public_model="public",
-                    provider_name="TEST",
-                    read_timeout_s=3,
                     request_id="stopped",
                 )
             return _stream(transport, Endpoint(), responses=route == "responses")

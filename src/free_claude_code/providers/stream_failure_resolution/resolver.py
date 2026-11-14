@@ -41,10 +41,10 @@ class StreamFailurePolicy:
     read_timeout_s: float
     request_id: str | None
     failure_override: ProviderFailureOverride | None = None
-    # False leaves the error for an outer owner to finalize.
-    finalize: bool = True
     # Request errors that must reach the caller exactly as raised.
     raise_unfinalized: tuple[type[Exception], ...] = ()
+    # Report the upstream error body to clients that speak the upstream protocol.
+    upstream_evidence: bool = False
     trace_error_message: bool = False
     report_terminal_error: Callable[[Exception], None] | None = None
 
@@ -154,7 +154,7 @@ class StreamFailureResolver:
 
     def _terminal(self, error: Exception, failure: StreamFailure) -> Exception:
         policy = self._policy
-        if not policy.finalize or isinstance(error, policy.raise_unfinalized):
+        if isinstance(error, policy.raise_unfinalized):
             return error
         reported = underlying_provider_error(error)
         if policy.report_terminal_error is not None:
@@ -165,6 +165,7 @@ class StreamFailureResolver:
             read_timeout_s=policy.read_timeout_s,
             request_id=policy.request_id,
             provider_failure_override=policy.failure_override,
+            upstream_evidence=policy.upstream_evidence,
         )
         fields: dict[str, Any] = {
             "exc_type": type(reported).__name__,

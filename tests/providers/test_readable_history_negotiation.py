@@ -17,8 +17,8 @@ from free_claude_code.core.history_replay import (
     encode_replay,
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.providers.anthropic_messages.passthrough import (
-    stream_native_messages,
+from free_claude_code.providers.anthropic_messages.transport import (
+    AnthropicMessagesTransport,
 )
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.endpoint_types import HttpEndpoint
@@ -473,6 +473,11 @@ def test_sdk_history_and_model_override_project_without_conflicting_overlay():
     assert original["messages"] == []
 
 
+class _NativeEndpoint:
+    async def endpoint(self, *, force_refresh: bool = False) -> HttpEndpoint:
+        return HttpEndpoint("https://provider.test/v1", {})
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
 async def test_native_messages_negotiates_stream_and_json_and_reuses_cache(streaming):
@@ -509,25 +514,28 @@ async def test_native_messages_negotiates_stream_and_json_and_reuses_cache(strea
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        transport = AnthropicMessagesTransport(
+            client=client,
+            admission=immediate_admission(),
+            history_cache=cache,
+            provider_name="native",
+            replay_scope="native",
+            read_timeout_s=30,
+        )
         for _ in range(2):
             result = [
                 event
-                async for event in stream_native_messages(
-                    client,
-                    immediate_admission(),
-                    base_url="https://provider.test/v1",
-                    headers={},
-                    body={
+                async for event in transport.forward_messages(
+                    {
                         "model": "model",
                         "messages": readable_history(),
                         "max_tokens": 100,
                         "stream": streaming,
                     },
+                    endpoint_context=_NativeEndpoint(),
+                    headers={},
                     public_model="public",
-                    provider_name="native",
-                    read_timeout_s=30,
                     request_id="native-history",
-                    history_cache=cache,
                 )
             ]
             assert result
