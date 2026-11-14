@@ -10,7 +10,7 @@ import pytest
 
 from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.providers import admission, failure_policy
+from free_claude_code.providers import admission, failure_reporting
 from tests.api.test_delivered_stream_recovery import public_text, text_events
 from tests.api.test_four_protocol_matrix import ingress_request, matrix_app
 
@@ -20,7 +20,7 @@ def cooldown_clock(monkeypatch):
     clock = SimpleNamespace(now=100.0)
     monotonic_time = SimpleNamespace(monotonic=lambda: clock.now)
     monkeypatch.setattr(admission, "time", monotonic_time)
-    monkeypatch.setattr(failure_policy, "time", monotonic_time)
+    monkeypatch.setattr(failure_reporting, "time", monotonic_time)
     return clock
 
 

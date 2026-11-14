@@ -15,7 +15,7 @@ import openai
 import pytest
 
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.providers import admission, failure_policy
+from free_claude_code.providers import admission, failure_reporting
 from free_claude_code.providers.admission import (
     UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
     ProviderAdmissionController,
@@ -26,8 +26,8 @@ from free_claude_code.providers.admission import (
     ProviderOperationKind,
     _retry_after_seconds,
 )
-from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
 from free_claude_code.providers.http import ProviderAttemptScope
+from free_claude_code.providers.recovery_errors import ProviderRecoveryExhausted
 from free_claude_code.providers.stream_recovery import TruncatedProviderStreamError
 
 
@@ -77,7 +77,7 @@ def recovery_clock(monkeypatch):
     clock = SimpleNamespace(now=100.0)
     monotonic_time = SimpleNamespace(monotonic=lambda: clock.now)
     monkeypatch.setattr(admission, "time", monotonic_time)
-    monkeypatch.setattr(failure_policy, "time", monotonic_time)
+    monkeypatch.setattr(failure_reporting, "time", monotonic_time)
     return clock
 
 
@@ -1114,7 +1114,7 @@ async def test_terminal_waiters_keep_captured_failure(elapsed, recovery_clock):
         for failure in (original_decision.error, waiting.value, coalesced.value):
             assert failure.last_error is original_error
             assert failure.retry_not_before == original_deadline
-            classified = failure_policy.classify_provider_failure(
+            classified = failure_reporting.finalize_provider_failure(
                 failure, provider_name="TEST", read_timeout_s=None, request_id=None
             )
             assert "HTTP 429" in classified.message

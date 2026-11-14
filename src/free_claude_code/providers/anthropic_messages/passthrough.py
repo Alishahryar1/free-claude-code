@@ -38,14 +38,12 @@ from free_claude_code.providers.continuation import (
     public_stream_failure,
 )
 from free_claude_code.providers.endpoint_types import HttpEndpoint
-from free_claude_code.providers.failure_policy import (
-    RetryableProviderProtocolError,
-    classify_provider_failure,
-    is_retryable_stream_error,
-)
+from free_claude_code.providers.failure_classification import classify
+from free_claude_code.providers.failure_reporting import finalize_provider_failure
 from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.history_replay import replay_origin
 from free_claude_code.providers.http import ProviderAttemptScope
+from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
 from free_claude_code.providers.request_recovery import (
     RequestCorrections,
     RequestRecovery,
@@ -250,7 +248,7 @@ async def stream_native_messages(
                     if corrected is not None:
                         body = corrected
                         continue
-                retryable = is_retryable_stream_error(error)
+                retryable = classify(error).retryable_mid_stream
                 if scope is not None:
                     hidden_stop = (
                         normal_stop_seen
@@ -313,7 +311,7 @@ async def stream_native_messages(
                 ),
             )
         else:
-            failure = classify_provider_failure(
+            failure = finalize_provider_failure(
                 error,
                 provider_name=provider_name,
                 read_timeout_s=read_timeout_s,

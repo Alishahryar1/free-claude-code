@@ -30,16 +30,14 @@ from free_claude_code.providers.continuation import (
 )
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
-from free_claude_code.providers.failure_policy import (
-    RetryableProviderProtocolError,
-    classify_provider_failure,
-    is_retryable_stream_error,
-)
+from free_claude_code.providers.failure_classification import classify
+from free_claude_code.providers.failure_reporting import finalize_provider_failure
 from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.history_replay import replay_origin
 from free_claude_code.providers.http import ProviderAttemptScope, maybe_await_aclose
 from free_claude_code.providers.openai_chat import ChatStreamOutput
 from free_claude_code.providers.reasoning_compatibility import ReasoningCorrection
+from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
 from free_claude_code.providers.request_recovery import (
     RequestCorrections,
     RequestRecovery,
@@ -298,7 +296,7 @@ class GeminiTransport:
                 retryable = (
                     attempt_failure.retryable
                     if attempt_failure
-                    else is_retryable_stream_error(error)
+                    else classify(error).retryable_mid_stream
                 )
                 retry_allowed = can_retry_undelivered_stream(
                     execution.delivery,
@@ -327,7 +325,7 @@ class GeminiTransport:
                     continue
                 if isinstance(error, InvalidRequestError):
                     raise
-                failure = classify_provider_failure(
+                failure = finalize_provider_failure(
                     error,
                     provider_name="GEMINI",
                     read_timeout_s=self._read_timeout,

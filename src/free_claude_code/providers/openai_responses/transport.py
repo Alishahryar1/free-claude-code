@@ -48,6 +48,11 @@ from free_claude_code.providers.admission import (
     ProviderExecution,
     ProviderOperationKind,
 )
+from free_claude_code.providers.canonical_failures import (
+    context_window_exceeded_provider_failure,
+    is_context_window_error_code,
+    reports_context_window_incomplete,
+)
 from free_claude_code.providers.continuation import (
     ContinuationRequest,
     SourceRecoveryState,
@@ -56,15 +61,8 @@ from free_claude_code.providers.continuation import (
 )
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
-from free_claude_code.providers.failure_policy import (
-    RetryableProviderProtocolError,
-    classify_provider_failure,
-    context_window_exceeded_provider_failure,
-    is_context_window_error_code,
-    is_retryable_stream_error,
-    provider_authentication_status,
-    reports_context_window_incomplete,
-)
+from free_claude_code.providers.failure_classification import classify
+from free_claude_code.providers.failure_reporting import finalize_provider_failure
 from free_claude_code.providers.history_negotiation import (
     HistoryModeCache,
     resolve_history_overrides,
@@ -84,6 +82,7 @@ from free_claude_code.providers.reasoning_compatibility import (
     ReasoningCorrection,
     prepare_messages_reasoning,
 )
+from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
 from free_claude_code.providers.request_recovery import (
     RequestCorrections,
     RequestRecovery,
@@ -598,7 +597,7 @@ class OpenAIResponsesTransport:
                 if scope is not None:
                     corrected_body = await request_recovery.retry_request(
                         error,
-                        provider_authentication_status(error),
+                        classify(error).auth_status,
                         scope.attempt,
                         body,
                         operation_kind=operation_kind,
@@ -632,7 +631,7 @@ class OpenAIResponsesTransport:
                 retryable = (
                     attempt_failure.retryable
                     if attempt_failure is not None
-                    else is_retryable_stream_error(error)
+                    else classify(error).retryable_mid_stream
                 )
                 retry_allowed = scope is not None and can_retry_undelivered_stream(
                     execution.delivery,
@@ -669,7 +668,7 @@ class OpenAIResponsesTransport:
                     corrections = RequestCorrections("responses", reasoning_correction)
                     continue
 
-                failure = classify_provider_failure(
+                failure = finalize_provider_failure(
                     error,
                     provider_name=self._provider_name,
                     read_timeout_s=self._read_timeout_s,
@@ -760,7 +759,7 @@ def _effective_error(error: Exception) -> Exception:
     )
     if is_context_window_error_code(error.code):
         return context_window_exceeded_provider_failure()
-    auth_status = provider_authentication_status(error)
+    auth_status = classify(error).auth_status
     if auth_status is not None:
         return ExecutionFailure(
             FailureKind.AUTHENTICATION

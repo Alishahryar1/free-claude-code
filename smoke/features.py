@@ -686,7 +686,7 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
             "tests/api/test_execution_failure_contract.py",
             "tests/core/test_failure_protocol_mapping.py",
             "tests/providers/test_execution_failure_boundary.py",
-            "tests/providers/test_failure_policy.py",
+            "tests/providers/test_failure_reporting.py",
         ),
         (),
         (

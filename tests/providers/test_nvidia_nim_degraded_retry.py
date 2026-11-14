@@ -13,10 +13,8 @@ from free_claude_code.providers.admission import (
     ProviderOperationKind,
 )
 from free_claude_code.providers.base import ProviderConfig
-from free_claude_code.providers.failure_policy import (
-    overloaded_provider_failure,
-    retryable_upstream_status,
-)
+from free_claude_code.providers.canonical_failures import overloaded_provider_failure
+from free_claude_code.providers.failure_classification import classify
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.open_router import OpenRouterProvider
 from tests.providers.request_factory import make_messages_request
@@ -357,7 +355,7 @@ async def test_degraded_wording_remains_non_retryable_for_other_providers() -> N
     )
     error = _bad_request()
 
-    assert retryable_upstream_status(error) is None
+    assert classify(error).transient_status is None
 
     with (
         patch.object(

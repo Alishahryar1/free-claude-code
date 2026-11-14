@@ -41,11 +41,11 @@ from free_claude_code.providers.anthropic_messages.transport import (
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.endpoint_types import HttpEndpoint
-from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
 from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.history_replay import replay_origin
 from free_claude_code.providers.http import maybe_await_aclose
 from free_claude_code.providers.model_listing import ModelListResponseError
+from free_claude_code.providers.recovery_errors import ProviderRecoveryExhausted
 
 from .headers import api_headers, native_request
 from .models import AnthropicModelRecord, model_record

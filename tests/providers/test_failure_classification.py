@@ -17,14 +17,11 @@ import openai
 import pytest
 
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.providers.failure_policy import (
+from free_claude_code.providers.failure_classification import classify
+from free_claude_code.providers.failure_reporting import finalize_provider_failure
+from free_claude_code.providers.recovery_errors import (
     ProviderRecoveryExhausted,
     RetryableProviderProtocolError,
-    classify_provider_failure,
-    is_retryable_provider_error,
-    is_retryable_stream_error,
-    provider_authentication_status,
-    retryable_upstream_status,
 )
 
 _URL = "https://provider.test/v1/chat/completions"
@@ -42,17 +39,18 @@ class Observed:
 
 
 def _observe(exc: Exception) -> Observed:
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         exc, provider_name="TEST", read_timeout_s=None, request_id=None
     )
+    verdict = classify(exc)
     return Observed(
         kind=failure.kind,
         status_code=failure.status_code,
         retryable=failure.retryable,
-        transient_status=retryable_upstream_status(exc),
-        retryable_on_open=is_retryable_provider_error(exc),
-        retryable_mid_stream=is_retryable_stream_error(exc),
-        auth_status=provider_authentication_status(exc),
+        transient_status=verdict.transient_status,
+        retryable_on_open=verdict.retryable,
+        retryable_mid_stream=verdict.retryable_mid_stream,
+        auth_status=verdict.auth_status,
     )
 
 

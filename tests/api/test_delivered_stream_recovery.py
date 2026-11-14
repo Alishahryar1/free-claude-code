@@ -13,7 +13,7 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.providers.deepseek import DeepSeekProvider
-from free_claude_code.providers.failure_policy import RetryableProviderProtocolError
+from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
 from free_claude_code.providers.request_recovery import RequestCorrections
 from tests.api.support import create_test_app, provider_manager_for_app
 from tests.api.test_hidden_stream_retries import delivered, partial_tool

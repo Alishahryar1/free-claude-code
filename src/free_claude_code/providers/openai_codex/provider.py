@@ -25,7 +25,7 @@ from free_claude_code.providers.admission import (
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.endpoint import RequestEndpoint
-from free_claude_code.providers.failure_policy import provider_authentication_status
+from free_claude_code.providers.failure_classification import classify
 from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.http import ProviderAttemptScope
 from free_claude_code.providers.model_listing import (
@@ -146,7 +146,7 @@ class OpenAICodexProvider(BaseProvider):
                 except Exception as error:
                     if scope is not None:
                         if await recovery.retry_authentication(
-                            error, provider_authentication_status(error), scope.attempt
+                            error, classify(error).auth_status, scope.attempt
                         ):
                             continue
                         if not scope.attempt.accepted:

@@ -15,7 +15,7 @@ from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
-from free_claude_code.providers.failure_policy import (
+from free_claude_code.providers.canonical_failures import (
     context_window_exceeded_provider_failure,
     overloaded_provider_failure,
 )

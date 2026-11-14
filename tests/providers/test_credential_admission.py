@@ -9,8 +9,8 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
 from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
-from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
 from free_claude_code.providers.groq import GroqProvider
+from free_claude_code.providers.recovery_errors import ProviderRecoveryExhausted
 from free_claude_code.providers.runtime import ProviderRuntime
 
 

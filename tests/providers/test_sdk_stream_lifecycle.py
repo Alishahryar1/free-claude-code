@@ -23,12 +23,12 @@ from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
 )
-from free_claude_code.providers.failure_policy import RetryableProviderProtocolError
 from free_claude_code.providers.mistral import MistralProvider
 from free_claude_code.providers.mistral.reasoning import normalize_mistral_stream
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 from free_claude_code.providers.openai_stream import OpenAIStreamAdapter
+from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
 from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.api.test_response_streams import _json_error, _serve
 from tests.providers.request_factory import make_messages_request
