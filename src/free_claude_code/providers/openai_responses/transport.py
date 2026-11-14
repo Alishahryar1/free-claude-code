@@ -5,7 +5,7 @@ import sys
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
 from functools import partial
-from typing import cast
+from typing import assert_never, cast
 
 import httpx2
 from openai import AsyncOpenAI, AsyncStream
@@ -56,13 +56,10 @@ from free_claude_code.providers.canonical_failures import (
 from free_claude_code.providers.continuation import (
     ContinuationRequest,
     SourceRecoveryState,
-    public_recovery,
-    public_stream_failure,
 )
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.failure_classification import classify
-from free_claude_code.providers.failure_reporting import finalize_provider_failure
 from free_claude_code.providers.history_negotiation import (
     HistoryModeCache,
     resolve_history_overrides,
@@ -87,8 +84,14 @@ from free_claude_code.providers.request_recovery import (
     RequestCorrections,
     RequestRecovery,
 )
-from free_claude_code.providers.stream_recovery import (
-    can_retry_undelivered_stream,
+from free_claude_code.providers.stream_failure_resolution import (
+    Continue,
+    Fail,
+    Handoff,
+    Retry,
+    StreamFailure,
+    StreamFailurePolicy,
+    StreamFailureResolver,
 )
 
 from .presentation import (
@@ -446,9 +449,19 @@ class OpenAIResponsesTransport:
             transport="responses",
         )
 
+        resolver = StreamFailureResolver(
+            StreamFailurePolicy(
+                provider_name=self._provider_name,
+                read_timeout_s=self._read_timeout_s,
+                request_id=request_id,
+            ),
+            recovery=request_recovery,
+            continuation=continuation_request,
+        )
         source: SourceRecoveryState | None = None
         while execution.can_attempt:
             normal_stop_seen = False
+            sent_body = body
             tool_buffer = ResponsesToolCallBuffer()
             source = SourceRecoveryState(execution, previous=source)
             presenter: ResponsesStreamPresenter | None = None
@@ -593,15 +606,14 @@ class OpenAIResponsesTransport:
                         )
                         if frames:
                             yield completed_output(frames)
-                error = _effective_error(raw_error)
-                if scope is not None:
-                    corrected_body = await request_recovery.retry_request(
-                        error,
-                        classify(error).auth_status,
-                        scope.attempt,
-                        body,
+                resolution = await resolver.resolve(
+                    StreamFailure(
+                        error=_effective_error(raw_error),
+                        scope=scope,
+                        body=body,
                         operation_kind=operation_kind,
                         normal_stop_seen=normal_stop_seen,
+                        source=source,
                         propose_correction=partial(
                             corrections.next_body,
                             raw_error,
@@ -612,94 +624,33 @@ class OpenAIResponsesTransport:
                                 self._provider_retry_body, raw_error, body, sent_body
                             ),
                         ),
+                        failure_payload=(
+                            partial(presenter.failure_payload, raw_error)
+                            if presenter is not None
+                            else None
+                        ),
                     )
-                    if corrected_body is not None:
-                        body = corrected_body
+                )
+                match resolution:
+                    case Retry(body=next_body):
+                        body = next_body
                         continue
-                attempt_failure = None
-                if scope is not None and not scope.attempt.accepted:
-                    attempt_failure = await scope.fail(error)
-                    error = attempt_failure.error
-                if attempt_failure is not None and attempt_failure.retry_allowed:
-                    _trace_early_retry(
-                        provider_name=self._provider_name,
-                        request_id=request_id,
-                        execution=execution,
-                    )
-                    continue
-
-                retryable = (
-                    attempt_failure.retryable
-                    if attempt_failure is not None
-                    else classify(error).retryable_mid_stream
-                )
-                retry_allowed = scope is not None and can_retry_undelivered_stream(
-                    execution.delivery,
-                    retryable=retryable,
-                    attempts_remaining=execution.attempts_remaining,
-                    normal_stop_seen=normal_stop_seen,
-                )
-                if retry_allowed:
-                    _trace_early_retry(
-                        provider_name=self._provider_name,
-                        request_id=request_id,
-                        execution=execution,
-                    )
-                    continue
-
-                if scope is not None:
-                    await scope.aclose(active_error=error)
-                recovered = public_recovery(
-                    execution,
-                    body=body,
-                    request=continuation_request,
-                    retryable=retryable,
-                    normal_stop_seen=normal_stop_seen,
-                    source=source,
-                )
-                if recovered is not None:
-                    if recovered.body is None:
+                    case Continue(body=next_body):
+                        body = next_body
+                        operation_kind = ProviderOperationKind.CONTINUATION
+                        corrections = RequestCorrections(
+                            "responses", reasoning_correction
+                        )
+                        continue
+                    case Handoff():
                         if isinstance(presenter, GeminiResponsesStream):
                             for event in presenter.handoff():
                                 yield StreamOutput((event,))
                         return
-                    body = recovered.body
-                    operation_kind = ProviderOperationKind.CONTINUATION
-                    corrections = RequestCorrections("responses", reasoning_correction)
-                    continue
-
-                failure = finalize_provider_failure(
-                    error,
-                    provider_name=self._provider_name,
-                    read_timeout_s=self._read_timeout_s,
-                    request_id=request_id,
-                )
-                trace_event(
-                    stage="provider",
-                    event="provider.response.error",
-                    source="provider",
-                    provider=self._provider_name,
-                    request_id=request_id,
-                    transport="responses",
-                    exc_type=type(error).__name__,
-                    failure_kind=failure.kind.value,
-                    status_code=failure.status_code,
-                    provider_retryable=failure.retryable,
-                )
-                if execution.delivery is not None:
-                    raise public_stream_failure(
-                        failure,
-                        source=source,
-                        body=body,
-                        protocol="responses",
-                        normal_stop_seen=normal_stop_seen,
-                        responses_failure_payload=(
-                            presenter.failure_payload(raw_error, failure)
-                            if presenter is not None
-                            else None
-                        ),
-                    ) from raw_error
-                raise failure from raw_error
+                    case Fail(error=failure):
+                        raise failure from raw_error
+                    case _:
+                        assert_never(resolution)
             finally:
                 if scope is not None:
                     await scope.aclose(active_error=sys.exception())
@@ -778,21 +729,3 @@ def _effective_error(error: Exception) -> Exception:
         marker in code for marker in ("server", "internal", "unavailable", "timeout")
     )
     return ExecutionFailure(FailureKind.UPSTREAM, 502, message, retryable)
-
-
-def _trace_early_retry(
-    *,
-    provider_name: str,
-    request_id: str | None,
-    execution: ProviderExecution,
-) -> None:
-    trace_event(
-        stage="provider",
-        event="provider.recovery.early_retry",
-        source="provider",
-        provider=provider_name,
-        request_id=request_id,
-        transport="responses",
-        attempts_started=execution.attempts_started,
-        max_attempts=execution.max_attempts,
-    )
