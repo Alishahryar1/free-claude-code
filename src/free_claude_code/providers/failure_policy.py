@@ -49,6 +49,18 @@ _CONTEXT_WINDOW_EXCEEDED_MESSAGE = "Provider input exceeds the model context win
 _OVERLOADED_MESSAGE = "Provider is currently overloaded. Please retry."
 _CONTEXT_WINDOW_ERROR_CODE = "context_length_exceeded"
 _CONTEXT_WINDOW_FINISH_REASON = "model_context_window_exceeded"
+_RETRYABLE_TRANSPORT_ERRORS = (
+    TimeoutError,
+    ssl.SSLWantReadError,
+    httpx.TimeoutException,
+    httpx2.TimeoutException,
+    httpx.RemoteProtocolError,
+    httpx2.RemoteProtocolError,
+    httpx.NetworkError,
+    httpx2.NetworkError,
+    openai.APITimeoutError,
+    openai.APIConnectionError,
+)
 
 
 class ProviderRecoveryExhausted(RuntimeError):
@@ -253,63 +265,31 @@ def transient_error_text(exc: BaseException) -> str:
 
 
 def is_retryable_provider_error(exc: BaseException) -> bool:
-    """Return whether provider policy permits stream retry or recovery."""
-    if isinstance(exc, ProviderRecoveryExhausted):
+    """Return whether the canonical failure permits another provider attempt."""
+    if isinstance(exc, ProviderRecoveryExhausted) or not isinstance(exc, Exception):
         return False
-    if isinstance(exc, ExecutionFailure):
-        return exc.retryable
-    if isinstance(
-        exc,
-        openai.AuthenticationError
-        | openai.PermissionDeniedError
-        | openai.BadRequestError,
-    ):
-        return False
-    if retryable_transient_status(exc) is not None:
-        return True
-    return isinstance(
-        exc,
-        (
-            TimeoutError,
-            ssl.SSLWantReadError,
-            httpx.TimeoutException,
-            httpx2.TimeoutException,
-            httpx.RemoteProtocolError,
-            httpx2.RemoteProtocolError,
-            httpx.NetworkError,
-            httpx2.NetworkError,
-            openai.APITimeoutError,
-            openai.APIConnectionError,
-            RetryableProviderProtocolError,
-        ),
-    )
+    return _classify_provider_failure(exc, read_timeout_s=None).retryable
 
 
 def is_retryable_stream_error(exc: BaseException) -> bool:
-    """Return whether an opened stream failure permits replay or recovery."""
-    if isinstance(exc, RetryableProviderProtocolError):
-        return True
-    if isinstance(exc, ExecutionFailure):
-        return exc.retryable
-    if isinstance(exc, openai.AuthenticationError | openai.BadRequestError):
-        return False
+    """Return whether an opened stream failure permits replay or recovery.
+
+    Connection-setup timeouts cannot arise on an open stream, so they are not
+    replayed even though they are retryable before the upstream accepts.
+    """
+    return is_retryable_provider_error(exc) and not _is_connection_setup_timeout(exc)
+
+
+def _is_connection_setup_timeout(exc: BaseException) -> bool:
+    return isinstance(
+        exc, httpx.TimeoutException | httpx2.TimeoutException
+    ) and not isinstance(exc, httpx.ReadTimeout | httpx2.ReadTimeout)
+
+
+def _transport_retryable(exc: BaseException) -> bool:
     if retryable_transient_status(exc) is not None:
         return True
-    return isinstance(
-        exc,
-        (
-            TimeoutError,
-            ssl.SSLWantReadError,
-            httpx.ReadTimeout,
-            httpx2.ReadTimeout,
-            httpx.RemoteProtocolError,
-            httpx2.RemoteProtocolError,
-            httpx.NetworkError,
-            httpx2.NetworkError,
-            openai.APITimeoutError,
-            openai.APIConnectionError,
-        ),
-    )
+    return isinstance(exc, _RETRYABLE_TRANSPORT_ERRORS)
 
 
 def retryable_upstream_status(exc: BaseException) -> int | None:
@@ -430,7 +410,7 @@ def _classify_provider_failure(
             FailureKind.UPSTREAM,
             effective_status,
             _stable_upstream(effective_status),
-            is_retryable_provider_error(exc),
+            _transport_retryable(exc),
         )
 
     if isinstance(exc, httpx.HTTPStatusError):
@@ -469,7 +449,7 @@ def _classify_provider_failure(
         kind,
         502,
         provider_error_message(exc, read_timeout_s=read_timeout_s),
-        is_retryable_provider_error(exc),
+        isinstance(exc, RetryableProviderProtocolError) or _transport_retryable(exc),
     )
 
 

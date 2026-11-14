@@ -167,7 +167,7 @@ _ROWS: dict[str, tuple[Callable[[], Exception], Observed]] = {
     ),
     "openai_403_with_overload_text": (
         _openai_status(openai.PermissionDeniedError, 403, "limit reached"),
-        _o(K.PERMISSION, 403, False, transient=503, mid_stream=True, auth=403),
+        _o(K.PERMISSION, 403, False, transient=503, auth=403),
     ),
     "openai_400": (
         _openai_status(openai.BadRequestError, 400, "bad request"),
@@ -203,7 +203,7 @@ _ROWS: dict[str, tuple[Callable[[], Exception], Observed]] = {
     ),
     "openai_401_with_rate_limit_text": (
         _openai_status(openai.APIStatusError, 401, "rate limit exceeded"),
-        _o(K.AUTHENTICATION, 401, False, transient=429, on_open=True, auth=401),
+        _o(K.AUTHENTICATION, 401, False, transient=429, auth=401),
     ),
     # Statusless OpenAI errors carry their meaning in the body or text.
     "statusless_body_429": (
@@ -316,7 +316,7 @@ _ROWS: dict[str, tuple[Callable[[], Exception], Observed]] = {
     ),
     "coded_context_window_on_read_timeout": (
         lambda: _CodedReadTimeout("context_length_exceeded"),
-        _o(K.CONTEXT_WINDOW_EXCEEDED, 400, False, on_open=True),
+        _o(K.CONTEXT_WINDOW_EXCEEDED, 400, False),
     ),
 }
 
