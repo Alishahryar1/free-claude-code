@@ -351,6 +351,8 @@ ollama serve
 
 Use the tag shown by `ollama list` with the `ollama/` prefix. `OLLAMA_BASE_URL` defaults to `http://localhost:11434`.
 
+Claude Code compacts at 190000 tokens by default. For a local model with a smaller context window, set `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (for example `131072`) before running `fcc-claude`; FCC keeps a value you set.
+
 Provider cards show the checked endpoint and response time, with a useful message when a local server is unavailable. After starting the server or correcting its settings, click **Test** to refresh its models.
 
 </details>
