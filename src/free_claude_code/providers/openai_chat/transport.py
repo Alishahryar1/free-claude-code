@@ -1,12 +1,11 @@
 """Shared Chat Completions transport and per-request stream execution."""
 
 import asyncio
-import sys
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, assert_never, cast
+from typing import Any, cast
 
 import httpx2
 from loguru import logger
@@ -65,13 +64,18 @@ from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
 )
+from free_claude_code.providers.attempt_loop import (
+    AttemptContext,
+    AttemptPlan,
+    TransportAttempt,
+    run_attempts,
+)
 from free_claude_code.providers.canonical_failures import (
     context_window_exceeded_provider_failure,
     is_context_window_finish_reason,
 )
 from free_claude_code.providers.continuation import (
     ContinuationRequest,
-    SourceRecoveryState,
 )
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
@@ -102,11 +106,6 @@ from free_claude_code.providers.request_recovery import (
     RequestRecovery,
 )
 from free_claude_code.providers.stream_failure_resolution import (
-    Continue,
-    Fail,
-    Handoff,
-    Retry,
-    StreamFailure,
     StreamFailurePolicy,
     StreamFailureResolver,
 )
@@ -1037,7 +1036,6 @@ class _OpenAIChatStreamRunner:
         self._reasoning = reasoning
         self._reasoning_correction = reasoning_correction
         self._extra_headers = dict(extra_headers or {})
-        self._terminal_failure: ExecutionFailure | None = None
         self._request_client = OpenAIRequestClient(transport._endpoint_transport)
         self._endpoint = (
             RequestEndpoint(endpoint_context) if endpoint_context is not None else None
@@ -1064,10 +1062,7 @@ class _OpenAIChatStreamRunner:
             execution.fail(error)
             raise
         else:
-            if self._terminal_failure is None:
-                execution.succeed()
-            else:
-                execution.fail(self._terminal_failure)
+            execution.succeed()
         finally:
             try:
                 await maybe_await_aclose(provider_stream)
@@ -1077,19 +1072,13 @@ class _OpenAIChatStreamRunner:
                 finally:
                     execution.abandon()
 
-    async def _run_execution(
+    def _run_execution(
         self,
         request_recovery: RequestRecovery,
     ) -> AsyncIterator[StreamOutput]:
         """Run one provider execution while retaining transport-owned state."""
         tag = self._transport._provider_name
         req_tag = f" request_id={self._request_id}" if self._request_id else ""
-        execution = request_recovery.execution
-
-        def packet(event: str) -> Iterator[StreamOutput]:
-            if event:
-                yield StreamOutput((event,))
-
         body = resolve_history_overrides(self._body)
         continuation_request = ContinuationRequest("chat")
         operation_kind = ProviderOperationKind.GENERATION
@@ -1098,23 +1087,6 @@ class _OpenAIChatStreamRunner:
             operation_kind = ProviderOperationKind.CONTINUATION
         if not self._native_chat:
             request_stream_usage(body)
-        output_reasoning = self._reasoning.output_enabled
-        corrections = self._transport._corrector(self._reasoning_correction)
-        trace_event(
-            lambda: {"body": provider_chat_body_snapshot(body)},
-            stage="provider",
-            event="provider.request.sent",
-            source="provider",
-            provider=tag,
-            request_id=self._request_id,
-            execution_id=execution.execution_id,
-            gateway_model=self._response_model,
-            downstream_model=body.get("model"),
-            message_count=len(body.get("messages", [])),
-            tool_count=len(body.get("tools", [])),
-            transport="chat",
-        )
-
         resolver = StreamFailureResolver(
             StreamFailurePolicy(
                 provider_name=tag,
@@ -1132,245 +1104,26 @@ class _OpenAIChatStreamRunner:
             recovery=request_recovery,
             continuation=continuation_request,
         )
-        source: SourceRecoveryState | None = None
-        while True:
-            presenter = self._new_stream_presenter(output_reasoning=output_reasoning)
-            source = SourceRecoveryState(execution, previous=source)
-            sent_body = body
-
-            def observe_chunk(
-                chunk: Any,
-                presenter: _ChatStreamPresenter = presenter,
-                source: SourceRecoveryState = source,
-                operation_kind: ProviderOperationKind = operation_kind,
-            ) -> None:
-                presenter.observe_upstream_chunk(chunk)
-                if self._native_chat:
-                    source.observe(
-                        "chat",
-                        chunk.model_dump(mode="json", exclude_unset=True),
-                        continuing=operation_kind is ProviderOperationKind.CONTINUATION,
-                    )
-                    return
-                source.observe(
-                    "chat",
-                    {
-                        "usage": {
-                            key: value
-                            for key in (
-                                "prompt_tokens",
-                                "completion_tokens",
-                                "total_tokens",
-                            )
-                            if (value := usage_int(getattr(chunk, "usage", None), key))
-                            is not None
-                        },
-                        "choices": [
-                            {
-                                "delta": {
-                                    "reasoning_details": getattr(
-                                        getattr(choice, "delta", None),
-                                        "reasoning_details",
-                                        None,
-                                    ),
-                                    "audio": getattr(
-                                        getattr(choice, "delta", None), "audio", None
-                                    ),
-                                }
-                            }
-                            for choice in (getattr(chunk, "choices", None) or ())
-                        ],
-                    },
-                    continuing=operation_kind is ProviderOperationKind.CONTINUATION,
-                )
-
-            scope: ProviderAttemptScope | None = None
-            validating = False
-            try:
-                if not execution.can_attempt:
-                    if execution.last_failure is not None:
-                        raise execution.last_failure
-                    raise RuntimeError("provider execution ended without a final error")
-                # Credentials resolve before admission counts a provider call.
-                body, sent_body, client = await self._transport._prepare_create(
-                    body,
-                    operation_kind,
-                    corrections=corrections,
-                    endpoint=self._endpoint,
-                    request_client=self._request_client,
-                    extra_headers=self._extra_headers,
-                    on_origin=partial(setattr, presenter.output, "replay_origin"),
-                    call_replay=self._call_replay,
-                    native_chat=self._native_chat,
-                )
-                scope = ProviderAttemptScope(
-                    await execution.open_attempt(operation_kind),
-                    provider_name=tag,
-                    request_id=self._request_id,
-                )
-                if self._transport._validate_prepared_body is not None:
-                    validating = True
-                    await self._transport._validate_prepared_body(sent_body)
-                    validating = False
-                if self._native_chat:
-                    sent_body = _sdk_create_body(sent_body)
-                stream = await self._transport._open_stream(
-                    scope,
-                    client,
-                    sent_body,
-                    body,
-                    corrections=corrections,
-                    on_event=observe_chunk,
-                    native_chat=self._native_chat,
-                )
-                presenter.bind_tool_argument_aliases(self._tool_argument_aliases)
-                async for chunk in stream:
-                    if not scope.attempt.accepted:
-                        await scope.attempt.accept()
-                    for event in presenter.start_events():
-                        for out_event in packet(event):
-                            yield out_event
-                    for output in presenter.feed(chunk):
-                        yield output
-
-                for event in presenter.finish_upstream():
-                    for out_event in packet(event):
-                        yield out_event
-                break
-
-            except asyncio.CancelledError, GeneratorExit:
-                raise
-            except Exception as error:
-                if validating:
-                    # No upstream response occurred. Abandon the permit without
-                    # teaching correction or recovery state about a rejection.
-                    raise
-                if not (
-                    isinstance(error, ExecutionFailure)
-                    and error.stream_context
-                    and error.stream_context.source.unsafe_reason
-                ):
-                    for output in presenter.abandon():
-                        yield output
-                resolution = await resolver.resolve(
-                    StreamFailure(
-                        error=error,
-                        scope=scope,
-                        body=body,
-                        operation_kind=operation_kind,
-                        normal_stop_seen=presenter.normal_stop_seen,
-                        source=source,
-                        propose_correction=partial(
-                            corrections.correct, Rejection(error, body, sent_body)
-                        ),
-                        failure_payload=presenter.output.failure_payload,
-                    )
-                )
-                match resolution:
-                    case Retry(body=next_body):
-                        body = next_body
-                        continue
-                    case Continue(body=next_body):
-                        body = next_body
-                        operation_kind = ProviderOperationKind.CONTINUATION
-                        corrections = self._transport._corrector(
-                            self._reasoning_correction
-                        )
-                        continue
-                    case Handoff():
-                        return
-                    case Fail(error=failure):
-                        raise failure from error
-                    case _:
-                        assert_never(resolution)
-            finally:
-                if scope is not None:
-                    await scope.aclose(active_error=sys.exception())
-
-        for event in presenter.prepare_completion(
-            pad_empty=operation_kind is ProviderOperationKind.GENERATION
-            and presenter.output.pad_empty
-        ):
-            for out_event in packet(event):
-                yield out_event
-        completion = presenter.completion
-        if completion.provider_input_tokens is not None:
-            logger.debug(
-                "TOKEN_ESTIMATE: our={} provider={} diff={:+d}",
-                self._input_tokens,
-                completion.provider_input_tokens,
-                completion.provider_input_tokens - self._input_tokens,
+        return run_attempts(
+            AttemptPlan(
+                body=body,
+                operation_kind=operation_kind,
+                execution=request_recovery.execution,
+                resolver=resolver,
+                corrector=partial(
+                    self._transport._corrector, self._reasoning_correction
+                ),
+                start=partial(_ChatAttempt, runner=self),
+                provider_name=tag,
+                transport="chat",
+                gateway_model=self._response_model,
+                sent_fields={
+                    "message_count": len(body.get("messages", [])),
+                    "tool_count": len(body.get("tools", [])),
+                },
+                sent_payload=lambda: {"body": provider_chat_body_snapshot(body)},
             )
-        trace_event(
-            stage="provider",
-            event="provider.response.completed",
-            source="provider",
-            provider=tag,
-            request_id=self._request_id,
-            finish_reason=(
-                None
-                if completion.finish_reason is None
-                else str(completion.finish_reason)
-            ),
-            output_tokens=completion.output_tokens,
-            prompt_tokens=completion.input_tokens,
-            prompt_tokens_estimate=self._input_tokens,
-            transport="chat",
         )
-        usage = ChatStreamUsage(
-            finish_reason=str(completion.finish_reason)
-            if completion.finish_reason is not None
-            else None,
-            reported={
-                key: value
-                for key, value in (
-                    ("prompt_tokens", usage_int(presenter.usage_info, "prompt_tokens")),
-                    (
-                        "completion_tokens",
-                        usage_int(presenter.usage_info, "completion_tokens"),
-                    ),
-                    ("total_tokens", usage_int(presenter.usage_info, "total_tokens")),
-                    (
-                        "cached_tokens",
-                        self._transport._behavior.cached_input_tokens(
-                            presenter.usage_info
-                        ),
-                    ),
-                    (
-                        "reasoning_tokens",
-                        nested_usage_int(
-                            presenter.usage_info,
-                            "completion_tokens_details",
-                            "reasoning_tokens",
-                        ),
-                    ),
-                )
-                if value is not None
-            },
-            input_tokens=completion.input_tokens,
-            output_tokens=completion.output_tokens,
-            cached_tokens=self._transport._behavior.cached_input_tokens(
-                presenter.usage_info
-            )
-            or 0,
-            cache_write_tokens=self._transport._behavior.cache_write_input_tokens(
-                presenter.usage_info
-            ),
-            reasoning_tokens=(
-                nested_usage_int(
-                    presenter.usage_info,
-                    "completion_tokens_details",
-                    "reasoning_tokens",
-                )
-                or 0
-            ),
-            anthropic_fields=self._transport._behavior.anthropic_usage_fields(
-                presenter.usage_info
-            ),
-        )
-        for event in presenter.terminal_events(usage=usage):
-            for out_event in packet(event):
-                yield out_event
 
     def _new_stream_presenter(self, *, output_reasoning: bool) -> _ChatStreamPresenter:
         def extra_reasoning_events(
@@ -1406,4 +1159,204 @@ class _OpenAIChatStreamRunner:
             reserved_tool_ids=self._reserved_tool_ids,
             record_extra_content=record_extra_content,
             extra_reasoning_events=extra_reasoning_events,
+        )
+
+
+class _ChatAttempt(TransportAttempt):
+    """One Chat Completions attempt."""
+
+    def __init__(self, context: AttemptContext, *, runner: _OpenAIChatStreamRunner):
+        super().__init__(context)
+        self._runner = runner
+        self._presenter = runner._new_stream_presenter(
+            output_reasoning=runner._reasoning.output_enabled
+        )
+        self._client: AsyncOpenAI | None = None
+        self._validating = False
+
+    @property
+    def normal_stop_seen(self) -> bool:
+        return self._presenter.normal_stop_seen
+
+    async def prepare(self) -> None:
+        runner = self._runner
+        (
+            self.body,
+            self.sent_body,
+            self._client,
+        ) = await runner._transport._prepare_create(
+            self.body,
+            self.context.operation_kind,
+            corrections=self.context.corrections,
+            endpoint=runner._endpoint,
+            request_client=runner._request_client,
+            extra_headers=runner._extra_headers,
+            on_origin=partial(setattr, self._presenter.output, "replay_origin"),
+            call_replay=runner._call_replay,
+            native_chat=runner._native_chat,
+        )
+
+    async def stream(self, scope: ProviderAttemptScope) -> AsyncIterator[StreamOutput]:
+        assert self._client is not None
+        runner = self._runner
+        transport = runner._transport
+        presenter = self._presenter
+        if transport._validate_prepared_body is not None:
+            self._validating = True
+            await transport._validate_prepared_body(self.sent_body)
+            self._validating = False
+        if runner._native_chat:
+            self.sent_body = _sdk_create_body(self.sent_body)
+        stream = await transport._open_stream(
+            scope,
+            self._client,
+            self.sent_body,
+            self.body,
+            corrections=self.context.corrections,
+            on_event=self._observe,
+            native_chat=runner._native_chat,
+        )
+        presenter.bind_tool_argument_aliases(runner._tool_argument_aliases)
+        async for chunk in stream:
+            if not scope.attempt.accepted:
+                await scope.attempt.accept()
+            for event in presenter.start_events():
+                if event:
+                    yield StreamOutput((event,))
+            for output in presenter.feed(chunk):
+                yield output
+        for event in presenter.finish_upstream():
+            if event:
+                yield StreamOutput((event,))
+        for event in presenter.prepare_completion(
+            pad_empty=not self.context.continuing and presenter.output.pad_empty
+        ):
+            if event:
+                yield StreamOutput((event,))
+        completion = presenter.completion
+        if completion.provider_input_tokens is not None:
+            logger.debug(
+                "TOKEN_ESTIMATE: our={} provider={} diff={:+d}",
+                runner._input_tokens,
+                completion.provider_input_tokens,
+                completion.provider_input_tokens - runner._input_tokens,
+            )
+        usage = ChatStreamUsage(
+            finish_reason=str(completion.finish_reason)
+            if completion.finish_reason is not None
+            else None,
+            reported={
+                key: value
+                for key, value in (
+                    ("prompt_tokens", usage_int(presenter.usage_info, "prompt_tokens")),
+                    (
+                        "completion_tokens",
+                        usage_int(presenter.usage_info, "completion_tokens"),
+                    ),
+                    ("total_tokens", usage_int(presenter.usage_info, "total_tokens")),
+                    (
+                        "cached_tokens",
+                        runner._transport._behavior.cached_input_tokens(
+                            presenter.usage_info
+                        ),
+                    ),
+                    (
+                        "reasoning_tokens",
+                        nested_usage_int(
+                            presenter.usage_info,
+                            "completion_tokens_details",
+                            "reasoning_tokens",
+                        ),
+                    ),
+                )
+                if value is not None
+            },
+            input_tokens=completion.input_tokens,
+            output_tokens=completion.output_tokens,
+            cached_tokens=runner._transport._behavior.cached_input_tokens(
+                presenter.usage_info
+            )
+            or 0,
+            cache_write_tokens=runner._transport._behavior.cache_write_input_tokens(
+                presenter.usage_info
+            ),
+            reasoning_tokens=(
+                nested_usage_int(
+                    presenter.usage_info,
+                    "completion_tokens_details",
+                    "reasoning_tokens",
+                )
+                or 0
+            ),
+            anthropic_fields=runner._transport._behavior.anthropic_usage_fields(
+                presenter.usage_info
+            ),
+        )
+        for event in presenter.terminal_events(usage=usage):
+            if event:
+                yield StreamOutput((event,))
+
+    def resolvable(self, error: Exception) -> bool:
+        # A local check sent nothing upstream; the permit is abandoned without
+        # teaching correction or recovery state about a rejection.
+        return not self._validating
+
+    def abandon(self, error: Exception) -> Iterator[StreamOutput]:
+        return iter(self._presenter.abandon())
+
+    def failure_payload(
+        self, error: Exception, failure: ExecutionFailure
+    ) -> JsonObject | None:
+        return self._presenter.output.failure_payload(failure)
+
+    def completed_fields(self) -> dict[str, Any]:
+        completion = self._presenter.completion
+        return {
+            "finish_reason": (
+                None
+                if completion.finish_reason is None
+                else str(completion.finish_reason)
+            ),
+            "output_tokens": completion.output_tokens,
+            "prompt_tokens": completion.input_tokens,
+            "prompt_tokens_estimate": self._runner._input_tokens,
+        }
+
+    def _observe(self, chunk: Any) -> None:
+        self._presenter.observe_upstream_chunk(chunk)
+        source = self.context.source
+        continuing = self.context.continuing
+        if self._runner._native_chat:
+            source.observe(
+                "chat",
+                chunk.model_dump(mode="json", exclude_unset=True),
+                continuing=continuing,
+            )
+            return
+        source.observe(
+            "chat",
+            {
+                "usage": {
+                    key: value
+                    for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+                    if (value := usage_int(getattr(chunk, "usage", None), key))
+                    is not None
+                },
+                "choices": [
+                    {
+                        "delta": {
+                            "reasoning_details": getattr(
+                                getattr(choice, "delta", None),
+                                "reasoning_details",
+                                None,
+                            ),
+                            "audio": getattr(
+                                getattr(choice, "delta", None), "audio", None
+                            ),
+                        }
+                    }
+                    for choice in (getattr(chunk, "choices", None) or ())
+                ],
+            },
+            continuing=continuing,
         )
