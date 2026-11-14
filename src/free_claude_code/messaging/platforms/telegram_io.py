@@ -14,8 +14,12 @@ TELEGRAM_DELETE_MESSAGES_BATCH_SIZE = 100
 
 TelegramNetworkError: type[BaseException]
 TelegramRetryAfter: type[BaseException]
+TelegramBadRequest: type[BaseException]
 TelegramBaseError: type[BaseException]
 try:
+    from telegram.error import (
+        BadRequest as _TelegramBadRequest,
+    )
     from telegram.error import (
         NetworkError as _TelegramNetworkError,
     )
@@ -28,10 +32,16 @@ try:
 
     TelegramNetworkError = _TelegramNetworkError
     TelegramRetryAfter = _TelegramRetryAfter
+    TelegramBadRequest = _TelegramBadRequest
     TelegramBaseError = _TelegramBaseError
 except ImportError:
+
+    class _UnavailableTelegramBadRequest(Exception):
+        """Stand-in so the handler exists when telegram is not installed."""
+
     TelegramNetworkError = TimeoutError
     TelegramRetryAfter = TimeoutError
+    TelegramBadRequest = _UnavailableTelegramBadRequest
     TelegramBaseError = Exception
 
 ApplicationGetter = Callable[[], Any | None]
@@ -54,6 +64,33 @@ class TelegramMessenger:
             delete_many=self.delete_messages,
         )
 
+    def _handle_known_telegram_api_error(
+        self,
+        error: BaseException,
+        suppress_known_message_errors: bool,
+    ) -> bool:
+        """Return True when a known BadRequest should be swallowed."""
+
+        err_lower = str(error).lower()
+        if "message is not modified" in err_lower:
+            if suppress_known_message_errors:
+                return True
+            raise error
+        if any(
+            x in err_lower
+            for x in [
+                "message to edit not found",
+                "message to delete not found",
+                "message can't be deleted",
+                "message can't be edited",
+                "not enough rights to delete",
+            ]
+        ):
+            if suppress_known_message_errors:
+                return True
+            raise error
+        return False
+
     async def _with_retry(
         self,
         func: Callable[..., Awaitable[Any]],
@@ -66,6 +103,26 @@ class TelegramMessenger:
         for attempt in range(max_retries):
             try:
                 return await func(*args, **kwargs)
+            except TelegramRetryAfter as e:
+                retry_after = getattr(e, "retry_after", 0)
+                wait_secs = (
+                    retry_after.total_seconds()
+                    if isinstance(retry_after, timedelta)
+                    else float(retry_after)
+                )
+                logger.warning("Rate limited by Telegram, waiting {}s...", wait_secs)
+                await asyncio.sleep(wait_secs)
+                return await func(*args, **kwargs)
+            except TelegramBadRequest as e:
+                if self._handle_known_telegram_api_error(
+                    e, suppress_known_message_errors
+                ):
+                    return None
+                if "Can't parse entities" in str(e) and kwargs.get("parse_mode"):
+                    logger.warning("Markdown failed, retrying without parse_mode")
+                    kwargs["parse_mode"] = None
+                    return await func(*args, **kwargs)
+                raise
             except (TimeoutError, TelegramNetworkError) as e:
                 if "Message is not modified" in str(e):
                     if suppress_known_message_errors:
@@ -89,16 +146,6 @@ class TelegramMessenger:
                         e,
                     )
                     raise
-            except TelegramRetryAfter as e:
-                retry_after = getattr(e, "retry_after", 0)
-                wait_secs = (
-                    retry_after.total_seconds()
-                    if isinstance(retry_after, timedelta)
-                    else float(retry_after)
-                )
-                logger.warning("Rate limited by Telegram, waiting {}s...", wait_secs)
-                await asyncio.sleep(wait_secs)
-                return await func(*args, **kwargs)
             except TelegramBaseError as e:
                 err_lower = str(e).lower()
                 if "message is not modified" in err_lower:
