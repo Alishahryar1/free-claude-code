@@ -54,6 +54,7 @@ class RequestRecovery:
     ) -> bool:
         if (
             self._endpoint is None
+            or not self._endpoint.can_refresh
             or auth_status not in {401, 403}
             or self._refreshed
             or self._committed

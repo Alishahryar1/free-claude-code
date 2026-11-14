@@ -1,6 +1,7 @@
 """Opaque native Messages requests and lifecycle-only SSE relay."""
 
 import json
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 
@@ -11,7 +12,7 @@ from free_claude_code.core.history_replay import (
     protected_reasoning,
     resolve_messages_replay,
 )
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from .native import NativeMessagesError, validate_messages_json
 from .native_stream import MessagesBlockIndexMap
@@ -90,25 +91,25 @@ class NativeMessagesPassthrough:
         self.completed = False
         self._indexes = MessagesBlockIndexMap()
 
-    def feed(self, kind: str, payload: JsonObject) -> str | None:
+    def feed(self, event_type: str, payload: Mapping[str, JsonValue]) -> str | None:
         if self.completed:
             raise NativeMessagesError("Messages event arrived after message_stop.")
-        validate_messages_json(payload)
-        if payload.get("type") != kind:
+        validate_messages_json(dict(payload))
+        if payload.get("type") != event_type:
             raise NativeMessagesError("Messages event has an invalid payload type.")
-        if kind == "ping" and not self.started:
+        if event_type == "ping" and not self.started:
             return None
-        body = self._indexes.project(kind, payload)
-        if kind == "message_start":
+        body = self._indexes.project(event_type, payload)
+        if event_type == "message_start":
             message = body.get("message")
             if self.started or not isinstance(message, dict):
                 raise NativeMessagesError("Invalid native message_start.")
             self.started = True
             body["message"] = {**message, "model": self.public_model}
-        elif kind != "ping" and not self.started:
+        elif event_type != "ping" and not self.started:
             raise NativeMessagesError(
                 "Native Messages event arrived before message_start."
             )
-        if kind == "message_stop":
+        if event_type == "message_stop":
             self.completed = True
-        return f"event: {kind}\ndata: {json.dumps(body, ensure_ascii=False)}\n\n"
+        return f"event: {event_type}\ndata: {json.dumps(body, ensure_ascii=False)}\n\n"

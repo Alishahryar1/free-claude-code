@@ -416,9 +416,7 @@ async def test_native_history_restores_matching_fcc_carriers_and_rejects_foreign
         "thinking": "native",
         "signature": "original-signature",
     }
-    origin = replay_origin(
-        "anthropic", "messages", "claude-test", endpoint=await p.endpoint()
-    )
+    origin = replay_origin("anthropic", "messages", "claude-test", endpoint=p._snapshot)
     body = native_body()
     body["messages"] = [
         {

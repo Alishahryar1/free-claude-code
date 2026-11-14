@@ -22,9 +22,6 @@ from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
 )
-from free_claude_code.providers.anthropic_messages.passthrough import (
-    stream_native_messages,
-)
 from free_claude_code.providers.anthropic_messages.transport import (
     AnthropicMessagesTransport,
 )
@@ -133,7 +130,7 @@ async def upstream(egress, body_factory, *, timeout=READ_TIMEOUT, attempts=1):
                 provider_name="TEST",
                 log_raw_sse_events=False,
             )
-    elif egress == "messages":
+    elif egress in {"messages", "native_messages"}:
         transport = AnthropicMessagesTransport(
             client=http,
             admission=admission,
@@ -148,20 +145,17 @@ async def upstream(egress, body_factory, *, timeout=READ_TIMEOUT, attempts=1):
 
     def stream():
         if egress == "native_messages":
-            return stream_native_messages(
-                http,
-                admission,
-                base_url="https://provider.invalid/v1",
-                headers={},
-                body={
+            assert isinstance(transport, AnthropicMessagesTransport)
+            return transport.forward_messages(
+                {
                     "model": "model",
                     "stream": True,
                     "max_tokens": 100,
                     "messages": [{"role": "user", "content": "hello"}],
                 },
+                endpoint_context=Endpoint(),
+                headers={},
                 public_model="public",
-                provider_name="TEST",
-                read_timeout_s=timeout,
                 request_id="keepalive",
             )
         if isinstance(transport, GeminiTransport):
