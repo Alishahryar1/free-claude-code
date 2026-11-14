@@ -185,10 +185,7 @@ class GeminiTransport:
             presenter: GeminiStream | None = None
             sent_body = body
             try:
-                attempt = await execution.open_attempt(operation)
-                scope = ProviderAttemptScope(
-                    attempt, provider_name="GEMINI", request_id=execution.request_id
-                )
+                # Credentials resolve before admission counts a provider call.
                 snapshot = await endpoint.resolve()
                 origin = replay_origin(
                     "GEMINI", "gemini", str(body["model"]), endpoint=snapshot
@@ -207,6 +204,10 @@ class GeminiTransport:
                 headers = {"Accept": "text/event-stream", **snapshot.headers}
                 if snapshot.api_key:
                     headers["x-goog-api-key"] = snapshot.api_key
+                attempt = await execution.open_attempt(operation)
+                scope = ProviderAttemptScope(
+                    attempt, provider_name="GEMINI", request_id=execution.request_id
+                )
                 response = scope.retain(
                     await self._client.send(
                         self._client.build_request(

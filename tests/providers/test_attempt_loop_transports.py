@@ -131,19 +131,14 @@ async def test_gemini_successful_request_lifecycle_traces(traces):
     assert _outcomes(traces) == [("generation", "accepted")]
 
 
-ENDPOINT_FAILURE = {
-    # (credential exchanges, admission outcomes)
-    "chat": (2, [("generation", "retryable_failure")] * 2),
-    "messages": (2, [("generation", "retryable_failure")] * 2),
-    "gemini": (2, [("generation", "retryable_failure")] * 2),
-    # Responses resolves the endpoint before opening an attempt.
-    "responses": (1, []),
-}
+# A credential failure is not a provider call: it opens no attempt and is
+# terminal on every transport. (credential exchanges, admission outcomes)
+ENDPOINT_FAILURE = (1, [])
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", HARNESSED)
-async def test_endpoint_failure_is_an_admission_attempt(protocol, traces):
+async def test_endpoint_failure_opens_no_attempt(protocol, traces):
     context = _UnreachableEndpoint()
     async with _harness(
         protocol,
@@ -154,11 +149,11 @@ async def test_endpoint_failure_is_an_admission_attempt(protocol, traces):
 
     assert status == 503
     assert bodies == []
-    assert (context.calls, _outcomes(traces)) == ENDPOINT_FAILURE[protocol]
+    assert (context.calls, _outcomes(traces)) == ENDPOINT_FAILURE
 
 
 @pytest.mark.asyncio
-async def test_gemini_endpoint_failure_is_an_admission_attempt(traces):
+async def test_gemini_endpoint_failure_opens_no_attempt(traces):
     context = _UnreachableEndpoint()
     sent: list[httpx.Request] = []
 
@@ -185,7 +180,7 @@ async def test_gemini_endpoint_failure_is_an_admission_attempt(traces):
 
     assert status == 503
     assert sent == []
-    assert (context.calls, _outcomes(traces)) == ENDPOINT_FAILURE["gemini"]
+    assert (context.calls, _outcomes(traces)) == ENDPOINT_FAILURE
 
 
 EXHAUSTED_STATUS = {"chat": 503, "responses": 503, "messages": 529, "gemini": 529}

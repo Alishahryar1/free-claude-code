@@ -519,12 +519,7 @@ class AnthropicMessagesTransport:
             sent_body = body
             presenter: _Presenter | None = None
             try:
-                attempt = await execution.open_attempt(operation_kind)
-                scope = ProviderAttemptScope(
-                    attempt,
-                    provider_name=self._provider_name,
-                    request_id=execution.request_id,
-                )
+                # Credentials resolve before admission counts a provider call.
                 endpoint = await request_endpoint.resolve()
                 body = resolve_history_overrides(body)
                 origin = replay_origin(
@@ -557,6 +552,12 @@ class AnthropicMessagesTransport:
                     )
                 base_url = endpoint.base_url.rstrip("/")
                 path = "/messages"
+                attempt = await execution.open_attempt(operation_kind)
+                scope = ProviderAttemptScope(
+                    attempt,
+                    provider_name=self._provider_name,
+                    request_id=execution.request_id,
+                )
                 response = scope.retain(
                     await self._client.send(
                         self._client.build_request(

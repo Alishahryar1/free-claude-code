@@ -1191,11 +1191,7 @@ class _OpenAIChatStreamRunner:
                     if execution.last_failure is not None:
                         raise execution.last_failure
                     raise RuntimeError("provider execution ended without a final error")
-                scope = ProviderAttemptScope(
-                    await execution.open_attempt(operation_kind),
-                    provider_name=tag,
-                    request_id=self._request_id,
-                )
+                # Credentials resolve before admission counts a provider call.
                 body, sent_body, client = await self._transport._prepare_create(
                     body,
                     operation_kind,
@@ -1206,6 +1202,11 @@ class _OpenAIChatStreamRunner:
                     on_origin=partial(setattr, presenter.output, "replay_origin"),
                     call_replay=self._call_replay,
                     native_chat=self._native_chat,
+                )
+                scope = ProviderAttemptScope(
+                    await execution.open_attempt(operation_kind),
+                    provider_name=tag,
+                    request_id=self._request_id,
                 )
                 if self._transport._validate_prepared_body is not None:
                     validating = True
