@@ -38,11 +38,17 @@ def build_claude_proxy_env(
 ) -> dict[str, str]:
     """Return the canonical environment for Claude Code proxy sessions."""
 
+    updates = claude_proxy_values(proxy_root_url, auth_token)
+    # Smaller backends (a local model served with a 131072-token window) need an
+    # earlier compaction point, so a caller-set window wins over the default.
+    if window := base_env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "").strip():
+        updates["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = window
+
     # Claude's aggregate traffic flag also suppresses gateway model discovery.
     return client_environment(
         base_env,
         proxy_root_url=proxy_root_url,
         remove_prefixes=("ANTHROPIC_",),
         remove_keys=("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",),
-        updates=claude_proxy_values(proxy_root_url, auth_token),
+        updates=updates,
     )

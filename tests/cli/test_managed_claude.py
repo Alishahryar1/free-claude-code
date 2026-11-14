@@ -142,6 +142,27 @@ def test_managed_claude_env_forwards_retained_proxy_auth_token() -> None:
     assert env["ANTHROPIC_AUTH_TOKEN"] == "freecc"
 
 
+def test_claude_env_keeps_a_caller_set_auto_compact_window() -> None:
+    env = build_claude_proxy_env(
+        proxy_root_url="http://localhost:8082",
+        auth_token="proxy-token",
+        base_env={"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "131072"},
+    )
+
+    assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "131072"
+
+
+def test_claude_env_uses_default_auto_compact_window_when_unset_or_blank() -> None:
+    for base_env in ({}, {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "  "}):
+        env = build_claude_proxy_env(
+            proxy_root_url="http://localhost:8082",
+            auth_token="proxy-token",
+            base_env=base_env,
+        )
+
+        assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "190000"
+
+
 def test_managed_claude_env_adds_noninteractive_process_policy() -> None:
     base_env = {
         "PATH": "keep",
