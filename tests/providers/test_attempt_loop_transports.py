@@ -244,7 +244,7 @@ async def test_continuation_still_drops_a_rejected_reasoning_control(protocol):
 
 
 @pytest.mark.asyncio
-async def test_gemini_continuation_resends_a_rejected_reasoning_control():
+async def test_gemini_continuation_drops_a_rejected_reasoning_control():
     bodies: list[dict[str, Any]] = []
 
     def reply(request):
@@ -287,9 +287,7 @@ async def test_gemini_continuation_resends_a_rejected_reasoning_control():
     finally:
         await provider.cleanup()
 
-    # The 400 moves history replay to its next mode instead of dropping the
-    # rejected thinking control, so the control is sent again.
     assert [
-        "thinkingBudget" in body["generationConfig"]["thinkingConfig"]
+        "thinkingBudget" in body["generationConfig"].get("thinkingConfig", {})
         for body in bodies
-    ] == [True, True, True]
+    ] == [True, True, False]

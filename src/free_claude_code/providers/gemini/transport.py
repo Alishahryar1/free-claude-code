@@ -323,7 +323,9 @@ class GeminiTransport:
                     case Continue(body=next_body):
                         body = next_body
                         operation = ProviderOperationKind.CONTINUATION
-                        corrections = RequestCorrector("gemini")
+                        corrections = RequestCorrector(
+                            "gemini", reasoning=reasoning_correction
+                        )
                         continue
                     case Handoff():
                         return
