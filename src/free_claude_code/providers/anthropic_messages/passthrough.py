@@ -260,8 +260,12 @@ async def stream_native_messages(
                     if hidden_stop:
                         await scope.attempt.accept()
                     else:
+                        opening = not scope.attempt.accepted
                         decision = await scope.fail(error)
                         error = decision.error
+                        if opening:
+                            # Before acceptance, admission owns the retry verdict.
+                            retryable = decision.retryable
                         if can_retry_undelivered_stream(
                             execution.delivery,
                             retryable=retryable,

@@ -248,6 +248,40 @@ async def test_connection_recovery_before_output_closes_failed_response(streamin
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_connect_timeout_before_acceptance_uses_admission_retry(streaming):
+    calls = 0
+    success = Wire(
+        [
+            _sse(*_events())
+            if streaming
+            else b'{"type":"message","content":[],"stop_reason":"end_turn"}'
+        ]
+    )
+
+    def handle(request):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.ConnectTimeout("connect timed out", request=request)
+        return httpx.Response(
+            200,
+            stream=success,
+            headers={
+                "content-type": "text/event-stream" if streaming else "application/json"
+            },
+        )
+
+    p = provider(handle)
+    try:
+        assert await collect(p, native_body(streaming))
+        assert calls == 2
+        assert success.closed
+    finally:
+        await p.cleanup()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["error", "connection", "eof"])
 async def test_leading_ping_does_not_accept_attempt_or_prevent_retry(failure):
     tail = {
