@@ -38,6 +38,7 @@ from free_claude_code.config.provider_catalog import (
     SILICONFLOW_DEFAULT_BASE,
     SUPPORTED_PROVIDER_IDS,
     TOGETHER_DEFAULT_BASE,
+    TRUSTEDROUTER_DEFAULT_BASE,
     VERCEL_AI_GATEWAY_DEFAULT_BASE,
     WANDB_INFERENCE_DEFAULT_BASE,
     XAI_DEFAULT_BASE,
@@ -133,6 +134,7 @@ def _make_settings(**overrides):
     mock.cheaperinference_api_keys = "test_cheaperinference_key"
     mock.orcarouter_api_keys = "test_orcarouter_key"
     mock.atlascloud_api_keys = "test_atlascloud_key"
+    mock.trustedrouter_api_keys = "test_trustedrouter_key"
     mock.xkiro_api_keys = "test_xkiro_key"
     mock.nvidia_nim_proxy = None
     mock.open_router_proxy = None
@@ -185,6 +187,7 @@ def _make_settings(**overrides):
     mock.cheaperinference_proxy = None
     mock.orcarouter_proxy = None
     mock.atlascloud_proxy = None
+    mock.trustedrouter_proxy = None
     mock.xkiro_proxy = None
     mock.kilo_api_keys = "test_kilo_key"
     mock.kilo_proxy = None
@@ -448,6 +451,36 @@ async def test_atlascloud_provider_config_uses_key_base_and_proxy() -> None:
     assert descriptor.proxy_attr == "atlascloud_proxy"
     assert config.api_key == "atlascloud-token"
     assert config.base_url == ATLASCLOUD_DEFAULT_BASE
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+
+
+@pytest.mark.asyncio
+async def test_trustedrouter_provider_config_uses_key_base_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["trustedrouter"]
+    settings = _make_settings(
+        trustedrouter_api_keys="trustedrouter-token",
+        trustedrouter_base_url="https://unused.example/v1",
+        trustedrouter_proxy="http://proxy.test:8080",
+    )
+
+    config = build_provider_config(descriptor, settings)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider(
+            "trustedrouter",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
+
+    assert descriptor.display_name == "TrustedRouter"
+    assert descriptor.credential_env == "TRUSTEDROUTER_API_KEY"
+    assert descriptor.credential_attr == "trustedrouter_api_keys"
+    assert descriptor.credential_url == "https://trustedrouter.com/console/api-keys"
+    assert descriptor.default_base_url == TRUSTEDROUTER_DEFAULT_BASE
+    assert descriptor.base_url_attr is None
+    assert descriptor.proxy_attr == "trustedrouter_proxy"
+    assert config.api_key == "trustedrouter-token"
+    assert config.base_url == TRUSTEDROUTER_DEFAULT_BASE
     assert config.proxy == "http://proxy.test:8080"
     assert isinstance(provider, OpenAIChatProvider)
 
@@ -1209,6 +1242,7 @@ async def test_create_provider_instantiates_each_builtin():
         "cheaperinference": OpenAIChatProvider,
         "orcarouter": OpenAIChatProvider,
         "atlascloud": OpenAIChatProvider,
+        "trustedrouter": OpenAIChatProvider,
         "xkiro": OpenAIChatProvider,
         "opencode_go": OpenCodeProvider,
         "vercel": OpenAIChatProvider,

@@ -787,6 +787,25 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
             max_output_tokens_path=("max_output_length",),
         ),
     ),
+    # api.trustedrouter.com/v1/models is OpenRouter-shaped and also lists
+    # embedding, image, video, speech and decision models, which advertise
+    # ``trustedrouter.supports_chat: false`` and are excluded.
+    "trustedrouter": OpenAIChatProfile(
+        _policy(
+            "TRUSTEDROUTER",
+            ReasoningReplayMode.REASONING_CONTENT,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NamedEffortReasoning(_LOW_MEDIUM_HIGH, enabled_value="medium"),
+        model_listing=OpenAIModelListing(
+            path="/models",
+            required_path_values=((("trustedrouter", "supports_chat"), (True,)),),
+            thinking_sequence_path=("supported_parameters",),
+            input_modalities_path=("architecture", "input_modalities"),
+            context_window_tokens_path=("context_length",),
+            max_output_tokens_path=("top_provider", "max_completion_tokens"),
+        ),
+    ),
     "xkiro": OpenAIChatProfile(
         _policy(
             "XKIRO",

@@ -101,6 +101,7 @@ PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
     "cheaperinference": "cheaperinference/gpt-5.4-mini",
     "orcarouter": "orcarouter/deepseek/deepseek-v4-flash-free",
     "atlascloud": "atlascloud/deepseek-ai/deepseek-v4-flash",
+    "trustedrouter": "trustedrouter/trustedrouter/auto",
     "xkiro": "xkiro/qwen/qwen3.7-flash:free",
     "agnes": "agnes/agnes-2.0-flash",
     "zenmux": "zenmux/deepseek/deepseek-v4-flash-free",
