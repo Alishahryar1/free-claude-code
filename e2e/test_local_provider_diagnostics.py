@@ -19,7 +19,7 @@ def admin_client_files(monkeypatch: pytest.MonkeyPatch):
     async def timeout_local(
         runtime: ProviderRuntime, provider_id: str, api_key_number: int = 1
     ):
-        if provider_id in {"lmstudio", "llamacpp", "ollama"}:
+        if provider_id in {"lmstudio", "llamacpp", "ollama", "rapid_mlx"}:
             raise httpx.ReadTimeout("private-provider-error")
         return await resolve(runtime, provider_id, api_key_number)
 
@@ -37,7 +37,7 @@ def timeout_probe(provider_id: str):
     }
 
 
-@pytest.mark.parametrize("provider_id", ["lmstudio", "llamacpp", "ollama"])
+@pytest.mark.parametrize("provider_id", ["lmstudio", "llamacpp", "ollama", "rapid_mlx"])
 def test_optional_local_absence_is_neutral_and_manual_test_reports_error(
     page: Page, admin_base_url: str, provider_id: str
 ):
@@ -70,7 +70,7 @@ def test_optional_local_absence_is_neutral_and_manual_test_reports_error(
     ("admin_base_url", "provider_id"),
     [
         ({"MODEL": f"{provider}/local-model"}, provider)
-        for provider in ("lmstudio", "llamacpp", "ollama")
+        for provider in ("lmstudio", "llamacpp", "ollama", "rapid_mlx")
     ],
     indirect=["admin_base_url"],
 )

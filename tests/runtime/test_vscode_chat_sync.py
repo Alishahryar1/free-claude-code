@@ -41,7 +41,7 @@ async def runtime(request: pytest.FixtureRequest):
     )
 
     async def construct(provider_id: str, *_):
-        if provider_id in {"lmstudio", "llamacpp", "ollama"}:
+        if provider_id in {"lmstudio", "llamacpp", "ollama", "rapid_mlx"}:
             raise ConnectionError()
         return provider
 

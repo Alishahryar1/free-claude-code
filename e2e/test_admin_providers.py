@@ -354,7 +354,7 @@ def test_admin_loading_finishes_before_local_availability_checks(
     expect(page.locator("#dirtyState")).to_have_text("No changes")
     expect(page.locator("#saveProvider")).to_be_enabled()
 
-    page.wait_for_function("window.localChecks === 3")
+    page.wait_for_function("window.localChecks === 4")
     for route in pending:
         payload = response_object(route.fetch())
         if payload["provider_id"] == "llamacpp":
@@ -400,7 +400,7 @@ def test_local_availability_failure_does_not_fail_admin_loading(
     else:
         pending.pop().abort()
 
-    for provider_id in ("lmstudio", "llamacpp", "ollama"):
+    for provider_id in ("lmstudio", "llamacpp", "ollama", "rapid_mlx"):
         card = page.locator(f'[data-provider="{provider_id}"]')
         if provider_id == "lmstudio":
             expect(card.locator(".provider-availability-result")).to_have_text(
@@ -438,6 +438,14 @@ def test_local_provider_diagnostics_are_visible_on_cards_and_in_the_dialog(
         "Check that its server is responsive and retry."
     )
     results = {
+        "rapid_mlx": {
+            "provider_id": "rapid_mlx",
+            "status": "reachable",
+            "base_url": "http://localhost:8000/v1",
+            "probe_path": "/models",
+            "latency_ms": 10,
+            "error_type": None,
+        },
         "lmstudio": {
             "provider_id": "lmstudio",
             "status": "reachable",

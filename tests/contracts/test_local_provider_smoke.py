@@ -42,6 +42,7 @@ def test_local_provider_openai_models_returns_first_id(
     ("provider", "port", "model_id"),
     [
         ("llamacpp", 8080, "local-model"),
+        ("rapid_mlx", 8000, "local-model"),
         ("ollama", 11434, "llama3.1"),
     ],
 )
@@ -101,3 +102,40 @@ def test_local_provider_empty_model_list_is_missing_env_skip(
     assert "missing_env: lmstudio local server has no loaded models" in str(
         excinfo.value
     )
+
+
+@pytest.mark.parametrize(
+    "base_url", ["http://localhost:8000", "http://localhost:8000/v1/"]
+)
+def test_rapid_mlx_discovery_sends_configured_key(
+    monkeypatch: pytest.MonkeyPatch, base_url: str
+) -> None:
+    def fake_get(url: str, *, timeout: float, headers: dict[str, str]) -> FakeResponse:
+        assert url == "http://localhost:8000/v1/models"
+        assert headers == {"Authorization": "Bearer test-local-key"}
+        return FakeResponse(200, {"data": [{"id": "local-model"}]})
+
+    monkeypatch.setattr("smoke.lib.local_providers.httpx.get", fake_get)
+    assert (
+        first_local_provider_model_id(
+            "rapid_mlx", base_url, timeout_s=45, api_key="test-local-key"
+        )
+        == "local-model"
+    )
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_rapid_mlx_auth_failure_skips_smoke(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    def fake_get(url: str, *, timeout: float) -> FakeResponse:
+        return FakeResponse(status, {})
+
+    monkeypatch.setattr(
+        "smoke.lib.local_providers.httpx.get",
+        fake_get,
+    )
+    with pytest.raises(pytest.skip.Exception, match=f"HTTP {status}"):
+        first_local_provider_model_id(
+            "rapid_mlx", "http://localhost:8000/v1", timeout_s=45
+        )
