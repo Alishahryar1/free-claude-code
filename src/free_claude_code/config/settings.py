@@ -248,6 +248,11 @@ class Settings(BaseModel):
         default=(), validation_alias="ATLASCLOUD_API_KEY"
     )
 
+    # ==================== TrustedRouter (OpenAI-compatible gateway) ====================
+    trustedrouter_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="TRUSTEDROUTER_API_KEY"
+    )
+
     # ==================== xKiro (OpenAI-compatible gateway) ====================
     xkiro_api_keys: ApiKeyList = Field(default=(), validation_alias="XKIRO_API_KEY")
 
@@ -561,6 +566,9 @@ class Settings(BaseModel):
     )
     atlascloud_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="ATLASCLOUD_PROXY"
+    )
+    trustedrouter_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="TRUSTEDROUTER_PROXY"
     )
     xkiro_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="XKIRO_PROXY"
