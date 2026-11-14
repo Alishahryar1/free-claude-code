@@ -51,6 +51,7 @@ from free_claude_code.core.reasoning import (
 )
 from free_claude_code.core.stream_output import StreamOutput, completed_output
 from free_claude_code.core.stream_recovery import ContinuationSeed
+from free_claude_code.core.trace import trace_event
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderExecution,
@@ -287,6 +288,7 @@ class AnthropicMessagesTransport:
             betas=prepared.betas,
             endpoint_context=endpoint_context,
             request_id=request_id,
+            response_model=response_model or request.model,
             presenter_factory=lambda origin: NativeMessagesRelay(
                 public_model=response_model or request.model
             ),
@@ -309,6 +311,7 @@ class AnthropicMessagesTransport:
             betas=(),
             endpoint_context=endpoint_context,
             request_id=request_id,
+            response_model=public_model,
             presenter_factory=lambda origin: NativeMessagesPassthrough(public_model),
             continuation=continuation,
             forwarding=_Forwarding(
@@ -343,6 +346,7 @@ class AnthropicMessagesTransport:
             betas=(),
             endpoint_context=endpoint_context,
             request_id=request_id,
+            response_model=response_model or request.model,
             continuation=continuation,
             presenter_factory=lambda origin: GeminiMessagesStream(
                 response_id=response_id,
@@ -380,6 +384,7 @@ class AnthropicMessagesTransport:
             betas=prepared.betas,
             endpoint_context=endpoint_context,
             request_id=request_id,
+            response_model=response_model or request.model,
             continuation=continuation,
             presenter_factory=lambda origin: ChatMessagesStream(
                 model=response_model or request.model,
@@ -409,6 +414,7 @@ class AnthropicMessagesTransport:
             betas=(),
             endpoint_context=endpoint_context,
             request_id=request_id,
+            response_model=response_model or request.model,
             presenter_factory=lambda origin: AnthropicToResponsesStream(
                 request,
                 public_model=response_model or request.model,
@@ -424,6 +430,7 @@ class AnthropicMessagesTransport:
         betas: tuple[str, ...],
         endpoint_context: EndpointContext,
         request_id: str | None,
+        response_model: str,
         presenter_factory: Callable[[ReplayOrigin], _Presenter],
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
@@ -438,6 +445,7 @@ class AnthropicMessagesTransport:
             betas=betas,
             endpoint_context=endpoint_context,
             execution=execution,
+            response_model=response_model,
             presenter_factory=presenter_factory,
             continuation=continuation,
             forwarding=forwarding,
@@ -463,6 +471,7 @@ class AnthropicMessagesTransport:
         betas: tuple[str, ...],
         endpoint_context: EndpointContext,
         execution: ProviderExecution,
+        response_model: str,
         presenter_factory: Callable[[ReplayOrigin], _Presenter],
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
@@ -489,6 +498,17 @@ class AnthropicMessagesTransport:
             ),
             recovery=request_recovery,
             continuation=continuation_request,
+        )
+        trace_event(
+            stage="provider",
+            event="provider.request.sent",
+            source="provider",
+            provider=self._provider_name,
+            request_id=execution.request_id,
+            execution_id=execution.execution_id,
+            gateway_model=response_model,
+            downstream_model=body.get("model"),
+            transport="messages",
         )
         source: SourceRecoveryState | None = None
         while execution.can_attempt:
@@ -557,6 +577,7 @@ class AnthropicMessagesTransport:
                     corrections.accepted_history()
                     await attempt.accept()
                     yield StreamOutput((output,))
+                    self._trace_completed(execution.request_id)
                     return
                 content_type = response.headers.get("content-type", "")
                 if "text/event-stream" not in content_type.lower():
@@ -599,6 +620,7 @@ class AnthropicMessagesTransport:
                     raise RetryableProviderProtocolError(
                         "Messages stream ended without message_stop."
                     )
+                self._trace_completed(execution.request_id)
                 return
             except asyncio.CancelledError, GeneratorExit:
                 raise
@@ -666,3 +688,13 @@ class AnthropicMessagesTransport:
         if execution.last_failure is not None:
             raise execution.last_failure
         raise RuntimeError("Messages execution ended without a terminal result.")
+
+    def _trace_completed(self, request_id: str | None) -> None:
+        trace_event(
+            stage="provider",
+            event="provider.response.completed",
+            source="provider",
+            provider=self._provider_name,
+            request_id=request_id,
+            transport="messages",
+        )

@@ -1112,6 +1112,7 @@ class _OpenAIChatStreamRunner:
             downstream_model=body.get("model"),
             message_count=len(body.get("messages", [])),
             tool_count=len(body.get("tools", [])),
+            transport="chat",
         )
 
         resolver = StreamFailureResolver(
@@ -1313,6 +1314,7 @@ class _OpenAIChatStreamRunner:
             output_tokens=completion.output_tokens,
             prompt_tokens=completion.input_tokens,
             prompt_tokens_estimate=self._input_tokens,
+            transport="chat",
         )
         usage = ChatStreamUsage(
             finish_reason=str(completion.finish_reason)

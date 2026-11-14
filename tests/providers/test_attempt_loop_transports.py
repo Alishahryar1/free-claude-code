@@ -56,11 +56,23 @@ def traces() -> Iterator[list[dict[str, Any]]]:
         logger.remove(handle)
 
 
+_SENT_FIELDS = {
+    "provider",
+    "request_id",
+    "execution_id",
+    "gateway_model",
+    "downstream_model",
+    "transport",
+}
+_COMPLETED_FIELDS = {"provider", "request_id", "transport"}
+
+
 def _lifecycle(payloads: list[dict[str, Any]]) -> tuple[int, int]:
-    return (
-        len(_events(payloads, "provider.request.sent")),
-        len(_events(payloads, "provider.response.completed")),
-    )
+    sent = _events(payloads, "provider.request.sent")
+    completed = _events(payloads, "provider.response.completed")
+    assert all(set(payload) >= _SENT_FIELDS for payload in sent)
+    assert all(set(payload) >= _COMPLETED_FIELDS for payload in completed)
+    return len(sent), len(completed)
 
 
 async def _drain(stream) -> int | None:
@@ -92,8 +104,8 @@ class _UnreachableEndpoint:
 LIFECYCLE_TRACES = {
     "chat": (1, 1),
     "responses": (1, 1),
-    "messages": (0, 0),
-    "gemini": (0, 0),
+    "messages": (1, 1),
+    "gemini": (1, 1),
 }
 
 

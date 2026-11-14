@@ -18,6 +18,7 @@ from free_claude_code.core.history_replay import HistoryReplayError
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_output import StreamOutput, completed_output
 from free_claude_code.core.stream_recovery import ContinuationSeed
+from free_claude_code.core.trace import trace_event
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderExecution,
@@ -166,6 +167,17 @@ class GeminiTransport:
             recovery=request_recovery,
             continuation=continuation_request,
         )
+        trace_event(
+            stage="provider",
+            event="provider.request.sent",
+            source="provider",
+            provider="GEMINI",
+            request_id=execution.request_id,
+            execution_id=execution.execution_id,
+            gateway_model=response_model,
+            downstream_model=body.get("model"),
+            transport="gemini",
+        )
         source: SourceRecoveryState | None = None
         while execution.can_attempt:
             source = SourceRecoveryState(execution, previous=source)
@@ -276,6 +288,14 @@ class GeminiTransport:
                     )
                 for event in presenter.finish():
                     yield StreamOutput((event,))
+                trace_event(
+                    stage="provider",
+                    event="provider.response.completed",
+                    source="provider",
+                    provider="GEMINI",
+                    request_id=execution.request_id,
+                    transport="gemini",
+                )
                 return
             except asyncio.CancelledError, GeneratorExit:
                 raise
