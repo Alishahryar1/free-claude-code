@@ -63,6 +63,7 @@ def _settings(**overrides):
         "nebius_api_keys": "",
         "scw_secret_keys": "",
         "opper_api_keys": "",
+        "apiko_api_keys": "",
         "chutes_api_keys": "",
         "featherless_api_keys": "",
         "wandb_api_keys": "",
@@ -722,6 +723,23 @@ def test_opper_provider_smoke_uses_documented_agent_model(monkeypatch) -> None:
 
     assert [model.provider for model in models] == ["opper"]
     assert models[0].full_model == "opper/claude-sonnet-4-6"
+    assert models[0].source == "provider_default"
+
+
+def test_apiko_provider_smoke_uses_documented_agent_model(monkeypatch) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_APIKO", raising=False)
+    config = _smoke_config(
+        settings=_settings(
+            model="ollama/llama3.1",
+            ollama_base_url="",
+            apiko_api_keys="apiko-key",
+        )
+    )
+
+    models = config.provider_smoke_models()
+
+    assert [model.provider for model in models] == ["apiko"]
+    assert models[0].full_model == "apiko/claude-sonnet-5-5"
     assert models[0].source == "provider_default"
 
 

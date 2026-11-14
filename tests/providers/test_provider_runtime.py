@@ -13,6 +13,7 @@ from free_claude_code.application.errors import (
 from free_claude_code.config.api_keys import normalize_api_keys
 from free_claude_code.config.provider_catalog import (
     AGNES_DEFAULT_BASE,
+    APIKO_DEFAULT_BASE,
     ATLASCLOUD_DEFAULT_BASE,
     BEDROCK_DEFAULT_BASE,
     CHEAPERINFERENCE_DEFAULT_BASE,
@@ -103,6 +104,7 @@ def _make_settings(**overrides):
     mock.nebius_api_keys = "test_nebius_key"
     mock.scw_secret_keys = "test_scw_key"
     mock.opper_api_keys = "test_opper_key"
+    mock.apiko_api_keys = "test_apiko_key"
     mock.chutes_api_keys = "test_chutes_key"
     mock.featherless_api_keys = "test_featherless_key"
     mock.mistral_api_keys = "test_mistral_key"
@@ -199,6 +201,7 @@ def _make_settings(**overrides):
     mock.nebius_proxy = None
     mock.scw_proxy = None
     mock.opper_proxy = None
+    mock.apiko_proxy = None
     mock.chutes_proxy = None
     mock.featherless_proxy = None
     mock.azure_openai_proxy = None
@@ -706,6 +709,36 @@ async def test_opper_provider_config_uses_key_base_and_proxy() -> None:
 
 
 @pytest.mark.asyncio
+async def test_apiko_provider_config_uses_key_base_and_proxy() -> None:
+    descriptor = PROVIDER_CATALOG["apiko"]
+    settings = _make_settings(
+        apiko_api_keys="apiko-token",
+        apiko_base_url="https://unused.example/v1",
+        apiko_proxy="http://proxy.test:8080",
+    )
+
+    config = build_provider_config(descriptor, settings)
+    with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
+        provider = await create_provider(
+            "apiko",
+            settings,
+            ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+        )
+
+    assert descriptor.display_name == "APIKO"
+    assert descriptor.credential_env == "APIKO_API_KEY"
+    assert descriptor.credential_attr == "apiko_api_keys"
+    assert descriptor.credential_url == "https://apiko.app/dashboard/apikeys"
+    assert descriptor.default_base_url == APIKO_DEFAULT_BASE
+    assert descriptor.base_url_attr is None
+    assert descriptor.proxy_attr == "apiko_proxy"
+    assert config.api_key == "apiko-token"
+    assert config.base_url == APIKO_DEFAULT_BASE
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+
+
+@pytest.mark.asyncio
 async def test_chutes_provider_config_uses_key_base_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["chutes"]
     settings = _make_settings(
@@ -1183,6 +1216,7 @@ async def test_create_provider_instantiates_each_builtin():
         "nebius": OpenAIChatProvider,
         "scaleway": OpenAIChatProvider,
         "opper": OpenAIChatProvider,
+        "apiko": OpenAIChatProvider,
         "chutes": OpenAIChatProvider,
         "featherless": OpenAIChatProvider,
         "azure_openai": OpenAIChatProvider,

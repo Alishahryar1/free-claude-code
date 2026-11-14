@@ -97,6 +97,8 @@ ATLASCLOUD_DEFAULT_BASE = "https://api.atlascloud.ai/v1"
 XKIRO_DEFAULT_BASE = "https://api.xkiro.com/v1"
 # Opper OpenAI-compatible Chat Completions gateway.
 OPPER_DEFAULT_BASE = "https://api.opper.ai/v3/compat"
+# APIKO OpenAI-compatible multi-provider gateway.
+APIKO_DEFAULT_BASE = "https://api.apiko.app/v1"
 # Agnes AI OpenAI-compatible Chat Completions API.
 AGNES_DEFAULT_BASE = "https://apihub.agnes-ai.com/v1"
 # ZenMux OpenAI-compatible Chat Completions gateway.
@@ -777,6 +779,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="opper_api_keys",
         default_base_url=OPPER_DEFAULT_BASE,
         proxy_attr="opper_proxy",
+    ),
+    "apiko": ProviderDescriptor(
+        provider_id="apiko",
+        display_name="APIKO",
+        website_url="https://apiko.app/",
+        logo_filename="apiko.svg",
+        credential_env="APIKO_API_KEY",
+        credential_url="https://apiko.app/dashboard/apikeys",
+        credential_attr="apiko_api_keys",
+        default_base_url=APIKO_DEFAULT_BASE,
+        proxy_attr="apiko_proxy",
     ),
     "ollama_cloud": ProviderDescriptor(
         provider_id="ollama_cloud",
