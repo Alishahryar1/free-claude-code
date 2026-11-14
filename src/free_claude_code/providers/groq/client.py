@@ -159,15 +159,10 @@ class GroqChatBehavior(OpenAIChatBehavior):
         self,
         error: Exception,
         body: JsonObject,
-        used_retry_kinds: set[str],
     ) -> JsonObject | None:
-        if "groq_tpm" in used_retry_kinds:
-            return None
-
         correction = correct_tpm_completion_budget(error, body)
         if correction is None:
             return None
-        used_retry_kinds.add("groq_tpm")
         logger.warning(
             "GROQ_STREAM: TPM limit={} requested={}; retrying "
             "max_completion_tokens {} -> {}",

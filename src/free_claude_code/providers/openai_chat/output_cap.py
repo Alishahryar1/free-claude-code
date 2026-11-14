@@ -15,6 +15,10 @@ import re
 from typing import Any
 
 import openai
+from loguru import logger
+
+from free_claude_code.core.json_types import JsonObject
+from free_claude_code.providers.request_correction import Rejection
 
 # Body keys that carry the output-token budget across OpenAI-compatible policies.
 _OUTPUT_TOKEN_FIELDS = ("max_completion_tokens", "max_tokens")
@@ -159,3 +163,40 @@ def clamp_output_tokens(body: dict[str, Any], cap: int) -> dict[str, Any] | None
                 clamped = dict(body)
             clamped[field] = cap
     return clamped
+
+
+class OutputCapMemory:
+    """Learn each model's output-token cap from rejections and apply it."""
+
+    def __init__(self, provider_name: str) -> None:
+        self._provider_name = provider_name
+        self._caps: dict[str, int] = {}
+
+    def clamp(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Clamp output tokens to the cap already learned for this model."""
+        model = body.get("model")
+        cap = self._caps.get(model) if isinstance(model, str) else None
+        if cap is None:
+            return body
+        clamped = clamp_output_tokens(body, cap)
+        return clamped if clamped is not None else body
+
+    def correct(self, rejection: Rejection) -> JsonObject | None:
+        """Learn the cap a rejection names and clamp the rejected body to it."""
+        cap = parse_output_token_cap(rejection.error)
+        if cap is None:
+            return None
+        model = rejection.body.get("model")
+        if isinstance(model, str):
+            previous = self._caps.get(model)
+            cap = cap if previous is None else min(previous, cap)
+            self._caps[model] = cap
+        clamped = clamp_output_tokens(rejection.body, cap)
+        if clamped is None:
+            return None
+        logger.warning(
+            "{}_STREAM: clamping output tokens to {} after upstream cap rejection",
+            self._provider_name,
+            cap,
+        )
+        return clamped

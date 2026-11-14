@@ -29,7 +29,6 @@ from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 from free_claude_code.providers.openai_stream import OpenAIStreamAdapter
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
-from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.api.test_response_streams import _json_error, _serve
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import make_provider_config, profiled_provider
@@ -297,6 +296,11 @@ async def test_cancelled_normalizer_construction_cleanup_releases_admission():
         client,
         admission,
     ):
+
+        async def consume():
+            async for _ in _public_stream(provider, "messages"):
+                pass
+
         task = None
         with patch.object(
             provider._behavior,
@@ -304,13 +308,7 @@ async def test_cancelled_normalizer_construction_cleanup_releases_admission():
             side_effect=ValueError("invalid normalization"),
         ):
             try:
-                task = asyncio.create_task(
-                    provider._chat._create_stream(
-                        {"model": "model", "messages": []},
-                        RequestRecovery(admission.start_execution()),
-                        ProviderOperationKind.GENERATION,
-                    )
-                )
+                task = asyncio.create_task(consume())
                 await asyncio.wait_for(body.close_started.wait(), timeout=2)
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
@@ -622,15 +620,9 @@ async def test_chunk_transform_failure_releases_response_without_retry(wire):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "operation",
-    [
-        ProviderOperationKind.GENERATION,
-        ProviderOperationKind.CONTINUATION,
-    ],
-)
-async def test_normalizer_construction_failure_closes_response_before_retry(operation):
-    bodies = [ResponseBody(), ResponseBody()]
+async def test_normalizer_construction_failure_closes_response_before_retry():
+    bodies = [ResponseBody(), ResponseBody(*_chunks("chat", "recovered"))]
+    bodies[1].read_release.set()
     remaining = iter(bodies)
 
     def handler(request):
@@ -655,17 +647,16 @@ async def test_normalizer_construction_failure_closes_response_before_retry(oper
             provider._behavior, "normalize_stream", side_effect=fail_once
         ):
             async with asyncio.timeout(2):
-                stream, _, attempt, _ = await provider._chat._create_stream(
-                    {"model": "model", "messages": []},
-                    RequestRecovery(admission.start_execution()),
-                    operation,
+                frames = "".join(
+                    [
+                        frame
+                        async for packet in _public_stream(provider, "messages")
+                        for frame in packet.frames
+                    ]
                 )
-        try:
-            assert calls == 2
-            assert bodies[0].close_count == 1
-            assert not client.is_closed()
-        finally:
-            await stream.aclose()
-            await attempt.aclose()
+        assert "recovered" in frames
+        assert calls == 2
+        assert bodies[0].close_count == 1
         assert bodies[1].close_count == 1
+        assert not client.is_closed()
         await _assert_admission_available(admission)

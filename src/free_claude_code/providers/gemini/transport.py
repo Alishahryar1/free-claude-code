@@ -34,8 +34,11 @@ from free_claude_code.providers.http import ProviderAttemptScope, maybe_await_ac
 from free_claude_code.providers.openai_chat import ChatStreamOutput
 from free_claude_code.providers.reasoning_compatibility import ReasoningCorrection
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
+from free_claude_code.providers.request_correction import (
+    Rejection,
+    RequestCorrector,
+)
 from free_claude_code.providers.request_recovery import (
-    RequestCorrections,
     RequestRecovery,
 )
 from free_claude_code.providers.stream_failure_resolution import (
@@ -146,7 +149,7 @@ class GeminiTransport:
     ) -> AsyncIterator[StreamOutput]:
         endpoint = RequestEndpoint(endpoint_context)
         request_recovery = RequestRecovery(execution, endpoint=endpoint)
-        corrections = RequestCorrections("gemini", reasoning=reasoning_correction)
+        corrections = RequestCorrector("gemini", reasoning=reasoning_correction)
         continuation_request = ContinuationRequest("gemini")
         operation = ProviderOperationKind.GENERATION
         if continuation is not None:
@@ -288,12 +291,7 @@ class GeminiTransport:
                         ),
                         source=source,
                         propose_correction=partial(
-                            corrections.next_body,
-                            error,
-                            body,
-                            sent_body=sent_body,
-                            reasoning_error=error,
-                            reasoning_sent_body=sent_body,
+                            corrections.correct, Rejection(error, body, sent_body)
                         ),
                     )
                 )
@@ -304,7 +302,7 @@ class GeminiTransport:
                     case Continue(body=next_body):
                         body = next_body
                         operation = ProviderOperationKind.CONTINUATION
-                        corrections = RequestCorrections("gemini")
+                        corrections = RequestCorrector("gemini")
                         continue
                     case Handoff():
                         return

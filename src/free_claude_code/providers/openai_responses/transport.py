@@ -3,7 +3,7 @@
 import asyncio
 import sys
 import uuid
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from functools import partial
 from typing import assert_never, cast
 
@@ -80,8 +80,12 @@ from free_claude_code.providers.reasoning_compatibility import (
     prepare_messages_reasoning,
 )
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
+from free_claude_code.providers.request_correction import (
+    CorrectionStep,
+    Rejection,
+    RequestCorrector,
+)
 from free_claude_code.providers.request_recovery import (
-    RequestCorrections,
     RequestRecovery,
 )
 from free_claude_code.providers.stream_failure_resolution import (
@@ -123,17 +127,14 @@ class OpenAIResponsesTransport:
         log_raw_sse_events: bool,
         endpoint_transport: httpx2.AsyncBaseTransport | None = None,
         event_adapter_factory: Callable[[], ResponsesEventAdapter] | None = None,
-        request_correction: Callable[
-            [Exception, JsonObject, JsonObject], JsonObject | None
-        ]
-        | None = None,
+        correction_steps: Sequence[CorrectionStep] = (),
         omitted_request_fields: frozenset[str] = frozenset(),
         tool_policy: ResponsesToolPolicy = ResponsesToolPolicy(),
     ) -> None:
         self._client = client
         self._endpoint_transport = endpoint_transport
         self._event_adapter_factory = event_adapter_factory
-        self._request_correction = request_correction
+        self._correction_steps = tuple(correction_steps)
         self._omitted_request_fields = omitted_request_fields
         self._tool_policy = tool_policy
         self._admission = admission
@@ -430,7 +431,7 @@ class OpenAIResponsesTransport:
         continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[StreamOutput]:
         request_recovery = RequestRecovery(execution, endpoint=endpoint)
-        corrections = RequestCorrections("responses", reasoning_correction)
+        corrections = self._corrector(reasoning_correction)
         body = resolve_history_overrides(body)
         continuation_request = ContinuationRequest("responses")
         operation_kind = ProviderOperationKind.GENERATION
@@ -615,14 +616,7 @@ class OpenAIResponsesTransport:
                         normal_stop_seen=normal_stop_seen,
                         source=source,
                         propose_correction=partial(
-                            corrections.next_body,
-                            raw_error,
-                            body,
-                            sent_body=sent_body,
-                            reasoning_error=raw_error,
-                            after_common=partial(
-                                self._provider_retry_body, raw_error, body, sent_body
-                            ),
+                            corrections.correct, Rejection(raw_error, body, sent_body)
                         ),
                         failure_payload=(
                             partial(presenter.failure_payload, raw_error)
@@ -638,9 +632,7 @@ class OpenAIResponsesTransport:
                     case Continue(body=next_body):
                         body = next_body
                         operation_kind = ProviderOperationKind.CONTINUATION
-                        corrections = RequestCorrections(
-                            "responses", reasoning_correction
-                        )
+                        corrections = self._corrector(reasoning_correction)
                         continue
                     case Handoff():
                         if isinstance(presenter, GeminiResponsesStream):
@@ -659,16 +651,10 @@ class OpenAIResponsesTransport:
             raise execution.last_failure
         raise RuntimeError("Responses execution ended without a terminal result.")
 
-    def _provider_retry_body(
-        self,
-        error: Exception,
-        body: JsonObject,
-        sent_body: JsonObject,
-        _used_retry_kinds: set[str],
-    ) -> JsonObject | None:
-        if self._request_correction is None:
-            return None
-        return self._request_correction(error, body, sent_body)
+    def _corrector(self, reasoning: ReasoningCorrection | None) -> RequestCorrector:
+        return RequestCorrector(
+            "responses", reasoning=reasoning, steps=self._correction_steps
+        )
 
     async def _create_sdk_stream(
         self,

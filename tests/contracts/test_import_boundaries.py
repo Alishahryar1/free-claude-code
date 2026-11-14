@@ -54,6 +54,7 @@ FACADE_ONLY_BOUNDARIES = {
     "free_claude_code.messaging.trees",
     "free_claude_code.providers.failure_classification",
     "free_claude_code.providers.openai_chat",
+    "free_claude_code.providers.request_correction",
     "free_claude_code.providers.stream_failure_resolution",
 }
 
