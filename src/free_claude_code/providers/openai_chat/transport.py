@@ -838,10 +838,11 @@ class OpenAIChatTransport:
                 )
                 return retry_body
 
-        if "provider_specific" not in used_retry_kinds:
+        retry_kind = self._behavior.retry_request_kind(error, body, used_retry_kinds)
+        if retry_kind is not None and retry_kind not in used_retry_kinds:
             retry_body = self._behavior.retry_request_body(error, body)
             if retry_body is not None:
-                used_retry_kinds.add("provider_specific")
+                used_retry_kinds.add(retry_kind)
                 return retry_body
 
         return self._behavior.retry_after_standard_corrections(

@@ -18,6 +18,7 @@ from free_claude_code.providers.nvidia_nim.request_options import (
 )
 from free_claude_code.providers.nvidia_nim.retry import (
     clone_body_without_chat_template,
+    clone_body_without_reasoning_effort,
 )
 from free_claude_code.providers.nvidia_nim.tool_schema import (
     NIM_TOOL_ARGUMENT_ALIASES_KEY,
@@ -494,6 +495,41 @@ class TestBuildRequestBody:
 
         assert clone_body_without_chat_template(body) is None
 
+    def test_clone_body_without_reasoning_effort(self):
+        body = {
+            "model": "test",
+            "reasoning_effort": "medium",
+            "messages": [],
+        }
+
+        cloned = clone_body_without_reasoning_effort(body)
+
+        assert cloned is not None
+        assert "reasoning_effort" not in cloned
+        assert body["reasoning_effort"] == "medium"
+
+    def test_clone_body_without_reasoning_effort_returns_none_when_unchanged(self):
+        body = {"model": "test", "messages": []}
+
+        assert clone_body_without_reasoning_effort(body) is None
+
+    def test_clone_body_without_reasoning_effort_returns_none_when_disabled_none(self):
+        body = {
+            "model": "test",
+            "reasoning_effort": "none",
+            "messages": [],
+        }
+
+        assert clone_body_without_reasoning_effort(body) is None
+
+        extra_body = {
+            "model": "test",
+            "extra_body": {"reasoning_effort": "none"},
+            "messages": [],
+        }
+
+        assert clone_body_without_reasoning_effort(extra_body) is None
+
     def test_no_chat_template_kwargs_when_thinking_disabled(self):
         req = make_messages_request(
             model="test",
@@ -662,3 +698,19 @@ class TestBuildRequestBody:
         assert assistant["reasoning_content"] == "secret"
         assert assistant["content"] == "answer"
         assert "<think>" not in assistant["content"]
+
+
+def test_build_nim_request_body_multimodal_env_flag(monkeypatch):
+    req = make_messages_request(
+        model="test", messages=[{"role": "user", "content": "hi"}]
+    )
+
+    monkeypatch.setenv("FCC_ENABLE_MULTIMODAL", "1")
+    body = build_request_body(req, reasoning=REASONING_OFF)
+    assert body.get("extra_body", {}).get("multimodal") is True
+    assert "multimodal" not in body
+
+    monkeypatch.setenv("FCC_ENABLE_MULTIMODAL", "0")
+    body = build_request_body(req, reasoning=REASONING_OFF)
+    assert "multimodal" not in body.get("extra_body", {})
+    assert "multimodal" not in body

@@ -1,5 +1,6 @@
 """NVIDIA NIM request adaptation."""
 
+import os
 from copy import deepcopy
 from typing import Any
 
@@ -89,6 +90,10 @@ def apply_nim_request_options(
             extra_body.pop("chat_template_kwargs", None)
 
     NIM_REASONING.encode(body, reasoning)
+
+    # Enable multimodal processing if requested via environment variable.
+    if os.getenv("FCC_ENABLE_MULTIMODAL", "0").lower() in {"1", "true", "yes"}:
+        extra_body["multimodal"] = True
 
     if extra_body:
         body["extra_body"] = extra_body

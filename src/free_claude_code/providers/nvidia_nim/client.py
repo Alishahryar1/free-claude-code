@@ -35,6 +35,7 @@ from .request_options import (
 )
 from .retry import (
     clone_body_without_chat_template,
+    clone_body_without_reasoning_effort,
 )
 from .tool_schema import (
     body_without_nim_tool_argument_aliases,
@@ -92,30 +93,67 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         """Return NIM tool argument aliases captured while building this request."""
         return nim_tool_argument_aliases_from_body(body)
 
+    def retry_request_kind(
+        self,
+        error: Exception,
+        body: dict[str, Any],
+        used_retry_kinds: set[str] | None = None,
+    ) -> str | None:
+        status_code = getattr(error, "status_code", None)
+        if not (isinstance(error, openai.BadRequestError) or status_code == 400):
+            return None
+        error_text = _error_text(error)
+        used = used_retry_kinds or set()
+        if "nim_chat_template" not in used and "chat_template" in error_text:
+            return "nim_chat_template"
+        if "nim_reasoning_effort" not in used and _is_nim_reasoning_rejection(
+            error, error_text=error_text
+        ):
+            return "nim_reasoning_effort"
+        if "chat_template" in error_text:
+            return "nim_chat_template"
+        if _is_nim_reasoning_rejection(error, error_text=error_text):
+            return "nim_reasoning_effort"
+        return "provider_specific"
+
     def retry_request_body(self, error: Exception, body: dict) -> dict | None:
         """Retry once with a downgraded body when NIM rejects a known field."""
         status_code = getattr(error, "status_code", None)
         bad_request_like = isinstance(error, openai.BadRequestError) or (
             status_code == 400
         )
-
-        error_text = str(error)
-        error_body = getattr(error, "body", None)
-        if error_body is not None:
-            error_text = f"{error_text} {json.dumps(error_body, default=str)}"
-        error_text = error_text.lower()
-
         if not bad_request_like:
             return None
 
+        error_text = _error_text(error)
+
         if "chat_template" in error_text:
             retry_body = clone_body_without_chat_template(body)
-            if retry_body is None:
-                return None
-            logger.warning("NIM_STREAM: retrying without chat_template after 400 error")
-            return retry_body
+            if retry_body is not None:
+                logger.warning(
+                    "NIM_STREAM: retrying without chat_template after 400 error"
+                )
+                return retry_body
+
+        if _is_nim_reasoning_rejection(error, error_text=error_text):
+            retry_body = clone_body_without_reasoning_effort(body)
+            if retry_body is not None:
+                logger.warning(
+                    "NIM_STREAM: retrying without reasoning_effort after 400 error"
+                )
+                return retry_body
 
         return None
+
+    def reasoning_disable_rejected(self, error: Exception) -> bool:
+        """Recognize NIM rejection when disabling reasoning."""
+        status_code = getattr(error, "status_code", None)
+        if not (isinstance(error, openai.BadRequestError) or status_code == 400):
+            return False
+        error_text = _error_text(error)
+        if _identifies_other_rejected_field(error, error_text):
+            return False
+        return _is_nim_reasoning_rejection(error, error_text=error_text)
 
     def failure_override(self, error: Exception) -> ExecutionFailure | None:
         """Classify NVIDIA-specific 400/500 responses by their actual semantics."""
@@ -192,3 +230,51 @@ def _is_degraded_function(body: Mapping[str, Any]) -> bool:
         and function_id
         and state.strip() == _DEGRADED_FUNCTION_STATE
     )
+
+
+def _error_text(error: Exception) -> str:
+    error_text = str(error)
+    error_body = getattr(error, "body", None)
+    if error_body is not None:
+        error_text = f"{error_text} {json.dumps(error_body, default=str)}"
+    return error_text.lower()
+
+
+def _identifies_other_rejected_field(error: Exception, error_text: str) -> bool:
+    for body in _nim_error_bodies(error):
+        param = body.get("param")
+        if isinstance(param, str) and param and param != "reasoning_effort":
+            return True
+    return "chat_template" in error_text
+
+
+def _is_nim_reasoning_rejection(
+    error: Exception | str, *, error_text: str | None = None
+) -> bool:
+    """Recognize NIM rejection of reasoning_effort by message or named field."""
+    if isinstance(error, str):
+        text = error.lower()
+        if "must be one of" in text or "chat_template" in text:
+            return False
+        return "reasoning_effort" in text or "invalid request" in text
+
+    bodies = _nim_error_bodies(error)
+    for body in bodies:
+        param = body.get("param")
+        if param == "reasoning_effort":
+            message = str(body.get("message", "")).lower()
+            return "must be one of" not in message
+        if isinstance(param, str) and param:
+            return False
+
+    text = error_text if error_text is not None else _error_text(error)
+    if "must be one of" in text or "chat_template" in text:
+        return False
+    if "reasoning_effort" in text:
+        return True
+
+    for body in bodies:
+        message = body.get("message")
+        if isinstance(message, str) and message.strip().lower() == "invalid request":
+            return True
+    return False

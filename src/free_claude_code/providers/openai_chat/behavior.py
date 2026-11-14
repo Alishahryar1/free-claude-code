@@ -79,6 +79,15 @@ class OpenAIChatBehavior:
         """Hook for provider-specific reasoning."""
         return iter(())
 
+    def retry_request_kind(
+        self,
+        error: Exception,
+        body: dict[str, Any],
+        used_retry_kinds: set[str] | None = None,
+    ) -> str | None:
+        """Return the used_retry_kinds marker for retry_request_body."""
+        return "provider_specific"
+
     def retry_request_body(self, error: Exception, body: dict) -> dict | None:
         """Return a modified request body for one retry, or None."""
         return None
