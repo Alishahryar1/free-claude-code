@@ -27,6 +27,7 @@ MISTRAL_DEFAULT_BASE = "https://api.mistral.ai/v1"
 CODESTRAL_DEFAULT_BASE = "https://codestral.mistral.ai/v1"
 LMSTUDIO_DEFAULT_BASE = "http://localhost:1234/v1"
 LLAMACPP_DEFAULT_BASE = "http://localhost:8080/v1"
+RAPID_MLX_DEFAULT_BASE = "http://localhost:8000/v1"
 OLLAMA_DEFAULT_BASE = "http://localhost:11434"
 OLLAMA_CLOUD_DEFAULT_BASE = "https://ollama.com/v1"
 OPENCODE_ZEN_DEFAULT_BASE = "https://opencode.ai/zen/v1"
@@ -819,6 +820,18 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         static_credential="ollama",
         default_base_url=OLLAMA_DEFAULT_BASE,
         base_url_attr="ollama_base_url",
+        local=True,
+    ),
+    "rapid_mlx": ProviderDescriptor(
+        provider_id="rapid_mlx",
+        display_name="Rapid-MLX",
+        website_url="https://rapidmlx.com/",
+        logo_filename="rapid-mlx.png",
+        credential_env="RAPID_MLX_API_KEY",
+        credential_attr="rapid_mlx_api_keys",
+        default_base_url=RAPID_MLX_DEFAULT_BASE,
+        base_url_attr="rapid_mlx_base_url",
+        proxy_attr="rapid_mlx_proxy",
         local=True,
     ),
 }

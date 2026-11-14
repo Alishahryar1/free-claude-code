@@ -186,6 +186,9 @@ def _clear_process_config(monkeypatch) -> None:
         "BEDROCK_BASE_URL",
         "BEDROCK_PROXY",
         "OLLAMA_API_KEY",
+        "RAPID_MLX_API_KEY",
+        "RAPID_MLX_BASE_URL",
+        "RAPID_MLX_PROXY",
         "ANTHROPIC_AUTH_TOKEN",
         "PROXY_AUTH_ENABLED",
         "TELEGRAM_PROXY_URL",
@@ -2320,7 +2323,7 @@ def test_admin_apply_preserves_false_and_numeric_zero(monkeypatch, tmp_path):
     assert "HTTP_WRITE_TIMEOUT=0" in managed
 
 
-@pytest.mark.parametrize("provider_id", ["lmstudio", "llamacpp", "ollama"])
+@pytest.mark.parametrize("provider_id", ["lmstudio", "llamacpp", "ollama", "rapid_mlx"])
 def test_admin_local_provider_status_reports_reachable(
     monkeypatch, tmp_path, provider_id
 ):
@@ -2338,7 +2341,7 @@ def test_admin_local_provider_status_reports_reachable(
         async def __aexit__(self, *args):
             return None
 
-        async def get(self, url: str):
+        async def get(self, url: str, *, headers=None):
             return httpx.Response(200, json={"data": []})
 
     with patch("free_claude_code.api.admin_routes.httpx.AsyncClient", FakeAsyncClient):
@@ -2495,3 +2498,40 @@ def test_admin_launch_url_uses_loopback_for_wildcard_host():
     settings = Settings.model_construct(host="0.0.0.0", port=8082)
 
     assert local_admin_url(settings) == "http://127.0.0.1:8082/admin"
+
+
+@pytest.mark.parametrize(
+    "base_url", ["http://localhost:8000", "http://localhost:8000/v1/"]
+)
+@pytest.mark.parametrize("key", ["not-needed", "test-local-key"])
+def test_admin_rapid_mlx_status_normalizes_url_and_sends_key(
+    monkeypatch, tmp_path, base_url, key
+):
+    _set_home(monkeypatch, tmp_path)
+    _clear_process_config(monkeypatch)
+    monkeypatch.setenv("RAPID_MLX_BASE_URL", base_url)
+    monkeypatch.setenv("RAPID_MLX_API_KEY", key)
+    app = create_test_app()
+    calls = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, *, headers):
+            calls.append((url, headers))
+            return httpx.Response(200, json={"data": [{"id": "local-model"}]})
+
+    with patch("free_claude_code.api.admin_routes.httpx.AsyncClient", FakeAsyncClient):
+        response = _local_client(app).get("/admin/api/providers/rapid_mlx/local-status")
+    assert response.status_code == 200
+    assert response.json()["status"] == "reachable"
+    assert calls == [
+        ("http://localhost:8000/v1/models", {"Authorization": f"Bearer {key}"})
+    ]

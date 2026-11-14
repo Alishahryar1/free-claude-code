@@ -83,6 +83,8 @@ def _settings(**overrides):
         "lm_studio_base_url": "",
         "llamacpp_base_url": "",
         "ollama_base_url": "http://localhost:11434",
+        "rapid_mlx_api_keys": "",
+        "rapid_mlx_base_url": "http://localhost:8000/v1",
     }
     values.update(overrides)
     for attr in {

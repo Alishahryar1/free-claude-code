@@ -12,7 +12,7 @@ from pydantic import (
     model_validator,
 )
 
-from .api_keys import ApiKeyList
+from .api_keys import ApiKeyList, normalize_api_keys
 from .constants import DEFAULT_MODEL, HTTP_CONNECT_TIMEOUT_DEFAULT
 from .custom_providers import CustomProviderDefinition, decode_custom_providers
 from .model_refs import ModelFallback, ModelFallbacks
@@ -397,6 +397,18 @@ class Settings(BaseModel):
     ollama_base_url: NonEmptyString = Field(
         default="http://localhost:11434",
         validation_alias="OLLAMA_BASE_URL",
+    )
+
+    # ==================== Rapid-MLX Config ====================
+    rapid_mlx_api_keys: ApiKeyList = Field(
+        default_factory=lambda: normalize_api_keys("not-needed"),
+        validation_alias="RAPID_MLX_API_KEY",
+    )
+    rapid_mlx_base_url: NonEmptyString = Field(
+        default="http://localhost:8000/v1", validation_alias="RAPID_MLX_BASE_URL"
+    )
+    rapid_mlx_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="RAPID_MLX_PROXY"
     )
 
     # ==================== Model ====================

@@ -24,7 +24,7 @@ from free_claude_code.runtime import provider_manager
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.runtime.catalog_support import finish_discovery, finish_publication
 
-LOCAL_IDS = ("lmstudio", "llamacpp", "ollama")
+LOCAL_IDS = ("lmstudio", "llamacpp", "ollama", "rapid_mlx")
 
 
 def provider(*ids, error=None):

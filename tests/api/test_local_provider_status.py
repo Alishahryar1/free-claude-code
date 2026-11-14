@@ -12,7 +12,7 @@ async def test_local_provider_results_complete_independently():
     app = create_test_app()
     entered, release = asyncio.Event(), asyncio.Event()
 
-    async def check(provider_id, url, path):
+    async def check(provider_id, url, path, *, api_key=None):
         if provider_id == "ollama":
             entered.set()
             await release.wait()

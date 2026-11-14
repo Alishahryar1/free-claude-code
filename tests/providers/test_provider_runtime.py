@@ -125,6 +125,9 @@ def _make_settings(**overrides):
     mock.lm_studio_base_url = "http://localhost:1234/v1"
     mock.llamacpp_base_url = "http://localhost:8080/v1"
     mock.ollama_base_url = "http://localhost:11434"
+    mock.rapid_mlx_base_url = "http://localhost:8000/v1"
+    mock.rapid_mlx_api_keys = ("not-needed",)
+    mock.rapid_mlx_proxy = None
     mock.ollama_api_keys = "test_ollama_cloud_key"
     mock.poolside_api_keys = "test_poolside_key"
     mock.llm7_api_keys = "test_llm7_key"
@@ -1198,6 +1201,7 @@ async def test_create_provider_instantiates_each_builtin():
         "cloudflare": CloudflareProvider,
         "lmstudio": LMStudioProvider,
         "llamacpp": OpenAIChatProvider,
+        "rapid_mlx": OpenAIChatProvider,
         "ollama": OpenAIChatProvider,
         "ollama_cloud": OpenAIChatProvider,
         "wafer": OpenAIChatProvider,
@@ -1757,3 +1761,22 @@ def test_xkiro_requires_key_despite_public_catalog():
         build_provider_config(
             PROVIDER_CATALOG["xkiro"], _make_settings(xkiro_api_keys=None)
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["not-needed", "test-local-key"])
+async def test_rapid_mlx_factory_resolves_settings(key):
+    from free_claude_code.config.settings import Settings
+
+    settings = Settings(RAPID_MLX_API_KEY=key, RAPID_MLX_PROXY="http://proxy.test:8080")
+    config = build_provider_config(PROVIDER_CATALOG["rapid_mlx"], settings)
+    provider = await create_provider(
+        "rapid_mlx",
+        settings,
+        ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+    )
+    assert config.api_key == key
+    assert config.base_url == "http://localhost:8000/v1"
+    assert config.proxy == "http://proxy.test:8080"
+    assert isinstance(provider, OpenAIChatProvider)
+    assert provider._api_key == key

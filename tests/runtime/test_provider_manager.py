@@ -34,7 +34,7 @@ class FakeRuntime(ProviderRuntime):
     async def resolve_provider(
         self, provider_id: str, api_key_number: int = 1
     ) -> BaseProvider:
-        if provider_id in {"lmstudio", "llamacpp", "ollama"}:
+        if provider_id in {"lmstudio", "llamacpp", "ollama", "rapid_mlx"}:
             raise ConnectionError("Local fixture is offline")
         return cast(BaseProvider, self.provider)
 
@@ -117,7 +117,9 @@ async def test_discovery_error_follows_attempt_and_generation_without_losing_cac
         provider.list_model_infos.side_effect = held
         refresh = asyncio.create_task(manager.refresh_provider("nvidia_nim"))
         await entered.wait()
-        local_states = dict.fromkeys(("lmstudio", "llamacpp", "ollama"), "unavailable")
+        local_states = dict.fromkeys(
+            ("lmstudio", "llamacpp", "ollama", "rapid_mlx"), "unavailable"
+        )
         assert manager.catalog_status()["providers"] == {
             "nvidia_nim": "starting",
             **local_states,

@@ -78,7 +78,7 @@ def _manager(
     providers = {
         **{
             provider_id: FakeProvider(error=ConnectionError("Local fixture is offline"))
-            for provider_id in ("lmstudio", "llamacpp", "ollama")
+            for provider_id in ("lmstudio", "llamacpp", "ollama", "rapid_mlx")
         },
         **(providers or {}),
     }
