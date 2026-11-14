@@ -135,7 +135,10 @@ class StreamFailureResolver:
             )
             return Retry(failure.body)
 
-        if scope is not None:
+        if scope is not None and content_released:
+            # Free the attempt before public recovery reuses the execution. A
+            # terminal failure leaves cleanup to the transport, which closes
+            # with the error the caller actually receives.
             await scope.aclose(active_error=error)
         recovered = public_recovery(
             execution,
