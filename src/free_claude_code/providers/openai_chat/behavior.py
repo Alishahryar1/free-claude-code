@@ -3,6 +3,8 @@
 from collections.abc import Iterator, Mapping
 from typing import Any
 
+from openai.types.chat import ChatCompletionChunk
+
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.usage import anthropic_input_usage_fields
 from free_claude_code.core.failures import ExecutionFailure
@@ -96,6 +98,10 @@ class OpenAIChatBehavior:
     def normalize_stream(self, stream: Any, _body: Mapping[str, Any]) -> Any:
         """Return the provider-specific stream view consumed by the base runner."""
         return stream
+
+    def normalize_chunk(self, chunk: ChatCompletionChunk) -> ChatCompletionChunk:
+        """Normalize provider wire quirks before observation or presentation."""
+        return chunk
 
     def record_tool_call_extra_content(
         self, tool_call_id: str, extra_content: dict[str, Any], *, origin: ReplayOrigin

@@ -97,7 +97,8 @@ explicit = true
 
 [dependency-groups]
 dev = [
-    "pytest>=9.2.0",
+    # pytest 9.2 breaks xdist provider grouping: pytest-dev/pytest#15303.
+    "pytest>=9.1.1,<9.2",
     "pytest-asyncio>=1.4.1.post1",
     "pytest-cov>=7.1.0",
     "ty>=0.0.99",
@@ -150,8 +151,6 @@ filterwarnings = [
     "error",
     # Starlette's test client uses this deprecated alias, including in 1.6.0.
     'ignore:^The anyio\.abc\.BlockingPortal alias is deprecated, use anyio\.from_thread\.BlockingPortal instead\.$:DeprecationWarning:^starlette\.testclient$',
-    # pytest 9.2 deprecates pytest-playwright 0.10.0's plugin-class base_url fixture.
-    'ignore:^Session-scoped fixtures defined as instance methods are deprecated\.\nInstance attributes set in the .base_url. fixture:pytest.PytestRemovedIn10Warning:^_pytest\.fixtures$',
 ]
 testpaths = ["tests"]
 markers = [

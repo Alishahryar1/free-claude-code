@@ -358,7 +358,7 @@ FEATURE_INVENTORY: tuple[FeatureCoverage, ...] = (
         (
             "test_provider_interleaved_thinking_tool_e2e",
             "test_provider_tool_result_continuation_e2e",
-            "test_provider_interrupted_tool_turn_resume_e2e",
+            "test_provider_tool_history_resume_e2e",
             "test_gemini_thought_signature_tool_continuation_e2e",
             "test_provider_reasoning_tool_continuation_e2e",
         ),
