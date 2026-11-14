@@ -46,7 +46,10 @@ def ensure_private_permissions(path: Path) -> None:
 def atomic_write_text(path: Path, content: str, *, private: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
+    target_mode: int | None = None
     try:
+        if path.exists():
+            target_mode = stat.S_IMODE(path.stat().st_mode)
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
@@ -62,9 +65,24 @@ def atomic_write_text(path: Path, content: str, *, private: bool = False) -> Non
             os.fsync(output.fileno())
         if private and os.name != "nt":
             ensure_private_permissions(temporary)
-        elif path.exists():
-            temporary.chmod(stat.S_IMODE(path.stat().st_mode))
-        temporary.replace(path)
+            target_mode = 0o600
+        elif target_mode is not None:
+            temporary.chmod(target_mode)
+        try:
+            temporary.replace(path)
+        except PermissionError:
+            if os.name != "nt":
+                raise
+            if path.exists():
+                path.chmod(stat.S_IWRITE | stat.S_IREAD)
+            try:
+                temporary.replace(path)
+            except PermissionError:
+                if path.exists() and target_mode is not None:
+                    path.chmod(target_mode)
+                raise
+        if target_mode is not None and path.exists():
+            path.chmod(target_mode)
     finally:
         if temporary is not None and temporary.exists():
             # Windows cannot delete a temporary file after copying a read-only mode.
