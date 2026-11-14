@@ -1,6 +1,8 @@
 """Tests for Cloudflare Workers AI OpenAI-compatible chat provider."""
 
+import json
 from collections.abc import AsyncIterator
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -13,6 +15,9 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import CLOUDFLARE_AI_REST_ROOT
 from free_claude_code.core.anthropic.models import Message, MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.chat_completions.request import ChatRequest
+from free_claude_code.core.chat_completions.response import ChatResponseAccumulator
+from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.cloudflare import (
     CloudflareProvider,
@@ -335,3 +340,152 @@ async def test_stream_maps_openai_tool_calls_to_tool_use(
         and event.data.get("delta", {}).get("partial_json") == '{"value":"x"}'
         for event in parsed
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "chat"])
+@pytest.mark.parametrize("numeric", [206, 0, -7, 1.25])
+async def test_numeric_text_reaches_translated_and_native_consumers(
+    cloudflare_provider, wire, numeric
+):
+    chunks = [
+        sdk_chat_chunk(
+            {"choices": [{"delta": {"content": value}, "finish_reason": None}]}
+        )
+        for value in ["FCC_", numeric, "_SMOKE"]
+    ]
+    chunks.append(sdk_chat_chunk({"choices": [{"delta": {}, "finish_reason": "stop"}]}))
+    closed = AsyncMock()
+    with patch.object(
+        cloudflare_provider._client.chat.completions,
+        "create",
+        new_callable=AsyncMock,
+        return_value=SDKStreamDouble(_stream(*chunks), close=closed),
+    ) as create:
+        stream = (
+            cloudflare_provider.stream_messages(_request())
+            if wire == "messages"
+            else cloudflare_provider.stream_chat(
+                ChatRequest.model_validate(
+                    {
+                        "model": "model",
+                        "messages": [{"role": "user", "content": "hello"}],
+                    }
+                )
+            )
+        )
+        frames = [frame async for packet in stream for frame in packet.frames]
+    parsed = parse_sse_text("".join(frames))
+    if wire == "messages":
+        text = "".join(e.data.get("delta", {}).get("text", "") for e in parsed)
+        assert parsed[-1].event == "message_stop"
+    else:
+        accumulator = ChatResponseAccumulator()
+        for event in parsed:
+            accumulator.feed(event.data)
+        accumulator.finish()
+        text = accumulator.result()["choices"][0]["message"]["content"]
+        assert all(
+            isinstance(choice["delta"].get("content", ""), str)
+            for event in parsed
+            for choice in event.data.get("choices", [])
+        )
+    assert text == f"FCC_{numeric}_SMOKE"
+    assert create.call_count == 1
+    closed.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_captured_cloudflare_numeric_stream(cloudflare_provider):
+    chunks = json.loads(
+        (Path(__file__).parent / "fixtures/cloudflare_numeric_content.json").read_text()
+    )
+    with patch.object(
+        cloudflare_provider._client.chat.completions,
+        "create",
+        new_callable=AsyncMock,
+        return_value=SDKStreamDouble(_stream(*(sdk_chat_chunk(c) for c in chunks))),
+    ):
+        frames = [
+            frame
+            async for packet in cloudflare_provider.stream_messages(_request())
+            for frame in packet.frames
+        ]
+    parsed = parse_sse_text("".join(frames))
+    assert "FCC_206_SMOKE" in "".join(
+        e.data.get("delta", {}).get("text", "") for e in parsed
+    )
+    assert parsed[-1].event == "message_stop"
+
+
+@pytest.mark.parametrize(
+    "value", [True, False, {}, [], float("inf"), float("-inf"), float("nan")]
+)
+def test_cloudflare_rejects_non_text_non_numeric_content(cloudflare_provider, value):
+    chunk = sdk_chat_chunk({"choices": [{"delta": {"content": value}}]})
+    with pytest.raises(ExecutionFailure) as caught:
+        cloudflare_provider._behavior.normalize_chunk(chunk)
+    assert caught.value.status_code == 502
+    assert not caught.value.retryable
+
+
+def test_cloudflare_normalization_preserves_other_fields_and_source(
+    cloudflare_provider,
+):
+    payload = {
+        "opaque": {"keep": 0},
+        "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "content": 0,
+                    "reasoning": "thought",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call",
+                            "type": "function",
+                            "function": {"name": "echo", "arguments": '{"value":0}'},
+                        }
+                    ],
+                },
+                "finish_reason": None,
+            },
+            {
+                "index": 1,
+                "delta": {"content": "007", "opaque": [1]},
+                "finish_reason": "stop",
+            },
+            {"index": 2, "delta": {"content": None}},
+            {"index": 3, "delta": {}},
+        ],
+    }
+    chunk = sdk_chat_chunk(payload)
+    normalized = cloudflare_provider._behavior.normalize_chunk(chunk)
+    expected = sdk_chat_chunk(
+        {
+            **payload,
+            "choices": [
+                {
+                    **payload["choices"][0],
+                    "delta": {**payload["choices"][0]["delta"], "content": "0"},
+                },
+                *payload["choices"][1:],
+            ],
+        }
+    )
+    assert normalized.model_dump(exclude_unset=True) == expected.model_dump(
+        exclude_unset=True
+    )
+    assert chunk.choices[0].delta.content == 0
+    assert normalized.choices[1] is chunk.choices[1]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"choices": []}, {"choices": [{"delta": {}}]}, {"choices": [{"delta": None}]}],
+)
+def test_cloudflare_leaves_non_content_frames_unchanged(cloudflare_provider, payload):
+    chunk = sdk_chat_chunk(payload)
+    assert cloudflare_provider._behavior.normalize_chunk(chunk) is chunk

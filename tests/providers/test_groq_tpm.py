@@ -12,7 +12,7 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import FailureKind
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.admission import ProviderOperationKind
-from free_claude_code.providers.failure_policy import classify_provider_failure
+from free_claude_code.providers.failure_reporting import finalize_provider_failure
 from free_claude_code.providers.groq import GroqProvider
 from free_claude_code.providers.groq.client import GroqChatBehavior
 from free_claude_code.providers.groq.tpm import correct_tpm_completion_budget
@@ -40,7 +40,7 @@ _ITPM_MESSAGE = (
 @pytest.mark.parametrize("message", [_ITPM_MESSAGE, "Token allowance exceeded"])
 def test_token_limit_failure_is_actionable_without_parsing_prose(wrapped, message):
     error = _status_error(detail=_detail(message), wrapped=wrapped)
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         error,
         provider_name="GROQ",
         read_timeout_s=30,

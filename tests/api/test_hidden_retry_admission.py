@@ -20,7 +20,7 @@ from free_claude_code.core.stream_delivery import (
 from free_claude_code.providers.anthropic_messages.passthrough import (
     stream_native_messages,
 )
-from free_claude_code.providers.failure_policy import RetryableProviderProtocolError
+from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
 from tests.api.test_response_streams import _json_error, _serve
 from tests.providers.test_anthropic_messages_transport import (
     Endpoint,

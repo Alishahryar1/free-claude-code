@@ -52,6 +52,7 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
 FACADE_ONLY_BOUNDARIES = {
     "free_claude_code.core.openai_responses",
     "free_claude_code.messaging.trees",
+    "free_claude_code.providers.failure_classification",
     "free_claude_code.providers.openai_chat",
 }
 
@@ -174,6 +175,35 @@ def test_request_recovery_policy_has_no_client_or_transport_binding() -> None:
     ]
     assert not offenders, (
         "Request recovery policy depends on an adapter:\n" + "\n".join(offenders)
+    )
+
+
+def test_failure_classification_is_pure() -> None:
+    owner = f"{_PACKAGE_NAME}.providers.failure_classification"
+    forbidden = (
+        "asyncio",
+        "datetime",
+        "logging",
+        "loguru",
+        "random",
+        "time",
+        f"{_PACKAGE_NAME}.core.trace",
+        f"{_PACKAGE_NAME}.providers.admission",
+        f"{_PACKAGE_NAME}.providers.failure_reporting",
+        f"{_PACKAGE_NAME}.providers.http",
+    )
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if (record.importer == owner or record.importer.startswith(f"{owner}."))
+        and any(
+            record.imported == prefix or record.imported.startswith(f"{prefix}.")
+            for prefix in forbidden
+        )
+    ]
+    assert not offenders, (
+        "Failure classification must not log, sleep, read clocks, or own recovery:\n"
+        + "\n".join(offenders)
     )
 
 
