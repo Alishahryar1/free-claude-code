@@ -10,6 +10,7 @@ import pytest
 from loguru import logger
 
 from free_claude_code.core.continuation_request import ContinuationRequest
+from free_claude_code.core.diagnostics import attach_upstream_error_body
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_delivery import (
@@ -256,11 +257,8 @@ async def test_request_correction_precedes_admission():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "policy", [{"finalize": False}, {"raise_unfinalized": (ExecutionFailure,)}]
-)
-async def test_unfinalized_errors_reach_the_caller_unchanged(policy, traces):
-    async with _harness(**policy) as harness:
+async def test_unfinalized_errors_reach_the_caller_unchanged(traces):
+    async with _harness(raise_unfinalized=(ExecutionFailure,)) as harness:
         scope = await harness.scope()
         resolution = await harness.resolver.resolve(harness.failure(REJECTED, scope))
 
@@ -298,3 +296,19 @@ async def test_terminal_report_and_message_trace_are_opt_in(traces):
     assert reported == [REJECTED]
     error_trace = next(p for p in traces if p["event"] == "provider.response.error")
     assert error_trace["error_message"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream_evidence", [False, True])
+async def test_upstream_evidence_is_reported_only_when_requested(upstream_evidence):
+    rejected = ExecutionFailure(FailureKind.INVALID_REQUEST, 400, "bad request", False)
+    attach_upstream_error_body(rejected, '{"type":"error","detail":"evidence"}')
+    async with _harness(upstream_evidence=upstream_evidence) as harness:
+        scope = await harness.scope()
+        resolution = await harness.resolver.resolve(harness.failure(rejected, scope))
+
+    assert isinstance(resolution, Fail)
+    assert isinstance(resolution.error, ExecutionFailure)
+    message = resolution.error.message
+    assert ('"detail":"evidence"' in message) is upstream_evidence
+    assert message.endswith("Request ID: r")

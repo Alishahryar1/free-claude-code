@@ -29,9 +29,6 @@ from free_claude_code.providers.admission import (
     ProviderOperationKind,
 )
 from free_claude_code.providers.anthropic_messages.discovery import list_messages_models
-from free_claude_code.providers.anthropic_messages.passthrough import (
-    stream_native_messages,
-)
 from free_claude_code.providers.anthropic_messages.request_policy import (
     MessagesModelCapabilities,
     resolve_messages_options,
@@ -133,9 +130,6 @@ class AnthropicProvider(BaseProvider):
         self._records: Mapping[str, AnthropicModelRecord] = MappingProxyType({})
         self._model_lock = asyncio.Lock()
 
-    async def endpoint(self, *, force_refresh: bool = False) -> HttpEndpoint:
-        return self._snapshot
-
     async def cleanup(self) -> None:
         await self._http.aclose()
 
@@ -191,7 +185,9 @@ class AnthropicProvider(BaseProvider):
             self._records = MappingProxyType({**self._records, model: record})
             return record
 
-    def _transport(self, record: AnthropicModelRecord) -> AnthropicMessagesTransport:
+    def _transport(
+        self, record: AnthropicModelRecord | None = None
+    ) -> AnthropicMessagesTransport:
         return AnthropicMessagesTransport(
             client=self._http,
             admission=self._admission,
@@ -199,7 +195,9 @@ class AnthropicProvider(BaseProvider):
             provider_name="anthropic",
             replay_scope="anthropic",
             read_timeout_s=self._config.http_read_timeout,
-            capabilities=record.messages,
+            capabilities=(
+                record.messages if record is not None else MessagesModelCapabilities()
+            ),
         )
 
     def stream_native_messages(
@@ -224,16 +222,11 @@ class AnthropicProvider(BaseProvider):
             raise InvalidRequestError(str(error)) from error
 
         def open_stream() -> AsyncIterator[StreamOutput]:
-            return stream_native_messages(
-                self._http,
-                self._admission,
-                history_cache=self._history_cache,
-                base_url=self._snapshot.base_url,
-                headers={**self._snapshot.headers, **headers},
-                body=body,
+            return self._transport().forward_messages(
+                body,
+                endpoint_context=self._snapshot,
+                headers=headers,
                 public_model=response_model or request.model,
-                provider_name="anthropic",
-                read_timeout_s=self._config.http_read_timeout,
                 request_id=request_id,
                 continuation=continuation,
             )
@@ -276,7 +269,7 @@ class AnthropicProvider(BaseProvider):
         record = await self.model_record(request.model)
         stream = self._transport(record).stream_messages(
             request,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=response_model,
             reasoning=reasoning,
@@ -304,7 +297,7 @@ class AnthropicProvider(BaseProvider):
         record = await self.model_record(request.model)
         stream = self._transport(record).stream_chat(
             request,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=response_model,
             reasoning=reasoning,
@@ -332,7 +325,7 @@ class AnthropicProvider(BaseProvider):
         record = await self.model_record(request.model)
         stream = self._transport(record).stream_gemini(
             request,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=response_model,
             reasoning=reasoning,
@@ -360,7 +353,7 @@ class AnthropicProvider(BaseProvider):
         record = await self.model_record(request.model)
         stream = self._transport(record).stream_responses(
             request,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=response_model,
             reasoning=reasoning,

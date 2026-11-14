@@ -1,10 +1,11 @@
 """Native Messages HTTP execution with one admitted recovery budget."""
 
 import asyncio
+import json
 import sys
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from functools import partial
 from typing import Protocol, assert_never
 
@@ -17,9 +18,14 @@ from free_claude_code.core.anthropic.native import (
     NativeMessagesError,
     PreparedMessagesRequest,
     build_native_messages_request,
+    validate_messages_json,
 )
 from free_claude_code.core.anthropic.native_stream import NativeMessagesRelay
-from free_claude_code.core.anthropic.tool_calls import MessagesToolCallBuffer
+from free_claude_code.core.anthropic.passthrough import NativeMessagesPassthrough
+from free_claude_code.core.anthropic.tool_calls import (
+    MessagesToolCallBuffer,
+    validate_tool_identity,
+)
 from free_claude_code.core.chat_completions.messages_stream import ChatMessagesStream
 from free_claude_code.core.chat_completions.request import (
     ChatRequest,
@@ -104,7 +110,57 @@ class _Presenter(Protocol):
 
     def feed(
         self, event_type: str, payload: Mapping[str, JsonValue]
-    ) -> str | Iterable[str]: ...
+    ) -> str | Iterable[str] | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _Forwarding:
+    """A client that speaks Messages itself and receives the upstream's protocol."""
+
+    headers: Mapping[str, str]
+    public_model: str
+    streaming: bool
+
+
+_NORMAL_STOPS = frozenset({"tool_use", "end_turn", "stop_sequence"})
+
+
+async def _read_message(response: httpx.Response) -> JsonObject:
+    await response.aread()
+    try:
+        message = response.json()
+        validate_messages_json(message)
+    except (ValueError, NativeMessagesError) as error:
+        raise RetryableProviderProtocolError(
+            "Messages upstream returned invalid JSON."
+        ) from error
+    if (
+        not isinstance(message, dict)
+        or message.get("type") != "message"
+        or message.get("stop_reason") is None
+    ):
+        raise RetryableProviderProtocolError(
+            "Messages upstream did not return a Message object."
+        )
+    return message
+
+
+def _present_message(message: JsonObject, public_model: str) -> str:
+    """Keep tool calls only when the model stopped to run them."""
+    content = message.get("content", [])
+    if isinstance(content, list):
+        if message["stop_reason"] not in _NORMAL_STOPS:
+            content = [
+                block
+                for block in content
+                if not (isinstance(block, dict) and block.get("type") == "tool_use")
+            ]
+            message = {**message, "content": content}
+        call_ids: set[str] = set()
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                call_ids.add(validate_tool_identity(block, call_ids))
+    return json.dumps({**message, "model": public_model}, ensure_ascii=False)
 
 
 class AnthropicMessagesTransport:
@@ -234,6 +290,29 @@ class AnthropicMessagesTransport:
             continuation=continuation,
         )
 
+    def forward_messages(
+        self,
+        body: JsonObject,
+        *,
+        endpoint_context: EndpointContext,
+        headers: Mapping[str, str],
+        public_model: str,
+        request_id: str | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[StreamOutput]:
+        """Send a client's own Messages request and relay the upstream's answer."""
+        return self._stream(
+            body,
+            betas=(),
+            endpoint_context=endpoint_context,
+            request_id=request_id,
+            presenter_factory=lambda origin: NativeMessagesPassthrough(public_model),
+            continuation=continuation,
+            forwarding=_Forwarding(
+                headers, public_model, body.get("stream", False) is True
+            ),
+        )
+
     def stream_gemini(
         self,
         request: GeminiRequest,
@@ -345,6 +424,7 @@ class AnthropicMessagesTransport:
         presenter_factory: Callable[[ReplayOrigin], _Presenter],
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
+        forwarding: _Forwarding | None = None,
     ) -> AsyncIterator[StreamOutput]:
         execution = self._admission.start_execution(
             request_id=request_id, model=str(body["model"])
@@ -357,6 +437,7 @@ class AnthropicMessagesTransport:
             execution=execution,
             presenter_factory=presenter_factory,
             continuation=continuation,
+            forwarding=forwarding,
         )
         try:
             async for event in run:
@@ -382,9 +463,14 @@ class AnthropicMessagesTransport:
         presenter_factory: Callable[[ReplayOrigin], _Presenter],
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
+        forwarding: _Forwarding | None = None,
     ) -> AsyncIterator[StreamOutput]:
+        native = forwarding is not None
         request_endpoint = RequestEndpoint(endpoint_context)
-        request_recovery = RequestRecovery(execution, endpoint=request_endpoint)
+        # Forwarding reports an authentication rejection instead of resending.
+        request_recovery = RequestRecovery(
+            execution, endpoint=None if native else request_endpoint
+        )
         corrections = RequestCorrections("messages", reasoning_correction)
         continuation_request = ContinuationRequest("messages")
         operation_kind = ProviderOperationKind.GENERATION
@@ -396,6 +482,7 @@ class AnthropicMessagesTransport:
                 provider_name=self._provider_name,
                 read_timeout_s=self._read_timeout_s,
                 request_id=execution.request_id,
+                upstream_evidence=native,
             ),
             recovery=request_recovery,
             continuation=continuation_request,
@@ -430,13 +517,12 @@ class AnthropicMessagesTransport:
                     continuation=operation_kind is ProviderOperationKind.CONTINUATION,
                 )
                 presenter = presenter_factory(origin)
-                headers = httpx.Headers(
-                    {
-                        "anthropic-version": "2023-06-01",
-                        "Accept": "text/event-stream",
-                    }
-                )
+                headers = httpx.Headers({"anthropic-version": "2023-06-01"})
+                if not native:
+                    headers["Accept"] = "text/event-stream"
                 headers.update(endpoint.headers)
+                if forwarding is not None:
+                    headers.update(forwarding.headers)
                 if endpoint.api_key and not any(
                     key.lower() in {"authorization", "x-api-key"} for key in headers
                 ):
@@ -461,6 +547,14 @@ class AnthropicMessagesTransport:
                 )
                 if not response.is_success:
                     raise await messages_status_error(response)
+                if forwarding is not None and not forwarding.streaming:
+                    message = await _read_message(response)
+                    normal_stop_seen = True
+                    output = _present_message(message, forwarding.public_model)
+                    corrections.accepted_history()
+                    await attempt.accept()
+                    yield StreamOutput((output,))
+                    return
                 content_type = response.headers.get("content-type", "")
                 if "text/event-stream" not in content_type.lower():
                     raise RetryableProviderProtocolError(
@@ -473,17 +567,16 @@ class AnthropicMessagesTransport:
                     async for item in upstream:
                         event_type, payload = item
                         normal_stop_seen |= is_messages_stop(event_type, payload)
-                        check_messages_failure(event_type, payload)
+                        check_messages_failure(event_type, payload, native=native)
                         source.observe(
                             "messages",
                             payload,
                             continuing=operation_kind
                             is ProviderOperationKind.CONTINUATION,
                         )
-                        if event_type != "ping":
-                            corrections.accepted_history()
-                            if not attempt.accepted:
-                                await attempt.accept()
+                        corrections.accepted_history()
+                        if not attempt.accepted:
+                            await attempt.accept()
                         for group in tool_buffer.feed(event_type, payload):
                             frames = []
                             for kind, value in group:

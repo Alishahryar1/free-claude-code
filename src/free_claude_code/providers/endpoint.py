@@ -11,6 +11,11 @@ class RequestEndpoint:
         self._refresh_pending = False
         self.snapshot: HttpEndpoint | None = None
 
+    @property
+    def can_refresh(self) -> bool:
+        """Only an account owner, never a fixed snapshot, can renew credentials."""
+        return not isinstance(self._context, HttpEndpoint)
+
     def request_refresh(self) -> None:
         self._refresh_pending = True
 
