@@ -38,6 +38,7 @@ from free_claude_code.providers.stream_failure_resolution import (
 )
 from free_claude_code.providers.stream_failure_resolution.decision import (
     NextStep,
+    can_restart,
     next_step,
 )
 from tests.providers.support import immediate_admission
@@ -85,6 +86,21 @@ def test_next_step(row: Row, expected: NextStep) -> None:
         )
         is expected
     )
+
+
+@pytest.mark.parametrize("released", [None, False, True])
+@pytest.mark.parametrize("normal_stop", [False, True])
+@pytest.mark.parametrize("retryable", [False, True])
+@pytest.mark.parametrize("attempts", [0, 1])
+def test_restart_requires_undelivered_retryable_unstopped_stream(
+    released, normal_stop, retryable, attempts
+):
+    assert can_restart(
+        content_released=released,
+        retryable=retryable,
+        attempts_remaining=attempts,
+        normal_stop_seen=normal_stop,
+    ) == (released is False and not normal_stop and retryable and attempts > 0)
 
 
 @pytest.fixture
