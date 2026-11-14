@@ -188,6 +188,12 @@ def test_failed_smoke_start_cleans_private_state(smoke_config, monkeypatch, fail
     assert not Path(captured["FCC_SMOKE_CONFIG_DIR"]).exists()
 
 
+class WindowsPermissionError(PermissionError):
+    """Model Windows sharing errors even when these tests run on Unix."""
+
+    winerror: int
+
+
 def test_smoke_cleanup_waits_for_windows_handle_release(smoke_config, monkeypatch):
     from smoke.lib import server_runtime
 
@@ -197,7 +203,7 @@ def test_smoke_cleanup_waits_for_windows_handle_release(smoke_config, monkeypatc
     def sharing_violation_once(directory):
         attempts.append(directory.name)
         if len(attempts) == 1:
-            error = PermissionError("file is still held by terminating child")
+            error = WindowsPermissionError("file is still held by terminating child")
             error.winerror = 32
             raise error
         cleanup(directory)
@@ -223,7 +229,7 @@ def test_smoke_cleanup_does_not_hide_permanent_failures(
 
     def fail(directory):
         retained.append(directory)
-        error = PermissionError("cleanup failed")
+        error = WindowsPermissionError("cleanup failed")
         error.winerror = winerror
         raise error
 
