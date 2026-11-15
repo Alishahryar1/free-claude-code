@@ -29,6 +29,7 @@
 - 12 supported harnesses: [Claude Code](https://code.claude.com/docs/en/overview), [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi), [OpenCode](https://github.com/anomalyco/opencode), [Cline](https://github.com/cline/cline), [Hermes](https://github.com/NousResearch/hermes-agent), [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), [Grok Build](https://github.com/xai-org/grok-build), [Muse Code](https://research.meta.ai/blog/introducing-muse-code-and-muse-spark-1-2/), [Aider](https://aider.chat/), [Antigravity CLI](https://antigravity.google/docs/getting-started/), or [VS Code Chat](https://code.visualstudio.com/).
   - Preserved native streaming, tool use, and interleaved thinking for maximum performance.
   - For Claude Code, route [Fable](https://www.anthropic.com/claude/fable), [Opus](https://www.anthropic.com/claude/opus), [Sonnet](https://www.anthropic.com/claude/sonnet), and [Haiku](https://www.anthropic.com/claude/haiku) to supported models.
+- Use any model through any of four APIs: [Anthropic Messages](https://platform.claude.com/docs/en/api/messages) (`/v1/messages`), [OpenAI Chat Completions](https://platform.openai.com/docs/api-reference/chat/create) (`/v1/chat/completions`), [OpenAI Responses](https://platform.openai.com/docs/api-reference/responses/create) (`/v1/responses`), or [Gemini](https://ai.google.dev/api/generate-content) (`generateContent`). See [Use The API Directly](#use-the-api-directly).
 - 61 supported providers, including free, paid, subscription, and local providers.
   - 1.3B+ free tokens per month.
   - FCC follows provider TOS and removes integrations if they stop being allowed.
@@ -181,10 +182,7 @@ Antigravity CLI (connect on the Integrations page first):
 fcc-agy
 ```
 
-Other Chat Completions clients can use FCC's server URL followed by `/v1` as their
-OpenAI-compatible base URL (default `http://127.0.0.1:8082/v1`). Select an FCC model
-such as `gemini/models/gemini-3.5-flash-lite`. If Proxy Authentication is enabled,
-use its token as the client's API key. Both streaming and JSON replies are supported.
+Other clients and SDKs can call FCC directly. See [Use The API Directly](#use-the-api-directly).
 
 <a id="model-picker"></a>
 
@@ -408,6 +406,64 @@ in VS Code also completes onboarding.
 
 Run FCC on the same computer and in the same user environment as the client you
 are configuring.
+
+<a id="use-the-api-directly"></a>
+
+### Use The API Directly
+
+Any client or SDK for these APIs can call FCC. Set the base URL to
+`http://127.0.0.1:8082/v1` for OpenAI clients and `http://127.0.0.1:8082` for
+Anthropic and Gemini clients. Gemini clients also need API version `v1beta`.
+Every FCC model works on every endpoint. If Proxy
+Authentication is enabled, use its token as the client's API key, or add
+`-H "Authorization: Bearer <token>"` to each `curl` request.
+List the available models with `curl "http://127.0.0.1:8082/v1/models?view=messages"`.
+
+[`POST /v1/messages`](https://platform.claude.com/docs/en/api/messages):
+
+```bash
+curl http://127.0.0.1:8082/v1/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+[`POST /v1/chat/completions`](https://platform.openai.com/docs/api-reference/chat/create):
+
+```bash
+curl http://127.0.0.1:8082/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+[`POST /v1/responses`](https://platform.openai.com/docs/api-reference/responses/create):
+
+```bash
+curl http://127.0.0.1:8082/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b",
+    "input": "Hello!"
+  }'
+```
+
+[`POST /v1beta/models/{model}:generateContent`](https://ai.google.dev/api/generate-content):
+
+```bash
+curl http://127.0.0.1:8082/v1beta/models/nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b:generateContent \
+  -H "Content-Type: application/json" \
+  -d '{"contents": [{"role": "user", "parts": [{"text": "Hello!"}]}]}'
+```
+
+Responses replies always stream. To stream Messages or Chat Completions replies, add
+`"stream": true`. For Gemini, call `:streamGenerateContent?alt=sse` instead of
+`:generateContent`.
 
 <a id="optional-integrations"></a>
 
