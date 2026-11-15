@@ -411,9 +411,12 @@ are configuring.
 
 ### Use The API Directly
 
-Any client or SDK for these APIs can call FCC at `http://127.0.0.1:8082`. Every FCC
-model works on every endpoint. If Proxy Authentication is enabled, add
-`-H "Authorization: Bearer <token>"` to each request.
+Any client or SDK for these APIs can call FCC. Set the base URL to
+`http://127.0.0.1:8082/v1` for OpenAI clients and `http://127.0.0.1:8082` for
+Anthropic and Gemini clients. Gemini clients also need API version `v1beta`.
+Every FCC model works on every endpoint. If Proxy
+Authentication is enabled, use its token as the client's API key, or add
+`-H "Authorization: Bearer <token>"` to each `curl` request.
 List the available models with `curl "http://127.0.0.1:8082/v1/models?view=messages"`.
 
 [`POST /v1/messages`](https://platform.claude.com/docs/en/api/messages):
