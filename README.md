@@ -560,7 +560,7 @@ Stop all running FCC commands, then run:
 fcc-update
 ```
 
-The update installs the checked stable FCC release with its matching installer.
+`fcc-update` installs the latest FCC release unless you already have it.
 
 If `fcc-update` is unavailable or fails, try running the [install command](#install) again.
 
