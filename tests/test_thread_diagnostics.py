@@ -65,8 +65,12 @@ def _diagnostic_probe():
 
     current_frames = sys._current_frames
     print_stack = thread_diagnostics.traceback.print_stack
+    # Snapshot only once the test body runs: a frame caught mid-setup can be
+    # printed after its generator suspends, which cuts the stack short.
+    in_body = threading.Event()
 
     def traced_frames():
+        assert in_body.wait(5)
         print("diagnostic: acquiring frames", flush=True)
         frames = current_frames()
         print("diagnostic: acquired frames", flush=True)
@@ -82,6 +86,7 @@ def _diagnostic_probe():
         patcher.setattr(thread_diagnostics.traceback, "print_stack", traced_stack)
         output = DiagnosticOutput()
         with dump_threads_after(0.001, output, "slow-test"):
+            in_body.set()
             assert output.flushed.wait(5)
             print("diagnostic: flushed", flush=True)
             assert "slow-test" in output.getvalue()

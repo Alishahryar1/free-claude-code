@@ -7,7 +7,6 @@ import pytest
 
 from free_claude_code.core.anthropic import get_token_count
 from free_claude_code.core.anthropic.models import (
-    Message,
     SystemContent,
 )
 
@@ -144,16 +143,6 @@ class TestGetTokenCount:
 
         # Double message should have more tokens (including overhead)
         assert count_double > count_single
-
-    def test_inline_system_message_contributes_to_token_count(self):
-        """Mid-conversation system content remains part of the counted transcript."""
-        user_message = Message(role="user", content="Hello")
-        inline_system = Message(role="system", content="New instructions")
-
-        without_inline_system = get_token_count([user_message])
-        with_inline_system = get_token_count([user_message, inline_system])
-
-        assert with_inline_system > without_inline_system
 
     def test_per_message_overhead_four_tokens(self):
         """Per-message overhead is 4 tokens (was 3)."""

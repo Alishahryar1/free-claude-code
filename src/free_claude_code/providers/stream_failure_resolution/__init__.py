@@ -1,15 +1,26 @@
-"""Resolve a failed provider stream attempt into one next action."""
+"""Decide what follows a failed stream attempt.
 
-from .resolution import Continue, Fail, Handoff, Retry, StreamFailureResolution
-from .resolver import StreamFailure, StreamFailurePolicy, StreamFailureResolver
+Pure rules: given what the attempt left behind and admission's answers so far,
+return the repairs worth trying and the next step. ``attempt_loop`` makes the
+calls these rules depend on and carries out what they decide.
+"""
+
+from .decision import (
+    NextStep,
+    Repair,
+    Stage,
+    can_restart,
+    is_hidden_stop,
+    next_step,
+    repairs,
+)
 
 __all__ = [
-    "Continue",
-    "Fail",
-    "Handoff",
-    "Retry",
-    "StreamFailure",
-    "StreamFailurePolicy",
-    "StreamFailureResolution",
-    "StreamFailureResolver",
+    "NextStep",
+    "Repair",
+    "Stage",
+    "can_restart",
+    "is_hidden_stop",
+    "next_step",
+    "repairs",
 ]

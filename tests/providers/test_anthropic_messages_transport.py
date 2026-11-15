@@ -559,7 +559,8 @@ async def test_cancelled_consumer_closes_response_before_releasing_admission() -
         nonlocal calls
         calls += 1
         if calls == 2:
-            assert request.headers["Authorization"] == "Bearer new"
+            # Credentials resolve before the request waits for admission.
+            assert request.headers["Authorization"] == "Bearer original"
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -587,8 +588,7 @@ async def test_cancelled_consumer_closes_response_before_releasing_admission() -
         await asyncio.sleep(0)
         await asyncio.sleep(0)
         assert calls == 1 and not close.done() and not next_request.done()
-        assert next_endpoint.refreshes == []
-        next_endpoint.token = "new"
+        assert next_endpoint.refreshes == [False]
         gate.set()
         await close
         assert await next_request

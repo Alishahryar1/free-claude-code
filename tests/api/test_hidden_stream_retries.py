@@ -4,17 +4,17 @@ import asyncio
 import json
 from copy import deepcopy
 from itertools import pairwise
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
 from free_claude_code.api.response_streams import bind_response_lifetime
-from free_claude_code.application.execution import ProviderExecutor
+from free_claude_code.application.model_fallback import stream_model_candidates
+from free_claude_code.application.routing import ProviderModelCandidate
 from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.nvidia_nim.client import NvidiaNimChatBehavior
 from free_claude_code.providers.openai_chat.transport import _ChatStreamPresenter
@@ -53,15 +53,10 @@ def executed(body, wire):
     async def open_candidate(_index, _target, _continuation):
         return body
 
-    return ProviderExecutor(AsyncMock())._stream_candidates(
-        resolved=_routed_request().resolved,
-        reasoning=ReasoningPolicy.provider_default(),
+    return stream_model_candidates(
+        (ProviderModelCandidate(_routed_request().resolved.primary),),
+        get_delivery=current_stream_delivery,
         wire_api=wire,
-        raw_log_label="HIDDEN_RETRY",
-        raw_log_payload=dict,
-        request_snapshot=dict,
-        ingress_count_name="message_count",
-        ingress_count=1,
         request_id="hidden-retry",
         open_candidate=open_candidate,
     )

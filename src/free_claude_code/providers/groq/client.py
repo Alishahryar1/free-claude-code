@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import openai
-from loguru import logger
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
@@ -28,6 +27,7 @@ from free_claude_code.providers.openai_chat import (
     OpenAIModelListing,
     validate_extra_body_does_not_override_reasoning_fields,
 )
+from free_claude_code.providers.request_correction import Proposal
 
 from .tpm import correct_tpm_completion_budget, token_limit_message
 
@@ -136,7 +136,7 @@ class GroqChatBehavior(OpenAIChatBehavior):
 
     def retry_request_body(
         self, error: Exception, body: dict[str, Any]
-    ) -> dict[str, Any] | None:
+    ) -> Proposal | None:
         accepted = _parse_reasoning_vocabulary(error)
         model = body.get("model")
         if accepted is None or not isinstance(model, str):
@@ -146,32 +146,44 @@ class GroqChatBehavior(OpenAIChatBehavior):
         if retry_body is None:
             return None
 
-        self._model_reasoning_vocabularies[model] = accepted
-        action = (
-            "omitting reasoning_effort"
+        note = (
+            "omitted reasoning_effort"
             if _REASONING_FIELD not in retry_body
-            else "adjusting reasoning_effort"
+            else "adjusted reasoning_effort"
         )
-        logger.warning("GROQ_STREAM: {} after upstream rejection", action)
-        return retry_body
+        return Proposal(
+            retry_body, note, ReasoningVocabularyLearned(self, model, accepted)
+        )
+
+    def learn_reasoning_vocabulary(self, model: str, accepted: frozenset[str]) -> None:
+        self._model_reasoning_vocabularies[model] = accepted
 
     def retry_after_standard_corrections(
         self,
         error: Exception,
         body: JsonObject,
-    ) -> JsonObject | None:
+    ) -> Proposal | None:
         correction = correct_tpm_completion_budget(error, body)
         if correction is None:
             return None
-        logger.warning(
-            "GROQ_STREAM: TPM limit={} requested={}; retrying "
-            "max_completion_tokens {} -> {}",
-            correction.limit,
-            correction.requested,
-            correction.previous_max_completion_tokens,
-            correction.corrected_max_completion_tokens,
+        return Proposal(
+            correction.body,
+            f"TPM limit={correction.limit} requested={correction.requested}; "
+            f"max_completion_tokens {correction.previous_max_completion_tokens} -> "
+            f"{correction.corrected_max_completion_tokens}",
         )
-        return correction.body
+
+
+@dataclass(frozen=True, slots=True)
+class ReasoningVocabularyLearned:
+    """The reasoning efforts a Groq model accepts, named by a rejection."""
+
+    behavior: GroqChatBehavior
+    model: str
+    accepted: frozenset[str]
+
+    def apply(self) -> None:
+        self.behavior.learn_reasoning_vocabulary(self.model, self.accepted)
 
 
 class GroqProvider(OpenAIChatProvider):

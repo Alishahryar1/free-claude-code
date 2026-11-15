@@ -38,7 +38,6 @@ def test_cli_scripts_are_registered() -> None:
     )
 
     assert pyproject["project"]["scripts"] == {
-        "_fcc-update-check": "free_claude_code.updater.check:main",
         "fcc-server": "free_claude_code.cli.entrypoints:serve",
         "fcc-doctor": "free_claude_code.cli.entrypoints:doctor",
         "fcc-claude": "free_claude_code.cli.launchers.claude:launch",
@@ -455,7 +454,7 @@ def test_claude_child_env_targets_current_proxy_config() -> None:
     assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
     assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0"
     assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "190000"
-    assert env["DISABLE_AUTOUPDATER"] == "1"
+    assert env["DISABLE_AUTOUPDATER"] == "0"
     assert env["DISABLE_FEEDBACK_COMMAND"] == "1"
     assert env["DISABLE_ERROR_REPORTING"] == "1"
     assert env["DISABLE_TELEMETRY"] == "0"

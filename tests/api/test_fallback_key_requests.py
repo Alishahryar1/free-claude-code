@@ -24,7 +24,12 @@ CUSTOM_ID = "custom_" + "d" * 32
 def upstream(monkeypatch, request):
     calls = []
     failure_status = request.param
-    monkeypatch.setattr(ProviderAdmissionController, "_retry_delay", lambda *_args: 0.1)
+    build = ProviderAdmissionController.__init__
+
+    def fast_backoff(self, **kwargs):
+        build(self, **kwargs, base_delay=0.1, max_delay=0.1, jitter=0.0)
+
+    monkeypatch.setattr(ProviderAdmissionController, "__init__", fast_backoff)
 
     def payload(request):
         if request.method == "GET":

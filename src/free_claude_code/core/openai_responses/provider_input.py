@@ -50,11 +50,7 @@ def build_responses_provider_request(
     instructions = _system_text(request)
     input_items: list[dict[str, Any]] = []
     for message in request.messages:
-        if message.role == "system":
-            text = _message_text(message.content, context="system message")
-            if text:
-                instructions.append(text)
-        elif message.role == "assistant":
+        if message.role == "assistant":
             input_items.extend(
                 _assistant_items(
                     message.content,
@@ -370,19 +366,6 @@ def _image_part(block: Any) -> dict[str, Any]:
     except AnthropicImageSourceError as exc:
         raise ResponsesConversionError(str(exc)) from exc
     return {"type": "input_image", "image_url": url}
-
-
-def _message_text(content: Any, *, context: str) -> str:
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        raise ResponsesConversionError(f"{context} must contain only text.")
-    parts: list[str] = []
-    for block in content:
-        if get_block_type(block) != "text":
-            raise ResponsesConversionError(f"{context} must contain only text.")
-        parts.append(str(get_block_attr(block, "text", "")))
-    return "\n\n".join(parts)
 
 
 def _assistant_message(content: list[dict[str, Any]]) -> dict[str, Any]:

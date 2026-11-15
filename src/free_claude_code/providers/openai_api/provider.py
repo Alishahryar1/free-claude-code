@@ -10,7 +10,6 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.gemini import GeminiRequest
-from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesStreamFailure,
@@ -26,10 +25,14 @@ from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.model_listing import extract_openai_model_infos
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
-from free_claude_code.providers.request_correction import CorrectionStep, Rejection
+from free_claude_code.providers.request_correction import (
+    CorrectionStep,
+    Proposal,
+    Rejection,
+)
 
 
-def _sampling_retry_body(rejection: Rejection) -> JsonObject | None:
+def _sampling_retry_body(rejection: Rejection) -> Proposal | None:
     """Omit only a sampling field explicitly rejected on this outbound attempt."""
     error, body, sent_body = rejection.error, rejection.body, rejection.sent_body
     if not isinstance(error, APIError | ResponsesStreamFailure):
@@ -62,7 +65,10 @@ def _sampling_retry_body(rejection: Rejection) -> JsonObject | None:
             return None
     elif code != "unsupported_parameter":
         return None
-    return {key: value for key, value in body.items() if key != param}
+    return Proposal(
+        {key: value for key, value in body.items() if key != param},
+        f"dropped the rejected {param}",
+    )
 
 
 class OpenAIAPIProvider(BaseProvider):
@@ -105,7 +111,9 @@ class OpenAIAPIProvider(BaseProvider):
             provider_name="OpenAI API",
             read_timeout_s=config.http_read_timeout,
             log_raw_sse_events=config.log_raw_sse_events,
-            correction_steps=(CorrectionStep(None, _sampling_retry_body),),
+            correction_steps=(
+                CorrectionStep("sampling", _sampling_retry_body, once=False),
+            ),
         )
 
     async def cleanup(self) -> None:

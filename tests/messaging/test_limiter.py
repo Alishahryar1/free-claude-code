@@ -6,6 +6,7 @@ from collections.abc import Callable
 import pytest
 import pytest_asyncio
 
+from free_claude_code.messaging.delivery_failures import PlatformRateLimited
 from free_claude_code.messaging.limiter import MessagingRateLimiter
 
 
@@ -124,48 +125,38 @@ class TestMessagingRateLimiter:
         assert call_counts[msg_id] <= 2, f"Too many actual calls: {call_counts[msg_id]}"
 
     @pytest.mark.asyncio
-    async def test_flood_wait_handling(self):
-        """Test that FloodWait exceptions pause the worker."""
+    async def test_platform_rate_limit_pauses_the_worker(self):
+        """A platform rate limit holds later work for its retry_after."""
         limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
-
-        # Mock exception with .seconds attribute
-        class FloodWait(Exception):
-            def __init__(self, seconds):
-                self.seconds = seconds
-                super().__init__(f"Flood wait {seconds}s")
-
         call_count = 0
 
         async def mock_fail():
             nonlocal call_count
             call_count += 1
-            raise FloodWait(1)  # 1 second wait
+            raise PlatformRateLimited(1)
 
         async def mock_success():
             nonlocal call_count
             call_count += 1
             return "success"
 
-        # First call fails and triggers pause
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(PlatformRateLimited):
             await limiter.enqueue(mock_fail, dedup_key="key1")
 
         assert limiter._paused_until > 0
 
-        # Enqueue success, it should wait
         start = time.time()
         await limiter.enqueue(mock_success, dedup_key="key2")
         duration = time.time() - start
 
-        # Should have waited at least ~1s
         assert duration >= 0.9, (
-            f"Should have waited for FloodWait, but took {duration:.2f}s"
+            f"Should have waited for the rate limit, but took {duration:.2f}s"
         )
         assert call_count == 2
 
     @pytest.mark.asyncio
-    async def test_flood_wait_retry_after_parsing(self):
-        """Error message with 'retry after N' parses the wait seconds."""
+    async def test_flood_wording_alone_does_not_pause(self):
+        """Only a typed platform rate limit pauses; error text does not."""
         limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
 
         async def mock_flood():
@@ -174,8 +165,7 @@ class TestMessagingRateLimiter:
         with contextlib.suppress(Exception):
             await limiter.enqueue(mock_flood, dedup_key="retry_parse")
 
-        # Should have parsed "after 2" -> 2 seconds
-        assert limiter._paused_until > 0
+        assert limiter._paused_until == 0
 
     @pytest.mark.asyncio
     async def test_non_flood_exception_no_pause(self):
@@ -190,24 +180,6 @@ class TestMessagingRateLimiter:
 
         # Should NOT have paused since it's not a flood error
         assert limiter._paused_until == 0
-
-    @pytest.mark.asyncio
-    async def test_flood_with_seconds_attribute(self):
-        """Exception with .seconds attribute uses that value for pause."""
-        limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
-
-        class FloodWaitCustom(Exception):
-            def __init__(self):
-                self.seconds = 2
-                super().__init__("Flood wait custom")
-
-        async def mock_flood():
-            raise FloodWaitCustom()
-
-        with contextlib.suppress(Exception):
-            await limiter.enqueue(mock_flood, dedup_key="flood_sec")
-
-        assert limiter._paused_until > 0
 
     @pytest.mark.asyncio
     async def test_proactive_strict_sliding_window(self):

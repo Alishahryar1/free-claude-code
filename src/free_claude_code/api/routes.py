@@ -42,6 +42,7 @@ from .dependencies import (
 from .handlers import MessagesHandler, ResponsesHandler, TokenCountHandler
 from .handlers.chat import ChatHandler
 from .handlers.gemini import GeminiHandler
+from .inline_system_turns import reject_inline_system_turns
 from .model_catalog import (
     ModelCatalogView,
     ModelsListResponse,
@@ -66,6 +67,7 @@ def _unique_json_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 @router.post("/v1beta/models/{resource:path}")
+@router.post("/v1/models/{resource:path}")
 async def create_gemini_response(
     resource: str,
     request: Request,
@@ -195,6 +197,7 @@ async def _create_messages_response(
                 raise InvalidRequestError(str(error)) from error
         else:
             if not isinstance(request_data, MessagesRequest):
+                reject_inline_system_turns(raw, request_headers)
                 try:
                     request_data = MessagesRequest.model_validate(raw)
                 except ValidationError as error:
@@ -347,6 +350,7 @@ async def count_tokens(
                 validate_messages_json(request_data)
                 counted = NativeTokenCountRequest.model_validate(request_data)
             else:
+                reject_inline_system_turns(request_data, request.headers)
                 counted = TokenCountRequest.model_validate(request_data)
         except NativeMessagesError as error:
             raise InvalidRequestError(str(error)) from error

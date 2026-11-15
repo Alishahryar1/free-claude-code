@@ -13,7 +13,9 @@ from free_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningPolicy,
 )
+from free_claude_code.providers.request_correction import Proposal
 
+from .media_support import is_media_rejection
 from .profiles import OpenAIChatProfile
 from .request_policy import (
     build_openai_chat_request_body,
@@ -79,9 +81,13 @@ class OpenAIChatBehavior:
         """Hook for provider-specific reasoning."""
         return iter(())
 
-    def retry_request_body(self, error: Exception, body: dict) -> dict | None:
-        """Return a modified request body for one retry, or None."""
+    def retry_request_body(self, error: Exception, body: dict) -> Proposal | None:
+        """Return a corrected request for one retry, or None."""
         return None
+
+    def media_rejected(self, error: Exception) -> bool:
+        """Whether the upstream rejected the request because it carried media."""
+        return is_media_rejection(error)
 
     def reasoning_disable_rejected(self, error: Exception) -> bool:
         """Recognize provider-owned OFF rejection formats without learning state."""
@@ -138,6 +144,6 @@ class OpenAIChatBehavior:
 
     def retry_after_standard_corrections(
         self, error: Exception, body: dict[str, Any]
-    ) -> dict[str, Any] | None:
+    ) -> Proposal | None:
         """Offer one provider correction after the standard correction sequence."""
         return None

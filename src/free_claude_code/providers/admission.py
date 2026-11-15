@@ -1,7 +1,6 @@
 """Provider-owned admission, concurrency, and coordinated retry lifecycle."""
 
 import asyncio
-import math
 import random
 import time
 import uuid
@@ -10,7 +9,6 @@ from contextlib import contextmanager
 from contextvars import Context, ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from enum import StrEnum
 from functools import partial
 from typing import TypeVar
@@ -28,6 +26,20 @@ from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
 from free_claude_code.providers.canonical_failures import ProviderFailureOverride
 from free_claude_code.providers.failure_classification import classify
 from free_claude_code.providers.recovery_errors import ProviderRecoveryExhausted
+from free_claude_code.providers.recovery_policy import (
+    EpisodeView,
+    Exhaust,
+    FailedAttempt,
+    FailFromEpisode,
+    GiveUp,
+    OpenEpisode,
+    RearmProbe,
+    RecoveryTiming,
+    StartCooldown,
+    Wait,
+    on_failure,
+    retry_after_seconds,
+)
 
 T = TypeVar("T")
 
@@ -506,18 +518,10 @@ class ProviderAdmissionController:
         limits = ProviderAdmissionLimits(rate_limit, rate_window, max_concurrency)
         if max_attempts <= 0:
             raise ValueError("max_attempts must be > 0")
-        if base_delay < 0:
-            raise ValueError("base_delay must be >= 0")
-        if max_delay < base_delay:
-            raise ValueError("max_delay must be >= base_delay")
-        if jitter < 0:
-            raise ValueError("jitter must be >= 0")
+        self._timing = RecoveryTiming(base_delay, max_delay, jitter)
 
         self._provider_name = provider_name
         self._max_attempts = max_attempts
-        self._base_delay = base_delay
-        self._max_delay = max_delay
-        self._jitter = jitter
         self._capacity = capacity or ProviderCapacityLimiter(limits)
         self._changed = asyncio.Event()
         self._expiry_timer: asyncio.TimerHandle | None = None
@@ -793,127 +797,99 @@ class ProviderAdmissionController:
         error: Exception,
         status: int | None,
     ) -> None:
-        retry_after = _retry_after_seconds(error)
+        """Apply what recovery policy decides about one retryable failure."""
         self._maintain_idle_episodes()
         episode = self._episodes.get(execution.model)
-        if retry_after is not None and retry_after > self._max_delay:
-            self._defer_recovery(execution, episode, error, retry_after)
-            return
-        if episode is not None and episode.terminal_until is not None:
-            execution._fail_recovery(episode)
-            return
-
-        can_retry = execution.can_attempt
-        delay = self._retry_delay(retry_after, execution.attempts_started)
-        became_leader = False
-        exhausted_episode = False
-
-        matching_probe = self._matching_probe(execution, permit)
-        if can_retry:
-            if episode is None:
-                episode = self._start_recovery_episode(
+        probing = self._matching_probe(execution, permit) is not None
+        now = time.monotonic()
+        transition = on_failure(
+            FailedAttempt(
+                attempt=execution.attempts_started,
+                can_retry=execution.can_attempt,
+                retry_after=retry_after_seconds(
+                    _retry_after_header(error), now=datetime.now(UTC)
+                ),
+            ),
+            None
+            if episode is None
+            else EpisodeView(
+                terminal_until=episode.terminal_until,
+                reports_cooldown=episode.reports_cooldown,
+                probing=probing,
+                leader_idle=episode.leader is not None
+                and episode.leader._active_claim is None,
+            ),
+            now=now,
+            timing=self._timing,
+            noise=random.uniform(0, self._timing.jitter),
+        )
+        label = self._failure_label(status, error)
+        match transition:
+            case FailFromEpisode():
+                assert episode is not None
+                execution._fail_recovery(episode)
+            case StartCooldown():
+                self._start_cooldown(execution, episode, error, transition, now)
+            case OpenEpisode(ready_at=ready_at, delay=delay):
+                self._start_recovery_episode(
                     model=execution.model,
                     leader=execution,
-                    ready_at=time.monotonic() + delay,
+                    ready_at=ready_at,
                     last_error=error,
                 )
-                became_leader = True
-            elif matching_probe is not None:
+                self._notify_recovery_waiters()
+                self._trace_retry_scheduled(execution, label, status, error, delay)
+            case RearmProbe(ready_at=ready_at, delay=delay):
+                assert episode is not None
                 episode.last_error = error
                 episode.probe_active = False
-                episode.ready_at = time.monotonic() + delay
-                became_leader = True
-            else:
+                episode.ready_at = ready_at
+                self._notify_recovery_waiters()
+                self._trace_retry_scheduled(execution, label, status, error, delay)
+            case Wait():
+                assert episode is not None
                 episode.waiters.add(execution)
-            self._notify_recovery_waiters()
-        elif episode is None or matching_probe is not None:
-            if episode is None:
-                episode = self._start_recovery_episode(
-                    model=execution.model,
-                    leader=None,
-                    ready_at=time.monotonic(),
-                    last_error=error,
+                self._notify_recovery_waiters()
+                trace_event(
+                    stage="provider",
+                    event="provider.retry.coalesced",
+                    source="provider",
+                    provider=self._provider_name,
                     request_id=execution.request_id,
+                    model=execution.model,
+                    status_code=status,
+                    exc_type=type(error).__name__,
+                    attempt=execution.attempts_started,
+                    max_attempts=execution.max_attempts,
                 )
-            self._finish_recovery_episode(episode, error, time.monotonic() + delay)
-            exhausted_episode = True
+            case Exhaust(until=until, open_episode=open_episode):
+                if open_episode:
+                    episode = self._start_recovery_episode(
+                        model=execution.model,
+                        leader=None,
+                        ready_at=now,
+                        last_error=error,
+                        request_id=execution.request_id,
+                    )
+                assert episode is not None
+                self._finish_recovery_episode(episode, error, until)
+                self._trace_retry_exhausted(
+                    execution, label, status, error, episode_exhausted=True
+                )
+            case GiveUp():
+                self._trace_retry_exhausted(
+                    execution, label, status, error, episode_exhausted=False
+                )
 
-        label = self._failure_label(status, error)
-        if became_leader:
-            _log_recovery(
-                "{}, attempt {}/{} failed; one provider recovery probe in {:.1f}s",
-                label,
-                execution.attempts_started,
-                execution.max_attempts,
-                delay,
-            )
-            trace_event(
-                stage="provider",
-                event="provider.retry.scheduled",
-                source="provider",
-                provider=self._provider_name,
-                request_id=execution.request_id,
-                model=execution.model,
-                status_code=status,
-                exc_type=type(error).__name__,
-                attempt=execution.attempts_started,
-                max_attempts=execution.max_attempts,
-                delay_s=round(delay, 3),
-                coordinated=True,
-            )
-        elif can_retry:
-            trace_event(
-                stage="provider",
-                event="provider.retry.coalesced",
-                source="provider",
-                provider=self._provider_name,
-                request_id=execution.request_id,
-                model=execution.model,
-                status_code=status,
-                exc_type=type(error).__name__,
-                attempt=execution.attempts_started,
-                max_attempts=execution.max_attempts,
-            )
-        else:
-            _log_recovery(
-                "{} retry exhausted (attempts={})",
-                label,
-                execution.attempts_started,
-            )
-            trace_event(
-                stage="provider",
-                event="provider.retry.exhausted",
-                source="provider",
-                provider=self._provider_name,
-                request_id=execution.request_id,
-                model=execution.model,
-                status_code=status,
-                exc_type=type(error).__name__,
-                attempts=execution.attempts_started,
-                episode_exhausted=exhausted_episode,
-            )
-
-    def _defer_recovery(
+    def _start_cooldown(
         self,
         execution: ProviderExecution,
         episode: _RecoveryEpisode | None,
         error: Exception,
-        retry_after: float,
+        cooldown: StartCooldown,
+        now: float,
     ) -> None:
-        now = time.monotonic()
-        deadline = now + retry_after
-        if (
-            episode is not None
-            and episode.terminal_until is not None
-            and episode.terminal_until >= deadline
-        ):
-            if episode.reports_cooldown:
-                execution._fail_recovery(episode)
-                return
-            deadline = episode.terminal_until
-            error = episode.last_error
-
-        if episode is None:
+        if cooldown.open_episode:
             episode = self._start_recovery_episode(
                 model=execution.model,
                 leader=None,
@@ -921,16 +897,21 @@ class ProviderAdmissionController:
                 last_error=error,
                 request_id=execution.request_id,
             )
-        leader = episode.leader
-        if leader is not None and leader._active_claim is None:
-            episode.waiters.add(leader)
-        self._finish_recovery_episode(episode, error, deadline, reports_cooldown=True)
+        assert episode is not None
+        if cooldown.keep_episode_error:
+            error = episode.last_error
+        if cooldown.fail_idle_leader:
+            assert episode.leader is not None
+            episode.waiters.add(episode.leader)
+        self._finish_recovery_episode(
+            episode, error, cooldown.until, reports_cooldown=True
+        )
         execution._fail_recovery(episode)
         _log_recovery(
             "Provider {} model {} deferred for {:.1f}s after Retry-After",
             self._provider_name,
             execution.model,
-            deadline - now,
+            cooldown.until - now,
         )
         trace_event(
             stage="provider",
@@ -940,7 +921,64 @@ class ProviderAdmissionController:
             request_id=execution.request_id,
             model=execution.model,
             generation=episode.generation,
-            delay_s=round(deadline - now, 3),
+            delay_s=round(cooldown.until - now, 3),
+        )
+
+    def _trace_retry_scheduled(
+        self,
+        execution: ProviderExecution,
+        label: str,
+        status: int | None,
+        error: Exception,
+        delay: float,
+    ) -> None:
+        _log_recovery(
+            "{}, attempt {}/{} failed; one provider recovery probe in {:.1f}s",
+            label,
+            execution.attempts_started,
+            execution.max_attempts,
+            delay,
+        )
+        trace_event(
+            stage="provider",
+            event="provider.retry.scheduled",
+            source="provider",
+            provider=self._provider_name,
+            request_id=execution.request_id,
+            model=execution.model,
+            status_code=status,
+            exc_type=type(error).__name__,
+            attempt=execution.attempts_started,
+            max_attempts=execution.max_attempts,
+            delay_s=round(delay, 3),
+            coordinated=True,
+        )
+
+    def _trace_retry_exhausted(
+        self,
+        execution: ProviderExecution,
+        label: str,
+        status: int | None,
+        error: Exception,
+        *,
+        episode_exhausted: bool,
+    ) -> None:
+        _log_recovery(
+            "{} retry exhausted (attempts={})",
+            label,
+            execution.attempts_started,
+        )
+        trace_event(
+            stage="provider",
+            event="provider.retry.exhausted",
+            source="provider",
+            provider=self._provider_name,
+            request_id=execution.request_id,
+            model=execution.model,
+            status_code=status,
+            exc_type=type(error).__name__,
+            attempts=execution.attempts_started,
+            episode_exhausted=episode_exhausted,
         )
 
     def _finish_recovery_episode(
@@ -1100,12 +1138,6 @@ class ProviderAdmissionController:
     def _release_concurrency(self) -> None:
         self._capacity.release()
 
-    def _retry_delay(self, retry_after: float | None, attempt: int) -> float:
-        exponent = max(0, attempt - 1)
-        backoff = min(self._base_delay * (2**exponent), self._max_delay)
-        backoff += random.uniform(0, self._jitter)
-        return max(backoff, retry_after or 0.0)
-
     @staticmethod
     def _failure_label(status: int | None, error: Exception) -> str:
         if status == 429:
@@ -1115,25 +1147,7 @@ class ProviderAdmissionController:
         return f"Provider transient error ({type(error).__name__})"
 
 
-def _retry_after_seconds(error: Exception) -> float | None:
+def _retry_after_header(error: Exception) -> object:
     response = getattr(error, "response", None)
     headers = getattr(response, "headers", None)
-    if headers is None:
-        return None
-    value = headers.get("retry-after")
-    if not isinstance(value, str) or not value.strip():
-        return None
-    stripped = value.strip()
-    try:
-        seconds = float(stripped)
-    except ValueError:
-        try:
-            retry_at = parsedate_to_datetime(stripped)
-        except TypeError, ValueError, OverflowError:
-            return None
-        if retry_at.tzinfo is None:
-            retry_at = retry_at.replace(tzinfo=UTC)
-        seconds = (retry_at - datetime.now(UTC)).total_seconds()
-    if not math.isfinite(seconds):
-        return None
-    return max(0.0, seconds)
+    return None if headers is None else headers.get("retry-after")

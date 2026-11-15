@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from free_claude_code.harnesses import (
-    antigravity_integration,
     claude_desktop_integration,
     claude_integration,
     codex_integration,
@@ -19,7 +18,7 @@ from free_claude_code.harnesses.integration_cleanup import (
     IntegrationPaths,
     disconnect_integrations,
 )
-from tests.harnesses.test_antigravity_integration import catalog
+from tests.harnesses.antigravity_support import write_previous_connection
 
 URL = "http://127.0.0.1:8082"
 TOKEN = "cleanup-test-token"
@@ -55,12 +54,7 @@ def paths(tmp_path, monkeypatch):
 def test_cleanup_disconnects_native_connections_and_preserves_unrelated_settings(paths):
     paths.antigravity.parent.mkdir()
     paths.antigravity.write_text('{"modelProvider":"", "keep": true}')
-    antigravity_integration.configure(
-        paths.antigravity,
-        paths.antigravity_state,
-        catalog("provider/model"),
-        connect=True,
-    )
+    write_previous_connection(paths.antigravity, paths.antigravity_state)
     paths.claude_vscode.parent.mkdir()
     paths.claude_vscode.write_text('{"editor.fontSize": 17}')
     claude_integration.configure(paths.claude_vscode, URL, TOKEN, True)
