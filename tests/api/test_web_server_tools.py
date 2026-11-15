@@ -37,7 +37,6 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.conversion import AnthropicToOpenAIConverter
 from free_claude_code.core.anthropic.models import (
     ContentBlockServerToolUse,
-    ContentBlockText,
     ContentBlockWebFetchToolResult,
     Message,
     MessagesRequest,
