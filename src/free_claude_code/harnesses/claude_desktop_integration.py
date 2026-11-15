@@ -1,6 +1,7 @@
 """Manage FCC's own saved Claude Desktop gateway configuration."""
 
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -21,6 +22,9 @@ _IDENTITY = (
 FCC_ID = str(uuid5(NAMESPACE_URL, _IDENTITY))
 DEFAULT_ID = str(uuid5(NAMESPACE_URL, _IDENTITY + "/default"))
 _VIEW_HEADER = "X-FCC-Model-View"
+_KEY = "inferenceGatewayApiKey"
+# Desktop may encrypt the key in place, so FCC can no longer compare it.
+_SEALED_PREFIX = "__sealed__:"
 
 
 class ManagedDesktopError(ValueError):
@@ -264,7 +268,39 @@ def _values(url: str, token: str) -> JsonObject:
     }
 
 
-def _current(library: _Library, values: JsonObject) -> bool:
+def _token_path(disconnect_path: Path) -> Path:
+    """Return where FCC remembers which token it last gave Desktop."""
+    return disconnect_path.with_name("claude-desktop-token.json")
+
+
+def _fingerprint(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _remembered(token_path: Path, token: str) -> bool:
+    try:
+        return _read(token_path) == {"sha256": _fingerprint(token)}
+    except ValueError, UnicodeError:
+        return False
+
+
+def _remember(token_path: Path, token: str) -> None:
+    if not _remembered(token_path, token):
+        value = {"sha256": _fingerprint(token)}
+        atomic_write_text(token_path, json.dumps(value, indent=2) + "\n")
+
+
+def _sealed_current(profile: JsonObject, token: str, token_path: Path) -> bool:
+    """Return whether the stored key is Desktop's sealed copy of ``token``."""
+    stored = profile.get(_KEY)
+    return (
+        isinstance(stored, str)
+        and stored.startswith(_SEALED_PREFIX)
+        and _remembered(token_path, token)
+    )
+
+
+def _current(library: _Library, values: JsonObject, token_path: Path) -> bool:
     profile = library.profile
     return bool(
         library.active
@@ -273,7 +309,11 @@ def _current(library: _Library, values: JsonObject) -> bool:
         and all(
             profile.get(key) == value
             for key, value in values.items()
-            if key != "inferenceGatewayBaseUrl"
+            if key not in ("inferenceGatewayBaseUrl", _KEY)
+        )
+        and (
+            profile.get(_KEY) == values[_KEY]
+            or _sealed_current(profile, str(values[_KEY]), token_path)
         )
         and same_proxy_url(
             profile.get("inferenceGatewayBaseUrl"),
@@ -282,17 +322,25 @@ def _current(library: _Library, values: JsonObject) -> bool:
     )
 
 
-def _update_profile(library: _Library, values: JsonObject) -> bool:
+def _update_profile(library: _Library, values: JsonObject, token_path: Path) -> bool:
     profile = dict(library.profile or {})
+    token = str(values[_KEY])
     headers = {
         k: v for k, v in _headers(profile).items() if k.lower() != _VIEW_HEADER.lower()
     }
     headers[_VIEW_HEADER] = "claude-desktop"
-    profile.update(values)
+    sealed = _sealed_current(profile, token, token_path)
+    if not sealed and profile.get(_KEY) != token:
+        # Forget the old token first: if remembering the new one then fails,
+        # a sealed copy of it must read as stale, not as the old token.
+        token_path.unlink(missing_ok=True)
+    profile.update({k: v for k, v in values.items() if not (sealed and k == _KEY)})
     # Desktop otherwise restricts tool network access to the inference gateway.
     profile.setdefault("coworkEgressAllowedHosts", ["*"])
     profile["inferenceCustomHeaders"] = headers
-    return _write(library.profile_path, profile)
+    changed = _write(library.profile_path, profile)
+    _remember(token_path, token)
+    return changed
 
 
 def _disconnect_intent(path: Path, root: Path) -> bool | None:
@@ -367,7 +415,9 @@ def refresh_connected(
         return False
     if not library.active or library.profile is None:
         return False
-    return _update_profile(library, _values(proxy_root_url, auth_token))
+    return _update_profile(
+        library, _values(proxy_root_url, auth_token), _token_path(disconnect_path)
+    )
 
 
 def configure(
@@ -380,6 +430,7 @@ def configure(
 ) -> JsonObject:
     library = _load(root)
     disconnect_path = disconnect_path.resolve()
+    token_path = _token_path(disconnect_path)
     intent = _disconnect_intent(disconnect_path, root)
     if connected is True:
         if intent is not None:
@@ -389,7 +440,7 @@ def configure(
         if not library.entries:
             library.validate_default()
             library.entries = [library.ensure_default()]
-        _update_profile(library, values)
+        _update_profile(library, values, token_path)
         entries = [entry for entry in library.entries if entry["id"] != FCC_ID]
         entries.append({"id": FCC_ID, "name": "FCC"})
         metadata = dict(library.metadata or {})
@@ -399,13 +450,16 @@ def configure(
         _write(library.mode_path, library.mode | {"deploymentMode": "3p"})
     elif connected is False:
         _disconnect(library, disconnect_path, intent)
+        token_path.unlink(missing_ok=True)
     if connected is not None:
         library = _load(root)
     is_connected = (
         library.active and library.profile is not None and connected is not False
     )
     if is_connected:
-        is_connected = _current(library, _values(proxy_root_url, auth_token))
+        is_connected = _current(
+            library, _values(proxy_root_url, auth_token), token_path
+        )
     return {
         "connected": is_connected,
         "disconnect_pending": _disconnect_intent(disconnect_path, root) is not None,

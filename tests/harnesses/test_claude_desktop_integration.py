@@ -146,6 +146,17 @@ def mode(root):
     return root / "claude_desktop_config.json"
 
 
+def token_record():
+    return claude_desktop_disconnect_path().with_name("claude-desktop-token.json")
+
+
+def seal(root):
+    """Replace the stored key the way Claude Desktop encrypts it in place."""
+    config = read(profile(root))
+    config["inferenceGatewayApiKey"] = "__sealed__:v1:opaque"
+    write(profile(root), config)
+
+
 def test_fresh_connection_and_disconnect_preserve_native_library(tmp_path):
     root = tmp_path / "desktop"
     assert (
@@ -458,15 +469,23 @@ def test_other_profiles_and_unknown_settings_are_preserved(tmp_path):
     assert other_path.read_bytes() == before
 
 
-@pytest.mark.parametrize("failed_write", [1, 2, 3, 4])
+@pytest.mark.parametrize(
+    "failed_write",
+    [
+        lambda root: root / "configLibrary" / f"{desktop.DEFAULT_ID}.json",
+        profile,
+        lambda root: token_record(),
+        meta,
+        mode,
+    ],
+    ids=["default", "profile", "fingerprint", "meta", "mode"],
+)
 def test_connect_partial_write_is_retryable(tmp_path, monkeypatch, failed_write):
     atomic = desktop.atomic_write_text
-    calls = 0
+    failed = failed_write(tmp_path)
 
     def fail(path, content):
-        nonlocal calls
-        calls += 1
-        if calls == failed_write:
+        if path == failed:
             raise PermissionError("test")
         atomic(path, content)
 
@@ -674,7 +693,7 @@ def test_retry_preserves_a_later_external_choice(tmp_path, monkeypatch, change):
     before = {
         p: p.read_bytes()
         for p in tmp_path.rglob("*.json")
-        if p not in {meta(tmp_path), profile(tmp_path), record}
+        if p not in {meta(tmp_path), profile(tmp_path), record, token_record()}
     }
     desktop.configure(tmp_path, URL, TOKEN, False, disconnect_path=record)
     expected = metadata | {
@@ -683,6 +702,97 @@ def test_retry_preserves_a_later_external_choice(tmp_path, monkeypatch, change):
     assert read(meta(tmp_path)) == expected
     assert all(p.read_bytes() == content for p, content in before.items())
     assert not record.exists()
+    assert not token_record().exists()
+    assert not profile(tmp_path).exists()
+
+
+def test_sealed_key_for_current_token_stays_connected_and_untouched(tmp_path):
+    record = claude_desktop_disconnect_path()
+    desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
+    seal(tmp_path)
+    before = profile(tmp_path).read_bytes()
+
+    assert desktop.configure(tmp_path, URL, TOKEN, disconnect_path=record)["connected"]
+    assert not desktop.refresh_connected(tmp_path, URL, TOKEN, disconnect_path=record)
+    assert profile(tmp_path).read_bytes() == before
+
+
+def test_sealed_key_for_an_old_token_is_replaced(tmp_path):
+    record = claude_desktop_disconnect_path()
+    desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
+    seal(tmp_path)
+
+    assert not desktop.configure(tmp_path, URL, "new-token", disconnect_path=record)[
+        "connected"
+    ]
+    assert desktop.refresh_connected(tmp_path, URL, "new-token", disconnect_path=record)
+    assert read(profile(tmp_path))["inferenceGatewayApiKey"] == "new-token"
+    seal(tmp_path)
+    assert desktop.configure(tmp_path, URL, "new-token", disconnect_path=record)[
+        "connected"
+    ]
+
+
+@pytest.mark.parametrize("fingerprint", [None, "not json", {"sha256": "other"}])
+def test_sealed_key_without_a_matching_fingerprint_is_replaced(tmp_path, fingerprint):
+    record = claude_desktop_disconnect_path()
+    desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
+    seal(tmp_path)
+    if fingerprint is None:
+        token_record().unlink()
+    elif isinstance(fingerprint, str):
+        token_record().write_text(fingerprint)
+    else:
+        write(token_record(), fingerprint)
+
+    assert not desktop.configure(tmp_path, URL, TOKEN, disconnect_path=record)[
+        "connected"
+    ]
+    assert desktop.refresh_connected(tmp_path, URL, TOKEN, disconnect_path=record)
+    assert read(profile(tmp_path))["inferenceGatewayApiKey"] == TOKEN
+    seal(tmp_path)
+    assert desktop.configure(tmp_path, URL, TOKEN, disconnect_path=record)["connected"]
+
+
+def test_failed_fingerprint_write_never_vouches_for_a_rotated_key(
+    tmp_path, monkeypatch
+):
+    record = claude_desktop_disconnect_path()
+    desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
+    seal(tmp_path)
+    atomic = desktop.atomic_write_text
+
+    def fail_fingerprint(path, content):
+        if path == token_record():
+            raise PermissionError("test")
+        atomic(path, content)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(desktop, "atomic_write_text", fail_fingerprint)
+        with pytest.raises(PermissionError):
+            desktop.refresh_connected(
+                tmp_path, URL, "new-token", disconnect_path=record
+            )
+    assert read(profile(tmp_path))["inferenceGatewayApiKey"] == "new-token"
+    seal(tmp_path)
+
+    assert not desktop.configure(tmp_path, URL, TOKEN, disconnect_path=record)[
+        "connected"
+    ]
+    assert desktop.refresh_connected(tmp_path, URL, TOKEN, disconnect_path=record)
+    assert read(profile(tmp_path))["inferenceGatewayApiKey"] == TOKEN
+
+
+def test_disconnect_removes_token_fingerprint(tmp_path):
+    record = claude_desktop_disconnect_path()
+    desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
+    assert token_record().exists()
+    seal(tmp_path)
+
+    assert not desktop.configure(tmp_path, URL, TOKEN, False, disconnect_path=record)[
+        "connected"
+    ]
+    assert not token_record().exists()
     assert not profile(tmp_path).exists()
 
 
