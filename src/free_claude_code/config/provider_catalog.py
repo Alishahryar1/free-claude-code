@@ -97,6 +97,8 @@ ATLASCLOUD_DEFAULT_BASE = "https://api.atlascloud.ai/v1"
 XKIRO_DEFAULT_BASE = "https://api.xkiro.com/v1"
 # Opper OpenAI-compatible Chat Completions gateway.
 OPPER_DEFAULT_BASE = "https://api.opper.ai/v3/compat"
+# EmpirioLabs AI OpenAI-compatible Chat Completions API.
+EMPIRIOLABS_DEFAULT_BASE = "https://api.empiriolabs.ai/v1"
 # Agnes AI OpenAI-compatible Chat Completions API.
 AGNES_DEFAULT_BASE = "https://apihub.agnes-ai.com/v1"
 # ZenMux OpenAI-compatible Chat Completions gateway.
@@ -777,6 +779,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="opper_api_keys",
         default_base_url=OPPER_DEFAULT_BASE,
         proxy_attr="opper_proxy",
+    ),
+    "empiriolabs": ProviderDescriptor(
+        provider_id="empiriolabs",
+        display_name="EmpirioLabs AI",
+        website_url="https://empiriolabs.ai/",
+        logo_filename="empiriolabs.svg",
+        credential_env="EMPIRIOLABS_API_KEY",
+        credential_url="https://platform.empiriolabs.ai/dashboard/api-keys",
+        credential_attr="empiriolabs_api_keys",
+        default_base_url=EMPIRIOLABS_DEFAULT_BASE,
+        proxy_attr="empiriolabs_proxy",
     ),
     "ollama_cloud": ProviderDescriptor(
         provider_id="ollama_cloud",

@@ -164,6 +164,17 @@ _PROBES = (
         ),
         _AUTH_401,
     ),
+    # EmpirioLabs AI's /models is public; /account/usage requires the API key.
+    # https://docs.empiriolabs.ai/api-reference/api-reference/account/retrieve-account-usage
+    _Probe(
+        "empiriolabs",
+        "/account/usage?limit=1",
+        lambda p: (
+            _field(p, "object") == "account_usage"
+            and isinstance(_field(p, "balance"), Mapping)
+        ),
+        _AUTH_401,
+    ),
     # Positive evidence only: these errors can also reflect permissions, budget,
     # token type, or an undocumented response contract. Never reject on failure.
     # https://docs.deepinfra.com/api-reference/account/me

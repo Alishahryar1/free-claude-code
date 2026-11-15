@@ -725,6 +725,23 @@ def test_opper_provider_smoke_uses_documented_agent_model(monkeypatch) -> None:
     assert models[0].source == "provider_default"
 
 
+def test_empiriolabs_provider_smoke_uses_documented_model(monkeypatch) -> None:
+    monkeypatch.delenv("FCC_SMOKE_MODEL_EMPIRIOLABS", raising=False)
+    config = _smoke_config(
+        settings=_settings(
+            model="ollama/llama3.1",
+            ollama_base_url="",
+            empiriolabs_api_keys="empiriolabs-key",
+        )
+    )
+
+    models = config.provider_smoke_models()
+
+    assert [model.provider for model in models] == ["empiriolabs"]
+    assert models[0].full_model == "empiriolabs/qwen3-8-flash"
+    assert models[0].source == "provider_default"
+
+
 def test_featherless_provider_smoke_uses_documented_agent_model(monkeypatch) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_FEATHERLESS", raising=False)
     config = _smoke_config(
