@@ -430,6 +430,76 @@ def test_count_tokens_rejects_system_role_messages_with_update_hint(
     assert "Run `claude update`" in error["message"]
 
 
+@pytest.fixture
+def hoisting_client():
+    """HTTP client that hoists inline system turns instead of rejecting them."""
+    hoisting_app = create_test_app(
+        Settings.model_validate({"HOIST_INLINE_SYSTEM_TURNS": True})
+    )
+    with (
+        patch(
+            "free_claude_code.api.routes.resolve_provider",
+            return_value=mock_provider,
+        ),
+        TestClient(hoisting_app) as test_client,
+    ):
+        yield test_client
+
+
+def test_hoisting_setting_moves_system_turns_to_the_top_level_system(
+    hoisting_client: TestClient,
+):
+    _stream_messages_calls.clear()
+    response = hoisting_client.post(
+        "/v1/messages",
+        json={
+            "model": "claude-3-sonnet",
+            "system": "base prompt",
+            "messages": [
+                {"role": "system", "content": "reminder"},
+                {"role": "user", "content": "Hi"},
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "cached",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                },
+                {"role": "assistant", "content": "Hello"},
+            ],
+            "max_tokens": 100,
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(_stream_messages_calls) == 1
+    forwarded = _stream_messages_calls[0][0][0]
+    assert forwarded.system == "base prompt\n\nreminder\n\ncached"
+    assert [message.role for message in forwarded.messages] == ["user", "assistant"]
+
+
+def test_count_tokens_hoists_system_turns_when_enabled(
+    hoisting_client: TestClient,
+):
+    response = hoisting_client.post(
+        "/v1/messages/count_tokens",
+        json={
+            "model": "test",
+            "messages": [
+                {"role": "system", "content": "reminder"},
+                {"role": "user", "content": "Hello"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["input_tokens"] > 0
+
+
 def test_model_mapping(client: TestClient):
     # Test Haiku mapping
     _stream_messages_calls.clear()

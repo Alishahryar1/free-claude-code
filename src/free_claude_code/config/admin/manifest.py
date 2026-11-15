@@ -268,6 +268,17 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         description="Open the Admin UI after the next fcc-server launch becomes healthy.",
     ),
     ConfigFieldSpec(
+        "HOIST_INLINE_SYSTEM_TURNS",
+        "Hoist Inline System Turns",
+        "runtime",
+        "boolean",
+        settings_attr="hoist_inline_system_turns",
+        description=(
+            "Merge system-role turns from messages into the top-level system "
+            "field instead of rejecting the request."
+        ),
+    ),
+    ConfigFieldSpec(
         "MESSAGING_PLATFORM",
         "Messaging Platform",
         "messaging",

@@ -655,6 +655,15 @@ class Settings(BaseModel):
         default=False, validation_alias="WEB_FETCH_ALLOW_PRIVATE_NETWORKS"
     )
 
+    # ==================== Claude Code compatibility ====================
+    # Recent Claude Code builds can place system-role turns inside `messages`.
+    # Default is to reject them so Claude Code retries without them. Enable this
+    # only for clients that never retry: their text is merged into the
+    # top-level `system` field and the turns are removed from `messages`.
+    hoist_inline_system_turns: bool = Field(
+        default=False, validation_alias="HOIST_INLINE_SYSTEM_TURNS"
+    )
+
     # ==================== Debug / diagnostic logging (avoid sensitive content) ====================
     # Minimum log level for the JSON file sink (DEBUG, INFO, WARNING, ERROR, CRITICAL).
     log_level: NonEmptyString = Field(default="INFO", validation_alias="LOG_LEVEL")

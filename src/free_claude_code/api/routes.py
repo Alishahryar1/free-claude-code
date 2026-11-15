@@ -42,7 +42,7 @@ from .dependencies import (
 from .handlers import MessagesHandler, ResponsesHandler, TokenCountHandler
 from .handlers.chat import ChatHandler
 from .handlers.gemini import GeminiHandler
-from .inline_system_turns import reject_inline_system_turns
+from .inline_system_turns import hoist_inline_system_turns, reject_inline_system_turns
 from .model_catalog import (
     ModelCatalogView,
     ModelsListResponse,
@@ -183,6 +183,8 @@ async def _create_messages_response(
             if isinstance(request_data, MessagesRequest)
             else request_data
         )
+        if lease.settings.hoist_inline_system_turns:
+            raw = hoist_inline_system_turns(raw)
         model = raw.get("model")
         resolved = (
             router.resolve(model) if isinstance(model, str) and model.strip() else None
@@ -334,6 +336,8 @@ async def count_tokens(
     """Count tokens for a request."""
     lease = await services.requests.acquire()
     try:
+        if lease.settings.hoist_inline_system_turns:
+            request_data = hoist_inline_system_turns(request_data)
         model_router = ModelRouter(lease.settings)
         model = request_data.get("model")
         if isinstance(model, str) and not model.strip():

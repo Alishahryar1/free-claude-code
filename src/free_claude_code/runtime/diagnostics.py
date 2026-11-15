@@ -39,6 +39,7 @@ RUNTIME_FIELDS = (
     "host",
     "port",
     "open_admin_browser",
+    "hoist_inline_system_turns",
     "proxy_auth_enabled",
     "provider_rate_limit",
     "provider_rate_window",
