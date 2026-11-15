@@ -107,17 +107,22 @@ def plan_automatic_web_search(
 ) -> AutomaticWebSearchPlan | None:
     """Translate only Claude Code's server-tool-only automatic WebSearch request."""
     choice = request.tool_choice
-    if choice is not None and choice != {"type": "auto"}:
+    if choice is not None and choice not in ({"type": "auto"}, {"type": "any"}):
         return None
 
     tools = request.tools or []
     server_tools = [tool for tool in tools if is_anthropic_server_tool_definition(tool)]
     if not server_tools:
         return None
-    if len(tools) != 1 or len(server_tools) != 1:
+    # Headroom injects its headroom_retrieve function tool into every request,
+    # so the "server-tool-only" automatic-search request also carries plain
+    # function tools; they are dropped by the translation below.
+    # (local patch 2026-11-14)
+    search_tools = [tool for tool in server_tools if tool.type == WEB_SEARCH_TYPE]
+    if len(search_tools) != 1:
         return None
 
-    tool = server_tools[0]
+    tool = search_tools[0]
     if tool.type != WEB_SEARCH_TYPE:
         return None
     if not web_tools_enabled:
@@ -167,6 +172,7 @@ def plan_automatic_web_search(
     translated = request.model_copy(
         update={
             "tools": [hidden_tool],
+            "tool_choice": {"type": "auto"},
             "messages": _normalized_search_history(request.messages),
         },
         deep=True,
@@ -221,6 +227,8 @@ def _normalized_search_history(messages: list[Message]) -> list[Message]:
         results: dict[str, ContentBlockWebSearchToolResult] = {}
         for block in content:
             if isinstance(block, ContentBlockServerToolUse):
+                if block.name != "web_search":
+                    continue
                 query = block.input.get("query")
                 if (
                     block.name != "web_search"
@@ -236,16 +244,31 @@ def _normalized_search_history(messages: list[Message]) -> list[Message]:
                 if not block.tool_use_id or block.tool_use_id in results:
                     raise InvalidRequestError(_INCOMPLETE_HISTORY)
                 results[block.tool_use_id] = block
-            elif getattr(block, "type", None) in _SERVER_HISTORY_TYPES:
-                raise InvalidRequestError(_INCOMPLETE_HISTORY)
         if not uses or uses.keys() != results.keys():
             raise InvalidRequestError(_INCOMPLETE_HISTORY)
 
         projected = []
         for block in content:
             if isinstance(block, ContentBlockServerToolUse):
+                if block.name != "web_search":
+                    projected.append(
+                        ContentBlockText(
+                            type="text",
+                            text="[Earlier non-search server tool call omitted]",
+                        )
+                    )
+                    continue
                 projected.append(_search_history_text(block, results[block.id]))
-            elif not isinstance(block, ContentBlockWebSearchToolResult):
+            elif isinstance(block, ContentBlockWebSearchToolResult):
+                continue
+            elif getattr(block, "type", None) in _SERVER_HISTORY_TYPES:
+                projected.append(
+                    ContentBlockText(
+                        type="text",
+                        text="[Earlier non-search server tool result omitted]",
+                    )
+                )
+            else:
                 projected.append(block)
         normalized.append(message.model_copy(update={"content": projected}, deep=True))
     return normalized
