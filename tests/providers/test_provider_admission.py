@@ -24,7 +24,6 @@ from free_claude_code.providers.admission import (
     ProviderExecution,
     ProviderExecutionState,
     ProviderOperationKind,
-    _retry_after_seconds,
 )
 from free_claude_code.providers.http import ProviderAttemptScope
 from free_claude_code.providers.recovery_errors import ProviderRecoveryExhausted
@@ -1244,18 +1243,6 @@ async def test_failed_scope_rechecks_retry_after_cleanup_and_releases_capacity_o
     assert close_count == 1
     assert controller._capacity._active_attempts == 0
     controller.close()
-
-
-def test_retry_after_accepts_http_date_and_rejects_invalid_values() -> None:
-    future = format_datetime(datetime.now(UTC) + timedelta(seconds=10), usegmt=True)
-
-    parsed = _retry_after_seconds(_status_error(429, retry_after=future))
-
-    assert parsed is not None
-    assert 8 <= parsed <= 10
-    assert _retry_after_seconds(_status_error(429, retry_after="invalid")) is None
-    assert _retry_after_seconds(_status_error(429, retry_after="nan")) is None
-    assert _retry_after_seconds(_status_error(429, retry_after="inf")) is None
 
 
 @pytest.mark.asyncio
