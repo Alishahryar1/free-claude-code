@@ -37,6 +37,8 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.conversion import AnthropicToOpenAIConverter
 from free_claude_code.core.anthropic.models import (
     ContentBlockServerToolUse,
+    ContentBlockText,
+    ContentBlockWebFetchToolResult,
     Message,
     MessagesRequest,
     Tool,
@@ -510,21 +512,44 @@ def test_does_not_plan_noncanonical_automatic_search(tool: Tool) -> None:
     assert plan_automatic_web_search(request, web_tools_enabled=True) is None
 
 
-def test_does_not_plan_mixed_tools_or_extended_auto_choice() -> None:
-    mixed = _automatic_search_request()
-    mixed.tools = [
+def test_plans_injected_function_tools_from_middlewares() -> None:
+    """Middlewares (e.g. Headroom) add plain function tools to every request,
+    including the automatic-search one; they are dropped in translation."""
+    request = _automatic_search_request()
+    request.tools = [
+        Tool(name="headroom_retrieve", input_schema={"type": "object"}),
         Tool(name="web_search", type="web_search_20250305"),
-        Tool(name="client_tool", input_schema={"type": "object"}),
     ]
+    request.tool_choice = {"type": "any"}
+
+    plan = plan_automatic_web_search(request, web_tools_enabled=True)
+
+    assert plan is not None
+    assert [tool.name for tool in plan.request.tools] == [HIDDEN_WEB_SEARCH_NAME]
+    assert plan.request.tool_choice == {"type": "auto"}
+
+
+def test_does_not_plan_multiple_server_tool_definitions() -> None:
+    request = _automatic_search_request()
+    request.tools = [
+        Tool(name="web_search", type="web_search_20250305"),
+        Tool(name="web_fetch", type="web_fetch_20250910"),
+    ]
+
+    assert plan_automatic_web_search(request, web_tools_enabled=True) is None
+    assert unsupported_server_tool_error(request, web_tools_enabled=True) is not None
+
+
+def test_does_not_plan_extended_auto_choice() -> None:
     extended_choice = _automatic_search_request(
         tool_choice={"type": "auto", "disable_parallel_tool_use": True}
     )
 
-    for request in (mixed, extended_choice):
-        assert plan_automatic_web_search(request, web_tools_enabled=True) is None
-        assert (
-            unsupported_server_tool_error(request, web_tools_enabled=True) is not None
-        )
+    assert plan_automatic_web_search(extended_choice, web_tools_enabled=True) is None
+    assert (
+        unsupported_server_tool_error(extended_choice, web_tools_enabled=True)
+        is not None
+    )
 
 
 @pytest.mark.parametrize(
@@ -583,6 +608,73 @@ def test_rejects_automatic_web_search_with_server_tool_history() -> None:
                     name="web_search",
                     input={"query": "prior"},
                 )
+            ],
+        ),
+    )
+
+    with pytest.raises(InvalidRequestError, match="prior Anthropic server-tool"):
+        plan_automatic_web_search(request, web_tools_enabled=True)
+
+
+def test_projects_fetch_only_server_tool_history_to_text() -> None:
+    """A prior turn that only used web_fetch must not block automatic search;
+    its blocks are quoted as plain text instead of raising."""
+    request = _automatic_search_request()
+    request.messages.insert(
+        0,
+        Message(
+            role="assistant",
+            content=[
+                ContentBlockServerToolUse(
+                    type="server_tool_use",
+                    id="srvtoolu_fetch",
+                    name="web_fetch",
+                    input={"url": "https://example.com"},
+                ),
+                ContentBlockWebFetchToolResult(
+                    type="web_fetch_tool_result",
+                    tool_use_id="srvtoolu_fetch",
+                    content={"type": "web_fetch_result", "url": "https://example.com"},
+                ),
+            ],
+        ),
+    )
+
+    plan = plan_automatic_web_search(request, web_tools_enabled=True)
+
+    assert plan is not None
+    history = plan.request.messages[0].content
+    assert len(history) == 2
+    assert all(block.type == "text" for block in history)
+    assert all("non-search server tool" in block.text for block in history)
+
+
+def test_rejects_unmatched_web_search_history_but_keeps_fetch_blocks() -> None:
+    """A web_search call without its result still raises, even when the same
+    turn carries (well-formed) web_fetch history."""
+    request = _automatic_search_request()
+    request.messages.insert(
+        0,
+        Message(
+            role="assistant",
+            content=[
+                ContentBlockServerToolUse(
+                    type="server_tool_use",
+                    id="srvtoolu_fetch",
+                    name="web_fetch",
+                    input={"url": "https://example.com"},
+                ),
+                ContentBlockWebFetchToolResult(
+                    type="web_fetch_tool_result",
+                    tool_use_id="srvtoolu_fetch",
+                    content={"type": "web_fetch_result", "url": "https://example.com"},
+                ),
+                ContentBlockServerToolUse(
+                    type="server_tool_use",
+                    id="srvtoolu_search",
+                    name="web_search",
+                    input={"query": "unmatched"},
+                ),
             ],
         ),
     )
