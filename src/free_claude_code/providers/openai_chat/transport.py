@@ -203,12 +203,7 @@ def _correction_steps(
     return (
         CorrectionStep("output_cap", output_caps.correct, once=False),
         CorrectionStep("stream_usage", without_stream_usage),
-        CorrectionStep(
-            "provider_specific",
-            lambda rejection: behavior.retry_request_body(
-                rejection.error, rejection.body
-            ),
-        ),
+        *behavior.correction_steps(),
         CorrectionStep(
             "provider_late",
             lambda rejection: behavior.retry_after_standard_corrections(
