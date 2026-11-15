@@ -52,6 +52,7 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
 FACADE_ONLY_BOUNDARIES = {
     "free_claude_code.application.model_fallback",
     "free_claude_code.core.openai_responses",
+    "free_claude_code.messaging.delivery_failures",
     "free_claude_code.messaging.trees",
     "free_claude_code.providers.attempt_loop",
     "free_claude_code.providers.failure_classification",
@@ -291,6 +292,24 @@ def test_recovery_policy_is_pure() -> None:
         )
     assert not offenders, (
         "Recovery policy must take its clock and jitter as arguments:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_delivery_failures_is_pure() -> None:
+    owner = f"{_PACKAGE_NAME}.messaging.delivery_failures"
+    allowed = {"dataclasses", "enum", owner}
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if (record.importer == owner or record.importer.startswith(f"{owner}."))
+        and not any(
+            record.imported == prefix or record.imported.startswith(f"{prefix}.")
+            for prefix in allowed
+        )
+    ]
+    assert not offenders, (
+        "Delivery failure rules must not reach a platform, the loop or a clock:\n"
         + "\n".join(offenders)
     )
 
