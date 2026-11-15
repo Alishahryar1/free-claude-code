@@ -11,7 +11,7 @@ from httpx2 import Request, Response
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.config.provider_catalog import NVIDIA_NIM_DEFAULT_BASE
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.history_replay import (
     ReplayOrigin,
     ReplayRecord,
@@ -20,8 +20,14 @@ from free_claude_code.core.history_replay import (
 from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.admission import UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+from free_claude_code.providers.failure_reporting import finalize_provider_failure
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
-from free_claude_code.providers.nvidia_nim.client import _PROFILE as NIM_PROFILE
+from free_claude_code.providers.nvidia_nim.client import (
+    _PROFILE as NIM_PROFILE,
+)
+from free_claude_code.providers.nvidia_nim.client import (
+    NvidiaNimChatBehavior,
+)
 from free_claude_code.providers.nvidia_nim.tool_schema import (
     NIM_TOOL_ARGUMENT_ALIASES_KEY,
 )
@@ -1416,3 +1422,196 @@ async def test_stream_messages_internal_reasoning_content_error_does_not_downgra
         for call in mock_create.await_args_list
     )
     assert "Provider API request failed" in exc_info.value.message
+
+
+def test_nim_failure_override_multimodal_unsupported():
+    behavior = NvidiaNimChatBehavior()
+    resp = Response(
+        status_code=400,
+        request=Request("POST", f"{NVIDIA_NIM_DEFAULT_BASE}/chat/completions"),
+    )
+
+    # 1. Nested error format (Issue #2414 / standard OpenAI envelope)
+    err1 = openai.BadRequestError(
+        "Received multimodal data but multimodal processing is not enabled",
+        response=resp,
+        body={
+            "error": {
+                "message": (
+                    "Received multimodal data but multimodal processing is not enabled. "
+                    "Use --enable-multimodal flag to enable multimodal processing."
+                ),
+                "type": "invalid_request_error",
+                "code": 400,
+            }
+        },
+    )
+    failure1 = behavior.failure_override(err1)
+    assert failure1 is not None
+    assert failure1.kind == FailureKind.INVALID_REQUEST
+    assert failure1.status_code == 400
+    assert failure1.retryable is False
+    assert "does not support image or multimodal input" in failure1.message
+    assert (
+        "Remove the image attachment or switch to a multimodal model"
+        in failure1.message
+    )
+
+    # 2. ValueError prefix format (Issue #2386)
+    err2 = openai.BadRequestError(
+        "ValueError: Received multimodal data but multimodal processing is not enabled",
+        response=resp,
+        body={
+            "message": (
+                "ValueError: Received multimodal data but multimodal processing is not enabled. "
+                "Use --enable-multimodal flag to enable multimodal processing."
+            ),
+            "type": "invalid_request_error",
+            "code": 400,
+        },
+    )
+    failure2 = behavior.failure_override(err2)
+    assert failure2 is not None
+    assert failure2.kind == FailureKind.INVALID_REQUEST
+    assert failure2.status_code == 400
+    assert failure2.retryable is False
+    assert "does not support image or multimodal input" in failure2.message
+
+    # 3. Detail field format
+    err3 = openai.BadRequestError(
+        "Multimodal error",
+        response=resp,
+        body={
+            "detail": (
+                "Received multimodal data but multimodal processing is not enabled."
+            )
+        },
+    )
+    failure3 = behavior.failure_override(err3)
+    assert failure3 is not None
+    assert failure3.kind == FailureKind.INVALID_REQUEST
+    assert failure3.status_code == 400
+
+    # 4. Error string only without dict body
+    err4 = openai.BadRequestError(
+        "Received multimodal data but multimodal processing is not enabled",
+        response=resp,
+        body=None,
+    )
+    failure4 = behavior.failure_override(err4)
+    assert failure4 is not None
+    assert failure4.kind == FailureKind.INVALID_REQUEST
+    assert failure4.status_code == 400
+
+
+def test_nim_failure_override_ignores_unrelated_errors():
+    behavior = NvidiaNimChatBehavior()
+    resp = Response(
+        status_code=400,
+        request=Request("POST", f"{NVIDIA_NIM_DEFAULT_BASE}/chat/completions"),
+    )
+    err = openai.BadRequestError(
+        "Invalid schema for tool",
+        response=resp,
+        body={
+            "error": {
+                "message": "tools.0.function.parameters is invalid",
+                "param": "tools",
+                "type": "invalid_request_error",
+                "code": 400,
+            }
+        },
+    )
+    assert behavior.failure_override(err) is None
+
+
+def test_finalize_provider_failure_with_nim_multimodal_unsupported():
+    behavior = NvidiaNimChatBehavior()
+    resp = Response(
+        status_code=400,
+        request=Request("POST", f"{NVIDIA_NIM_DEFAULT_BASE}/chat/completions"),
+    )
+    raw_message = (
+        "Received multimodal data but multimodal processing is not enabled. "
+        "Use --enable-multimodal flag to enable multimodal processing."
+    )
+    error = openai.BadRequestError(
+        raw_message,
+        response=resp,
+        body={
+            "error": {
+                "message": raw_message,
+                "type": "invalid_request_error",
+                "code": 400,
+            }
+        },
+    )
+    failure = finalize_provider_failure(
+        error,
+        provider_name="NIM",
+        read_timeout_s=30,
+        request_id="req_img_2414",
+        provider_failure_override=behavior.failure_override,
+    )
+    assert failure.status_code == 400
+    assert failure.kind == FailureKind.INVALID_REQUEST
+    assert failure.retryable is False
+    assert (
+        "Mapped message: The selected NVIDIA NIM model does not support image or multimodal input."
+        in failure.message
+    )
+    assert (
+        "Remove the image attachment or switch to a multimodal model."
+        in failure.message
+    )
+    assert "Category: invalid_request_error" in failure.message
+    assert "Upstream error:" in failure.message
+    assert raw_message in failure.message
+    assert "req_img_2414" in failure.message
+
+
+@pytest.mark.asyncio
+async def test_stream_messages_multimodal_unsupported_error(nim_provider):
+    req = make_request()
+    resp = Response(
+        status_code=400,
+        request=Request("POST", f"{NVIDIA_NIM_DEFAULT_BASE}/chat/completions"),
+    )
+    error = openai.BadRequestError(
+        "Received multimodal data but multimodal processing is not enabled",
+        response=resp,
+        body={
+            "error": {
+                "message": (
+                    "Received multimodal data but multimodal processing is not enabled. "
+                    "Use --enable-multimodal flag to enable multimodal processing."
+                ),
+                "type": "invalid_request_error",
+                "code": 400,
+            }
+        },
+    )
+
+    with patch.object(
+        nim_provider._client.chat.completions, "create", new_callable=AsyncMock
+    ) as mock_create:
+        mock_create.side_effect = error
+
+        with pytest.raises(ExecutionFailure) as exc_info:
+            [
+                frame
+                async for e in nim_provider.stream_messages(req)
+                for frame in e.frames
+            ]
+
+    assert mock_create.await_count == 1
+    assert exc_info.value.kind == FailureKind.INVALID_REQUEST
+    assert exc_info.value.status_code == 400
+    assert (
+        "The selected NVIDIA NIM model does not support image or multimodal input"
+        in exc_info.value.message
+    )
+    assert (
+        "Remove the image attachment or switch to a multimodal model"
+        in exc_info.value.message
+    )

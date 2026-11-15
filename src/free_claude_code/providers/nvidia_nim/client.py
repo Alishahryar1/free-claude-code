@@ -10,7 +10,7 @@ import openai
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import NVIDIA_NIM_DEFAULT_BASE
 from free_claude_code.core.anthropic.models import MessagesRequest
-from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
@@ -94,20 +94,10 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
 
     def retry_request_body(self, error: Exception, body: dict) -> Proposal | None:
         """Retry once with a downgraded body when NIM rejects a known field."""
-        status_code = getattr(error, "status_code", None)
-        bad_request_like = isinstance(error, openai.BadRequestError) or (
-            status_code == 400
-        )
-
-        error_text = str(error)
-        error_body = getattr(error, "body", None)
-        if error_body is not None:
-            error_text = f"{error_text} {json.dumps(error_body, default=str)}"
-        error_text = error_text.lower()
-
-        if not bad_request_like:
+        if not _is_bad_request(error):
             return None
 
+        error_text = _error_text(error)
         if "chat_template" in error_text:
             retry_body = clone_body_without_chat_template(body)
             if retry_body is None:
@@ -130,6 +120,16 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
             _is_degraded_function(body) for body in bodies
         ):
             return overloaded_provider_failure()
+        if isinstance(error, openai.BadRequestError) and _is_nim_multimodal_unsupported(
+            error, bodies
+        ):
+            return ExecutionFailure(
+                FailureKind.INVALID_REQUEST,
+                400,
+                "The selected NVIDIA NIM model does not support image or multimodal input. "
+                "Remove the image attachment or switch to a multimodal model.",
+                False,
+            )
         return None
 
 
@@ -190,4 +190,37 @@ def _is_degraded_function(body: Mapping[str, Any]) -> bool:
         and function_ref.startswith("function id ")
         and function_id
         and state.strip() == _DEGRADED_FUNCTION_STATE
+    )
+
+
+def _is_bad_request(error: Exception) -> bool:
+    status_code = getattr(error, "status_code", None)
+    return isinstance(error, openai.BadRequestError) or status_code == 400
+
+
+def _error_text(error: Exception) -> str:
+    error_text = str(error)
+    error_body = getattr(error, "body", None)
+    if error_body is not None:
+        error_text = f"{error_text} {json.dumps(error_body, default=str)}"
+    return error_text.lower()
+
+
+def _is_nim_multimodal_unsupported(
+    error: Exception, bodies: tuple[Mapping[str, Any], ...]
+) -> bool:
+    for body in bodies:
+        for field in ("message", "detail"):
+            value = body.get(field)
+            if isinstance(value, str) and _is_multimodal_unsupported_text(value):
+                return True
+    return _is_multimodal_unsupported_text(_error_text(error))
+
+
+def _is_multimodal_unsupported_text(text: str) -> bool:
+    lower = text.lower()
+    return (
+        "multimodal processing is not enabled" in lower
+        or "--enable-multimodal" in lower
+        or "received multimodal data" in lower
     )
