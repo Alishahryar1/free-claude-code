@@ -11,7 +11,7 @@ from free_claude_code.core.rate_limit import (
     StrictSlidingWindowLimiter as SlidingWindowLimiter,
 )
 
-from .delivery_failures import PlatformRateLimited
+from .delivery_failures import queue_pause
 from .safe_diagnostics import format_exception_for_log
 
 
@@ -111,14 +111,13 @@ class MessagingRateLimiter:
                             if not f.done():
                                 f.set_exception(e)
 
-                        if isinstance(e, PlatformRateLimited):
+                        pause = queue_pause(e)
+                        if pause is not None:
                             logger.warning(
                                 "Platform rate limit: pausing messaging for {:.1f}s",
-                                e.retry_after,
+                                pause,
                             )
-                            self._paused_until = (
-                                asyncio.get_event_loop().time() + e.retry_after
-                            )
+                            self._paused_until = asyncio.get_event_loop().time() + pause
                         else:
                             logger.error(
                                 "Error in limiter worker for key {}: {}",

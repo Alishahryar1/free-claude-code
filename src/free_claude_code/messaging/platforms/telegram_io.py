@@ -7,7 +7,20 @@ from typing import Any
 
 from loguru import logger
 
-from ..limiter import MessagingRateLimiter, PlatformRateLimited
+from ..delivery_failures import (
+    MAX_ATTEMPTS,
+    CallState,
+    DeliveryFailure,
+    FailureKind,
+    Ignore,
+    PlatformRateLimited,
+    Raise,
+    RateLimited,
+    Retry,
+    RetryPlain,
+    decide,
+)
+from ..limiter import MessagingRateLimiter
 from .outbox import PlatformOutbox
 
 TELEGRAM_DELETE_MESSAGES_BATCH_SIZE = 100
@@ -56,16 +69,46 @@ _GONE_MESSAGE_ERRORS = (
 )
 
 
-def _failure_kind(error: BaseException) -> str:
-    """Say whether Telegram rate-limited, lost, or rejected a call."""
+def _failure(error: BaseException) -> DeliveryFailure:
+    """Read a failed Telegram call as a platform-neutral delivery failure."""
+    text = str(error).lower()
     if isinstance(error, TelegramRetryAfter):
-        return "rate_limited"
+        return DeliveryFailure(
+            FailureKind.RATE_LIMITED, _seconds(getattr(error, "retry_after", 0))
+        )
+    if "message is not modified" in text:
+        return DeliveryFailure(FailureKind.UNMODIFIED)
     # BadRequest subclasses NetworkError: a rejection, not a lost call.
-    if isinstance(error, TelegramBadRequest):
-        return "rejected"
-    if isinstance(error, (TimeoutError, TelegramNetworkError)):
-        return "network"
-    return "rejected"
+    if not isinstance(error, TelegramBadRequest) and isinstance(
+        error, (TimeoutError, TelegramNetworkError)
+    ):
+        return DeliveryFailure(FailureKind.NETWORK)
+    if any(phrase in text for phrase in _GONE_MESSAGE_ERRORS):
+        return DeliveryFailure(FailureKind.GONE)
+    if "can't parse entities" in text:
+        return DeliveryFailure(FailureKind.UNPARSEABLE)
+    return DeliveryFailure(FailureKind.REJECTED)
+
+
+def _seconds(retry_after: float | timedelta) -> float:
+    if isinstance(retry_after, timedelta):
+        return retry_after.total_seconds()
+    return float(retry_after)
+
+
+def _log_retry(
+    failure: DeliveryFailure, attempt: int, error: BaseException, delay: float
+) -> None:
+    if failure.kind is FailureKind.RATE_LIMITED:
+        logger.warning("Rate limited by Telegram, waiting {}s...", delay)
+        return
+    logger.warning(
+        "Telegram API network error (attempt {}/{}): {}. Retrying in {}s...",
+        attempt,
+        MAX_ATTEMPTS,
+        error,
+        delay,
+    )
 
 
 class TelegramMessenger:
@@ -97,61 +140,37 @@ class TelegramMessenger:
         Network errors and rate limits share one budget of three calls; a
         plain-text resend after unparseable Markdown does not use it.
         """
-        max_attempts = 3
-        attempt = 0
+        attempts = 1
         while True:
             try:
                 return await func(*args, **kwargs)
             except (TimeoutError, TelegramBaseError) as e:
-                kind = _failure_kind(e)
-                err_lower = str(e).lower()
-                if "message is not modified" in err_lower or (
-                    kind == "rejected"
-                    and any(x in err_lower for x in _GONE_MESSAGE_ERRORS)
-                ):
-                    if suppress_known_message_errors:
+                failure = _failure(e)
+                state = CallState(
+                    attempts=attempts,
+                    formatted=bool(kwargs.get("parse_mode")),
+                    suppress_known=suppress_known_message_errors,
+                )
+                match decide(failure, state):
+                    case Ignore():
                         return None
-                    raise
-                if kind == "rate_limited":
-                    attempt += 1
-                    retry_after = getattr(e, "retry_after", 0)
-                    wait_secs = (
-                        retry_after.total_seconds()
-                        if isinstance(retry_after, timedelta)
-                        else float(retry_after)
-                    )
-                    if attempt >= max_attempts:
-                        raise PlatformRateLimited(wait_secs) from e
-                    logger.warning(
-                        "Rate limited by Telegram, waiting {}s...", wait_secs
-                    )
-                    await asyncio.sleep(wait_secs)
-                    continue
-                if kind == "network":
-                    attempt += 1
-                    if attempt >= max_attempts:
-                        logger.error(
-                            "Telegram API failed after {} attempts: {}",
-                            max_attempts,
-                            e,
-                        )
+                    case RetryPlain():
+                        logger.warning("Markdown failed, retrying without parse_mode")
+                        kwargs["parse_mode"] = None
+                    case Retry(delay=delay):
+                        _log_retry(failure, attempts, e, delay)
+                        attempts += 1
+                        await asyncio.sleep(delay)
+                    case RateLimited(retry_after=retry_after):
+                        raise PlatformRateLimited(retry_after) from e
+                    case Raise():
+                        if failure.kind is FailureKind.NETWORK:
+                            logger.error(
+                                "Telegram API failed after {} attempts: {}",
+                                attempts,
+                                e,
+                            )
                         raise
-                    wait_time = 2 ** (attempt - 1)
-                    logger.warning(
-                        "Telegram API network error (attempt {}/{}): {}. "
-                        "Retrying in {}s...",
-                        attempt,
-                        max_attempts,
-                        e,
-                        wait_time,
-                    )
-                    await asyncio.sleep(wait_time)
-                    continue
-                if "can't parse entities" in err_lower and kwargs.get("parse_mode"):
-                    logger.warning("Markdown failed, retrying without parse_mode")
-                    kwargs["parse_mode"] = None
-                    continue
-                raise
 
     async def send_message(
         self,

@@ -11,10 +11,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TimedOut
 
-from free_claude_code.messaging.limiter import (
-    MessagingRateLimiter,
-    PlatformRateLimited,
-)
+from free_claude_code.messaging.delivery_failures import PlatformRateLimited
+from free_claude_code.messaging.limiter import MessagingRateLimiter
 from free_claude_code.messaging.platforms import telegram_io
 from tests.messaging.test_telegram_edge_cases import _telegram_runtime
 
