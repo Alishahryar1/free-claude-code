@@ -46,8 +46,31 @@ def test_settings_are_reserved_before_any_server_work(arg, launch_capture, capsy
 
 
 @pytest.mark.parametrize(
-    "flag", ["--print", "-p", "--prompt", "--prompt-interactive", "-i"]
+    "flag",
+    [
+        "--print",
+        "-print",
+        "--p",
+        "-p",
+        "--prompt",
+        "-prompt",
+        "--prompt-interactive",
+        "-prompt-interactive",
+        "--i",
+        "-i",
+    ],
 )
 def test_prompt_can_literally_name_the_reserved_option(flag, launch_capture):
     launch("agy", [flag, "--settings"])
     assert launch_capture.commands[0][-2:] == [flag, "--settings"]
+
+
+@pytest.mark.parametrize("model", ["print", "prompt", "prompt-interactive", "p", "i"])
+@pytest.mark.parametrize(
+    "option", ["--settings", "--settings={}", "-settings", "-settings={}"]
+)
+def test_model_value_cannot_hide_reserved_settings(model, option, launch_capture):
+    launch("agy", ["--model", model, option, "{}"], exit_code=1)
+    assert not launch_capture.probes
+    assert not launch_capture.requests
+    assert not launch_capture.commands

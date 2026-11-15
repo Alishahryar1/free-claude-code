@@ -81,6 +81,17 @@ def launch(argv: Sequence[str] | None = None) -> None:
             )
             raise SystemExit(1)
         # Prompt values are opaque, even when the entire prompt is a flag name.
-        if arg.lstrip("-") in {"p", "print", "prompt", "i", "prompt-interactive"}:
+        if arg in {
+            "-p",
+            "--p",
+            "-print",
+            "--print",
+            "-prompt",
+            "--prompt",
+            "-i",
+            "--i",
+            "-prompt-interactive",
+            "--prompt-interactive",
+        }:
             next(arguments, None)
     launch_harness(SPEC, args)
