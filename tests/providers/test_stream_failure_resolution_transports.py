@@ -16,9 +16,15 @@ from loguru import logger
 
 from free_claude_code.config.provider_catalog import GEMINI_DEFAULT_BASE
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.stream_delivery import (
+    StreamDeliveryState,
+    bind_stream_delivery,
+)
 from free_claude_code.core.trace import TRACE_PAYLOAD_BINDING
 from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.gemini import GeminiProvider
+from free_claude_code.providers.gemini.transport import GeminiTransport
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from tests.api.test_delivered_stream_recovery import text_events
 from tests.api.test_hidden_stream_retries import delivered
 from tests.providers.support import immediate_admission, make_provider_config
@@ -177,10 +183,20 @@ async def test_gemini_stop_rejected_before_acceptance_accepts_the_attempt(traces
     assert _outcomes(traces) == [("generation", "accepted")]
 
 
+class _RefreshingEndpoint:
+    def __init__(self) -> None:
+        self.refreshes: list[bool] = []
+
+    async def endpoint(self, *, force_refresh: bool = False) -> HttpEndpoint:
+        self.refreshes.append(force_refresh)
+        return HttpEndpoint(
+            GEMINI_DEFAULT_BASE, {}, "fresh-key" if force_refresh else "key"
+        )
+
+
 @pytest.mark.asyncio
 async def test_gemini_inband_authentication_failure_refreshes_once(traces):
     keys: list[str] = []
-    refreshes: list[bool] = []
 
     def reply(request):
         keys.append(request.headers["x-goog-api-key"])
@@ -188,18 +204,28 @@ async def test_gemini_inband_authentication_failure_refreshes_once(traces):
             return _gemini_payloads({"error": {"code": 401, "message": "expired"}})
         return gemini_sse([{"text": "ok"}])
 
-    provider = _gemini(reply, max_attempts=3)
-
-    async def endpoint(*, force_refresh: bool = False) -> HttpEndpoint:
-        refreshes.append(force_refresh)
-        return HttpEndpoint(
-            GEMINI_DEFAULT_BASE, {}, "fresh-key" if force_refresh else "key"
+    context = _RefreshingEndpoint()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
+        transport = GeminiTransport(
+            client,
+            immediate_admission(max_attempts=3),
+            HistoryModeCache(),
+            read_timeout=30,
         )
+        with bind_stream_delivery(StreamDeliveryState()):
+            _ = [
+                frame
+                async for chunk in transport.stream(
+                    {"model": "gemini-test", "contents": [{"parts": [{"text": "hi"}]}]},
+                    endpoint_context=context,
+                    request_id="refresh",
+                    response_model="public",
+                    output_factory=lambda: None,
+                )
+                for frame in chunk.frames
+            ]
 
-    provider.endpoint = endpoint
-    await _drain_gemini(provider)
-
-    assert refreshes == [False, True]
+    assert context.refreshes == [False, True]
     assert keys == ["key", "fresh-key"]
 
 

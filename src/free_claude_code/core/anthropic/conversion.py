@@ -499,15 +499,6 @@ class AnthropicToOpenAIConverter:
         reasoning_replay: ReasoningReplayMode,
         structured_reasoning_details: bool = False,
     ) -> list[_TranscriptSegment]:
-        if role == "system":
-            system_text = _openai_system_text(
-                content,
-                context="an inline Anthropic system message",
-            )
-            if not system_text:
-                return []
-            # Reserve the downstream system role for request.system at index zero.
-            return [_PlainSegment([{"role": "user", "content": system_text}])]
         if role == "assistant" and isinstance(content, list):
             try:
                 validate_hosted_tool_history(

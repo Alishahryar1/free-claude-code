@@ -14,6 +14,10 @@ class HttpEndpoint:
     api_key: str | None = field(default=None, repr=False)
     account_id: str | None = field(default=None, repr=False)
 
+    async def endpoint(self, *, force_refresh: bool = False) -> HttpEndpoint:
+        """A fixed snapshot is its own context and has nothing fresher to give."""
+        return self
+
 
 class EndpointContext(Protocol):
     """Borrow a current snapshot without changing credentials on shared clients."""

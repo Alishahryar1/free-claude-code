@@ -3,8 +3,6 @@
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
-from loguru import logger
-
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
@@ -28,6 +26,7 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatRequestPolicy,
     OpenAIModelListing,
 )
+from free_claude_code.providers.request_correction import Proposal
 
 from .caching import mistral_affinity_headers
 from .reasoning import (
@@ -78,7 +77,7 @@ class MistralChatBehavior(OpenAIChatBehavior):
         apply_mistral_history_shape(body)
         return body
 
-    def retry_request_body(self, error: Exception, body: dict) -> dict | None:
+    def retry_request_body(self, error: Exception, body: dict) -> Proposal | None:
         """Retry once without Mistral reasoning fields when a model rejects them."""
         detail = extract_upstream_error_detail(error)
         if not is_mistral_reasoning_rejection(error) or "reasoning_effort" not in (
@@ -88,10 +87,7 @@ class MistralChatBehavior(OpenAIChatBehavior):
         retry_body = clone_body_without_mistral_reasoning(body)
         if retry_body is None:
             return None
-        logger.warning(
-            "MISTRAL_STREAM: retrying without reasoning after upstream rejection"
-        )
-        return retry_body
+        return Proposal(retry_body, "dropped reasoning")
 
     def normalize_stream(self, stream: Any, _body: Mapping[str, Any]) -> Any:
         return normalize_mistral_stream(stream)

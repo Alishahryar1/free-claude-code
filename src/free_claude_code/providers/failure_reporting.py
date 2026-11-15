@@ -26,8 +26,13 @@ def finalize_provider_failure(
     read_timeout_s: float | None,
     request_id: str | None,
     provider_failure_override: ProviderFailureOverride | None = None,
+    upstream_evidence: bool = False,
 ) -> ExecutionFailure:
-    """Return one detailed canonical failure after provider retries are exhausted."""
+    """Return one detailed canonical failure after provider retries are exhausted.
+
+    ``upstream_evidence`` also reports the upstream error body of a failure the
+    provider stream already classified, for clients that speak its protocol.
+    """
     remaining = 0
     if isinstance(exc, ProviderRecoveryExhausted):
         exc, retry_not_before = exc.last_error, exc.retry_not_before
@@ -35,6 +40,15 @@ def finalize_provider_failure(
             remaining = math.ceil(retry_not_before - time.monotonic())
     if isinstance(exc, ExecutionFailure):
         message = _with_cooldown(exc.message, remaining)
+        if upstream_evidence:
+            failure = replace(exc, message=message)
+            message = format_execution_failure_message(
+                failure,
+                extract_upstream_error_detail(exc),
+                upstream_name=provider_name,
+                request_id=request_id,
+            )
+            return replace(failure, message=message)
         request_id_line = f"Request ID: {request_id}" if request_id else None
         if request_id_line and request_id_line not in message:
             message = f"{message}\n\n{request_id_line}"
