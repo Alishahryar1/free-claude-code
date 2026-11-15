@@ -413,7 +413,7 @@ are configuring.
 
 Any client or SDK for these APIs can call FCC. Set the base URL to
 `http://127.0.0.1:8082/v1` for OpenAI clients and `http://127.0.0.1:8082` for
-Anthropic and Gemini clients. Gemini clients also need API version `v1beta`.
+Anthropic and Gemini clients.
 Every FCC model works on every endpoint. If Proxy
 Authentication is enabled, use its token as the client's API key, or add
 `-H "Authorization: Bearer <token>"` to each `curl` request.
@@ -453,10 +453,10 @@ curl http://127.0.0.1:8082/v1/responses \
   }'
 ```
 
-[`POST /v1beta/models/{model}:generateContent`](https://ai.google.dev/api/generate-content):
+[`POST /v1/models/{model}:generateContent`](https://ai.google.dev/api/generate-content):
 
 ```bash
-curl http://127.0.0.1:8082/v1beta/models/nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b:generateContent \
+curl http://127.0.0.1:8082/v1/models/nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b:generateContent \
   -H "Content-Type: application/json" \
   -d '{"contents": [{"role": "user", "parts": [{"text": "Hello!"}]}]}'
 ```
