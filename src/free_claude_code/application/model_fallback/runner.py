@@ -95,7 +95,13 @@ async def stream_model_candidates(
                 produced_output=candidate_committed,
             ),
             content_released=delivery.content_released,
-            read_prefix=lambda: delivery.prefix,
+            # Reading the prefix snapshots the delivered stream; only a
+            # failure with stream evidence needs it.
+            prefix=(
+                delivery.prefix
+                if candidate_failure.stream_context is not None
+                else None
+            ),
             seed=continuation,
             has_next=index + 1 < len(candidates),
         )
@@ -118,6 +124,6 @@ async def stream_model_candidates(
                     failure=candidate_failure,
                     candidate_index=index + 2,
                     candidate_count=len(candidates),
-                    recovery_action=action,
+                    recovery_action=action.value,
                     recovery_reason=reason,
                 )

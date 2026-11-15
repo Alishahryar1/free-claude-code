@@ -83,12 +83,16 @@ class Outcome:
     selected: list[int] = field(default_factory=list)
 
 
-async def _run(*script: Candidate, prefix_calls: bool = False) -> Outcome:
+async def _run(
+    *script: Candidate, prefix_calls: bool = False, reads: list[str] | None = None
+) -> Outcome:
     state = StreamDeliveryState()
     delivered: list[str] = []
 
     def prefix() -> DeliveredPrefix:
         text = "".join(delivered)
+        if reads is not None:
+            reads.append(text)
         return DeliveredPrefix(
             text=text,
             thinking="",
@@ -377,3 +381,18 @@ async def test_lmstudio_budget_rejection_of_a_continuation_keeps_the_seed():
 
     assert seeds == [None, delivered, delivered]
     assert frames == ["first", "last"]
+
+
+@pytest.mark.asyncio
+async def test_prefix_is_read_only_for_failures_with_stream_evidence():
+    reads: list[str] = []
+    outcome = await _run(
+        fails_after("a", failure=_failure(CLEAN)),
+        open_fails(_failure(NO_CONTEXT, status=429)),
+        ok("c"),
+        reads=reads,
+    )
+
+    assert outcome.frames == ["a", "c"]
+    # Read once, for the first failure; the second carries no stream evidence.
+    assert reads == ["a"]

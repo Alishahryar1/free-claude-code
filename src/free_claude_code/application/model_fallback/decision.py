@@ -4,7 +4,6 @@ Pure: the caller supplies what the client has received and what the failed
 candidate left behind, and acts on the step returned.
 """
 
-from collections.abc import Callable
 from dataclasses import dataclass
 
 from free_claude_code.core.stream_recovery import (
@@ -40,7 +39,7 @@ class Fallback:
     """Open the next candidate, continuing from ``seed`` when there is one."""
 
     seed: ContinuationSeed | None
-    action: str
+    action: RecoveryAction
     reason: str | None
 
 
@@ -51,12 +50,16 @@ def next_step(
     failure: CandidateFailure,
     *,
     content_released: bool,
-    read_prefix: Callable[[], DeliveredPrefix | None],
+    prefix: DeliveredPrefix | None,
     seed: ContinuationSeed | None,
     has_next: bool,
 ) -> FallbackStep:
-    """Return the step after ``failure``, given the delivery so far."""
-    action = "continue" if seed is not None else "restart"
+    """Return the step after ``failure``, given the delivery so far.
+
+    ``prefix`` is what the client has received; it is consulted only when the
+    failure carries stream evidence.
+    """
+    action = RecoveryAction.CONTINUE if seed is not None else RecoveryAction.RESTART
     reason: str | None = "no_candidate_output"
     if failure.context is None:
         # Without stream evidence, only a candidate that produced nothing
@@ -66,7 +69,7 @@ def next_step(
     else:
         assessment = assess_recovery(
             content_released=content_released,
-            prefix=read_prefix(),
+            prefix=prefix,
             source=failure.context.source,
             retryable=failure.retryable,
         )
@@ -75,7 +78,7 @@ def next_step(
         if assessment.action is RecoveryAction.HANDOFF:
             return Handoff()
         seed = assessment.seed
-        action = assessment.action.value
+        action = assessment.action
         reason = assessment.reason
     if not has_next:
         return Fail()
