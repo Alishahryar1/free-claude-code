@@ -220,3 +220,65 @@ class HistoryNegotiation:
         if not self._accepted and self._learnable and self._revision is not None:
             self._revision = self._cache.update(self._key, self._revision, self.mode)
         self._accepted = True
+
+
+class RequestHistory:
+    """One request's history negotiation, begun when its history is first rendered.
+
+    The negotiation reads and teaches the server-lifetime ``HistoryModeCache``:
+    a rejected cached mode is forgotten, and an accepted mode is suggested to
+    later requests.
+    """
+
+    def __init__(self) -> None:
+        self._negotiation: HistoryNegotiation | None = None
+
+    def prepare(
+        self,
+        body: Mapping[str, Any],
+        origin: ReplayOrigin,
+        cache: HistoryModeCache,
+        *,
+        reasoning_field: str = "reasoning_content",
+        structured_details: bool = True,
+        finalize: Callable[[JsonObject], JsonObject] | None = None,
+        continuation: bool = False,
+        native_chat: bool = False,
+    ) -> JsonObject:
+        """Render history in this request's negotiated replay mode."""
+        if self._negotiation is None:
+            self._negotiation = HistoryNegotiation(cache, origin)
+        return self._negotiation.prepare(
+            body,
+            origin,
+            reasoning_field=reasoning_field,
+            structured_details=structured_details,
+            finalize=finalize,
+            continuation=continuation,
+            native_chat=native_chat,
+        )
+
+    @property
+    def negotiating(self) -> bool:
+        return self._negotiation is not None
+
+    @property
+    def source(self) -> JsonObject | None:
+        """The normalized history this request renders, once prepared."""
+        return self._negotiation.source if self._negotiation is not None else None
+
+    @property
+    def paths(self) -> dict[HistoryPath, HistoryPath] | None:
+        """Where each rendered record came from in ``source``, once prepared."""
+        return self._negotiation.paths if self._negotiation is not None else None
+
+    def accepted(self) -> None:
+        """Record that the upstream accepted this request's history mode."""
+        if self._negotiation is not None:
+            self._negotiation.accepted()
+
+    def next_mode(self) -> JsonObject | None:
+        """Move to the next untried replay mode, or ``None`` when none is left."""
+        if self._negotiation is None:
+            return None
+        return self._negotiation.rejected()

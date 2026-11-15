@@ -12,13 +12,12 @@ so later requests clamp proactively instead of paying the 400 every time.
 """
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 import openai
-from loguru import logger
 
-from free_claude_code.core.json_types import JsonObject
-from free_claude_code.providers.request_correction import Rejection
+from free_claude_code.providers.request_correction import Proposal, Rejection
 
 # Body keys that carry the output-token budget across OpenAI-compatible policies.
 _OUTPUT_TOKEN_FIELDS = ("max_completion_tokens", "max_tokens")
@@ -168,8 +167,7 @@ def clamp_output_tokens(body: dict[str, Any], cap: int) -> dict[str, Any] | None
 class OutputCapMemory:
     """Learn each model's output-token cap from rejections and apply it."""
 
-    def __init__(self, provider_name: str) -> None:
-        self._provider_name = provider_name
+    def __init__(self) -> None:
         self._caps: dict[str, int] = {}
 
     def clamp(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -181,22 +179,33 @@ class OutputCapMemory:
         clamped = clamp_output_tokens(body, cap)
         return clamped if clamped is not None else body
 
-    def correct(self, rejection: Rejection) -> JsonObject | None:
-        """Learn the cap a rejection names and clamp the rejected body to it."""
+    def correct(self, rejection: Rejection) -> Proposal | None:
+        """Clamp the rejected body to the cap the rejection names, and learn it."""
         cap = parse_output_token_cap(rejection.error)
         if cap is None:
             return None
         model = rejection.body.get("model")
+        lesson = None
         if isinstance(model, str):
             previous = self._caps.get(model)
             cap = cap if previous is None else min(previous, cap)
-            self._caps[model] = cap
+            lesson = OutputCapLearned(self, model, cap)
         clamped = clamp_output_tokens(rejection.body, cap)
         if clamped is None:
             return None
-        logger.warning(
-            "{}_STREAM: clamping output tokens to {} after upstream cap rejection",
-            self._provider_name,
-            cap,
-        )
-        return clamped
+        return Proposal(clamped, f"clamped output tokens to {cap}", lesson)
+
+    def learn(self, model: str, cap: int) -> None:
+        self._caps[model] = cap
+
+
+@dataclass(frozen=True, slots=True)
+class OutputCapLearned:
+    """A model's output-token cap, named by an upstream rejection."""
+
+    memory: OutputCapMemory
+    model: str
+    cap: int
+
+    def apply(self) -> None:
+        self.memory.learn(self.model, self.cap)

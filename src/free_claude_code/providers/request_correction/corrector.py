@@ -1,27 +1,29 @@
-"""Turn one request's upstream rejections into corrected bodies, in a fixed order.
+"""Decide how to correct one request's upstream rejections, in a fixed order.
 
 The order is: repair a rejected history record, drop a rejected reasoning
 control, run the transport's own steps, and finally move history replay to
-the next mode after an HTTP 400.
+the next mode after an HTTP 400. Deciding has no effects: what a rejection
+teaches is returned as a lesson for the attempt loop to apply.
 """
 
-from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from collections.abc import Sequence
 
-from free_claude_code.core.history_replay import HistoryProtocol, ReplayOrigin
-from free_claude_code.core.json_types import JsonObject
-from free_claude_code.providers.history_negotiation import (
-    HistoryModeCache,
-    HistoryNegotiation,
-)
+from free_claude_code.core.history_replay import HistoryProtocol
 from free_claude_code.providers.history_replay import history_retry_body
 from free_claude_code.providers.reasoning_compatibility import ReasoningCorrection
 
-from .rejection import CorrectionStep, Rejection
+from .rejection import (
+    Correction,
+    CorrectionDecision,
+    CorrectionStep,
+    NextHistoryMode,
+    Proposal,
+    Rejection,
+)
 
 
 class RequestCorrector:
-    """Own the corrections of one request body and what they already used."""
+    """Remember which corrections one request body has already used."""
 
     def __init__(
         self,
@@ -31,79 +33,52 @@ class RequestCorrector:
         steps: Sequence[CorrectionStep] = (),
     ) -> None:
         self._protocol = protocol
-        self._history: HistoryNegotiation | None = None
         self._steps = (
             (_reasoning_step(reasoning),) if reasoning is not None else ()
         ) + tuple(steps)
         self._used: set[str] = set()
 
-    @property
-    def history(self) -> HistoryNegotiation | None:
-        """This request's history negotiation, once history has been prepared."""
-        return self._history
-
-    def prepare_history(
-        self,
-        body: Mapping[str, Any],
-        origin: ReplayOrigin,
-        cache: HistoryModeCache,
-        *,
-        reasoning_field: str = "reasoning_content",
-        structured_details: bool = True,
-        finalize: Callable[[JsonObject], JsonObject] | None = None,
-        continuation: bool = False,
-        native_chat: bool = False,
-    ) -> JsonObject:
-        """Render history in this request's negotiated replay mode."""
-        if self._history is None:
-            self._history = HistoryNegotiation(cache, origin)
-        return self._history.prepare(
-            body,
-            origin,
-            reasoning_field=reasoning_field,
-            structured_details=structured_details,
-            finalize=finalize,
-            continuation=continuation,
-            native_chat=native_chat,
-        )
-
-    def accepted_history(self) -> None:
-        """Record that the upstream accepted this request's history mode."""
-        if self._history is not None:
-            self._history.accepted()
-
-    def correct(self, rejection: Rejection) -> JsonObject | None:
-        """Return a corrected body for this rejection, or ``None``."""
-        history = self._history
-        corrected = history_retry_body(
+    def correct(self, rejection: Rejection) -> CorrectionDecision | None:
+        """Return how to correct this rejection, or ``None`` when nothing can."""
+        repaired = history_retry_body(
             rejection.error,
             rejection.sent_body,
             self._protocol,
-            source=history.source if history is not None else None,
-            source_paths=history.paths if history is not None else None,
+            source=rejection.history_source,
+            source_paths=rejection.history_paths,
         )
-        if corrected is not None:
-            return corrected
+        if repaired is not None:
+            return Correction(
+                repaired, "history_record", "repaired a rejected history record"
+            )
         for step in self._steps:
-            if step.kind is not None and step.kind in self._used:
+            if step.once and step.name in self._used:
                 continue
-            corrected = step.propose(rejection)
-            if corrected is not None:
-                if step.kind is not None:
-                    self._used.add(step.kind)
-                return corrected
-        if history is not None and _http_response_status(rejection.error) == 400:
-            return history.rejected()
+            proposal = step.propose(rejection)
+            if proposal is not None:
+                if step.once:
+                    self._used.add(step.name)
+                return Correction(
+                    proposal.body, step.name, proposal.note, proposal.lesson
+                )
+        if (
+            rejection.history_source is not None
+            and _http_response_status(rejection.error) == 400
+        ):
+            return NextHistoryMode()
         return None
 
 
 def _reasoning_step(reasoning: ReasoningCorrection) -> CorrectionStep:
-    return CorrectionStep(
-        "reasoning",
-        lambda rejection: reasoning.retry_body(
+    def propose(rejection: Rejection) -> Proposal | None:
+        body = reasoning.retry_body(
             rejection.error, rejection.body, sent_body=rejection.sent_body
-        ),
-    )
+        )
+        if body is None:
+            return None
+        return Proposal(body, "dropped a rejected reasoning control")
+
+    return CorrectionStep("reasoning", propose)
 
 
 def _http_response_status(error: Exception) -> int | None:

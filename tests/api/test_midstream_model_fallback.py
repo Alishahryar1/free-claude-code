@@ -1,14 +1,14 @@
 """Model fallback continues the public response through real provider transports."""
 
-from unittest.mock import AsyncMock
-
 import pytest
 
-from free_claude_code.application.execution import ProviderExecutor
+from free_claude_code.application.model_fallback import stream_model_candidates
+from free_claude_code.application.routing import ProviderModelCandidate
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.open_router import OpenRouterProvider
+from free_claude_code.providers.recovery_policy import RecoveryTiming
 from tests.api.test_delivered_stream_recovery import (
     after_text,
     assert_completed,
@@ -49,15 +49,10 @@ async def delivered_candidates(senders, wire, *, tools=None, history=None):
             for index in range(1, len(senders))
         )
     )
-    body = ProviderExecutor(AsyncMock())._stream_candidates(
-        resolved=routed.resolved,
-        reasoning=ReasoningPolicy.provider_default(),
+    body = stream_model_candidates(
+        (ProviderModelCandidate(routed.resolved.primary), *routed.resolved.fallbacks),
+        get_delivery=current_stream_delivery,
         wire_api=wire,
-        raw_log_label="MIDSTREAM_FALLBACK",
-        raw_log_payload=dict,
-        request_snapshot=dict,
-        ingress_count_name="message_count",
-        ingress_count=1,
         request_id="midstream-fallback",
         open_candidate=open_candidate,
     )
@@ -556,9 +551,12 @@ async def test_exhausted_model_allows_another_model_on_same_client(
         bodies,
         provider,
     ):
-        provider._admission._base_delay = 60
-        provider._admission._max_delay = 60
+        provider._admission._timing = RecoveryTiming(
+            base_delay=60, max_delay=60, jitter=0
+        )
         raw = await delivered_candidates([send, send], wire)
+        blocked = provider._admission._episodes["provider-model"]
+        assert blocked.terminal_until is not None
     expected_models = ["provider-model"] * (2 if partial else 1) + ["model-1"]
     assert [body["model"] for body in bodies] == expected_models
     events = parse_sse_text(raw)

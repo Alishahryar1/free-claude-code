@@ -197,7 +197,16 @@ async def _harness(
                 )
         extras = {}
 
-    def stream(wire, history, *, tools=None, model="requested", continuation=None):
+    def stream(
+        wire,
+        history,
+        *,
+        tools=None,
+        model="requested",
+        continuation=None,
+        reasoning=None,
+        endpoint_context=None,
+    ):
         options: dict[str, Any] = dict(
             input_tokens=0,
             request_id="history-test",
@@ -208,6 +217,10 @@ async def _harness(
         if protocol == "messages":
             options.pop("input_tokens")
             options["reasoning"] = ReasoningPolicy.provider_default()
+        if reasoning is not None:
+            options["reasoning"] = reasoning
+        if endpoint_context is not None:
+            options["endpoint_context"] = endpoint_context
         if continuation is not None:
             options["continuation"] = continuation
         if wire == "responses":
