@@ -9,6 +9,8 @@ import pytest
 
 from free_claude_code.messaging.event_parser import parse_cli_event
 
+pytestmark = pytest.mark.usefixtures("managed_claude_compatible")
+
 # --- Existing Parser Tests ---
 
 

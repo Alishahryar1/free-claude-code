@@ -21,6 +21,8 @@ SCRIPTS = ("fcc-update", "fcc-update.cmd")
 @contextlib.contextmanager
 def installer_server(body, status, outcome):
     requests = []
+    if outcome.startswith("claude-"):
+        outcome = "current"
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -97,9 +99,22 @@ def fixture_wheel(area, url, outcome):
             )
         archive.writestr(
             f"{dist}.dist-info/entry_points.txt",
-            "[console_scripts]\n_fcc-update-check = free_claude_code.updater.check:main\n",
+            "[console_scripts]\n_fcc-update-check = free_claude_code.updater.check:main\n"
+            "_fcc-update-claude = free_claude_code.harnesses.claude_update:main\n",
         )
-        for name in ("__init__.py", "updater/__init__.py", "updater/check.py"):
+        for name in (
+            "__init__.py",
+            "updater/__init__.py",
+            "updater/check.py",
+            "harnesses/__init__.py",
+            "harnesses/claude_update.py",
+            "harnesses/claude.py",
+            "harnesses/environment.py",
+            "harnesses/launch.py",
+            "core/__init__.py",
+            "core/json_types.py",
+            "core/reasoning.py",
+        ):
             source = (ROOT / "src/free_claude_code" / name).read_text(encoding="utf-8")
             if (
                 name == "updater/check.py"
@@ -152,6 +167,11 @@ def fixture_wheel(area, url, outcome):
         "checker-empty",
         "checker-exit",
         "checker-missing",
+        "claude-outdated",
+        "claude-supported",
+        "claude-update-failed",
+        "claude-still-old",
+        "claude-dry-run",
     ],
 )
 def test_installed_update_delegates_and_survives_replacement(
@@ -224,6 +244,44 @@ printf 'replaced after checker exited' > "$FCC_TEST_CHECKER"
             boundary = "\ninitialize_install_log\n"
         assert source.count(boundary) == 1
         body = source.replace(boundary, "\n" + body + boundary)
+    client_bin = area / "client bin"
+    client_bin.mkdir()
+    call_log = area / "claude-calls.txt"
+    version_file = area / "claude-version.txt"
+    version_file.write_text("2.1.310" if outcome == "claude-supported" else "2.1.288")
+    env.update(
+        FCC_TEST_CLAUDE_CALLS=str(call_log),
+        FCC_TEST_CLAUDE_VERSION=str(version_file),
+        FCC_TEST_CLAUDE_OUTCOME=outcome,
+    )
+    if outcome.startswith("claude-"):
+        if os.name == "nt":
+            (client_bin / "claude.cmd").write_text("""@echo off
+echo %1>>"%FCC_TEST_CLAUDE_CALLS%"
+if "%1"=="update" goto update
+type "%FCC_TEST_CLAUDE_VERSION%"
+exit /b 0
+:update
+if "%FCC_TEST_CLAUDE_OUTCOME%"=="claude-update-failed" exit /b 17
+if "%FCC_TEST_CLAUDE_OUTCOME%"=="claude-still-old" exit /b 0
+>"%FCC_TEST_CLAUDE_VERSION%" echo 2.1.310
+exit /b 0
+""")
+        else:
+            client = client_bin / "claude"
+            client.write_text("""#!/bin/sh
+printf '%s\\n' "$1" >> "$FCC_TEST_CLAUDE_CALLS"
+if [ "$1" = --version ]; then
+    cat "$FCC_TEST_CLAUDE_VERSION"
+elif [ "$1" = update ]; then
+    [ "$FCC_TEST_CLAUDE_OUTCOME" != claude-update-failed ] || exit 17
+    [ "$FCC_TEST_CLAUDE_OUTCOME" != claude-still-old ] || exit 0
+    printf '2.1.310\\n' > "$FCC_TEST_CLAUDE_VERSION"
+fi
+""")
+            client.chmod(0o755)
+    if outcome == "claude-dry-run":
+        arguments = "-DryRun" if os.name == "nt" else ["--dry-run"]
     with installer_server(
         body, 503 if outcome == "download-error" else 200, outcome
     ) as (
@@ -247,6 +305,18 @@ printf 'replaced after checker exited' > "$FCC_TEST_CHECKER"
         assert result.returncode == 0, result.stderr
         if outcome == "checker-missing":
             Path(env["FCC_TEST_CHECKER"]).unlink()
+        # Do not discover a developer's real Claude during the maintenance branch.
+        system_paths = (
+            [
+                str(Path(powershell).parent),
+                str(Path(os.environ["SYSTEMROOT"]) / "System32"),
+            ]
+            if os.name == "nt"
+            else ["/usr/bin", "/bin"]
+        )
+        env["PATH"] = os.pathsep.join(
+            [str(client_bin), str(area / "bin"), *system_paths]
+        )
         launcher = env["FCC_TEST_LAUNCHER"]
         command = (
             f'"{os.environ.get("COMSPEC", "cmd.exe")}" /d /s /c ""{launcher}" {arguments}"'
@@ -267,10 +337,12 @@ printf 'replaced after checker exited' > "$FCC_TEST_CHECKER"
             "newer-installed",
             "check-error",
             "invalid-release",
-        } or outcome.startswith("checker-")
+        } or outcome.startswith(("checker-", "claude-"))
         selected = {"current": "1.0.0", "newer-installed": "0.9.0"}.get(
             outcome, "2.0.0rc1" if outcome == "invalid-release" else "2.0.0"
         )
+        if outcome.startswith("claude-"):
+            selected = "1.0.0"
         discovery = [] if outcome.startswith("checker-") else ["/releases/latest"]
         if discovery and outcome != "check-error":
             discovery.append(f"/releases/tag/v{selected}")
@@ -293,11 +365,25 @@ printf 'replaced after checker exited' > "$FCC_TEST_CHECKER"
             expected_exit = 37 if outcome == "checker-exit" else 1
             if outcome in {"current", "newer-installed"}:
                 expected_exit = 0
+            if outcome.startswith("claude-"):
+                expected_exit = (
+                    1 if outcome in {"claude-update-failed", "claude-still-old"} else 0
+                )
             if outcome == "checker-missing":
                 assert result.returncode != 0
             else:
-                assert result.returncode == expected_exit
+                assert result.returncode == expected_exit, result.stdout + result.stderr
             assert "installer:" not in result.stdout
+            calls = call_log.read_text().splitlines() if call_log.exists() else []
+            if outcome == "claude-dry-run":
+                assert calls == []
+            elif outcome == "claude-supported":
+                assert calls == ["--version"]
+            elif outcome.startswith("claude-"):
+                expected_calls = ["--version", "update"]
+                if outcome != "claude-update-failed":
+                    expected_calls.append("--version")
+                assert calls == expected_calls, result.stdout + result.stderr
         elif outcome == "download-error":
             assert result.returncode != 0
             assert "installer:" not in result.stdout
@@ -315,3 +401,4 @@ printf 'replaced after checker exited' > "$FCC_TEST_CHECKER"
         assert result.returncode == 0, result.stderr
         assert not any((area / "bin" / name).exists() for name in SCRIPTS)
         assert not any((area / "bin").glob("_fcc-update-check*"))
+        assert not any((area / "bin").glob("_fcc-update-claude*"))

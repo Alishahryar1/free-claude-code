@@ -6,6 +6,8 @@ import pytest
 from free_claude_code.cli.managed.manager import ManagedClaudeSessionManager
 from free_claude_code.cli.managed.session import ManagedClaudeSession
 
+pytestmark = pytest.mark.usefixtures("managed_claude_compatible")
+
 
 def _manager() -> ManagedClaudeSessionManager:
     return ManagedClaudeSessionManager(

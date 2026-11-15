@@ -2,8 +2,10 @@
 
 import asyncio
 import os
+import shutil
 import subprocess
 from collections.abc import AsyncGenerator
+from contextlib import suppress
 
 from loguru import logger
 
@@ -13,9 +15,11 @@ from free_claude_code.cli.process_registry import (
     unregister_pid,
 )
 from free_claude_code.core.trace import trace_event
+from free_claude_code.harnesses.claude import CLAUDE_COMPATIBILITY_CHECK
 
 from .claude import (
     ManagedClaudeConfig,
+    ManagedClaudeInvocation,
     ManagedClaudeParseState,
     ManagedClaudeTaskRequest,
     build_managed_claude_invocation,
@@ -93,6 +97,67 @@ class ManagedClaudeSession:
         """Check if a task is currently running."""
         return self._is_busy
 
+    async def _compatible_binary(self, invocation: ManagedClaudeInvocation) -> str:
+        """Check and reap a version probe under the session's launch lock."""
+        command = invocation.argv[0]
+        if os.path.dirname(command) and not os.path.isabs(command):
+            command = os.path.normpath(os.path.join(invocation.cwd, command))
+        binary = shutil.which(command, path=invocation.env.get("PATH"))
+        check = CLAUDE_COMPATIBILITY_CHECK
+        if binary is None:
+            raise RuntimeError(
+                f"Could not find Claude Code: {command}. {check.failure_message}"
+            )
+        try:
+            probe = await asyncio.create_subprocess_exec(
+                binary,
+                *check.args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=invocation.cwd,
+                env=invocation.env,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+        except OSError as exc:
+            raise RuntimeError(check.failure_message) from exc
+        if probe.pid:
+            register_pid(probe.pid)
+
+        async def reap() -> None:
+            if probe.returncode is None:
+                if probe.pid:
+                    kill_pid_tree_best_effort(probe.pid)
+                with suppress(ProcessLookupError):
+                    probe.kill()
+            await probe.wait()
+            if probe.pid:
+                unregister_pid(probe.pid)
+
+        try:
+            output, _ = await asyncio.wait_for(
+                probe.communicate(), check.timeout_seconds
+            )
+            if probe.returncode != 0 or not check.accepts(
+                output.decode("utf-8", errors="replace")
+            ):
+                raise RuntimeError(f"{check.failure_message} Checked: {binary}.")
+            return binary
+        except TimeoutError as exc:
+            raise RuntimeError(
+                f"Claude Code version check timed out. {check.failure_message}"
+            ) from exc
+        finally:
+            cleanup = asyncio.create_task(reap())
+            cancelled = False
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    cancelled = True
+            cleanup.result()
+            if cancelled:
+                raise asyncio.CancelledError
+
     async def start_task(
         self, prompt: str, session_id: str | None = None, fork_session: bool = False
     ) -> AsyncGenerator[dict]:
@@ -123,6 +188,7 @@ class ManagedClaudeSession:
                         ),
                         base_env=os.environ,
                     )
+                    binary = await self._compatible_binary(invocation)
 
                     trace_event(
                         stage="claude_cli",
@@ -132,7 +198,8 @@ class ManagedClaudeSession:
                     )
 
                     process = await asyncio.create_subprocess_exec(
-                        *invocation.argv,
+                        binary,
+                        *invocation.argv[1:],
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                         cwd=invocation.cwd,

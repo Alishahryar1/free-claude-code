@@ -16,6 +16,7 @@ $ProgressPreference = "SilentlyContinue"
 $PythonRequest = "<release-python>"
 $MinUvVersion = "<release-uv-minimum>"
 $ClaudeInstallUrl = "https://claude.ai/install.ps1"
+$ClaudeMinimumVersion = "2.1.310"
 $CodexInstallUrl = "https://chatgpt.com/codex/install.ps1"
 $PiInstallUrl = "https://pi.dev/install.ps1"
 $OpenCodeReleaseBaseUrl = "https://opencode.ai/files/bin"
@@ -878,17 +879,49 @@ function Configure-HeadroomForSelectedAgents {
     }
 }
 
+function Get-ClaudeVersion {
+    param([string] $ClaudePath)
+
+    $output = Invoke-Utf8NativeCapture -FilePath $ClaudePath -Arguments @("--version")
+    if ($output -notmatch '\A\s*(?<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)(?:[ \t]+\(Claude Code\))?\s*\z') {
+        throw "Claude Code is present, but '$ClaudePath --version' did not return a stable semantic version."
+    }
+    return $Matches['version']
+}
+
 function Ensure-ClaudeCode {
-    if (Get-ApplicationCommand "claude") {
-        $script:InstallStepOutcome = "Reused"
-        Write-Host "Claude Code already found on PATH; verifying it."
+    $command = Get-ApplicationCommand "claude"
+    if ($DryRun) {
+        if ($command) {
+            Write-Host "+ claude --version"
+            Write-Host "Claude Code >=$ClaudeMinimumVersion will be preserved; an older version will be upgraded with claude update."
+        }
+        else {
+            Invoke-DownloadedPowerShellInstaller -Url $ClaudeInstallUrl -Name "Claude Code"
+            Write-Host "+ claude --version"
+        }
+        return
+    }
+    if ($command) {
+        $version = Get-ClaudeVersion $command.Source
+        if (Test-SupportedStableVersion $version $ClaudeMinimumVersion) {
+            $script:InstallStepOutcome = "Reused"
+            Write-Host "Claude Code $version already satisfies >=$ClaudeMinimumVersion; leaving it unchanged."
+            return
+        }
+        Invoke-NativeCommand -FilePath $command.Source -Arguments @("update")
     }
     else {
         Invoke-DownloadedPowerShellInstaller -Url $ClaudeInstallUrl -Name "Claude Code"
         Add-KnownBinDirectories
     }
-
-    Confirm-Application -CommandName "claude" -DisplayName "Claude Code"
+    $command = Get-ApplicationCommand "claude"
+    if (-not $command) { throw "Claude Code is not available on PATH after installation/update." }
+    $version = Get-ClaudeVersion $command.Source
+    if (-not (Test-SupportedStableVersion $version $ClaudeMinimumVersion)) {
+        throw "Claude Code requires >=$ClaudeMinimumVersion; found $version at $($command.Source) after installation/update."
+    }
+    Write-Host "Verified Claude Code $version."
 }
 
 function Ensure-Codex {

@@ -19,6 +19,17 @@ class JsonResponse(io.BytesIO):
     status = 200
 
 
+@pytest.fixture
+def managed_claude_compatible(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Process-lifecycle tests supply compatibility separately from their child mocks."""
+    from free_claude_code.cli.managed.session import ManagedClaudeSession
+
+    async def compatible(self, invocation):
+        return invocation.argv[0]
+
+    monkeypatch.setattr(ManagedClaudeSession, "_compatible_binary", compatible)
+
+
 @dataclass
 class LaunchCapture:
     requests: list[Request] = field(default_factory=list)
@@ -46,6 +57,7 @@ class LaunchCapture:
     exit_code: int = 23
     versions: dict[str, str] = field(
         default_factory=lambda: {
+            "claude": "2.1.310 (Claude Code)",
             "pi": "0.80.4",
             "opencode": "opencode v2.0.10",
             "cline": "3.0.55",

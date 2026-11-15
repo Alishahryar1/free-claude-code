@@ -1,11 +1,40 @@
 """Shared Claude Code environment policy for FCC client surfaces."""
 
+import re
 from collections.abc import Mapping
 
 from free_claude_code.harnesses.environment import client_environment
+from free_claude_code.harnesses.launch import NativeCheck
 
 CLAUDE_CODE_AUTO_COMPACT_WINDOW = "190000"
 CLAUDE_BINARY_NAME = "claude"
+CLAUDE_MINIMUM_VERSION = (2, 1, 310)
+CLAUDE_MINIMUM_VERSION_TEXT = ".".join(map(str, CLAUDE_MINIMUM_VERSION))
+_VERSION_PATTERN = re.compile(
+    r"\s*(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:[ \t]+\(Claude Code\))?\s*"
+)
+
+
+def claude_version(output: str) -> tuple[int, int, int] | None:
+    """Parse one stable release reported by Claude's version command."""
+    match = _VERSION_PATTERN.fullmatch(output)
+    if match is None:
+        return None
+    return int(match[1]), int(match[2]), int(match[3])
+
+
+def claude_version_supported(output: str) -> bool:
+    version = claude_version(output)
+    return version is not None and version >= CLAUDE_MINIMUM_VERSION
+
+
+CLAUDE_COMPATIBILITY_CHECK = NativeCheck(
+    ("--version",),
+    claude_version_supported,
+    f"FCC requires Claude Code {CLAUDE_MINIMUM_VERSION_TEXT} or newer. "
+    "Run `claude update` or `fcc-update`, then try again.",
+)
 
 
 def claude_proxy_values(proxy_root_url: str, auth_token: str) -> dict[str, str]:

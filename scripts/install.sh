@@ -5,6 +5,7 @@ set -eu
 PYTHON_VERSION="<release-python>"
 MIN_UV_VERSION="<release-uv-minimum>"
 CLAUDE_INSTALL_URL="https://claude.ai/install.sh"
+MIN_CLAUDE_VERSION="2.1.310"
 CODEX_INSTALL_URL="https://chatgpt.com/codex/install.sh"
 PI_INSTALL_URL="https://pi.dev/install.sh"
 OPENCODE_INSTALL_URL="https://opencode.ai/v2/install"
@@ -845,16 +846,49 @@ configure_headroom_for_selected_agents() {
     done
 }
 
+current_claude_version() {
+    output=$("$1" --version) || return 1
+    printf '%s\n' "$output" | LC_ALL=C awk '
+        { sub(/^[[:space:]]*/, ""); sub(/[[:space:]]*$/, "") }
+        NF {
+            count++
+            sub(/[ \t]+\(Claude Code\)$/, "")
+            if ($0 ~ /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/) version=$0
+            else invalid=1
+        }
+        END { if (count == 1 && !invalid) print version; else exit 1 }
+    '
+}
+
 ensure_claude() {
-    if command -v claude >/dev/null 2>&1; then
-        install_step_outcome=Reused
-        printf 'Claude Code already found on PATH; verifying it.\n'
+    claude_command=$(command -v claude || true)
+    if [ "$dry_run" -eq 1 ]; then
+        if [ -n "$claude_command" ]; then
+            print_command "$claude_command" --version
+            printf 'Claude Code >=%s will be preserved; an older version will be upgraded with claude update.\n' "$MIN_CLAUDE_VERSION"
+        else
+            download_and_run "$CLAUDE_INSTALL_URL" bash "Claude Code"
+            print_command claude --version
+        fi
+        return 0
+    fi
+    if [ -n "$claude_command" ]; then
+        version=$(current_claude_version "$claude_command") || fail "Claude Code is present, but '$claude_command --version' did not return a stable semantic version."
+        if stable_version_is_supported "$version" "$MIN_CLAUDE_VERSION"; then
+            install_step_outcome=Reused
+            printf 'Claude Code %s already satisfies >=%s; leaving it unchanged.\n' "$version" "$MIN_CLAUDE_VERSION"
+            return 0
+        fi
+        run "$claude_command" update
+        hash -r 2>/dev/null || true
     else
         download_and_run "$CLAUDE_INSTALL_URL" bash "Claude Code"
         add_known_bin_directories
     fi
-
-    verify_command claude "Claude Code"
+    claude_command=$(command -v claude) || fail "Claude Code is not available on PATH after installation/update."
+    version=$(current_claude_version "$claude_command") || fail "Claude Code did not return a stable semantic version after installation/update."
+    stable_version_is_supported "$version" "$MIN_CLAUDE_VERSION" || fail "Claude Code requires >=$MIN_CLAUDE_VERSION; found $version at $claude_command after installation/update."
+    printf 'Verified Claude Code %s.\n' "$version"
 }
 
 ensure_codex() {

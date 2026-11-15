@@ -2,7 +2,11 @@
 
 from collections.abc import Sequence
 
-from free_claude_code.harnesses.claude import CLAUDE_BINARY_NAME, build_claude_proxy_env
+from free_claude_code.harnesses.claude import (
+    CLAUDE_BINARY_NAME,
+    CLAUDE_COMPATIBILITY_CHECK,
+    build_claude_proxy_env,
+)
 from free_claude_code.harnesses.launch import PreparedLaunch
 from free_claude_code.harnesses.resources import LaunchResources
 
@@ -27,6 +31,7 @@ SPEC = HarnessSpec(
     display_name="Claude Code",
     install_hint="Install Claude Code with: npm install -g @anthropic-ai/claude-code",
     configure=_configure,
+    compatibility_check=CLAUDE_COMPATIBILITY_CHECK,
 )
 
 

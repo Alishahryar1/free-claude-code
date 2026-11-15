@@ -15,6 +15,12 @@ from tests.cli.test_launcher_workflow import HARNESSES, launch
 @pytest.mark.parametrize(
     ("name", "output", "compatible"),
     [
+        ("claude", "2.1.288 (Claude Code)", False),
+        ("claude", "2.1.309 (Claude Code)", False),
+        ("claude", "2.1.310 (Claude Code)", True),
+        ("claude", "2.1.311+build.1 (Claude Code)", True),
+        ("claude", "2.1.310-rc.1 (Claude Code)", False),
+        ("claude", "unknown", False),
         ("opencode", "opencode v2.0.9", True),
         ("opencode", "opencode version v2.0.10+build", True),
         ("opencode", "opencode version 2.0.10", True),
@@ -72,7 +78,7 @@ def test_native_compatibility_precedes_fcc_setup(
 
 
 @pytest.mark.parametrize(
-    "name", ("pi", "opencode", "cline", "hermes", "dsh", "grok", "muse")
+    "name", ("claude", "pi", "opencode", "cline", "hermes", "dsh", "grok", "muse")
 )
 @pytest.mark.parametrize(
     "error", (OSError("cannot execute"), subprocess.TimeoutExpired("probe", 5))

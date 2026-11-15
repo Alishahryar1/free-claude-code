@@ -3,7 +3,16 @@ set -eu
 status=0
 release_version=$("$(dirname "$0")/_fcc-update-check" --print-version) || status=$?
 case "$status" in
-    0) exit 0 ;;
+    0)
+        claude_dry_run=
+        for argument in "$@"; do
+            case "$argument" in --dry-run) claude_dry_run=--dry-run ;; esac
+        done
+        if [ -n "$claude_dry_run" ]; then
+            exec "$(dirname "$0")/_fcc-update-claude" --dry-run
+        fi
+        exec "$(dirname "$0")/_fcc-update-claude"
+        ;;
     10) ;;
     *) exit "$status" ;;
 esac

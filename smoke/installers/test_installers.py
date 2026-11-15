@@ -382,6 +382,7 @@ def _braced_body(text: str, declaration: str) -> str:
 
 def _posix_command(name: str, *, version_output: str | None = None) -> str:
     version = {
+        "claude": "2.1.310",
         "opencode": "v2.0.10",
         "cline": "3.0.55",
         "hermes": "0.20.4",
@@ -392,7 +393,9 @@ def _posix_command(name: str, *, version_output: str | None = None) -> str:
         "node": "22.19.0",
     }.get(name, "1.0.0")
     if version_output is None:
-        if name == "agy":
+        if name == "claude":
+            version_output = f"{version} (Claude Code)"
+        elif name == "agy":
             version_output = version
         elif name == "hermes":
             version_output = f"Hermes Agent v{version} (test build)"
@@ -2346,6 +2349,7 @@ def _windows_shortcut_icon(
 
 def _batch_client(name: str, *, version_output: str | None = None) -> str:
     version = {
+        "claude": "2.1.310",
         "opencode": "v2.0.10",
         "cline": "3.0.55",
         "hermes": "0.20.4",
@@ -2357,6 +2361,8 @@ def _batch_client(name: str, *, version_output: str | None = None) -> str:
     }.get(name, "1.0.0")
     if version_output is not None:
         version_command = f'if "%1"=="--version" echo {version_output}'
+    elif name == "claude":
+        version_command = f'if "%1"=="--version" echo {version} (Claude Code)'
     elif name == "agy":
         version_command = f'if "%1"=="--version" echo {version}'
     elif name == "hermes":
