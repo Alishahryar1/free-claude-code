@@ -112,6 +112,7 @@ from free_claude_code.providers.stream_recovery import (
 
 from .behavior import OpenAIChatBehavior
 from .gemini_output import GeminiChatStreamOutput
+from .media_support import TextOnlyModels
 from .native_output import NativeChatStreamOutput
 from .output_cap import OutputCapMemory
 from .profiles import OpenAIChatProfile
@@ -188,7 +189,9 @@ def _sdk_create_body(create_body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _correction_steps(
-    behavior: OpenAIChatBehavior, output_caps: OutputCapMemory
+    behavior: OpenAIChatBehavior,
+    output_caps: OutputCapMemory,
+    text_only: TextOnlyModels,
 ) -> tuple[CorrectionStep, ...]:
     """Chat's own corrections, in the order they are tried."""
 
@@ -200,9 +203,15 @@ def _correction_steps(
             return None
         return Proposal(corrected, "dropped stream_options.include_usage")
 
+    def without_media(rejection: Rejection) -> Proposal | None:
+        if not behavior.media_rejected(rejection.error):
+            return None
+        return text_only.correct(rejection)
+
     return (
         CorrectionStep("output_cap", output_caps.correct, once=False),
         CorrectionStep("stream_usage", without_stream_usage),
+        CorrectionStep("media", without_media),
         CorrectionStep(
             "provider_specific",
             lambda rejection: behavior.retry_request_body(
@@ -569,7 +578,10 @@ class OpenAIChatTransport:
         self._api_key_provider = api_key_provider
         self._validate_prepared_body = validate_prepared_body
         self._output_caps = OutputCapMemory()
-        self._correction_steps = _correction_steps(behavior, self._output_caps)
+        self._text_only = TextOnlyModels()
+        self._correction_steps = _correction_steps(
+            behavior, self._output_caps, self._text_only
+        )
 
     def _log_stream_transport_error(
         self,
@@ -686,6 +698,15 @@ class OpenAIChatTransport:
     ) -> tuple[dict, dict[str, Any], AsyncOpenAI]:
         """Return the intended body, the body to send, and the client to send it."""
         body = self._output_caps.clamp(body)
+        body, replaced = self._text_only.strip(body)
+        if replaced:
+            logger.warning(
+                "{}_REQUEST: model {} rejected media earlier; replaced {} media "
+                "part(s) with a note. The model will not see them.",
+                self._provider_name,
+                body.get("model"),
+                replaced,
+            )
         create_body = cast(
             dict[str, Any],
             resolve_history_overrides(

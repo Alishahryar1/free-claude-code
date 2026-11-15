@@ -63,6 +63,7 @@ def test_image_routing_failure_explains_unsupported_input(
 ):
     body = {**image_routing_error_body(), "message": message}
     error = routing_error({"error": body} if wrapped else body)
+    assert open_router_provider._chat._behavior.media_rejected(error)
     failure = finalize_provider_failure(
         error,
         provider_name="OPENROUTER",
@@ -108,14 +109,15 @@ def test_image_routing_failure_explains_unsupported_input(
 )
 def test_unrelated_routing_errors_keep_shared_policy(open_router_provider, body):
     error = routing_error(body)
-    override = open_router_provider._chat._behavior.failure_override
-    assert override(error) is None
+    behavior = open_router_provider._chat._behavior
+    assert behavior.failure_override(error) is None
+    assert not behavior.media_rejected(error)
     failure = finalize_provider_failure(
         error,
         provider_name="OPENROUTER",
         read_timeout_s=30,
         request_id=None,
-        provider_failure_override=override,
+        provider_failure_override=behavior.failure_override,
     )
     assert failure.status_code == 404
 
