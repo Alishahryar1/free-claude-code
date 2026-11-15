@@ -1,7 +1,6 @@
 """Installed Antigravity CLI launcher with session-only FCC settings."""
 
 import re
-import sys
 from collections.abc import Sequence
 
 from free_claude_code.harnesses import antigravity
@@ -68,30 +67,4 @@ SPEC = HarnessSpec(
 
 
 def launch(argv: Sequence[str] | None = None) -> None:
-    args = list(sys.argv[1:] if argv is None else argv)
-    arguments = iter(args)
-    for arg in arguments:
-        if arg == "--":
-            break
-        if arg.split("=", 1)[0] in {"--settings", "-settings"}:
-            print(
-                "fcc-agy supplies --settings for the FCC connection. "
-                "Use Antigravity's saved settings or other native options instead.",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
-        # Prompt values are opaque, even when the entire prompt is a flag name.
-        if arg in {
-            "-p",
-            "--p",
-            "-print",
-            "--print",
-            "-prompt",
-            "--prompt",
-            "-i",
-            "--i",
-            "-prompt-interactive",
-            "--prompt-interactive",
-        }:
-            next(arguments, None)
-    launch_harness(SPEC, args)
+    launch_harness(SPEC, argv)

@@ -36,41 +36,25 @@ def test_fresh_launch_uses_temporary_settings(launch_capture):
 
 
 @pytest.mark.parametrize(
-    "arg", ["--settings", "--settings={}", "-settings", "-settings={}"]
-)
-def test_settings_are_reserved_before_any_server_work(arg, launch_capture, capsys):
-    launch("agy", [arg, "{}"], exit_code=1)
-    assert not launch_capture.requests and not launch_capture.probes
-    assert not launch_capture.commands
-    assert "settings" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize(
-    "flag",
+    "args",
     [
-        "--print",
-        "-print",
-        "--p",
-        "-p",
-        "--prompt",
-        "-prompt",
-        "--prompt-interactive",
-        "-prompt-interactive",
-        "--i",
-        "-i",
+        ["--settings", "{}"],
+        ["--settings={}"],
+        ["-settings", "{}"],
+        ["-settings={}"],
+        ["--settings", "my session settings.json"],
+        ["--settings", "{}", "--settings", "another.json"],
+        ["--model", "print", "--settings", "{}"],
+        ["--log-file", "--print", "--settings", "{}", "--print", "hello"],
+        ["--print", "--settings"],
+        ["--print=--settings"],
     ],
 )
-def test_prompt_can_literally_name_the_reserved_option(flag, launch_capture):
-    launch("agy", [flag, "--settings"])
-    assert launch_capture.commands[0][-2:] == [flag, "--settings"]
-
-
-@pytest.mark.parametrize("model", ["print", "prompt", "prompt-interactive", "p", "i"])
-@pytest.mark.parametrize(
-    "option", ["--settings", "--settings={}", "-settings", "-settings={}"]
-)
-def test_model_value_cannot_hide_reserved_settings(model, option, launch_capture):
-    launch("agy", ["--model", model, option, "{}"], exit_code=1)
-    assert not launch_capture.probes
-    assert not launch_capture.requests
-    assert not launch_capture.commands
+def test_user_arguments_follow_fcc_defaults_without_interpretation(
+    args, launch_capture
+):
+    launch("agy", args)
+    command = launch_capture.commands[0]
+    assert command[:2] == ["agy", "--settings"]
+    assert command[3:5] == ["--model", launch_capture.catalog["default_model_id"]]
+    assert command[5:] == args
