@@ -139,28 +139,44 @@ async def test_rate_limit_waits_then_retries(sleeps):
 
 
 @pytest.mark.asyncio
-async def test_second_rate_limit_escapes_the_retry_policy(sleeps):
-    second = RetryAfter(7)
-    result, calls = await _run([RetryAfter(5), second])
+async def test_rate_limits_share_the_three_call_budget(sleeps):
+    result, calls = await _run([RetryAfter(5), RetryAfter(7), OK])
 
-    assert result is second
-    assert len(calls) == 2
-    assert _delays(sleeps) == [5]
+    assert result is OK
+    assert len(calls) == 3
+    assert _delays(sleeps) == [5, 7]
 
 
 @pytest.mark.asyncio
-async def test_failed_plain_retry_escapes_the_retry_policy(sleeps):
+async def test_third_rate_limit_raises(sleeps):
+    third = RetryAfter(9)
+    result, calls = await _run([RetryAfter(5), TimedOut(), third])
+
+    assert result is third
+    assert len(calls) == 3
+    assert _delays(sleeps) == [5, 2]
+
+
+@pytest.mark.asyncio
+async def test_failed_plain_resend_is_still_retried(sleeps):
     from telegram.error import TelegramError
 
-    timeout = TimedOut()
     result, calls = await _run(
-        [TelegramError("Can't parse entities: bad"), timeout],
+        [TelegramError("Can't parse entities: bad"), TimedOut(), OK],
         parse_mode="MarkdownV2",
     )
 
-    assert result is timeout
-    assert calls == ["MarkdownV2", None]
-    assert sleeps.call_count == 0
+    assert result is OK
+    assert calls == ["MarkdownV2", None, None]
+    assert _delays(sleeps) == [1]
+
+
+@pytest.mark.asyncio
+async def test_unmodified_message_is_ignored_in_any_case(sleeps):
+    result, calls = await _run([NetworkError("message is not modified")])
+
+    assert result is None
+    assert len(calls) == 1
 
 
 async def _queue_pause(error: Exception) -> float:
