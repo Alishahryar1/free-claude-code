@@ -14,7 +14,7 @@ DSH_PACKAGE="@deepseek-ai/dsh@latest"
 GROK_INSTALL_URL="https://x.ai/cli/install.sh"
 MUSE_INSTALL_URL="https://dev.meta.ai/install.sh"
 AGY_INSTALL_URL="https://antigravity.google/cli/install.sh"
-MIN_AGY_VERSION="1.4.7"
+MIN_AGY_VERSION="1.5.9"
 RTK_VERSION="0.44.2"
 HEADROOM_PACKAGE="headroom-ai[mcp]==0.40.0"
 RTK_RELEASE_BASE_URL="https://github.com/rtk-ai/rtk/releases/download/v$RTK_VERSION"
@@ -1731,7 +1731,6 @@ show_installer_next_steps() {
         printf 'Run Aider with: fcc-aider\n'
     fi
     if [ "$install_agy" -eq 1 ]; then
-        printf "Connect Antigravity CLI on FCC's Integrations page first.\n"
         printf 'Run Antigravity CLI with: fcc-agy\n'
     fi
 }

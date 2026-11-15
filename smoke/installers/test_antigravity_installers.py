@@ -32,7 +32,7 @@ echo agy:%*>>"%CALL_LOG%"
 if "%FAIL_STEP%"=="agy-verify" exit /b 31
 if "%1"=="update" (
     if "%FAIL_STEP%"=="agy-update" exit /b 32
-    >"%FAKE_AGY_VERSION_FILE%" echo 1.4.7
+    >"%FAKE_AGY_VERSION_FILE%" echo 1.5.9
     exit /b 0
 )
 if "%1"=="--version" type "%FAKE_AGY_VERSION_FILE%"
@@ -45,7 +45,7 @@ printf 'agy:%s\n' "$*" >> "$CALL_LOG"
 [ "$FAIL_STEP" != agy-verify ] || exit 31
 if [ "$1" = update ]; then
     [ "$FAIL_STEP" != agy-update ] || exit 32
-    printf '1.4.7\n' > "$FAKE_AGY_VERSION_FILE"
+    printf '1.5.9\n' > "$FAKE_AGY_VERSION_FILE"
 elif [ "$1" = --version ]; then
     cat "$FAKE_AGY_VERSION_FILE"
     printf '\n'
@@ -64,16 +64,16 @@ def _ensure(harness, *, fail_step=""):
     return harness.run_functions("add_known_bin_directories\nensure_agy")
 
 
-@pytest.mark.parametrize("version", ["1.4.7", "2.0.0", "1.4.6"])
+@pytest.mark.parametrize("version", ["1.5.9", "2.0.0", "1.5.8"])
 def test_agy_keeps_supported_versions_and_updates_older_ones(agy_harness, version):
     _installed(agy_harness, version)
     result = _ensure(agy_harness)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert ("agy:update" in agy_harness.calls()) == (version == "1.4.6")
+    assert ("agy:update" in agy_harness.calls()) == (version == "1.5.8")
     assert not any(call.startswith("download:") for call in agy_harness.calls())
 
 
-@pytest.mark.parametrize("version", ["unrecognized", "1.4", "1.4.7-beta.1"])
+@pytest.mark.parametrize("version", ["unrecognized", "1.4", "1.5.9-beta.1"])
 def test_agy_invalid_version_stops_before_other_installation(agy_harness, version):
     _installed(agy_harness, version)
     result = _ensure(agy_harness)
@@ -101,13 +101,13 @@ def test_agy_installation_failure_is_not_reported_as_success(agy_harness, failur
 
 
 def test_agy_update_failure_stops(agy_harness):
-    _installed(agy_harness, "1.4.6")
+    _installed(agy_harness, "1.5.8")
     result = _ensure(agy_harness, fail_step="agy-update")
     assert result.returncode != 0 and "agy:update" in agy_harness.calls()
 
 
 def test_agy_running_process_prevents_replacement(agy_harness):
-    _installed(agy_harness, "1.4.6")
+    _installed(agy_harness, "1.5.8")
     agy_harness.env["FCC_RUNNING_COMMAND"] = "agy"
     agy_harness.env["FCC_RUNNING_PHASE"] = "early"
     result = _ensure(agy_harness)
@@ -117,7 +117,7 @@ def test_agy_running_process_prevents_replacement(agy_harness):
 
 
 def test_agy_dry_run_makes_no_native_changes(agy_harness):
-    command = _installed(agy_harness, "1.4.6")
+    command = _installed(agy_harness, "1.5.8")
     before = command.read_bytes()
     result = (
         agy_harness.run_functions("Ensure-Agy", "-DryRun")
@@ -130,7 +130,7 @@ def test_agy_dry_run_makes_no_native_changes(agy_harness):
 
 
 def test_agy_windows_default_install_directory_is_discovered(powershell_harness):
-    source = _installed(powershell_harness, "1.4.7")
+    source = _installed(powershell_harness, "1.5.9")
     target = Path(powershell_harness.env["LOCALAPPDATA"]) / "agy/bin/agy.cmd"
     target.parent.mkdir(parents=True)
     source.replace(target)
@@ -168,10 +168,8 @@ def test_agy_selection_preserves_native_settings_and_verifies_fcc(
     assert settings.read_text() == original
     assert not (home / ".fcc/antigravity-integration.json").exists()
     if selected:
-        assert (
-            "Connect Antigravity CLI on FCC's Integrations page first." in result.stdout
-        )
-        assert "fcc-agy --connect" not in result.stdout
+        assert "Connect Antigravity CLI" not in result.stdout
+        assert "Run Antigravity CLI with: fcc-agy" in result.stdout
         assert not any(
             f"{command}:--version" in calls
             for command in CODING_AGENTS
