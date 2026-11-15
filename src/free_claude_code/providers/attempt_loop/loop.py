@@ -13,6 +13,8 @@ from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from loguru import logger
+
 from free_claude_code.core.continuation_request import ContinuationRequest
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.json_types import JsonObject
@@ -34,9 +36,12 @@ from free_claude_code.providers.continuation import (
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.failure_classification import classify
 from free_claude_code.providers.failure_reporting import finalize_provider_failure
+from free_claude_code.providers.history_negotiation import RequestHistory
 from free_claude_code.providers.http import ProviderAttemptScope
 from free_claude_code.providers.recovery_errors import underlying_provider_error
 from free_claude_code.providers.request_correction import (
+    Correction,
+    NextHistoryMode,
     Rejection,
     RequestCorrector,
 )
@@ -116,6 +121,7 @@ async def run_attempts(plan: AttemptPlan) -> AsyncGenerator[StreamOutput]:
     body = plan.body
     operation_kind = plan.operation_kind
     corrections = plan.corrector()
+    history = RequestHistory()
     trace_event(
         plan.sent_payload,
         stage="provider",
@@ -132,7 +138,7 @@ async def run_attempts(plan: AttemptPlan) -> AsyncGenerator[StreamOutput]:
     source: SourceRecoveryState | None = None
     while execution.can_attempt:
         source = SourceRecoveryState(execution, previous=source)
-        attempt = plan.start(AttemptContext(body, operation_kind, corrections, source))
+        attempt = plan.start(AttemptContext(body, operation_kind, history, source))
         scope: ProviderAttemptScope | None = None
         stream: AsyncIterator[StreamOutput] | None = None
         try:
@@ -160,6 +166,7 @@ async def run_attempts(plan: AttemptPlan) -> AsyncGenerator[StreamOutput]:
                 attempt,
                 scope,
                 corrections=corrections,
+                history=history,
                 operation_kind=operation_kind,
                 source=source,
             )
@@ -170,6 +177,7 @@ async def run_attempts(plan: AttemptPlan) -> AsyncGenerator[StreamOutput]:
                     body = next_body
                     operation_kind = ProviderOperationKind.CONTINUATION
                     corrections = plan.corrector()
+                    history = RequestHistory()
                 case _Handoff():
                     for output in attempt.handoff():
                         yield output
@@ -212,6 +220,7 @@ class _Shell:
         scope: ProviderAttemptScope | None,
         *,
         corrections: RequestCorrector,
+        history: RequestHistory,
         operation_kind: ProviderOperationKind,
         source: SourceRecoveryState,
     ) -> _Resolution:
@@ -247,13 +256,20 @@ class _Shell:
                 plan.refreshable.request_refresh()
                 return _Retry(attempt.body)
             if Repair.CORRECT in found:
-                corrected = corrections.correct(
-                    Rejection(raw_error, attempt.body, attempt.sent_body)
+                rejection = Rejection(
+                    raw_error,
+                    attempt.body,
+                    attempt.sent_body,
+                    history_source=history.source,
+                    history_paths=history.paths,
                 )
+                corrected = self._correct(corrections.correct(rejection), history)
                 if corrected is not None and await _authorize(
                     execution, scope.attempt, error
                 ):
-                    return _Retry(corrected)
+                    body, step, note = corrected
+                    self._corrected(step, note)
+                    return _Retry(body)
 
         admission: ProviderFailureDecision | None = None
         if scope is not None and not scope.attempt.accepted:
@@ -310,6 +326,37 @@ class _Shell:
                     return _Handoff()
                 return _Continue(recovered.body)
         return _Fail(self._terminal(error, raw_error, attempt, source))
+
+    def _correct(
+        self, decision: Correction | NextHistoryMode | None, history: RequestHistory
+    ) -> tuple[JsonObject, str, str | None] | None:
+        """Carry out a correction decision: the body to send, and why.
+
+        What the rejection taught is applied whether or not admission allows
+        the corrected retry: the evidence came from the upstream either way.
+        """
+        match decision:
+            case None:
+                return None
+            case NextHistoryMode():
+                body = history.next_mode()
+                if body is None:
+                    return None
+                return body, "history_mode", "moved history replay to the next mode"
+            case Correction(body=body, step=step, note=note, lesson=lesson):
+                if lesson is not None:
+                    lesson.apply()
+                return body, step, note
+
+    def _corrected(self, step: str, note: str | None) -> None:
+        plan = self._plan
+        self.trace("provider.request.corrected", {"step": step, "note": note})
+        logger.warning(
+            "{}_STREAM: correcting the request after an upstream rejection: {} ({})",
+            plan.provider_name,
+            note or step,
+            step,
+        )
 
     def _terminal(
         self,

@@ -83,6 +83,7 @@ from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.history_negotiation import (
     HistoryModeCache,
+    RequestHistory,
     resolve_history_overrides,
 )
 from free_claude_code.providers.history_replay import (
@@ -101,6 +102,7 @@ from free_claude_code.providers.reasoning_compatibility import (
 )
 from free_claude_code.providers.request_correction import (
     CorrectionStep,
+    Proposal,
     Rejection,
     RequestCorrector,
 )
@@ -186,24 +188,20 @@ def _sdk_create_body(create_body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _correction_steps(
-    provider_name: str, behavior: OpenAIChatBehavior, output_caps: OutputCapMemory
+    behavior: OpenAIChatBehavior, output_caps: OutputCapMemory
 ) -> tuple[CorrectionStep, ...]:
     """Chat's own corrections, in the order they are tried."""
 
-    def without_stream_usage(rejection: Rejection) -> JsonObject | None:
+    def without_stream_usage(rejection: Rejection) -> Proposal | None:
         if not is_stream_usage_rejection(rejection.error):
             return None
         corrected = clone_without_stream_usage(rejection.body)
-        if corrected is not None:
-            logger.warning(
-                "{}_STREAM: retrying without stream_options.include_usage "
-                "after upstream rejection",
-                provider_name,
-            )
-        return corrected
+        if corrected is None:
+            return None
+        return Proposal(corrected, "dropped stream_options.include_usage")
 
     return (
-        CorrectionStep(None, output_caps.correct),
+        CorrectionStep("output_cap", output_caps.correct, once=False),
         CorrectionStep("stream_usage", without_stream_usage),
         CorrectionStep(
             "provider_specific",
@@ -570,10 +568,8 @@ class OpenAIChatTransport:
         self._endpoint_transport = endpoint_transport
         self._api_key_provider = api_key_provider
         self._validate_prepared_body = validate_prepared_body
-        self._output_caps = OutputCapMemory(self._provider_name)
-        self._correction_steps = _correction_steps(
-            self._provider_name, behavior, self._output_caps
-        )
+        self._output_caps = OutputCapMemory()
+        self._correction_steps = _correction_steps(behavior, self._output_caps)
 
     def _log_stream_transport_error(
         self,
@@ -680,7 +676,7 @@ class OpenAIChatTransport:
         body: dict,
         operation_kind: ProviderOperationKind,
         *,
-        corrections: RequestCorrector,
+        history: RequestHistory,
         endpoint: RequestEndpoint | None = None,
         request_client: OpenAIRequestClient | None = None,
         extra_headers: Mapping[str, str] | None = None,
@@ -726,7 +722,7 @@ class OpenAIChatTransport:
             on_origin(origin)
         create_body = cast(
             dict[str, Any],
-            corrections.prepare_history(
+            history.prepare(
                 create_body,
                 origin,
                 self._history_cache,
@@ -756,7 +752,7 @@ class OpenAIChatTransport:
         create_body: dict[str, Any],
         body: dict,
         *,
-        corrections: RequestCorrector,
+        history: RequestHistory,
         on_event: Callable[[Any], None] | None = None,
         native_chat: bool = False,
     ) -> Any:
@@ -767,7 +763,7 @@ class OpenAIChatTransport:
                 getattr(event, "choices", None)
                 or getattr(event, "usage", None) is not None
             ):
-                corrections.accepted_history()
+                history.accepted()
             if on_event is not None:
                 on_event(event)
 
@@ -1175,7 +1171,7 @@ class _ChatAttempt(TransportAttempt):
         ) = await runner._transport._prepare_create(
             self.body,
             self.context.operation_kind,
-            corrections=self.context.corrections,
+            history=self.context.history,
             endpoint=runner._endpoint,
             request_client=runner._request_client,
             extra_headers=runner._extra_headers,
@@ -1200,7 +1196,7 @@ class _ChatAttempt(TransportAttempt):
             self._client,
             self.sent_body,
             self.body,
-            corrections=self.context.corrections,
+            history=self.context.history,
             on_event=self._observe,
             native_chat=runner._native_chat,
         )

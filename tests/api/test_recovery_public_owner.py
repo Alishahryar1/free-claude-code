@@ -8,7 +8,10 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.continuation_stream import ContinuationStream
 from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.core.stream_output import completed_output
-from free_claude_code.providers.request_correction import RequestCorrector
+from free_claude_code.providers.request_correction import (
+    Correction,
+    RequestCorrector,
+)
 from tests.api.test_delivered_stream_recovery import public_text, text_events
 from tests.api.test_hidden_stream_retries import delivered
 from tests.api.test_tool_call_buffer import _call, _frames, _response, _start
@@ -347,7 +350,7 @@ async def test_shared_correction_guard_uses_public_attempt_effects(
         if marker not in str(rejection.error):
             return None
         proposals.append(True)
-        return {**deepcopy(rejection.body), "temperature": 0}
+        return Correction({**deepcopy(rejection.body), "temperature": 0}, "injected")
 
     monkeypatch.setattr(RequestCorrector, "correct", correction)
 

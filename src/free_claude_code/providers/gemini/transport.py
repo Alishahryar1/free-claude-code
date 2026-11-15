@@ -210,7 +210,7 @@ class _GeminiAttempt(TransportAttempt):
             "GEMINI", "gemini", str(self.body["model"]), endpoint=snapshot
         )
         try:
-            self.sent_body = context.corrections.prepare_history(
+            self.sent_body = context.history.prepare(
                 self.body,
                 self._origin,
                 self._transport._history_cache,
@@ -234,8 +234,9 @@ class _GeminiAttempt(TransportAttempt):
 
     async def stream(self, scope: ProviderAttemptScope) -> AsyncIterator[StreamOutput]:
         assert self._request is not None and self._origin is not None
-        corrections = self.context.corrections
-        assert corrections.history is not None
+        history = self.context.history
+        source, paths = history.source, history.paths
+        assert source is not None and paths is not None
         client = self._transport._client
         response = scope.retain(await client.send(self._request, stream=True))
         if not response.is_success:
@@ -272,8 +273,8 @@ class _GeminiAttempt(TransportAttempt):
             include_thoughts=self._include_thoughts,
             continuation_context=self._continuation.sent_context(
                 self.sent_body,
-                source=corrections.history.source,
-                source_paths=corrections.history.paths,
+                source=source,
+                source_paths=paths,
             ),
         )
         upstream = _events(response, read_timeout=self._transport._read_timeout)
@@ -283,7 +284,7 @@ class _GeminiAttempt(TransportAttempt):
                     "gemini", payload, continuing=self.context.continuing
                 )
                 output = presenter.feed(payload)
-                corrections.accepted_history()
+                history.accepted()
                 if not scope.attempt.accepted:
                     await scope.attempt.accept()
                 if output:
