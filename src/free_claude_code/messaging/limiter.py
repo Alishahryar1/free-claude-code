@@ -11,15 +11,8 @@ from free_claude_code.core.rate_limit import (
     StrictSlidingWindowLimiter as SlidingWindowLimiter,
 )
 
+from .delivery_failures import PlatformRateLimited
 from .safe_diagnostics import format_exception_for_log
-
-
-class PlatformRateLimited(RuntimeError):
-    """A platform kept rate-limiting one call; queued work waits ``retry_after``."""
-
-    def __init__(self, retry_after: float) -> None:
-        super().__init__(f"Platform rate limit: retry after {retry_after:g}s")
-        self.retry_after = retry_after
 
 
 class MessagingRateLimiter:
