@@ -11,7 +11,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TimedOut
 
-from free_claude_code.messaging.limiter import MessagingRateLimiter
+from free_claude_code.messaging.limiter import (
+    MessagingRateLimiter,
+    PlatformRateLimited,
+)
 from free_claude_code.messaging.platforms import telegram_io
 from tests.messaging.test_telegram_edge_cases import _telegram_runtime
 
@@ -148,11 +151,13 @@ async def test_rate_limits_share_the_three_call_budget(sleeps):
 
 
 @pytest.mark.asyncio
-async def test_third_rate_limit_raises(sleeps):
+async def test_third_rate_limit_hands_its_wait_to_the_queue(sleeps):
     third = RetryAfter(9)
     result, calls = await _run([RetryAfter(5), TimedOut(), third])
 
-    assert result is third
+    assert isinstance(result, PlatformRateLimited)
+    assert result.retry_after == 9
+    assert result.__cause__ is third
     assert len(calls) == 3
     assert _delays(sleeps) == [5, 2]
 
@@ -198,29 +203,22 @@ async def _queue_pause(error: Exception) -> float:
 
 
 @pytest.mark.asyncio
-async def test_telegram_rate_limit_pauses_the_queue_for_thirty_seconds():
-    pause = await _queue_pause(RetryAfter(5))
+async def test_platform_rate_limit_pauses_the_queue_for_its_wait():
+    pause = await _queue_pause(PlatformRateLimited(5))
 
-    assert 29 < pause <= 30
-
-
-@pytest.mark.asyncio
-async def test_any_error_mentioning_wait_pauses_the_queue():
-    pause = await _queue_pause(ValueError("Timed out waiting for the lock"))
-
-    assert 29 < pause <= 30
+    assert 4 < pause <= 5
 
 
 @pytest.mark.asyncio
-async def test_non_numeric_wait_seconds_leave_the_queue_unpaused():
-    class FloodWait(Exception):
-        seconds = "soon"
-
-    pause = await _queue_pause(FloodWait("Flood wait"))
-
-    assert pause == 0
-
-
-@pytest.mark.asyncio
-async def test_unrelated_errors_do_not_pause_the_queue():
-    assert await _queue_pause(ValueError("bad payload")) == 0
+@pytest.mark.parametrize(
+    "error",
+    [
+        ValueError("Timed out waiting for the lock"),
+        ValueError("Flood wait"),
+        RetryAfter(5),
+        ValueError("bad payload"),
+    ],
+    ids=["wait-wording", "flood-wording", "raw-retry-after", "unrelated"],
+)
+async def test_other_errors_do_not_pause_the_queue(error):
+    assert await _queue_pause(error) == 0

@@ -14,6 +14,14 @@ from free_claude_code.core.rate_limit import (
 from .safe_diagnostics import format_exception_for_log
 
 
+class PlatformRateLimited(RuntimeError):
+    """A platform kept rate-limiting one call; queued work waits ``retry_after``."""
+
+    def __init__(self, retry_after: float) -> None:
+        super().__init__(f"Platform rate limit: retry after {retry_after:g}s")
+        self.retry_after = retry_after
+
+
 class MessagingRateLimiter:
     """
     Rate limiter and compacting work queue for one messaging runtime.
@@ -75,7 +83,7 @@ class MessagingRateLimiter:
                     func, futures = self._queue_map.pop(dedup_key)
                     self._active_futures = futures
 
-                # Check for manual pause (FloodWait)
+                # Honor a platform rate limit that outlasted the call's own retries
                 now = asyncio.get_event_loop().time()
                 if self._paused_until > now:
                     wait_time = self._paused_until - now
@@ -110,30 +118,13 @@ class MessagingRateLimiter:
                             if not f.done():
                                 f.set_exception(e)
 
-                        error_msg = str(e).lower()
-                        if "flood" in error_msg or "wait" in error_msg:
-                            seconds = 30
-                            try:
-                                if hasattr(e, "seconds"):
-                                    seconds = e.seconds
-                                elif "after " in error_msg:
-                                    # Try to parse "retry after X"
-                                    parts = error_msg.split("after ")
-                                    if len(parts) > 1:
-                                        seconds = int(parts[1].split()[0])
-                            except Exception:
-                                pass
-
-                            logger.error(
-                                f"FloodWait detected! Pausing worker for {seconds}s"
-                            )
-                            wait_secs = (
-                                float(seconds)
-                                if isinstance(seconds, (int, float, str))
-                                else 30.0
+                        if isinstance(e, PlatformRateLimited):
+                            logger.warning(
+                                "Platform rate limit: pausing messaging for {:.1f}s",
+                                e.retry_after,
                             )
                             self._paused_until = (
-                                asyncio.get_event_loop().time() + wait_secs
+                                asyncio.get_event_loop().time() + e.retry_after
                             )
                         else:
                             logger.error(

@@ -7,7 +7,7 @@ from typing import Any
 
 from loguru import logger
 
-from ..limiter import MessagingRateLimiter
+from ..limiter import MessagingRateLimiter, PlatformRateLimited
 from .outbox import PlatformOutbox
 
 TELEGRAM_DELETE_MESSAGES_BATCH_SIZE = 100
@@ -121,7 +121,7 @@ class TelegramMessenger:
                         else float(retry_after)
                     )
                     if attempt >= max_attempts:
-                        raise
+                        raise PlatformRateLimited(wait_secs) from e
                     logger.warning(
                         "Rate limited by Telegram, waiting {}s...", wait_secs
                     )
