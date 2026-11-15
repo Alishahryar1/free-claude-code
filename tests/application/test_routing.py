@@ -396,6 +396,30 @@ def test_direct_provider_model_uses_root_policy_without_model_name_guessing(sett
     assert routed.reasoning.effort is ReasoningEffort.LOW
 
 
+@pytest.mark.parametrize(
+    ("model", "provider_model"),
+    [
+        ("llmtr/llmtr/qwen3-8-27b", "llmtr/qwen3-8-27b"),
+        ("anthropic/llmtr/llmtr/qwen3-8-27b", "llmtr/qwen3-8-27b"),
+        ("llmtr/qwen/qwen3.8-27b-free", "qwen/qwen3.8-27b-free"),
+    ],
+)
+def test_model_router_keeps_upstream_ids_that_start_with_llmtr(
+    settings, model, provider_model
+):
+    routed = ModelRouter(settings).resolve_messages_request(
+        MessagesRequest(
+            model=model,
+            messages=[Message(role="user", content="hello")],
+        )
+    )
+
+    assert routed.request.model == provider_model
+    assert routed.resolved.primary.provider_id == "llmtr"
+    assert routed.resolved.primary.provider_model == provider_model
+    assert routed.resolved.primary.provider_model_ref == f"llmtr/{provider_model}"
+
+
 def test_model_router_routes_token_count_request(settings):
     settings = Settings.model_validate(
         settings.model_dump() | {"model_haiku": "lmstudio/qwen2.5-7b"}

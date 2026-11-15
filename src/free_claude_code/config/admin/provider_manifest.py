@@ -232,6 +232,13 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "tool-capable models across its EU-hosted model pools."
         ),
     },
+    "LLMTR_API_KEY": {
+        "label": "LLMTR API Keys",
+        "description": (
+            "LLMTR OpenAI-compatible gateway API key for llmtr.com/v1. "
+            "Keys start with llmtr-."
+        ),
+    },
     "SCW_SECRET_KEY": {
         "label": "Scaleway API Keys",
         "description": (

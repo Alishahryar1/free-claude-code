@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 53 36" role="img" aria-label="LLMTR">
+  <title>LLMTR</title>
+  <g fill="currentColor">
+    <circle cx="2" cy="18" r="1.8" opacity="0.3" />
+    <circle cx="8" cy="18" r="1.8" opacity="0.55" />
+    <circle cx="14" cy="18" r="1.8" opacity="0.85" />
+  </g>
+  <path
+    d="M 38 18 A 11 11 0 1 0 16 18 A 11 11 0 1 0 38 18 Z M 38 18 A 8 8 0 1 0 22 18 A 8 8 0 1 0 38 18 Z"
+    fill="currentColor"
+    fill-rule="evenodd"
+  />
+  <polygon
+    points="46,13 47.12,16.45 50.76,16.45 47.82,18.59 48.94,22.05 46,19.91 43.06,22.05 44.18,18.59 41.24,16.45 44.88,16.45"
+    fill="#B91C1C"
+  />
+</svg>

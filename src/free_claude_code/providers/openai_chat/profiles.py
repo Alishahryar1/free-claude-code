@@ -819,6 +819,33 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         model_listing=OpenAIModelListing(path="/models"),
     ),
+    # Chat accepts a boolean ``reasoning`` field. Effort names differ by model,
+    # and a reasoning object is rejected. On sends true, off sends false, and
+    # the default omits the field. Ids such as ``llmtr/qwen3-8-27b`` already
+    # start with this provider name and are forwarded unchanged.
+    "llmtr": OpenAIChatProfile(
+        _policy(
+            "LLMTR",
+            ReasoningReplayMode.REASONING_CONTENT,
+            include_extra_body=True,
+            extra_body_validator=validate_extra_body_does_not_override_reasoning_fields,
+            default_max_tokens=ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+        ),
+        NamedEffortReasoning(
+            (),
+            disabled_value=False,
+            enabled_value=True,
+            field="reasoning",
+            use_extra_body=True,
+        ),
+        model_listing=OpenAIModelListing(
+            path="/models",
+            required_sequence_items=(("supported_operations", "CHAT_COMPLETIONS"),),
+            input_modalities_path=("architecture", "input_modalities"),
+            context_window_tokens_path=("context_length",),
+            max_output_tokens_path=("top_provider", "max_completion_tokens"),
+        ),
+    ),
     "ollama_cloud": OpenAIChatProfile(
         _policy(
             "OLLAMA_CLOUD",
