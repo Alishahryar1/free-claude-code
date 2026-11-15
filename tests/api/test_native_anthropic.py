@@ -116,6 +116,41 @@ def test_native_ingress_preserves_extensions_and_bypasses_local_processing():
     assert without_empty_reasoning(sent) == [{**body, "model": "claude-test"}]
 
 
+def test_native_ingress_forwards_system_turns_for_upstream_to_judge():
+    sent = []
+
+    def handle(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "type": "message",
+                "model": "claude-test",
+                "content": [],
+                "stop_reason": "end_turn",
+            },
+        )
+
+    app = create_test_app(
+        Settings(MODEL="anthropic/claude-test", ANTHROPIC_API_KEY="key"),
+        providers={"anthropic": provider(handle)},
+    )
+    body = native_body()
+    body["messages"] = [
+        *body["messages"],
+        {"role": "system", "content": "reminder", "clear_at": "next_user_message"},
+        {"role": "user", "content": "again"},
+    ]
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/messages",
+            headers={"User-Agent": "claude-cli/2.1.288 (external, cli)"},
+            json=body,
+        )
+    assert response.status_code == 200, response.text
+    assert without_empty_reasoning(sent[0])["messages"] == body["messages"]
+
+
 def test_native_fallback_excludes_compatibility_and_preserves_alias():
     sent = []
 
