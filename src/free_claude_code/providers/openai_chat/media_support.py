@@ -29,6 +29,8 @@ _REJECTION_PHRASES = (
     # support. Hosted NIM reports it inside an HTTP 200 stream.
     "multimodal processing is not enabled",
     "received multimodal data",
+    # DeepSeek and other OpenAI-compatible APIs serving a text-only model.
+    "does not support image input",
 )
 
 

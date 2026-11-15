@@ -44,9 +44,13 @@ def _in_stream(body: object) -> openai.APIError:
         _status_error("Error code: 400", body={"error": {"message": VLLM}}),
         _status_error("Error code: 400", body={"detail": VLLM}),
         _status_error(f"Error code: 400 - {VLLM}"),
+        _status_error(
+            "This model does not support image inputs",
+            body={"message": "This model does not support image inputs"},
+        ),
     ],
 )
-def test_vllm_multimodal_rejections_are_recognized(error):
+def test_media_rejections_are_recognized(error):
     assert is_media_rejection(error)
 
 
