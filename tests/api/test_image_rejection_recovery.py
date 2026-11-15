@@ -142,9 +142,81 @@ def nim_app(reply):
     return provider, create_test_app(settings, providers={"nvidia_nim": provider})
 
 
+NOTE = (
+    "[image omitted: this model cannot accept image input. "
+    "Tell the user the image was not seen.]"
+)
+
+
+def image_sent(request: httpx2.Request) -> bool:
+    return {"type": "image_url", "image_url": {"url": IMAGE_URL}} in sent_parts(request)
+
+
+def note_sent(request: httpx2.Request) -> bool:
+    return {"type": "text", "text": NOTE} in sent_parts(request)
+
+
+def text_only_upstream(requests: list[httpx2.Request], *, in_stream: bool):
+    def reply(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        if image_sent(request):
+            return vllm_rejection(in_stream=in_stream)
+        return chat_reply("I cannot see the image.")
+
+    return reply
+
+
 @pytest.mark.parametrize("in_stream", [True, False])
 @pytest.mark.parametrize("wire", WIRES)
-def test_rejected_image_is_sent_once_and_fails(wire, in_stream):
+def test_rejected_image_is_replaced_by_a_note_and_remembered(wire, in_stream):
+    requests: list[httpx2.Request] = []
+    provider, app = nim_app(text_only_upstream(requests, in_stream=in_stream))
+    path, payload = image_request(wire)
+    try:
+        with TestClient(app) as client:
+            first = client.post(path, json=payload)
+            second = client.post(path, json=payload)
+    finally:
+        asyncio.run(provider.cleanup())
+
+    for response in (first, second):
+        assert response.status_code == 200, response.text
+        assert "I cannot see the image." in response.text
+    # The rejected request is retried with the note; the next request for the
+    # same model is sent with the note from the start.
+    assert [image_sent(request) for request in requests] == [True, False, False]
+    assert [note_sent(request) for request in requests] == [False, True, True]
+
+
+def test_a_model_that_accepts_images_still_receives_them():
+    requests: list[httpx2.Request] = []
+
+    def reply(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        if json.loads(request.content)["model"] == "text-only" and image_sent(request):
+            return vllm_rejection(in_stream=True)
+        return chat_reply("Done.")
+
+    provider, app = nim_app(reply)
+    path, payload = image_request("messages")
+    try:
+        with TestClient(app) as client:
+            assert client.post(path, json=payload).status_code == 200
+            vision = {**payload, "model": "nvidia_nim/vision"}
+            assert client.post(path, json=vision).status_code == 200
+    finally:
+        asyncio.run(provider.cleanup())
+
+    assert [json.loads(request.content)["model"] for request in requests] == [
+        "text-only",
+        "text-only",
+        "vision",
+    ]
+    assert [image_sent(request) for request in requests] == [True, False, True]
+
+
+@pytest.mark.parametrize("in_stream", [True, False])
+def test_rejection_of_a_request_without_media_is_not_retried(in_stream):
     requests: list[httpx2.Request] = []
 
     def reply(request: httpx2.Request) -> httpx2.Response:
@@ -152,7 +224,8 @@ def test_rejected_image_is_sent_once_and_fails(wire, in_stream):
         return vllm_rejection(in_stream=in_stream)
 
     provider, app = nim_app(reply)
-    path, payload = image_request(wire)
+    path, payload = image_request("messages")
+    payload["messages"] = [{"role": "user", "content": "hello"}]
     try:
         with TestClient(app) as client:
             response = client.post(path, json=payload)
@@ -162,6 +235,3 @@ def test_rejected_image_is_sent_once_and_fails(wire, in_stream):
     assert response.status_code == 400, response.text
     assert "multimodal processing is not enabled" in response.text
     assert len(requests) == 1
-    assert {"type": "image_url", "image_url": {"url": IMAGE_URL}} in sent_parts(
-        requests[0]
-    )

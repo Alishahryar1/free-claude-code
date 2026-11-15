@@ -15,6 +15,7 @@ from free_claude_code.core.reasoning import (
 )
 from free_claude_code.providers.request_correction import Proposal
 
+from .media_support import is_media_rejection
 from .profiles import OpenAIChatProfile
 from .request_policy import (
     build_openai_chat_request_body,
@@ -83,6 +84,10 @@ class OpenAIChatBehavior:
     def retry_request_body(self, error: Exception, body: dict) -> Proposal | None:
         """Return a corrected request for one retry, or None."""
         return None
+
+    def media_rejected(self, error: Exception) -> bool:
+        """Whether the upstream rejected the request because it carried media."""
+        return is_media_rejection(error)
 
     def reasoning_disable_rejected(self, error: Exception) -> bool:
         """Recognize provider-owned OFF rejection formats without learning state."""
