@@ -119,7 +119,6 @@ def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(tmp_path
         "CLAUDE_CODE_RETRY_WATCHDOG",
         "CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES",
         "API_TIMEOUT_MS",
-        "DISABLE_AUTOUPDATER",
         "DISABLE_FEEDBACK_COMMAND",
         "DISABLE_ERROR_REPORTING",
     }
