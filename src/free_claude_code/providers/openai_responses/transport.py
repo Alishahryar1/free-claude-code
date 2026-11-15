@@ -568,7 +568,7 @@ class _ResponsesAttempt(TransportAttempt):
             client=self._client,
             endpoint=endpoint.snapshot if endpoint is not None else None,
         )
-        self.sent_body = self.context.corrections.prepare_history(
+        self.sent_body = self.context.history.prepare(
             self.body,
             origin,
             transport._history_cache,
@@ -582,7 +582,7 @@ class _ResponsesAttempt(TransportAttempt):
         transport = self._transport
         presenter = self._presenter
         source = self.context.source
-        corrections = self.context.corrections
+        history = self.context.history
         sdk_stream = await transport._create_sdk_stream(
             self.sent_body,
             client=self._client,
@@ -641,7 +641,7 @@ class _ResponsesAttempt(TransportAttempt):
                 raise responses_stream_failure_from_event(upstream_event.type, payload)
             if context_exceeded:
                 raise context_window_exceeded_provider_failure()
-            corrections.accepted_history()
+            history.accepted()
             if presenter.completed:
                 break
         if not presenter.completed:

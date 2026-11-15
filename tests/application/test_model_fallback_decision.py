@@ -12,10 +12,13 @@ from free_claude_code.application.model_fallback.decision import (
 from free_claude_code.core.stream_recovery import (
     ContinuationSeed,
     DeliveredPrefix,
+    RecoveryAction,
     SourceRecoverySnapshot,
     StreamFailureContext,
 )
 
+RESTART = RecoveryAction.RESTART
+CONTINUE = RecoveryAction.CONTINUE
 SEED = ContinuationSeed("messages", ({"type": "text", "text": "a"},))
 
 
@@ -53,7 +56,7 @@ CLEAN = SourceRecoverySnapshot()
             None,
             None,
             True,
-            Fallback(None, "restart", "no_candidate_output"),
+            Fallback(None, RESTART, "no_candidate_output"),
             id="no_context_before_delivery",
         ),
         pytest.param(
@@ -62,7 +65,7 @@ CLEAN = SourceRecoverySnapshot()
             None,
             None,
             True,
-            Fallback(None, "restart", "no_candidate_output"),
+            Fallback(None, RESTART, "no_candidate_output"),
             id="no_context_hidden_output",
         ),
         pytest.param(
@@ -71,7 +74,7 @@ CLEAN = SourceRecoverySnapshot()
             None,
             SEED,
             True,
-            Fallback(SEED, "continue", "no_candidate_output"),
+            Fallback(SEED, CONTINUE, "no_candidate_output"),
             id="no_context_silent_continuation",
         ),
         pytest.param(
@@ -98,7 +101,7 @@ CLEAN = SourceRecoverySnapshot()
             None,
             None,
             True,
-            Fallback(None, "restart", "no_delivered_content"),
+            Fallback(None, RESTART, "no_delivered_content"),
             id="restart",
         ),
         pytest.param(
@@ -107,7 +110,7 @@ CLEAN = SourceRecoverySnapshot()
             _prefix(),
             None,
             True,
-            Fallback(SEED, "continue", "portable_prefix"),
+            Fallback(SEED, CONTINUE, "portable_prefix"),
             id="continue",
         ),
         pytest.param(
@@ -153,7 +156,7 @@ def test_next_step(failure, released, prefix, seed, has_next, expected):
         next_step(
             failure,
             content_released=released,
-            read_prefix=lambda: prefix,
+            prefix=prefix,
             seed=seed,
             has_next=has_next,
         )
@@ -161,16 +164,13 @@ def test_next_step(failure, released, prefix, seed, has_next, expected):
     )
 
 
-def test_prefix_is_read_only_with_stream_evidence():
-    def unread() -> DeliveredPrefix:
-        raise AssertionError("prefix read without stream evidence")
-
+def test_prefix_is_ignored_without_stream_evidence():
     step = next_step(
         _failure(None),
         content_released=True,
-        read_prefix=unread,
+        prefix=_prefix(has_calls=True),
         seed=SEED,
         has_next=True,
     )
 
-    assert step == Fallback(SEED, "continue", "no_candidate_output")
+    assert step == Fallback(SEED, CONTINUE, "no_candidate_output")

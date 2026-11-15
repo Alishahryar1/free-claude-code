@@ -9,8 +9,8 @@ from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.continuation import SourceRecoveryState
+from free_claude_code.providers.history_negotiation import RequestHistory
 from free_claude_code.providers.http import ProviderAttemptScope
-from free_claude_code.providers.request_correction import RequestCorrector
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +19,7 @@ class AttemptContext:
 
     body: JsonObject
     operation_kind: ProviderOperationKind
-    corrections: RequestCorrector
+    history: RequestHistory
     source: SourceRecoveryState
 
     @property

@@ -42,6 +42,7 @@ from free_claude_code.providers.continuation import PublicRecovery
 from free_claude_code.providers.http import ProviderAttemptScope
 from free_claude_code.providers.request_correction import (
     CorrectionStep,
+    Proposal,
     Rejection,
     RequestCorrector,
 )
@@ -239,19 +240,32 @@ async def test_retryable_failure_before_acceptance_retries_the_same_body(record)
     assert len(record.events("provider.recovery.early_retry")) == 1
 
 
+@dataclass
+class _Taught:
+    applied: int = 0
+
+    def apply(self) -> None:
+        self.applied += 1
+
+
+def _teaching(rejections: list[Rejection], lesson: _Taught) -> CorrectionStep:
+    def propose(rejection: Rejection) -> Proposal:
+        rejections.append(rejection)
+        return Proposal({**rejection.body, "n": 1}, "set n", lesson)
+
+    return CorrectionStep("fix", propose)
+
+
 @pytest.mark.asyncio
 async def test_corrected_rejection_retries_with_the_corrected_body(record):
     rejections: list[Rejection] = []
-
-    def propose(rejection: Rejection) -> JsonObject:
-        rejections.append(rejection)
-        return {**rejection.body, "n": 1}
+    lesson = _Taught()
 
     frames, raised = await _run(
         record,
         Step(error=_failure(400)),
         Step(frames=("ok",)),
-        correction=CorrectionStep("fix", propose),
+        correction=_teaching(rejections, lesson),
     )
 
     assert (frames, raised) == (["abandoned", "ok"], None)
@@ -259,6 +273,25 @@ async def test_corrected_rejection_retries_with_the_corrected_body(record):
     assert [rejection.sent_body for rejection in rejections] == [{**BODY, "sent": True}]
     # The correction is authorized before admission could judge the rejection.
     assert record.outcomes == ["corrected", "accepted"]
+    assert lesson.applied == 1
+    [corrected] = record.events("provider.request.corrected")
+    assert (corrected["step"], corrected["note"]) == ("fix", "set n")
+
+
+@pytest.mark.asyncio
+async def test_a_lesson_is_applied_even_when_no_attempt_remains(record):
+    lesson = _Taught()
+
+    _, raised = await _run(
+        record,
+        Step(error=_failure(400)),
+        correction=_teaching([], lesson),
+        max_attempts=1,
+    )
+
+    assert isinstance(raised, ExecutionFailure) and raised.status_code == 400
+    assert lesson.applied == 1
+    assert record.events("provider.request.corrected") == []
 
 
 @pytest.mark.asyncio

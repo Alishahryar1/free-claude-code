@@ -223,6 +223,31 @@ def test_stream_failure_resolution_is_pure() -> None:
     )
 
 
+def test_request_correction_decides_without_effects() -> None:
+    owner = f"{_PACKAGE_NAME}.providers.request_correction"
+    forbidden = (
+        "logging",
+        "loguru",
+        f"{_PACKAGE_NAME}.core.trace",
+        f"{_PACKAGE_NAME}.providers.admission",
+        f"{_PACKAGE_NAME}.providers.history_negotiation",
+        f"{_PACKAGE_NAME}.providers.http",
+    )
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if (record.importer == owner or record.importer.startswith(f"{owner}."))
+        and any(
+            record.imported == prefix or record.imported.startswith(f"{prefix}.")
+            for prefix in forbidden
+        )
+    ]
+    assert not offenders, (
+        "Request correction must return lessons, not log or teach memories:\n"
+        + "\n".join(offenders)
+    )
+
+
 def test_model_fallback_decision_is_pure() -> None:
     owner = f"{_PACKAGE_NAME}.application.model_fallback.decision"
     allowed = {"collections", "dataclasses", f"{_PACKAGE_NAME}.core.stream_recovery"}

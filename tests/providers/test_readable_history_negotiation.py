@@ -25,6 +25,7 @@ from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.history_negotiation import (
     HistoryModeCache,
     HistoryNegotiation,
+    RequestHistory,
     resolve_history_overrides,
 )
 from tests.providers.support import immediate_admission, make_provider_config
@@ -549,6 +550,7 @@ async def test_native_messages_negotiates_stream_and_json_and_reuses_cache(strea
 def test_precise_native_repair_keeps_other_records_in_same_carrier():
     from free_claude_code.core.history_replay import ReplayRecord, encode_replay
     from free_claude_code.providers.request_correction import (
+        Correction,
         Rejection,
         RequestCorrector,
     )
@@ -570,7 +572,8 @@ def test_precise_native_repair_keeps_other_records_in_same_carrier():
         ],
     }
     corrections = RequestCorrector("chat")
-    sent = corrections.prepare_history(source, origin, HistoryModeCache())
+    history = RequestHistory()
+    sent = history.prepare(source, origin, HistoryModeCache())
     response = httpx.Response(
         400,
         request=httpx.Request("POST", "https://provider.test"),
@@ -585,11 +588,19 @@ def test_precise_native_repair_keeps_other_records_in_same_carrier():
     error = httpx.HTTPStatusError(
         "rejected", request=response.request, response=response
     )
-    corrected = corrections.correct(Rejection(error, source, sent))
-    assert corrected is not None
+    corrected = corrections.correct(
+        Rejection(
+            error,
+            source,
+            sent,
+            history_source=history.source,
+            history_paths=history.paths,
+        )
+    )
+    assert isinstance(corrected, Correction)
     retried = cast(
         dict[str, Any],
-        corrections.prepare_history(corrected, origin, HistoryModeCache()),
+        history.prepare(corrected.body, origin, HistoryModeCache()),
     )
     assert retried["messages"][0]["reasoning_details"] == [second]
     assert "first-sig" not in json.dumps(retried)

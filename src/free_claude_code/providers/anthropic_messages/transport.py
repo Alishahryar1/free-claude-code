@@ -543,7 +543,7 @@ class _MessagesAttempt(TransportAttempt):
             str(self.body["model"]),
             endpoint=endpoint,
         )
-        self.sent_body = self.context.corrections.prepare_history(
+        self.sent_body = self.context.history.prepare(
             self.body,
             origin,
             transport._history_cache,
@@ -576,7 +576,7 @@ class _MessagesAttempt(TransportAttempt):
         assert self._request is not None and self._presenter is not None
         presenter = self._presenter
         forwarding = self._forwarding
-        corrections = self.context.corrections
+        history = self.context.history
         attempt = scope.attempt
         response = scope.retain(
             await self._transport._client.send(self._request, stream=True)
@@ -587,7 +587,7 @@ class _MessagesAttempt(TransportAttempt):
             message = await _read_message(response)
             self._stopped = True
             output = _present_message(message, forwarding.public_model)
-            corrections.accepted_history()
+            history.accepted()
             await attempt.accept()
             yield StreamOutput((output,))
             return
@@ -608,7 +608,7 @@ class _MessagesAttempt(TransportAttempt):
                 self.context.source.observe(
                     "messages", payload, continuing=self.context.continuing
                 )
-                corrections.accepted_history()
+                history.accepted()
                 if not attempt.accepted:
                     await attempt.accept()
                 for group in self._tool_buffer.feed(event_type, payload):

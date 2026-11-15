@@ -1,7 +1,8 @@
-"""A request corrector turns one rejection into one corrected body, in a fixed order.
+"""A request corrector decides how to correct one rejection, in a fixed order.
 
 Order: history record repair, reasoning control, transport steps, and the
-history-mode fallback after an HTTP 400.
+history-mode fallback after an HTTP 400. Deciding has no effects: lessons are
+returned, never applied.
 """
 
 import json
@@ -17,10 +18,16 @@ from free_claude_code.core.history_replay import (
     encode_replay,
 )
 from free_claude_code.core.json_types import JsonObject
-from free_claude_code.providers.history_negotiation import HistoryModeCache
+from free_claude_code.providers.history_negotiation import (
+    HistoryModeCache,
+    RequestHistory,
+)
 from free_claude_code.providers.reasoning_compatibility import ReasoningCorrection
 from free_claude_code.providers.request_correction import (
+    Correction,
     CorrectionStep,
+    NextHistoryMode,
+    Proposal,
     Rejection,
     RequestCorrector,
 )
@@ -41,12 +48,14 @@ def _http_400(error: JsonObject) -> httpx.HTTPStatusError:
     )
 
 
-def _step(kind: str | None, calls: list[str], result: JsonObject | None):
-    def propose(rejection: Rejection) -> JsonObject | None:
-        calls.append(kind or "kindless")
-        return result
+def _step(
+    name: str, calls: list[str], result: JsonObject | None, *, once: bool = True
+) -> CorrectionStep:
+    def propose(rejection: Rejection) -> Proposal | None:
+        calls.append(name)
+        return Proposal(result) if result is not None else None
 
-    return CorrectionStep(kind, propose)
+    return CorrectionStep(name, propose, once=once)
 
 
 def _readable_source() -> dict[str, Any]:
@@ -65,6 +74,20 @@ def _rejection(error: Exception, body: JsonObject | None = None) -> Rejection:
     return Rejection(error, body, body)
 
 
+def _negotiated(
+    error: Exception, source: JsonObject
+) -> tuple[RequestHistory, Rejection]:
+    history = RequestHistory()
+    sent = history.prepare(source, ORIGIN, HistoryModeCache())
+    return history, Rejection(
+        error,
+        source,
+        sent,
+        history_source=history.source,
+        history_paths=history.paths,
+    )
+
+
 def test_steps_run_in_order_and_the_first_correction_wins():
     calls: list[str] = []
     corrector = RequestCorrector(
@@ -76,26 +99,53 @@ def test_steps_run_in_order_and_the_first_correction_wins():
         ),
     )
 
-    assert corrector.correct(_rejection(RuntimeError("no"))) == {"corrected": "second"}
+    assert corrector.correct(_rejection(RuntimeError("no"))) == Correction(
+        {"corrected": "second"}, "second"
+    )
     assert calls == ["first", "second"]
 
 
-def test_a_step_with_a_kind_corrects_at_most_once():
+def test_a_once_step_corrects_at_most_once():
     calls: list[str] = []
     corrector = RequestCorrector("chat", steps=(_step("once", calls, {"fixed": 1}),))
 
-    assert corrector.correct(_rejection(RuntimeError("no"))) == {"fixed": 1}
+    assert corrector.correct(_rejection(RuntimeError("no"))) is not None
     assert corrector.correct(_rejection(RuntimeError("no"))) is None
     assert calls == ["once"]
 
 
-def test_a_step_without_a_kind_may_correct_again():
+def test_a_repeatable_step_may_correct_again():
     calls: list[str] = []
-    corrector = RequestCorrector("chat", steps=(_step(None, calls, {"fixed": 1}),))
+    corrector = RequestCorrector(
+        "chat", steps=(_step("again", calls, {"fixed": 1}, once=False),)
+    )
 
-    assert corrector.correct(_rejection(RuntimeError("no"))) == {"fixed": 1}
-    assert corrector.correct(_rejection(RuntimeError("no"))) == {"fixed": 1}
-    assert calls == ["kindless", "kindless"]
+    assert corrector.correct(_rejection(RuntimeError("no"))) is not None
+    assert corrector.correct(_rejection(RuntimeError("no"))) is not None
+    assert calls == ["again", "again"]
+
+
+def test_a_lesson_is_returned_and_never_applied():
+    applied: list[str] = []
+
+    class Taught:
+        def apply(self) -> None:
+            applied.append("taught")
+
+    lesson = Taught()
+    corrector = RequestCorrector(
+        "chat",
+        steps=(
+            CorrectionStep(
+                "learn", lambda _rejection: Proposal({"fixed": 1}, "why", lesson)
+            ),
+        ),
+    )
+
+    assert corrector.correct(_rejection(RuntimeError("no"))) == Correction(
+        {"fixed": 1}, "learn", "why", lesson
+    )
+    assert applied == []
 
 
 def test_reasoning_correction_runs_before_transport_steps():
@@ -115,8 +165,8 @@ def test_reasoning_correction_runs_before_transport_steps():
 
     corrected = corrector.correct(Rejection(error, body, body))
 
-    assert corrected is not None
-    assert "reasoning_effort" not in corrected
+    assert isinstance(corrected, Correction) and corrected.step == "reasoning"
+    assert "reasoning_effort" not in corrected.body
     assert calls == []
 
 
@@ -135,7 +185,6 @@ def test_history_record_repair_runs_before_any_step():
         ],
     }
     corrector = RequestCorrector("chat", steps=(_step("step", calls, {"x": 1}),))
-    sent = corrector.prepare_history(source, ORIGIN, HistoryModeCache())
     error = _http_400(
         {
             "code": "invalid_signature",
@@ -143,12 +192,13 @@ def test_history_record_repair_runs_before_any_step():
             "param": "messages[0].reasoning_details[0]",
         }
     )
+    history, rejection = _negotiated(error, source)
 
-    corrected = corrector.correct(Rejection(error, source, sent))
+    corrected = corrector.correct(rejection)
 
-    assert corrected is not None
+    assert isinstance(corrected, Correction) and corrected.step == "history_record"
     assert "first-sig" not in json.dumps(
-        corrector.prepare_history(corrected, ORIGIN, HistoryModeCache())
+        history.prepare(corrected.body, ORIGIN, HistoryModeCache())
     )
     assert calls == []
 
@@ -157,18 +207,21 @@ def test_history_mode_moves_on_after_an_http_400_no_step_corrects():
     calls: list[str] = []
     corrector = RequestCorrector("chat", steps=(_step("step", calls, None),))
     source = _readable_source()
-    sent = corrector.prepare_history(source, ORIGIN, HistoryModeCache())
+    history, rejection = _negotiated(_http_400({"message": "bad request"}), source)
 
-    corrected = corrector.correct(
-        Rejection(_http_400({"message": "bad request"}), source, sent)
-    )
-
-    assert corrected is not None
-    rendered = json.dumps(
-        corrector.prepare_history(corrected, ORIGIN, HistoryModeCache())
-    )
-    assert "Old" not in rendered and "New" in rendered
+    assert corrector.correct(rejection) == NextHistoryMode()
     assert calls == ["step"]
+    corrected = history.next_mode()
+    assert corrected is not None
+    rendered = json.dumps(history.prepare(corrected, ORIGIN, HistoryModeCache()))
+    assert "Old" not in rendered and "New" in rendered
+
+
+def test_history_mode_stays_without_negotiated_history():
+    corrector = RequestCorrector("chat")
+    error = _http_400({"message": "bad request"})
+
+    assert corrector.correct(_rejection(error)) is None
 
 
 @pytest.mark.parametrize(
@@ -181,7 +234,6 @@ def test_history_mode_moves_on_after_an_http_400_no_step_corrects():
 )
 def test_history_mode_stays_without_an_http_400_response(error):
     corrector = RequestCorrector("chat")
-    source = _readable_source()
-    sent = corrector.prepare_history(source, ORIGIN, HistoryModeCache())
+    _, rejection = _negotiated(error, _readable_source())
 
-    assert corrector.correct(Rejection(error, source, sent)) is None
+    assert corrector.correct(rejection) is None
