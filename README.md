@@ -414,9 +414,9 @@ are configuring.
 Any client or SDK for these APIs can call FCC at `http://127.0.0.1:8082`. Every FCC
 model works on every endpoint. If Proxy Authentication is enabled, add
 `-H "Authorization: Bearer <token>"` to each request.
-List the available models with `curl http://127.0.0.1:8082/v1/models`.
+List the available models with `curl "http://127.0.0.1:8082/v1/models?view=messages"`.
 
-[`POST /v1/messages`](https://docs.claude.com/en/api/messages):
+[`POST /v1/messages`](https://platform.claude.com/docs/en/api/messages):
 
 ```bash
 curl http://127.0.0.1:8082/v1/messages \
