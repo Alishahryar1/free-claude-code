@@ -144,22 +144,6 @@ def build_native_messages_request(
                 "reasoning_content cannot be replayed losslessly."
             )
         raw = cast(JsonObject, message.model_dump(mode="json", exclude_none=True))
-        if message.role == "system":
-            if messages:
-                raise NativeMessagesError(
-                    "Native Messages supports only leading system messages."
-                )
-            content = raw["content"]
-            if isinstance(content, str):
-                system.append({"type": "text", "text": content})
-            elif isinstance(content, list):
-                if any(
-                    not isinstance(block, Mapping) or block.get("type") != "text"
-                    for block in content
-                ):
-                    raise NativeMessagesError("System content must contain only text.")
-                system.extend(content)
-            continue
         messages.append(raw)
     if not messages:
         raise NativeMessagesError("Messages input must contain a conversational turn.")
