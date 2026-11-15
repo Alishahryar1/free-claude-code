@@ -340,32 +340,39 @@ def test_create_message_pre_start_provider_error_returns_terminal_json(
     mock_provider.stream_messages = _mock_stream_messages
 
 
-def test_create_message_preserves_system_role_messages(client: TestClient):
-    """Create message preserves latest-client system message placement."""
-    mock_provider.stream_messages = _mock_stream_messages
+@pytest.mark.parametrize(
+    "system_turn",
+    [
+        {"role": "system", "content": "system prompt"},
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "reminder"}],
+            "clear_at": "next_user_message",
+        },
+    ],
+    ids=["text", "clear-at"],
+)
+@pytest.mark.parametrize("leading", [True, False], ids=["leading", "mid"])
+def test_system_role_messages_are_rejected(client: TestClient, system_turn, leading):
+    """System prompts belong in ``system``; Claude Code retries without the turn."""
     _stream_messages_calls.clear()
-    payload = {
-        "model": "claude-3-sonnet",
-        "messages": [
-            {"role": "user", "content": "context"},
-            {"role": "system", "content": "system prompt"},
-            {"role": "user", "content": "Hi"},
-        ],
-        "max_tokens": 100,
-        "stream": True,
-    }
+    messages = [{"role": "user", "content": "Hi"}]
+    messages.insert(0 if leading else 1, system_turn)
+    if not leading:
+        messages.append({"role": "user", "content": "again"})
 
-    response = client.post("/v1/messages", json=payload)
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "claude-3-sonnet",
+            "messages": messages,
+            "max_tokens": 100,
+            "stream": True,
+        },
+    )
 
-    assert response.status_code == 200
-    routed_request = _stream_messages_calls[0][0][0]
-    assert [message.role for message in routed_request.messages] == [
-        "user",
-        "system",
-        "user",
-    ]
-    assert routed_request.messages[1].content == "system prompt"
-    assert routed_request.system is None
+    assert response.status_code in (400, 422)
+    assert _stream_messages_calls == []
 
 
 def test_model_mapping(client: TestClient):
