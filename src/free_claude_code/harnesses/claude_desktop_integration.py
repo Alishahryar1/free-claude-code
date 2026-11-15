@@ -330,12 +330,15 @@ def _update_profile(library: _Library, values: JsonObject, token_path: Path) -> 
     }
     headers[_VIEW_HEADER] = "claude-desktop"
     sealed = _sealed_current(profile, token, token_path)
+    if not sealed and profile.get(_KEY) != token:
+        # Forget the old token first: if remembering the new one then fails,
+        # a sealed copy of it must read as stale, not as the old token.
+        token_path.unlink(missing_ok=True)
     profile.update({k: v for k, v in values.items() if not (sealed and k == _KEY)})
     # Desktop otherwise restricts tool network access to the inference gateway.
     profile.setdefault("coworkEgressAllowedHosts", ["*"])
     profile["inferenceCustomHeaders"] = headers
     changed = _write(library.profile_path, profile)
-    # Written after the profile, so a failure here only costs a later rewrite.
     _remember(token_path, token)
     return changed
 

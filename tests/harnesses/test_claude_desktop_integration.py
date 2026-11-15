@@ -754,6 +754,35 @@ def test_sealed_key_without_a_matching_fingerprint_is_replaced(tmp_path, fingerp
     assert desktop.configure(tmp_path, URL, TOKEN, disconnect_path=record)["connected"]
 
 
+def test_failed_fingerprint_write_never_vouches_for_a_rotated_key(
+    tmp_path, monkeypatch
+):
+    record = claude_desktop_disconnect_path()
+    desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
+    seal(tmp_path)
+    atomic = desktop.atomic_write_text
+
+    def fail_fingerprint(path, content):
+        if path == token_record():
+            raise PermissionError("test")
+        atomic(path, content)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(desktop, "atomic_write_text", fail_fingerprint)
+        with pytest.raises(PermissionError):
+            desktop.refresh_connected(
+                tmp_path, URL, "new-token", disconnect_path=record
+            )
+    assert read(profile(tmp_path))["inferenceGatewayApiKey"] == "new-token"
+    seal(tmp_path)
+
+    assert not desktop.configure(tmp_path, URL, TOKEN, disconnect_path=record)[
+        "connected"
+    ]
+    assert desktop.refresh_connected(tmp_path, URL, TOKEN, disconnect_path=record)
+    assert read(profile(tmp_path))["inferenceGatewayApiKey"] == TOKEN
+
+
 def test_disconnect_removes_token_fingerprint(tmp_path):
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
