@@ -469,15 +469,23 @@ def test_other_profiles_and_unknown_settings_are_preserved(tmp_path):
     assert other_path.read_bytes() == before
 
 
-@pytest.mark.parametrize("failed_write", [1, 2, 3, 4])
+@pytest.mark.parametrize(
+    "failed_write",
+    [
+        lambda root: root / "configLibrary" / f"{desktop.DEFAULT_ID}.json",
+        profile,
+        lambda root: token_record(),
+        meta,
+        mode,
+    ],
+    ids=["default", "profile", "fingerprint", "meta", "mode"],
+)
 def test_connect_partial_write_is_retryable(tmp_path, monkeypatch, failed_write):
     atomic = desktop.atomic_write_text
-    calls = 0
+    failed = failed_write(tmp_path)
 
     def fail(path, content):
-        nonlocal calls
-        calls += 1
-        if calls == failed_write:
+        if path == failed:
             raise PermissionError("test")
         atomic(path, content)
 
