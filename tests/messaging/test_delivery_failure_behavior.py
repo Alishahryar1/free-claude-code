@@ -6,6 +6,7 @@ library actually reports a rejected request.
 """
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -220,3 +221,49 @@ async def test_platform_rate_limit_pauses_the_queue_for_its_wait():
 )
 async def test_other_errors_do_not_pause_the_queue(error):
     assert await _queue_pause(error) == 0
+
+
+def _bulk_messenger(bulk_outcomes):
+    """A messenger whose bot fails bulk deletes as scripted and logs single ones."""
+    bulk = iter(bulk_outcomes)
+
+    async def delete_messages(*, chat_id, message_ids):
+        outcome = next(bulk)
+        if isinstance(outcome, BaseException):
+            raise outcome
+
+    bot = SimpleNamespace(
+        delete_messages=AsyncMock(side_effect=delete_messages),
+        delete_message=AsyncMock(),
+    )
+    messenger = telegram_io.TelegramMessenger(
+        get_application=lambda: SimpleNamespace(bot=bot),
+        limiter=MessagingRateLimiter(rate_limit=100, rate_window=1.0),
+    )
+    return messenger, bot
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_bulk_delete_hands_its_wait_to_the_queue(sleeps):
+    messenger, bot = _bulk_messenger([RetryAfter(5), RetryAfter(6), RetryAfter(7)])
+
+    with pytest.raises(PlatformRateLimited) as raised:
+        await messenger.delete_messages("1", ["10", "11"])
+
+    assert raised.value.retry_after == 7
+    assert bot.delete_message.await_count == 0
+    assert _delays(sleeps) == [5, 6]
+
+
+@pytest.mark.asyncio
+async def test_rejected_bulk_delete_falls_back_to_single_deletes(sleeps):
+    messenger, bot = _bulk_messenger([BadRequest("Method not available")])
+
+    await messenger.delete_messages("1", ["10", "11"])
+
+    assert [
+        call.kwargs["message_id"] for call in bot.delete_message.await_args_list
+    ] == [
+        10,
+        11,
+    ]

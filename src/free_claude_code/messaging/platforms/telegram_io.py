@@ -263,6 +263,9 @@ class TelegramMessenger:
                         _do_bulk,
                         suppress_known_message_errors=False,
                     )
+                except PlatformRateLimited:
+                    # Single deletes would hit the same limit; the queue waits.
+                    raise
                 except Exception as e:
                     logger.debug(
                         "Telegram bulk delete failed for chat {}: {}; falling back",
