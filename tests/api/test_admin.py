@@ -179,21 +179,14 @@ def _clear_process_config(monkeypatch) -> None:
     for key in (
         "MODEL",
         "MODEL_FALLBACKS",
-        "NVIDIA_NIM_API_KEY",
-        "HUGGINGFACE_API_KEY",
-        "OPENROUTER_API_KEY",
-        "AWS_BEARER_TOKEN_BEDROCK",
         "BEDROCK_BASE_URL",
         "BEDROCK_PROXY",
-        "OLLAMA_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
         "PROXY_AUTH_ENABLED",
         "TELEGRAM_PROXY_URL",
         "FCC_ENV_FILE",
-        "CLOUDFLARE_API_TOKEN",
         "CLOUDFLARE_ACCOUNT_ID",
         "GITHUB_MODELS_TOKEN",
-        "SAMBANOVA_API_KEY",
         "HOST",
         "PORT",
         "FCC_OPEN_BROWSER",
@@ -206,6 +199,8 @@ def _clear_process_config(monkeypatch) -> None:
     ):
         monkeypatch.delenv(key, raising=False)
     for descriptor in PROVIDER_CATALOG.values():
+        if descriptor.credential_env is not None:
+            monkeypatch.delenv(descriptor.credential_env, raising=False)
         if descriptor.proxy_attr is None:
             continue
         alias = Settings.model_fields[descriptor.proxy_attr].validation_alias
