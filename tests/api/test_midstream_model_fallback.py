@@ -8,6 +8,7 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.open_router import OpenRouterProvider
+from free_claude_code.providers.recovery_policy import RecoveryTiming
 from tests.api.test_delivered_stream_recovery import (
     after_text,
     assert_completed,
@@ -550,9 +551,12 @@ async def test_exhausted_model_allows_another_model_on_same_client(
         bodies,
         provider,
     ):
-        provider._admission._base_delay = 60
-        provider._admission._max_delay = 60
+        provider._admission._timing = RecoveryTiming(
+            base_delay=60, max_delay=60, jitter=0
+        )
         raw = await delivered_candidates([send, send], wire)
+        blocked = provider._admission._episodes["provider-model"]
+        assert blocked.terminal_until is not None
     expected_models = ["provider-model"] * (2 if partial else 1) + ["model-1"]
     assert [body["model"] for body in bodies] == expected_models
     events = parse_sse_text(raw)

@@ -23,6 +23,7 @@ from free_claude_code.core.history_replay import (
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.history_replay import replay_origin
+from free_claude_code.providers.recovery_policy import RecoveryTiming
 from tests.api.test_response_streams import _json_error
 from tests.providers.test_gemini_transport import chat_response, gemini_request
 from tests.providers.test_google_cache_provenance import history_request
@@ -181,7 +182,7 @@ async def test_local_rejection_abandons_probe_without_upstream_rejection(wire):
     async with provider_with_http(reply) as provider:
         admission = provider._admission
         provider._client.max_retries = 0
-        admission._base_delay = admission._max_delay = admission._jitter = 0
+        admission._timing = RecoveryTiming(base_delay=0, max_delay=0, jitter=0)
         original_check = provider._chat._validate_prepared_body
         assert original_check is not None
 
