@@ -15,7 +15,7 @@
 [![Formatter: Ruff](https://img.shields.io/badge/Formatter-ruff-bf4b00.svg?style=for-the-badge)](https://github.com/astral-sh/ruff)
 [![Logging: Loguru](https://img.shields.io/badge/logging-loguru-00695c.svg?style=for-the-badge)](https://github.com/Delgan/loguru)
 
-[Quick Start](#quick-start) · [Providers](#choose-a-provider) · [Clients](#connect-your-client) · [Integrations](#optional-integrations) · [Manage](#manage-your-installation)
+[Quick Start](#quick-start) · [Providers](#choose-a-provider) · [Integrations](#integrations) · [API](#use-the-api-directly) · [Phone](#use-from-your-phone) · [Manage](#manage-your-installation)
 
 </div>
 
@@ -380,9 +380,10 @@ Open **Admin UI → Model Config → Model Routing** and choose an effort beside
 
 </details>
 
+<a id="integrations"></a>
 <a id="connect-your-client"></a>
 
-## Connect Your Client
+## Integrations
 
 FCC launchers automatically start the server.
 
@@ -409,7 +410,7 @@ are configuring.
 
 <a id="use-the-api-directly"></a>
 
-### Use The API Directly
+## Use The API Directly
 
 Any client or SDK for these APIs can call FCC. Set the base URL to
 `http://127.0.0.1:8082/v1` for OpenAI clients and `http://127.0.0.1:8082` for
@@ -465,11 +466,13 @@ Responses replies always stream. To stream Messages or Chat Completions replies,
 `"stream": true`. For Gemini, call `:streamGenerateContent?alt=sse` instead of
 `:generateContent`.
 
+<a id="use-from-your-phone"></a>
 <a id="optional-integrations"></a>
 
-## Optional Integrations
+## Use From Your Phone
 
-Configure integrations from **Admin UI → Messaging**, then click **Apply**.
+Run coding tasks from Discord or Telegram, and send voice notes. Configure them
+in **Admin UI → Messaging**, then click **Apply**.
 
 <details>
 <summary><strong>Discord bot</strong></summary>
