@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from free_claude_code.application.errors import InvalidRequestError
 
 _CLAUDE_CODE_VERSION = re.compile(r"\bclaude-cli/(\d+(?:\.\d+)+)")
+# Claude Code retries without system turns only when the refusal carries this code.
+MID_CONVERSATION_SYSTEM_NOT_SUPPORTED = "mid_conversation_system_not_supported"
 
 
 def reject_inline_system_turns(
@@ -13,9 +15,8 @@ def reject_inline_system_turns(
 ) -> None:
     """Raise an actionable error when ``messages`` holds a ``system`` turn.
 
-    Older Claude Code builds send these turns and cannot recover from the
-    rejection, so the message says how to fix it. Newer builds retry without
-    them on any 400, so the status stays an ordinary invalid request.
+    Current Claude Code recognizes the error code and resends without these
+    turns. Older builds cannot recover, so the message says how to fix it.
     """
 
     messages = body.get("messages")
@@ -29,10 +30,12 @@ def reject_inline_system_turns(
         raise InvalidRequestError(
             f"Claude Code {match.group(1)} sent a system message inside `messages`, "
             "which Free Claude Code can't accept. Run `claude update`, then "
-            "restart Claude Code."
+            "restart Claude Code.",
+            error_code=MID_CONVERSATION_SYSTEM_NOT_SUPPORTED,
         )
     raise InvalidRequestError(
         "System messages belong in the top-level `system` field, not in "
         "`messages`. If you're using Claude Code, run `claude update`, then "
-        "restart it."
+        "restart it.",
+        error_code=MID_CONVERSATION_SYSTEM_NOT_SUPPORTED,
     )

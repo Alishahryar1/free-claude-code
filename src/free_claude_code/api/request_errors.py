@@ -62,6 +62,7 @@ def ordinary_application_error_response(
             error_type=anthropic_error_type_for_failure(error.kind),
             message=error.message,
             request_id=request_id,
+            error_code=error.error_code,
         ),
     )
 
