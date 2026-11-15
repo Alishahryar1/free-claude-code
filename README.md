@@ -618,6 +618,10 @@ fcc-doctor
 - [Report bugs or request features](https://github.com/Alishahryar1/free-claude-code/issues)
 - [Contributing guide](CONTRIBUTING.md)
 
+## Maintainers
+
+See [MAINTAINERS.md](MAINTAINERS.md) for the project's maintainers and their areas of responsibility.
+
 ## License
 
 GNU Affero General Public License version 3 only (`AGPL-3.0-only`). See [LICENSE](LICENSE) for details.
