@@ -34,7 +34,6 @@ from free_claude_code.providers.openai_chat.transport import (
     _OpenAIChatStreamRunner,
     _reserved_anthropic_tool_ids,
 )
-from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     REASONING_OFF,
@@ -350,7 +349,6 @@ class TestStreamingExceptionHandling:
     async def test_stream_normalization_failure_closes_raw_stream(self):
         provider = _make_provider()
         stream = ClosableAsyncStreamMock([])
-        execution = provider._admission.start_execution()
 
         with (
             patch.object(
@@ -364,13 +362,8 @@ class TestStreamingExceptionHandling:
                 "normalize_stream",
                 side_effect=ValueError("invalid stream wrapper"),
             ),
-            pytest.raises(ValueError, match="invalid stream wrapper"),
         ):
-            await provider._chat._create_stream(
-                {"model": "test-model", "messages": []},
-                RequestRecovery(execution),
-                ProviderOperationKind.GENERATION,
-            )
+            await _collect_stream_error(provider, _make_request())
 
         assert stream.closed
 

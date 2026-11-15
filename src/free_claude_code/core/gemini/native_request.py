@@ -413,9 +413,7 @@ def messages_to_gemini(
             result_parts.sort(
                 key=lambda part: result_order[part["functionResponse"]["id"]]
             )
-        if role == "system":
-            system.extend(parts)
-        elif parts:
+        if parts:
             if role == "user" and calls:
                 raise GeminiConversionError(
                     "Unresolved tool calls before user follow-up"

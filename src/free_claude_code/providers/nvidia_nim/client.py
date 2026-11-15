@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from typing import Any
 
 import openai
-from loguru import logger
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import NVIDIA_NIM_DEFAULT_BASE
@@ -25,6 +24,11 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatBehavior,
     OpenAIChatProfile,
     OpenAIChatProvider,
+)
+from free_claude_code.providers.request_correction import (
+    CorrectionStep,
+    Proposal,
+    Rejection,
 )
 
 from .models import HOSTED_MODEL_EXCLUSIONS
@@ -93,62 +97,44 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         """Return NIM tool argument aliases captured while building this request."""
         return nim_tool_argument_aliases_from_body(body)
 
-    def retry_request_kind(
-        self,
-        error: Exception,
-        body: dict[str, Any],
-        used_retry_kinds: set[str] | None = None,
-    ) -> str | None:
-        status_code = getattr(error, "status_code", None)
-        if not (isinstance(error, openai.BadRequestError) or status_code == 400):
-            return None
-        error_text = _error_text(error)
-        used = used_retry_kinds or set()
-        if "nim_chat_template" not in used and "chat_template" in error_text:
-            return "nim_chat_template"
-        if "nim_reasoning_effort" not in used and _is_nim_reasoning_rejection(
-            error, error_text=error_text
-        ):
-            return "nim_reasoning_effort"
-        if "chat_template" in error_text:
-            return "nim_chat_template"
-        if _is_nim_reasoning_rejection(error, error_text=error_text):
-            return "nim_reasoning_effort"
-        return "provider_specific"
-
-    def retry_request_body(self, error: Exception, body: dict) -> dict | None:
-        """Retry once with a downgraded body when NIM rejects a known field."""
-        status_code = getattr(error, "status_code", None)
-        bad_request_like = isinstance(error, openai.BadRequestError) or (
-            status_code == 400
+    def correction_steps(self) -> tuple[CorrectionStep, ...]:
+        return (
+            CorrectionStep("nim_chat_template", self._retry_chat_template),
+            CorrectionStep("nim_reasoning_effort", self._retry_reasoning_effort),
         )
-        if not bad_request_like:
+
+    def _retry_chat_template(self, rejection: Rejection) -> Proposal | None:
+        if not _is_bad_request(rejection.error):
             return None
+        error_text = _error_text(rejection.error)
+        if "chat_template" not in error_text:
+            return None
+        retry_body = clone_body_without_chat_template(rejection.body)
+        if retry_body is None:
+            return None
+        return Proposal(retry_body, "dropped chat_template")
 
-        error_text = _error_text(error)
+    def _retry_reasoning_effort(self, rejection: Rejection) -> Proposal | None:
+        if not _is_bad_request(rejection.error):
+            return None
+        error_text = _error_text(rejection.error)
+        if not _is_nim_reasoning_rejection(rejection.error, error_text=error_text):
+            return None
+        retry_body = clone_body_without_reasoning_effort(rejection.body)
+        if retry_body is None:
+            return None
+        return Proposal(retry_body, "dropped reasoning_effort")
 
-        if "chat_template" in error_text:
-            retry_body = clone_body_without_chat_template(body)
-            if retry_body is not None:
-                logger.warning(
-                    "NIM_STREAM: retrying without chat_template after 400 error"
-                )
-                return retry_body
-
-        if _is_nim_reasoning_rejection(error, error_text=error_text):
-            retry_body = clone_body_without_reasoning_effort(body)
-            if retry_body is not None:
-                logger.warning(
-                    "NIM_STREAM: retrying without reasoning_effort after 400 error"
-                )
-                return retry_body
-
-        return None
+    def retry_request_body(self, error: Exception, body: dict) -> Proposal | None:
+        """Retry once with a downgraded body when NIM rejects a known field."""
+        rejection = Rejection(error, body, body)
+        return self._retry_chat_template(rejection) or self._retry_reasoning_effort(
+            rejection
+        )
 
     def reasoning_disable_rejected(self, error: Exception) -> bool:
         """Recognize NIM rejection when disabling reasoning."""
-        status_code = getattr(error, "status_code", None)
-        if not (isinstance(error, openai.BadRequestError) or status_code == 400):
+        if not _is_bad_request(error):
             return False
         error_text = _error_text(error)
         if _identifies_other_rejected_field(error, error_text):
@@ -230,6 +216,11 @@ def _is_degraded_function(body: Mapping[str, Any]) -> bool:
         and function_id
         and state.strip() == _DEGRADED_FUNCTION_STATE
     )
+
+
+def _is_bad_request(error: Exception) -> bool:
+    status_code = getattr(error, "status_code", None)
+    return isinstance(error, openai.BadRequestError) or status_code == 400
 
 
 def _error_text(error: Exception) -> str:
