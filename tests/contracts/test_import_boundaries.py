@@ -56,6 +56,7 @@ FACADE_ONLY_BOUNDARIES = {
     "free_claude_code.providers.attempt_loop",
     "free_claude_code.providers.failure_classification",
     "free_claude_code.providers.openai_chat",
+    "free_claude_code.providers.recovery_policy",
     "free_claude_code.providers.request_correction",
     "free_claude_code.providers.stream_failure_resolution",
 }
@@ -262,6 +263,34 @@ def test_model_fallback_decision_is_pure() -> None:
     ]
     assert not offenders, (
         "Model fallback decisions must depend on nothing but recovery evidence:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_recovery_policy_is_pure() -> None:
+    owner = f"{_PACKAGE_NAME}.providers.recovery_policy"
+    # datetime and email.utils parse HTTP-date hints; the caller passes "now".
+    allowed = {"dataclasses", "datetime", "email.utils", "math", owner}
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if (record.importer == owner or record.importer.startswith(f"{owner}."))
+        and not any(
+            record.imported == prefix or record.imported.startswith(f"{prefix}.")
+            for prefix in allowed
+        )
+    ]
+    clock_reads = {"now", "today", "utcnow"}
+    for path in (_PACKAGE_ROOT / "providers" / "recovery_policy").glob("*.py"):
+        offenders.extend(
+            f"{path.name}:{node.lineno}: reads the clock"
+            for node in ast.walk(ast.parse(path.read_text()))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in clock_reads
+        )
+    assert not offenders, (
+        "Recovery policy must take its clock and jitter as arguments:\n"
         + "\n".join(offenders)
     )
 
