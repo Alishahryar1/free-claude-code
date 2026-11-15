@@ -176,7 +176,7 @@ Aider:
 fcc-aider
 ```
 
-Antigravity CLI (connect on the Integrations page first):
+Antigravity CLI:
 
 ```bash
 fcc-agy

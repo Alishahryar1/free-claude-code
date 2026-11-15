@@ -388,7 +388,7 @@ def _posix_command(name: str, *, version_output: str | None = None) -> str:
         "dsh": "0.2.0-rc.2",
         "grok": "1.0.5",
         "muse": "0.2.1",
-        "agy": "1.4.7",
+        "agy": "1.5.9",
         "node": "22.19.0",
     }.get(name, "1.0.0")
     if version_output is None:
@@ -2352,7 +2352,7 @@ def _batch_client(name: str, *, version_output: str | None = None) -> str:
         "dsh": "0.2.0-rc.2",
         "grok": "1.0.5",
         "muse": "0.2.1",
-        "agy": "1.4.7",
+        "agy": "1.5.9",
         "node": "22.19.0",
     }.get(name, "1.0.0")
     if version_output is not None:

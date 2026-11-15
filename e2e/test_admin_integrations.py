@@ -12,7 +12,6 @@ from free_claude_code.harnesses import claude_integration, claude_onboarding
     "integration,button_id",
     [
         ("claude-vscode", "openClaudeIntegration"),
-        ("antigravity", "openAntigravityIntegration"),
         ("codex", "openCodexIntegration"),
         ("claude-desktop", "openClaudeDesktopIntegration"),
         ("jetbrains-acp", "openJetBrainsIntegration"),
