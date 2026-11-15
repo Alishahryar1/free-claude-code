@@ -176,7 +176,7 @@ Aider:
 fcc-aider
 ```
 
-Antigravity CLI (connect on the Integrations page first):
+Antigravity CLI:
 
 ```bash
 fcc-agy
@@ -617,6 +617,10 @@ fcc-doctor
 
 - [Report bugs or request features](https://github.com/Alishahryar1/free-claude-code/issues)
 - [Contributing guide](CONTRIBUTING.md)
+
+## Maintainers
+
+See [MAINTAINERS.md](MAINTAINERS.md) for the project's maintainers and their areas of responsibility.
 
 ## License
 

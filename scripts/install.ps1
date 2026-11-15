@@ -26,7 +26,7 @@ $DshPackage = "@deepseek-ai/dsh@latest"
 $GrokInstallUrl = "https://x.ai/cli/install.ps1"
 $MuseInstallUrl = "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install-muse.ps1"
 $AgyInstallUrl = "https://antigravity.google/cli/install.ps1"
-$AgyMinimumVersion = "1.4.7"
+$AgyMinimumVersion = "1.5.9"
 $RtkVersion = "0.44.2"
 $HeadroomPackage = "headroom-ai[mcp]==0.40.0"
 $RtkReleaseBaseUrl = "https://github.com/rtk-ai/rtk/releases/download/v$RtkVersion"
@@ -2023,7 +2023,6 @@ function Show-InstallerNextSteps {
         Write-Host "Run Aider with: fcc-aider"
     }
     if ($script:InstallAgy) {
-        Write-Host "Connect Antigravity CLI on FCC's Integrations page first."
         Write-Host "Run Antigravity CLI with: fcc-agy"
     }
 

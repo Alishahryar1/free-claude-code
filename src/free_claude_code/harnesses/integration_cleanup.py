@@ -15,7 +15,7 @@ from free_claude_code.config.paths import (
 from free_claude_code.config.server_urls import local_proxy_root_url
 from free_claude_code.config.settings import Settings
 from free_claude_code.harnesses import (
-    antigravity_integration,
+    antigravity,
     claude_desktop_integration,
     claude_integration,
     codex_integration,
@@ -55,8 +55,8 @@ class IntegrationPaths:
             claude_desktop_integration.config_root(),
             claude_desktop_disconnect_path(),
             dsh_desktop_integration.config_home(),
-            antigravity_integration.config_path(),
-            antigravity_integration.state_path(),
+            antigravity.config_path(),
+            antigravity.state_path(),
         )
 
 
@@ -102,7 +102,7 @@ def disconnect_integrations(paths: IntegrationPaths | None = None) -> None:
     operations: tuple[tuple[str, Callable[[], object]], ...] = (
         (
             "Antigravity CLI",
-            lambda: antigravity_integration.disconnect(
+            lambda: antigravity.cleanup_previous_connection(
                 paths.antigravity, paths.antigravity_state
             ),
         ),

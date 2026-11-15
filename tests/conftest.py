@@ -15,7 +15,7 @@ from free_claude_code.core.stream_delivery import (
     bind_stream_delivery,
 )
 from free_claude_code.harnesses import (
-    antigravity_integration,
+    antigravity,
     claude_desktop_integration,
     claude_integration,
     claude_onboarding,
@@ -52,7 +52,7 @@ def _isolate_managed_config(monkeypatch, tmp_path):
 
     config_dir = tmp_path / ".fcc"
     monkeypatch.setattr(
-        antigravity_integration,
+        antigravity,
         "config_path",
         lambda: tmp_path / ".gemini/antigravity-cli/settings.json",
     )
