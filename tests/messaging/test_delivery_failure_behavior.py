@@ -75,32 +75,31 @@ async def test_network_errors_raise_after_three_attempts(sleeps):
 
 
 @pytest.mark.asyncio
-async def test_unparseable_markdown_is_retried_as_a_network_error(sleeps):
+async def test_unparseable_markdown_is_resent_as_plain_text(sleeps):
     error = BadRequest("Can't parse entities: unsupported start tag")
-    result, calls = await _run([error, error, error], parse_mode="MarkdownV2")
+    result, calls = await _run([error, OK], parse_mode="MarkdownV2")
 
-    assert result is error
-    assert calls == ["MarkdownV2"] * 3
-    assert _delays(sleeps) == [1, 2]
-
-
-@pytest.mark.asyncio
-async def test_edit_of_a_missing_message_is_retried_then_raised(sleeps):
-    error = BadRequest("Message to edit not found")
-    result, calls = await _run([error, error, error])
-
-    assert result is error
-    assert len(calls) == 3
+    assert result is OK
+    assert calls == ["MarkdownV2", None]
+    assert sleeps.call_count == 0
 
 
 @pytest.mark.asyncio
-async def test_other_bad_requests_are_retried_then_raised(sleeps):
+async def test_edit_of_a_missing_message_is_ignored(sleeps):
+    result, calls = await _run([BadRequest("Message to edit not found")])
+
+    assert result is None
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_other_bad_requests_raise_at_once(sleeps):
     error = BadRequest("Chat not found")
-    result, calls = await _run([error, error, error])
+    result, calls = await _run([error])
 
     assert result is error
-    assert len(calls) == 3
-    assert _delays(sleeps) == [1, 2]
+    assert len(calls) == 1
+    assert sleeps.call_count == 0
 
 
 @pytest.mark.asyncio
