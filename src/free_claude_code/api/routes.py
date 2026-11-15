@@ -66,6 +66,7 @@ def _unique_json_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 @router.post("/v1beta/models/{resource:path}")
+@router.post("/v1/models/{resource:path}")
 async def create_gemini_response(
     resource: str,
     request: Request,
