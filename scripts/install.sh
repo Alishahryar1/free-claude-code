@@ -14,7 +14,7 @@ DSH_PACKAGE="@deepseek-ai/dsh@latest"
 GROK_INSTALL_URL="https://x.ai/cli/install.sh"
 MUSE_INSTALL_URL="https://dev.meta.ai/install.sh"
 AGY_INSTALL_URL="https://antigravity.google/cli/install.sh"
-MIN_AGY_VERSION="1.4.7"
+MIN_AGY_VERSION="1.5.9"
 RTK_VERSION="0.44.2"
 HEADROOM_PACKAGE="headroom-ai[mcp]==0.40.0"
 RTK_RELEASE_BASE_URL="https://github.com/rtk-ai/rtk/releases/download/v$RTK_VERSION"
@@ -23,6 +23,7 @@ UV_INSTALL_URL="https://astral.sh/uv/install.sh"
 FCC_COMMANDS="fcc-desktop fcc-server fcc-claude fcc-codex fcc-pi fcc-opencode fcc-cline fcc-hermes fcc-dsh fcc-grok fcc-muse fcc-aider fcc-agy fcc-doctor fcc-update fcc-init free-claude-code"
 
 dry_run=0
+update_only=0
 voice_local=0
 fcc_install_version=${FCC_INSTALL_VERSION:-}
 install_claude=1
@@ -72,6 +73,7 @@ Options:
   --voice-local            Install local Whisper voice transcription support.
   --torch-backend VALUE    Use a uv PyTorch backend, such as cu130. Requires local voice.
   --rtk-headroom           Install and configure RTK + Headroom token optimization.
+  --update                 Skip when FCC is already this release or newer.
   --dry-run                Print commands without running them.
   --help                   Show this help text.
 USAGE
@@ -1602,6 +1604,9 @@ parse_args() {
             --dry-run)
                 dry_run=1
                 ;;
+            --update)
+                update_only=1
+                ;;
             --help|-h)
                 show_usage
                 exit 0
@@ -1731,9 +1736,59 @@ show_installer_next_steps() {
         printf 'Run Aider with: fcc-aider\n'
     fi
     if [ "$install_agy" -eq 1 ]; then
-        printf "Connect Antigravity CLI on FCC's Integrations page first.\n"
         printf 'Run Antigravity CLI with: fcc-agy\n'
     fi
+}
+
+installed_fcc_version() {
+    # Look where uv usually lives without changing the PATH the installer preserves.
+    listing=$(
+        add_known_bin_directories
+        command -v uv >/dev/null 2>&1 || exit 1
+        uv tool list 2>/dev/null
+    ) || return 1
+    version=$(printf '%s\n' "$listing" | awk '$1 == "free-claude-code" && $2 ~ /^v/ { print substr($2, 2); exit }')
+    [ -n "$version" ] || return 1
+    printf '%s\n' "$version"
+}
+
+compare_fcc_versions() {
+    # Prints older, current, or newer for an installed version against a release.
+    printf '%s %s\n' "$1" "$2" | awk '
+        function parse(value, parts) {
+            if (!match(value, /^[0-9]+[.][0-9]+[.][0-9]+/)) return 0
+            split(substr(value, 1, RLENGTH), parts, ".")
+            parts[4] = substr(value, RLENGTH + 1)
+            return 1
+        }
+        {
+            if (!parse($1, installed) || !parse($2, release) || release[4] != "") exit 1
+            for (i = 1; i <= 3; i++) {
+                if (installed[i] + 0 > release[i] + 0) { print "newer"; exit }
+                if (installed[i] + 0 < release[i] + 0) { print "older"; exit }
+            }
+            # Local and post builds follow the release; dev and pre-releases precede it.
+            if (installed[4] == "") print "current"
+            else if (installed[4] ~ /^([+]|[.]post)/) print "newer"
+            else print "older"
+        }
+    '
+}
+
+fcc_update_is_needed() {
+    installed=$(installed_fcc_version) || return 0
+    comparison=$(compare_fcc_versions "$installed" "$fcc_install_version") || return 0
+    case "$comparison" in
+        current)
+            printf 'FCC %s is already up to date.\n' "$installed"
+            return 1
+            ;;
+        newer)
+            printf 'FCC %s is newer than the published version %s. No update needed.\n' "$installed" "$fcc_install_version"
+            return 1
+            ;;
+    esac
+    printf 'FCC update available: %s -> %s.\n' "$installed" "$fcc_install_version"
 }
 
 dispatch_release() {
@@ -1815,6 +1870,9 @@ if [ "$dry_run" -eq 0 ]; then
     [ -z "$installer_release" ] || [ "$installer_release" = "$fcc_install_version" ] || fail "Invalid FCC release handoff."
     unset _FCC_INSTALLER_RELEASE
     [ -n "$installer_release" ] || dispatch_release "$@"
+    if [ "$update_only" -eq 1 ] && ! fcc_update_is_needed; then
+        exit 0
+    fi
     load_toolchain
 fi
 initialize_install_log

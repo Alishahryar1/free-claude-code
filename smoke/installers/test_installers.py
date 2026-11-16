@@ -167,6 +167,101 @@ def test_install_ps1_pins_selected_fcc_release(powershell_harness, voice):
     assert "$env:FCC_INSTALL_VERSION = '2.0.0'" in result.stdout
 
 
+FCC_UPDATE_DECISIONS = [
+    pytest.param(None, True, "", id="not-installed"),
+    pytest.param("1.2.2", True, "FCC update available: 1.2.2 -> 1.2.3.", id="older"),
+    pytest.param(
+        "1.2.3.dev4+gabc",
+        True,
+        "FCC update available: 1.2.3.dev4+gabc -> 1.2.3.",
+        id="dev-build",
+    ),
+    pytest.param(
+        "1.2.3rc1", True, "FCC update available: 1.2.3rc1 -> 1.2.3.", id="pre-release"
+    ),
+    pytest.param("not-a-version", True, "", id="unparseable"),
+    pytest.param("1.2.3", False, "FCC 1.2.3 is already up to date.", id="current"),
+    pytest.param(
+        "1.10.0",
+        False,
+        "FCC 1.10.0 is newer than the published version 1.2.3. No update needed.",
+        id="newer",
+    ),
+    pytest.param(
+        "1.2.3+local",
+        False,
+        "FCC 1.2.3+local is newer than the published version 1.2.3. No update needed.",
+        id="local-build",
+    ),
+    pytest.param(
+        "1.2.3.post1",
+        False,
+        "FCC 1.2.3.post1 is newer than the published version 1.2.3. No update needed.",
+        id="post-release",
+    ),
+]
+
+
+def _assert_update_decision(result, needed, message):
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert f"decision:{'install' if needed else 'skip'}" in result.stdout, output
+    if message:
+        assert message in result.stdout, output
+    else:
+        assert "FCC " not in result.stdout, output
+    assert "path-changed" not in result.stdout, output
+
+
+@pytest.mark.parametrize(("installed", "needed", "message"), FCC_UPDATE_DECISIONS)
+def test_install_sh_update_compares_installed_fcc_with_selected_release(
+    posix_harness, installed, needed, message
+):
+    if installed is not None:
+        # uv in its usual directory, which is not on PATH, is still found.
+        uv_bin = Path(posix_harness.env["HOME"]) / ".local/bin"
+        uv_bin.mkdir(parents=True)
+        _write_executable(
+            uv_bin / "uv",
+            f"""#!/bin/sh
+[ "$*" = "tool list" ] || exit 35
+printf 'other-tool v9.9.9\\n- other\\nfree-claude-code v{installed}\\n- fcc-server\\n'
+""",
+        )
+    result = posix_harness.run_functions(
+        "fcc_install_version=1.2.3\nbefore=$PATH\n"
+        "if fcc_update_is_needed; then echo decision:install; else echo decision:skip; fi\n"
+        '[ "$PATH" = "$before" ] || echo path-changed'
+    )
+    _assert_update_decision(result, needed, message)
+
+
+@pytest.mark.parametrize(("installed", "needed", "message"), FCC_UPDATE_DECISIONS)
+def test_install_ps1_update_compares_installed_fcc_with_selected_release(
+    powershell_harness, installed, needed, message
+):
+    if installed is not None:
+        # uv in its usual directory, which is not on PATH, is still found.
+        uv_bin = Path(powershell_harness.env["USERPROFILE"]) / ".local" / "bin"
+        uv_bin.mkdir(parents=True)
+        _write_executable(
+            uv_bin / "uv.cmd",
+            f"""@echo off
+if not "%~1 %~2"=="tool list" exit /b 35
+echo other-tool v9.9.9
+echo free-claude-code v{installed}
+exit /b 0
+""",
+        )
+    result = powershell_harness.run_functions(
+        "$FccInstallVersion = '1.2.3'\n$before = $env:Path\n"
+        "$decision = if (Test-FccUpdateNeeded) { 'install' } else { 'skip' }\n"
+        'Write-Output "decision:$decision"\n'
+        "if ($env:Path -ne $before) { Write-Output 'path-changed' }"
+    )
+    _assert_update_decision(result, needed, message)
+
+
 @pytest.mark.parametrize(
     "version",
     [
@@ -388,7 +483,7 @@ def _posix_command(name: str, *, version_output: str | None = None) -> str:
         "dsh": "0.2.0-rc.2",
         "grok": "1.0.5",
         "muse": "0.2.1",
-        "agy": "1.4.7",
+        "agy": "1.5.9",
         "node": "22.19.0",
     }.get(name, "1.0.0")
     if version_output is None:
@@ -2352,7 +2447,7 @@ def _batch_client(name: str, *, version_output: str | None = None) -> str:
         "dsh": "0.2.0-rc.2",
         "grok": "1.0.5",
         "muse": "0.2.1",
-        "agy": "1.4.7",
+        "agy": "1.5.9",
         "node": "22.19.0",
     }.get(name, "1.0.0")
     if version_output is not None:

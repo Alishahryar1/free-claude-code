@@ -14,20 +14,19 @@ import httpx2
 import openai
 import pytest
 
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.providers import admission, failure_policy
+from free_claude_code.providers import admission, failure_reporting
 from free_claude_code.providers.admission import (
-    UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
     ProviderAdmissionController,
     ProviderAttempt,
     ProviderCorrectionAction,
     ProviderExecution,
     ProviderExecutionState,
     ProviderOperationKind,
-    _retry_after_seconds,
 )
-from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
 from free_claude_code.providers.http import ProviderAttemptScope
+from free_claude_code.providers.recovery_errors import ProviderRecoveryExhausted
 from free_claude_code.providers.stream_recovery import TruncatedProviderStreamError
 
 
@@ -37,7 +36,7 @@ def _controller(
     rate_limit: int = 1_000_000,
     rate_window: float = 1.0,
     max_concurrency: int = 1_000,
-    max_attempts: int = UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
+    max_attempts: int = PROVIDER_MAX_ATTEMPTS_DEFAULT,
     base_delay: float = 0.0,
     max_delay: float = 0.0,
 ) -> ProviderAdmissionController:
@@ -77,7 +76,7 @@ def recovery_clock(monkeypatch):
     clock = SimpleNamespace(now=100.0)
     monotonic_time = SimpleNamespace(monotonic=lambda: clock.now)
     monkeypatch.setattr(admission, "time", monotonic_time)
-    monkeypatch.setattr(failure_policy, "time", monotonic_time)
+    monkeypatch.setattr(failure_reporting, "time", monotonic_time)
     return clock
 
 
@@ -304,7 +303,7 @@ async def test_attempt_cancellation_releases_concurrency() -> None:
     [_status_error(503), ssl.SSLWantReadError("read would block")],
     ids=["http_503", "tls_want_read"],
 )
-async def test_run_call_uses_one_ten_attempt_budget(error: Exception) -> None:
+async def test_run_call_uses_one_attempt_budget(error: Exception) -> None:
     controller = ProviderAdmissionController(
         provider_name="TEST", base_delay=0.0, max_delay=0.0, jitter=0.0
     )
@@ -321,7 +320,7 @@ async def test_run_call_uses_one_ten_attempt_budget(error: Exception) -> None:
             operation_kind=ProviderOperationKind.GENERATION,
         )
 
-    assert attempts == 10
+    assert attempts == PROVIDER_MAX_ATTEMPTS_DEFAULT
     assert exc_info.value is error
 
 
@@ -338,7 +337,7 @@ async def test_run_call_succeeds_without_multiplying_attempts(error: Exception) 
     async def recover() -> str:
         nonlocal attempts
         attempts += 1
-        if attempts < 10:
+        if attempts < PROVIDER_MAX_ATTEMPTS_DEFAULT:
             raise error
         return "recovered"
 
@@ -352,7 +351,7 @@ async def test_run_call_succeeds_without_multiplying_attempts(error: Exception) 
         )
         == "recovered"
     )
-    assert attempts == 10
+    assert attempts == PROVIDER_MAX_ATTEMPTS_DEFAULT
 
 
 @pytest.mark.asyncio
@@ -1114,7 +1113,7 @@ async def test_terminal_waiters_keep_captured_failure(elapsed, recovery_clock):
         for failure in (original_decision.error, waiting.value, coalesced.value):
             assert failure.last_error is original_error
             assert failure.retry_not_before == original_deadline
-            classified = failure_policy.classify_provider_failure(
+            classified = failure_reporting.finalize_provider_failure(
                 failure, provider_name="TEST", read_timeout_s=None, request_id=None
             )
             assert "HTTP 429" in classified.message
@@ -1244,18 +1243,6 @@ async def test_failed_scope_rechecks_retry_after_cleanup_and_releases_capacity_o
     assert close_count == 1
     assert controller._capacity._active_attempts == 0
     controller.close()
-
-
-def test_retry_after_accepts_http_date_and_rejects_invalid_values() -> None:
-    future = format_datetime(datetime.now(UTC) + timedelta(seconds=10), usegmt=True)
-
-    parsed = _retry_after_seconds(_status_error(429, retry_after=future))
-
-    assert parsed is not None
-    assert 8 <= parsed <= 10
-    assert _retry_after_seconds(_status_error(429, retry_after="invalid")) is None
-    assert _retry_after_seconds(_status_error(429, retry_after="nan")) is None
-    assert _retry_after_seconds(_status_error(429, retry_after="inf")) is None
 
 
 @pytest.mark.asyncio

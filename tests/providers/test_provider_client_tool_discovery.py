@@ -6,6 +6,7 @@ import httpx2
 import pytest
 from openai import AsyncOpenAI
 
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -257,6 +258,7 @@ async def test_provider_discovery_call_and_result_round_trip(
                                 rate_limit=1_000_000,
                                 rate_window=1.0,
                                 max_concurrency=1_000,
+                                max_attempts=PROVIDER_MAX_ATTEMPTS_DEFAULT,
                             )
                         ),
                     )

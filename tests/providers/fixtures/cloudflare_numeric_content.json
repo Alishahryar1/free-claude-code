@@ -1,0 +1,444 @@
+[
+  {
+    "id": "id-1794632217283",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "object": "chat.completion.chunk",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "role": "assistant",
+          "content": ""
+        },
+        "logprobs": null,
+        "finish_reason": null
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 326,
+      "completion_tokens": 0,
+      "total_tokens": 326,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 8.693659782409668
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "object": "chat.completion.chunk",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": "Yes"
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 1,
+      "total_tokens": 1,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 0.20480532944202423
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "object": "chat.completion.chunk",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": ","
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 1,
+      "total_tokens": 1,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 0.20480532944202423
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "object": "chat.completion.chunk",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": " the"
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 1,
+      "total_tokens": 1,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 0.20480532944202423
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "object": "chat.completion.chunk",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": " echo"
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 1,
+      "total_tokens": 1,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 0.20480532944202423
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "object": "chat.completion.chunk",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": " value"
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 1,
+      "total_tokens": 1,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 0.20480532944202423
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "object": "chat.completion.chunk",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": " was"
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 1,
+      "total_tokens": 1,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 0.20480532944202423
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "object": "chat.completion.chunk",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": " \""
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 1,
+      "total_tokens": 1,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 0.20480532944202423
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "object": "chat.completion.chunk",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": "F"
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 1,
+      "total_tokens": 1,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 0.20480532944202423
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "object": "chat.completion.chunk",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": "CC"
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 1,
+      "total_tokens": 1,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 0.20480532944202423
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "object": "chat.completion.chunk",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": "_"
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 1,
+      "total_tokens": 1,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 0.20480532944202423
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "object": "chat.completion.chunk",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": 206
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 1,
+      "total_tokens": 1,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 0.20480532944202423
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "object": "chat.completion.chunk",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": "_S"
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 1,
+      "total_tokens": 1,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 0.20480532944202423
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "object": "chat.completion.chunk",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": "MO"
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 1,
+      "total_tokens": 1,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 0.20480532944202423
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "object": "chat.completion.chunk",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": "KE"
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 1,
+      "total_tokens": 1,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 0.20480532944202423
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "object": "chat.completion.chunk",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": "\"."
+        }
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 1,
+      "total_tokens": 1,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 0.20480532944202423
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "object": "chat.completion.chunk",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": ""
+        },
+        "logprobs": null,
+        "finish_reason": "stop",
+        "stop_reason": null,
+        "token_ids": null
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 1,
+      "total_tokens": 1,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 0.20480532944202423
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "object": "chat.completion.chunk",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {},
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "total_tokens": 0,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 0
+    }
+  },
+  {
+    "id": "id-1794632217283",
+    "object": "chat.completion.chunk",
+    "created": 1794632217,
+    "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {},
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 326,
+      "completion_tokens": 16,
+      "total_tokens": 342,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "neurons": 11.970545053482056
+    }
+  }
+]

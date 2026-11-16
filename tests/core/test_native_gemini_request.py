@@ -81,6 +81,58 @@ def test_messages_object_tool_result_retains_complete_value():
     ] == {"count": 3, "nested": {"ok": True}}
 
 
+def test_messages_tool_result_and_followup_remain_distinct_turns():
+    from free_claude_code.core.anthropic.models import MessagesRequest
+    from free_claude_code.core.gemini.native_request import messages_to_gemini
+
+    request = MessagesRequest(
+        model="model",
+        messages=[
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call",
+                        "name": "echo",
+                        "input": {"value": "FCC_RESUME"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call",
+                        "content": "FCC_RESUME",
+                    },
+                ],
+            },
+            {"role": "user", "content": "Reply exactly OK without calling tools."},
+        ],
+    )
+    contents = cast(dict[str, Any], messages_to_gemini(request))["contents"]
+    assert contents[-2:] == [
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "functionResponse": {
+                        "id": "call",
+                        "name": "echo",
+                        "response": {"output": "FCC_RESUME"},
+                    }
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "parts": [{"text": "Reply exactly OK without calling tools."}],
+        },
+    ]
+
+
 def test_gemini_25_effort_uses_supported_numeric_budget():
     from free_claude_code.core.gemini.native_request import apply_reasoning
     from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy

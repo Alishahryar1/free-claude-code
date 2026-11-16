@@ -208,6 +208,7 @@ def _make_settings(**overrides):
     mock.provider_rate_limit = 40
     mock.provider_rate_window = 60
     mock.provider_max_concurrency = 5
+    mock.provider_max_attempts = 5
     mock.http_read_timeout = 300.0
     mock.http_write_timeout = 10.0
     mock.http_connect_timeout = 10.0
@@ -1168,6 +1169,7 @@ async def test_create_provider_instantiates_each_builtin():
         provider_rate_limit=7,
         provider_rate_window=11,
         provider_max_concurrency=3,
+        provider_max_attempts=4,
         sambanova_api_keys="test_sambanova_key",
     )
     cases = {
@@ -1288,6 +1290,7 @@ async def test_create_provider_instantiates_each_builtin():
                 rate_limit=7,
                 rate_window=11,
                 max_concurrency=3,
+                max_attempts=4,
                 capacity=ANY,
             )
             admission_factory.reset_mock()

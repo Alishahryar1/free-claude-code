@@ -10,6 +10,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     SSEEvent,
     parse_sse_lines,
 )
+from free_claude_code.core.history_replay import decode_replay, is_replay
 from smoke.lib.config import ProviderModel, SmokeConfig
 from smoke.lib.e2e import (
     ConversationDriver,
@@ -67,6 +68,8 @@ def test_provider_adaptive_thinking_history_e2e(
 def test_provider_interleaved_thinking_tool_e2e(
     smoke_config: SmokeConfig, provider_model: ProviderModel
 ) -> None:
+    if provider_model.provider == "gemini":
+        pytest.skip("synthetic tool history cannot carry native Gemini signatures")
     _run_provider_scenario(smoke_config, provider_model, _scenario_interleaved_history)
 
 
@@ -75,6 +78,10 @@ def test_provider_tool_use_then_text_history_e2e(
     smoke_config: SmokeConfig, provider_model: ProviderModel
 ) -> None:
     """OpenAI-compatible path: history with tool_use + assistant text after tool (issue #206)."""
+    if provider_model.provider == "gemini":
+        pytest.skip(
+            "synthetic post-tool narration cannot carry native Gemini signatures"
+        )
     _run_provider_scenario(
         smoke_config, provider_model, _scenario_tool_use_then_text_in_history
     )
@@ -90,12 +97,10 @@ def test_provider_tool_result_continuation_e2e(
 
 
 @pytest.mark.smoke_target("tools")
-def test_provider_interrupted_tool_turn_resume_e2e(
+def test_provider_tool_history_resume_e2e(
     smoke_config: SmokeConfig, provider_model: ProviderModel
 ) -> None:
-    _run_provider_scenario(
-        smoke_config, provider_model, _scenario_interrupted_tool_turn_resume
-    )
+    _run_provider_scenario(smoke_config, provider_model, _scenario_tool_history_resume)
 
 
 @pytest.mark.smoke_target("tools")
@@ -351,8 +356,8 @@ def _scenario_text_multiturn(
 ) -> None:
     with _server_for_provider(smoke_config, provider_model, "text") as server:
         driver = ConversationDriver(server, smoke_config)
-        first = driver.ask("Reply with one short sentence.")
-        second = driver.ask("Reply with a different short sentence.")
+        first = driver.ask("Reply with one short sentence.", max_tokens=4096)
+        second = driver.ask("Reply with a different short sentence.", max_tokens=4096)
     _assert_provider_product_stream(first.events)
     _assert_provider_product_stream(second.events)
 
@@ -363,23 +368,27 @@ def _scenario_adaptive_thinking_history(
     payload = {
         "model": "claude-opus-4-7",
         "max_tokens": 2048,
-        "messages": [
-            {"role": "user", "content": "hello"},
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "thinking", "thinking": "unsigned hidden thought"},
-                    {"type": "redacted_thinking", "data": "opaque"},
-                    {"type": "text", "text": "Hello."},
-                ],
-            },
-            {"role": "user", "content": "Reply with one short sentence."},
-        ],
+        "messages": [{"role": "user", "content": "Reply with one short sentence."}],
         "thinking": {"type": "adaptive", "budget_tokens": 1024},
     }
     with _server_for_provider(smoke_config, provider_model, "adaptive") as server:
-        turn = ConversationDriver(server, smoke_config).stream(payload)
-    _assert_provider_product_stream(turn.events)
+        driver = ConversationDriver(server, smoke_config)
+        first = driver.stream(payload)
+        second = driver.stream(
+            {
+                **payload,
+                "messages": [
+                    *payload["messages"],
+                    {"role": "assistant", "content": first.assistant_content},
+                    {
+                        "role": "user",
+                        "content": "Reply with a different short sentence.",
+                    },
+                ],
+            }
+        )
+    _assert_provider_product_stream(first.events)
+    _assert_provider_product_stream(second.events)
 
 
 def _scenario_interleaved_history(
@@ -512,49 +521,54 @@ def _scenario_tool_result_continuation(
     _assert_provider_product_stream(second.events)
 
 
-def _scenario_interrupted_tool_turn_resume(
+def _scenario_tool_history_resume(
     smoke_config: SmokeConfig, provider_model: ProviderModel
 ) -> None:
-    tool_id = "toolu_interrupted123456789"
-    payload = {
+    first_payload = {
         "model": "claude-sonnet-4-5-20250929",
         "max_tokens": 256,
-        "stream": True,
         "messages": [
-            {"role": "user", "content": "Use echo_smoke with value FCC_INTERRUPTED."},
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "id": tool_id,
-                        "name": "echo_smoke",
-                        "input": {"value": "FCC_INTERRUPTED"},
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": tool_id,
-                        "content": "FCC_INTERRUPTED",
-                    }
-                ],
-            },
-            {
-                "role": "user",
-                "content": "Reply exactly OK without calling tools.",
-            },
+            {"role": "user", "content": "Use echo_smoke with value FCC_RESUME."}
         ],
         "tools": [echo_tool_schema()],
+        "tool_choice": {"type": "tool", "name": "echo_smoke"},
+        "thinking": {"type": "adaptive"},
     }
     with _server_for_provider(
-        smoke_config, provider_model, "interrupted-tool-turn"
+        smoke_config, provider_model, "tool-history-resume"
     ) as server:
-        turn = ConversationDriver(server, smoke_config).stream(payload)
-    _assert_provider_product_stream(turn.events)
+        driver = ConversationDriver(server, smoke_config)
+        first = driver.stream(first_payload)
+        tool_use = _tool_use_blocks_or_skip(
+            first.events, "provider did not emit a tool_use block"
+        )[0]
+        second = driver.stream(
+            {
+                "model": first_payload["model"],
+                "max_tokens": 256,
+                "messages": [
+                    *first_payload["messages"],
+                    {"role": "assistant", "content": first.assistant_content},
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_use["id"],
+                                "content": "FCC_RESUME",
+                            }
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": "Reply exactly OK without calling tools.",
+                    },
+                ],
+                "tools": first_payload["tools"],
+            }
+        )
+    _assert_provider_product_stream(first.events)
+    _assert_provider_product_stream(second.events)
 
 
 def _scenario_gemini_thought_signature_tool_continuation(
@@ -579,10 +593,16 @@ def _scenario_gemini_thought_signature_tool_continuation(
             first.events, "gemini did not emit a tool_use block"
         )
         tool_use = tool_uses[0]
-        signature = _gemini_tool_thought_signature(tool_use)
-        assert signature, (
-            "gemini tool_use did not preserve extra_content.google.thought_signature"
-        )
+        records = [
+            decode_replay(block["data"])
+            for block in first.assistant_content
+            if block.get("type") == "redacted_thinking" and is_replay(block.get("data"))
+        ]
+        assert any(
+            part.get("thoughtSignature")
+            for record in records
+            for part in record.native.get("parts", [])
+        ), "gemini tool turn did not preserve its native thought signature"
         second_payload = {
             "model": "claude-sonnet-4-5-20250929",
             "max_tokens": 256,
@@ -606,17 +626,6 @@ def _scenario_gemini_thought_signature_tool_continuation(
         second = driver.stream(second_payload)
     _assert_provider_product_stream(first.events)
     _assert_provider_product_stream(second.events)
-
-
-def _gemini_tool_thought_signature(tool_use: dict[str, Any]) -> str | None:
-    extra_content = tool_use.get("extra_content")
-    if not isinstance(extra_content, dict):
-        return None
-    google = extra_content.get("google")
-    if not isinstance(google, dict):
-        return None
-    signature = google.get("thought_signature")
-    return signature if isinstance(signature, str) and signature else None
 
 
 def _scenario_reasoning_tool_continuation(
@@ -680,7 +689,7 @@ def _scenario_disconnect(
         health = httpx.get(f"{server.base_url}/health", timeout=5)
         assert health.status_code == 200
         followup = ConversationDriver(server, smoke_config).ask(
-            "Reply with one short sentence.", headers=headers
+            "Reply with one short sentence.", max_tokens=4096, headers=headers
         )
     _assert_provider_product_stream(followup.events)
 
@@ -694,6 +703,13 @@ def _server_for_provider(
         env_overrides={
             "MODEL": provider_model.full_model,
             "MESSAGING_PLATFORM": "none",
+            "MODEL_FALLBACKS": "",
+            "REASONING_POLICY": "client",
+            **{f"MODEL_{tier}": "" for tier in ("FABLE", "OPUS", "SONNET", "HAIKU")},
+            **{
+                f"REASONING_{tier}": "inherit"
+                for tier in ("FABLE", "OPUS", "SONNET", "HAIKU")
+            },
         },
     ).run()
 

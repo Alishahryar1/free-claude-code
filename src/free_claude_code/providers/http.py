@@ -11,7 +11,7 @@ from free_claude_code.providers.admission import (
     ProviderAttempt,
     ProviderFailureDecision,
 )
-from free_claude_code.providers.failure_policy import ProviderFailureOverride
+from free_claude_code.providers.canonical_failures import ProviderFailureOverride
 
 _ResourceT = TypeVar("_ResourceT")
 
@@ -91,6 +91,15 @@ class ProviderAttemptScope:
             raise RuntimeError("provider attempt scope already owns a resource")
         self._resource = resource
         return resource
+
+    def adopt(self, wrapper: _ResourceT) -> _ResourceT:
+        """Hand the retained resource to a wrapper that now owns and closes it."""
+        if self._closed:
+            raise RuntimeError("provider attempt scope is already closed")
+        if self._resource is None:
+            raise RuntimeError("provider attempt scope owns no resource to wrap")
+        self._resource = wrapper
+        return wrapper
 
     async def fail(
         self,

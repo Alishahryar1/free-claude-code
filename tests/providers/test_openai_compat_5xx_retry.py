@@ -7,8 +7,8 @@ import openai
 import pytest
 from httpx2 import Request, Response
 
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.core.failures import ExecutionFailure
-from free_claude_code.providers.admission import UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
@@ -148,7 +148,7 @@ async def test_nim_stream_connection_error_exhausted_emits_cause_chain():
             new_callable=AsyncMock,
             side_effect=error,
         ) as mock_create,
-        patch("free_claude_code.providers.openai_chat.transport.trace_event") as trace,
+        patch("free_claude_code.providers.attempt_loop.loop.trace_event") as trace,
         pytest.raises(ExecutionFailure) as exc_info,
     ):
         [
@@ -157,7 +157,7 @@ async def test_nim_stream_connection_error_exhausted_emits_cause_chain():
             for frame in e.frames
         ]
 
-    assert mock_create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+    assert mock_create.await_count == PROVIDER_MAX_ATTEMPTS_DEFAULT
     error_traces = [
         call.kwargs
         for call in trace.call_args_list
@@ -207,5 +207,5 @@ async def test_nim_stream_openai_5xx_exhausted_emits_user_message(
         with pytest.raises(ExecutionFailure) as exc_info:
             [frame async for e in provider.stream_messages(req) for frame in e.frames]
 
-    assert mock_create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+    assert mock_create.await_count == PROVIDER_MAX_ATTEMPTS_DEFAULT
     assert expect_substr in exc_info.value.message.lower()

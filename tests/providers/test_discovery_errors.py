@@ -17,8 +17,8 @@ from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
 )
-from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
 from free_claude_code.providers.model_listing import ModelListResponseError
+from free_claude_code.providers.recovery_errors import ProviderRecoveryExhausted
 from free_claude_code.providers.runtime.discovery import _provider_query_failure_reason
 
 

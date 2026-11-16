@@ -10,16 +10,15 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from free_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
-from free_claude_code.providers.admission import ProviderOperationKind
+from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.providers.groq import GroqProvider
 from free_claude_code.providers.openai_chat.output_cap import (
     clamp_output_tokens,
     parse_output_token_cap,
 )
-from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
-    SDKStreamDouble,
+    completed_chat_stream,
     immediate_admission,
     make_provider_config,
 )
@@ -238,18 +237,30 @@ def groq_provider():
     )
 
 
-@pytest.mark.asyncio
-async def test_create_stream_clamps_and_learns_on_cap_rejection(groq_provider):
-    body = groq_provider._chat._build_request_body(
-        make_messages_request(
-            "llama-3.3-70b-versatile",
-            max_tokens=64000,
-            thinking={"enabled": False},
+async def _send(provider: GroqProvider, max_tokens: int = 64000) -> None:
+    _ = [
+        frame
+        async for event in provider.stream_messages(
+            make_messages_request(
+                "llama-3.3-70b-versatile",
+                max_tokens=max_tokens,
+                thinking={"enabled": False},
+            )
         )
-    )
-    assert body["max_completion_tokens"] == 64000
-    model = body["model"]
+        for frame in event.frames
+    ]
 
+
+def _sent_caps(create: AsyncMock) -> list[int]:
+    return [call.kwargs["max_completion_tokens"] for call in create.await_args_list]
+
+
+def _ok():
+    return completed_chat_stream()
+
+
+@pytest.mark.asyncio
+async def test_cap_rejection_clamps_and_learns_for_the_next_request(groq_provider):
     error = _BadRequest(
         "invalid request",
         body={
@@ -262,114 +273,65 @@ async def test_create_stream_clamps_and_learns_on_cap_rejection(groq_provider):
             "param": "max_completion_tokens",
         },
     )
-    create = AsyncMock(side_effect=[error, SDKStreamDouble(AsyncMock())])
+    create = AsyncMock(side_effect=[error, _ok(), _ok()])
 
     with patch.object(groq_provider._client.chat.completions, "create", create):
-        (
-            _stream,
-            used_body,
-            attempt,
-            _sent_body,
-        ) = await groq_provider._chat._create_stream(
-            body,
-            RequestRecovery(groq_provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
-        await _stream.aclose()
-        await attempt.aclose()
+        await _send(groq_provider)
+        await _send(groq_provider)
 
-    assert create.call_count == 2
-    assert create.call_args_list[1].kwargs["max_completion_tokens"] == 16384
-    assert used_body["max_completion_tokens"] == 16384
-    assert groq_provider._chat._model_output_caps[model] == 16384
+    assert _sent_caps(create) == [64000, 16384, 16384]
 
 
 @pytest.mark.asyncio
-async def test_learned_cap_clamps_next_request_without_a_400(groq_provider):
-    body = groq_provider._chat._build_request_body(
-        make_messages_request(
-            "llama-3.3-70b-versatile",
-            max_tokens=64000,
-            thinking={"enabled": False},
-        )
-    )
-    model = body["model"]
-    groq_provider._chat._model_output_caps[model] = 40960
+async def test_learned_cap_clamps_a_later_request_without_a_rejection(
+    groq_provider,
+):
+    error = _BadRequest("max_completion_tokens must be less than or equal to 40960")
+    create = AsyncMock(side_effect=[error, _ok(), _ok()])
 
-    create = AsyncMock(return_value=SDKStreamDouble(AsyncMock()))
     with patch.object(groq_provider._client.chat.completions, "create", create):
-        (
-            _stream,
-            used_body,
-            attempt,
-            _sent_body,
-        ) = await groq_provider._chat._create_stream(
-            body,
-            RequestRecovery(groq_provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
-        await _stream.aclose()
-        await attempt.aclose()
+        await _send(groq_provider)
+        await _send(groq_provider, max_tokens=50000)
 
-    assert create.call_count == 1
-    assert create.call_args.kwargs["max_completion_tokens"] == 40960
-    assert used_body["max_completion_tokens"] == 40960
+    assert _sent_caps(create) == [64000, 40960, 40960]
 
 
 @pytest.mark.asyncio
 async def test_unrelated_400_is_not_clamped_and_propagates(groq_provider):
-    body = groq_provider._chat._build_request_body(
-        make_messages_request(
-            "llama-3.3-70b-versatile",
-            max_tokens=100,
-            thinking={"enabled": False},
-        )
+    create = AsyncMock(
+        side_effect=[_BadRequest("messages: invalid role 'wizard'"), _ok()]
     )
-    create = AsyncMock(side_effect=_BadRequest("messages: invalid role 'wizard'"))
 
     with (
         patch.object(groq_provider._client.chat.completions, "create", create),
-        pytest.raises(Exception, match="wizard"),
+        pytest.raises(ExecutionFailure),
     ):
-        await groq_provider._chat._create_stream(
-            body,
-            RequestRecovery(groq_provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
+        await _send(groq_provider)
+    with patch.object(groq_provider._client.chat.completions, "create", create):
+        await _send(groq_provider)
 
-    assert create.call_count == 1
-    assert groq_provider._chat._model_output_caps == {}
+    assert _sent_caps(create) == [64000, 64000]
 
 
 @pytest.mark.asyncio
 async def test_mixed_field_400_does_not_retry_or_poison_learned_cap(groq_provider):
-    body = groq_provider._chat._build_request_body(
-        make_messages_request(
-            "llama-3.3-70b-versatile",
-            max_tokens=64000,
-            thinking={"enabled": False},
-        )
-    )
     error_body = {
         "param": "temperature",
         "message": "max_completion_tokens must not exceed 2",
     }
     create = AsyncMock(
-        side_effect=_BadRequest(
-            f"Error code: 400 - {error_body}",
-            body=error_body,
-        )
+        side_effect=[
+            _BadRequest(f"Error code: 400 - {error_body}", body=error_body),
+            _ok(),
+        ]
     )
 
     with (
         patch.object(groq_provider._client.chat.completions, "create", create),
-        pytest.raises(Exception, match="temperature"),
+        pytest.raises(ExecutionFailure),
     ):
-        await groq_provider._chat._create_stream(
-            body,
-            RequestRecovery(groq_provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
+        await _send(groq_provider)
+    with patch.object(groq_provider._client.chat.completions, "create", create):
+        await _send(groq_provider)
 
-    assert create.call_count == 1
-    assert groq_provider._chat._model_output_caps == {}
+    assert _sent_caps(create) == [64000, 64000]

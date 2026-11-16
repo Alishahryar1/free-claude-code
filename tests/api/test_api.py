@@ -99,6 +99,15 @@ async def _mock_empty_stream(*args, **kwargs):
         yield StreamOutput(("unreachable",))
 
 
+def _invalid_request_error(response):
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["type"] == "error"
+    assert payload["request_id"] == response.headers["request-id"]
+    assert payload["error"]["type"] == "invalid_request_error"
+    return payload["error"]
+
+
 def _terminal_json_error(response, *, status_code: int):
     assert response.status_code == status_code
     assert response.headers["content-type"].startswith("application/json")
@@ -340,32 +349,88 @@ def test_create_message_pre_start_provider_error_returns_terminal_json(
     mock_provider.stream_messages = _mock_stream_messages
 
 
-def test_create_message_preserves_system_role_messages(client: TestClient):
-    """Create message preserves latest-client system message placement."""
-    mock_provider.stream_messages = _mock_stream_messages
+@pytest.mark.parametrize(
+    "system_turn",
+    [
+        {"role": "system", "content": "system prompt"},
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "reminder"}],
+            "clear_at": "next_user_message",
+        },
+    ],
+    ids=["text", "clear-at"],
+)
+@pytest.mark.parametrize("leading", [True, False], ids=["leading", "mid"])
+def test_system_role_messages_are_rejected(client: TestClient, system_turn, leading):
+    """System prompts belong in ``system``; Claude Code retries without the turn."""
     _stream_messages_calls.clear()
-    payload = {
-        "model": "claude-3-sonnet",
-        "messages": [
-            {"role": "user", "content": "context"},
-            {"role": "system", "content": "system prompt"},
-            {"role": "user", "content": "Hi"},
-        ],
-        "max_tokens": 100,
-        "stream": True,
-    }
+    messages = [{"role": "user", "content": "Hi"}]
+    messages.insert(0 if leading else 1, system_turn)
+    if not leading:
+        messages.append({"role": "user", "content": "again"})
 
-    response = client.post("/v1/messages", json=payload)
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "claude-3-sonnet",
+            "messages": messages,
+            "max_tokens": 100,
+            "stream": True,
+        },
+    )
 
-    assert response.status_code == 200
-    routed_request = _stream_messages_calls[0][0][0]
-    assert [message.role for message in routed_request.messages] == [
-        "user",
-        "system",
-        "user",
-    ]
-    assert routed_request.messages[1].content == "system prompt"
-    assert routed_request.system is None
+    error = _invalid_request_error(response)
+    assert "top-level `system` field" in error["message"]
+    assert "run `claude update`" in error["message"]
+    assert error["details"] == {"error_code": "mid_conversation_system_not_supported"}
+    assert _stream_messages_calls == []
+
+
+def test_system_role_rejection_names_the_claude_code_version(client: TestClient):
+    _stream_messages_calls.clear()
+    response = client.post(
+        "/v1/messages",
+        headers={"User-Agent": "claude-cli/2.1.288 (external, cli)"},
+        json={
+            "model": "claude-3-sonnet",
+            "messages": [
+                {"role": "user", "content": "Hi"},
+                {"role": "system", "content": "reminder"},
+            ],
+            "max_tokens": 100,
+        },
+    )
+
+    error = _invalid_request_error(response)
+    assert error["message"] == (
+        "Claude Code 2.1.288 sent a system message inside `messages`, which "
+        "Free Claude Code can't accept. Run `claude update`, then restart "
+        "Claude Code."
+    )
+    assert error["details"] == {"error_code": "mid_conversation_system_not_supported"}
+    assert _stream_messages_calls == []
+
+
+def test_count_tokens_rejects_system_role_messages_with_update_hint(
+    client: TestClient,
+):
+    response = client.post(
+        "/v1/messages/count_tokens",
+        headers={"User-Agent": "claude-cli/2.1.288 (external, cli)"},
+        json={
+            "model": "test",
+            "messages": [
+                {"role": "system", "content": "reminder"},
+                {"role": "user", "content": "Hello"},
+            ],
+        },
+    )
+
+    error = _invalid_request_error(response)
+    assert "Claude Code 2.1.288" in error["message"]
+    assert "Run `claude update`" in error["message"]
+    assert error["details"] == {"error_code": "mid_conversation_system_not_supported"}
 
 
 def test_model_mapping(client: TestClient):

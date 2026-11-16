@@ -6,17 +6,15 @@ import httpx2
 import openai
 import pytest
 
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.providers.admission import (
-    UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
     ProviderAdmissionController,
     ProviderOperationKind,
 )
 from free_claude_code.providers.base import ProviderConfig
-from free_claude_code.providers.failure_policy import (
-    overloaded_provider_failure,
-    retryable_upstream_status,
-)
+from free_claude_code.providers.canonical_failures import overloaded_provider_failure
+from free_claude_code.providers.failure_classification import classify
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.open_router import OpenRouterProvider
 from tests.providers.request_factory import make_messages_request
@@ -40,7 +38,7 @@ def _config(base_url: str) -> ProviderConfig:
     )
 
 
-def _admission(*, max_attempts: int = UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS):
+def _admission(*, max_attempts: int = PROVIDER_MAX_ATTEMPTS_DEFAULT):
     return ProviderAdmissionController(
         provider_name="nvidia_nim",
         rate_limit=1_000_000,
@@ -169,7 +167,7 @@ async def test_degraded_function_exhaustion_is_detailed_redacted_overload() -> N
             new_callable=AsyncMock,
             side_effect=error,
         ) as create,
-        patch("free_claude_code.providers.openai_chat.transport.trace_event") as trace,
+        patch("free_claude_code.providers.attempt_loop.loop.trace_event") as trace,
         pytest.raises(ExecutionFailure) as exc_info,
     ):
         [
@@ -180,7 +178,7 @@ async def test_degraded_function_exhaustion_is_detailed_redacted_overload() -> N
             for frame in event.frames
         ]
 
-    assert create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+    assert create.await_count == PROVIDER_MAX_ATTEMPTS_DEFAULT
 
     failure = exc_info.value
     assert failure.kind is FailureKind.OVERLOADED
@@ -357,7 +355,7 @@ async def test_degraded_wording_remains_non_retryable_for_other_providers() -> N
     )
     error = _bad_request()
 
-    assert retryable_upstream_status(error) is None
+    assert classify(error).transient_status is None
 
     with (
         patch.object(

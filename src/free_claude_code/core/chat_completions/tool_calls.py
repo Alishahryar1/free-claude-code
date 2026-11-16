@@ -198,19 +198,34 @@ class ChatToolCallBuffer:
         ](budget)
         self._identities: dict[int, ToolCallIdentityResolver] = {}
         self._calls: dict[tuple[int, int], _PendingCall] = {}
-        self._finished: set[int] = set()
+        self._finished: dict[int, tuple[Any, Any]] = {}
         self._native = native
         self._native_group: _NativeGroup | None = None
 
     def feed(
         self, payload: Mapping[str, Any]
     ) -> list[ChatSourceOutput | CompletedChatBatch]:
-        for choice in payload.get("choices") or []:
+        choices = payload.get("choices") or []
+        active = []
+        seen = set()
+        for choice in choices:
             index = choice.get("index", 0)
             if not isinstance(index, int) or isinstance(index, bool) or index < 0:
                 raise chat_failure("Invalid Chat choice index")
+            if index in seen:
+                raise chat_failure("Chat chunk repeated a choice index")
+            seen.add(index)
             if index in self._finished:
-                raise chat_failure("Chat choice changed after completion")
+                if not isinstance(
+                    payload.get("usage"), Mapping
+                ) or not _accounting_choice(choice, self._finished[index]):
+                    raise chat_failure("Chat choice changed after completion")
+            else:
+                active.append(choice)
+        if len(active) != len(choices):
+            # Completion belongs to the choice; final accounting belongs to the
+            # response. Downstream consumers already accept usage-only chunks.
+            payload = {**payload, "choices": active}
         if self._native:
             return [
                 output
@@ -236,18 +251,21 @@ class ChatToolCallBuffer:
                 for key, value in choice.items()
             ):
                 self._append({**envelope, "choices": [ordinary]})
-            elif position == 0 and any(
-                key
-                not in {
-                    "id",
-                    "object",
-                    "created",
-                    "model",
-                    "system_fingerprint",
-                    "service_tier",
-                    "usage",
-                }
-                for key in envelope
+            elif position == 0 and (
+                envelope.get("usage") is not None
+                or any(
+                    key
+                    not in {
+                        "id",
+                        "object",
+                        "created",
+                        "model",
+                        "system_fingerprint",
+                        "service_tier",
+                        "usage",
+                    }
+                    for key in envelope
+                )
             ):
                 self._append({**envelope, "choices": []})
             for fragment in calls:
@@ -278,7 +296,7 @@ class ChatToolCallBuffer:
                 self._buffer.grow(key, _size(fragment))
                 self._calls[key].add(fragment, tool_id=tool_id)
             if finish is not None:
-                self._finish_choice(choice_index, finish)
+                self._finish_choice(choice)
                 self._append(
                     {
                         **envelope,
@@ -298,7 +316,7 @@ class ChatToolCallBuffer:
         if self._native_group is None and not has_calls:
             for choice in data.get("choices", []):
                 if choice.get("finish_reason") is not None:
-                    self._remember_finish(choice.get("index", 0))
+                    self._remember_finish(choice)
             return [data]
         if self._native_group is None:
             self._native_group = _NativeGroup()
@@ -328,7 +346,7 @@ class ChatToolCallBuffer:
                     for (owner, _), call in self._calls.items():
                         if owner == choice_index:
                             call.seal()
-                self._remember_finish(choice_index)
+                self._remember_finish(choice)
         if all(choice in self._finished for choice, _ in self._calls):
             self._complete_native_group()
         return self._drain()
@@ -429,8 +447,9 @@ class ChatToolCallBuffer:
     def _append(self, value: dict[str, Any]) -> None:
         self._buffer.append(deepcopy(value), size=_size(value))
 
-    def _finish_choice(self, choice: int, reason: object) -> None:
-        keys = [key for key in self._calls if key[0] == choice]
+    def _finish_choice(self, choice: Mapping[str, Any]) -> None:
+        keys = [key for key in self._calls if key[0] == choice.get("index", 0)]
+        reason = choice.get("finish_reason")
         if reason in {"stop", "tool_calls"}:
             for key in keys:
                 self._calls[key].seal()
@@ -442,9 +461,10 @@ class ChatToolCallBuffer:
                 del self._calls[key]
         self._remember_finish(choice)
 
-    def _remember_finish(self, choice: int) -> None:
-        self._buffer.budget.add(32)
-        self._finished.add(choice)
+    def _remember_finish(self, choice: Mapping[str, Any]) -> None:
+        markers = (choice.get("finish_reason"), choice.get("native_finish_reason"))
+        self._buffer.budget.add(32 + _size(markers))
+        self._finished[choice.get("index", 0)] = deepcopy(markers)
 
     def _drain(self) -> list[ChatSourceOutput | CompletedChatBatch]:
         result: list[ChatSourceOutput | CompletedChatBatch] = []
@@ -467,6 +487,35 @@ class ChatToolCallBuffer:
         result = self._drain()
         self._calls.clear()
         return result
+
+
+def _accounting_choice(choice: Mapping[str, Any], finished: tuple[Any, Any]) -> bool:
+    """Only discard fields that repeat completion or carry no choice content."""
+    if (
+        choice.get("finish_reason") != finished[0]
+        or choice.get("native_finish_reason") not in (None, finished[1])
+        or choice.get("logprobs") is not None
+        or choice.keys()
+        - {"index", "delta", "finish_reason", "native_finish_reason", "logprobs"}
+    ):
+        return False
+    delta = choice.get("delta")
+    if not isinstance(delta, Mapping):
+        return False
+    for key, value in delta.items():
+        if key == "role":
+            empty = value in (None, "assistant")
+        elif key in {"content", "reasoning", "reasoning_content", "refusal"}:
+            empty = value in (None, "")
+        elif key in {"reasoning_details", "tool_calls"}:
+            empty = value is None or value == []
+        elif key in {"function_call", "audio"}:
+            empty = value is None
+        else:
+            return False
+        if not empty:
+            return False
+    return True
 
 
 def _native_parts(payload: Mapping[str, Any]) -> list[dict[str, Any]]:

@@ -21,11 +21,12 @@ from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
+    ProviderCorrectionAction,
     ProviderOperationKind,
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.endpoint import RequestEndpoint
-from free_claude_code.providers.failure_policy import provider_authentication_status
+from free_claude_code.providers.failure_classification import classify
 from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.http import ProviderAttemptScope
 from free_claude_code.providers.model_listing import (
@@ -35,7 +36,11 @@ from free_claude_code.providers.model_listing import (
 )
 from free_claude_code.providers.openai_client import OpenAIRequestClient
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
-from free_claude_code.providers.request_recovery import RequestRecovery
+from free_claude_code.providers.stream_failure_resolution import (
+    Repair,
+    Stage,
+    repairs,
+)
 
 from .auth import OpenAIAuthManager
 from .endpoint import CodexEndpointContext
@@ -115,7 +120,7 @@ class OpenAICodexProvider(BaseProvider):
         execution = self._admission.start_execution(model=None)
         endpoint = RequestEndpoint(self._endpoint())
         request_client = OpenAIRequestClient(self._pool)
-        recovery = RequestRecovery(execution, endpoint=endpoint)
+        refreshed = False
         try:
             while execution.can_attempt:
                 scope: ProviderAttemptScope | None = None
@@ -145,9 +150,23 @@ class OpenAICodexProvider(BaseProvider):
                     raise
                 except Exception as error:
                     if scope is not None:
-                        if await recovery.retry_authentication(
-                            error, provider_authentication_status(error), scope.attempt
+                        found = repairs(
+                            stage=Stage.OPEN,
+                            auth_status=classify(error).auth_status,
+                            can_refresh=endpoint.can_refresh,
+                            refreshed=refreshed,
+                            content_released=None,
+                            attempt_content_released=False,
+                            normal_stop_seen=False,
+                            continuing=False,
+                        )
+                        if (
+                            Repair.REFRESH in found
+                            and await scope.attempt.correct(error)
+                            is ProviderCorrectionAction.RETRY
                         ):
+                            refreshed = True
+                            endpoint.request_refresh()
                             continue
                         if not scope.attempt.accepted:
                             decision = await scope.attempt.fail(error)

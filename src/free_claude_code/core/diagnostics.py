@@ -140,7 +140,7 @@ def extract_upstream_error_detail(exc: Exception) -> UpstreamErrorDetail:
         exception_text, _ = _cap_text_bytes(exception_text)
 
     return UpstreamErrorDetail(
-        status_code=_status_code_from_exception(exc),
+        status_code=reported_http_status(exc),
         body_text=body_text,
         exception_text=exception_text,
         cause_chain_text=_exception_cause_chain_text(exc),
@@ -200,7 +200,8 @@ def _body_truncation_line_needed(detail: UpstreamErrorDetail) -> bool:
     )
 
 
-def _status_code_from_exception(exc: Exception) -> int | None:
+def reported_http_status(exc: BaseException) -> int | None:
+    """Return the HTTP status an exception or its attached response reports."""
     status = getattr(exc, "status_code", None)
     if isinstance(status, int):
         return status

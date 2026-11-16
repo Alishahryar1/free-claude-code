@@ -11,6 +11,7 @@ from openai import AuthenticationError
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
@@ -22,10 +23,7 @@ from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.core.stream_output import StreamOutput
-from free_claude_code.providers.admission import (
-    UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
-    ProviderAdmissionController,
-)
+from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.openai_codex import provider as codex_provider_module
 from free_claude_code.providers.openai_codex.auth import (
@@ -1133,7 +1131,7 @@ async def test_final_attempt_unauthorized_preserves_the_provider_401() -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal attempts
         attempts += 1
-        status = 503 if attempts < UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS else 401
+        status = 503 if attempts < PROVIDER_MAX_ATTEMPTS_DEFAULT else 401
         return httpx2.Response(
             status,
             json={"error": {"message": f"attempt {attempts}"}},
@@ -1155,7 +1153,7 @@ async def test_final_attempt_unauthorized_preserves_the_provider_401() -> None:
             )
         )
 
-    assert attempts == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+    assert attempts == PROVIDER_MAX_ATTEMPTS_DEFAULT
     assert auth.recovery_calls == 0
     assert exc_info.value.status_code == 401
     assert "Request ID: req_final_401" in str(exc_info.value)

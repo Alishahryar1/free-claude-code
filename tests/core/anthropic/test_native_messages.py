@@ -31,26 +31,22 @@ def test_native_body_rejects_nonfinite_json_before_http_serialization() -> None:
         )
 
 
-def test_native_body_preserves_blocks_and_merges_leading_system_in_order() -> None:
+def test_native_body_preserves_blocks_and_system_in_order() -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "public",
             "original_model": "private-routing",
             "max_tokens": 100,
             "stream": False,
-            "system": "top",
-            "messages": [
-                {"role": "system", "content": "first"},
+            "system": [
+                {"type": "text", "text": "top"},
                 {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "second",
-                            "cache_control": {"type": "ephemeral"},
-                        }
-                    ],
+                    "type": "text",
+                    "text": "second",
+                    "cache_control": {"type": "ephemeral"},
                 },
+            ],
+            "messages": [
                 {
                     "role": "assistant",
                     "content": [
@@ -108,11 +104,10 @@ def test_native_body_preserves_blocks_and_merges_leading_system_in_order() -> No
     assert prepared.body["service_tier"] == "auto"
     assert prepared.body["system"] == [
         {"type": "text", "text": "top"},
-        {"type": "text", "text": "first"},
         {"type": "text", "text": "second", "cache_control": {"type": "ephemeral"}},
     ]
     assert prepared.body["messages"] == [
-        message.model_dump(exclude_none=True) for message in request.messages[2:]
+        message.model_dump(exclude_none=True) for message in request.messages
     ]
     assert (
         not {"betas", "extra_body", "original_model", "resolved_provider_model"}
@@ -145,16 +140,17 @@ def test_extra_body_cannot_override_owned_or_explicit_fields(extra: JsonObject) 
         build_native_messages_request(request, options=NativeMessagesOptions("m", 1024))
 
 
-def test_late_system_and_unsigned_compatibility_reasoning_rejected() -> None:
-    for messages in (
-        [{"role": "user", "content": "hi"}, {"role": "system", "content": "late"}],
-        [{"role": "assistant", "content": "hi", "reasoning_content": "unsigned"}],
-    ):
-        request = MessagesRequest.model_validate({"model": "m", "messages": messages})
-        with pytest.raises(NativeMessagesError):
-            build_native_messages_request(
-                request, options=NativeMessagesOptions("m", 1024)
-            )
+def test_unsigned_compatibility_reasoning_rejected() -> None:
+    request = MessagesRequest.model_validate(
+        {
+            "model": "m",
+            "messages": [
+                {"role": "assistant", "content": "hi", "reasoning_content": "unsigned"}
+            ],
+        }
+    )
+    with pytest.raises(NativeMessagesError):
+        build_native_messages_request(request, options=NativeMessagesOptions("m", 1024))
 
 
 def test_forced_tool_with_manual_thinking_rejected() -> None:

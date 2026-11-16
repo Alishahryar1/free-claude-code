@@ -13,7 +13,11 @@ from pydantic import (
 )
 
 from .api_keys import ApiKeyList
-from .constants import DEFAULT_MODEL, HTTP_CONNECT_TIMEOUT_DEFAULT
+from .constants import (
+    DEFAULT_MODEL,
+    HTTP_CONNECT_TIMEOUT_DEFAULT,
+    PROVIDER_MAX_ATTEMPTS_DEFAULT,
+)
 from .custom_providers import CustomProviderDefinition, decode_custom_providers
 from .model_refs import ModelFallback, ModelFallbacks
 from .provider_catalog import (
@@ -615,6 +619,11 @@ class Settings(BaseModel):
     )
     provider_max_concurrency: int = Field(
         default=2, gt=0, validation_alias="PROVIDER_MAX_CONCURRENCY"
+    )
+    provider_max_attempts: int = Field(
+        default=PROVIDER_MAX_ATTEMPTS_DEFAULT,
+        gt=0,
+        validation_alias="PROVIDER_MAX_ATTEMPTS",
     )
     reasoning_policy: ReasoningPreference = Field(
         default=ReasoningPreference.CLIENT,

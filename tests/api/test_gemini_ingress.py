@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from fastapi.testclient import TestClient
 
+from free_claude_code.api.generation_paths import generation_api
 from free_claude_code.cli.uvicorn_server import (
     QueryCredentialFilter,
     uvicorn_log_config,
@@ -15,6 +16,9 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.core.stream_output import StreamOutput
 from tests.api.support import create_test_app, provider_manager_for_app
 
+# Google documents /v1beta; Gemini SDKs given a custom base URL call /v1.
+PREFIXES = ("/v1beta/models", "/v1/models")
+
 
 def body():
     return {"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]}
@@ -22,12 +26,13 @@ def body():
 
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("model", ["model:free", "model%3Afree", "model:region:free"])
-def test_routed_model_preserves_colons(streaming, model):
+@pytest.mark.parametrize("prefix", PREFIXES)
+def test_routed_model_preserves_colons(prefix, streaming, model):
     provider, calls = fixture_provider()
     app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
     action = "streamGenerateContent?alt=sse" if streaming else "generateContent"
     with TestClient(app) as client:
-        response = client.post(f"/v1beta/models/groq/{model}:{action}", json=body())
+        response = client.post(f"{prefix}/groq/{model}:{action}", json=body())
     assert response.status_code == 200, response.text
     assert calls[0][0].model == model.replace("%3A", ":")
     assert calls[0][1]["response_model"] == "groq/" + model.replace("%3A", ":")
@@ -88,12 +93,15 @@ def fixture_provider():
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-def test_generation_routes_use_the_selected_backend_and_release_lease(streaming):
+@pytest.mark.parametrize("prefix", PREFIXES)
+def test_generation_routes_use_the_selected_backend_and_release_lease(
+    prefix, streaming
+):
     provider, calls = fixture_provider()
     app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
     suffix = "streamGenerateContent?alt=sse" if streaming else "generateContent"
     with TestClient(app) as client:
-        response = client.post(f"/v1beta/models/public-model:{suffix}", json=body())
+        response = client.post(f"{prefix}/public-model:{suffix}", json=body())
     assert response.status_code == 200, response.text
     if streaming:
         assert response.headers["content-type"].startswith("text/event-stream")
@@ -115,7 +123,8 @@ def test_generation_routes_use_the_selected_backend_and_release_lease(streaming)
 
 
 @pytest.mark.parametrize("credential", ["header", "query", "bearer"])
-def test_gemini_credentials_authenticate_the_proxy_not_the_upstream(credential):
+@pytest.mark.parametrize("prefix", PREFIXES)
+def test_gemini_credentials_authenticate_the_proxy_not_the_upstream(prefix, credential):
     provider, calls = fixture_provider()
     app = create_test_app(
         Settings(
@@ -135,7 +144,7 @@ def test_gemini_credentials_authenticate_the_proxy_not_the_upstream(credential):
     query = "?key=fcc-test-token" if credential == "query" else ""
     with TestClient(app) as client:
         response = client.post(
-            "/v1beta/models/model:generateContent" + query, headers=headers, json=body()
+            f"{prefix}/model:generateContent" + query, headers=headers, json=body()
         )
     assert response.status_code == 200, response.text
     forwarded = calls[0][1].get("request_headers") or {}
@@ -152,7 +161,8 @@ def test_gemini_credentials_authenticate_the_proxy_not_the_upstream(credential):
         ({}, "?key=fcc-test-token&key=other"),
     ],
 )
-def test_invalid_auth_is_a_google_error_before_inference(headers, query):
+@pytest.mark.parametrize("prefix", PREFIXES)
+def test_invalid_auth_is_a_google_error_before_inference(prefix, headers, query):
     provider, calls = fixture_provider()
     app = create_test_app(
         Settings(
@@ -164,7 +174,7 @@ def test_invalid_auth_is_a_google_error_before_inference(headers, query):
     )
     with TestClient(app) as client:
         response = client.post(
-            "/v1beta/models/model:generateContent" + query, headers=headers, json=body()
+            f"{prefix}/model:generateContent" + query, headers=headers, json=body()
         )
     assert response.status_code in {400, 401}, response.text
     assert response.json()["error"]["code"] == response.status_code
@@ -181,13 +191,14 @@ def test_invalid_auth_is_a_google_error_before_inference(headers, query):
         {**body(), "generationConfig": {"candidateCount": 2}},
     ],
 )
-def test_invalid_or_unsupported_requests_are_rejected_before_inference(request_body):
+@pytest.mark.parametrize("prefix", PREFIXES)
+def test_invalid_or_unsupported_requests_are_rejected_before_inference(
+    prefix, request_body
+):
     provider, calls = fixture_provider()
     app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
     with TestClient(app) as client:
-        response = client.post(
-            "/v1beta/models/model:generateContent", json=request_body
-        )
+        response = client.post(f"{prefix}/model:generateContent", json=request_body)
     assert response.status_code == 400, response.text
     assert response.json()["error"]["status"] == "INVALID_ARGUMENT"
     assert not calls
@@ -201,6 +212,10 @@ def test_invalid_or_unsupported_requests_are_rejected_before_inference(request_b
         ("POST", "/v1beta/models/:generateContent", 400),
         ("POST", "/v1beta/models/model:streamGenerateContent", 400),
         ("POST", "/v1beta/models/model:generateContent?alt=sse", 400),
+        ("GET", "/v1/models/model:generateContent", 405),
+        ("POST", "/v1/models/:generateContent", 400),
+        ("POST", "/v1/models/model:streamGenerateContent", 400),
+        ("POST", "/v1/models/model:generateContent?alt=sse", 400),
     ],
 )
 def test_gemini_route_family_errors_use_google_envelopes(method, path, status):
@@ -214,12 +229,13 @@ def test_gemini_route_family_errors_use_google_envelopes(method, path, status):
     assert not calls
 
 
-def test_repeated_material_json_key_is_rejected_before_inference():
+@pytest.mark.parametrize("prefix", PREFIXES)
+def test_repeated_material_json_key_is_rejected_before_inference(prefix):
     provider, calls = fixture_provider()
     app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
     with TestClient(app) as client:
         response = client.post(
-            "/v1beta/models/model:generateContent",
+            f"{prefix}/model:generateContent",
             content='{"contents":[],"contents":[{"parts":[{"text":"ok"}]}]}',
             headers={"content-type": "application/json"},
         )
@@ -228,7 +244,10 @@ def test_repeated_material_json_key_is_rejected_before_inference():
 
 
 @pytest.mark.parametrize("console", [False, True])
-def test_query_api_key_is_masked_before_uvicorn_console_and_file_handlers(console):
+@pytest.mark.parametrize("prefix", PREFIXES)
+def test_query_api_key_is_masked_before_uvicorn_console_and_file_handlers(
+    prefix, console
+):
     config = uvicorn_log_config(console=console)
     loggers = config["loggers"]
     assert isinstance(loggers, dict)
@@ -242,7 +261,7 @@ def test_query_api_key_is_masked_before_uvicorn_console_and_file_handlers(consol
         (
             "127.0.0.1",
             "POST",
-            "/v1beta/models/m:generateContent?ke%79=SECRET&alt=json&key=SECOND",
+            f"{prefix}/m:generateContent?ke%79=SECRET&alt=json&key=SECOND",
             "1.1",
             400,
         ),
@@ -251,3 +270,31 @@ def test_query_api_key_is_masked_before_uvicorn_console_and_file_handlers(consol
     assert QueryCredentialFilter().filter(record)
     assert "SECRET" not in record.getMessage() and "SECOND" not in record.getMessage()
     assert "alt=json" in record.getMessage()
+
+
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        ("/v1beta/models/model:generateContent", "gemini"),
+        ("/v1beta/models/model:unknown", "gemini"),
+        ("/v1/models/groq/model:free:generateContent", "gemini"),
+        ("/v1/models/model:streamGenerateContent", "gemini"),
+        ("/v1/models", None),
+        ("/v1/models/gpt-4o", None),
+        ("/v1/models/ft:gpt-4o:org::id", None),
+        ("/v1/models/model:unknown", None),
+    ],
+)
+def test_only_gemini_generation_methods_are_gemini_under_v1_models(path, expected):
+    assert generation_api(path) == expected
+
+
+def test_openai_model_list_is_unchanged_beside_the_gemini_route():
+    provider, calls = fixture_provider()
+    app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
+    with TestClient(app) as client:
+        response = client.get("/v1/models")
+    assert response.status_code == 200, response.text
+    assert response.json()["object"] == "list"
+    assert "x-request-id" in response.headers
+    assert not calls

@@ -8,7 +8,10 @@ import openai
 import pytest
 from httpx2 import Request, Response
 
-from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+from free_claude_code.config.constants import (
+    ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    PROVIDER_MAX_ATTEMPTS_DEFAULT,
+)
 from free_claude_code.config.provider_catalog import NVIDIA_NIM_DEFAULT_BASE
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
@@ -19,7 +22,6 @@ from free_claude_code.core.history_replay import (
 )
 from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.providers.admission import UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.nvidia_nim.client import _PROFILE as NIM_PROFILE
 from free_claude_code.providers.nvidia_nim.tool_schema import (
@@ -1381,7 +1383,7 @@ async def test_stream_messages_unrelated_internal_error_does_not_downgrade(
                 for frame in e.frames
             ]
 
-    assert mock_create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+    assert mock_create.await_count == PROVIDER_MAX_ATTEMPTS_DEFAULT
     assert all(
         call.kwargs == mock_create.await_args_list[0].kwargs
         for call in mock_create.await_args_list
@@ -1410,7 +1412,7 @@ async def test_stream_messages_internal_reasoning_content_error_does_not_downgra
                 for frame in e.frames
             ]
 
-    assert mock_create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+    assert mock_create.await_count == PROVIDER_MAX_ATTEMPTS_DEFAULT
     assert all(
         call.kwargs == mock_create.await_args_list[0].kwargs
         for call in mock_create.await_args_list

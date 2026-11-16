@@ -14,6 +14,7 @@ from free_claude_code.api.response_streams import (
     _first_chunk_streaming_response,
 )
 from free_claude_code.application.response_collection import collect_response
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
     parse_sse_text,
@@ -22,10 +23,7 @@ from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
-from free_claude_code.providers.admission import (
-    UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
-    ProviderOperationKind,
-)
+from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.openai_chat.stream_output import (
     AnthropicChatStreamOutput,
@@ -34,7 +32,6 @@ from free_claude_code.providers.openai_chat.transport import (
     _OpenAIChatStreamRunner,
     _reserved_anthropic_tool_ids,
 )
-from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     REASONING_OFF,
@@ -350,7 +347,6 @@ class TestStreamingExceptionHandling:
     async def test_stream_normalization_failure_closes_raw_stream(self):
         provider = _make_provider()
         stream = ClosableAsyncStreamMock([])
-        execution = provider._admission.start_execution()
 
         with (
             patch.object(
@@ -364,13 +360,8 @@ class TestStreamingExceptionHandling:
                 "normalize_stream",
                 side_effect=ValueError("invalid stream wrapper"),
             ),
-            pytest.raises(ValueError, match="invalid stream wrapper"),
         ):
-            await provider._chat._create_stream(
-                {"model": "test-model", "messages": []},
-                RequestRecovery(execution),
-                ProviderOperationKind.GENERATION,
-            )
+            await _collect_stream_error(provider, _make_request())
 
         assert stream.closed
 
@@ -1622,7 +1613,7 @@ class TestStreamingExceptionHandling:
         """Private drafts are replaced within the same bounded execution."""
         provider = _make_provider()
         request = _make_request()
-        primary_attempts = UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS - 1
+        primary_attempts = PROVIDER_MAX_ATTEMPTS_DEFAULT - 1
         primary_streams = [
             AsyncStreamMock([_make_chunk(content="hello")])
             for _ in range(primary_attempts)
@@ -1645,7 +1636,7 @@ class TestStreamingExceptionHandling:
         ):
             events = await _collect_stream(provider, request)
 
-        assert create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+        assert create.await_count == PROVIDER_MAX_ATTEMPTS_DEFAULT
         assert all(
             call.kwargs["messages"] == create.await_args_list[0].kwargs["messages"]
             for call in create.await_args_list[:primary_attempts]

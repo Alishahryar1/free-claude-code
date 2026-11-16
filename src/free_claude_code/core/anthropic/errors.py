@@ -56,15 +56,16 @@ def anthropic_error_payload(
     error_type: str,
     message: str,
     request_id: str | None = None,
+    error_code: str | None = None,
 ) -> dict[str, Any]:
     """Return one Anthropic-compatible JSON error envelope."""
-    payload: dict[str, Any] = {
-        "type": "error",
-        "error": {
-            "type": error_type,
-            "message": redact_sensitive_error_text(message),
-        },
+    error: dict[str, Any] = {
+        "type": error_type,
+        "message": redact_sensitive_error_text(message),
     }
+    if error_code:
+        error["details"] = {"error_code": error_code}
+    payload: dict[str, Any] = {"type": "error", "error": error}
     if request_id:
         payload["request_id"] = request_id
     return payload

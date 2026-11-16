@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from typing import Any
 
 import openai
-from loguru import logger
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import NVIDIA_NIM_DEFAULT_BASE
@@ -15,7 +14,7 @@ from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
-from free_claude_code.providers.failure_policy import (
+from free_claude_code.providers.canonical_failures import (
     context_window_exceeded_provider_failure,
     overloaded_provider_failure,
 )
@@ -26,6 +25,7 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatProfile,
     OpenAIChatProvider,
 )
+from free_claude_code.providers.request_correction import Proposal
 
 from .models import HOSTED_MODEL_EXCLUSIONS
 from .request_options import (
@@ -92,7 +92,7 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         """Return NIM tool argument aliases captured while building this request."""
         return nim_tool_argument_aliases_from_body(body)
 
-    def retry_request_body(self, error: Exception, body: dict) -> dict | None:
+    def retry_request_body(self, error: Exception, body: dict) -> Proposal | None:
         """Retry once with a downgraded body when NIM rejects a known field."""
         status_code = getattr(error, "status_code", None)
         bad_request_like = isinstance(error, openai.BadRequestError) or (
@@ -112,8 +112,7 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
             retry_body = clone_body_without_chat_template(body)
             if retry_body is None:
                 return None
-            logger.warning("NIM_STREAM: retrying without chat_template after 400 error")
-            return retry_body
+            return Proposal(retry_body, "dropped chat_template")
 
         return None
 
