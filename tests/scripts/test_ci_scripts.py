@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -396,7 +397,7 @@ def _run_install_with_stubbed_uv(
     }
     for name, body in stubs.items():
         stub = bin_dir / name
-        stub.write_text(body, encoding="utf-8")
+        stub.write_text(body, encoding="utf-8", newline="\n")
         stub.chmod(0o755)
 
     harness = tmp_path / "harness.sh"
@@ -405,6 +406,7 @@ def _run_install_with_stubbed_uv(
         + '\ntrap - EXIT INT HUP TERM\nPYTHON_VERSION=3.14.10\ninstall_log=""\n'
         + "configure_uv_environment\ninstall_free_claude_code\n",
         encoding="utf-8",
+        newline="\n",
     )
 
     env = {
@@ -417,7 +419,10 @@ def _run_install_with_stubbed_uv(
     return calls.read_text(encoding="utf-8").splitlines()
 
 
-@pytest.mark.skipif(shutil.which("sh") is None, reason="requires a POSIX shell")
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("sh") is None,
+    reason="requires a POSIX shell and POSIX paths",
+)
 def test_install_sh_installs_managed_python_before_pinned_tool_install(
     tmp_path: Path,
 ) -> None:
@@ -431,7 +436,10 @@ def test_install_sh_installs_managed_python_before_pinned_tool_install(
     assert "--python 3.14.10+gil" in calls[1]
 
 
-@pytest.mark.skipif(shutil.which("sh") is None, reason="requires a POSIX shell")
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("sh") is None,
+    reason="requires a POSIX shell and POSIX paths",
+)
 def test_install_sh_defaults_uv_system_certs_when_unset(tmp_path: Path) -> None:
     calls = _run_install_with_stubbed_uv(tmp_path, None)
 
@@ -439,7 +447,10 @@ def test_install_sh_defaults_uv_system_certs_when_unset(tmp_path: Path) -> None:
     assert all(call.endswith("UV_SYSTEM_CERTS=1") for call in calls)
 
 
-@pytest.mark.skipif(shutil.which("sh") is None, reason="requires a POSIX shell")
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("sh") is None,
+    reason="requires a POSIX shell and POSIX paths",
+)
 def test_install_sh_keeps_explicit_uv_system_certs_opt_out(tmp_path: Path) -> None:
     calls = _run_install_with_stubbed_uv(tmp_path, "0")
 
