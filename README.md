@@ -73,7 +73,7 @@ Windows PowerShell:
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1")))
 ```
 
-The installer sets `UV_SYSTEM_CERTS=1` (unless you already set it) so uv trusts the operating system certificate store, which lets it download Python behind TLS-inspecting corporate proxies. Set `UV_SYSTEM_CERTS=0` to opt out. If you run uv by hand behind such a proxy, export it yourself first: `export UV_SYSTEM_CERTS=1`.
+On macOS/Linux, `install.sh` sets `UV_SYSTEM_CERTS=1` (unless you already set it) so uv trusts the operating system certificate store, which lets it download Python behind TLS-inspecting corporate proxies. Set `UV_SYSTEM_CERTS=0` to opt out. `install.ps1` does not set it. On Windows behind such a proxy, set it yourself in the same PowerShell session before running the installer: `$env:UV_SYSTEM_CERTS = "1"`. On macOS/Linux, run `export UV_SYSTEM_CERTS=1` first if you call uv by hand.
 
 If you need uv first, install it and put `~/.local/bin` on your PATH. A new terminal does not pick this up until the shell profile is sourced:
 
