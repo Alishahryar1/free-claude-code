@@ -13,9 +13,10 @@ class ProviderAdmissionLimits:
     rate_limit: int
     rate_window: float
     max_concurrency: int
+    max_attempts: int
 
     def __post_init__(self) -> None:
-        for name in ("rate_limit", "max_concurrency"):
+        for name in ("rate_limit", "max_concurrency", "max_attempts"):
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
@@ -28,4 +29,5 @@ class ProviderAdmissionLimits:
             settings.provider_rate_limit,
             settings.provider_rate_window,
             settings.provider_max_concurrency,
+            settings.provider_max_attempts,
         )

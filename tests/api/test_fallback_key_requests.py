@@ -7,11 +7,9 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.config.settings import Settings
-from free_claude_code.providers.admission import (
-    UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
-    ProviderAdmissionController,
-)
+from free_claude_code.providers.admission import ProviderAdmissionController
 from tests.api.support import create_test_app
 from tests.api.test_delivered_stream_recovery import text_events
 from tests.providers.test_anthropic_messages_transport import _sse
@@ -154,8 +152,8 @@ def test_fallback_sequence_uses_each_rows_selected_key(
     ] == KEYS
     if failure_status == 429:
         assert tokens == (
-            [KEYS[0]] * UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
-            + [KEYS[1]] * UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+            [KEYS[0]] * PROVIDER_MAX_ATTEMPTS_DEFAULT
+            + [KEYS[1]] * PROVIDER_MAX_ATTEMPTS_DEFAULT
             + [KEYS[2]]
         )
     assert all(body["model"] == "same-model" for _, body in calls)

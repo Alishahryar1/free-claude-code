@@ -309,6 +309,7 @@ def test_settings_defaults_are_valid_and_nonempty() -> None:
     assert settings.provider_rate_limit == 1
     assert settings.provider_rate_window == 2
     assert settings.provider_max_concurrency == 2
+    assert settings.provider_max_attempts == 5
     assert settings.http_read_timeout == 120.0
     assert settings.http_write_timeout == 30.0
     assert settings.http_connect_timeout == 30.0

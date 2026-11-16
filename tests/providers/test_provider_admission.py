@@ -14,10 +14,10 @@ import httpx2
 import openai
 import pytest
 
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.providers import admission, failure_reporting
 from free_claude_code.providers.admission import (
-    UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
     ProviderAdmissionController,
     ProviderAttempt,
     ProviderCorrectionAction,
@@ -36,7 +36,7 @@ def _controller(
     rate_limit: int = 1_000_000,
     rate_window: float = 1.0,
     max_concurrency: int = 1_000,
-    max_attempts: int = UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
+    max_attempts: int = PROVIDER_MAX_ATTEMPTS_DEFAULT,
     base_delay: float = 0.0,
     max_delay: float = 0.0,
 ) -> ProviderAdmissionController:
@@ -303,7 +303,7 @@ async def test_attempt_cancellation_releases_concurrency() -> None:
     [_status_error(503), ssl.SSLWantReadError("read would block")],
     ids=["http_503", "tls_want_read"],
 )
-async def test_run_call_uses_one_ten_attempt_budget(error: Exception) -> None:
+async def test_run_call_uses_one_attempt_budget(error: Exception) -> None:
     controller = ProviderAdmissionController(
         provider_name="TEST", base_delay=0.0, max_delay=0.0, jitter=0.0
     )
@@ -320,7 +320,7 @@ async def test_run_call_uses_one_ten_attempt_budget(error: Exception) -> None:
             operation_kind=ProviderOperationKind.GENERATION,
         )
 
-    assert attempts == 10
+    assert attempts == PROVIDER_MAX_ATTEMPTS_DEFAULT
     assert exc_info.value is error
 
 
@@ -337,7 +337,7 @@ async def test_run_call_succeeds_without_multiplying_attempts(error: Exception) 
     async def recover() -> str:
         nonlocal attempts
         attempts += 1
-        if attempts < 10:
+        if attempts < PROVIDER_MAX_ATTEMPTS_DEFAULT:
             raise error
         return "recovered"
 
@@ -351,7 +351,7 @@ async def test_run_call_succeeds_without_multiplying_attempts(error: Exception) 
         )
         == "recovered"
     )
-    assert attempts == 10
+    assert attempts == PROVIDER_MAX_ATTEMPTS_DEFAULT
 
 
 @pytest.mark.asyncio

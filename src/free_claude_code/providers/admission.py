@@ -15,6 +15,7 @@ from typing import TypeVar
 
 from loguru import logger
 
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.core.diagnostics import reported_http_status
 from free_claude_code.core.stream_delivery import (
     StreamDeliveryState,
@@ -43,7 +44,6 @@ from free_claude_code.providers.recovery_policy import (
 
 T = TypeVar("T")
 
-UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS = 10
 DEFAULT_UPSTREAM_BASE_DELAY = 2.0
 DEFAULT_UPSTREAM_MAX_DELAY = 60.0
 DEFAULT_UPSTREAM_JITTER = 1.0
@@ -509,15 +509,15 @@ class ProviderAdmissionController:
         rate_limit: int = 40,
         rate_window: float = 60.0,
         max_concurrency: int = 5,
-        max_attempts: int = UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
+        max_attempts: int = PROVIDER_MAX_ATTEMPTS_DEFAULT,
         base_delay: float = DEFAULT_UPSTREAM_BASE_DELAY,
         max_delay: float = DEFAULT_UPSTREAM_MAX_DELAY,
         jitter: float = DEFAULT_UPSTREAM_JITTER,
         capacity: ProviderCapacityLimiter | None = None,
     ) -> None:
-        limits = ProviderAdmissionLimits(rate_limit, rate_window, max_concurrency)
-        if max_attempts <= 0:
-            raise ValueError("max_attempts must be > 0")
+        limits = ProviderAdmissionLimits(
+            rate_limit, rate_window, max_concurrency, max_attempts
+        )
         self._timing = RecoveryTiming(base_delay, max_delay, jitter)
 
         self._provider_name = provider_name
@@ -1122,7 +1122,11 @@ class ProviderAdmissionController:
         self._wake_recovery_waiters()
 
     def reconfigure(self, limits: ProviderAdmissionLimits) -> None:
-        """Update capacity without resetting occupancy, history, or recovery."""
+        """Update limits without resetting occupancy, history, or recovery.
+
+        Executions already started keep the attempt budget they began with.
+        """
+        self._max_attempts = limits.max_attempts
         self._capacity.reconfigure(limits)
 
     def _notify_recovery_waiters(self) -> None:

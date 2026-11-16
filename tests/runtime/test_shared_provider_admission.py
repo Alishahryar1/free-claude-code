@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
@@ -214,7 +215,7 @@ async def test_old_lazy_construction_uses_current_limits_and_survives_retirement
 
 @pytest.mark.asyncio
 async def test_separate_provider_ids_and_managers_have_independent_capacity():
-    limits = ProviderAdmissionLimits(1, 60, 1)
+    limits = ProviderAdmissionLimits(1, 60, 1, PROVIDER_MAX_ATTEMPTS_DEFAULT)
     registry = ProviderAdmissionRegistry(limits)
     other = ProviderAdmissionRegistry(limits)
     attempts = []
