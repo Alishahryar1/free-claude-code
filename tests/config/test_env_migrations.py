@@ -517,3 +517,19 @@ def test_newer_managed_schema_fails_closed(
 
     with pytest.raises(ValueError, match="unsupported schema"):
         consolidate_managed_config({})
+
+
+def test_quote_env_value_round_trips_leading_single_quote() -> None:
+    from free_claude_code.config.env_files import dotenv_values_from_text
+    from free_claude_code.config.env_migrations import quote_env_value
+
+    for value in ("'abc", "'quoted'", "foo'bar", r"c:\temp", ""):
+        parsed = dotenv_values_from_text(f"KEY={quote_env_value(value)}\n")
+        assert parsed["KEY"] == value
+
+
+def test_quote_env_value_leaves_plain_tokens_unquoted() -> None:
+    from free_claude_code.config.env_migrations import quote_env_value
+
+    assert quote_env_value("abc123") == "abc123"
+    assert quote_env_value("'abc").startswith('"')
