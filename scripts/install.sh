@@ -1968,6 +1968,10 @@ if [ "$dry_run" -eq 0 ]; then
     if [ "$enable_rtk_headroom" -eq 1 ] && ! command -v rtk >/dev/null 2>&1; then select_rtk_release; fi
 fi
 
+# Trust the OS certificate store (corporate TLS-inspecting proxies) unless the user chose a value.
+: "${UV_SYSTEM_CERTS:=1}"
+export UV_SYSTEM_CERTS
+
 start_install_step uv "Ensuring uv $MIN_UV_VERSION or newer is installed"
 ensure_uv
 

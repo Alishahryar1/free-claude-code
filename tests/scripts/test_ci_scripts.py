@@ -373,3 +373,22 @@ def test_ci_ps1_fail_fast_runs_checks_sequentially() -> None:
         < pytest_index
         < playwright_index
     )
+
+
+def test_install_sh_installs_managed_python_before_tool_install() -> None:
+    body = _braced_body(_script_text("install.sh"), "install_free_claude_code()")
+
+    python_index = body.index('uv python install --managed-python "$PYTHON_VERSION"')
+    tool_index = body.index("uv tool install --force")
+    pinned_index = body.index('--python "$PYTHON_VERSION+gil"')
+
+    assert python_index < pinned_index
+    assert tool_index < pinned_index
+
+
+def test_install_sh_defaults_uv_system_certs_without_overriding_user() -> None:
+    text = _script_text("install.sh")
+
+    assert ': "${UV_SYSTEM_CERTS:=1}"' in text
+    assert "export UV_SYSTEM_CERTS" in text
+    assert text.index("export UV_SYSTEM_CERTS") < text.index("\nensure_uv\n")
