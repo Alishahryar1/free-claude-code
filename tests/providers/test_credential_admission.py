@@ -5,6 +5,7 @@ import asyncio
 import httpx
 import pytest
 
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
@@ -50,7 +51,9 @@ async def test_models_and_credentials_share_capacity_and_limit_updates(
         )
         await asyncio.sleep(0)
         assert not pending.done(), f"another model bypassed provider {protection}"
-        registry.reconfigure(ProviderAdmissionLimits(1000, 60, 2))
+        registry.reconfigure(
+            ProviderAdmissionLimits(1000, 60, 2, PROVIDER_MAX_ATTEMPTS_DEFAULT)
+        )
         second_attempt = await asyncio.wait_for(pending, 1)
         await second_attempt.accept()
     finally:

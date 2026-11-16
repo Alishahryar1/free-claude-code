@@ -12,14 +12,12 @@ from openai._models import construct_type
 from openai.types.chat import ChatCompletionChunk
 
 from free_claude_code.application.reasoning import client_reasoning_policy
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.providers.admission import (
-    UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
-    ProviderAdmissionController,
-)
+from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.openai_chat import (
     OpenAIChatProvider,
@@ -165,7 +163,7 @@ async def capture_openai_chat_wire_body(body: dict) -> dict:
 def immediate_admission(
     *,
     provider_name: str = "TEST",
-    max_attempts: int = UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
+    max_attempts: int = PROVIDER_MAX_ATTEMPTS_DEFAULT,
 ) -> ProviderAdmissionController:
     """Return a real controller with deterministic zero-delay recovery."""
     return ProviderAdmissionController(

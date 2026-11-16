@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.providers import admission
 from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
@@ -135,7 +136,9 @@ async def test_timer_does_not_capture_request_context():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("custom", [False, True])
 async def test_registry_retirement_releases_scheduled_controller(custom):
-    registry = ProviderAdmissionRegistry(ProviderAdmissionLimits(1000, 60, 5))
+    registry = ProviderAdmissionRegistry(
+        ProviderAdmissionLimits(1000, 60, 5, PROVIDER_MAX_ATTEMPTS_DEFAULT)
+    )
     controller = registry.get("custom_test" if custom else "groq")
     # Exhaust without waiting through retries.
     controller._max_attempts = 1
@@ -193,7 +196,9 @@ async def test_live_members_and_reserved_probes_survive_deadlines(clock):
     assert controller._expiry_timer is None
 
     # Reserve the follower's probe while another model occupies capacity.
-    controller.reconfigure(ProviderAdmissionLimits(1000, 60, 1))
+    controller.reconfigure(
+        ProviderAdmissionLimits(1000, 60, 1, PROVIDER_MAX_ATTEMPTS_DEFAULT)
+    )
     blocker = await _open(controller.start_execution(model="b"))
     leader.abandon()
     queued = asyncio.create_task(_open(follower))

@@ -6,9 +6,9 @@ import httpx2
 import openai
 import pytest
 
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.providers.admission import (
-    UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
     ProviderAdmissionController,
     ProviderOperationKind,
 )
@@ -38,7 +38,7 @@ def _config(base_url: str) -> ProviderConfig:
     )
 
 
-def _admission(*, max_attempts: int = UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS):
+def _admission(*, max_attempts: int = PROVIDER_MAX_ATTEMPTS_DEFAULT):
     return ProviderAdmissionController(
         provider_name="nvidia_nim",
         rate_limit=1_000_000,
@@ -178,7 +178,7 @@ async def test_degraded_function_exhaustion_is_detailed_redacted_overload() -> N
             for frame in event.frames
         ]
 
-    assert create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+    assert create.await_count == PROVIDER_MAX_ATTEMPTS_DEFAULT
 
     failure = exc_info.value
     assert failure.kind is FailureKind.OVERLOADED
