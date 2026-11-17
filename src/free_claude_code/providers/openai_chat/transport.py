@@ -308,8 +308,9 @@ class _ChatStreamPresenter:
         if not self._started or self._upstream_finished:
             raise RuntimeError("stream presenter is not accepting chunks")
 
-        if chunk.choices and chunk.choices[0].finish_reason is not None:
-            self._finish_reason = chunk.choices[0].finish_reason
+        # The tool buffer owns finish_reason alignment (an empty tool_calls
+        # finish becomes stop); _feed_frame records the aligned value from the
+        # emitted frame, so a repeated accounting trailer cannot override it.
         yield from self._present(
             self._tool_buffer.feed(chunk.model_dump(mode="json", exclude_unset=True))
         )
@@ -509,19 +510,29 @@ class _NativeChatStreamPresenter(_ChatStreamPresenter):
         if getattr(chunk, "usage", None) is not None:
             self._usage_info = chunk.usage
         for choice in payload.get("choices", []):
-            if choice.get("finish_reason") is not None:
-                self._finish_reason = choice["finish_reason"]
             delta = choice.get("delta") or {}
             self._generated |= any(
                 value for key, value in delta.items() if key != "role"
             )
+        # The tool buffer owns finish_reason alignment; _present records the
+        # aligned value from the emitted frames.
         yield from self._present(self._tool_buffer.feed(payload))
+
+    def _note_finish(self, payload: dict[str, Any]) -> None:
+        for choice in payload.get("choices", []):
+            if choice.get("finish_reason") is not None:
+                self._finish_reason = choice["finish_reason"]
 
     def _present(self, items) -> Iterator[StreamOutput]:
         for item in items:
             if isinstance(item, CompletedChatBatch):
-                yield completed_output(self._relay.feed(frame) for frame in item.frames)
+                frames = []
+                for frame in item.frames:
+                    self._note_finish(frame)
+                    frames.append(self._relay.feed(frame))
+                yield completed_output(frames)
             else:
+                self._note_finish(item)
                 yield StreamOutput((self._relay.feed(item),))
 
     def finish_upstream(self) -> Iterator[str]:

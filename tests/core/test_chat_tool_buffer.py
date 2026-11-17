@@ -1,6 +1,7 @@
 """Chat has choice-level completion; JSON appearance and indexes are not ends."""
 
 import pytest
+from loguru import logger
 
 from free_claude_code.core.chat_completions.tool_calls import (
     ChatToolCallBuffer,
@@ -183,3 +184,144 @@ def test_parallel_calls_keep_resolved_ids_across_unusable_fragments(
         assert [
             (item.body["id"], item.body["function"]["arguments"]) for item in calls
         ] == [("a", "{}"), ("b", "{}")]
+
+
+def _frames(outputs):
+    return [
+        frame
+        for item in outputs
+        for frame in (item.frames if isinstance(item, CompletedChatBatch) else [item])
+        if isinstance(frame, dict)
+    ]
+
+
+@pytest.fixture
+def warning_sink():
+    records = []
+    sink = logger.add(lambda message: records.append(message.record), level="WARNING")
+    try:
+        yield records
+    finally:
+        logger.remove(sink)
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_empty_tool_calls_finish_is_reported_as_stop(native, warning_sink):
+    buffer = ChatToolCallBuffer(native=native)
+    text = event(content="thinking done")
+    text["model"] = "mistral-large-4"
+    buffer.feed(text)
+    result = buffer.feed(event(finish="tool_calls"))
+    frames = _frames(result)
+    assert not any(isinstance(item, CompletedChatCall) for item in result)
+    assert [frame["choices"][0]["finish_reason"] for frame in frames] == ["stop"]
+    assert any(
+        "tool_calls" in record["message"] and "stop" in record["message"]
+        for record in warning_sink
+    )
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_tool_calls_finish_with_a_real_call_is_preserved(native, warning_sink):
+    buffer = ChatToolCallBuffer(native=native)
+    buffer.feed(event([call(0, "read", "{}", "a")]))
+    result = buffer.feed(event(finish="tool_calls"))
+    frames = _frames(result)
+    finishes = [
+        frame["choices"][0]["finish_reason"]
+        for frame in frames
+        if frame["choices"][0]["finish_reason"] is not None
+    ]
+    assert finishes == ["tool_calls"]
+    if native:
+        assert isinstance(result[0], CompletedChatBatch)
+    else:
+        assert any(isinstance(item, CompletedChatCall) for item in result)
+    assert not warning_sink
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_empty_tool_calls_finish_repeated_with_usage_stays_accounting(native):
+    buffer = ChatToolCallBuffer(native=native)
+    buffer.feed(event(finish="tool_calls"))
+    trailer = event(finish="tool_calls")
+    trailer["usage"] = {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}
+    assert _frames(buffer.feed(trailer)) == [{**trailer, "choices": []}]
+    with pytest.raises(ExecutionFailure):
+        buffer.feed(event(finish="tool_calls"))
+
+
+def test_native_empty_tool_calls_finish_is_per_choice():
+    buffer = ChatToolCallBuffer(native=True)
+    buffer.feed(event([call(0, "read", "{}", "a")], choice=0))
+    buffer.feed(event(finish="tool_calls", choice=1))
+    result = buffer.feed(event(finish="tool_calls", choice=0))
+    frames = _frames(result)
+    reasons = {
+        (frame["choices"][0]["index"], frame["choices"][0]["finish_reason"])
+        for frame in frames
+    }
+    assert (0, "tool_calls") in reasons
+    assert (1, "stop") in reasons
+
+
+def test_nameless_call_still_fails_instead_of_becoming_stop():
+    buffer = ChatToolCallBuffer()
+    buffer.feed(event([call(0, None, "{}", "a")]))
+    with pytest.raises(ExecutionFailure):
+        buffer.feed(event(finish="tool_calls"))
+
+
+def _finish_reasons(outputs):
+    reasons = {}
+    for frame in _frames(outputs):
+        for choice in frame["choices"]:
+            if choice.get("finish_reason") is not None:
+                reasons[choice.get("index", 0)] = choice["finish_reason"]
+    return reasons
+
+
+@pytest.mark.parametrize("call_first", [False, True])
+@pytest.mark.parametrize("native", [False, True])
+def test_same_chunk_multi_choice_guards_each_choice_independently(native, call_first):
+    # Choice 0 seals a real call before choice 1's guard runs in the same
+    # chunk; a global "any sealed call" check would wrongly keep tool_calls
+    # for choice 1. The native path splits a chunk per choice and clears its
+    # calls once a group completes, so it only exposes that mistake when the
+    # call arrives in an earlier chunk (call_first).
+    buffer = ChatToolCallBuffer(native=native)
+    reasons = {}
+    first = {"index": 0, "delta": {}, "finish_reason": "tool_calls"}
+    if call_first:
+        reasons.update(
+            _finish_reasons(buffer.feed(event([call(0, "read", "{}", "a")])))
+        )
+    else:
+        first["delta"] = {"tool_calls": [call(0, "read", "{}", "a")]}
+    chunk = {
+        "id": "chat",
+        "model": "m",
+        "choices": [first, {"index": 1, "delta": {}, "finish_reason": "tool_calls"}],
+    }
+    reasons.update(_finish_reasons(buffer.feed(chunk)))
+    assert reasons == {0: "tool_calls", 1: "stop"}
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_reverse_order_empty_finish_is_still_per_choice(native):
+    buffer = ChatToolCallBuffer(native=native)
+    first = {
+        "id": "chat",
+        "model": "m",
+        "choices": [
+            {
+                "index": 1,
+                "delta": {"tool_calls": [call(0, "read", "{}", "a")]},
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+    assert _finish_reasons(buffer.feed(first)) == {1: "tool_calls"}
+    assert _finish_reasons(buffer.feed(event(finish="tool_calls", choice=0))) == {
+        0: "stop"
+    }

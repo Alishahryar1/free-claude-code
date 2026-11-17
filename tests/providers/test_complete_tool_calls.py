@@ -217,3 +217,88 @@ async def test_completed_response_call_survives_an_earlier_unfinished_call(wire)
             await response.aclose()
     assert "call_abandoned" not in output
     assert "call_ready" in output
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_trailer", [False, True])
+async def test_messages_wire_maps_empty_tool_calls_finish_to_end_turn(with_trailer):
+    # The end_turn assertion pins existing egress behaviour: final_stop_reason
+    # already downgrades tool_use to end_turn when no tool block was emitted.
+    # The new coverage is the completed_fields spy: telemetry must report the
+    # aligned stop, and a repeated accounting trailer must not restore the raw
+    # tool_calls finish.
+    from unittest.mock import patch
+
+    from free_claude_code.providers.openai_chat.transport import _ChatAttempt
+
+    reported = []
+    original = _ChatAttempt.completed_fields
+
+    def spy(self):
+        fields = original(self)
+        reported.append(fields["finish_reason"])
+        return fields
+
+    template = _events_for("chat")[0]
+    events = [
+        {
+            **template,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "done"},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            **template,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+        },
+    ]
+    if with_trailer:
+        events.append(
+            {
+                **template,
+                "usage": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 2,
+                    "total_tokens": 7,
+                },
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+            }
+        )
+    tools = [{"name": "read", "input_schema": {"type": "object"}}]
+    async with _harness("chat", lambda _: (200, events), max_attempts=1) as (
+        send,
+        bodies,
+        _,
+    ):
+        with patch.object(_ChatAttempt, "completed_fields", spy):
+            response = await _response(
+                "messages",
+                send("messages", [{"role": "user", "content": "read"}], tools=tools),
+            )
+            try:
+                output = parse_sse_text(
+                    "".join([str(chunk) async for chunk in response.body_iterator])
+                )
+            finally:
+                await response.aclose()
+    assert not any(
+        event.data.get("content_block", {}).get("type") == "tool_use"
+        for event in output
+    )
+    assert (
+        "".join(event.data.get("delta", {}).get("text", "") for event in output)
+        == "done"
+    )
+    stop_reasons = [
+        event.data["delta"]["stop_reason"]
+        for event in output
+        if event.event == "message_delta"
+        and event.data.get("delta", {}).get("stop_reason")
+    ]
+    assert stop_reasons == ["end_turn"]
+    assert reported == ["stop"]
+    assert len(bodies) == 1

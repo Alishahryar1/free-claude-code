@@ -7,6 +7,8 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
+from loguru import logger
+
 from ..failures import ExecutionFailure, FailureKind
 from ..openai_tool_names import OpenAIToolNameCodec
 from ..stream_recovery import SourceRecoverySnapshot, StreamFailureContext
@@ -297,6 +299,9 @@ class ChatToolCallBuffer:
                 self._calls[key].add(fragment, tool_id=tool_id)
             if finish is not None:
                 self._finish_choice(choice)
+                finish = self._aligned_finish(
+                    choice, finish, model=envelope.get("model")
+                )
                 self._append(
                     {
                         **envelope,
@@ -317,6 +322,11 @@ class ChatToolCallBuffer:
             for choice in data.get("choices", []):
                 if choice.get("finish_reason") is not None:
                     self._remember_finish(choice)
+                    aligned = self._aligned_finish(
+                        choice, choice["finish_reason"], model=data.get("model")
+                    )
+                    if aligned != choice["finish_reason"]:
+                        choice["finish_reason"] = aligned
             return [data]
         if self._native_group is None:
             self._native_group = _NativeGroup()
@@ -347,6 +357,9 @@ class ChatToolCallBuffer:
                         if owner == choice_index:
                             call.seal()
                 self._remember_finish(choice)
+                aligned = self._aligned_finish(choice, reason, model=data.get("model"))
+                if aligned != reason:
+                    choice["finish_reason"] = aligned
         if all(choice in self._finished for choice, _ in self._calls):
             self._complete_native_group()
         return self._drain()
@@ -460,6 +473,31 @@ class ChatToolCallBuffer:
                 self._buffer.discard(key)
                 del self._calls[key]
         self._remember_finish(choice)
+
+    def _aligned_finish(
+        self, choice: Mapping[str, Any], finish: Any, *, model: Any = None
+    ) -> Any:
+        """Report an empty tool_calls finish as stop (upstream issue mistralai#652).
+
+        Some backends finish with ``finish_reason="tool_calls"`` while sending no
+        tool-call blocks. Native Chat clients would receive that finish as-is,
+        and request telemetry would record it. Rewrite only when this choice
+        sealed no calls.
+        """
+        if finish != "tool_calls":
+            return finish
+        choice_index = choice.get("index", 0)
+        if any(
+            key[0] == choice_index and call.completed is not None
+            for key, call in self._calls.items()
+        ):
+            return finish
+        logger.warning(
+            "Chat model {} finished with finish_reason=tool_calls but sent no tool "
+            "calls; reporting finish_reason=stop",
+            model if isinstance(model, str) and model.strip() else "unknown",
+        )
+        return "stop"
 
     def _remember_finish(self, choice: Mapping[str, Any]) -> None:
         markers = (choice.get("finish_reason"), choice.get("native_finish_reason"))
