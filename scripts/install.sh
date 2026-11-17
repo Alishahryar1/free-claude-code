@@ -1652,8 +1652,12 @@ install_free_claude_code() {
 
     set -- uv tool install --force --refresh-package free-claude-code
     if [ "$(uname -s)" = "Darwin" ]; then
-        # uv can select an installed +gil interpreter but cannot download it by that name.
-        run env -u UV_PYTHON_PREFERENCE uv python install --no-bin "$PYTHON_VERSION"
+        # Keep interpreter discovery outside the caller's project. uv can select
+        # an installed +gil build but needs the plain version to download it.
+        if [ "$dry_run" -eq 1 ] || ! env -u UV_PYTHON_PREFERENCE uv python find \
+            --project / --system --managed-python --no-python-downloads "$PYTHON_VERSION+gil" >/dev/null 2>&1; then
+            run env -u UV_PYTHON_PREFERENCE uv python install --project / --no-bin "$PYTHON_VERSION"
+        fi
         set -- env -u UV_PYTHON_PREFERENCE "$@" --managed-python --python "$PYTHON_VERSION+gil"
     else
         set -- "$@" --python "$PYTHON_VERSION"

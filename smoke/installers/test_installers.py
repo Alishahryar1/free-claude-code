@@ -572,6 +572,10 @@ if [ "${{1:-}}" = "--version" ]; then
     echo "uv {version}"
     exit 0
 fi
+if [ "${{1:-}}" = "python" ] && [ "${{2:-}}" = "find" ]; then
+    [ "${{FAKE_MANAGED_GIL_PYTHON:-}}" = "installed" ]
+    exit $?
+fi
 if [ "${{1:-}}" = "python" ] && [ "${{2:-}}" = "install" ]; then
     [ "$FAIL_STEP" != "python-install" ] || exit 36
     exit 0
@@ -1849,13 +1853,18 @@ def test_install_sh_delegates_macos_bundle_to_installed_helper(posix_harness):
 
 
 @pytest.mark.parametrize(
-    "system,preference", [("Darwin", "unset"), ("Linux", "system")]
+    "system,preference,installed",
+    [("Darwin", "unset", False), ("Darwin", "unset", True), ("Linux", "system", False)],
 )
 def test_install_sh_macos_python_selection_overrides_only_its_preference(
-    posix_harness, system, preference
+    posix_harness, system, preference, installed
 ):
     posix_harness.env["FAKE_UNAME"] = system
     posix_harness.env["UV_PYTHON_PREFERENCE"] = "system"
+    if installed:
+        posix_harness.env.update(
+            FAKE_MANAGED_GIL_PYTHON="installed", FAIL_STEP="python-install"
+        )
     _write_executable(
         posix_harness.bin_dir / "uv",
         _posix_uv_command(UV_MINIMUM).replace(
@@ -1870,11 +1879,15 @@ def test_install_sh_macos_python_selection_overrides_only_its_preference(
     install = next(
         call for call in calls if "--refresh-package free-claude-code" in call
     )
-    provision = f"uv:python install --no-bin {PYTHON_VERSION}"
+    expected = []
     if system == "Darwin":
-        assert calls.index(provision) < calls.index(install)
-    else:
-        assert provision not in calls
+        expected.append(
+            "uv:python find --project / --system --managed-python --no-python-downloads "
+            f"{PYTHON_VERSION}+gil"
+        )
+        if not installed:
+            expected.append(f"uv:python install --project / --no-bin {PYTHON_VERSION}")
+    assert [call for call in calls if call.startswith("uv:")] == [*expected, install]
     assert ("--managed-python" in install) == (system == "Darwin")
     assert ("+gil" in install) == (system == "Darwin")
 
