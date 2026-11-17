@@ -572,6 +572,10 @@ if [ "${{1:-}}" = "--version" ]; then
     echo "uv {version}"
     exit 0
 fi
+if [ "${{1:-}}" = "python" ] && [ "${{2:-}}" = "install" ]; then
+    [ "$FAIL_STEP" != "python-install" ] || exit 36
+    exit 0
+fi
 if [ "${{1:-}}" = "tool" ] && [ "${{2:-}}" = "install" ]; then
     case " $* " in
         *" headroom-ai[mcp]==0.40.0 "*)
@@ -1862,13 +1866,25 @@ def test_install_sh_macos_python_selection_overrides_only_its_preference(
     )
     result = posix_harness.run_functions("install_free_claude_code")
     assert result.returncode == 0, result.stderr
+    calls = posix_harness.calls()
     install = next(
-        call
-        for call in posix_harness.calls()
-        if "--refresh-package free-claude-code" in call
+        call for call in calls if "--refresh-package free-claude-code" in call
     )
+    provision = f"uv:python install --no-bin {PYTHON_VERSION}"
+    if system == "Darwin":
+        assert calls.index(provision) < calls.index(install)
+    else:
+        assert provision not in calls
     assert ("--managed-python" in install) == (system == "Darwin")
     assert ("+gil" in install) == (system == "Darwin")
+
+
+def test_install_sh_stops_before_fcc_when_macos_python_install_fails(posix_harness):
+    posix_harness.env.update(FAKE_UNAME="Darwin", FAIL_STEP="python-install")
+    posix_harness.add_uv(UV_MINIMUM)
+    result = posix_harness.run_functions("install_free_claude_code")
+    assert result.returncode != 0
+    assert not any(call.startswith("uv:tool install") for call in posix_harness.calls())
 
 
 @pytest.mark.parametrize("system,dry_run", [("Darwin", True), ("Linux", False)])
