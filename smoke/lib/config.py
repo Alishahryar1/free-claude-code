@@ -86,6 +86,7 @@ PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
     "scaleway": "scaleway/deepseek/deepseek-v4-flash",
     "opper": "opper/claude-sonnet-4-6",
     "chutes": "chutes/Qwen/Qwen3-32B-TEE",
+    "runcrate": "runcrate/deepseek-ai/DeepSeek-V4.1-Flash",
     "featherless": "featherless/Qwen/Qwen3-32B",
     "sambanova": "sambanova/Meta-Llama-3.3-70B-Instruct",
     "kilo": "kilo/kilo-auto/free",

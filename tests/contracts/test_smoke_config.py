@@ -64,6 +64,7 @@ def _settings(**overrides):
         "scw_secret_keys": "",
         "opper_api_keys": "",
         "chutes_api_keys": "",
+        "runcrate_api_keys": "",
         "featherless_api_keys": "",
         "wandb_api_keys": "",
         "sambanova_api_keys": "",

@@ -23,6 +23,7 @@ _EXPECTED_PROVIDER_ORDER: tuple[str, ...] = (
     "siliconflow",
     "nebius",
     "chutes",
+    "runcrate",
     "featherless",
     "agnes",
     "zenmux",

@@ -225,6 +225,13 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "and tool-capable models."
         ),
     },
+    "RUNCRATE_API_KEY": {
+        "label": "Runcrate API Keys",
+        "description": (
+            "Runcrate API key for OpenAI-compatible chat, reasoning and "
+            "tool-capable open models."
+        ),
+    },
     "OPPER_API_KEY": {
         "label": "Opper API Keys",
         "description": (
