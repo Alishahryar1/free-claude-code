@@ -457,7 +457,15 @@ def test_web_server_tool_not_detected_when_forced_name_missing_from_tools():
     assert not is_web_server_tool_request(request)
 
 
-@pytest.mark.parametrize("tool_choice", [None, {"type": "auto"}])
+@pytest.mark.parametrize(
+    "tool_choice",
+    [
+        None,
+        {"type": "auto"},
+        {"type": "auto", "disable_parallel_tool_use": False},
+        {"type": "any", "disable_parallel_tool_use": False},
+    ],
+)
 def test_plans_exact_automatic_web_search(tool_choice: dict[str, Any] | None) -> None:
     request = MessagesRequest(
         model="m",
@@ -1172,12 +1180,48 @@ async def test_automatic_web_search_rejects_absent_required_call(
     search = AsyncMock()
     monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
     response = await _automatic_search_service(provider).create(
-        _automatic_search_request(tool_choice={"type": "any"})
+        _automatic_search_request(
+            tool_choice={"type": "any", "disable_parallel_tool_use": False}
+        )
     )
     assert isinstance(response, JSONResponse)
     assert response.status_code == 500
     assert response.headers["x-should-retry"] == "false"
     assert len(provider.requests) == 1
+    search.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_automatic_web_search_does_not_parse_discarded_tool_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _provider_tool_events()
+    events[2] = format_sse_event(
+        "content_block_delta",
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"query":'},
+        },
+    )
+    events[-2] = format_sse_event(
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "refusal", "stop_sequence": None},
+            "usage": {"output_tokens": 2},
+        },
+    )
+    search = AsyncMock()
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
+    response = await _automatic_search_service(
+        ScriptedSelectionProvider(events)
+    ).create(_automatic_search_request(stream=False))
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 200
+    body = _json_body(response)
+    assert body["stop_reason"] == "refusal"
+    assert body["content"] == []
     search.assert_not_awaited()
 
 

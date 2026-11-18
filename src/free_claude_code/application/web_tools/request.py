@@ -116,7 +116,11 @@ def plan_automatic_web_search(
 ) -> AutomaticWebSearchPlan | None:
     """Translate one WebSearch definition while preserving ordinary client tools."""
     choice = request.tool_choice
-    if choice not in (None, {"type": "auto"}, {"type": "any"}):
+    if choice is not None and (
+        choice.get("type") not in ("auto", "any")
+        or choice.get("disable_parallel_tool_use", False) is not False
+        or set(choice) - {"type", "disable_parallel_tool_use"}
+    ):
         return None
 
     tools = request.tools or []

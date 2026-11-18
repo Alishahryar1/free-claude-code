@@ -151,6 +151,14 @@ class WebToolService:
         )
         packets = await collect_response_packets(provider_stream, protocol="messages")
         chunks = tuple(frame for packet in packets for frame in packet.frames)
+        stop_reason = _provider_stop_reason(chunks)
+        references = {ref.call_id: ref for ref in call_references(chunks)}
+        if stop_reason in ("refusal", "max_tokens", "stop_sequence", "pause_turn"):
+            # Tool arguments from a discarded candidate can be incomplete.
+            output = _without_tool_candidates(chunks) if references else iter(packets)
+            for packet in output:
+                yield packet
+            return
 
         message, stream_error, _complete = await aggregate_anthropic_sse_to_message(
             _iterate_chunks(chunks)
@@ -158,18 +166,12 @@ class WebToolService:
         if stream_error is not None:
             raise _execution_failure_from_stream_error(stream_error)
         tool_calls = _tool_calls(message)
-        stop_reason = message.get("stop_reason")
         if tool_calls and stop_reason != "tool_use":
-            if stop_reason in ("refusal", "max_tokens", "stop_sequence", "pause_turn"):
-                for packet in _without_tool_candidates(chunks):
-                    yield packet
-                return
             raise _protocol_failure(
                 "Upstream model returned tool candidates without a tool-use stop.",
                 request_id=request_id,
             )
         completed = {call for packet in packets for call in packet.completed_calls}
-        references = {ref.call_id: ref for ref in call_references(chunks)}
         names = {tool.name for tool in plan.request.tools or ()}
         searches: dict[int, str] = {}
         client_calls: dict[int, CompletedCall] = {}
@@ -201,7 +203,7 @@ class WebToolService:
         if not tool_calls and (
             stop_reason == "tool_use"
             or (
-                plan.request.tool_choice == {"type": "any"}
+                (plan.request.tool_choice or {}).get("type") == "any"
                 and stop_reason == "end_turn"
             )
         ):
@@ -430,10 +432,23 @@ async def _iterate_chunks(chunks: tuple[str, ...]) -> AsyncIterator[str]:
         yield chunk
 
 
-def _messages_events(chunks: Iterable[str]) -> Iterator[SSEEvent]:
-    decoder = AnthropicSSEDecoder()
+def _messages_events(
+    chunks: Iterable[str], *, event_names: frozenset[str] | None = None
+) -> Iterator[SSEEvent]:
+    decoder = AnthropicSSEDecoder(event_names=event_names)
     for chunk in chunks:
         yield from decoder.feed(chunk)
+
+
+def _provider_stop_reason(chunks: Iterable[str]) -> str | None:
+    reason = None
+    for event in _messages_events(chunks, event_names=frozenset({"message_delta"})):
+        delta = event.data.get("delta")
+        if isinstance(delta, dict) and isinstance(
+            stop := delta.get("stop_reason"), str
+        ):
+            reason = stop
+    return reason
 
 
 def _without_tool_candidates(chunks: Iterable[str]) -> Iterator[StreamOutput]:
