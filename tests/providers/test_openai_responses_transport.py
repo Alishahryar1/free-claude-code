@@ -1280,8 +1280,10 @@ async def test_standard_responses_maps_reasoning_and_tool_calls(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("snapshot_only", [False, True])
+@pytest.mark.parametrize("incomplete", [False, True])
 async def test_standard_responses_preserves_refusal_text_and_terminal(
     snapshot_only: bool,
+    incomplete: bool,
 ) -> None:
     refusal = "I can't answer that."
     item = {
@@ -1317,6 +1319,14 @@ async def test_standard_responses_preserves_refusal_text_and_terminal(
             "response": {**_completed_response(), "output": [item]},
         }
     )
+    if incomplete:
+        events[-1]["type"] = "response.incomplete"
+        events[-1]["response"] = {
+            **_completed_response(),
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output": [item],
+        }
     client = _client(
         lambda _request: httpx2.Response(
             200,
@@ -1331,7 +1341,9 @@ async def test_standard_responses_preserves_refusal_text_and_terminal(
 
     parsed = parse_sse_text("".join(chunks))
     assert_anthropic_stream_contract(parsed)
-    assert parsed[-2].data["delta"]["stop_reason"] == "refusal"
+    assert parsed[-2].data["delta"]["stop_reason"] == (
+        "max_tokens" if incomplete else "refusal"
+    )
     assert text_content(parsed) == refusal
 
 

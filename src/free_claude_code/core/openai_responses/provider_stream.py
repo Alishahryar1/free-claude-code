@@ -395,7 +395,7 @@ class ResponsesProviderStream:
         )
         stop_reason = (
             "refusal"
-            if self._refusals or filtered
+            if filtered or (self._refusals and not incomplete)
             else "max_tokens"
             if incomplete
             else "end_turn"

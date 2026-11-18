@@ -475,10 +475,11 @@ class _ChatStreamPresenter:
         if self._completed:
             return
         completion = self.completion
+        stop_reason = map_stop_reason(completion.finish_reason)
+        if self._refused and stop_reason != "max_tokens":
+            stop_reason = "refusal"
         yield from self._output.finish_success(
-            stop_reason="refusal"
-            if self._refused
-            else map_stop_reason(completion.finish_reason),
+            stop_reason=stop_reason,
             usage=usage,
         )
         self._completed = True

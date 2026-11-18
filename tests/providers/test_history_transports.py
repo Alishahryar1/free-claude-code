@@ -258,11 +258,42 @@ async def _saved_reply(stream, wire):
 
 
 @pytest.mark.asyncio
-async def test_chat_to_messages_preserves_explicit_refusal() -> None:
+@pytest.mark.parametrize(
+    ("finish_reason", "stop_reason"), [("stop", "refusal"), ("length", "max_tokens")]
+)
+@pytest.mark.parametrize("unfinished_tool", [False, True])
+async def test_chat_to_messages_preserves_explicit_refusal(
+    finish_reason: str, stop_reason: str, unfinished_tool: bool
+) -> None:
     refusal = "I can't answer that."
     payload = _events_for("chat")[-1]
     payload["choices"][0]["delta"] = {"refusal": refusal}
-    async with _harness("chat", lambda _: (200, [payload])) as (send, _, _):
+    payload["choices"][0]["finish_reason"] = finish_reason
+    events = [payload]
+    if unfinished_tool:
+        events.insert(
+            0,
+            {
+                **payload,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_partial",
+                                    "type": "function",
+                                    "function": {"arguments": "{"},
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            },
+        )
+    async with _harness("chat", lambda _: (200, events)) as (send, _, _):
         reply, error, complete = await aggregate_anthropic_sse_to_message(
             collected_frames(
                 send("messages", [{"role": "user", "content": "Request"}]),
@@ -270,7 +301,7 @@ async def test_chat_to_messages_preserves_explicit_refusal() -> None:
             )
         )
     assert complete and error is None
-    assert reply["stop_reason"] == "refusal"
+    assert reply["stop_reason"] == stop_reason
     assert reply["content"] == [{"type": "text", "text": refusal}]
 
 

@@ -940,6 +940,10 @@ async def test_automatic_web_search_keeps_client_tool_and_its_result(
     assert messages[-1]["role"] == "tool"
     if selection != "client":
         assert "https://example.com/mixed" in json.dumps(messages)
+        no_search_tool = request.model_copy(update={"tools": [retrieve]})
+        gemini_wire = messages_to_gemini(no_search_tool)
+        assert "https://example.com/mixed" in json.dumps(gemini_wire["contents"])
+        assert "retrieved body" in json.dumps(gemini_wire["contents"])
 
 
 async def _single_sse_chunk(text: str) -> AsyncIterator[str]:
