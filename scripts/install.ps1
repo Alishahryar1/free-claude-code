@@ -1905,16 +1905,20 @@ function Set-FccBundlePathEntry {
             }
         }
         $newPath = $entries -join ';'
-        if ($newPath -cne $userPath) {
+        $pathChanged = $newPath -cne $userPath
+        if ($pathChanged) {
             $kind = if ("Path" -iin $key.GetValueNames()) { $key.GetValueKind("Path") } else { "ExpandString" }
             $key.SetValue("Path", $newPath, $kind)
-            $launcher = Join-Path $binPath 'fcc-server.exe'
-            if (Test-Path -LiteralPath $launcher -PathType Leaf) {
-                Invoke-NativeCommand -FilePath $launcher -Arguments @('--fcc-notify-environment')
-            }
         }
     } finally {
         $key.Dispose()
+    }
+    # An interrupted activation can persist PATH before notifying other processes.
+    if (-not $Remove -or $pathChanged) {
+        $launcher = Join-Path $binPath 'fcc-server.exe'
+        if (Test-Path -LiteralPath $launcher -PathType Leaf) {
+            Invoke-NativeCommand -FilePath $launcher -Arguments @('--fcc-notify-environment')
+        }
     }
     $env:Path = ($env:Path -split ';' | Where-Object { $_ -ine $binPath }) -join ';'
     if (-not $Remove) { Prioritize-PathEntry $binPath }

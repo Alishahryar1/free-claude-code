@@ -326,13 +326,13 @@ function Remove-FccBundlePathEntry {
         $newPath = ($path -split ';' | Where-Object { $_ -ine $bin }) -join ';'
         if ($newPath -cne $path) {
             $key.SetValue("Path", $newPath, $key.GetValueKind("Path"))
-            $launcher = Join-Path $BundlePath 'bin\fcc-server.exe'
-            if (Test-Path -LiteralPath $launcher -PathType Leaf) {
-                $null = Invoke-NativeResult -FilePath $launcher -Arguments @('--fcc-notify-environment')
-            }
         }
     } finally {
         $key.Dispose()
+    }
+    $launcher = Join-Path $BundlePath 'bin\fcc-server.exe'
+    if (Test-Path -LiteralPath $launcher -PathType Leaf) {
+        $null = Invoke-NativeResult -FilePath $launcher -Arguments @('--fcc-notify-environment')
     }
     $env:Path = ($env:Path -split ';' | Where-Object { $_ -ine $bin }) -join ';'
 }

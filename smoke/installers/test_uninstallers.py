@@ -997,6 +997,10 @@ def test_uninstall_ps1_resumes_after_signed_home_was_detached(
     removing = harness.home / ".fcc.removing"
     if empty:
         (harness.fcc_home / "config.json").unlink()
+    else:
+        launcher = harness.fcc_home / "windows-app" / "bin" / "fcc-server.exe"
+        launcher.parent.mkdir(parents=True)
+        launcher.touch()
     harness.fcc_home.rename(removing)
 
     removed = harness.run(fail_step="tool-dir")
@@ -1005,6 +1009,7 @@ def test_uninstall_ps1_resumes_after_signed_home_was_detached(
     assert not harness.fcc_home.exists()
     assert not removing.exists()
     assert not any(call.startswith(("uv:", "doctor:")) for call in harness.calls())
+    assert ("fcc-path-changed" in harness.calls()) == (not empty)
 
 
 def test_uninstall_ps1_recognizes_bundle_after_interrupted_activation(

@@ -237,10 +237,16 @@ def test_install_ps1_preserves_expandable_user_path(powershell_harness):
             f"{bin_dir};{previous}",
             winreg.REG_EXPAND_SZ,
         )
+        retried = powershell_harness.run_functions("Set-FccBundlePathEntry")
+        assert retried.returncode == 0, retried.stdout + retried.stderr
+        assert winreg.QueryValueEx(key, "Path") == (
+            f"{bin_dir};{previous}",
+            winreg.REG_EXPAND_SZ,
+        )
         removed = powershell_harness.run_functions("Set-FccBundlePathEntry -Remove")
         assert removed.returncode == 0, removed.stdout + removed.stderr
         assert winreg.QueryValueEx(key, "Path") == (previous, winreg.REG_EXPAND_SZ)
-    assert powershell_harness.calls() == ["fcc-path-changed", "fcc-path-changed"]
+    assert powershell_harness.calls() == ["fcc-path-changed"] * 3
 
 
 def test_install_ps1_signed_bundle_does_not_require_uv_for_claude_code(
