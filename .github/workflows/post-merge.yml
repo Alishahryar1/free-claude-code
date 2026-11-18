@@ -217,8 +217,18 @@ jobs:
           $name = "free_claude_code-$env:RELEASE_VERSION-windows-x64.zip"
           $bundle = Join-Path $env:RUNNER_TEMP 'bundle'
           & ./scripts/windows/signing_files.ps1 -Bundle $bundle -RequireSigned
-          $version = & (Join-Path $bundle 'bin\fcc-server.exe') --version
-          if ($LASTEXITCODE -ne 0 -or $version -cne "free-claude-code $env:RELEASE_VERSION") { throw 'Signed launcher test failed' }
+          $checkLauncher = @'
+          import subprocess
+          import sys
+          result = subprocess.run(
+              [sys.argv[1], "--version"], stdin=subprocess.DEVNULL, capture_output=True,
+              text=True, creationflags=subprocess.DETACHED_PROCESS, check=True,
+          )
+          if result.stdout.strip() != f"free-claude-code {sys.argv[2]}":
+              raise SystemExit("Signed launcher did not preserve stdout")
+          '@
+          & (Join-Path $bundle 'runtime\python.exe') -c $checkLauncher (Join-Path $bundle 'bin\FCC-SERVER.EXE') $env:RELEASE_VERSION
+          if ($LASTEXITCODE -ne 0) { throw 'Signed launcher test failed' }
           $archive = Join-Path $env:RUNNER_TEMP $name
           [IO.Compression.ZipFile]::CreateFromDirectory($bundle, $archive)
           $commit = git rev-parse HEAD

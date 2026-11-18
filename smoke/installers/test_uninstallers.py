@@ -757,6 +757,9 @@ $source = [IO.File]::ReadAllText($env:FCC_UNINSTALLER).Replace(
     '[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")',
     '[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($env:FCC_TEST_ENV_KEY)'
 ).Replace(
+    '[Environment]::GetEnvironmentVariable("Path", "User")',
+    '$env:FCC_TEST_USER_PATH'
+).Replace(
     "`$null = Invoke-NativeResult -FilePath `$launcher -Arguments @('--fcc-notify-environment')",
     'Add-Content -LiteralPath $env:CALL_LOG -Value "fcc-path-changed"'
 )
@@ -811,6 +814,7 @@ if ($env:UNINSTALL_KEEP_INTEGRATIONS -eq "1") {
             "UNINSTALL_DRY_RUN": "0",
             "UNINSTALL_KEEP_INTEGRATIONS": "0",
             "FCC_TEST_ENV_KEY": windows_user_environment,
+            "FCC_TEST_USER_PATH": "",
         }
     )
     return PowerShellUninstallHarness(
@@ -910,6 +914,22 @@ def test_uninstall_ps1_removes_bundle_and_its_path_without_uv(
     assert "fcc-path-changed" in harness.calls()
     assert not any(call.startswith("uv:") for call in harness.calls())
     assert (harness.bin_dir / "claude.cmd").exists()
+
+
+def test_uninstall_ps1_cleans_integrations_with_active_uv_install(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+) -> None:
+    harness = powershell_uninstall_harness
+    bundle = harness.fcc_home / "windows-app" / "bin"
+    bundle.mkdir(parents=True)
+    (bundle / "fcc-doctor.exe").write_bytes(b"stale inactive launcher")
+    harness.env["FCC_TEST_USER_PATH"] = str(harness.tool_bin)
+
+    result = harness.run()
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "doctor:--disconnect-integrations" in harness.calls()
+    assert not harness.fcc_home.exists()
 
 
 def test_uninstall_ps1_preserves_unowned_desktop_shortcut(

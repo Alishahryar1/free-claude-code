@@ -64,6 +64,10 @@ static int run(BOOL graphical) {
         return 1;
     }
     startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
     SetConsoleCtrlHandler(console_handler, TRUE);
     if (!CreateProcessW(python, command, NULL, NULL, TRUE, CREATE_SUSPENDED,
         NULL, NULL, &startup, &process)) {

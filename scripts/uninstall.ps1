@@ -213,9 +213,10 @@ function Disconnect-FccIntegrations {
         Write-Host "+ fcc-doctor --disconnect-integrations"
         return
     }
-    $bundleDoctor = Join-Path (Get-FccBundleBin) 'fcc-doctor.exe'
-    $doctorPath = if (Test-Path -LiteralPath $bundleDoctor -PathType Leaf) { $bundleDoctor }
-    if (-not $doctorPath -and $script:UvToolBin) {
+    $bundleBin = Get-FccBundleBin
+    $bundleDoctor = Join-Path $bundleBin 'fcc-doctor.exe'
+    $doctorPath = $null
+    if ($script:UvToolBin) {
         foreach ($extension in @(".exe", ".cmd", ".bat", "")) {
             $candidate = Join-Path $script:UvToolBin "fcc-doctor$extension"
             if (Test-Path -LiteralPath $candidate -PathType Leaf) {
@@ -223,6 +224,10 @@ function Disconnect-FccIntegrations {
                 break
             }
         }
+    }
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User") -split ';'
+    if ((-not $doctorPath -or $bundleBin -iin $userPath) -and (Test-Path -LiteralPath $bundleDoctor -PathType Leaf)) {
+        $doctorPath = $bundleDoctor
     }
     if (-not $doctorPath) {
         throw "FCC's integration cleanup command is unavailable. Update FCC first, or disconnect editor/app integrations manually and rerun with -KeepIntegrations. FCC data was not deleted."
