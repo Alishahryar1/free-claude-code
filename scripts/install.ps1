@@ -195,22 +195,28 @@ function Show-InstallReport {
     if ($script:InstallLog) { Write-Host "Installer log: $script:InstallLog" }
 }
 
-function Write-WindowsLaunchGuidance {
-    param([string] $FilePath, [Exception] $Exception, [string] $Stderr = "")
+function Test-WindowsLaunchPolicyFailure {
+    param([Exception] $Exception, [string] $Stderr = "")
 
-    $policyFailure = $Stderr -match '\(os error (4551|1260)\)'
+    if ($Stderr -match '\(os error (4551|1260)\)') { return $true }
     for ($cause = $Exception; $null -ne $cause; $cause = $cause.InnerException) {
         if ($cause -is [ComponentModel.Win32Exception] -and $cause.NativeErrorCode -in @(4551, 1260)) {
-            $policyFailure = $true
+            return $true
         }
         # Start-Process on Windows PowerShell drops the native error code.
         foreach ($code in @(4551, 1260)) {
             if ($cause.Message.Contains([ComponentModel.Win32Exception]::new($code).Message)) {
-                $policyFailure = $true
+                return $true
             }
         }
     }
-    if ($policyFailure) {
+    return $false
+}
+
+function Write-WindowsLaunchGuidance {
+    param([string] $FilePath, [Exception] $Exception, [string] $Stderr = "")
+
+    if (Test-WindowsLaunchPolicyFailure -Exception $Exception -Stderr $Stderr) {
         $guidance = @"
 Windows application policy prevented this command from running: '$FilePath'.
 Inspect recent policy events to identify the blocked file, then ask your administrator to allow the required application:
@@ -1684,7 +1690,16 @@ function Ensure-SelectedCodingAgents {
 
     if ($script:InstallAider) {
         Start-InstallStep "Aider" "Ensuring Aider is installed"
-        Ensure-Aider
+        try {
+            Ensure-Aider
+        } catch {
+            if ($VoiceLocal -or -not (Test-WindowsLaunchPolicyFailure -Exception $_.Exception -Stderr $_.Exception.Message)) {
+                throw
+            }
+            $script:InstallAider = $false
+            $script:InstallStepOutcome = "Skipped"
+            Write-Host "Windows application policy blocked Aider. Continuing with the other selected coding agents."
+        }
     }
 
     if ($script:InstallAgy) {
@@ -2394,7 +2409,9 @@ try {
         Select-CodingAgents
     }
 
-    $script:InstallSteps["uv"] = "Not attempted"
+    $needsUv = $VoiceLocal -or $script:EnableRtkHeadroom -or
+        ($script:InstallAider -and -not (Get-ApplicationCommand "aider"))
+    if ($needsUv) { $script:InstallSteps["uv"] = "Not attempted" }
     $selectedAgents = @()
     foreach ($choice in @(
         @("Claude Code", $script:InstallClaudeCode), @("Codex", $script:InstallCodex),
@@ -2429,8 +2446,10 @@ try {
 
     Confirm-SelectedPrerequisites
 
-    Start-InstallStep "uv" "Ensuring uv $MinUvVersion or newer is installed"
-    Ensure-Uv
+    if ($needsUv) {
+        Start-InstallStep "uv" "Ensuring uv $MinUvVersion or newer is installed"
+        Ensure-Uv
+    }
 
     Ensure-SelectedCodingAgents
 

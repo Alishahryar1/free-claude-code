@@ -15,6 +15,10 @@ on:
         description: SHA-256 digest of the first signed Windows bundle after Smart App Control acceptance
         required: false
         type: string
+      supersedes_windows_candidate:
+        description: Rejected draft tag replaced by this release commit
+        required: false
+        type: string
   push:
     branches: [main]
 
@@ -113,9 +117,11 @@ jobs:
           RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_COMMIT: ${{ inputs.release_commit || github.sha }}
           CI_PYTHON: ${{ steps.environment.outputs.python-version }}
+          SUPERSEDES_WINDOWS_CANDIDATE: ${{ inputs.supersedes_windows_candidate }}
         run: |
           uv run --no-project --python "$CI_PYTHON" python -m scripts.publish_release \
-            --repository "$RELEASE_REPOSITORY" --commit "$RELEASE_COMMIT" --stage-only
+            --repository "$RELEASE_REPOSITORY" --commit "$RELEASE_COMMIT" --stage-only \
+            --supersedes-windows-candidate "$SUPERSEDES_WINDOWS_CANDIDATE"
 
   windows:
     name: Stage signed Windows bundle
@@ -309,7 +315,9 @@ jobs:
           RELEASE_COMMIT: ${{ inputs.release_commit || github.sha }}
           CI_PYTHON: ${{ steps.environment.outputs.python-version }}
           ACCEPTED_WINDOWS_DIGEST: ${{ inputs.accepted_windows_digest }}
+          SUPERSEDES_WINDOWS_CANDIDATE: ${{ inputs.supersedes_windows_candidate }}
         run: |
           uv run --no-project --python "$CI_PYTHON" python -m scripts.publish_release \
             --repository "$RELEASE_REPOSITORY" --commit "$RELEASE_COMMIT" \
-            --accepted-windows-digest "$ACCEPTED_WINDOWS_DIGEST"
+            --accepted-windows-digest "$ACCEPTED_WINDOWS_DIGEST" \
+            --supersedes-windows-candidate "$SUPERSEDES_WINDOWS_CANDIDATE"

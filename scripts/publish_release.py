@@ -20,6 +20,7 @@ from .check_version_policy import (
 )
 
 WINDOWS_BUILDER = "scripts/build_windows_bundle.py"
+BUMP_ORDER = ("patch", "minor", "major")
 
 
 def command(args: list[str], *, cwd: Path | None = None) -> str:
@@ -82,6 +83,7 @@ class Publisher:
         *,
         stage_only: bool = False,
         accepted_windows_digest: str = "",
+        supersedes_windows_candidate: str = "",
     ) -> tuple[str, bool, bool] | None:
         if not re.fullmatch(r"[0-9a-f]{40}", target):
             raise ValueError("Release target must be a full commit SHA")
@@ -103,22 +105,49 @@ class Publisher:
             if name.startswith("v") and VERSION.fullmatch(name[1:]):
                 tags[name] = sha
         previous = None
-        for sha in history[history.index(target) + 1 :]:
+        target_index = history.index(target)
+        for sha in history[target_index + 1 :]:
             names = [name for name, commit in tags.items() if commit == sha]
             if names:
                 if len(names) != 1:
                     raise ValueError(f"Ambiguous release tags at {sha}")
                 previous = names[0]
                 break
-            if release_paths(changed_paths(f"{sha}^", sha)):
-                raise ValueError(
-                    f"Earlier release {sha} is unfinished; retry its post-merge run"
+            paths = changed_paths(f"{sha}^", sha)
+            if release_paths(paths):
+                if not supersedes_windows_candidate:
+                    raise ValueError(
+                        f"Earlier release {sha} is unfinished; retry its post-merge run"
+                    )
+                skipped_kind = release_kind(
+                    git("show", "-s", "--format=%s", sha), paths
                 )
+                if skipped_kind is not None and BUMP_ORDER.index(
+                    skipped_kind
+                ) > BUMP_ORDER.index(kind):
+                    kind = skipped_kind
         if previous is None:
             raise ValueError("No baseline release tag found")
         releases = self.releases()
         predecessor = releases.get(previous)
-        if not predecessor or predecessor["draft"] or predecessor["prerelease"]:
+        superseding = bool(supersedes_windows_candidate)
+        if superseding:
+            if (
+                previous != supersedes_windows_candidate
+                or not predecessor
+                or not predecessor["draft"]
+                or predecessor["prerelease"]
+                or not git(
+                    "ls-tree", "--name-only", tags[previous], "--", WINDOWS_BUILDER
+                ).strip()
+                or not git(
+                    "ls-tree", "--name-only", target, "--", WINDOWS_BUILDER
+                ).strip()
+            ):
+                raise ValueError(
+                    "Only a preceding draft Windows candidate can be superseded"
+                )
+        elif not predecessor or predecessor["draft"] or predecessor["prerelease"]:
             raise ValueError(
                 f"Earlier release {previous} is unfinished; retry its post-merge run"
             )
@@ -136,16 +165,38 @@ class Publisher:
         if release and not release["draft"]:
             print(f"{tag} already published")
             return
+        newer_commits = set(history[:target_index])
+        if newer_commits.intersection(tags.values()):
+            raise ValueError(f"A newer release is already staged; cannot publish {tag}")
         if tag not in tags:
             command(["git", "tag", tag, target])
             command(["git", "push", "origin", f"refs/tags/{tag}"])
         if release is None:
+            notes_base = previous
+            if superseding:
+                published_by_commit = {
+                    tags[name]: name
+                    for name, item in releases.items()
+                    if name in tags and not item["draft"] and not item["prerelease"]
+                }
+                notes_base = next(
+                    (
+                        published_by_commit[sha]
+                        for sha in history[target_index + 1 :]
+                        if sha in published_by_commit
+                    ),
+                    None,
+                )
+                if notes_base is None:
+                    raise ValueError(
+                        "No published release for the corrected candidate's notes"
+                    )
             notes = self.release_api(
                 "/generate-notes",
                 "-f",
                 f"tag_name={tag}",
                 "-f",
-                f"previous_tag_name={previous}",
+                f"previous_tag_name={notes_base}",
             )
             release = self.release_api(
                 "",
@@ -168,10 +219,13 @@ class Publisher:
                 if command(["git", "status", "--porcelain"], cwd=source).strip():
                     raise ValueError("Release source must be clean")
                 bundle_required = (source / WINDOWS_BUILDER).is_file()
-                acceptance_required = bundle_required and not any(
-                    asset["name"] == windows_bundle_name(previous[1:])
-                    and asset["state"] == "uploaded"
-                    for asset in predecessor["assets"]
+                acceptance_required = bundle_required and (
+                    superseding
+                    or not any(
+                        asset["name"] == windows_bundle_name(previous[1:])
+                        and asset["state"] == "uploaded"
+                        for asset in predecessor["assets"]
+                    )
                 )
                 bundle_digest = self.stage(
                     tag,
@@ -327,12 +381,14 @@ def main() -> int:
     parser.add_argument("--commit", required=True)
     parser.add_argument("--stage-only", action="store_true")
     parser.add_argument("--accepted-windows-digest", default="")
+    parser.add_argument("--supersedes-windows-candidate", default="")
     args = parser.parse_args()
     try:
         result = Publisher(args.repository).publish(
             args.commit,
             stage_only=args.stage_only,
             accepted_windows_digest=args.accepted_windows_digest,
+            supersedes_windows_candidate=args.supersedes_windows_candidate,
         )
         if result is not None and (output := os.environ.get("GITHUB_OUTPUT")):
             version, windows_needed, acceptance_required = result

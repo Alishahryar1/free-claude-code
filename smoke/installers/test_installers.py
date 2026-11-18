@@ -242,6 +242,36 @@ def test_install_ps1_preserves_expandable_user_path(powershell_harness):
     assert powershell_harness.calls() == ["fcc-path-changed", "fcc-path-changed"]
 
 
+def test_install_ps1_signed_bundle_does_not_require_uv_for_claude_code(
+    powershell_harness,
+):
+    powershell_harness.add_client("claude")
+    powershell_harness.add_uv("not-a-version")
+
+    result = powershell_harness.run_interactive(["n"] * 11)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = powershell_harness.calls()
+    assert "claude:--version" in calls
+    assert f"download:{BUNDLE_URL}" in calls
+    assert not any(call.startswith("uv:") for call in calls)
+
+
+def test_install_ps1_signed_bundle_survives_policy_blocked_aider(powershell_harness):
+    powershell_harness.add_client("claude")
+    _write_executable(
+        powershell_harness.bin_dir / "aider.cmd",
+        "@echo off\necho error: uv trampoline failed ^(os error 4551^) 1>&2\nexit /b 1\n",
+    )
+
+    result = powershell_harness.run_interactive(["n"] * 10)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Windows application policy blocked Aider" in result.stdout
+    assert "Run Aider with:" not in result.stdout
+    assert f"download:{BUNDLE_URL}" in powershell_harness.calls()
+
+
 def test_install_ps1_update_switches_to_requested_install_route(powershell_harness):
     root = Path(powershell_harness.env["USERPROFILE"]) / ".fcc" / "windows-app"
     root.mkdir(parents=True)
@@ -3553,8 +3583,9 @@ def _assert_setup_preserves_other_commands(
         if name not in installed
     ] + ["n"]
     failure = "" if other == "uv" else f"stale-{other}-verify"
+    windows_options = ["-VoiceLocal"] if other == "uv" else []
     result = (
-        harness.run_interactive(answers, fail_step=failure)
+        harness.run_interactive(answers, *windows_options, fail_step=failure)
         if windows
         else harness.run_interactive("\n".join(answers) + "\n", fail_step=failure)
     )
@@ -3568,7 +3599,7 @@ def _assert_setup_preserves_other_commands(
         assert not any(call.startswith("stale-uv:tool") for call in calls)
     else:
         assert not any(call.startswith(f"stale-{other}:") for call in calls)
-    if windows:
+    if windows and other != "uv":
         assert f"download:{BUNDLE_URL}" in calls
     else:
         assert any("--refresh-package free-claude-code" in call for call in calls)

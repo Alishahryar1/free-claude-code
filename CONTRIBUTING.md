@@ -29,6 +29,8 @@ The first signed Windows release stays in draft after signing. On a disposable W
 
 Once the candidate passes, dispatch the **Post merge** workflow on `main` with the draft's commit as `release_commit` and the tested ZIP's digest as `accepted_windows_digest` in `sha256:<lowercase hex>` form. The publisher checks the exact ZIP, release commit, and staged wheel before releasing it. Later releases publish automatically after signing and verification. If verification rejects an uploaded ZIP, inspect the draft asset before removing it and retrying the same release commit.
 
+If acceptance finds a bug that requires a code change, dispatch the workflow for the corrected main commit and set `supersedes_windows_candidate` to the rejected draft tag. This allocates a new version and keeps the rejected candidate in draft. Include the same rejected tag when dispatching acceptance of the corrected candidate.
+
 The default Windows install uses the signed bundle. `-VoiceLocal` uses the uv install with the optional PyTorch dependencies.
 
 ## Development Setup

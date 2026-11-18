@@ -17,8 +17,8 @@ $version = $Tag.Substring(1)
 $name = "free_claude_code-$version-windows-x64.zip"
 $releaseApi = "https://api.github.com/repos/$repo/releases/tags/$Tag"
 $download = "https://github.com/$repo/releases/download/$Tag/$name"
-$metadata = gh api "repos/$repo/releases/tags/$Tag" | ConvertFrom-Json
-if ($LASTEXITCODE -ne 0 -or -not $metadata.draft -or $metadata.prerelease -or $metadata.tag_name -cne $Tag) {
+$metadata = gh release view $Tag --repo $repo --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or -not $metadata.isDraft -or $metadata.isPrerelease -or $metadata.tagName -cne $Tag) {
     throw "Expected a draft release for $Tag."
 }
 $asset = @($metadata.assets | Where-Object { $_.name -ceq $name -and $_.state -eq 'uploaded' })

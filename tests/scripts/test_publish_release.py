@@ -275,6 +275,37 @@ def test_nonrelease_never_allocates_or_builds(releases):
     assert not any(c[:2] == ["git", "push"] for c in remote.calls)
 
 
+def test_rejected_windows_candidate_can_be_replaced_without_publishing_it(releases):
+    repo, remote = releases
+    write(repo, "scripts/build_windows_bundle.py", "# windows builder")
+    first = remote.advance()
+    publisher = remote.publisher()
+    assert publisher.publish(first, stage_only=True) == ("1.2.4", True, True)
+    remote.advance("minor: Intervening feature")
+    corrected = remote.advance("patch: Correct signed Windows release")
+
+    with pytest.raises(ValueError, match="Earlier release"):
+        publisher.publish(corrected, stage_only=True)
+    with pytest.raises(ValueError, match="Only a preceding draft Windows candidate"):
+        publisher.publish(
+            corrected, stage_only=True, supersedes_windows_candidate="v1.2.3"
+        )
+    assert publisher.publish(
+        corrected, stage_only=True, supersedes_windows_candidate="v1.2.4"
+    ) == ("1.3.0", True, True)
+    with pytest.raises(ValueError, match="A newer release is already staged"):
+        publisher.publish(first)
+    assert remote.releases["v1.2.4"]["draft"]
+    assert remote.releases["v1.3.0"]["draft"]
+    generated_notes = [
+        call
+        for call in remote.calls
+        if any(arg.endswith("/generate-notes") for arg in call)
+    ]
+    assert "previous_tag_name=v1.2.3" in generated_notes[-1]
+    assert not remote.uploaded
+
+
 def test_native_preparation_uses_release_commit_despite_dirty_current_checkout(
     releases,
 ):

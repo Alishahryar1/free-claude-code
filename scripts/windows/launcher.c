@@ -71,6 +71,10 @@ static int run(BOOL graphical) {
     SetConsoleCtrlHandler(console_handler, TRUE);
     if (!CreateProcessW(python, command, NULL, NULL, TRUE, CREATE_SUSPENDED,
         NULL, NULL, &startup, &process)) {
+        DWORD error = GetLastError();
+        if (!graphical) {
+            fprintf(stderr, "Could not start bundled Python (os error %lu)\n", error);
+        }
         CloseHandle(job);
         return 1;
     }
