@@ -253,6 +253,52 @@ def test_install_ps1_preserves_expandable_user_path(powershell_harness):
     assert powershell_harness.calls() == ["fcc-path-changed"] * 3
 
 
+def test_install_ps1_signed_update_does_not_expose_prerequisite_uv_early(
+    powershell_harness,
+):
+    if os.name != "nt":
+        pytest.skip("Windows registry test")
+
+    import winreg
+
+    harness = powershell_harness
+    harness.add_installed_clients(except_for=("aider",))
+    home = Path(harness.env["USERPROFILE"])
+    bundle_bin = home / ".fcc/windows-app/bin"
+    bundle_bin.mkdir(parents=True)
+    (bundle_bin.parent / "version.txt").write_text("1.9.0", encoding="ascii")
+    receipt = bundle_bin.parent / ".installed-version"
+    receipt.write_text("1.9.0", encoding="ascii")
+    uv_bin = home / ".local/bin"
+    _write_executable(uv_bin / "fcc-server.cmd", _batch_client("legacy-fcc-server"))
+    harness.env.update(
+        UV_INSTALL_DIR=str(uv_bin),
+        UV_NO_MODIFY_PATH="",
+        FCC_TEST_UV_STANDALONE_PATH="1",
+        FCC_TEST_USER_PATH=str(bundle_bin),
+    )
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        harness.env["FCC_TEST_ENV_KEY"],
+        0,
+        winreg.KEY_ALL_ACCESS,
+    ) as key:
+        winreg.SetValueEx(key, "Path", 0, winreg.REG_SZ, str(bundle_bin))
+        failed = harness.run("-Update", fail_step="bundle-digest")
+        assert failed.returncode != 0
+        assert "failed its release digest check" in failed.stderr
+        assert receipt.read_text(encoding="ascii") == "1.9.0"
+        assert winreg.QueryValueEx(key, "Path") == (str(bundle_bin), winreg.REG_SZ)
+
+        harness.add_rtk()
+        finished = harness.run("-Update", "-RtkHeadroom")
+        assert finished.returncode == 0, finished.stdout + finished.stderr
+        user_path, kind = winreg.QueryValueEx(key, "Path")
+        assert kind == winreg.REG_SZ
+        assert user_path.split(";")[0] == str(bundle_bin)
+        assert str(uv_bin) in user_path.split(";")
+
+
 def test_install_ps1_signed_bundle_does_not_require_uv_for_claude_code(
     powershell_harness,
 ):

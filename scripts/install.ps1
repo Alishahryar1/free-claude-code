@@ -45,6 +45,7 @@ $script:InstallGrok = $true
 $script:InstallMuse = $true
 $script:InstallAider = $true
 $script:VerifiedAiderBin = ''
+$script:VerifiedUvInstallBin = ''
 $script:InstallAgy = $true
 $script:PiAvailable = $false
 $script:MuseAvailable = $false
@@ -1754,6 +1755,7 @@ function Confirm-Uv {
         throw "Stable uv $MinUvVersion or newer is required; found uv $version after installation."
     }
     Write-Host "Verified uv $version."
+    return $uvCommand.Source
 }
 
 function Get-UvInstallBinDirectory {
@@ -1795,6 +1797,14 @@ function Get-UvInstallBinDirectory {
     throw "Could not determine where the standalone uv installer places uv."
 }
 
+function Get-StandaloneUvPathEntry {
+    param([string] $UvPath)
+
+    if ($env:UV_NO_MODIFY_PATH -or $env:UV_UNMANAGED_INSTALL) { return }
+    $directory = Split-Path -Parent $UvPath
+    if (Test-EquivalentPath -Left $directory -Right (Get-UvInstallBinDirectory)) { return $directory }
+}
+
 function Ensure-Uv {
     if ($DryRun) {
         if (Get-ApplicationCommand "uv") {
@@ -1809,10 +1819,14 @@ function Ensure-Uv {
         return
     }
 
+    # Keep prerequisite installation from changing the active FCC route.
+    $deferPath = -not $VoiceLocal -or (Test-FccBundleOnUserPath)
+    if ($deferPath) { Add-PathEntry (Get-UvInstallBinDirectory) }
     $uvCommand = Get-ApplicationCommand "uv"
     if ($uvCommand) {
         $version = Get-UvVersion $uvCommand.Source
         if (Test-SupportedStableVersion -Version $version -Minimum $MinUvVersion) {
+            if ($deferPath) { $script:VerifiedUvInstallBin = Get-StandaloneUvPathEntry $uvCommand.Source }
             $script:InstallStepOutcome = "Reused"
             Write-Host "uv $version already satisfies >=$MinUvVersion; leaving it unchanged."
             return
@@ -1823,7 +1837,6 @@ function Ensure-Uv {
         Write-Host "uv is not installed; installing the current standalone uv."
     }
 
-    $deferPath = $VoiceLocal -and (Test-FccBundleOnUserPath)
     $previousNoModifyPath = $env:UV_NO_MODIFY_PATH
     try {
         if ($deferPath) { $env:UV_NO_MODIFY_PATH = '1' }
@@ -1832,7 +1845,8 @@ function Ensure-Uv {
         if ($deferPath) { $env:UV_NO_MODIFY_PATH = $previousNoModifyPath }
     }
     Prioritize-PathEntry (Get-UvInstallBinDirectory)
-    Confirm-Uv
+    $verifiedUv = Confirm-Uv
+    if ($deferPath) { $script:VerifiedUvInstallBin = Get-StandaloneUvPathEntry $verifiedUv }
 }
 
 function Get-PackageSpec {
@@ -1912,7 +1926,7 @@ function Send-FccPathChange {
 }
 
 function Set-FccBundlePathEntry {
-    param([switch] $Remove, [string] $AdditionalBin, [string] $VoiceToolBin)
+    param([switch] $Remove, [string] $AiderBin, [string] $UvInstallBin, [string] $VoiceToolBin)
 
     $binPath = Join-Path (Get-FccBundlePath) 'bin'
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
@@ -1928,8 +1942,8 @@ function Set-FccBundlePathEntry {
         }
         if ($VoiceToolBin) {
             $preferred = @($VoiceToolBin)
-            if ($AdditionalBin -and -not (Test-EquivalentPath -Left $VoiceToolBin -Right $AdditionalBin)) {
-                $preferred += $AdditionalBin
+            if ($UvInstallBin -and -not (Test-EquivalentPath -Left $VoiceToolBin -Right $UvInstallBin)) {
+                $preferred += $UvInstallBin
             }
             $prioritized = @()
             foreach ($directory in $preferred) {
@@ -1942,14 +1956,16 @@ function Set-FccBundlePathEntry {
             $entries = $prioritized + $entries
         } elseif (-not $Remove) {
             $entries = @($binPath) + $entries
-            if ($AdditionalBin) {
+            $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';'
+            foreach ($directory in @($AiderBin, $UvInstallBin)) {
+                if (-not $directory) { continue }
                 $userMatch = $entries | Where-Object {
-                    Test-PathEntry -Entry $_ -Directory $AdditionalBin -Expand:$expand
+                    Test-PathEntry -Entry $_ -Directory $directory -Expand:$expand
                 } | Select-Object -First 1
-                $machineMatch = [Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';' | Where-Object {
-                    Test-PathEntry -Entry $_ -Directory $AdditionalBin
+                $machineMatch = $machinePath | Where-Object {
+                    Test-PathEntry -Entry $_ -Directory $directory
                 } | Select-Object -First 1
-                if (-not ($userMatch -or $machineMatch)) { $entries += $AdditionalBin }
+                if (-not ($userMatch -or $machineMatch)) { $entries += $directory }
             }
         }
         $newPath = $entries -join ';'
@@ -2139,7 +2155,7 @@ function Configure-AndConfirmFreeClaudeCode {
             $toolBin = Add-UvToolBinDirectory -UvPath $uvCommand.Source
             Prioritize-PathEntry $toolBin
         } else {
-            Set-FccBundlePathEntry -AdditionalBin $script:VerifiedAiderBin
+            Set-FccBundlePathEntry -AiderBin $script:VerifiedAiderBin -UvInstallBin $script:VerifiedUvInstallBin
             $toolBin = Join-Path (Get-FccBundlePath) 'bin'
         }
         Start-InstallStep "FCC verification"
@@ -2180,11 +2196,8 @@ function Configure-AndConfirmFreeClaudeCode {
     if ($VoiceLocal) {
         if (Test-FccBundleOnUserPath) {
             # Register the verified voice commands and retire the signed entry in one PATH write.
-            $uvInstallBin = if (-not ($env:UV_NO_MODIFY_PATH -or $env:UV_UNMANAGED_INSTALL)) {
-                $uvCommandBin = Split-Path -Parent $uvCommand.Source
-                if (Test-EquivalentPath -Left $uvCommandBin -Right (Get-UvInstallBinDirectory)) { $uvCommandBin }
-            }
-            Set-FccBundlePathEntry -Remove -VoiceToolBin $toolBin -AdditionalBin $uvInstallBin
+            $uvInstallBin = Get-StandaloneUvPathEntry $uvCommand.Source
+            Set-FccBundlePathEntry -Remove -VoiceToolBin $toolBin -UvInstallBin $uvInstallBin
         } else {
             Invoke-NativeCommand -FilePath $uvCommand.Source -Arguments @("tool", "update-shell")
             Set-FccBundlePathEntry -Remove
