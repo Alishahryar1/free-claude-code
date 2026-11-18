@@ -38,7 +38,7 @@ function Show-Usage {
     @"
 Usage: uninstall.ps1 [options]
 
-Removes the Free Claude Code uv tool and deletes ~/.fcc/ after removal is verified.
+Removes the Free Claude Code installation and deletes ~/.fcc/ after removal is verified.
 Does not remove uv, Claude Code, Codex, Pi, OpenCode, Cline, Hermes Agent, DeepSeek Harness, Grok Build, Muse Code, Aider, Antigravity CLI, the uv-managed Python runtime, or shared PATH entries.
 
 Options:
@@ -147,6 +147,7 @@ function Assert-NoFccProcessesRunning {
 }
 
 function Initialize-UvContext {
+    param([switch] $Optional)
     Add-KnownUvPaths
 
     if ($DryRun) {
@@ -156,6 +157,7 @@ function Initialize-UvContext {
 
     $uvCommand = Get-ApplicationCommand "uv"
     if (-not $uvCommand) {
+        if ($Optional) { return }
         throw "uv is required to remove the Free Claude Code tool. Install uv, then rerun this uninstaller; ~/.fcc was not deleted."
     }
     $script:UvPath = $uvCommand.Source
@@ -176,6 +178,7 @@ function Initialize-UvContext {
 }
 
 function Uninstall-FreeClaudeCode {
+    if (-not $DryRun -and -not $script:UvPath) { return }
     Write-Host "+ uv tool uninstall $PackageName"
     if ($DryRun) {
         return
@@ -210,12 +213,15 @@ function Disconnect-FccIntegrations {
         Write-Host "+ fcc-doctor --disconnect-integrations"
         return
     }
-    $doctorPath = $null
-    foreach ($extension in @(".exe", ".cmd", ".bat", "")) {
-        $candidate = Join-Path $script:UvToolBin "fcc-doctor$extension"
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
-            $doctorPath = $candidate
-            break
+    $bundleDoctor = Join-Path (Get-FccBundleBin) 'fcc-doctor.exe'
+    $doctorPath = if (Test-Path -LiteralPath $bundleDoctor -PathType Leaf) { $bundleDoctor }
+    if (-not $doctorPath -and $script:UvToolBin) {
+        foreach ($extension in @(".exe", ".cmd", ".bat", "")) {
+            $candidate = Join-Path $script:UvToolBin "fcc-doctor$extension"
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                $doctorPath = $candidate
+                break
+            }
         }
     }
     if (-not $doctorPath) {
@@ -236,6 +242,7 @@ function Confirm-FccCommandsRemoved {
         Write-Host "+ verify all Free Claude Code entry points are absent from the uv tool bin directory"
         return
     }
+    if (-not $script:UvToolBin) { return }
 
     $remaining = @()
     $extensions = @("", ".exe", ".cmd", ".bat", ".ps1")
@@ -276,6 +283,8 @@ function Test-EquivalentPath {
 function Test-FccDesktopShortcutTarget {
     param([string] $TargetPath)
 
+    if (Test-EquivalentPath -Left $TargetPath -Right (Join-Path (Get-FccBundleBin) 'fcc-desktop.exe')) { return $true }
+    if (-not $script:UvToolBin) { return $false }
     foreach ($extension in @("", ".exe", ".cmd", ".bat", ".ps1")) {
         $expectedTarget = Join-Path $script:UvToolBin "fcc-desktop$extension"
         if (Test-EquivalentPath -Left $TargetPath -Right $expectedTarget) {
@@ -283,6 +292,22 @@ function Test-FccDesktopShortcutTarget {
         }
     }
     return $false
+}
+
+function Get-FccBundleBin {
+    return Join-Path $env:USERPROFILE "$FccHomeDirname\windows-app\bin"
+}
+
+function Remove-FccBundlePathEntry {
+    $bin = Get-FccBundleBin
+    $path = [Environment]::GetEnvironmentVariable("Path", "User")
+    $newPath = ($path -split ';' | Where-Object { $_ -ine $bin }) -join ';'
+    if (-not $DryRun) {
+        if ($path -and $newPath -cne $path) {
+            [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+        }
+        $env:Path = ($env:Path -split ';' | Where-Object { $_ -ine $bin }) -join ';'
+    }
 }
 
 function Remove-FccDesktopShortcuts {
@@ -353,13 +378,14 @@ if ([string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
 Write-Step "Checking for running Free Claude Code processes"
 Assert-NoFccProcessesRunning
 
-Write-Step "Locating the uv-managed Free Claude Code installation"
-Initialize-UvContext
+Write-Step "Locating the Free Claude Code installation"
+$hasBundle = Test-Path -LiteralPath (Get-FccBundleBin) -PathType Container
+Initialize-UvContext -Optional:$hasBundle
 
 Write-Step "Disconnecting FCC editor/app integrations"
 Disconnect-FccIntegrations
 
-Write-Step "Removing the Free Claude Code uv tool"
+Write-Step "Removing any Free Claude Code uv tool installation"
 Uninstall-FreeClaudeCode
 
 Write-Step "Verifying Free Claude Code entry points were removed"
@@ -367,6 +393,7 @@ Confirm-FccCommandsRemoved
 
 Write-Step "Removing Free Claude Code desktop shortcuts"
 Remove-FccDesktopShortcuts
+if ($hasBundle) { Remove-FccBundlePathEntry }
 
 Write-Step "Purging FCC config and data from ~/.fcc"
 Purge-FccHome

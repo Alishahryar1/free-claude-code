@@ -77,9 +77,144 @@ jobs:
           path: ${{ steps.environment.outputs.dependencies-path }}
           key: ${{ steps.environment.outputs.dependencies-key }}
 
+  stage:
+    name: Stage Python distributions
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.stage.outputs.version }}
+      windows_needed: ${{ steps.stage.outputs.windows_needed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up CI environment
+        id: environment
+        uses: ./.github/actions/ci-environment
+        with:
+          runner-label: macos-latest
+          lookup-only: "true"
+          sync-dependencies: "false"
+
+      - name: Stage release
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_COMMIT: ${{ inputs.release_commit || github.sha }}
+          CI_PYTHON: ${{ steps.environment.outputs.python-version }}
+        run: |
+          uv run --no-project --python "$CI_PYTHON" python -m scripts.publish_release \
+            --repository "$RELEASE_REPOSITORY" --commit "$RELEASE_COMMIT" --stage-only
+
+  windows:
+    name: Stage signed Windows bundle
+    needs: stage
+    if: needs.stage.outputs.windows_needed == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 25
+    environment: windows-signing
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      RELEASE_REPOSITORY: ${{ github.repository }}
+      RELEASE_VERSION: ${{ needs.stage.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.release_commit || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up CI environment
+        id: environment
+        uses: ./.github/actions/ci-environment
+        with:
+          runner-label: windows-2025
+          lookup-only: 'true'
+          sync-dependencies: 'false'
+
+      - name: Build bundle from staged wheel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_PYTHON: ${{ steps.environment.outputs.python-version }}
+        shell: pwsh
+        run: |
+          $tag = "v$env:RELEASE_VERSION"
+          $wheel = "free_claude_code-$env:RELEASE_VERSION-py3-none-any.whl"
+          $root = $env:RUNNER_TEMP
+          $release = gh release view $tag --repo $env:RELEASE_REPOSITORY --json isDraft,assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $release.isDraft) { throw "Expected draft $tag" }
+          gh release download $tag --repo $env:RELEASE_REPOSITORY --pattern $wheel --dir $root
+          if ($LASTEXITCODE -ne 0) { throw "Could not download $wheel" }
+          $env:FCC_SIGNING_WHEEL = Join-Path $root $wheel
+          $asset = @($release.assets | Where-Object name -eq $wheel)
+          $digest = (Get-FileHash -LiteralPath $env:FCC_SIGNING_WHEEL).Hash.ToLowerInvariant()
+          if ($asset.Count -ne 1 -or $asset[0].digest -cne "sha256:$digest") { throw "Invalid wheel digest" }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $env:FCC_SIGNING_VS = Join-Path $vs 'Common7\Tools\VsDevCmd.bat'
+          cmd.exe /d /c 'call "%FCC_SIGNING_VS%" -arch=amd64 -host_arch=amd64 && uv run --no-project --python "%CI_PYTHON%" python -m scripts.build_windows_bundle --wheel "%FCC_SIGNING_WHEEL%" --version "%RELEASE_VERSION%" --output "%RUNNER_TEMP%\bundle"'
+          if ($LASTEXITCODE -ne 0) { throw 'Windows bundle build failed' }
+          $files = @(& ./scripts/windows/signing_files.ps1 -Bundle (Join-Path $root 'bundle'))
+          if ($files.Count -eq 0) { throw 'Missing unsigned FCC launchers' }
+          $relative = $files | ForEach-Object { [IO.Path]::GetRelativePath($root, $_) }
+          Set-Content -LiteralPath (Join-Path $root 'fcc-sign-files.txt') -Value $relative -Encoding utf8NoBOM
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign native binaries
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files-catalog: ${{ runner.temp }}\fcc-sign-files.txt
+
+      - name: Verify and stage the signed bundle
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v$env:RELEASE_VERSION"
+          $name = "free_claude_code-$env:RELEASE_VERSION-windows-x64.zip"
+          $bundle = Join-Path $env:RUNNER_TEMP 'bundle'
+          & ./scripts/windows/signing_files.ps1 -Bundle $bundle -RequireSigned
+          $version = & (Join-Path $bundle 'bin\fcc-server.exe') --version
+          if ($LASTEXITCODE -ne 0 -or $version -cne "free-claude-code $env:RELEASE_VERSION") { throw 'Signed launcher test failed' }
+          $archive = Join-Path $env:RUNNER_TEMP $name
+          [IO.Compression.ZipFile]::CreateFromDirectory($bundle, $archive)
+          $release = gh release view $tag --repo $env:RELEASE_REPOSITORY --json isDraft,assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $release.isDraft) { throw "Expected draft $tag" }
+          $existing = @($release.assets | Where-Object name -eq $name)
+          if ($existing.Count -eq 1 -and $existing[0].state -eq 'starter') {
+            gh release delete-asset $tag $name --repo $env:RELEASE_REPOSITORY --yes
+            if ($LASTEXITCODE -ne 0) { throw 'Could not remove interrupted upload' }
+          }
+          gh release upload $tag $archive --repo $env:RELEASE_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'Could not upload Windows bundle' }
+          $release = gh release view $tag --repo $env:RELEASE_REPOSITORY --json assets | ConvertFrom-Json
+          $asset = @($release.assets | Where-Object name -eq $name)
+          $digest = (Get-FileHash -LiteralPath $archive).Hash.ToLowerInvariant()
+          if ($LASTEXITCODE -ne 0 -or $asset.Count -ne 1 -or $asset[0].digest -cne "sha256:$digest" -or $asset[0].size -ne (Get-Item -LiteralPath $archive).Length) {
+            throw 'Uploaded Windows bundle failed verification'
+          }
+
   publish:
     name: Publish to PyPI
-    if: github.ref == 'refs/heads/main'
+    needs: [stage, windows]
+    if: ${{ !cancelled() && needs.stage.result == 'success' && needs.stage.outputs.version != '' && (needs.windows.result == 'success' || needs.windows.result == 'skipped') }}
     runs-on: macos-latest
     timeout-minutes: 15
     environment: pypi
@@ -97,8 +232,8 @@ jobs:
         uses: ./.github/actions/ci-environment
         with:
           runner-label: macos-latest
-          lookup-only: "true"
-          sync-dependencies: "false"
+          lookup-only: 'true'
+          sync-dependencies: 'false'
 
       - name: Publish release
         env:

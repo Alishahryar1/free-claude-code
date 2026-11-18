@@ -140,8 +140,10 @@ class FakeRemote:
         elif args[:3] == ["gh", "release", "download"]:
             tag = args[3]
             dest = Path(args[args.index("--dir") + 1])
+            patterns = {value for flag, value in pairwise(args) if flag == "--pattern"}
             for asset in self.releases[tag]["assets"]:
-                (dest / asset["name"]).write_bytes(self.files[tag, asset["name"]])
+                if not patterns or asset["name"] in patterns:
+                    (dest / asset["name"]).write_bytes(self.files[tag, asset["name"]])
         elif args[:3] == ["gh", "release", "edit"]:
             if self.fail == "finalize":
                 self.fail = None
@@ -184,6 +186,29 @@ class FakeRemote:
 
     def publisher(self):
         return publishing.Publisher("owner/repo")
+
+
+def test_windows_release_waits_for_bundle_and_keeps_python_assets(releases, tmp_path):
+    repo, remote = releases
+    write(repo, "scripts/build_windows_bundle.py", "# windows builder")
+    target = remote.advance()
+    publisher = remote.publisher()
+
+    assert publisher.publish(target, stage_only=True) == ("1.2.4", True)
+    assert not remote.uploaded
+    with pytest.raises(ValueError, match="Windows bundle"):
+        publisher.publish(target)
+    assert remote.builds == 1
+
+    bundle = tmp_path / "free_claude_code-1.2.4-windows-x64.zip"
+    bundle.write_bytes(b"signed Windows bundle")
+    remote.command(["gh", "release", "upload", "v1.2.4", str(bundle)])
+    assert publisher.publish(target, stage_only=True) == ("1.2.4", False)
+    publisher.publish(target)
+
+    assert not remote.releases["v1.2.4"]["draft"]
+    assert remote.builds == 1
+    assert set(remote.uploaded) == set(publishing.distribution_names("1.2.4"))
 
 
 def test_nonrelease_never_allocates_or_builds(releases):

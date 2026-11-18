@@ -24,6 +24,14 @@ UV_NEWER = ".".join(
 )
 RELEASE_VERSION = "2.0.0"
 METADATA_URL = f"https://raw.githubusercontent.com/Alishahryar1/free-claude-code/v{RELEASE_VERSION}/pyproject.toml"
+BUNDLE_RELEASE_URL = (
+    "https://api.github.com/repos/Alishahryar1/free-claude-code/releases/tags"
+    f"/v{RELEASE_VERSION}"
+)
+BUNDLE_URL = (
+    "https://github.com/Alishahryar1/free-claude-code/releases/download"
+    f"/v{RELEASE_VERSION}/free_claude_code-{RELEASE_VERSION}-windows-x64.zip"
+)
 
 FCC_COMMANDS = (
     "fcc-desktop",
@@ -159,12 +167,49 @@ def test_install_ps1_pins_selected_fcc_release(powershell_harness, voice):
         *(["-VoiceLocal"] if voice else []),
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    spec = (
-        "free-claude-code[voice_local]==2.0.0" if voice else "free-claude-code==2.0.0"
-    )
-    assert any(call.endswith(spec) for call in powershell_harness.calls())
+    calls = powershell_harness.calls()
+    if voice:
+        assert any(
+            call.endswith("free-claude-code[voice_local]==2.0.0") for call in calls
+        )
+    else:
+        assert calls[:2] == [f"download:{BUNDLE_RELEASE_URL}", f"download:{BUNDLE_URL}"]
+        assert not any("tool install" in call for call in calls)
     assert "/v2.0.0/scripts/install.ps1" in result.stdout
     assert "$env:FCC_INSTALL_VERSION = '2.0.0'" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("failure", "diagnostic"),
+    [
+        ("bundle-digest", "failed its release digest check"),
+        ("bundle-signature", "test.pyd is HashMismatch"),
+        ("fcc-verify", "Command failed with exit code 55"),
+    ],
+)
+def test_install_ps1_bundle_rejects_failed_update_before_activation(
+    powershell_harness, failure, diagnostic
+):
+    home = Path(powershell_harness.env["USERPROFILE"])
+    root = home / ".fcc" / "windows-app"
+    root.mkdir(parents=True)
+    (root / "version.txt").write_text("1.9.0\n", encoding="ascii")
+
+    failed = powershell_harness.run_functions(
+        "Install-FreeClaudeCode", fail_step=failure
+    )
+
+    assert failed.returncode != 0
+    assert diagnostic in failed.stderr
+    assert (root / "version.txt").read_text(encoding="ascii").strip() == "1.9.0"
+    assert not list(root.parent.glob("windows-app.staging-*"))
+
+    installed = powershell_harness.run_functions("Install-FreeClaudeCode")
+
+    assert installed.returncode == 0, installed.stdout + installed.stderr
+    assert (root / "version.txt").read_text(encoding="ascii").strip() == RELEASE_VERSION
+    assert (root / "bin" / "fcc-server.exe").is_file()
+    assert not list(root.parent.glob("windows-app.staging-*"))
 
 
 FCC_UPDATE_DECISIONS = [
@@ -2670,6 +2715,17 @@ exit /b 76
 
     def run(self, *args: str, fail_step: str = "") -> subprocess.CompletedProcess[str]:
         env = self.env | {"FAIL_STEP": fail_step}
+        with zipfile.ZipFile(self.fixtures / "fcc-bundle.zip", "w") as archive:
+            for group in ("scripts", "gui-scripts"):
+                for command in PROJECT["project"][group]:
+                    if fail_step == "fcc-missing" and command == "fcc-doctor":
+                        continue
+                    archive.writestr(f"bin/{command}.exe", b"fake launcher")
+            archive.writestr("bin/fcc-update.cmd", "@exit /b 0")
+            archive.writestr("runtime/python.exe", b"fake Python")
+            archive.writestr("runtime/pythonw.exe", b"fake Python")
+            archive.writestr("runtime/Lib/site-packages/test.pyd", b"fake extension")
+            archive.writestr("version.txt", env.get("FCC_INSTALL_VERSION", "") + "\n")
         return subprocess.run(
             [
                 self.powershell,
@@ -2922,11 +2978,30 @@ Add-Content -LiteralPath $env:CALL_LOG -Value "agy-install"
 
     wrapper = tmp_path / "run-installer.ps1"
     wrapper.write_text(
-        """Set-StrictMode -Version Latest
+        r"""Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+function Invoke-WebRequest {
+    [CmdletBinding()]
+    param([string] $Uri, [string] $OutFile, [int] $TimeoutSec, [switch] $UseBasicParsing)
+    Add-Content -LiteralPath $env:CALL_LOG -Value "download:$Uri"
+    $version = $env:FCC_INSTALL_VERSION
+    if ($Uri -cne "https://github.com/Alishahryar1/free-claude-code/releases/download/v$version/free_claude_code-$version-windows-x64.zip") {
+        throw "unexpected bundle download: $Uri"
+    }
+    if ($env:FAIL_STEP -eq "fcc-install") { throw "simulated download failure" }
+    Copy-Item -LiteralPath (Join-Path $env:FAKE_FIXTURES 'fcc-bundle.zip') -Destination $OutFile
+    if ($env:FAIL_STEP -eq "bundle-digest") { Add-Content -LiteralPath $OutFile -Value 'changed' }
+}
+function Get-AuthenticodeSignature {
+    param([string] $LiteralPath)
+    $status = if ($env:FAIL_STEP -eq 'bundle-signature' -and $LiteralPath.EndsWith('.pyd')) {
+        'HashMismatch'
+    } else { 'Valid' }
+    return @{ Status = $status }
+}
 function Invoke-RestMethod {
     [CmdletBinding()]
-    param([string] $Uri, [string] $OutFile, [int] $TimeoutSec, [int] $MaximumRedirection)
+    param([string] $Uri, [string] $OutFile, [int] $TimeoutSec, [int] $MaximumRedirection, [hashtable] $Headers)
     if ($Uri -eq "https://registry.npmjs.org/-/package/opencode-ai/dist-tags") {
         Add-Content -LiteralPath $env:CALL_LOG -Value "download:$Uri"
         if ($env:FAIL_STEP -eq "opencode-metadata") { throw "simulated metadata failure" }
@@ -2939,6 +3014,16 @@ function Invoke-RestMethod {
     }
 
     Add-Content -LiteralPath $env:CALL_LOG -Value "download:$Uri"
+    $version = $env:FCC_INSTALL_VERSION
+    if ($Uri -ceq "https://api.github.com/repos/Alishahryar1/free-claude-code/releases/tags/v$version") {
+        $archive = Get-Item -LiteralPath (Join-Path $env:FAKE_FIXTURES 'fcc-bundle.zip')
+        $digest = (Get-FileHash -LiteralPath $archive.FullName).Hash.ToLowerInvariant()
+        if ($env:FCC_RUNNING_PHASE -eq "late") { New-Item -ItemType File -Path $env:FCC_PROCESS_MARKER -Force | Out-Null }
+        return @{ tag_name = "v$version"; draft = $false; prerelease = $false; assets = @(@{
+            name = "free_claude_code-$version-windows-x64.zip"; size = $archive.Length
+            digest = "sha256:$digest"; state = 'uploaded'
+        }) }
+    }
     if ($Uri -eq "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/v$env:FCC_INSTALL_VERSION/pyproject.toml") {
         if ($env:FAIL_STEP -eq "toolchain-download") { throw "simulated metadata failure" }
         return [IO.File]::ReadAllText((Join-Path $env:FAKE_FIXTURES "pyproject.toml"))
@@ -3025,6 +3110,35 @@ $installerSource = [IO.File]::ReadAllText($env:FCC_INSTALLER)
 $installerSource = $installerSource.Replace(
     '[Environment]::GetEnvironmentVariable("Path", "User")',
     '$env:FCC_TEST_USER_PATH'
+).Replace(
+    '[Environment]::SetEnvironmentVariable("Path", $newPath, "User")',
+    '$env:FCC_TEST_USER_PATH = $newPath'
+)
+$installerSource = $installerSource.Replace(
+    'function Invoke-Utf8NativeCapture {',
+    @'
+function Invoke-Utf8NativeCapture {
+    param([string] $FilePath, [string[]] $Arguments)
+    if ([IO.Path]::GetFileName($FilePath) -eq 'fcc-server.exe') {
+        Add-Content -LiteralPath $env:CALL_LOG -Value "fcc-server:$($Arguments -join ' ')"
+        if ($env:FAIL_STEP -eq 'fcc-verify') { throw 'Command failed with exit code 55' }
+        return "free-claude-code $env:FCC_INSTALL_VERSION"
+    }
+    return Invoke-RealUtf8NativeCapture -FilePath $FilePath -Arguments $Arguments
+}
+function Invoke-RealUtf8NativeCapture {
+'@
+).Replace(
+    '    $process = Start-Process `',
+    @'
+    if ($DesktopCommand.EndsWith('\windows-app\bin\fcc-desktop.exe')) {
+        Add-Content -LiteralPath $env:CALL_LOG -Value "fcc-desktop:--export-icon `"$IconPath`""
+        if ($env:FAIL_STEP -eq 'desktop-icon-export') { throw 'Command failed with exit code 56' }
+        Set-Content -LiteralPath $IconPath -Value 'fake icon' -Encoding ascii
+        return
+    }
+    $process = Start-Process `
+'@
 )
 if ($env:FCC_INSTALLER_ANSWERS) {
     $script:InstallerAnswers = (ConvertFrom-Json $env:FCC_INSTALLER_ANSWERS).answers
@@ -3392,7 +3506,10 @@ def _assert_setup_preserves_other_commands(
         assert not any(call.startswith("stale-uv:tool") for call in calls)
     else:
         assert not any(call.startswith(f"stale-{other}:") for call in calls)
-    assert any("--refresh-package free-claude-code" in call for call in calls)
+    if windows:
+        assert f"download:{BUNDLE_URL}" in calls
+    else:
+        assert any("--refresh-package free-claude-code" in call for call in calls)
 
 
 @pytest.mark.parametrize(
@@ -3703,18 +3820,12 @@ def test_install_ps1_fresh_install_is_verified(
     )
     assert calls.index("uv:--version") < calls.index("claude-install")
     assert calls.index(aider_install) < calls.index("aider:--version")
-    assert any(
-        call.startswith(
-            "uv:tool install --force --refresh-package free-claude-code "
-            f"--python cpython-{PYTHON_VERSION}-windows-x86_64-none "
-            "free-claude-code"
-        )
-        for call in calls
-    )
+    assert f"download:{BUNDLE_URL}" in calls
+    assert not any("--refresh-package free-claude-code" in call for call in calls)
     assert not any(call.startswith("git:") for call in calls)
     assert calls[-4:-1] == [
-        "uv:tool update-shell",
-        "uv:tool dir --bin",
+        f"download:{BUNDLE_URL}",
+        "fcc-server:--version",
         "fcc-server:--version",
     ]
     home = Path(powershell_harness.env["USERPROFILE"])
@@ -4552,7 +4663,8 @@ def test_install_ps1_stops_without_success_on_each_failure(
         "fcc-missing",
         "fcc-verify",
     }:
-        result = powershell_harness.run(fail_step=failure)
+        options = ("-VoiceLocal",) if failure == "path-update" else ()
+        result = powershell_harness.run(*options, fail_step=failure)
     else:
         component = {
             "uv": "Ensure-Uv",
@@ -4646,7 +4758,6 @@ def test_install_ps1_rejects_unparseable_existing_uv(
 @pytest.mark.parametrize(
     ("args", "package"),
     [
-        ((), "free-claude-code"),
         (("-VoiceLocal",), "free-claude-code[voice_local]"),
         (
             ("-VoiceLocal", "-TorchBackend", "cu130"),
@@ -4830,9 +4941,11 @@ def test_install_ps1_installs_then_updates_only_selected_agent(
     update_calls = powershell_harness.calls()[len(calls) :]
     assert "codex:--version" in update_calls
     assert [call for call in update_calls if call.startswith("download:")] == [
-        f"download:{METADATA_URL}"
+        f"download:{METADATA_URL}",
+        f"download:{BUNDLE_RELEASE_URL}",
+        f"download:{BUNDLE_URL}",
     ]
-    assert any("--refresh-package free-claude-code" in call for call in update_calls)
+    assert "fcc-server:--version" in update_calls
 
 
 @pytest.mark.parametrize("powershell", _powershells())
@@ -5997,7 +6110,7 @@ def test_install_ps1_explains_child_policy_failure_without_doctor(
         encoding="utf-8",
     )
 
-    result = powershell_harness.run()
+    result = powershell_harness.run("-VoiceLocal")
 
     assert result.returncode != 0
     output = result.stdout + result.stderr
@@ -6023,7 +6136,7 @@ def test_install_ps1_log_failure_preserves_installation_failure(
     (home / ".fcc").mkdir()
     (home / ".fcc" / "logs").write_text("not a directory", encoding="utf-8")
 
-    result = powershell_harness.run(fail_step="fcc-install")
+    result = powershell_harness.run("-VoiceLocal", fail_step="fcc-install")
 
     assert result.returncode != 0
     output = result.stdout + result.stderr

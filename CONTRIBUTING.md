@@ -16,6 +16,19 @@ Changes to `assets/`, `scripts/`, `src/`, `pyproject.toml`, or `uv.lock` require
 
 PRs without changes to those paths must not use a release prefix. Do not edit version numbers. Publishing calculates the version after merge, creates its Git tag, and publishes to PyPI and GitHub Releases.
 
+## Windows release signing
+
+The post-merge workflow builds the x64 ZIP from the exact staged FCC wheel and the locked dependencies. It preserves valid upstream signatures, signs the unsigned executables and libraries, and verifies the ZIP before publishing the release.
+
+Before enabling this release path, configure an [Azure Artifact Signing Public Trust profile](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart) for the verified publisher. Create a GitHub Actions environment named `windows-signing`, restricted to the `main` deployment branch. Follow the [Azure OIDC setup](https://github.com/Azure/artifact-signing-action/blob/main/docs/OIDC.md) for that environment and grant the federated identity the Artifact Signing Certificate Profile Signer role on the profile. Set these environment variables in Actions.
+
+- `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
+- `ARTIFACT_SIGNING_ENDPOINT`, `ARTIFACT_SIGNING_ACCOUNT`, `ARTIFACT_SIGNING_PROFILE`
+
+For release acceptance, use a Windows 11 test system with Smart App Control set to On. Install the candidate bundle, run `fcc-doctor`, start FCC Desktop and the proxy, and exercise a harness launcher. Update from a prior install and check the Code Integrity log for blocked components. Use the [Microsoft signing test procedure](https://learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/test-your-app-with-smart-app-control).
+
+The default Windows install uses the signed bundle. `-VoiceLocal` uses the uv install with the optional PyTorch dependencies.
+
 ## Development Setup
 
 Install [uv](https://docs.astral.sh/uv/), then run directly from the checkout. uv automatically installs the Python version required by the project.

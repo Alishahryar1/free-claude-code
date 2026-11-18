@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -17,6 +18,8 @@ from .check_version_policy import (
     release_kind,
     release_paths,
 )
+
+WINDOWS_BUILDER = "scripts/build_windows_bundle.py"
 
 
 def command(args: list[str], *, cwd: Path | None = None) -> str:
@@ -58,7 +61,9 @@ class Publisher:
         )
         return {release["tag_name"]: release for page in pages for release in page}
 
-    def publish(self, target: str) -> None:
+    def publish(
+        self, target: str, *, stage_only: bool = False
+    ) -> tuple[str, bool] | None:
         if not re.fullmatch(r"[0-9a-f]{40}", target):
             raise ValueError("Release target must be a full commit SHA")
         command(["git", "fetch", "--tags", "origin", "main"])
@@ -134,7 +139,7 @@ class Publisher:
                 "-F",
                 "draft=true",
             )
-        print(f"Publishing {tag} from {target}")
+        print(f"Preparing {tag} from {target}")
         with tempfile.TemporaryDirectory(prefix="fcc-release-") as temporary:
             root = Path(temporary).resolve()
             source, dist = root / "source", root / "dist"
@@ -143,7 +148,13 @@ class Publisher:
             try:
                 if command(["git", "status", "--porcelain"], cwd=source).strip():
                     raise ValueError("Release source must be clean")
-                self.stage(tag, release["id"], version, source, dist)
+                windows_bundle_needed = self.stage(
+                    tag, release["id"], version, source, dist
+                )
+                if stage_only:
+                    return version, windows_bundle_needed
+                if windows_bundle_needed:
+                    raise ValueError(f"The signed Windows bundle for {tag} is missing")
                 command(
                     [
                         "uv",
@@ -158,6 +169,7 @@ class Publisher:
                 if not source.is_relative_to(root):
                     raise ValueError("Release worktree escaped its temporary directory")
                 command(["git", "worktree", "remove", "--force", str(source)])
+        return None
 
     def validate(self, source: Path, dist: Path, version: str) -> None:
         command(
@@ -173,20 +185,37 @@ class Publisher:
 
     def stage(
         self, tag: str, release_id: int, version: str, source: Path, dist: Path
-    ) -> None:
+    ) -> bool:
         names = set(distribution_names(version))
+        windows_name = (
+            f"free_claude_code-{version}-windows-x64.zip"
+            if (source / WINDOWS_BUILDER).is_file()
+            else None
+        )
         assets = self.release_api(f"/{release_id}")["assets"]
-        if any(asset["name"] not in names for asset in assets):
+        asset_names = {asset["name"] for asset in assets}
+        if len(asset_names) != len(assets) or asset_names - names - {windows_name}:
             raise ValueError(f"Unexpected assets on {tag}")
-        complete = (
-            {asset["name"] for asset in assets} == names
-            and len(assets) == 2
-            and all(asset["state"] == "uploaded" for asset in assets)
+        windows_asset = next(
+            (asset for asset in assets if asset["name"] == windows_name), None
+        )
+        assets = [asset for asset in assets if asset["name"] in names]
+        complete = {asset["name"] for asset in assets} == names and all(
+            asset["state"] == "uploaded" for asset in assets
         )
         if complete:
-            self.gh("download", tag, "--dir", str(dist))
+            self.gh(
+                "download",
+                tag,
+                "--dir",
+                str(dist),
+                *(part for name in sorted(names) for part in ("--pattern", name)),
+            )
         else:
-            # Publication never begins until both uploaded assets are verified.
+            if windows_asset is not None:
+                raise ValueError(
+                    f"Cannot replace Python assets used by the {tag} bundle"
+                )
             for asset in assets:
                 self.gh("delete-asset", tag, asset["name"], "--yes")
             builder = source / "scripts/build_macos_launcher.py"
@@ -209,15 +238,33 @@ class Publisher:
             ):
                 raise ValueError(f"Staged asset failed verification: {asset['name']}")
         self.validate(source, dist, version)
+        windows_uploaded = (
+            windows_asset is not None and windows_asset["state"] == "uploaded"
+        )
+        if windows_uploaded and (
+            windows_asset["size"] <= 0
+            or not re.fullmatch(r"sha256:[a-f0-9]{64}", windows_asset.get("digest", ""))
+        ):
+            raise ValueError(f"Staged asset failed verification: {windows_name}")
+        return windows_name is not None and not windows_uploaded
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--commit", required=True)
+    parser.add_argument("--stage-only", action="store_true")
     args = parser.parse_args()
     try:
-        Publisher(args.repository).publish(args.commit)
+        result = Publisher(args.repository).publish(
+            args.commit, stage_only=args.stage_only
+        )
+        if result is not None and (output := os.environ.get("GITHUB_OUTPUT")):
+            version, windows_needed = result
+            with Path(output).open("a", encoding="utf-8") as file:
+                file.write(
+                    f"version={version}\nwindows_needed={str(windows_needed).lower()}\n"
+                )
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as error:
         print(f"Release failed: {error}", file=sys.stderr)
         if isinstance(error, subprocess.CalledProcessError):

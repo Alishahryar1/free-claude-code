@@ -752,7 +752,14 @@ function Get-Process {
         }
     }
 }
-$installer = [scriptblock]::Create([IO.File]::ReadAllText($env:FCC_UNINSTALLER))
+$source = [IO.File]::ReadAllText($env:FCC_UNINSTALLER).Replace(
+    '[Environment]::GetEnvironmentVariable("Path", "User")',
+    '$env:FCC_TEST_USER_PATH'
+).Replace(
+    '[Environment]::SetEnvironmentVariable("Path", $newPath, "User")',
+    '$env:FCC_TEST_USER_PATH = $newPath; Add-Content -LiteralPath $env:CALL_LOG -Value "user-path:$newPath"'
+)
+$installer = [scriptblock]::Create($source)
 $uninstallOptions = @{}
 if ($env:UNINSTALL_DRY_RUN -eq "1") {
     $uninstallOptions.DryRun = $true
@@ -802,6 +809,7 @@ if ($env:UNINSTALL_KEEP_INTEGRATIONS -eq "1") {
             "FAIL_STEP": "",
             "UNINSTALL_DRY_RUN": "0",
             "UNINSTALL_KEEP_INTEGRATIONS": "0",
+            "FCC_TEST_USER_PATH": "",
         }
     )
     return PowerShellUninstallHarness(
@@ -858,6 +866,32 @@ def test_uninstall_ps1_removes_and_verifies_only_fcc(
         f"remove:{Path(powershell_uninstall_harness.env['APPDATA']) / 'Microsoft' / 'Windows' / 'Start Menu' / 'Programs' / 'Free Claude Code.lnk'}",
         f"remove:{powershell_uninstall_harness.fcc_home}",
     ]
+
+
+def test_uninstall_ps1_removes_bundle_and_its_path_without_uv(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+) -> None:
+    harness = powershell_uninstall_harness
+    harness.remove_entry_points()
+    bundle_bin = harness.fcc_home / "windows-app" / "bin"
+    bundle_bin.mkdir(parents=True)
+    (bundle_bin / "fcc-server.exe").touch()
+    desktop = harness.home / "Desktop" / "Free Claude Code.lnk"
+    shortcut_target = bundle_bin / "fcc-desktop.exe"
+    shortcut_target.touch()
+    _create_windows_shortcut(
+        harness.powershell, desktop, shortcut_target, harness.env["PSMODULEPATH"]
+    )
+    harness.env["FCC_TEST_USER_PATH"] = f"{bundle_bin};{harness.bin_dir}"
+
+    result = harness.run(include_uv=False, keep_integrations=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not bundle_bin.exists()
+    assert not desktop.exists()
+    assert f"user-path:{harness.bin_dir}" in harness.calls()
+    assert not any(call.startswith("uv:") for call in harness.calls())
+    assert (harness.bin_dir / "claude.cmd").exists()
 
 
 def test_uninstall_ps1_preserves_unowned_desktop_shortcut(
