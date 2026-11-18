@@ -77,7 +77,7 @@ class FakeRemote:
         self.builds = 0
         self.native_builds = []
         self.uploaded = {}
-        self.attested = set()
+        self.attested = {}
         self.real_command = publishing.command
 
     def command(self, args, *, cwd=None):
@@ -158,9 +158,23 @@ class FakeRemote:
                 "--source-ref",
                 "refs/heads/main",
                 "--deny-self-hosted-runners",
+                "--predicate-type",
+                "https://github.com/owner/repo/attestations/windows-release/v1",
+                "--format",
+                "json",
             ]
-            if Path(args[3]).read_bytes() not in self.attested:
+            artifact = Path(args[3]).read_bytes()
+            if artifact not in self.attested:
                 raise RuntimeError("No verified provenance")
+            return json.dumps(
+                [
+                    {
+                        "verificationResult": {
+                            "statement": {"predicate": self.attested[artifact]}
+                        }
+                    }
+                ]
+            )
         elif args[:2] == ["uv", "build"]:
             self.builds += 1
             assert cwd is not None
@@ -206,7 +220,7 @@ def test_windows_release_waits_for_bundle_and_keeps_python_assets(releases, tmp_
     target = remote.advance()
     publisher = remote.publisher()
 
-    assert publisher.publish(target, stage_only=True) == ("1.2.4", True)
+    assert publisher.publish(target, stage_only=True) == ("1.2.4", True, True)
     assert not remote.uploaded
     with pytest.raises(ValueError, match="Windows bundle"):
         publisher.publish(target)
@@ -216,24 +230,41 @@ def test_windows_release_waits_for_bundle_and_keeps_python_assets(releases, tmp_
     with zipfile.ZipFile(bundle, "w") as archive:
         archive.writestr("version.txt", "1.2.4\n")
     remote.command(["gh", "release", "upload", "v1.2.4", str(bundle)])
-    assert publisher.publish(target, stage_only=True) == ("1.2.4", False)
+    assert publisher.publish(target, stage_only=True) == ("1.2.4", False, True)
     with pytest.raises(RuntimeError, match="No verified provenance"):
         publisher.publish(target)
     assert not remote.uploaded
     assert remote.releases["v1.2.4"]["draft"]
 
-    remote.attested.add(bundle.read_bytes())
+    wheel = publishing.distribution_names("1.2.4")[0]
+    wheel_digest = "sha256:" + hashlib.sha256(remote.files["v1.2.4", wheel]).hexdigest()
+    remote.attested[bundle.read_bytes()] = {
+        "version": "1.2.3",
+        "commit": target,
+        "wheel_digest": wheel_digest,
+    }
+    with pytest.raises(ValueError, match="provenance does not match release"):
+        publisher.publish(target)
+    remote.attested[bundle.read_bytes()]["version"] = "1.2.4"
+    bundle_digest = "sha256:" + hashlib.sha256(bundle.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match="requires acceptance"):
+        publisher.publish(target, accepted_windows_digest="sha256:" + "0" * 64)
+    assert not remote.uploaded
+
     remote.files["v1.2.4", bundle.name] += b"changed"
     with pytest.raises(ValueError, match="Staged asset failed verification"):
         publisher.publish(target)
     assert not remote.uploaded
 
     remote.files["v1.2.4", bundle.name] = bundle.read_bytes()
-    publisher.publish(target)
+    publisher.publish(target, accepted_windows_digest=bundle_digest)
 
     assert not remote.releases["v1.2.4"]["draft"]
     assert remote.builds == 1
     assert set(remote.uploaded) == set(publishing.distribution_names("1.2.4"))
+
+    next_target = remote.advance("patch: Next")
+    assert publisher.publish(next_target, stage_only=True) == ("1.2.5", True, False)
 
 
 def test_nonrelease_never_allocates_or_builds(releases):

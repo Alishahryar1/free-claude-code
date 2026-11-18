@@ -872,6 +872,9 @@ def test_uninstall_ps1_removes_and_verifies_only_fcc(
 def test_uninstall_ps1_removes_bundle_and_its_path_without_uv(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows registry test")
+
     import winreg
 
     harness = powershell_uninstall_harness

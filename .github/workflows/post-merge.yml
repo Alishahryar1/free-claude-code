@@ -11,6 +11,10 @@ on:
         description: Full main commit SHA to retry (defaults to this workflow commit)
         required: false
         type: string
+      accepted_windows_digest:
+        description: SHA-256 digest of the first signed Windows bundle after Smart App Control acceptance
+        required: false
+        type: string
   push:
     branches: [main]
 
@@ -87,6 +91,7 @@ jobs:
     outputs:
       version: ${{ steps.stage.outputs.version }}
       windows_needed: ${{ steps.stage.outputs.windows_needed }}
+      windows_acceptance_required: ${{ steps.stage.outputs.windows_acceptance_required }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -156,6 +161,7 @@ jobs:
           sync-dependencies: 'false'
 
       - name: Build bundle from staged wheel
+        id: build
         if: steps.asset.outputs.uploaded != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -173,6 +179,7 @@ jobs:
           $asset = @($release.assets | Where-Object name -eq $wheel)
           $digest = (Get-FileHash -LiteralPath $env:FCC_SIGNING_WHEEL).Hash.ToLowerInvariant()
           if ($asset.Count -ne 1 -or $asset[0].digest -cne "sha256:$digest") { throw "Invalid wheel digest" }
+          "wheel-digest=sha256:$digest" >> $env:GITHUB_OUTPUT
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
           $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
           $env:FCC_SIGNING_VS = Join-Path $vs 'Common7\Tools\VsDevCmd.bat'
@@ -204,6 +211,8 @@ jobs:
         if: steps.asset.outputs.uploaded != 'true'
         id: archive
         shell: pwsh
+        env:
+          WHEEL_DIGEST: ${{ steps.build.outputs.wheel-digest }}
         run: |
           $name = "free_claude_code-$env:RELEASE_VERSION-windows-x64.zip"
           $bundle = Join-Path $env:RUNNER_TEMP 'bundle'
@@ -212,13 +221,21 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $version -cne "free-claude-code $env:RELEASE_VERSION") { throw 'Signed launcher test failed' }
           $archive = Join-Path $env:RUNNER_TEMP $name
           [IO.Compression.ZipFile]::CreateFromDirectory($bundle, $archive)
+          $commit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Could not identify the Windows build commit' }
+          $predicate = Join-Path $env:RUNNER_TEMP 'fcc-windows-provenance.json'
+          @{ version = $env:RELEASE_VERSION; commit = $commit; wheel_digest = $env:WHEEL_DIGEST } |
+            ConvertTo-Json -Compress | Set-Content -LiteralPath $predicate -Encoding utf8NoBOM
           "path=$archive" >> $env:GITHUB_OUTPUT
+          "predicate=$predicate" >> $env:GITHUB_OUTPUT
 
       - name: Attest the verified Windows bundle
         if: steps.asset.outputs.uploaded != 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ steps.archive.outputs.path }}
+          predicate-type: https://github.com/${{ github.repository }}/attestations/windows-release/v1
+          predicate-path: ${{ steps.archive.outputs.predicate }}
 
       - name: Stage the signed Windows bundle
         if: steps.asset.outputs.uploaded != 'true'
@@ -249,7 +266,11 @@ jobs:
   publish:
     name: Publish to PyPI
     needs: [stage, windows]
-    if: ${{ !cancelled() && needs.stage.result == 'success' && needs.stage.outputs.version != '' && (needs.windows.result == 'success' || needs.windows.result == 'skipped') }}
+    if: >-
+      ${{ !cancelled() &&
+          needs.stage.result == 'success' && needs.stage.outputs.version != '' &&
+          (needs.windows.result == 'success' || needs.windows.result == 'skipped') &&
+          (needs.stage.outputs.windows_acceptance_required != 'true' || inputs.accepted_windows_digest != '') }}
     runs-on: macos-latest
     timeout-minutes: 15
     environment: pypi
@@ -277,6 +298,8 @@ jobs:
           RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_COMMIT: ${{ inputs.release_commit || github.sha }}
           CI_PYTHON: ${{ steps.environment.outputs.python-version }}
+          ACCEPTED_WINDOWS_DIGEST: ${{ inputs.accepted_windows_digest }}
         run: |
           uv run --no-project --python "$CI_PYTHON" python -m scripts.publish_release \
-            --repository "$RELEASE_REPOSITORY" --commit "$RELEASE_COMMIT"
+            --repository "$RELEASE_REPOSITORY" --commit "$RELEASE_COMMIT" \
+            --accepted-windows-digest "$ACCEPTED_WINDOWS_DIGEST"

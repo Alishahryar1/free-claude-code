@@ -2168,14 +2168,13 @@ function Show-InstallerNextSteps {
 
 }
 
-function Get-InstalledFccVersion {
+function Get-InstalledFcc {
     $bundle = Get-FccBundlePath
     $bundleBin = Join-Path $bundle 'bin'
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User") -split ';'
     $versionFile = Join-Path $bundle 'version.txt'
     if ($bundleBin -iin $userPath -and (Test-Path -LiteralPath $versionFile -PathType Leaf)) {
-        if ($VoiceLocal) { return $null }
-        return (Get-Content -LiteralPath $versionFile -Raw).Trim()
+        return @{ Version = (Get-Content -LiteralPath $versionFile -Raw).Trim(); Bundle = $true }
     }
     # Look where uv usually lives without changing the PATH the installer preserves.
     $originalPath = $env:Path
@@ -2189,7 +2188,7 @@ function Get-InstalledFccVersion {
         $listing = @(& $uv.Source tool list 2>$null)
         if ($LASTEXITCODE -ne 0) { return $null }
         foreach ($line in $listing) {
-            if ("$line" -cmatch '\Afree-claude-code v(\S+)') { return $Matches[1] }
+            if ("$line" -cmatch '\Afree-claude-code v(\S+)') { return @{ Version = $Matches[1]; Bundle = $false } }
         }
         return $null
     }
@@ -2221,19 +2220,21 @@ function Compare-FccVersions {
 }
 
 function Test-FccUpdateNeeded {
-    $installed = Get-InstalledFccVersion
+    $installed = Get-InstalledFcc
     if (-not $installed) { return $true }
-    $comparison = Compare-FccVersions -Installed $installed -Release $FccInstallVersion
+    $version = $installed.Version
+    $comparison = Compare-FccVersions -Installed $version -Release $FccInstallVersion
     if ($comparison -eq "current") {
-        Write-Host "FCC $installed is already up to date."
+        if ($installed.Bundle -ne (-not $VoiceLocal)) { return $true }
+        Write-Host "FCC $version is already up to date."
         return $false
     }
     if ($comparison -eq "newer") {
-        Write-Host "FCC $installed is newer than the published version $FccInstallVersion. No update needed."
+        Write-Host "FCC $version is newer than the published version $FccInstallVersion. No update needed."
         return $false
     }
     if ($comparison -eq "older") {
-        Write-Host "FCC update available: $installed -> $FccInstallVersion."
+        Write-Host "FCC update available: $version -> $FccInstallVersion."
     }
     return $true
 }

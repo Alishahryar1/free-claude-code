@@ -33,6 +33,10 @@ def distribution_names(version: str) -> tuple[str, str]:
     return f"{stem}-py3-none-any.whl", f"{stem}.tar.gz"
 
 
+def windows_bundle_name(version: str) -> str:
+    return f"free_claude_code-{version}-windows-x64.zip"
+
+
 def verify_asset(file: Path, asset: dict) -> None:
     with file.open("rb") as stream:
         digest = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
@@ -73,8 +77,12 @@ class Publisher:
         return {release["tag_name"]: release for page in pages for release in page}
 
     def publish(
-        self, target: str, *, stage_only: bool = False
-    ) -> tuple[str, bool] | None:
+        self,
+        target: str,
+        *,
+        stage_only: bool = False,
+        accepted_windows_digest: str = "",
+    ) -> tuple[str, bool, bool] | None:
         if not re.fullmatch(r"[0-9a-f]{40}", target):
             raise ValueError("Release target must be a full commit SHA")
         command(["git", "fetch", "--tags", "origin", "main"])
@@ -159,18 +167,31 @@ class Publisher:
             try:
                 if command(["git", "status", "--porcelain"], cwd=source).strip():
                     raise ValueError("Release source must be clean")
-                windows_bundle_needed = self.stage(
+                bundle_required = (source / WINDOWS_BUILDER).is_file()
+                acceptance_required = bundle_required and not any(
+                    asset["name"] == windows_bundle_name(previous[1:])
+                    and asset["state"] == "uploaded"
+                    for asset in predecessor["assets"]
+                )
+                bundle_digest = self.stage(
                     tag,
                     release["id"],
                     version,
                     source,
                     dist,
+                    target=target,
+                    bundle_required=bundle_required,
                     verify_windows=not stage_only,
                 )
+                windows_bundle_needed = bundle_required and bundle_digest is None
                 if stage_only:
-                    return version, windows_bundle_needed
+                    return version, windows_bundle_needed, acceptance_required
                 if windows_bundle_needed:
                     raise ValueError(f"The signed Windows bundle for {tag} is missing")
+                if acceptance_required and bundle_digest != accepted_windows_digest:
+                    raise ValueError(
+                        f"The first signed Windows bundle for {tag} requires acceptance of {bundle_digest}"
+                    )
                 command(
                     [
                         "uv",
@@ -207,14 +228,12 @@ class Publisher:
         source: Path,
         dist: Path,
         *,
+        target: str,
+        bundle_required: bool,
         verify_windows: bool,
-    ) -> bool:
+    ) -> str | None:
         names = set(distribution_names(version))
-        windows_name = (
-            f"free_claude_code-{version}-windows-x64.zip"
-            if (source / WINDOWS_BUILDER).is_file()
-            else None
-        )
+        windows_name = windows_bundle_name(version) if bundle_required else None
         assets = self.release_api(f"/{release_id}")["assets"]
         asset_names = {asset["name"] for asset in assets}
         if len(asset_names) != len(assets) or asset_names - names - {windows_name}:
@@ -255,12 +274,23 @@ class Publisher:
             verify_asset(dist / asset["name"], asset)
         self.validate(source, dist, version)
         if windows_asset is None or windows_asset["state"] != "uploaded":
-            return windows_name is not None
+            return None
         if verify_windows:
             bundle_name = windows_asset["name"]
             self.gh("download", tag, "--dir", str(dist), "--pattern", bundle_name)
             bundle = dist / bundle_name
             verify_asset(bundle, windows_asset)
+            wheel_name = distribution_names(version)[0]
+            wheel_digest = next(
+                asset["digest"] for asset in assets if asset["name"] == wheel_name
+            )
+            self.verify_windows_attestation(bundle, version, target, wheel_digest)
+        return windows_asset["digest"]
+
+    def verify_windows_attestation(
+        self, bundle: Path, version: str, target: str, wheel_digest: str
+    ) -> None:
+        results = json.loads(
             command(
                 [
                     "gh",
@@ -272,11 +302,23 @@ class Publisher:
                     "--source-ref",
                     "refs/heads/main",
                     "--deny-self-hosted-runners",
+                    "--predicate-type",
+                    f"https://github.com/{self.repository}/attestations/windows-release/v1",
+                    "--format",
+                    "json",
                     "--repo",
                     self.repository,
                 ]
             )
-        return False
+        )
+        expected = {"version": version, "commit": target, "wheel_digest": wheel_digest}
+        if not any(
+            result["verificationResult"]["statement"]["predicate"] == expected
+            for result in results
+        ):
+            raise ValueError(
+                f"Windows bundle provenance does not match release v{version}"
+            )
 
 
 def main() -> int:
@@ -284,16 +326,20 @@ def main() -> int:
     parser.add_argument("--repository", required=True)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--stage-only", action="store_true")
+    parser.add_argument("--accepted-windows-digest", default="")
     args = parser.parse_args()
     try:
         result = Publisher(args.repository).publish(
-            args.commit, stage_only=args.stage_only
+            args.commit,
+            stage_only=args.stage_only,
+            accepted_windows_digest=args.accepted_windows_digest,
         )
         if result is not None and (output := os.environ.get("GITHUB_OUTPUT")):
-            version, windows_needed = result
+            version, windows_needed, acceptance_required = result
             with Path(output).open("a", encoding="utf-8") as file:
                 file.write(
                     f"version={version}\nwindows_needed={str(windows_needed).lower()}\n"
+                    f"windows_acceptance_required={str(acceptance_required).lower()}\n"
                 )
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as error:
         print(f"Release failed: {error}", file=sys.stderr)

@@ -213,6 +213,9 @@ def test_install_ps1_bundle_rejects_failed_update_before_activation(
 
 
 def test_install_ps1_preserves_expandable_user_path(powershell_harness):
+    if os.name != "nt":
+        pytest.skip("Windows registry test")
+
     import winreg
 
     root = Path(powershell_harness.env["USERPROFILE"]) / ".fcc" / "windows-app"
@@ -239,9 +242,7 @@ def test_install_ps1_preserves_expandable_user_path(powershell_harness):
     assert powershell_harness.calls() == ["fcc-path-changed", "fcc-path-changed"]
 
 
-def test_install_ps1_update_enables_requested_voice_with_bundle_active(
-    powershell_harness,
-):
+def test_install_ps1_update_switches_to_requested_install_route(powershell_harness):
     root = Path(powershell_harness.env["USERPROFILE"]) / ".fcc" / "windows-app"
     root.mkdir(parents=True)
     (root / "version.txt").write_text(RELEASE_VERSION, encoding="ascii")
@@ -260,6 +261,11 @@ def test_install_ps1_update_enables_requested_voice_with_bundle_active(
     _assert_update_decision(
         powershell_harness.run_functions(scenario, "-VoiceLocal"), True, ""
     )
+    powershell_harness.env["FCC_TEST_USER_PATH"] = ""
+    _assert_update_decision(
+        powershell_harness.run_functions(scenario, "-VoiceLocal"), False, "up to date"
+    )
+    _assert_update_decision(powershell_harness.run_functions(scenario), True, "")
 
 
 FCC_UPDATE_DECISIONS = [
@@ -352,7 +358,8 @@ exit /b 0
         "$FccInstallVersion = '1.2.3'\n$before = $env:Path\n"
         "$decision = if (Test-FccUpdateNeeded) { 'install' } else { 'skip' }\n"
         'Write-Output "decision:$decision"\n'
-        "if ($env:Path -ne $before) { Write-Output 'path-changed' }"
+        "if ($env:Path -ne $before) { Write-Output 'path-changed' }",
+        "-VoiceLocal",
     )
     _assert_update_decision(result, needed, message)
 
@@ -4464,6 +4471,8 @@ def test_install_ps1_preserves_valid_existing_tools(
         f"download:{METADATA_URL}",
         "download:https://raw.githubusercontent.com/Alishahryar1/"
         "free-claude-code/main/scripts/install-muse.ps1",
+        f"download:{BUNDLE_RELEASE_URL}",
+        f"download:{BUNDLE_URL}",
     ]
     assert "muse-install:external" in powershell_harness.calls()
     assert "leaving it unchanged" in result.stdout

@@ -67,6 +67,8 @@ def test_post_merge_serializes_and_limits_publish_permissions():
     assert "needs.stage.result == 'success'" in publish["if"]
     assert "needs.windows.result == 'success'" in publish["if"]
     assert "needs.windows.result == 'skipped'" in publish["if"]
+    assert "needs.stage.outputs.windows_acceptance_required != 'true'" in publish["if"]
+    assert "inputs.accepted_windows_digest != ''" in publish["if"]
     assert publish["environment"] == "pypi"
     assert publish["permissions"] == {
         "attestations": "read",
