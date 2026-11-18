@@ -2,7 +2,7 @@
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Iterable, Iterator, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from urllib.parse import urlparse, urlsplit
@@ -30,6 +30,7 @@ from free_claude_code.core.anthropic.server_tool_sse import (
     web_search_result_block,
     web_tool_error_block,
 )
+from free_claude_code.core.anthropic.stream_contracts import SSEEvent
 from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
@@ -157,6 +158,16 @@ class WebToolService:
         if stream_error is not None:
             raise _execution_failure_from_stream_error(stream_error)
         tool_calls = _tool_calls(message)
+        stop_reason = message.get("stop_reason")
+        if tool_calls and stop_reason != "tool_use":
+            if stop_reason in ("refusal", "max_tokens", "stop_sequence", "pause_turn"):
+                for packet in _without_tool_candidates(chunks):
+                    yield packet
+                return
+            raise _protocol_failure(
+                "Upstream model returned tool candidates without a tool-use stop.",
+                request_id=request_id,
+            )
         completed = {call for packet in packets for call in packet.completed_calls}
         references = {ref.call_id: ref for ref in call_references(chunks)}
         names = {tool.name for tool in plan.request.tools or ()}
@@ -188,10 +199,10 @@ class WebToolService:
                 client_calls[index] = reference
 
         if not tool_calls and (
-            message.get("stop_reason") == "tool_use"
+            stop_reason == "tool_use"
             or (
                 plan.request.tool_choice == {"type": "any"}
-                and message.get("stop_reason") == "end_turn"
+                and stop_reason == "end_turn"
             )
         ):
             raise _protocol_failure(
@@ -237,7 +248,11 @@ class WebToolService:
             )
             for query in searches.values()
         ]
-        executed = min(len(contexts), plan.max_uses or len(contexts))
+        executed = (
+            len(contexts)
+            if plan.remaining_uses is None
+            else min(len(contexts), plan.remaining_uses)
+        )
         if not client_calls:
             for frame in server_tool_message_start_frames(contexts[0]):
                 yield StreamOutput((frame,))
@@ -287,37 +302,33 @@ class WebToolService:
                     schedule = {first_call: tuple(range(len(contexts)))}
                 indices: dict[int, int] = {}
                 next_index = 0
-                decoder = AnthropicSSEDecoder()
-                for chunk in chunks:
-                    for event in decoder.feed(chunk):
-                        data = event.data
-                        kind = data.get("type")
-                        if kind in {"message_delta", "message_stop"}:
+                for event in _messages_events(chunks):
+                    data = event.data
+                    kind = data.get("type")
+                    if kind in {"message_delta", "message_stop"}:
+                        continue
+                    index = data.get("index")
+                    proof = ()
+                    if isinstance(index, int):
+                        if kind == "content_block_start":
+                            for slot in schedule.get(index, ()):
+                                async for packet in search_frames(slot, next_index):
+                                    yield packet
+                                next_index += 2
+                            if index not in searches:
+                                indices[index] = next_index
+                                next_index += 1
+                            if index in client_calls:
+                                proof = (
+                                    replace(
+                                        client_calls[index],
+                                        position=(indices[index],),
+                                    ),
+                                )
+                        if index in searches:
                             continue
-                        index = data.get("index")
-                        proof = ()
-                        if isinstance(index, int):
-                            if kind == "content_block_start":
-                                for slot in schedule.get(index, ()):
-                                    async for packet in search_frames(slot, next_index):
-                                        yield packet
-                                    next_index += 2
-                                if index not in searches:
-                                    indices[index] = next_index
-                                    next_index += 1
-                                if index in client_calls:
-                                    proof = (
-                                        replace(
-                                            client_calls[index],
-                                            position=(indices[index],),
-                                        ),
-                                    )
-                            if index in searches:
-                                continue
-                            data["index"] = indices.get(index, index)
-                        yield StreamOutput(
-                            (format_sse_event(event.event, data),), proof
-                        )
+                        data["index"] = indices.get(index, index)
+                    yield StreamOutput((format_sse_event(event.event, data),), proof)
             else:
                 for slot in range(len(contexts)):
                     async for packet in search_frames(slot, slot * 2):
@@ -417,6 +428,32 @@ def _search_summary(query: str, results: list[WebSearchResult]) -> str:
 async def _iterate_chunks(chunks: tuple[str, ...]) -> AsyncIterator[str]:
     for chunk in chunks:
         yield chunk
+
+
+def _messages_events(chunks: Iterable[str]) -> Iterator[SSEEvent]:
+    decoder = AnthropicSSEDecoder()
+    for chunk in chunks:
+        yield from decoder.feed(chunk)
+
+
+def _without_tool_candidates(chunks: Iterable[str]) -> Iterator[StreamOutput]:
+    """Keep the provider's terminal and discard calls it did not finish with tool_use."""
+    kept_indices: dict[int, int] = {}
+    for event in _messages_events(chunks):
+        data = event.data
+        index = data.get("index")
+        if isinstance(index, int):
+            if data.get("type") == "content_block_start":
+                block = data.get("content_block", {})
+                # This carrier describes a native Gemini turn that still has
+                # the discarded function calls in it.
+                if block.get("type") == "tool_use" or signed_gemini_turn((block,)):
+                    continue
+                kept_indices[index] = len(kept_indices)
+            if index not in kept_indices:
+                continue
+            data["index"] = kept_indices[index]
+        yield StreamOutput((format_sse_event(event.event, data),))
 
 
 def _tool_calls(message: Mapping[str, object]) -> list[dict[str, object]]:

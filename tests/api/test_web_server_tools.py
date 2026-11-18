@@ -1098,6 +1098,67 @@ async def test_automatic_web_search_preserves_nonselection_stop_reasons(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stop_reason", ["refusal", "max_tokens"])
+async def test_automatic_web_search_keeps_nonexecution_terminal_with_tool_candidates(
+    stop_reason: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    presenter = GeminiStream(
+        model="fixture",
+        origin=ReplayOrigin("gemini", "gemini", "endpoint", "key", "fixture"),
+        output=AnthropicChatStreamOutput(
+            message_id="msg_gemini", model="fixture", input_tokens=10
+        ),
+        tool_names=frozenset({HIDDEN_WEB_SEARCH_NAME, "retrieve"}),
+        tool_defaults={},
+        include_thoughts=True,
+    )
+    before_stop = presenter.feed(
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {"text": "Pending"},
+                            {
+                                "functionCall": {
+                                    "name": HIDDEN_WEB_SEARCH_NAME,
+                                    "args": {"query": "hours"},
+                                },
+                                "thoughtSignature": "native-thought-signature",
+                            },
+                            {
+                                "functionCall": {
+                                    "name": "retrieve",
+                                    "args": {"key": "hours"},
+                                }
+                            },
+                        ],
+                    }
+                }
+            ]
+        }
+    )
+    terminal = "SAFETY" if stop_reason == "refusal" else "MAX_TOKENS"
+    presenter.feed({"candidates": [{"finishReason": terminal}]})
+    provider = ScriptedSelectionProvider(before_stop + presenter.finish())
+    search = AsyncMock()
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
+    request = _automatic_search_request(stream=False, tool_choice={"type": "any"})
+    assert request.tools is not None
+    request.tools.append(Tool(name="retrieve", input_schema={"type": "object"}))
+
+    response = await _automatic_search_service(provider).create(request)
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 200
+    body = _json_body(response)
+    assert body["stop_reason"] == stop_reason
+    assert body["content"] == [{"type": "text", "text": "Pending"}]
+    search.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("incomplete_tool", [False, True])
 async def test_automatic_web_search_rejects_absent_required_call(
     incomplete_tool: bool, monkeypatch: pytest.MonkeyPatch
@@ -1258,6 +1319,67 @@ async def test_automatic_web_search_max_uses_limits_current_request(
     }
     search.assert_awaited_once_with("selected")
     assert body["usage"]["server_tool_use"] == {"web_search_requests": 1}
+
+
+@pytest.mark.asyncio
+async def test_automatic_web_search_keeps_limit_across_client_tool_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    search = AsyncMock(return_value=[])
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
+    provider = ScriptedSelectionProvider(
+        _provider_tool_events(ordinary_calls=[("retrieve", {"key": "hours"})])
+    )
+    request = _automatic_search_request(
+        stream=False,
+        tool=Tool(name="web_search", type="web_search_20250305", max_uses=1),
+    )
+    assert request.tools is not None
+    request.tools.append(Tool(name="retrieve", input_schema={"type": "object"}))
+    api = _automatic_search_service(provider)
+    first = await api.create(request)
+    assert isinstance(first, JSONResponse)
+    initial = _json_body(first)
+    assert initial["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    request.messages.extend(
+        [
+            Message.model_validate(
+                {"role": "assistant", "content": initial["content"]}
+            ),
+            Message.model_validate(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_1",
+                            "content": "retrieved",
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    provider.events = _provider_tool_events(arguments={"query": "follow-up"})
+    second = await api.create(request)
+    assert isinstance(second, JSONResponse)
+    continued = _json_body(second)
+    assert continued["usage"]["server_tool_use"] == {"web_search_requests": 0}
+    assert continued["content"][1]["content"]["error_code"] == "max_uses_exceeded"
+    search.assert_awaited_once_with("selected")
+
+    request.messages.extend(
+        [
+            Message.model_validate(
+                {"role": "assistant", "content": continued["content"]}
+            ),
+            Message(role="user", content="Start a fresh search"),
+        ]
+    )
+    third = await api.create(request)
+    assert isinstance(third, JSONResponse)
+    assert _json_body(third)["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    assert search.await_count == 2
 
 
 @pytest.mark.asyncio

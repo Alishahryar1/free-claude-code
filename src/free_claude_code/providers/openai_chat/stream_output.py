@@ -255,9 +255,9 @@ class ChatStreamOutput(ABC):
         return self._content_started
 
     def final_stop_reason(self, fallback: str) -> str:
-        if self.has_emitted_tool_block():
-            return "tool_use"
-        return "end_turn" if fallback == "tool_use" else fallback
+        if fallback in ("end_turn", "tool_use"):
+            return "tool_use" if self.has_emitted_tool_block() else "end_turn"
+        return fallback
 
     def estimate_output_tokens(self) -> int:
         block_count = (

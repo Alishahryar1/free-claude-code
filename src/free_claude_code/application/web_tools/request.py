@@ -12,6 +12,7 @@ from free_claude_code.core.anthropic.conversion import (
 from free_claude_code.core.anthropic.models import (
     ContentBlockServerToolUse,
     ContentBlockText,
+    ContentBlockToolResult,
     ContentBlockToolUse,
     ContentBlockWebFetchToolResult,
     ContentBlockWebSearchToolResult,
@@ -56,7 +57,7 @@ class AutomaticWebSearchPlan:
     request: MessagesRequest
     private_name: str
     domains: WebSearchDomainFilter
-    max_uses: int | None
+    remaining_uses: int | None
 
 
 def forced_tool_turn_text(request: MessagesRequest) -> str:
@@ -186,7 +187,7 @@ def plan_automatic_web_search(
         },
     )
     try:
-        messages = _normalized_search_history(request.messages)
+        messages, used_this_turn = _normalized_search_history(request.messages)
     except HistoryReplayError as error:
         raise InvalidRequestError(str(error)) from error
     translated = request.model_copy(
@@ -200,7 +201,7 @@ def plan_automatic_web_search(
         request=translated,
         private_name=private_name,
         domains=WebSearchDomainFilter(allowed=allowed, blocked=blocked),
-        max_uses=max_uses,
+        remaining_uses=None if max_uses is None else max(0, max_uses - used_this_turn),
     )
 
 
@@ -245,11 +246,18 @@ _INCOMPLETE_HISTORY = (
 )
 
 
-def _normalized_search_history(messages: list[Message]) -> list[Message]:
-    """Quote completed local search data for every upstream transport."""
+def _normalized_search_history(messages: list[Message]) -> tuple[list[Message], int]:
+    """Carry forward completed web results and count current-turn search attempts."""
     normalized: list[Message] = []
+    used_this_turn = 0
     for message in messages:
         content = message.content
+        if message.role == "user" and not (
+            isinstance(content, list)
+            and content
+            and all(isinstance(block, ContentBlockToolResult) for block in content)
+        ):
+            used_this_turn = 0
         if not isinstance(content, list) or not any(
             getattr(block, "type", None) in _SERVER_HISTORY_TYPES for block in content
         ):
@@ -300,6 +308,11 @@ def _normalized_search_history(messages: list[Message]) -> list[Message]:
                 ):
                     quoted = _search_history_text(block, result)
                     projected.append(block if signed_turn else quoted)
+                    if (
+                        not isinstance(result.content, dict)
+                        or result.content.get("error_code") != "max_uses_exceeded"
+                    ):
+                        used_this_turn += 1
                 elif block.name == "web_fetch" and isinstance(
                     result, ContentBlockWebFetchToolResult
                 ):
@@ -325,7 +338,7 @@ def _normalized_search_history(messages: list[Message]) -> list[Message]:
             ):
                 projected.append(block)
         normalized.append(message.model_copy(update={"content": projected}, deep=True))
-    return normalized
+    return normalized, used_this_turn
 
 
 def _search_history_text(
