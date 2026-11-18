@@ -435,8 +435,14 @@ try {
 
     $fccHome = Get-FccHome
     $resumingBundleRemoval = Test-Path -LiteralPath "$fccHome.removing" -PathType Container
-    $hasBundle = Test-Path -LiteralPath (Get-FccBundlePath) -PathType Container
+    $bundlePath = Get-FccBundlePath
+    $previousBundle = "$bundlePath.previous"
+    $hasBundle = Test-Path -LiteralPath $bundlePath -PathType Container
     if (-not $resumingBundleRemoval) {
+        if (-not $hasBundle -and (Test-Path -LiteralPath $previousBundle -PathType Container)) {
+            if (-not $DryRun) { [IO.Directory]::Move($previousBundle, $bundlePath) }
+            $hasBundle = $true
+        }
         Write-Step "Locating the Free Claude Code installation"
         $hasFccHome = Test-Path -LiteralPath $fccHome
         Initialize-UvContext -Optional:($hasBundle -or -not $hasFccHome)

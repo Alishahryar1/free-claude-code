@@ -443,6 +443,24 @@ def test_install_ps1_retries_update_after_desktop_integration_failure(
     assert "already up to date" in completed.stdout
 
 
+def test_install_ps1_restores_previous_bundle_before_loading_release(
+    powershell_harness,
+):
+    root = Path(powershell_harness.env["USERPROFILE"]) / ".fcc" / "windows-app"
+    previous = root.with_name("windows-app.previous")
+    previous.mkdir(parents=True)
+    (previous / "version.txt").write_text("1.9.0", encoding="ascii")
+    (previous / ".installed-version").write_text("1.9.0", encoding="ascii")
+    powershell_harness.env["FCC_TEST_USER_PATH"] = str(root / "bin")
+
+    failed = powershell_harness.run("-Update", fail_step="toolchain-download")
+
+    assert failed.returncode != 0
+    assert "simulated metadata failure" in failed.stderr
+    assert (root / "version.txt").read_text(encoding="ascii") == "1.9.0"
+    assert not previous.exists()
+
+
 @pytest.mark.parametrize("skip_download", [False, True])
 def test_signed_candidate_uses_draft_bundle_in_installer_scope(
     powershell_harness, skip_download: bool

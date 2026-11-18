@@ -1007,6 +1007,19 @@ def test_uninstall_ps1_resumes_after_signed_home_was_detached(
     assert not any(call.startswith(("uv:", "doctor:")) for call in harness.calls())
 
 
+def test_uninstall_ps1_recognizes_bundle_after_interrupted_activation(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+):
+    harness = powershell_uninstall_harness
+    harness.remove_entry_points()
+    (harness.fcc_home / "windows-app.previous" / "bin").mkdir(parents=True)
+
+    removed = harness.run(include_uv=False, keep_integrations=True)
+
+    assert removed.returncode == 0, removed.stdout + removed.stderr
+    assert not harness.fcc_home.exists()
+
+
 def test_uninstall_ps1_preserves_unowned_desktop_shortcut(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:

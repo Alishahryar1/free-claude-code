@@ -1839,6 +1839,14 @@ function Get-FccBundlePath {
     return Join-Path $env:USERPROFILE '.fcc\windows-app'
 }
 
+function Restore-FccPreviousBundle {
+    $bundle = Get-FccBundlePath
+    $previous = "$bundle.previous"
+    if ((Test-Path -LiteralPath $previous -PathType Container) -and -not (Test-Path -LiteralPath $bundle)) {
+        [IO.Directory]::Move($previous, $bundle)
+    }
+}
+
 function Assert-FccBundleMachinePath {
     param([string] $MachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine'))
 
@@ -1952,7 +1960,7 @@ function Install-FccBundle {
 
     $root = Get-FccBundlePath
     $staging = "$root.staging-$([Guid]::NewGuid().ToString('N'))"
-    $backup = "$staging.previous"
+    $backup = "$root.previous"
     New-Item -ItemType Directory -Path $staging -Force | Out-Null
     try {
         $archive = Join-Path $staging $name
@@ -1967,6 +1975,7 @@ function Install-FccBundle {
         [IO.Compression.ZipFile]::ExtractToDirectory($archive, $expanded)
         Confirm-FccBundle -Path $expanded
         Assert-NoFccProcessesRunning
+        if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force }
         if (Test-Path -LiteralPath $root) { [IO.Directory]::Move($root, $backup) }
         try {
             [IO.Directory]::Move($expanded, $root)
@@ -2420,6 +2429,7 @@ try {
         if (Test-Path -LiteralPath (Join-Path $env:USERPROFILE '.fcc.removing') -PathType Container) {
             throw 'The previous FCC uninstall did not finish. Rerun the uninstaller before installing again.'
         }
+        Restore-FccPreviousBundle
         if (-not $VoiceLocal) { Assert-FccBundleMachinePath }
         if ($Update -and -not (Test-FccUpdateNeeded)) {
             $installSucceeded = $true
