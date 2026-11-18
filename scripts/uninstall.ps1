@@ -74,14 +74,21 @@ function Format-Command {
     return ($parts | ForEach-Object { Format-Argument ([string] $_) }) -join " "
 }
 
-function Get-ApplicationCommand {
-    param([string] $Name)
+function Find-PathCommands {
+    param(
+        [string[]] $Name,
+        [System.Management.Automation.CommandTypes] $CommandType = 'Application'
+    )
 
-    $commands = @(Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue)
-    if ($commands.Count -eq 0) {
-        return $null
+    $originalPath = $env:Path
+    try {
+        # The current terminal may predate a registered PATH change.
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        if ($userPath) { $env:Path = "$originalPath;$userPath" }
+        Get-Command -Name $Name -CommandType $CommandType -All -ErrorAction SilentlyContinue
+    } finally {
+        $env:Path = $originalPath
     }
-    return $commands[0]
 }
 
 function Invoke-NativeResult {
@@ -155,18 +162,18 @@ function Initialize-UvContext {
         return
     }
 
-    $uvCommand = Get-ApplicationCommand "uv"
+    $uvCommand = Find-PathCommands -Name "uv" | Select-Object -First 1
     if (-not $uvCommand) {
-        if ($Optional -and ((Test-FccBundleOnUserPath) -or -not (Test-UnbundledFccCommand))) { return }
+        if ($Optional -and -not (Find-UnbundledFccCommand)) { return }
         throw "uv is required to remove the Free Claude Code tool. Install uv, then rerun this uninstaller; ~/.fcc was not deleted."
     }
-    $script:UvPath = $uvCommand.Source
+    $uvPath = $uvCommand.Source
 
-    $commandText = Format-Command -FilePath $script:UvPath -Arguments @("tool", "dir", "--bin")
+    $commandText = Format-Command -FilePath $uvPath -Arguments @("tool", "dir", "--bin")
     Write-Host "+ $commandText"
-    $result = Invoke-NativeResult -FilePath $script:UvPath -Arguments @("tool", "dir", "--bin")
+    $result = Invoke-NativeResult -FilePath $uvPath -Arguments @("tool", "dir", "--bin")
     if ($Optional -and ($result.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($result.Output))) {
-        if (Test-FccBundleOnUserPath) { return }
+        if (-not (Find-UnbundledFccCommand)) { return }
     }
     if ($result.ExitCode -ne 0) {
         if (-not [string]::IsNullOrWhiteSpace($result.Output)) {
@@ -178,6 +185,7 @@ function Initialize-UvContext {
     if ([string]::IsNullOrWhiteSpace($script:UvToolBin)) {
         throw "uv returned an empty tool bin directory; ~/.fcc was not deleted."
     }
+    $script:UvPath = $uvPath
 }
 
 function Uninstall-FreeClaudeCode {
@@ -264,6 +272,10 @@ function Confirm-FccCommandsRemoved {
     if ($remaining.Count -gt 0) {
         throw "Free Claude Code entry points remain after uv uninstall: $($remaining -join ', '); ~/.fcc was not deleted."
     }
+    $command = Find-UnbundledFccCommand
+    if ($command) {
+        throw "Free Claude Code command remains on PATH: $($command.Source). Remove its installation and retry; ~/.fcc was not deleted."
+    }
 }
 
 function Test-PathEntry {
@@ -329,20 +341,11 @@ function Test-FccBundleOnUserPath {
     return $false
 }
 
-function Test-UnbundledFccCommand {
+function Find-UnbundledFccCommand {
     $bin = Get-FccBundleBin
-    $originalPath = $env:Path
-    try {
-        # The current terminal may predate the switch to the uv-managed commands.
-        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-        if ($userPath) { $env:Path = "$originalPath;$userPath" }
-        $command = Get-Command -Name $FccCommands -CommandType Application -All -ErrorAction SilentlyContinue |
-            Where-Object { -not (Test-PathEntry -Entry (Split-Path -Parent $_.Source) -Directory $bin) } |
-            Select-Object -First 1
-        return $null -ne $command
-    } finally {
-        $env:Path = $originalPath
-    }
+    Find-PathCommands -Name $FccCommands -CommandType Application, ExternalScript |
+        Where-Object { -not (Test-PathEntry -Entry (Split-Path -Parent $_.Source) -Directory $bin) } |
+        Select-Object -First 1
 }
 
 function Remove-FccBundlePathEntry {
@@ -483,7 +486,7 @@ try {
         $hasFccHome = Test-Path -LiteralPath $fccHome
         Initialize-UvContext -Optional:($hasBundle -or -not $hasFccHome)
         if (-not $DryRun -and -not $hasFccHome -and -not $script:UvPath -and
-            -not ($FccCommands | Where-Object { Get-ApplicationCommand $_ } | Select-Object -First 1)) {
+            -not (Find-UnbundledFccCommand)) {
             Write-Host "Free Claude Code is already absent."
             return
         }
