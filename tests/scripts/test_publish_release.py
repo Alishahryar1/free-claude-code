@@ -3,7 +3,6 @@
 import hashlib
 import json
 import shutil
-import zipfile
 from itertools import pairwise
 from pathlib import Path
 from typing import TypedDict
@@ -57,7 +56,6 @@ class Release(TypedDict):
     draft: bool
     prerelease: bool
     assets: list[Asset]
-    immutable: bool
 
 
 class FakeRemote:
@@ -70,7 +68,6 @@ class FakeRemote:
                 "draft": False,
                 "prerelease": False,
                 "assets": [],
-                "immutable": False,
             }
         }
         self.files = {}
@@ -79,11 +76,9 @@ class FakeRemote:
         self.builds = 0
         self.native_builds = []
         self.uploaded = {}
-        self.attested = {}
-        self.immutable_releases_enabled = True
         self.real_command = publishing.command
 
-    def command(self, args, *, cwd=None, env=None):
+    def command(self, args, *, cwd=None):
         if "--repo" in args:
             args = args[: args.index("--repo")]
         self.calls.append(args)
@@ -93,9 +88,6 @@ class FakeRemote:
             return git(Path(cwd or self.repo), *args[1:])
         if args[:2] == ["gh", "api"]:
             endpoint = next(arg for arg in args if arg.startswith("repos/"))
-            if endpoint == "repos/owner/repo/immutable-releases":
-                assert env is not None and env["GH_TOKEN"] == "settings-token"
-                return json.dumps({"enabled": self.immutable_releases_enabled})
             fields = dict(
                 field.split("=", 1)
                 for flag, field in pairwise(args)
@@ -116,7 +108,6 @@ class FakeRemote:
                     "draft": True,
                     "prerelease": False,
                     "assets": [],
-                    "immutable": False,
                 }
                 return json.dumps(self.releases[tag])
             release_id = int(endpoint.rsplit("/", 1)[1])
@@ -149,40 +140,13 @@ class FakeRemote:
         elif args[:3] == ["gh", "release", "download"]:
             tag = args[3]
             dest = Path(args[args.index("--dir") + 1])
-            patterns = {value for flag, value in pairwise(args) if flag == "--pattern"}
             for asset in self.releases[tag]["assets"]:
-                if not patterns or asset["name"] in patterns:
-                    (dest / asset["name"]).write_bytes(self.files[tag, asset["name"]])
+                (dest / asset["name"]).write_bytes(self.files[tag, asset["name"]])
         elif args[:3] == ["gh", "release", "edit"]:
             if self.fail == "finalize":
                 self.fail = None
                 raise RuntimeError("interrupted finalization")
             self.releases[args[3]]["draft"] = False
-            self.releases[args[3]]["immutable"] = True
-        elif args[:3] == ["gh", "attestation", "verify"]:
-            assert args[4:] == [
-                "--signer-workflow",
-                "owner/repo/.github/workflows/post-merge.yml",
-                "--source-ref",
-                "refs/heads/main",
-                "--deny-self-hosted-runners",
-                "--predicate-type",
-                "https://github.com/owner/repo/attestations/windows-release/v1",
-                "--format",
-                "json",
-            ]
-            artifact = Path(args[3]).read_bytes()
-            if artifact not in self.attested:
-                raise RuntimeError("No verified provenance")
-            return json.dumps(
-                [
-                    {
-                        "verificationResult": {
-                            "statement": {"predicate": self.attested[artifact]}
-                        }
-                    }
-                ]
-            )
         elif args[:2] == ["uv", "build"]:
             self.builds += 1
             assert cwd is not None
@@ -218,75 +182,8 @@ class FakeRemote:
         git(self.repo, "update-ref", "refs/remotes/origin/main", head)
         return head
 
-    def publisher(self, *, settings_token=""):
-        return publishing.Publisher("owner/repo", settings_token=settings_token)
-
-
-def test_windows_release_waits_for_bundle_and_keeps_python_assets(releases, tmp_path):
-    repo, remote = releases
-    write(repo, "scripts/build_windows_bundle.py", "# windows builder")
-    target = remote.advance()
-    publisher = remote.publisher()
-
-    assert publisher.publish(target, stage_only=True) == ("1.2.4", True, True)
-    assert not remote.uploaded
-    with pytest.raises(ValueError, match="Windows bundle"):
-        publisher.publish(target)
-    assert remote.builds == 1
-
-    bundle = tmp_path / "free_claude_code-1.2.4-windows-x64.zip"
-    with zipfile.ZipFile(bundle, "w") as archive:
-        archive.writestr("version.txt", "1.2.4\n")
-    remote.command(["gh", "release", "upload", "v1.2.4", str(bundle)])
-    assert publisher.publish(target, stage_only=True) == ("1.2.4", False, True)
-    with pytest.raises(RuntimeError, match="No verified provenance"):
-        publisher.publish(target)
-    assert not remote.uploaded
-    assert remote.releases["v1.2.4"]["draft"]
-
-    wheel = publishing.distribution_names("1.2.4")[0]
-    wheel_digest = "sha256:" + hashlib.sha256(remote.files["v1.2.4", wheel]).hexdigest()
-    remote.attested[bundle.read_bytes()] = {
-        "version": "1.2.3",
-        "commit": target,
-        "wheel_digest": wheel_digest,
-    }
-    with pytest.raises(ValueError, match="provenance does not match release"):
-        publisher.publish(target)
-    remote.attested[bundle.read_bytes()]["version"] = "1.2.4"
-    bundle_digest = "sha256:" + hashlib.sha256(bundle.read_bytes()).hexdigest()
-    with pytest.raises(ValueError, match="requires acceptance"):
-        publisher.publish(target, accepted_windows_digest="sha256:" + "0" * 64)
-    assert not remote.uploaded
-
-    remote.files["v1.2.4", bundle.name] += b"changed"
-    with pytest.raises(ValueError, match="Staged asset failed verification"):
-        publisher.publish(target)
-    assert not remote.uploaded
-
-    remote.files["v1.2.4", bundle.name] = bundle.read_bytes()
-    with pytest.raises(ValueError, match="RELEASE_SETTINGS_TOKEN"):
-        publisher.publish(target, accepted_windows_digest=bundle_digest)
-    publisher = remote.publisher(settings_token="settings-token")
-    remote.immutable_releases_enabled = False
-    with pytest.raises(ValueError, match="Enable immutable releases"):
-        publisher.publish(target, accepted_windows_digest=bundle_digest)
-    assert not remote.uploaded
-    assert remote.releases["v1.2.4"]["draft"]
-
-    remote.immutable_releases_enabled = True
-    publisher.publish(target, accepted_windows_digest=bundle_digest)
-
-    assert not remote.releases["v1.2.4"]["draft"]
-    assert remote.builds == 1
-    assert set(remote.uploaded) == set(publishing.distribution_names("1.2.4"))
-    remote.releases["v1.2.4"]["immutable"] = False
-    with pytest.raises(ValueError, match="without immutable release protection"):
-        publisher.publish(target)
-    remote.releases["v1.2.4"]["immutable"] = True
-
-    next_target = remote.advance("patch: Next")
-    assert publisher.publish(next_target, stage_only=True) == ("1.2.5", True, False)
+    def publisher(self):
+        return publishing.Publisher("owner/repo")
 
 
 def test_nonrelease_never_allocates_or_builds(releases):
@@ -295,37 +192,6 @@ def test_nonrelease_never_allocates_or_builds(releases):
     remote.publisher().publish(head)
     assert remote.builds == 0
     assert not any(c[:2] == ["git", "push"] for c in remote.calls)
-
-
-def test_rejected_windows_candidate_can_be_replaced_without_publishing_it(releases):
-    repo, remote = releases
-    write(repo, "scripts/build_windows_bundle.py", "# windows builder")
-    first = remote.advance()
-    publisher = remote.publisher()
-    assert publisher.publish(first, stage_only=True) == ("1.2.4", True, True)
-    remote.advance("minor: Intervening feature")
-    corrected = remote.advance("patch: Correct signed Windows release")
-
-    with pytest.raises(ValueError, match="Earlier release"):
-        publisher.publish(corrected, stage_only=True)
-    with pytest.raises(ValueError, match="Only a preceding draft Windows candidate"):
-        publisher.publish(
-            corrected, stage_only=True, supersedes_windows_candidate="v1.2.3"
-        )
-    assert publisher.publish(
-        corrected, stage_only=True, supersedes_windows_candidate="v1.2.4"
-    ) == ("1.3.0", True, True)
-    with pytest.raises(ValueError, match="A newer release is already staged"):
-        publisher.publish(first)
-    assert remote.releases["v1.2.4"]["draft"]
-    assert remote.releases["v1.3.0"]["draft"]
-    generated_notes = [
-        call
-        for call in remote.calls
-        if any(arg.endswith("/generate-notes") for arg in call)
-    ]
-    assert "previous_tag_name=v1.2.3" in generated_notes[-1]
-    assert not remote.uploaded
 
 
 def test_native_preparation_uses_release_commit_despite_dirty_current_checkout(
@@ -425,6 +291,31 @@ def test_later_commit_waits_for_draft_and_old_retry_is_noop(releases):
     calls = len(remote.calls)
     remote.publisher().publish(first)
     assert not any(c[:3] == ["gh", "release", "edit"] for c in remote.calls[calls:])
+
+
+def test_publish_after_withdrawn_draft_and_reject_its_retry(releases, monkeypatch):
+    repo, remote = releases
+    withdrawn = remote.advance("patch: Withdrawn change")
+    git(repo, "tag", "v1.2.4", withdrawn)
+    remote.releases["v1.2.4"] = {
+        "id": 2,
+        "tag_name": "v1.2.4",
+        "draft": True,
+        "prerelease": False,
+        "assets": [],
+    }
+    monkeypatch.setattr(publishing, "WITHDRAWN_RELEASE", ("v1.2.4", withdrawn))
+    restored = remote.advance("patch: Restore publishing")
+
+    remote.publisher().publish(restored)
+    assert git(repo, "rev-parse", "v1.2.5") == restored
+    assert not remote.releases["v1.2.5"]["draft"]
+
+    with pytest.raises(ValueError, match="was withdrawn"):
+        remote.publisher().publish(withdrawn)
+    assert git(repo, "rev-parse", "v1.2.4") == withdrawn
+    assert remote.releases["v1.2.4"]["draft"]
+    assert set(remote.uploaded) == set(publishing.distribution_names("1.2.5"))
 
 
 def test_tag_collision_and_extra_target_tag_are_rejected(releases):

@@ -107,14 +107,7 @@ def server_command() -> list[str]:
 
     name = "fcc-desktop" if sys.platform in {"win32", "darwin"} else "fcc-server"
     suffix = ".exe" if sys.platform == "win32" else ""
-    directory = Path(sys.executable).parent
-    if (
-        sys.platform == "win32"
-        and directory.name == "runtime"
-        and (directory.parent / "version.txt").is_file()
-    ):
-        directory = directory.parent / "bin"
-    sibling = directory / f"{name}{suffix}"
+    sibling = Path(sys.executable).parent / f"{name}{suffix}"
     if sibling.is_file() and os.access(sibling, os.X_OK):
         return [str(sibling), "--auto-started"]
     raise FileNotFoundError(

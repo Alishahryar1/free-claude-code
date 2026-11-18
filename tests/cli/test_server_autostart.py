@@ -663,25 +663,6 @@ def test_server_command_selects_platform_owner(
     assert common.server_command() == [str(sibling), "--auto-started"]
 
 
-def test_windows_bundle_starts_the_installed_desktop_launcher(
-    monkeypatch, tmp_path
-) -> None:
-    installation = tmp_path / "relocated bundle"
-    executable = installation / "runtime" / "python.exe"
-    executable.parent.mkdir(parents=True)
-    (installation / "version.txt").write_text("1.0.0\n")
-    launcher = installation / "bin" / "fcc-desktop.exe"
-    launcher.parent.mkdir()
-    launcher.touch()
-    if sys.platform != "win32":
-        launcher.chmod(0o755)
-    monkeypatch.setattr(
-        common, "sys", SimpleNamespace(executable=str(executable), platform="win32")
-    )
-
-    assert common.server_command() == [str(launcher), "--auto-started"]
-
-
 def test_missing_installed_owner_does_not_fallback_to_python(
     monkeypatch, tmp_path
 ) -> None:

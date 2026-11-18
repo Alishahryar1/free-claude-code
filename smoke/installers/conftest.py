@@ -4,25 +4,8 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
-
-
-@pytest.fixture
-def windows_user_environment():
-    if os.name != "nt":
-        pytest.skip("Windows registry isolation requires Windows")
-
-    import winreg
-
-    path = rf"Software\FCC-Test-Environment-{uuid4().hex}"
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, path):
-        pass
-    try:
-        yield path
-    finally:
-        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
 
 
 @pytest.fixture(autouse=True)
