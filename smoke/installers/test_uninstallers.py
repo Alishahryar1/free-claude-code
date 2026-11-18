@@ -948,6 +948,34 @@ def test_uninstall_ps1_cleans_integrations_with_active_uv_install(
     assert not harness.fcc_home.exists()
 
 
+@pytest.mark.parametrize("legacy_commands_registered", [False, True])
+def test_uninstall_ps1_distinguishes_inactive_bundle_from_active_voice_install(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+    legacy_commands_registered: bool,
+) -> None:
+    harness = powershell_uninstall_harness
+    bundle_bin = harness.fcc_home / "windows-app" / "bin"
+    bundle_bin.mkdir(parents=True)
+    (bundle_bin / "fcc-server.exe").touch()
+    if legacy_commands_registered:
+        # Simulate running from a shell opened before the voice PATH change.
+        harness.env["FCC_TEST_USER_PATH"] = str(harness.tool_bin)
+        harness.env["PATH"] = os.pathsep.join((str(bundle_bin), harness.env["PATH"]))
+    else:
+        harness.remove_entry_points()
+
+    removed = harness.run(include_uv=False, keep_integrations=True)
+
+    if legacy_commands_registered:
+        assert removed.returncode != 0
+        assert "uv is required" in removed.stderr
+        assert (harness.fcc_home / "config.json").is_file()
+        assert (harness.tool_bin / "fcc-server.cmd").is_file()
+    else:
+        assert removed.returncode == 0, removed.stdout + removed.stderr
+        assert not harness.fcc_home.exists()
+
+
 @pytest.mark.parametrize("include_uv", [False, True])
 @pytest.mark.parametrize("locked_bundle", [False, True])
 def test_uninstall_ps1_can_retry_signed_bundle_purge_without_usable_uv(

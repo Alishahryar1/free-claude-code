@@ -157,7 +157,7 @@ function Initialize-UvContext {
 
     $uvCommand = Get-ApplicationCommand "uv"
     if (-not $uvCommand) {
-        if ($Optional) { return }
+        if ($Optional -and ((Test-FccBundleOnUserPath) -or -not (Test-UnbundledFccCommand))) { return }
         throw "uv is required to remove the Free Claude Code tool. Install uv, then rerun this uninstaller; ~/.fcc was not deleted."
     }
     $script:UvPath = $uvCommand.Source
@@ -327,6 +327,22 @@ function Test-FccBundleOnUserPath {
         if (Test-PathEntry -Entry $directory -Directory $bin) { return $true }
     }
     return $false
+}
+
+function Test-UnbundledFccCommand {
+    $bin = Get-FccBundleBin
+    $originalPath = $env:Path
+    try {
+        # The current terminal may predate the switch to the uv-managed commands.
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        if ($userPath) { $env:Path = "$originalPath;$userPath" }
+        $command = Get-Command -Name $FccCommands -CommandType Application -All -ErrorAction SilentlyContinue |
+            Where-Object { -not (Test-PathEntry -Entry (Split-Path -Parent $_.Source) -Directory $bin) } |
+            Select-Object -First 1
+        return $null -ne $command
+    } finally {
+        $env:Path = $originalPath
+    }
 }
 
 function Remove-FccBundlePathEntry {
