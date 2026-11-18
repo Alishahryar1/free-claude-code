@@ -44,6 +44,8 @@ $script:InstallDsh = $true
 $script:InstallGrok = $true
 $script:InstallMuse = $true
 $script:InstallAider = $true
+$script:VerifiedAiderBin = ''
+$script:VerifiedUvInstallBin = ''
 $script:InstallAgy = $true
 $script:PiAvailable = $false
 $script:MuseAvailable = $false
@@ -81,6 +83,7 @@ $FccCommands = @(
     "fcc-init",
     "free-claude-code"
 )
+$FccBundleCommands = @($FccCommands | Where-Object { $_ -notin @('fcc-init', 'free-claude-code') })
 
 function Show-Usage {
     @"
@@ -195,22 +198,40 @@ function Show-InstallReport {
     if ($script:InstallLog) { Write-Host "Installer log: $script:InstallLog" }
 }
 
-function Write-WindowsLaunchGuidance {
-    param([string] $FilePath, [Exception] $Exception, [string] $Stderr = "")
+function Test-WindowsLaunchPolicyFailure {
+    param([Exception] $Exception, [string] $Stderr = "")
 
-    $policyFailure = $Stderr -match '\(os error (4551|1260)\)'
+    if ($Stderr -match '\(os error (4551|1260)\)') { return $true }
     for ($cause = $Exception; $null -ne $cause; $cause = $cause.InnerException) {
         if ($cause -is [ComponentModel.Win32Exception] -and $cause.NativeErrorCode -in @(4551, 1260)) {
-            $policyFailure = $true
+            return $true
         }
         # Start-Process on Windows PowerShell drops the native error code.
         foreach ($code in @(4551, 1260)) {
             if ($cause.Message.Contains([ComponentModel.Win32Exception]::new($code).Message)) {
-                $policyFailure = $true
+                return $true
             }
         }
     }
-    if ($policyFailure) {
+    return $false
+}
+
+function Skip-AiderOnWindowsPolicyFailure {
+    param([Exception] $Exception)
+
+    if ($VoiceLocal -or -not (Test-WindowsLaunchPolicyFailure -Exception $Exception -Stderr $Exception.Message)) {
+        return $false
+    }
+    $script:InstallAider = $false
+    $script:InstallStepOutcome = "Skipped"
+    Write-Host "Windows application policy blocked Aider setup. Continuing with the other selected coding agents."
+    return $true
+}
+
+function Write-WindowsLaunchGuidance {
+    param([string] $FilePath, [Exception] $Exception, [string] $Stderr = "")
+
+    if (Test-WindowsLaunchPolicyFailure -Exception $Exception -Stderr $Stderr) {
         $guidance = @"
 Windows application policy prevented this command from running: '$FilePath'.
 Inspect recent policy events to identify the blocked file, then ask your administrator to allow the required application:
@@ -247,6 +268,13 @@ function Read-YesNo {
     }
 }
 
+function Get-ExpectedUvToolBin {
+    if ($env:UV_TOOL_BIN_DIR) { return $env:UV_TOOL_BIN_DIR }
+    if ($env:XDG_BIN_HOME) { return $env:XDG_BIN_HOME }
+    if ($env:XDG_DATA_HOME) { return Join-Path $env:XDG_DATA_HOME '..\bin' }
+    if ($env:USERPROFILE) { return Join-Path $env:USERPROFILE '.local\bin' }
+}
+
 function Find-InstalledCodingAgent {
     param([string] $CommandName)
 
@@ -266,18 +294,7 @@ function Find-InstalledCodingAgent {
         $command = Get-ApplicationCommand $CommandName
         if (-not $command) {
             if ($CommandName -eq "aider") {
-                if ($env:UV_TOOL_BIN_DIR) {
-                    Add-PathEntry $env:UV_TOOL_BIN_DIR
-                }
-                elseif ($env:XDG_BIN_HOME) {
-                    Add-PathEntry $env:XDG_BIN_HOME
-                }
-                elseif ($env:XDG_DATA_HOME) {
-                    Add-PathEntry (Join-Path $env:XDG_DATA_HOME "..\bin")
-                }
-                elseif ($env:USERPROFILE) {
-                    Add-PathEntry (Join-Path $env:USERPROFILE ".local\bin")
-                }
+                Add-PathEntry (Get-ExpectedUvToolBin)
                 $command = Get-ApplicationCommand $CommandName
             }
             elseif ($CommandName -eq "muse") {
@@ -1396,7 +1413,7 @@ function Install-Aider {
         $uvPath = $uvCommand.Source
     }
 
-    Invoke-NativeCommand -FilePath $uvPath -Arguments @(
+    $aiderOutput = Invoke-Utf8NativeCapture -FilePath $uvPath -Arguments @(
         "tool",
         "install",
         "--force",
@@ -1406,6 +1423,7 @@ function Install-Aider {
         "pip",
         "aider-chat@latest"
     )
+    if ($aiderOutput) { Write-Host $aiderOutput }
 }
 
 function Add-UvToolBinDirectory {
@@ -1421,17 +1439,19 @@ function Add-UvToolBinDirectory {
 }
 
 function Ensure-Aider {
-    $command = Get-ApplicationCommand "aider"
+    $toolBin = Get-ExpectedUvToolBin
+    $command = Find-InstalledCodingAgent "aider"
     if ((-not $command) -and (-not $DryRun)) {
         $uvCommand = Get-ApplicationCommand "uv"
         if (-not $uvCommand) {
             throw "Aider installation requires the verified uv command, but it is not available on PATH."
         }
-        $null = Add-UvToolBinDirectory -UvPath $uvCommand.Source
+        $toolBin = Add-UvToolBinDirectory -UvPath $uvCommand.Source
         $command = Get-ApplicationCommand "aider"
     }
 
     if ($command) {
+        Add-PathEntry (Split-Path -Parent $command.Source)
         $script:InstallStepOutcome = "Reused"
         Write-Host "Aider already found on PATH; verifying it."
     }
@@ -1440,6 +1460,12 @@ function Ensure-Aider {
     }
 
     Confirm-Application -CommandName "aider" -DisplayName "Aider"
+    if (-not $DryRun) {
+        $commandBin = Split-Path -Parent (Get-ApplicationCommand 'aider').Source
+        if (Test-EquivalentPath -Left $commandBin -Right $toolBin) {
+            $script:VerifiedAiderBin = $commandBin
+        }
+    }
 }
 
 function Ensure-Muse {
@@ -1684,7 +1710,11 @@ function Ensure-SelectedCodingAgents {
 
     if ($script:InstallAider) {
         Start-InstallStep "Aider" "Ensuring Aider is installed"
-        Ensure-Aider
+        try {
+            Ensure-Aider
+        } catch {
+            if (-not (Skip-AiderOnWindowsPolicyFailure -Exception $_.Exception)) { throw }
+        }
     }
 
     if ($script:InstallAgy) {
@@ -1725,6 +1755,7 @@ function Confirm-Uv {
         throw "Stable uv $MinUvVersion or newer is required; found uv $version after installation."
     }
     Write-Host "Verified uv $version."
+    return $uvCommand.Source
 }
 
 function Get-UvInstallBinDirectory {
@@ -1766,6 +1797,14 @@ function Get-UvInstallBinDirectory {
     throw "Could not determine where the standalone uv installer places uv."
 }
 
+function Get-StandaloneUvPathEntry {
+    param([string] $UvPath)
+
+    if ($env:UV_NO_MODIFY_PATH -or $env:UV_UNMANAGED_INSTALL) { return }
+    $directory = Split-Path -Parent $UvPath
+    if (Test-EquivalentPath -Left $directory -Right (Get-UvInstallBinDirectory)) { return $directory }
+}
+
 function Ensure-Uv {
     if ($DryRun) {
         if (Get-ApplicationCommand "uv") {
@@ -1780,10 +1819,17 @@ function Ensure-Uv {
         return
     }
 
+    # Keep prerequisite installation from changing the active FCC route.
+    $deferPath = -not $VoiceLocal -or (Test-FccBundleOnUserPath)
     $uvCommand = Get-ApplicationCommand "uv"
+    if (-not $uvCommand -and $deferPath) {
+        Add-PathEntry (Get-UvInstallBinDirectory)
+        $uvCommand = Get-ApplicationCommand "uv"
+    }
     if ($uvCommand) {
         $version = Get-UvVersion $uvCommand.Source
         if (Test-SupportedStableVersion -Version $version -Minimum $MinUvVersion) {
+            if ($deferPath) { $script:VerifiedUvInstallBin = Get-StandaloneUvPathEntry $uvCommand.Source }
             $script:InstallStepOutcome = "Reused"
             Write-Host "uv $version already satisfies >=$MinUvVersion; leaving it unchanged."
             return
@@ -1794,9 +1840,16 @@ function Ensure-Uv {
         Write-Host "uv is not installed; installing the current standalone uv."
     }
 
-    Invoke-DownloadedPowerShellInstaller -Url $UvInstallUrl -Name "uv"
+    $previousNoModifyPath = $env:UV_NO_MODIFY_PATH
+    try {
+        if ($deferPath) { $env:UV_NO_MODIFY_PATH = '1' }
+        Invoke-DownloadedPowerShellInstaller -Url $UvInstallUrl -Name "uv"
+    } finally {
+        if ($deferPath) { $env:UV_NO_MODIFY_PATH = $previousNoModifyPath }
+    }
     Prioritize-PathEntry (Get-UvInstallBinDirectory)
-    Confirm-Uv
+    $verifiedUv = Confirm-Uv
+    if ($deferPath) { $script:VerifiedUvInstallBin = Get-StandaloneUvPathEntry $verifiedUv }
 }
 
 function Get-PackageSpec {
@@ -1806,8 +1859,214 @@ function Get-PackageSpec {
     return $spec
 }
 
+function Get-FccBundlePath {
+    return Join-Path $env:USERPROFILE '.fcc\windows-app'
+}
+
+function Test-FccBundleOnUserPath {
+    $bundleBin = Join-Path (Get-FccBundlePath) 'bin'
+    foreach ($directory in ([Environment]::GetEnvironmentVariable("Path", "User") -split ';')) {
+        if (Test-PathEntry -Entry $directory -Directory $bundleBin) { return $true }
+    }
+    return $false
+}
+
+function Recover-FccBundleInstallation {
+    $bundle = Get-FccBundlePath
+    $previous = "$bundle.previous"
+    if (Test-Path -LiteralPath $previous -PathType Container) {
+        if (Test-Path -LiteralPath $bundle) {
+            Remove-Item -LiteralPath $previous -Recurse -Force
+        } else {
+            [IO.Directory]::Move($previous, $bundle)
+        }
+    }
+    $staging = "$bundle.staging"
+    if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+}
+
+function Assert-FccBundleMachinePath {
+    param([string] $MachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine'))
+
+    if (-not $MachinePath) { return }
+    $originalPath = $env:Path
+    try {
+        $env:Path = $MachinePath
+        $bundleBin = Join-Path (Get-FccBundlePath) 'bin'
+        foreach ($name in $FccBundleCommands) {
+            $command = Get-ApplicationCommand $name
+            if ($command -and -not (Test-EquivalentPath -Left (Split-Path -Parent $command.Source) -Right $bundleBin)) {
+                throw "The machine PATH selects '$($command.Source)' before the per-user FCC bundle. Remove the machine-wide FCC command from PATH, then rerun the installer."
+            }
+        }
+    } finally {
+        $env:Path = $originalPath
+    }
+}
+
+function Lock-FccInstallation {
+    # Keep the lock outside ~/.fcc so uninstall can purge the directory while holding it.
+    $path = Join-Path $env:USERPROFILE '.fcc-install.lock'
+    try {
+        return [IO.FileStream]::new(
+            $path, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite,
+            [IO.FileShare]::None, 4096, [IO.FileOptions]::DeleteOnClose
+        )
+    } catch {
+        throw "Could not lock the FCC installation. Wait for any other FCC installer or uninstaller to finish. $($_.Exception.Message)"
+    }
+}
+
+function Send-FccPathChange {
+    $launcher = Join-Path (Get-FccBundlePath) 'bin\fcc-server.exe'
+    if (Test-Path -LiteralPath $launcher -PathType Leaf) {
+        try {
+            Invoke-NativeCommand -FilePath $launcher -Arguments @('--fcc-notify-environment')
+        } catch {
+            Write-Warning "Could not notify Windows of the saved PATH. Sign out and back in to refresh it. $($_.Exception.Message)"
+        }
+    }
+}
+
+function Set-FccBundlePathEntry {
+    param([switch] $Remove, [string] $AiderBin, [string] $UvInstallBin, [string] $VoiceToolBin)
+
+    $binPath = Join-Path (Get-FccBundlePath) 'bin'
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
+    try {
+        $userPath = $key.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        $kind = if ("Path" -iin $key.GetValueNames()) { $key.GetValueKind("Path") } else { "ExpandString" }
+        $expand = $kind -eq 'ExpandString'
+        $entries = @()
+        if ($userPath) {
+            $entries = @($userPath -split ';' | Where-Object {
+                -not (Test-PathEntry -Entry $_ -Directory $binPath -Expand:$expand)
+            })
+        }
+        if ($VoiceToolBin) {
+            $preferred = @($VoiceToolBin)
+            if ($UvInstallBin -and -not (Test-EquivalentPath -Left $VoiceToolBin -Right $UvInstallBin)) {
+                $preferred += $UvInstallBin
+            }
+            $prioritized = @()
+            foreach ($directory in $preferred) {
+                $matching = @($entries | Where-Object {
+                    Test-PathEntry -Entry $_ -Directory $directory -Expand:$expand
+                })
+                $prioritized += if ($matching.Count) { $matching[0] } else { $directory }
+                $entries = @($entries | Where-Object { $_ -cnotin $matching })
+            }
+            $entries = $prioritized + $entries
+        } elseif (-not $Remove) {
+            $entries = @($binPath) + $entries
+            $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';'
+            foreach ($directory in @($AiderBin, $UvInstallBin)) {
+                if (-not $directory) { continue }
+                $userMatch = $entries | Where-Object {
+                    Test-PathEntry -Entry $_ -Directory $directory -Expand:$expand
+                } | Select-Object -First 1
+                $machineMatch = $machinePath | Where-Object {
+                    Test-PathEntry -Entry $_ -Directory $directory
+                } | Select-Object -First 1
+                if (-not ($userMatch -or $machineMatch)) { $entries += $directory }
+            }
+        }
+        $newPath = $entries -join ';'
+        $pathChanged = $newPath -cne $userPath
+        if ($pathChanged) {
+            $key.SetValue("Path", $newPath, $kind)
+        }
+    } finally {
+        $key.Dispose()
+    }
+    # An interrupted activation can persist PATH before notifying other processes.
+    if (-not $Remove -or $pathChanged) { Send-FccPathChange }
+    $env:Path = ($env:Path -split ';' | Where-Object {
+        -not (Test-PathEntry -Entry $_ -Directory $binPath)
+    }) -join ';'
+    if (-not $Remove) { Prioritize-PathEntry $binPath }
+}
+
+function Confirm-FccBundle {
+    param([string] $Path)
+
+    $bin = Join-Path $Path 'bin'
+    foreach ($name in ($FccBundleCommands | Where-Object { $_ -ne 'fcc-update' })) {
+        if (-not (Test-Path -LiteralPath (Join-Path $bin "$name.exe") -PathType Leaf)) {
+            throw "The Windows bundle is missing $name.exe."
+        }
+    }
+    foreach ($relative in @('bin\fcc-update.cmd', 'runtime\python.exe', 'runtime\pythonw.exe')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Path $relative) -PathType Leaf)) {
+            throw "The Windows bundle is missing $relative."
+        }
+    }
+    $version = Get-Content -LiteralPath (Join-Path $Path 'version.txt') -Raw
+    if ($version.Trim() -cne $FccInstallVersion) { throw 'The Windows bundle version does not match the release.' }
+    $native = Get-ChildItem -LiteralPath $Path -Recurse -Force -File | Where-Object {
+        $_.Extension -in @('.exe', '.dll', '.pyd', '.ocx', '.sys')
+    }
+    foreach ($file in $native) {
+        $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+        if ($signature.Status -ne 'Valid') {
+            throw "The Windows bundle signature for $($file.Name) is $($signature.Status)."
+        }
+    }
+    $reported = Invoke-Utf8NativeCapture -FilePath (Join-Path $bin 'fcc-server.exe') -Arguments @('--version')
+    if ($reported.Trim() -cne "free-claude-code $FccInstallVersion") { throw 'The Windows bundle could not launch.' }
+}
+
+function Install-FccBundle {
+    $version = if ($FccInstallVersion) { $FccInstallVersion } else { '<selected-release>' }
+    $name = "free_claude_code-$version-windows-x64.zip"
+    Write-Host "+ download, verify, and install $name"
+    if ($DryRun) { return }
+
+    $tag = "v$FccInstallVersion"
+    $metadata = Invoke-RestMethod -Uri "https://api.github.com/repos/Alishahryar1/free-claude-code/releases/tags/$tag" -TimeoutSec 20 -Headers @{ Accept = 'application/vnd.github+json' }
+    $asset = @($metadata.assets | Where-Object { $_.name -ceq $name })
+    if ($metadata.draft -or $metadata.prerelease -or -not $metadata.immutable -or $metadata.tag_name -cne $tag -or
+        $asset.Count -ne 1 -or $asset[0].state -ne 'uploaded' -or
+        $asset[0].digest -cnotmatch '\Asha256:[a-f0-9]{64}\z') {
+        throw "The signed Windows bundle for $tag must be available in an immutable release."
+    }
+
+    $root = Get-FccBundlePath
+    $staging = "$root.staging"
+    $backup = "$root.previous"
+    New-Item -ItemType Directory -Path $staging -Force | Out-Null
+    try {
+        $archive = Join-Path $staging $name
+        $download = "https://github.com/Alishahryar1/free-claude-code/releases/download/$tag/$name"
+        Invoke-WebRequest -Uri $download -UseBasicParsing -OutFile $archive -TimeoutSec 180
+        $digest = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($asset[0].digest -cne "sha256:$digest" -or $asset[0].size -ne (Get-Item -LiteralPath $archive).Length) {
+            throw "The Windows bundle for $tag failed its release digest check."
+        }
+        $expanded = Join-Path $staging 'bundle'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::ExtractToDirectory($archive, $expanded)
+        Confirm-FccBundle -Path $expanded
+        Assert-NoFccProcessesRunning
+        if (Test-Path -LiteralPath $root) { [IO.Directory]::Move($root, $backup) }
+        try {
+            [IO.Directory]::Move($expanded, $root)
+        } catch {
+            if (Test-Path -LiteralPath $backup) { [IO.Directory]::Move($backup, $root) }
+            throw
+        }
+        if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force }
+    } finally {
+        Remove-Item -LiteralPath $staging -Recurse -Force
+    }
+}
+
 function Install-FreeClaudeCode {
     Assert-NoFccProcessesRunning
+    if (-not $VoiceLocal) {
+        Install-FccBundle
+        return
+    }
     $packageSpec = Get-PackageSpec
     $arguments = @(
         "tool",
@@ -1872,55 +2131,91 @@ function Configure-AndConfirmFreeClaudeCode {
     Start-InstallStep "PATH configuration"
     $iconPath = Join-Path $env:USERPROFILE ".fcc\app-icon.ico"
     if ($DryRun) {
-        Write-Host "+ uv tool update-shell"
-        Write-Host "+ uv tool dir --bin"
-        Write-Host "+ verify fcc-desktop, fcc-server, fcc-claude, fcc-codex, fcc-pi, fcc-opencode, fcc-cline, fcc-hermes, fcc-dsh, fcc-grok, fcc-muse, fcc-aider, and fcc-agy in the uv tool bin directory"
+        $binFormat = if ($VoiceLocal) { '<uv-tool-bin>' } else { '<fcc-windows-bin>' }
+        if ($VoiceLocal) {
+            Write-Host "+ uv tool dir --bin"
+        }
+        Write-Host "+ verify FCC commands in $binFormat"
         Write-Host "+ fcc-server --version"
         Export-FccDesktopIcon `
-            -DesktopCommand "<uv-tool-bin>\fcc-desktop.exe" `
+            -DesktopCommand "$binFormat\fcc-desktop.exe" `
             -IconPath $iconPath
         Install-FccDesktopShortcuts `
-            -DesktopCommand "<uv-tool-bin>\fcc-desktop.exe" `
+            -DesktopCommand "$binFormat\fcc-desktop.exe" `
             -IconPath $iconPath
+        if ($VoiceLocal) {
+            if (Test-FccBundleOnUserPath) { Write-Host "+ switch User PATH to $binFormat" }
+            else { Write-Host "+ uv tool update-shell" }
+        }
         return
     }
 
-    $uvCommand = Get-ApplicationCommand "uv"
-    if (-not $uvCommand) {
-        throw "uv is not available for PATH configuration."
-    }
-    Invoke-NativeCommand -FilePath $uvCommand.Source -Arguments @("tool", "update-shell")
-    $toolBin = Add-UvToolBinDirectory -UvPath $uvCommand.Source
-    Start-InstallStep "FCC verification"
-    $toolBinPath = ([IO.Path]::GetFullPath($toolBin)).TrimEnd(
-        [IO.Path]::DirectorySeparatorChar,
-        [IO.Path]::AltDirectorySeparatorChar
-    )
-    $installedCommands = @{}
-    foreach ($commandName in @("fcc-desktop", "fcc-server", "fcc-claude", "fcc-codex", "fcc-pi", "fcc-opencode", "fcc-cline", "fcc-hermes", "fcc-dsh", "fcc-grok", "fcc-muse", "fcc-aider", "fcc-agy", "fcc-doctor", "fcc-update.cmd")) {
-        $command = Get-ApplicationCommand $commandName
-        if (-not $command) {
-            throw "Free Claude Code installation did not create '$commandName'."
+    $originalPath = $env:Path
+    try {
+        if ($VoiceLocal) {
+            $uvCommand = Get-ApplicationCommand "uv"
+            if (-not $uvCommand) { throw "uv is not available for PATH configuration." }
+            $toolBin = Add-UvToolBinDirectory -UvPath $uvCommand.Source
+            Prioritize-PathEntry $toolBin
+        } else {
+            Set-FccBundlePathEntry -AiderBin $script:VerifiedAiderBin -UvInstallBin $script:VerifiedUvInstallBin
+            $toolBin = Join-Path (Get-FccBundlePath) 'bin'
         }
-        $commandDirectory = ([IO.Path]::GetFullPath((Split-Path -Parent $command.Source))).TrimEnd(
+        Start-InstallStep "FCC verification"
+        $toolBinPath = ([IO.Path]::GetFullPath($toolBin)).TrimEnd(
             [IO.Path]::DirectorySeparatorChar,
             [IO.Path]::AltDirectorySeparatorChar
         )
-        if (-not $commandDirectory.Equals($toolBinPath, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "'$commandName' resolved outside the uv tool bin directory: $($command.Source)"
+        $installedCommands = @{}
+        foreach ($name in $FccBundleCommands) {
+            $commandName = if ($name -eq 'fcc-update') { 'fcc-update.cmd' } else { $name }
+            $command = Get-ApplicationCommand $commandName
+            if (-not $command) {
+                throw "Free Claude Code installation did not create '$commandName'."
+            }
+            $commandDirectory = ([IO.Path]::GetFullPath((Split-Path -Parent $command.Source))).TrimEnd(
+                [IO.Path]::DirectorySeparatorChar,
+                [IO.Path]::AltDirectorySeparatorChar
+            )
+            if (-not $commandDirectory.Equals($toolBinPath, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "'$commandName' resolved outside the FCC command directory: $($command.Source)"
+            }
+            $installedCommands[$commandName] = $command.Source
         }
-        $installedCommands[$commandName] = $command.Source
+
+        Write-Host (Invoke-Utf8NativeCapture -FilePath $installedCommands["fcc-server"] -Arguments @("--version"))
+        $script:FccVerified = -not $VoiceLocal
+        Start-InstallStep "Desktop integration"
+        Export-FccDesktopIcon `
+            -DesktopCommand $installedCommands["fcc-desktop"] `
+            -IconPath $iconPath
+        Install-FccDesktopShortcuts `
+            -DesktopCommand $installedCommands["fcc-desktop"] `
+            -IconPath $iconPath
+    } finally {
+        if ($VoiceLocal) { $env:Path = $originalPath }
     }
 
-    Write-Host (Invoke-Utf8NativeCapture -FilePath $installedCommands["fcc-server"] -Arguments @("--version"))
-    $script:FccVerified = $true
-    Start-InstallStep "Desktop integration"
-    Export-FccDesktopIcon `
-        -DesktopCommand $installedCommands["fcc-desktop"] `
-        -IconPath $iconPath
-    Install-FccDesktopShortcuts `
-        -DesktopCommand $installedCommands["fcc-desktop"] `
-        -IconPath $iconPath
+    if ($VoiceLocal) {
+        if (Test-FccBundleOnUserPath) {
+            # Register the verified voice commands and retire the signed entry in one PATH write.
+            $uvInstallBin = Get-StandaloneUvPathEntry $uvCommand.Source
+            Set-FccBundlePathEntry -Remove -VoiceToolBin $toolBin -UvInstallBin $uvInstallBin
+        } else {
+            Invoke-NativeCommand -FilePath $uvCommand.Source -Arguments @("tool", "update-shell")
+            Set-FccBundlePathEntry -Remove
+        }
+        Prioritize-PathEntry $toolBin
+        $script:FccVerified = $true
+    }
+}
+
+function Test-PathEntry {
+    param([string] $Entry, [string] $Directory, [switch] $Expand)
+    if ($Expand) { $Entry = [Environment]::ExpandEnvironmentVariables($Entry) }
+    # Relative entries can resolve differently in the next shell.
+    if ($Entry -notmatch '^(?:[a-z]:[\\/]|[\\/]{2}[^\\/])') { return $false }
+    return Test-EquivalentPath -Left $Entry -Right $Directory
 }
 
 function Test-EquivalentPath {
@@ -1934,8 +2229,8 @@ function Test-EquivalentPath {
     }
     try {
         return [string]::Equals(
-            [IO.Path]::GetFullPath($Left),
-            [IO.Path]::GetFullPath($Right),
+            [IO.Path]::GetFullPath($Left).TrimEnd('\', '/'),
+            [IO.Path]::GetFullPath($Right).TrimEnd('\', '/'),
             [StringComparison]::OrdinalIgnoreCase
         )
     }
@@ -1950,6 +2245,7 @@ function Install-FccDesktopShortcuts {
         [string] $IconPath
     )
 
+    $description = "Run Free Claude Code in the background"
     $shortcutPaths = @(
         (Join-Path $env:USERPROFILE "Desktop\Free Claude Code.lnk"),
         (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Free Claude Code.lnk")
@@ -1967,6 +2263,10 @@ function Install-FccDesktopShortcuts {
             try {
                 $existingShortcut = $shell.CreateShortcut($shortcutPath)
                 $isFccShortcut = Test-EquivalentPath -Left $existingShortcut.TargetPath -Right $DesktopCommand
+                if ($existingShortcut.Description -ceq $description -and
+                    [IO.Path]::GetFileNameWithoutExtension($existingShortcut.TargetPath) -ieq 'fcc-desktop') {
+                    $isFccShortcut = $true
+                }
             }
             catch {
                 $isFccShortcut = $false
@@ -1982,13 +2282,16 @@ function Install-FccDesktopShortcuts {
         $shortcut.TargetPath = $DesktopCommand
         $shortcut.WorkingDirectory = $env:USERPROFILE
         $shortcut.IconLocation = "$IconPath,0"
-        $shortcut.Description = "Run Free Claude Code in the background"
+        $shortcut.Description = $description
         $shortcut.Save()
         if ($shortcutPath -eq $shortcutPaths[0]) { $script:DesktopReady = $true }
     }
 }
 
 function Show-InstallerNextSteps {
+    if ($Update) {
+        Write-Host "Open a new terminal from the Start menu before running FCC commands."
+    }
     Write-Host "`nFree Claude Code is installed and verified."
     if ($script:DesktopReady) {
         Write-Host "Open the Free Claude Code desktop shortcut to run it in the background."
@@ -2031,6 +2334,18 @@ function Show-InstallerNextSteps {
 }
 
 function Get-InstalledFccVersion {
+    $bundle = Get-FccBundlePath
+    $versionFile = Join-Path $bundle 'version.txt'
+    if (Test-FccBundleOnUserPath) {
+        # The archived version becomes visible before the installer finishes integration.
+        $installedVersion = Join-Path $bundle '.installed-version'
+        if ((Test-Path -LiteralPath $versionFile -PathType Leaf) -and
+            (Test-Path -LiteralPath $installedVersion -PathType Leaf)) {
+            $version = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+            if ($version -ceq (Get-Content -LiteralPath $installedVersion -Raw)) { return $version }
+        }
+        return $null
+    }
     # Look where uv usually lives without changing the PATH the installer preserves.
     $originalPath = $env:Path
     $originalErrorPreference = $ErrorActionPreference
@@ -2075,19 +2390,19 @@ function Compare-FccVersions {
 }
 
 function Test-FccUpdateNeeded {
-    $installed = Get-InstalledFccVersion
-    if (-not $installed) { return $true }
-    $comparison = Compare-FccVersions -Installed $installed -Release $FccInstallVersion
+    $version = Get-InstalledFccVersion
+    if (-not $version) { return $true }
+    $comparison = Compare-FccVersions -Installed $version -Release $FccInstallVersion
     if ($comparison -eq "current") {
-        Write-Host "FCC $installed is already up to date."
+        Write-Host "FCC $version is already up to date."
         return $false
     }
     if ($comparison -eq "newer") {
-        Write-Host "FCC $installed is newer than the published version $FccInstallVersion. No update needed."
+        Write-Host "FCC $version is newer than the published version $FccInstallVersion. No update needed."
         return $false
     }
     if ($comparison -eq "older") {
-        Write-Host "FCC update available: $installed -> $FccInstallVersion."
+        Write-Host "FCC update available: $version -> $FccInstallVersion."
     }
     return $true
 }
@@ -2198,31 +2513,45 @@ if (-not $DryRun) {
     if ($installerRelease -and $installerRelease -cne $FccInstallVersion) { throw "Invalid FCC release handoff." }
     Remove-Item Env:_FCC_INSTALLER_RELEASE -ErrorAction SilentlyContinue
     if (-not $installerRelease) {
+        $bundle = Get-FccBundlePath
+        if ((Test-Path -LiteralPath "$bundle.previous") -or (Test-Path -LiteralPath "$bundle.staging")) {
+            $recoveryLock = Lock-FccInstallation
+            try { Recover-FccBundleInstallation }
+            finally { $recoveryLock.Dispose() }
+        }
         $installerParameters = @{} + $PSBoundParameters
         Invoke-SelectedReleaseInstaller -InstallerArguments $installerParameters
         return
     }
-    if ($Update -and -not (Test-FccUpdateNeeded)) {
-        return
-    }
-    try {
-        $requirements = Get-ReleaseToolchain
-    } catch {
-        if ($FccInstallVersion) {
-            Write-Host "Could not load toolchain requirements for FCC $FccInstallVersion."
-            Write-Host "Retry: $(Get-InstallerRetryCommand)"
-        }
-        throw
-    }
-    # Windows on ARM emulates x64 for broader Python wheel support.
-    $PythonRequest = "cpython-$($requirements.Python)-windows-x86_64-none"
-    $MinUvVersion = $requirements.Uv
 }
-Initialize-InstallLog
-$script:InstallSteps["Preflight"] = "Not attempted"
 $installSucceeded = $false
 $installError = $null
+$installLock = $null
 try {
+    if (-not $DryRun) {
+        $installLock = Lock-FccInstallation
+        if (Test-Path -LiteralPath (Join-Path $env:USERPROFILE '.fcc.removing') -PathType Container) {
+            throw 'The previous FCC uninstall did not finish. Rerun the uninstaller before installing again.'
+        }
+        Recover-FccBundleInstallation
+        if (-not $VoiceLocal) { Assert-FccBundleMachinePath }
+        if ($Update -and -not (Test-FccUpdateNeeded)) {
+            if ($VoiceLocal -and -not (Test-FccBundleOnUserPath)) { Send-FccPathChange }
+            $installSucceeded = $true
+            return
+        }
+        try {
+            $requirements = Get-ReleaseToolchain
+        } catch {
+            Write-Host "Could not load toolchain requirements for FCC $FccInstallVersion."
+            throw
+        }
+        # Windows on ARM emulates x64 for broader Python wheel support.
+        $PythonRequest = "cpython-$($requirements.Python)-windows-x86_64-none"
+        $MinUvVersion = $requirements.Uv
+    }
+    $script:InstallSteps["Preflight"] = "Not attempted"
+    Initialize-InstallLog
     Start-InstallStep "Preflight"
     # Preserve the user's winning command before adding installer search paths.
     $script:OriginalOpenCode = Get-ApplicationCommand "opencode"
@@ -2247,7 +2576,9 @@ try {
         Select-CodingAgents
     }
 
-    $script:InstallSteps["uv"] = "Not attempted"
+    $needsUv = $VoiceLocal -or $script:EnableRtkHeadroom -or
+        ($script:InstallAider -and -not (Find-InstalledCodingAgent "aider"))
+    if ($needsUv) { $script:InstallSteps["uv"] = "Not attempted" }
     $selectedAgents = @()
     foreach ($choice in @(
         @("Claude Code", $script:InstallClaudeCode), @("Codex", $script:InstallCodex),
@@ -2282,8 +2613,15 @@ try {
 
     Confirm-SelectedPrerequisites
 
-    Start-InstallStep "uv" "Ensuring uv $MinUvVersion or newer is installed"
-    Ensure-Uv
+    if ($needsUv) {
+        Start-InstallStep "uv" "Ensuring uv $MinUvVersion or newer is installed"
+        try {
+            Ensure-Uv
+        } catch {
+            if ($script:EnableRtkHeadroom -or -not (Skip-AiderOnWindowsPolicyFailure -Exception $_.Exception)) { throw }
+            $script:InstallSteps["Aider"] = "Skipped"
+        }
+    }
 
     Ensure-SelectedCodingAgents
 
@@ -2300,6 +2638,9 @@ try {
         Start-InstallStep "Headroom configuration"
         Configure-HeadroomForSelectedAgents
     }
+    if (-not $DryRun -and -not $VoiceLocal) {
+        Set-Content -LiteralPath (Join-Path (Get-FccBundlePath) '.installed-version') -Value $FccInstallVersion -Encoding ascii -NoNewline
+    }
     Complete-InstallStep
     $installSucceeded = $true
 }
@@ -2309,11 +2650,15 @@ catch {
     throw
 }
 finally {
-    $cancelled = (-not $installSucceeded) -and ($null -eq $installError)
-    if ($cancelled) { Complete-InstallStep "Cancelled" }
-    elseif (-not $installSucceeded) { Complete-InstallStep "Failed" }
-    Show-InstallReport -Succeeded $installSucceeded -Cancelled $cancelled
-    if ($script:FccVerified) { Show-InstallerNextSteps }
+    try {
+        $cancelled = (-not $installSucceeded) -and ($null -eq $installError)
+        if ($cancelled) { Complete-InstallStep "Cancelled" }
+        elseif (-not $installSucceeded) { Complete-InstallStep "Failed" }
+        Show-InstallReport -Succeeded $installSucceeded -Cancelled $cancelled
+        if ($script:FccVerified) { Show-InstallerNextSteps }
+    } finally {
+        if ($installLock) { $installLock.Dispose() }
+    }
 }
 
 if ($DryRun) { Write-Host "Dry run complete. No changes were made." }

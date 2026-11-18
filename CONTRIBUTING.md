@@ -16,6 +16,25 @@ Changes to `assets/`, `scripts/`, `src/`, `pyproject.toml`, or `uv.lock` require
 
 PRs without changes to those paths must not use a release prefix. Do not edit version numbers. Publishing calculates the version after merge, creates its Git tag, and publishes to PyPI and GitHub Releases.
 
+## Windows release signing
+
+The post-merge workflow builds the x64 ZIP from the exact staged FCC wheel and the locked dependencies. It preserves valid upstream signatures, signs the unsigned executables and libraries, and checks the ZIP's GitHub build attestation before publishing the release.
+
+Before enabling this release path, configure an [Azure Artifact Signing Public Trust profile](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart) for the verified publisher. Create a GitHub Actions environment named `windows-signing`, restricted to the `main` deployment branch. Follow the [Azure OIDC setup](https://github.com/Azure/artifact-signing-action/blob/main/docs/OIDC.md) for that environment and grant the federated identity the Artifact Signing Certificate Profile Signer role on the profile. Set these environment variables in Actions.
+
+- `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
+- `ARTIFACT_SIGNING_ENDPOINT`, `ARTIFACT_SIGNING_ACCOUNT`, `ARTIFACT_SIGNING_PROFILE`
+
+Enable [immutable GitHub releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases) before publishing a Windows bundle. In the `pypi` environment, set `RELEASE_SETTINGS_TOKEN` to a fine-grained token scoped to this repository with only [Administration read access](https://docs.github.com/en/rest/repos/repos#check-if-immutable-releases-are-enabled-for-a-repository). The publisher uses this token to check the setting before publishing to PyPI or GitHub. The installer checks immutable release metadata and the ZIP digest before validating the native signatures and executing any bundled code.
+
+The first signed Windows release stays in draft after signing. On a disposable Windows 11 test system with Smart App Control set to On, run `citool.exe -lp` from an administrator shell and confirm `VerifiedAndReputableDesktop` is currently enforced. Then authenticate `gh` in a normal PowerShell session and run `./scripts/windows/accept_release_candidate.ps1 -Tag <tag>`. It retrieves the signed draft ZIP and runs the release's installer. Run `fcc-doctor`, start FCC Desktop and the proxy, and exercise a harness launcher. Repeat with `-Update` over the previous release and run the candidate's uninstaller. Check the Code Integrity log for blocked components using the [Microsoft signing test procedure](https://learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/test-your-app-with-smart-app-control).
+
+Once the candidate passes, dispatch the **Post merge** workflow on `main` with the draft's commit as `release_commit` and the tested ZIP's digest as `accepted_windows_digest` in `sha256:<lowercase hex>` form. The publisher checks the exact ZIP, release commit, and staged wheel before releasing it. Later releases publish automatically after signing and verification. If verification rejects an uploaded ZIP, inspect the draft asset before removing it and retrying the same release commit.
+
+If acceptance finds a bug that requires a code change, dispatch the workflow for the corrected main commit and set `supersedes_windows_candidate` to the rejected draft tag. This allocates a new version and keeps the rejected candidate in draft. Include the same rejected tag when dispatching acceptance of the corrected candidate.
+
+The default Windows install uses the signed bundle. `-VoiceLocal` uses the uv install with the optional PyTorch dependencies.
+
 ## Development Setup
 
 Install [uv](https://docs.astral.sh/uv/), then run directly from the checkout. uv automatically installs the Python version required by the project.

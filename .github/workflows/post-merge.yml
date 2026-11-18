@@ -11,6 +11,14 @@ on:
         description: Full main commit SHA to retry (defaults to this workflow commit)
         required: false
         type: string
+      accepted_windows_digest:
+        description: SHA-256 digest of the first signed Windows bundle after Smart App Control acceptance
+        required: false
+        type: string
+      supersedes_windows_candidate:
+        description: Rejected draft tag replaced by this release commit
+        required: false
+        type: string
   push:
     branches: [main]
 
@@ -77,15 +85,17 @@ jobs:
           path: ${{ steps.environment.outputs.dependencies-path }}
           key: ${{ steps.environment.outputs.dependencies-key }}
 
-  publish:
-    name: Publish to PyPI
+  stage:
+    name: Stage Python distributions
     if: github.ref == 'refs/heads/main'
     runs-on: macos-latest
     timeout-minutes: 15
-    environment: pypi
     permissions:
       contents: write
-      id-token: write
+    outputs:
+      version: ${{ steps.stage.outputs.version }}
+      windows_needed: ${{ steps.stage.outputs.windows_needed }}
+      windows_acceptance_required: ${{ steps.stage.outputs.windows_acceptance_required }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -100,12 +110,215 @@ jobs:
           lookup-only: "true"
           sync-dependencies: "false"
 
+      - name: Stage release
+        id: stage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_COMMIT: ${{ inputs.release_commit || github.sha }}
+          CI_PYTHON: ${{ steps.environment.outputs.python-version }}
+          SUPERSEDES_WINDOWS_CANDIDATE: ${{ inputs.supersedes_windows_candidate }}
+        run: |
+          uv run --no-project --python "$CI_PYTHON" python -m scripts.publish_release \
+            --repository "$RELEASE_REPOSITORY" --commit "$RELEASE_COMMIT" --stage-only \
+            --supersedes-windows-candidate "$SUPERSEDES_WINDOWS_CANDIDATE"
+
+  windows:
+    name: Stage signed Windows bundle
+    needs: stage
+    if: needs.stage.outputs.windows_needed == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 25
+    environment: windows-signing
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    env:
+      RELEASE_REPOSITORY: ${{ github.repository }}
+      RELEASE_VERSION: ${{ needs.stage.outputs.version }}
+    steps:
+      - name: Check for an uploaded bundle
+        id: asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $name = "free_claude_code-$env:RELEASE_VERSION-windows-x64.zip"
+          $release = gh release view "v$env:RELEASE_VERSION" --repo $env:RELEASE_REPOSITORY --json isDraft,assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $release.isDraft) { throw 'Expected a draft release' }
+          $uploaded = @($release.assets | Where-Object { $_.name -ceq $name -and $_.state -eq 'uploaded' }).Count -eq 1
+          "uploaded=$($uploaded.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        if: steps.asset.outputs.uploaded != 'true'
+        with:
+          ref: ${{ inputs.release_commit || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up CI environment
+        id: environment
+        if: steps.asset.outputs.uploaded != 'true'
+        uses: ./.github/actions/ci-environment
+        with:
+          runner-label: windows-2025
+          lookup-only: 'true'
+          sync-dependencies: 'false'
+
+      - name: Build bundle from staged wheel
+        id: build
+        if: steps.asset.outputs.uploaded != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_PYTHON: ${{ steps.environment.outputs.python-version }}
+        shell: pwsh
+        run: |
+          $tag = "v$env:RELEASE_VERSION"
+          $wheel = "free_claude_code-$env:RELEASE_VERSION-py3-none-any.whl"
+          $root = $env:RUNNER_TEMP
+          $release = gh release view $tag --repo $env:RELEASE_REPOSITORY --json isDraft,assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $release.isDraft) { throw "Expected draft $tag" }
+          gh release download $tag --repo $env:RELEASE_REPOSITORY --pattern $wheel --dir $root
+          if ($LASTEXITCODE -ne 0) { throw "Could not download $wheel" }
+          $env:FCC_SIGNING_WHEEL = Join-Path $root $wheel
+          $asset = @($release.assets | Where-Object name -eq $wheel)
+          $digest = (Get-FileHash -LiteralPath $env:FCC_SIGNING_WHEEL).Hash.ToLowerInvariant()
+          if ($asset.Count -ne 1 -or $asset[0].digest -cne "sha256:$digest") { throw "Invalid wheel digest" }
+          "wheel-digest=sha256:$digest" >> $env:GITHUB_OUTPUT
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $env:FCC_SIGNING_VS = Join-Path $vs 'Common7\Tools\VsDevCmd.bat'
+          cmd.exe /d /c 'call "%FCC_SIGNING_VS%" -arch=amd64 -host_arch=amd64 && uv run --no-project --python "%CI_PYTHON%" python -m scripts.build_windows_bundle --wheel "%FCC_SIGNING_WHEEL%" --version "%RELEASE_VERSION%" --output "%RUNNER_TEMP%\bundle"'
+          if ($LASTEXITCODE -ne 0) { throw 'Windows bundle build failed' }
+          $files = @(& ./scripts/windows/signing_files.ps1 -Bundle (Join-Path $root 'bundle'))
+          if ($files.Count -eq 0) { throw 'Missing unsigned FCC launchers' }
+          $relative = $files | ForEach-Object { [IO.Path]::GetRelativePath($root, $_) }
+          Set-Content -LiteralPath (Join-Path $root 'fcc-sign-files.txt') -Value $relative -Encoding utf8NoBOM
+
+      - name: Sign in to Azure with OIDC
+        if: steps.asset.outputs.uploaded != 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign native binaries
+        if: steps.asset.outputs.uploaded != 'true'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
+        with:
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files-catalog: ${{ runner.temp }}\fcc-sign-files.txt
+
+      - name: Verify and archive the signed bundle
+        if: steps.asset.outputs.uploaded != 'true'
+        id: archive
+        shell: pwsh
+        env:
+          WHEEL_DIGEST: ${{ steps.build.outputs.wheel-digest }}
+        run: |
+          $name = "free_claude_code-$env:RELEASE_VERSION-windows-x64.zip"
+          $bundle = Join-Path $env:RUNNER_TEMP 'bundle'
+          & ./scripts/windows/signing_files.ps1 -Bundle $bundle -RequireSigned
+          $checkLauncher = @'
+          import subprocess
+          import sys
+          result = subprocess.run(
+              [sys.argv[1], "--version"], stdin=subprocess.DEVNULL, capture_output=True,
+              text=True, creationflags=subprocess.DETACHED_PROCESS, check=True,
+          )
+          if result.stdout.strip() != f"free-claude-code {sys.argv[2]}":
+              raise SystemExit("Signed launcher did not preserve stdout")
+          '@
+          & (Join-Path $bundle 'runtime\python.exe') -c $checkLauncher (Join-Path $bundle 'bin\FCC-SERVER.EXE') $env:RELEASE_VERSION
+          if ($LASTEXITCODE -ne 0) { throw 'Signed launcher test failed' }
+          $archive = Join-Path $env:RUNNER_TEMP $name
+          [IO.Compression.ZipFile]::CreateFromDirectory($bundle, $archive)
+          $commit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Could not identify the Windows build commit' }
+          $predicate = Join-Path $env:RUNNER_TEMP 'fcc-windows-provenance.json'
+          @{ version = $env:RELEASE_VERSION; commit = $commit; wheel_digest = $env:WHEEL_DIGEST } |
+            ConvertTo-Json -Compress | Set-Content -LiteralPath $predicate -Encoding utf8NoBOM
+          "path=$archive" >> $env:GITHUB_OUTPUT
+          "predicate=$predicate" >> $env:GITHUB_OUTPUT
+
+      - name: Attest the verified Windows bundle
+        if: steps.asset.outputs.uploaded != 'true'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.archive.outputs.path }}
+          predicate-type: https://github.com/${{ github.repository }}/attestations/windows-release/v1
+          predicate-path: ${{ steps.archive.outputs.predicate }}
+
+      - name: Stage the signed Windows bundle
+        if: steps.asset.outputs.uploaded != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_ARCHIVE: ${{ steps.archive.outputs.path }}
+        run: |
+          $tag = "v$env:RELEASE_VERSION"
+          $archive = $env:BUNDLE_ARCHIVE
+          $name = [IO.Path]::GetFileName($archive)
+          $release = gh release view $tag --repo $env:RELEASE_REPOSITORY --json isDraft,assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $release.isDraft) { throw "Expected draft $tag" }
+          $existing = @($release.assets | Where-Object name -eq $name)
+          if ($existing.Count -eq 1 -and $existing[0].state -eq 'starter') {
+            gh release delete-asset $tag $name --repo $env:RELEASE_REPOSITORY --yes
+            if ($LASTEXITCODE -ne 0) { throw 'Could not remove interrupted upload' }
+          }
+          gh release upload $tag $archive --repo $env:RELEASE_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'Could not upload Windows bundle' }
+          $release = gh release view $tag --repo $env:RELEASE_REPOSITORY --json assets | ConvertFrom-Json
+          $asset = @($release.assets | Where-Object name -eq $name)
+          $digest = (Get-FileHash -LiteralPath $archive).Hash.ToLowerInvariant()
+          if ($LASTEXITCODE -ne 0 -or $asset.Count -ne 1 -or $asset[0].digest -cne "sha256:$digest" -or $asset[0].size -ne (Get-Item -LiteralPath $archive).Length) {
+            throw 'Uploaded Windows bundle failed verification'
+          }
+
+  publish:
+    name: Publish to PyPI
+    needs: [stage, windows]
+    if: >-
+      ${{ !cancelled() &&
+          needs.stage.result == 'success' && needs.stage.outputs.version != '' &&
+          (needs.windows.result == 'success' || needs.windows.result == 'skipped') &&
+          (needs.stage.outputs.windows_acceptance_required != 'true' || inputs.accepted_windows_digest != '') }}
+    runs-on: macos-latest
+    timeout-minutes: 15
+    environment: pypi
+    permissions:
+      attestations: read
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up CI environment
+        id: environment
+        uses: ./.github/actions/ci-environment
+        with:
+          runner-label: macos-latest
+          lookup-only: 'true'
+          sync-dependencies: 'false'
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REPOSITORY: ${{ github.repository }}
           RELEASE_COMMIT: ${{ inputs.release_commit || github.sha }}
           CI_PYTHON: ${{ steps.environment.outputs.python-version }}
+          ACCEPTED_WINDOWS_DIGEST: ${{ inputs.accepted_windows_digest }}
+          SUPERSEDES_WINDOWS_CANDIDATE: ${{ inputs.supersedes_windows_candidate }}
+          RELEASE_SETTINGS_TOKEN: ${{ secrets.RELEASE_SETTINGS_TOKEN }}
         run: |
           uv run --no-project --python "$CI_PYTHON" python -m scripts.publish_release \
-            --repository "$RELEASE_REPOSITORY" --commit "$RELEASE_COMMIT"
+            --repository "$RELEASE_REPOSITORY" --commit "$RELEASE_COMMIT" \
+            --accepted-windows-digest "$ACCEPTED_WINDOWS_DIGEST" \
+            --supersedes-windows-candidate "$SUPERSEDES_WINDOWS_CANDIDATE"

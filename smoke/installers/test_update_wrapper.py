@@ -132,6 +132,10 @@ def test_installed_update_delegates_and_survives_replacement(
         if powershell is None:
             pytest.skip("Windows PowerShell is required for the native update wrapper")
         env["PSMODULEPATH"] = powershell_module_paths[powershell]
+        for variable in ("USERPROFILE", "APPDATA", "LOCALAPPDATA"):
+            directory = area / variable.lower()
+            directory.mkdir()
+            env[variable] = str(directory)
         body = """param([switch] $Update, [switch] $VoiceLocal, [string] $TorchBackend)
 $answer = Read-Host 'Continue'
 Write-Output "installer:$Update|$VoiceLocal|$TorchBackend|$answer|$env:FCC_INSTALL_VERSION"
@@ -156,8 +160,8 @@ printf 'exit 99\\n' > "$FCC_TEST_LAUNCHER"
         if os.name == "nt":
             # The real installer binds the options the stub reports.
             body = body.split("\n", 1)[1]
-            body += 'Write-Output "marker:[$env:_FCC_INSTALLER_RELEASE]"\nreturn\n'
-            boundary = "\nInitialize-InstallLog\n"
+            body += 'Write-Output "marker:[$env:_FCC_INSTALLER_RELEASE]"\n$installSucceeded = $true\nreturn\n'
+            boundary = "\n    Initialize-InstallLog\n"
             expected = "installer:True|True|cu130|yes|2.0.0"
         else:
             body += 'printf "marker:[%s]\\n" "${_FCC_INSTALLER_RELEASE-}"\nexit 0\n'

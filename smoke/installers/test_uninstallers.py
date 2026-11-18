@@ -621,6 +621,7 @@ def powershell_uninstall_harness(
     tmp_path: Path,
     request: pytest.FixtureRequest,
     powershell_module_paths,
+    windows_user_environment,
 ) -> PowerShellUninstallHarness:
     powershell = request.param
     if powershell is None or os.name != "nt":
@@ -752,7 +753,17 @@ function Get-Process {
         }
     }
 }
-$installer = [scriptblock]::Create([IO.File]::ReadAllText($env:FCC_UNINSTALLER))
+$source = [IO.File]::ReadAllText($env:FCC_UNINSTALLER).Replace(
+    '[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")',
+    '[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($env:FCC_TEST_ENV_KEY)'
+).Replace(
+    '[Environment]::GetEnvironmentVariable("Path", "User")',
+    '$env:FCC_TEST_USER_PATH'
+).Replace(
+    "`$null = Invoke-NativeResult -FilePath `$launcher -Arguments @('--fcc-notify-environment')",
+    'Add-Content -LiteralPath $env:CALL_LOG -Value "fcc-path-changed"'
+)
+$installer = [scriptblock]::Create($source)
 $uninstallOptions = @{}
 if ($env:UNINSTALL_DRY_RUN -eq "1") {
     $uninstallOptions.DryRun = $true
@@ -802,6 +813,8 @@ if ($env:UNINSTALL_KEEP_INTEGRATIONS -eq "1") {
             "FAIL_STEP": "",
             "UNINSTALL_DRY_RUN": "0",
             "UNINSTALL_KEEP_INTEGRATIONS": "0",
+            "FCC_TEST_ENV_KEY": windows_user_environment,
+            "FCC_TEST_USER_PATH": "",
         }
     )
     return PowerShellUninstallHarness(
@@ -860,6 +873,244 @@ def test_uninstall_ps1_removes_and_verifies_only_fcc(
     ]
 
 
+@pytest.mark.parametrize("include_uv", [False, True])
+@pytest.mark.parametrize("expandable_bundle_entry", [False, True])
+def test_uninstall_ps1_removes_bundle_and_its_path_without_usable_uv(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+    include_uv: bool,
+    expandable_bundle_entry: bool,
+) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows registry test")
+
+    import winreg
+
+    harness = powershell_uninstall_harness
+    harness.remove_entry_points()
+    bundle_bin = harness.fcc_home / "windows-app" / "bin"
+    bundle_bin.mkdir(parents=True)
+    harness.env["FCC_TEST_USER_PATH"] = (
+        f"{bundle_bin}\\" if expandable_bundle_entry else str(bundle_bin)
+    )
+    (bundle_bin / "fcc-server.exe").touch()
+    desktop = harness.home / "Desktop" / "Free Claude Code.lnk"
+    shortcut_target = bundle_bin / "fcc-desktop.exe"
+    shortcut_target.touch()
+    _create_windows_shortcut(
+        harness.powershell, desktop, shortcut_target, harness.env["PSMODULEPATH"]
+    )
+    bundle_entry = (
+        "%USERPROFILE%\\.fcc\\windows-app\\bin\\"
+        if expandable_bundle_entry
+        else str(bundle_bin)
+    )
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        harness.env["FCC_TEST_ENV_KEY"],
+        0,
+        winreg.KEY_ALL_ACCESS,
+    ) as key:
+        winreg.SetValueEx(
+            key, "Path", 0, winreg.REG_EXPAND_SZ, f"{bundle_entry};%USERPROFILE%\\bin"
+        )
+
+        result = harness.run(
+            include_uv=include_uv, fail_step="tool-dir", keep_integrations=True
+        )
+        assert winreg.QueryValueEx(key, "Path") == (
+            r"%USERPROFILE%\bin",
+            winreg.REG_EXPAND_SZ,
+        )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not bundle_bin.exists()
+    assert not desktop.exists()
+    assert "fcc-path-changed" in harness.calls()
+    assert "uv could not verify any separate uv installation" in result.stdout
+    uv_calls = [call for call in harness.calls() if call.startswith("uv:")]
+    assert uv_calls == (["uv:tool dir --bin"] if include_uv else [])
+    assert (harness.bin_dir / "claude.cmd").exists()
+
+
+def test_uninstall_ps1_cleans_integrations_with_active_uv_install(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+) -> None:
+    harness = powershell_uninstall_harness
+    bundle = harness.fcc_home / "windows-app" / "bin"
+    bundle.mkdir(parents=True)
+    (bundle / "fcc-doctor.exe").write_bytes(b"stale inactive launcher")
+    harness.env["FCC_TEST_USER_PATH"] = str(harness.tool_bin)
+
+    result = harness.run()
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "doctor:--disconnect-integrations" in harness.calls()
+    assert not harness.fcc_home.exists()
+
+
+@pytest.mark.parametrize("registered_route", ["none", "voice", "both"])
+@pytest.mark.parametrize("include_uv", [False, True])
+def test_uninstall_ps1_requires_usable_uv_for_registered_uv_commands(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+    registered_route: str,
+    include_uv: bool,
+) -> None:
+    harness = powershell_uninstall_harness
+    bundle_bin = harness.fcc_home / "windows-app" / "bin"
+    bundle_bin.mkdir(parents=True)
+    (bundle_bin / "fcc-server.exe").touch()
+    if registered_route == "none":
+        harness.remove_entry_points()
+    else:
+        # Simulate running from a shell opened before the voice PATH change.
+        harness.env["FCC_TEST_USER_PATH"] = str(harness.tool_bin)
+        harness.env["PATH"] = os.pathsep.join((str(bundle_bin), harness.env["PATH"]))
+        if registered_route == "both":
+            harness.env["FCC_TEST_USER_PATH"] = f"{bundle_bin};{harness.tool_bin}"
+
+    removed = harness.run(
+        include_uv=include_uv, fail_step="tool-dir", keep_integrations=True
+    )
+
+    if registered_route != "none":
+        assert removed.returncode != 0
+        diagnostic = (
+            "Could not determine the uv tool bin directory"
+            if include_uv
+            else "uv is required"
+        )
+        assert diagnostic in removed.stderr
+        assert (harness.fcc_home / "config.json").is_file()
+        assert (harness.tool_bin / "fcc-server.cmd").is_file()
+    else:
+        assert removed.returncode == 0, removed.stdout + removed.stderr
+        assert not harness.fcc_home.exists()
+
+
+def test_uninstall_ps1_checks_for_commands_outside_the_current_uv_tool_bin(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+) -> None:
+    harness = powershell_uninstall_harness
+    bundle_bin = harness.fcc_home / "windows-app" / "bin"
+    bundle_bin.mkdir(parents=True)
+    (bundle_bin / "fcc-server.exe").touch()
+    harness.env["FCC_TEST_USER_PATH"] = f"{bundle_bin};{harness.tool_bin}"
+    other_bin = harness.home / "new-uv-bin"
+    other_bin.mkdir()
+    harness.env["FAKE_TOOL_BIN"] = str(other_bin)
+
+    removed = harness.run(keep_integrations=True)
+
+    assert removed.returncode != 0
+    assert "Free Claude Code command remains on PATH" in removed.stderr
+    assert (harness.tool_bin / "fcc-server.cmd").is_file()
+    assert (harness.fcc_home / "config.json").is_file()
+
+
+def test_uninstall_ps1_finds_uv_in_saved_path_from_stale_terminal(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+) -> None:
+    harness = powershell_uninstall_harness
+    bundle_bin = harness.fcc_home / "windows-app" / "bin"
+    bundle_bin.mkdir(parents=True)
+    uv_bin = harness.home / "custom-uv-bin"
+    uv_bin.mkdir()
+    (harness.bin_dir / "uv.cmd").rename(uv_bin / "uv.cmd")
+    harness.env["FCC_TEST_USER_PATH"] = f"{uv_bin};{harness.tool_bin}"
+
+    removed = harness.run(keep_integrations=True)
+
+    assert removed.returncode == 0, removed.stdout + removed.stderr
+    assert not harness.fcc_home.exists()
+    assert not (harness.tool_bin / "fcc-server.cmd").exists()
+
+
+@pytest.mark.parametrize("include_uv", [False, True])
+@pytest.mark.parametrize("locked_bundle", [False, True])
+def test_uninstall_ps1_can_retry_signed_bundle_purge_without_usable_uv(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+    include_uv: bool,
+    locked_bundle: bool,
+):
+    if os.name != "nt":
+        pytest.skip("Windows registry test")
+
+    import winreg
+
+    harness = powershell_uninstall_harness
+    harness.remove_entry_points()
+    bundle_bin = harness.fcc_home / "windows-app" / "bin"
+    bundle_bin.mkdir(parents=True)
+    (bundle_bin / "fcc-server.exe").touch()
+    data_root = bundle_bin.parent if locked_bundle else harness.fcc_home
+    data = data_root / "z-locked" / "data.txt"
+    data.parent.mkdir()
+    data.write_bytes(b"test data")
+
+    harness.env["FCC_TEST_USER_PATH"] = str(bundle_bin)
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        harness.env["FCC_TEST_ENV_KEY"],
+        0,
+        winreg.KEY_ALL_ACCESS,
+    ) as key:
+        winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, str(bundle_bin))
+        with data.open("rb"):
+            interrupted = harness.run(
+                include_uv=include_uv, fail_step="tool-dir", keep_integrations=True
+            )
+        harness.env["FCC_TEST_USER_PATH"], _ = winreg.QueryValueEx(key, "Path")
+
+    assert interrupted.returncode != 0
+    assert data.is_file()
+    assert bundle_bin.is_dir()
+    removed = harness.run(
+        include_uv=include_uv, fail_step="tool-dir", keep_integrations=True
+    )
+    assert removed.returncode == 0, removed.stdout + removed.stderr
+    assert not harness.fcc_home.exists()
+    unchanged = harness.run(include_uv=False)
+    assert unchanged.returncode == 0, unchanged.stdout + unchanged.stderr
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_uninstall_ps1_resumes_after_signed_home_was_detached(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+    empty: bool,
+):
+    harness = powershell_uninstall_harness
+    harness.remove_entry_points()
+    removing = harness.home / ".fcc.removing"
+    if empty:
+        (harness.fcc_home / "config.json").unlink()
+    else:
+        launcher = harness.fcc_home / "windows-app" / "bin" / "fcc-server.exe"
+        launcher.parent.mkdir(parents=True)
+        launcher.touch()
+    harness.fcc_home.rename(removing)
+
+    removed = harness.run(fail_step="tool-dir")
+
+    assert removed.returncode == 0, removed.stdout + removed.stderr
+    assert not harness.fcc_home.exists()
+    assert not removing.exists()
+    assert not any(call.startswith(("uv:", "doctor:")) for call in harness.calls())
+    assert ("fcc-path-changed" in harness.calls()) == (not empty)
+
+
+def test_uninstall_ps1_recognizes_bundle_after_interrupted_activation(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+):
+    harness = powershell_uninstall_harness
+    harness.remove_entry_points()
+    (harness.fcc_home / "windows-app.previous" / "bin").mkdir(parents=True)
+
+    removed = harness.run(include_uv=False, keep_integrations=True)
+
+    assert removed.returncode == 0, removed.stdout + removed.stderr
+    assert not harness.fcc_home.exists()
+
+
 def test_uninstall_ps1_preserves_unowned_desktop_shortcut(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
@@ -883,6 +1134,24 @@ def test_uninstall_ps1_preserves_unowned_desktop_shortcut(
     assert result.returncode == 0, result.stderr
     assert "not managed by Free Claude Code" in result.stdout
     assert desktop_shortcut.read_bytes() == original_shortcut
+
+
+def test_uninstall_ps1_preserves_installation_during_concurrent_operation(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+):
+    harness = powershell_uninstall_harness
+    lock = harness.home / ".fcc-install.lock"
+    with lock.open("wb"):
+        busy = harness.run()
+    assert busy.returncode != 0
+    assert "Could not lock the FCC installation" in busy.stderr
+    assert harness.fcc_home.is_dir()
+    assert not harness.calls()
+
+    removed = harness.run()
+    assert removed.returncode == 0, removed.stdout + removed.stderr
+    assert not harness.fcc_home.exists()
+    assert not lock.exists()
 
 
 def test_uninstall_ps1_is_idempotent_when_tool_is_already_absent(
