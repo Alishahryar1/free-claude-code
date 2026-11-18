@@ -393,7 +393,7 @@ class _ChatStreamPresenter:
 
         yield from self._extra_reasoning_events(delta, self._output)
 
-        if delta.refusal:
+        if isinstance(self._output, AnthropicChatStreamOutput) and delta.refusal:
             self._refused = True
             yield from _iter_visible_text_events(self._output, delta.refusal)
         if delta.content:

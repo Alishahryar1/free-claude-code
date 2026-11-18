@@ -1370,7 +1370,9 @@ async def test_automatic_web_search_max_uses_limits_current_request(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("include_text", [False, True])
 async def test_automatic_web_search_keeps_limit_across_client_tool_results(
+    include_text: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     search = AsyncMock(return_value=[])
@@ -1389,23 +1391,17 @@ async def test_automatic_web_search_keeps_limit_across_client_tool_results(
     assert isinstance(first, JSONResponse)
     initial = _json_body(first)
     assert initial["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    result_blocks = [
+        {"type": "tool_result", "tool_use_id": "call_1", "content": "retrieved"}
+    ]
+    if include_text:
+        result_blocks.append({"type": "text", "text": "Continue with this result"})
     request.messages.extend(
         [
             Message.model_validate(
                 {"role": "assistant", "content": initial["content"]}
             ),
-            Message.model_validate(
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": "call_1",
-                            "content": "retrieved",
-                        }
-                    ],
-                }
-            ),
+            Message.model_validate({"role": "user", "content": result_blocks}),
         ]
     )
     provider.events = _provider_tool_events(arguments={"query": "follow-up"})

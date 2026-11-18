@@ -306,6 +306,27 @@ async def test_chat_to_messages_preserves_explicit_refusal(
 
 
 @pytest.mark.asyncio
+async def test_chat_refusal_is_not_sent_as_ordinary_responses_text() -> None:
+    payload = _events_for("chat")[-1]
+    payload["choices"][0]["delta"] = {"refusal": "I can't answer that."}
+    async with _harness("chat", lambda _: (200, [payload])) as (send, _, _):
+        events = [
+            frame
+            async for frame in collected_frames(
+                send("responses", [{"role": "user", "content": "Request"}]),
+                protocol="responses",
+            )
+        ]
+    parsed = parse_sse_text("".join(events))
+    assert parsed[-1].event == "response.completed"
+    assert all(
+        not event.data["delta"].strip()
+        for event in parsed
+        if event.event == "response.output_text.delta"
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("opaque_only", [False, True])
 async def test_responses_messages_roundtrip_preserves_bound_reasoning(opaque_only):
     native = [

@@ -259,7 +259,7 @@ def _normalized_search_history(messages: list[Message]) -> tuple[list[Message], 
         if message.role == "user" and not (
             isinstance(content, list)
             and content
-            and all(isinstance(block, ContentBlockToolResult) for block in content)
+            and isinstance(content[0], ContentBlockToolResult)
         ):
             used_this_turn = 0
         if not isinstance(content, list) or not any(
