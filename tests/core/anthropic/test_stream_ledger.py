@@ -24,7 +24,7 @@ def _payload(event: str) -> dict:
         ("stop", "end_turn"),
         ("length", "max_tokens"),
         ("tool_calls", "tool_use"),
-        ("content_filter", "end_turn"),
+        ("content_filter", "refusal"),
         (None, "end_turn"),
     ],
 )

@@ -11,6 +11,7 @@ import httpx2
 import pytest
 
 from free_claude_code.application.execution import ProviderExecutor
+from free_claude_code.application.response_collection import collected_frames
 from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
@@ -247,8 +248,6 @@ async def _harness(
 
 
 async def _saved_reply(stream, wire):
-    from free_claude_code.application.response_collection import collected_frames
-
     stream = collected_frames(stream, protocol=wire)
     if wire == "messages":
         message, error, saw_stop = await aggregate_anthropic_sse_to_message(stream)
@@ -256,6 +255,23 @@ async def _saved_reply(stream, wire):
         return [{"role": "assistant", "content": message["content"]}]
     events = parse_sse_text("".join([event async for event in stream]))
     return events[-1].data["response"]["output"]
+
+
+@pytest.mark.asyncio
+async def test_chat_to_messages_preserves_explicit_refusal() -> None:
+    refusal = "I can't answer that."
+    payload = _events_for("chat")[-1]
+    payload["choices"][0]["delta"] = {"refusal": refusal}
+    async with _harness("chat", lambda _: (200, [payload])) as (send, _, _):
+        reply, error, complete = await aggregate_anthropic_sse_to_message(
+            collected_frames(
+                send("messages", [{"role": "user", "content": "Request"}]),
+                protocol="messages",
+            )
+        )
+    assert complete and error is None
+    assert reply["stop_reason"] == "refusal"
+    assert reply["content"] == [{"type": "text", "text": refusal}]
 
 
 @pytest.mark.asyncio

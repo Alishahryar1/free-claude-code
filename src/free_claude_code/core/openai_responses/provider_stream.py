@@ -78,6 +78,7 @@ class ResponsesProviderStream:
         self._tool_names = tool_names or OpenAIToolNameCodec.from_names(())
         self._tools: dict[str, _ToolState] = {}
         self._reasoning: dict[str, _ReasoningState] = {}
+        self._refusals: dict[tuple[str, int], str] = {}
 
     def start(self) -> list[str]:
         """Return the Anthropic message_start event."""
@@ -100,6 +101,14 @@ class ResponsesProviderStream:
             )
         if event_type == "response.output_text.delta":
             return self._text_delta(data)
+        if event_type in {"response.refusal.delta", "response.refusal.done"}:
+            complete = event_type == "response.refusal.done"
+            return self._refusal_text(
+                _string(data.get("item_id")),
+                _integer(data.get("content_index")) or 0,
+                _string(data.get("refusal" if complete else "delta")),
+                complete=complete,
+            )
         if event_type == "response.function_call_arguments.delta":
             return self._tool_delta(data)
         if event_type == "response.output_item.done":
@@ -207,6 +216,32 @@ class ResponsesProviderStream:
         self.generated_output = True
         return events
 
+    def _refusal_text(
+        self, item_id: str, index: int, text: str, *, complete: bool
+    ) -> list[str]:
+        key = (item_id, index)
+        previous = self._refusals.get(key, "")
+        self._refusals[key] = text if complete else previous + text
+        return self._text_delta(
+            {"delta": text.removeprefix(previous) if complete else text}
+        )
+
+    def _message_refusal(self, item: dict[str, Any]) -> list[str]:
+        parts = item.get("content")
+        if item.get("type") != "message" or not isinstance(parts, list):
+            return []
+        return [
+            event
+            for index, part in enumerate(parts)
+            if isinstance(part, dict) and part.get("type") == "refusal"
+            for event in self._refusal_text(
+                _string(item.get("id")),
+                index,
+                _string(part.get("refusal")),
+                complete=True,
+            )
+        ]
+
     def _tool_delta(self, data: dict[str, Any]) -> list[str]:
         item_id = _string(data.get("item_id"))
         delta = data.get("delta")
@@ -234,6 +269,8 @@ class ResponsesProviderStream:
             return []
         item_type = item.get("type")
         item_id = _string(item.get("id"))
+        if item_type == "message":
+            return self._message_refusal(item)
         if item_type == "function_call":
             state = self._tools.get(item_id)
             if state is None:
@@ -319,6 +356,11 @@ class ResponsesProviderStream:
         response = data.get("response")
         response = response if isinstance(response, dict) else {}
         events = []
+        output = response.get("output")
+        if isinstance(output, list):
+            for item in output:
+                if isinstance(item, dict):
+                    events.extend(self._message_refusal(item))
         for state in self._reasoning.values():
             if state.block_index is not None and not state.stopped:
                 events.append(self.ledger.content_block_stop(state.block_index))
@@ -346,7 +388,18 @@ class ResponsesProviderStream:
             cache_read_tokens=cached_tokens,
             cache_creation_tokens=cache_write_tokens,
         )
-        stop_reason = "max_tokens" if incomplete else "end_turn"
+        incomplete_details = response.get("incomplete_details")
+        filtered = (
+            isinstance(incomplete_details, dict)
+            and incomplete_details.get("reason") == "content_filter"
+        )
+        stop_reason = (
+            "refusal"
+            if self._refusals or filtered
+            else "max_tokens"
+            if incomplete
+            else "end_turn"
+        )
         events.append(
             self.ledger.message_delta(
                 self.ledger.final_stop_reason(stop_reason),

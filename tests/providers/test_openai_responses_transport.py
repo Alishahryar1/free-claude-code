@@ -1177,7 +1177,25 @@ async def test_standard_responses_preserves_public_fields_and_usage() -> None:
 
 
 @pytest.mark.asyncio
-async def test_standard_responses_maps_reasoning_and_tool_calls() -> None:
+@pytest.mark.parametrize(
+    ("incomplete_reason", "stop_reason"),
+    [
+        (None, "tool_use"),
+        ("max_output_tokens", "max_tokens"),
+        ("content_filter", "refusal"),
+    ],
+)
+async def test_standard_responses_maps_reasoning_and_tool_calls(
+    incomplete_reason: str | None, stop_reason: str
+) -> None:
+    terminal = _completed_event(sequence=4)
+    if incomplete_reason is not None:
+        terminal["type"] = "response.incomplete"
+        terminal["response"] = {
+            **_completed_response(),
+            "status": "incomplete",
+            "incomplete_details": {"reason": incomplete_reason},
+        }
     events: tuple[dict[str, object], ...] = (
         {
             "type": "response.reasoning_summary_text.delta",
@@ -1220,7 +1238,7 @@ async def test_standard_responses_maps_reasoning_and_tool_calls() -> None:
                 "status": "completed",
             },
         },
-        _completed_event(sequence=4),
+        terminal,
     )
 
     client = _client(
@@ -1238,6 +1256,7 @@ async def test_standard_responses_maps_reasoning_and_tool_calls() -> None:
     parsed = parse_sse_text("".join(chunks))
     assert_anthropic_stream_contract(parsed)
     assert thinking_content(parsed) == "thinking"
+    assert parsed[-2].data["delta"]["stop_reason"] == stop_reason
     tool_start = next(
         event.data["content_block"]
         for event in parsed
@@ -1257,6 +1276,63 @@ async def test_standard_responses_maps_reasoning_and_tool_calls() -> None:
         and event.data["delta"]["type"] == "input_json_delta"
     )
     assert tool_delta["partial_json"] == '{"path":"README.md"}'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("snapshot_only", [False, True])
+async def test_standard_responses_preserves_refusal_text_and_terminal(
+    snapshot_only: bool,
+) -> None:
+    refusal = "I can't answer that."
+    item = {
+        "type": "message",
+        "id": "msg_refusal",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "refusal", "refusal": refusal}],
+    }
+    events: list[dict[str, object]] = []
+    if not snapshot_only:
+        events.extend(
+            [
+                {
+                    "type": "response.refusal.delta",
+                    "sequence_number": 0,
+                    "item_id": item["id"],
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": "I can't ",
+                },
+                {
+                    "type": "response.output_item.done",
+                    "sequence_number": 1,
+                    "output_index": 0,
+                    "item": item,
+                },
+            ]
+        )
+    events.append(
+        {
+            **_completed_event(sequence=2),
+            "response": {**_completed_response(), "output": [item]},
+        }
+    )
+    client = _client(
+        lambda _request: httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_sse(*events),
+        )
+    )
+    try:
+        chunks = await _collect(_transport(client))
+    finally:
+        await client.close()
+
+    parsed = parse_sse_text("".join(chunks))
+    assert_anthropic_stream_contract(parsed)
+    assert parsed[-2].data["delta"]["stop_reason"] == "refusal"
+    assert text_content(parsed) == refusal
 
 
 @pytest.mark.asyncio
