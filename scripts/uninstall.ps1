@@ -93,7 +93,7 @@ function Invoke-NativeResult {
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        $global:LASTEXITCODE = 0
+        $global:LASTEXITCODE = $null
         $output = (& $FilePath @Arguments 2>&1 | Out-String).Trim()
         return [pscustomobject] @{
             ExitCode = $LASTEXITCODE
@@ -165,6 +165,10 @@ function Initialize-UvContext {
     $commandText = Format-Command -FilePath $script:UvPath -Arguments @("tool", "dir", "--bin")
     Write-Host "+ $commandText"
     $result = Invoke-NativeResult -FilePath $script:UvPath -Arguments @("tool", "dir", "--bin")
+    if ($Optional -and ($result.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($result.Output))) {
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User") -split ';'
+        if ((Get-FccBundleBin) -iin $userPath) { return }
+    }
     if ($result.ExitCode -ne 0) {
         if (-not [string]::IsNullOrWhiteSpace($result.Output)) {
             [Console]::Error.WriteLine($result.Output)
@@ -178,7 +182,7 @@ function Initialize-UvContext {
 }
 
 function Uninstall-FreeClaudeCode {
-    if (-not $DryRun -and -not $script:UvPath) { return }
+    if (-not $DryRun -and -not $script:UvToolBin) { return }
     Write-Host "+ uv tool uninstall $PackageName"
     if ($DryRun) {
         return
@@ -416,6 +420,10 @@ if ($DryRun) {
     Write-Host "Dry run complete. No changes were made."
 }
 else {
-    Write-Host "Free Claude Code has been removed and verified."
+    if ($script:UvPath -and -not $script:UvToolBin) {
+        Write-Host "The signed Windows bundle has been removed. uv could not verify any separate uv installation."
+    } else {
+        Write-Host "Free Claude Code has been removed and verified."
+    }
     Write-Host "uv, Claude Code, Codex, Pi, OpenCode, Cline, Hermes Agent, DeepSeek Harness, Grok Build, Muse Code, Aider, the uv-managed Python runtime, and shared PATH entries were left installed."
 }

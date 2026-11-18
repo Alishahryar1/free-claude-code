@@ -873,8 +873,10 @@ def test_uninstall_ps1_removes_and_verifies_only_fcc(
     ]
 
 
-def test_uninstall_ps1_removes_bundle_and_its_path_without_uv(
+@pytest.mark.parametrize("include_uv", [False, True])
+def test_uninstall_ps1_removes_bundle_and_its_path_without_usable_uv(
     powershell_uninstall_harness: PowerShellUninstallHarness,
+    include_uv: bool,
 ) -> None:
     if os.name != "nt":
         pytest.skip("Windows registry test")
@@ -885,6 +887,7 @@ def test_uninstall_ps1_removes_bundle_and_its_path_without_uv(
     harness.remove_entry_points()
     bundle_bin = harness.fcc_home / "windows-app" / "bin"
     bundle_bin.mkdir(parents=True)
+    harness.env["FCC_TEST_USER_PATH"] = str(bundle_bin)
     (bundle_bin / "fcc-server.exe").touch()
     desktop = harness.home / "Desktop" / "Free Claude Code.lnk"
     shortcut_target = bundle_bin / "fcc-desktop.exe"
@@ -902,7 +905,9 @@ def test_uninstall_ps1_removes_bundle_and_its_path_without_uv(
             key, "Path", 0, winreg.REG_EXPAND_SZ, f"{bundle_bin};%USERPROFILE%\\bin"
         )
 
-        result = harness.run(include_uv=False, keep_integrations=True)
+        result = harness.run(
+            include_uv=include_uv, fail_step="tool-dir", keep_integrations=True
+        )
         assert winreg.QueryValueEx(key, "Path") == (
             r"%USERPROFILE%\bin",
             winreg.REG_EXPAND_SZ,
@@ -912,7 +917,8 @@ def test_uninstall_ps1_removes_bundle_and_its_path_without_uv(
     assert not bundle_bin.exists()
     assert not desktop.exists()
     assert "fcc-path-changed" in harness.calls()
-    assert not any(call.startswith("uv:") for call in harness.calls())
+    uv_calls = [call for call in harness.calls() if call.startswith("uv:")]
+    assert uv_calls == (["uv:tool dir --bin"] if include_uv else [])
     assert (harness.bin_dir / "claude.cmd").exists()
 
 

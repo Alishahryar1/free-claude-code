@@ -57,6 +57,7 @@ class Release(TypedDict):
     draft: bool
     prerelease: bool
     assets: list[Asset]
+    immutable: bool
 
 
 class FakeRemote:
@@ -69,6 +70,7 @@ class FakeRemote:
                 "draft": False,
                 "prerelease": False,
                 "assets": [],
+                "immutable": False,
             }
         }
         self.files = {}
@@ -110,6 +112,7 @@ class FakeRemote:
                     "draft": True,
                     "prerelease": False,
                     "assets": [],
+                    "immutable": False,
                 }
                 return json.dumps(self.releases[tag])
             release_id = int(endpoint.rsplit("/", 1)[1])
@@ -151,6 +154,7 @@ class FakeRemote:
                 self.fail = None
                 raise RuntimeError("interrupted finalization")
             self.releases[args[3]]["draft"] = False
+            self.releases[args[3]]["immutable"] = True
         elif args[:3] == ["gh", "attestation", "verify"]:
             assert args[4:] == [
                 "--signer-workflow",
@@ -262,6 +266,10 @@ def test_windows_release_waits_for_bundle_and_keeps_python_assets(releases, tmp_
     assert not remote.releases["v1.2.4"]["draft"]
     assert remote.builds == 1
     assert set(remote.uploaded) == set(publishing.distribution_names("1.2.4"))
+    remote.releases["v1.2.4"]["immutable"] = False
+    with pytest.raises(ValueError, match="without immutable release protection"):
+        publisher.publish(target)
+    remote.releases["v1.2.4"]["immutable"] = True
 
     next_target = remote.advance("patch: Next")
     assert publisher.publish(next_target, stage_only=True) == ("1.2.5", True, False)

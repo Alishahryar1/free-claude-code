@@ -213,6 +213,18 @@ function Test-WindowsLaunchPolicyFailure {
     return $false
 }
 
+function Skip-AiderOnWindowsPolicyFailure {
+    param([Exception] $Exception)
+
+    if ($VoiceLocal -or -not (Test-WindowsLaunchPolicyFailure -Exception $Exception -Stderr $Exception.Message)) {
+        return $false
+    }
+    $script:InstallAider = $false
+    $script:InstallStepOutcome = "Skipped"
+    Write-Host "Windows application policy blocked Aider setup. Continuing with the other selected coding agents."
+    return $true
+}
+
 function Write-WindowsLaunchGuidance {
     param([string] $FilePath, [Exception] $Exception, [string] $Stderr = "")
 
@@ -1402,7 +1414,7 @@ function Install-Aider {
         $uvPath = $uvCommand.Source
     }
 
-    Invoke-NativeCommand -FilePath $uvPath -Arguments @(
+    $aiderOutput = Invoke-Utf8NativeCapture -FilePath $uvPath -Arguments @(
         "tool",
         "install",
         "--force",
@@ -1412,6 +1424,7 @@ function Install-Aider {
         "pip",
         "aider-chat@latest"
     )
+    if ($aiderOutput) { Write-Host $aiderOutput }
 }
 
 function Add-UvToolBinDirectory {
@@ -1427,7 +1440,7 @@ function Add-UvToolBinDirectory {
 }
 
 function Ensure-Aider {
-    $command = Get-ApplicationCommand "aider"
+    $command = Find-InstalledCodingAgent "aider"
     if ((-not $command) -and (-not $DryRun)) {
         $uvCommand = Get-ApplicationCommand "uv"
         if (-not $uvCommand) {
@@ -1438,6 +1451,7 @@ function Ensure-Aider {
     }
 
     if ($command) {
+        Add-PathEntry (Split-Path -Parent $command.Source)
         $script:InstallStepOutcome = "Reused"
         Write-Host "Aider already found on PATH; verifying it."
     }
@@ -1693,12 +1707,7 @@ function Ensure-SelectedCodingAgents {
         try {
             Ensure-Aider
         } catch {
-            if ($VoiceLocal -or -not (Test-WindowsLaunchPolicyFailure -Exception $_.Exception -Stderr $_.Exception.Message)) {
-                throw
-            }
-            $script:InstallAider = $false
-            $script:InstallStepOutcome = "Skipped"
-            Write-Host "Windows application policy blocked Aider. Continuing with the other selected coding agents."
+            if (-not (Skip-AiderOnWindowsPolicyFailure -Exception $_.Exception)) { throw }
         }
     }
 
@@ -1889,10 +1898,10 @@ function Install-FccBundle {
     $tag = "v$FccInstallVersion"
     $metadata = Invoke-RestMethod -Uri "https://api.github.com/repos/Alishahryar1/free-claude-code/releases/tags/$tag" -TimeoutSec 20 -Headers @{ Accept = 'application/vnd.github+json' }
     $asset = @($metadata.assets | Where-Object { $_.name -ceq $name })
-    if ($metadata.draft -or $metadata.prerelease -or $metadata.tag_name -cne $tag -or
+    if ($metadata.draft -or $metadata.prerelease -or -not $metadata.immutable -or $metadata.tag_name -cne $tag -or
         $asset.Count -ne 1 -or $asset[0].state -ne 'uploaded' -or
         $asset[0].digest -cnotmatch '\Asha256:[a-f0-9]{64}\z') {
-        throw "The signed Windows bundle for $tag is unavailable."
+        throw "The signed Windows bundle for $tag must be available in an immutable release."
     }
 
     $root = Get-FccBundlePath
@@ -2085,6 +2094,7 @@ function Install-FccDesktopShortcuts {
         [string] $IconPath
     )
 
+    $description = "Run Free Claude Code in the background"
     $shortcutPaths = @(
         (Join-Path $env:USERPROFILE "Desktop\Free Claude Code.lnk"),
         (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Free Claude Code.lnk")
@@ -2102,23 +2112,9 @@ function Install-FccDesktopShortcuts {
             try {
                 $existingShortcut = $shell.CreateShortcut($shortcutPath)
                 $isFccShortcut = Test-EquivalentPath -Left $existingShortcut.TargetPath -Right $DesktopCommand
-                if (-not $isFccShortcut) {
-                    $previousBin = if ($VoiceLocal) {
-                        Join-Path (Get-FccBundlePath) 'bin'
-                    } else {
-                        $uv = Get-ApplicationCommand "uv"
-                        if ($uv) {
-                            Invoke-Utf8NativeCapture -FilePath $uv.Source -Arguments @("tool", "dir", "--bin")
-                        }
-                    }
-                    if ($previousBin) {
-                        foreach ($extension in @('.exe', '.cmd')) {
-                            if (Test-EquivalentPath -Left $existingShortcut.TargetPath -Right (Join-Path $previousBin "fcc-desktop$extension")) {
-                                $isFccShortcut = $true
-                                break
-                            }
-                        }
-                    }
+                if ($existingShortcut.Description -ceq $description -and
+                    [IO.Path]::GetFileNameWithoutExtension($existingShortcut.TargetPath) -ieq 'fcc-desktop') {
+                    $isFccShortcut = $true
                 }
             }
             catch {
@@ -2135,13 +2131,16 @@ function Install-FccDesktopShortcuts {
         $shortcut.TargetPath = $DesktopCommand
         $shortcut.WorkingDirectory = $env:USERPROFILE
         $shortcut.IconLocation = "$IconPath,0"
-        $shortcut.Description = "Run Free Claude Code in the background"
+        $shortcut.Description = $description
         $shortcut.Save()
         if ($shortcutPath -eq $shortcutPaths[0]) { $script:DesktopReady = $true }
     }
 }
 
 function Show-InstallerNextSteps {
+    if ($Update -and -not $VoiceLocal) {
+        Write-Host "Open a new terminal from the Start menu before running FCC commands."
+    }
     Write-Host "`nFree Claude Code is installed and verified."
     if ($script:DesktopReady) {
         Write-Host "Open the Free Claude Code desktop shortcut to run it in the background."
@@ -2183,13 +2182,13 @@ function Show-InstallerNextSteps {
 
 }
 
-function Get-InstalledFcc {
+function Get-InstalledFccVersion {
     $bundle = Get-FccBundlePath
     $bundleBin = Join-Path $bundle 'bin'
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User") -split ';'
     $versionFile = Join-Path $bundle 'version.txt'
     if ($bundleBin -iin $userPath -and (Test-Path -LiteralPath $versionFile -PathType Leaf)) {
-        return @{ Version = (Get-Content -LiteralPath $versionFile -Raw).Trim(); Bundle = $true }
+        return (Get-Content -LiteralPath $versionFile -Raw).Trim()
     }
     # Look where uv usually lives without changing the PATH the installer preserves.
     $originalPath = $env:Path
@@ -2203,7 +2202,7 @@ function Get-InstalledFcc {
         $listing = @(& $uv.Source tool list 2>$null)
         if ($LASTEXITCODE -ne 0) { return $null }
         foreach ($line in $listing) {
-            if ("$line" -cmatch '\Afree-claude-code v(\S+)') { return @{ Version = $Matches[1]; Bundle = $false } }
+            if ("$line" -cmatch '\Afree-claude-code v(\S+)') { return $Matches[1] }
         }
         return $null
     }
@@ -2235,12 +2234,10 @@ function Compare-FccVersions {
 }
 
 function Test-FccUpdateNeeded {
-    $installed = Get-InstalledFcc
-    if (-not $installed) { return $true }
-    $version = $installed.Version
+    $version = Get-InstalledFccVersion
+    if (-not $version) { return $true }
     $comparison = Compare-FccVersions -Installed $version -Release $FccInstallVersion
     if ($comparison -eq "current") {
-        if ($installed.Bundle -ne (-not $VoiceLocal)) { return $true }
         Write-Host "FCC $version is already up to date."
         return $false
     }
@@ -2410,7 +2407,7 @@ try {
     }
 
     $needsUv = $VoiceLocal -or $script:EnableRtkHeadroom -or
-        ($script:InstallAider -and -not (Get-ApplicationCommand "aider"))
+        ($script:InstallAider -and -not (Find-InstalledCodingAgent "aider"))
     if ($needsUv) { $script:InstallSteps["uv"] = "Not attempted" }
     $selectedAgents = @()
     foreach ($choice in @(
@@ -2448,7 +2445,12 @@ try {
 
     if ($needsUv) {
         Start-InstallStep "uv" "Ensuring uv $MinUvVersion or newer is installed"
-        Ensure-Uv
+        try {
+            Ensure-Uv
+        } catch {
+            if ($script:EnableRtkHeadroom -or -not (Skip-AiderOnWindowsPolicyFailure -Exception $_.Exception)) { throw }
+            $script:InstallSteps["Aider"] = "Skipped"
+        }
     }
 
     Ensure-SelectedCodingAgents

@@ -163,6 +163,12 @@ class Publisher:
         if release and release["prerelease"]:
             raise ValueError(f"Release {tag} unexpectedly is a prerelease")
         if release and not release["draft"]:
+            if git(
+                "ls-tree", "--name-only", target, "--", WINDOWS_BUILDER
+            ).strip() and not release.get("immutable"):
+                raise ValueError(
+                    f"GitHub published {tag} without immutable release protection"
+                )
             print(f"{tag} already published")
             return
         newer_commits = set(history[:target_index])
@@ -256,6 +262,13 @@ class Publisher:
                     ]
                 )
                 self.gh("edit", tag, "--draft=false", "--latest", "--verify-tag")
+                if (
+                    bundle_required
+                    and not self.release_api(f"/{release['id']}")["immutable"]
+                ):
+                    raise ValueError(
+                        f"GitHub published {tag} without immutable release protection"
+                    )
             finally:
                 if not source.is_relative_to(root):
                     raise ValueError("Release worktree escaped its temporary directory")

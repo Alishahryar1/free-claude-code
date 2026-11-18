@@ -182,6 +182,7 @@ def test_install_ps1_pins_selected_fcc_release(powershell_harness, voice):
 @pytest.mark.parametrize(
     ("failure", "diagnostic"),
     [
+        ("bundle-mutable", "must be available in an immutable release"),
         ("bundle-digest", "failed its release digest check"),
         ("bundle-signature", "test.pyd is HashMismatch"),
         ("fcc-verify", "Command failed with exit code 55"),
@@ -257,14 +258,28 @@ def test_install_ps1_signed_bundle_does_not_require_uv_for_claude_code(
     assert not any(call.startswith("uv:") for call in calls)
 
 
-def test_install_ps1_signed_bundle_survives_policy_blocked_aider(powershell_harness):
+@pytest.mark.parametrize("preinstalled", [False, True])
+def test_install_ps1_signed_bundle_survives_policy_blocked_aider(
+    powershell_harness, preinstalled
+):
     powershell_harness.add_client("claude")
-    _write_executable(
-        powershell_harness.bin_dir / "aider.cmd",
-        "@echo off\necho error: uv trampoline failed ^(os error 4551^) 1>&2\nexit /b 1\n",
+    installed = {"claude", "opencode"}
+    if preinstalled:
+        installed.add("aider")
+        _write_executable(
+            powershell_harness.bin_dir / "aider.cmd",
+            "@echo off\necho error: uv trampoline failed ^(os error 4551^) 1>&2\nexit /b 1\n",
+        )
+    else:
+        powershell_harness.add_uv(UV_MINIMUM)
+    answers = [
+        "y" if agent == "aider" else "n"
+        for agent in CODING_AGENTS
+        if agent not in installed
+    ] + ["n"]
+    result = powershell_harness.run_interactive(
+        answers, fail_step="aider-install-policy"
     )
-
-    result = powershell_harness.run_interactive(["n"] * 10)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Windows application policy blocked Aider" in result.stdout
@@ -272,7 +287,7 @@ def test_install_ps1_signed_bundle_survives_policy_blocked_aider(powershell_harn
     assert f"download:{BUNDLE_URL}" in powershell_harness.calls()
 
 
-def test_install_ps1_update_switches_to_requested_install_route(powershell_harness):
+def test_install_ps1_update_keeps_current_version_on_either_route(powershell_harness):
     root = Path(powershell_harness.env["USERPROFILE"]) / ".fcc" / "windows-app"
     root.mkdir(parents=True)
     (root / "version.txt").write_text(RELEASE_VERSION, encoding="ascii")
@@ -289,13 +304,40 @@ def test_install_ps1_update_switches_to_requested_install_route(powershell_harne
         powershell_harness.run_functions(scenario), False, "up to date"
     )
     _assert_update_decision(
-        powershell_harness.run_functions(scenario, "-VoiceLocal"), True, ""
+        powershell_harness.run_functions(scenario, "-VoiceLocal"), False, "up to date"
     )
     powershell_harness.env["FCC_TEST_USER_PATH"] = ""
     _assert_update_decision(
         powershell_harness.run_functions(scenario, "-VoiceLocal"), False, "up to date"
     )
-    _assert_update_decision(powershell_harness.run_functions(scenario), True, "")
+    _assert_update_decision(
+        powershell_harness.run_functions(scenario), False, "up to date"
+    )
+
+
+@pytest.mark.parametrize("skip_download", [False, True])
+def test_signed_candidate_uses_draft_bundle_in_installer_scope(
+    powershell_harness, skip_download: bool
+) -> None:
+    fixture = Path(__file__).with_name("windows_candidate_handoff.ps1")
+    result = subprocess.run(
+        [
+            powershell_harness.powershell,
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(fixture),
+            *(["-SkipDownload"] if skip_download else []),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=powershell_harness.env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ("Candidate digest sha256:fixture" in result.stdout) is not skip_download
 
 
 FCC_UPDATE_DECISIONS = [
@@ -2550,11 +2592,14 @@ def _create_windows_shortcut(
     powershell: str,
     shortcut_path: Path,
     target_path: Path,
+    *,
+    description: str = "",
 ) -> None:
     shortcut_path.parent.mkdir(parents=True, exist_ok=True)
     env = os.environ | {
         "FCC_TEST_SHORTCUT": str(shortcut_path),
         "FCC_TEST_TARGET": str(target_path),
+        "FCC_TEST_SHORTCUT_DESC": description,
     }
     subprocess.run(
         [
@@ -2565,6 +2610,7 @@ def _create_windows_shortcut(
                 "$shell = New-Object -ComObject WScript.Shell; "
                 "$shortcut = $shell.CreateShortcut($env:FCC_TEST_SHORTCUT); "
                 "$shortcut.TargetPath = $env:FCC_TEST_TARGET; "
+                "$shortcut.Description = $env:FCC_TEST_SHORTCUT_DESC; "
                 "$shortcut.Save()"
             ),
         ],
@@ -2720,6 +2766,10 @@ copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-update.cmd" >nul
 if not "%FAIL_STEP%"=="fcc-missing" copy /y "%FAKE_FIXTURES%\fcc-command.cmd" "%UV_BIN_DIR%\fcc-codex.cmd" >nul
 exit /b 0
 :install_aider
+if "%FAIL_STEP%"=="aider-install-policy" (
+    echo error: uv could not spawn Python ^(os error 4551^) 1>&2
+    exit /b 57
+)
 if "%FAIL_STEP%"=="aider-install" exit /b 57
 if not exist "%UV_BIN_DIR%" mkdir "%UV_BIN_DIR%"
 copy /y "%FAKE_FIXTURES%\aider-command.cmd" "%UV_BIN_DIR%\aider.cmd" >nul
@@ -3107,7 +3157,8 @@ function Invoke-RestMethod {
         $archive = Get-Item -LiteralPath (Join-Path $env:FAKE_FIXTURES 'fcc-bundle.zip')
         $digest = (Get-FileHash -LiteralPath $archive.FullName).Hash.ToLowerInvariant()
         if ($env:FCC_RUNNING_PHASE -eq "late") { New-Item -ItemType File -Path $env:FCC_PROCESS_MARKER -Force | Out-Null }
-        return @{ tag_name = "v$version"; draft = $false; prerelease = $false; assets = @(@{
+        return @{ tag_name = "v$version"; draft = $false; prerelease = $false
+            immutable = $env:FAIL_STEP -ne 'bundle-mutable'; assets = @(@{
             name = "free_claude_code-$version-windows-x64.zip"; size = $archive.Length
             digest = "sha256:$digest"; state = 'uploaded'
         }) }
@@ -3801,7 +3852,7 @@ def test_install_ps1_discovers_installed_aider_without_uv(
     calls = powershell_harness.calls()
     assert "aider:--version" in calls
     assert not any("aider-chat@latest" in call for call in calls)
-    assert "uv-install" in calls
+    assert "uv-install" not in calls
 
 
 def test_install_ps1_asks_about_unrelated_pi(
@@ -4476,6 +4527,35 @@ def test_install_ps1_preserves_unowned_desktop_shortcut(
     assert "start the proxy with: fcc-server" in result.stdout
 
 
+def test_install_ps1_update_retargets_managed_shortcut_without_uv(
+    powershell_harness: PowerShellHarness,
+) -> None:
+    harness = powershell_harness
+    harness.add_client("claude")
+    home = Path(harness.env["USERPROFILE"])
+    shortcut = home / "Desktop" / "Free Claude Code.lnk"
+    old_target = harness.tool_bin / "fcc-desktop.exe"
+    old_target.touch()
+    _create_windows_shortcut(
+        harness.powershell,
+        shortcut,
+        old_target,
+        description="Run Free Claude Code in the background",
+    )
+
+    result = harness.run_interactive(["n"] * 11, "-Update")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Open a new terminal from the Start menu" in result.stdout
+    assert "not managed by Free Claude Code" not in result.stdout
+    destination = harness.run_functions(
+        "$shell = New-Object -ComObject WScript.Shell\n"
+        '$shell.CreateShortcut((Join-Path $env:USERPROFILE "Desktop\\Free Claude Code.lnk")).TargetPath'
+    )
+    assert destination.returncode == 0, destination.stderr
+    assert str(home / ".fcc/windows-app/bin/fcc-desktop.exe") in destination.stdout
+
+
 @pytest.mark.parametrize("uv_version", (UV_MINIMUM, f"{UV_MINIMUM}+build.1", UV_NEWER))
 def test_install_ps1_preserves_valid_existing_tools(
     powershell_harness: PowerShellHarness,
@@ -4564,7 +4644,7 @@ def test_install_ps1_continues_when_pi_is_not_installed(
     calls = powershell_harness.calls()
     assert "pi-install" in calls
     assert not any(call.startswith("pi:") for call in calls)
-    assert "uv-install" in calls
+    assert "uv-install" not in calls
     assert "fcc-server:--version" in calls
 
 
