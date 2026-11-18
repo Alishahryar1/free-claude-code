@@ -2200,8 +2200,15 @@ function Get-InstalledFccVersion {
     $bundleBin = Join-Path $bundle 'bin'
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User") -split ';'
     $versionFile = Join-Path $bundle 'version.txt'
-    if ($bundleBin -iin $userPath -and (Test-Path -LiteralPath $versionFile -PathType Leaf)) {
-        return (Get-Content -LiteralPath $versionFile -Raw).Trim()
+    if ($bundleBin -iin $userPath) {
+        # The archived version becomes visible before the installer finishes integration.
+        $installedVersion = Join-Path $bundle '.installed-version'
+        if ((Test-Path -LiteralPath $versionFile -PathType Leaf) -and
+            (Test-Path -LiteralPath $installedVersion -PathType Leaf)) {
+            $version = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+            if ($version -ceq (Get-Content -LiteralPath $installedVersion -Raw)) { return $version }
+        }
+        return $null
     }
     # Look where uv usually lives without changing the PATH the installer preserves.
     $originalPath = $env:Path
@@ -2480,6 +2487,9 @@ try {
         Configure-RtkForSelectedAgents
         Start-InstallStep "Headroom configuration"
         Configure-HeadroomForSelectedAgents
+    }
+    if (-not $DryRun -and -not $VoiceLocal) {
+        Set-Content -LiteralPath (Join-Path (Get-FccBundlePath) '.installed-version') -Value $FccInstallVersion -Encoding ascii -NoNewline
     }
     Complete-InstallStep
     $installSucceeded = $true

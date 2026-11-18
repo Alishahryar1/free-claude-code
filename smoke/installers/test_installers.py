@@ -326,6 +326,7 @@ def test_install_ps1_update_keeps_current_version_on_either_route(powershell_har
     root = Path(powershell_harness.env["USERPROFILE"]) / ".fcc" / "windows-app"
     root.mkdir(parents=True)
     (root / "version.txt").write_text(RELEASE_VERSION, encoding="ascii")
+    (root / ".installed-version").write_text(RELEASE_VERSION, encoding="ascii")
     powershell_harness.env["FCC_TEST_USER_PATH"] = str(root / "bin")
     _write_executable(
         powershell_harness.bin_dir / "uv.cmd",
@@ -348,6 +349,32 @@ def test_install_ps1_update_keeps_current_version_on_either_route(powershell_har
     _assert_update_decision(
         powershell_harness.run_functions(scenario), False, "up to date"
     )
+
+
+def test_install_ps1_retries_update_after_desktop_integration_failure(
+    powershell_harness,
+):
+    powershell_harness.add_installed_clients()
+    root = Path(powershell_harness.env["USERPROFILE"]) / ".fcc" / "windows-app"
+    root.mkdir(parents=True)
+    (root / "version.txt").write_text("1.9.0", encoding="ascii")
+    (root / ".installed-version").write_text("1.9.0", encoding="ascii")
+    powershell_harness.env["FCC_TEST_USER_PATH"] = str(root / "bin")
+
+    failed = powershell_harness.run("-Update", fail_step="desktop-icon-export")
+
+    assert failed.returncode != 0
+    assert "exit code 56" in failed.stderr
+    assert (root / "version.txt").read_text(encoding="ascii").strip() == RELEASE_VERSION
+    assert not (root.parent / "app-icon.ico").exists()
+
+    retried = powershell_harness.run("-Update")
+
+    assert retried.returncode == 0, retried.stdout + retried.stderr
+    assert (root.parent / "app-icon.ico").is_file()
+    assert "already up to date" not in retried.stdout
+    completed = powershell_harness.run("-Update")
+    assert "already up to date" in completed.stdout
 
 
 @pytest.mark.parametrize("skip_download", [False, True])
