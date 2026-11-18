@@ -45,6 +45,9 @@ from free_claude_code.core.anthropic.native import (
     NativeMessagesOptions,
     build_native_messages_request,
 )
+from free_claude_code.core.anthropic.sse_aggregation import (
+    aggregate_anthropic_sse_to_message,
+)
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
     parse_sse_text,
@@ -57,7 +60,7 @@ from free_claude_code.core.openai_responses.provider_input import (
     build_responses_provider_request,
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.core.stream_output import StreamOutput
+from free_claude_code.core.stream_output import StreamOutput, call_references
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.core.version import package_version
 from free_claude_code.core.web_tools import WebFetchResult, WebSearchResult
@@ -176,11 +179,13 @@ class ScriptedSelectionProvider:
         failure: ExecutionFailure | None = None,
         failure_after_events: bool = False,
         wait_for: asyncio.Event | None = None,
+        calls_complete: bool = True,
     ) -> None:
         self.events = events
         self.failure = failure
         self.failure_after_events = failure_after_events
         self.wait_for = wait_for
+        self.calls_complete = calls_complete
         self.started = asyncio.Event()
         self.requests: list[MessagesRequest] = []
         self.stream_kwargs: list[dict[str, object]] = []
@@ -229,7 +234,10 @@ class ScriptedSelectionProvider:
             if self.failure is not None and not self.failure_after_events:
                 raise self.failure
             for event in self.events:
-                yield StreamOutput((event,))
+                yield StreamOutput(
+                    (event,),
+                    call_references((event,)) if self.calls_complete else (),
+                )
             if self.failure is not None:
                 raise self.failure
         finally:
@@ -291,12 +299,14 @@ def _provider_tool_events(
     arguments: dict[str, object] | None = None,
     additional_calls: int = 0,
     additional_inputs: list[dict[str, object]] | None = None,
+    ordinary_calls: list[tuple[str, dict[str, object]]] | None = None,
 ) -> list[str]:
     calls = [(name, arguments if arguments is not None else {"query": "selected"})]
     calls.extend(
         (name, {"query": f"extra-{index}"}) for index in range(additional_calls)
     )
     calls.extend((name, item) for item in additional_inputs or [])
+    calls.extend(ordinary_calls or [])
     events = [
         format_sse_event(
             "message_start",
@@ -510,11 +520,11 @@ def test_does_not_plan_noncanonical_automatic_search(tool: Tool) -> None:
     assert plan_automatic_web_search(request, web_tools_enabled=True) is None
 
 
-def test_does_not_plan_mixed_tools_or_extended_auto_choice() -> None:
+def test_does_not_plan_unsupported_typed_tools_or_extended_auto_choice() -> None:
     mixed = _automatic_search_request()
     mixed.tools = [
         Tool(name="web_search", type="web_search_20250305"),
-        Tool(name="client_tool", input_schema={"type": "object"}),
+        Tool(name="code_execution", type="code_execution_20250825"),
     ]
     extended_choice = _automatic_search_request(
         tool_choice={"type": "auto", "disable_parallel_tool_use": True}
@@ -752,6 +762,124 @@ async def test_automatic_web_search_uses_model_query_and_filters_domains(
     }
     assert len(provider.requests) == 1
     assert provider.close_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [True, False])
+@pytest.mark.parametrize("include_search", [True, False])
+async def test_automatic_web_search_keeps_client_tool_and_its_result(
+    stream: bool, include_search: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    retrieve = Tool(
+        name="headroom_retrieve",
+        type="custom",
+        description="Retrieve the original content",
+        input_schema={"type": "object", "properties": {"ref": {"type": "string"}}},
+    )
+    arguments: dict[str, object] = {"ref": "saved-content"}
+    events = (
+        _provider_tool_events(ordinary_calls=[(retrieve.name, arguments)])
+        if include_search
+        else _provider_tool_events(name=retrieve.name, arguments=arguments)
+    )
+    provider = ScriptedSelectionProvider(events)
+    search = AsyncMock(
+        return_value=[
+            WebSearchResult(title="Mixed hit", url="https://example.com/mixed")
+        ]
+    )
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
+    service = _automatic_search_service(provider)
+    request = _automatic_search_request(stream=stream, tool_choice={"type": "any"})
+    assert request.tools is not None
+    request.tools.append(retrieve)
+
+    response = await service.create(request)
+
+    if isinstance(response, StreamingResponse):
+        raw = await _streaming_body_text(response)
+        assert_anthropic_stream_contract(parse_sse_text(raw))
+        body, error, complete = await aggregate_anthropic_sse_to_message(
+            _single_sse_chunk(raw)
+        )
+        assert complete and error is None
+    else:
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 200
+        body = _json_body(response)
+    assert body["stop_reason"] == "tool_use"
+    call_id = "call_1" if include_search else "call_0"
+    assert [block for block in body["content"] if block["type"] == "tool_use"] == [
+        {"type": "tool_use", "id": call_id, "name": retrieve.name, "input": arguments}
+    ]
+    assert HIDDEN_WEB_SEARCH_NAME not in json.dumps(body)
+    assert provider.requests[0].tools is not None
+    assert provider.requests[0].tools[1] == retrieve
+    assert provider.requests[0].tool_choice == {"type": "any"}
+    if include_search:
+        search.assert_awaited_once_with("selected")
+        assert body["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    else:
+        search.assert_not_awaited()
+
+    request.messages.extend(
+        [
+            Message.model_validate({"role": "assistant", "content": body["content"]}),
+            Message.model_validate(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": call_id,
+                            "content": "retrieved body",
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    request.tool_choice = {"type": "auto"}
+    request.stream = False
+    provider.events = _provider_text_events("Continued")
+    continued = await service.create(request)
+    assert isinstance(continued, JSONResponse)
+    assert continued.status_code == 200
+    messages = AnthropicToOpenAIConverter.convert_messages(
+        provider.requests[1].messages
+    )
+    assert [
+        message["tool_call_id"] for message in messages if message["role"] == "tool"
+    ] == [call_id]
+    if include_search:
+        assert "https://example.com/mixed" in json.dumps(messages)
+
+
+async def _single_sse_chunk(text: str) -> AsyncIterator[str]:
+    yield text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("incomplete_tool", [False, True])
+async def test_automatic_web_search_rejects_absent_required_call(
+    incomplete_tool: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider = ScriptedSelectionProvider(
+        _provider_tool_events()
+        if incomplete_tool
+        else _provider_text_events("Declined"),
+        calls_complete=False,
+    )
+    search = AsyncMock()
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
+    response = await _automatic_search_service(provider).create(
+        _automatic_search_request(tool_choice={"type": "any"})
+    )
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 500
+    assert response.headers["x-should-retry"] == "false"
+    assert len(provider.requests) == 1
+    search.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1123,6 +1251,63 @@ def test_automatic_web_search_history_projects_for_each_provider_transport() -> 
         assert '"opaque"' not in serialized
         assert "server_tool_use" not in serialized
     assert getattr(request.messages[1].content[0], "type", None) == ("server_tool_use")
+
+
+@pytest.mark.parametrize("shape", ["document", "document-and-text", "error"])
+def test_automatic_web_search_preserves_fetch_history(shape: str) -> None:
+    url = "https://example.com/fetched"
+    document = {
+        "type": "web_fetch_result",
+        "url": url,
+        "content": {
+            "type": "document",
+            "title": "Fetched title",
+            "source": {
+                "type": "text",
+                "media_type": "text/plain",
+                "data": "Unique fetched body",
+            },
+        },
+    }
+    error = {"type": "web_fetch_tool_result_error", "error_code": "url_not_accessible"}
+    blocks = [
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_prior",
+            "name": "web_fetch",
+            "input": {"url": url},
+        },
+        {
+            "type": "web_fetch_tool_result",
+            "tool_use_id": "srvtoolu_prior",
+            "content": error if shape == "error" else document,
+        },
+    ]
+    if shape == "document-and-text":
+        blocks.append({"type": "text", "text": "Unique fetched body"})
+    blocks.append({"type": "text", "text": "Unrelated neighboring text"})
+    request = _automatic_search_request()
+    request.messages.extend(
+        [
+            Message.model_validate({"role": "assistant", "content": blocks}),
+            Message(role="user", content="Search again"),
+        ]
+    )
+
+    plan = plan_automatic_web_search(request, web_tools_enabled=True)
+
+    assert plan is not None
+    serialized = json.dumps(
+        AnthropicToOpenAIConverter.convert_messages(plan.request.messages)
+    )
+    assert url in serialized
+    assert "Unrelated neighboring text" in serialized
+    if shape == "error":
+        assert "url_not_accessible" in serialized
+    else:
+        assert "Fetched title" in serialized
+        assert serialized.count("Unique fetched body") == 1
+    assert request.messages[1].model_dump(exclude_none=True)["content"] == blocks
 
 
 @pytest.mark.asyncio

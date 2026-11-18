@@ -11,7 +11,7 @@ from loguru import logger
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.execution import ProviderExecutor, TokenCounter
-from free_claude_code.application.response_collection import collect_response
+from free_claude_code.application.response_collection import collect_response_packets
 from free_claude_code.application.routing import RoutedMessagesRequest
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import (
@@ -30,9 +30,15 @@ from free_claude_code.core.anthropic.server_tool_sse import (
     web_search_result_block,
     web_tool_error_block,
 )
+from free_claude_code.core.anthropic.streaming import format_sse_event
+from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
-from free_claude_code.core.stream_output import StreamOutput
+from free_claude_code.core.stream_output import (
+    CompletedCall,
+    StreamOutput,
+    call_references,
+)
 from free_claude_code.core.trace import trace_event
 from free_claude_code.core.web_tools import WebSearchResult
 
@@ -43,7 +49,6 @@ from .ports import (
     web_fetch_allowed_scheme_set,
 )
 from .request import (
-    HIDDEN_WEB_SEARCH_NAME,
     AutomaticWebSearchPlan,
     WebSearchDomainFilter,
     extract_query,
@@ -142,7 +147,8 @@ class WebToolService:
             raw_log_payload=plan.request.model_dump,
             request_id=request_id,
         )
-        chunks = await collect_response(provider_stream, protocol="messages")
+        packets = await collect_response_packets(provider_stream, protocol="messages")
+        chunks = tuple(frame for packet in packets for frame in packet.frames)
 
         message, stream_error, _complete = await aggregate_anthropic_sse_to_message(
             _iterate_chunks(chunks)
@@ -150,7 +156,48 @@ class WebToolService:
         if stream_error is not None:
             raise _execution_failure_from_stream_error(stream_error)
         tool_calls = _tool_calls(message)
-        if not tool_calls:
+        completed = {call for packet in packets for call in packet.completed_calls}
+        references = {ref.call_id: ref for ref in call_references(chunks)}
+        names = {tool.name for tool in plan.request.tools or ()}
+        searches: dict[int, str] = {}
+        client_calls: dict[int, CompletedCall] = {}
+        seen_ids: set[str] = set()
+        for call in tool_calls:
+            name = call.get("name")
+            call_id = call.get("id")
+            if not isinstance(name, str) or name not in names:
+                raise _protocol_failure(
+                    "Upstream model returned an unexpected tool for automatic WebSearch.",
+                    request_id=request_id,
+                )
+            reference = references.get(call_id) if isinstance(call_id, str) else None
+            if not call_id or reference not in completed or call_id in seen_ids:
+                raise _protocol_failure(
+                    "Upstream model returned an incomplete or ambiguous tool call for automatic WebSearch.",
+                    request_id=request_id,
+                )
+            assert reference is not None and isinstance(call_id, str)
+            seen_ids.add(call_id)
+            index = reference.position[0]
+            if name == plan.private_name:
+                searches[index] = _search_query(
+                    call.get("input"), request_id=request_id
+                )
+            else:
+                client_calls[index] = reference
+
+        if not tool_calls and (
+            message.get("stop_reason") == "tool_use"
+            or (
+                plan.request.tool_choice == {"type": "any"}
+                and message.get("stop_reason") != "max_tokens"
+            )
+        ):
+            raise _protocol_failure(
+                "Upstream model ended the response without a required tool call.",
+                request_id=request_id,
+            )
+        if not searches:
             trace_event(
                 stage="execution",
                 event="free_claude_code.api.web_search.automatic_declined",
@@ -158,29 +205,9 @@ class WebToolService:
                 request_id=request_id,
                 model=routed.resolved.original_model,
             )
-            for chunk in chunks:
-                yield StreamOutput((chunk,))
+            for packet in packets:
+                yield packet
             return
-        queries: list[str] = []
-        for call in tool_calls:
-            if call.get("name") != HIDDEN_WEB_SEARCH_NAME:
-                raise _protocol_failure(
-                    "Upstream model returned an unexpected tool for automatic WebSearch.",
-                    request_id=request_id,
-                )
-            arguments = call.get("input")
-            if not isinstance(arguments, dict) or set(arguments) != {"query"}:
-                raise _protocol_failure(
-                    "Upstream model returned malformed arguments for automatic WebSearch.",
-                    request_id=request_id,
-                )
-            raw_query = arguments.get("query")
-            if not isinstance(raw_query, str) or not raw_query.strip():
-                raise _protocol_failure(
-                    "Upstream model returned an empty query for automatic WebSearch.",
-                    request_id=request_id,
-                )
-            queries.append(raw_query.strip())
         provider_usage = _provider_usage(message)
         input_tokens = _integer_field(provider_usage, "input_tokens")
         if input_tokens is None:
@@ -204,11 +231,12 @@ class WebToolService:
                 input_tokens=input_tokens,
                 provider_usage=provider_usage,
             )
-            for query in queries
+            for query in searches.values()
         ]
         executed = min(len(contexts), plan.max_uses or len(contexts))
-        for frame in server_tool_message_start_frames(contexts[0]):
-            yield StreamOutput((frame,))
+        if not client_calls:
+            for frame in server_tool_message_start_frames(contexts[0]):
+                yield StreamOutput((frame,))
 
         limit = asyncio.Semaphore(4)
 
@@ -224,11 +252,15 @@ class WebToolService:
                 group.create_task(search_one(context))
                 for context in contexts[:executed]
             ]
-            for index, context in enumerate(contexts):
-                for frame in server_tool_use_frames(context, index=index * 2):
+
+            async def search_frames(
+                slot: int, index: int
+            ) -> AsyncIterator[StreamOutput]:
+                context = contexts[slot]
+                for frame in server_tool_use_frames(context, index=index):
                     yield StreamOutput((frame,))
-                if index < executed:
-                    result_block, summary = await tasks[index]
+                if slot < executed:
+                    result_block, summary = await tasks[slot]
                 else:
                     result_block = web_tool_error_block(
                         context, error_code="max_uses_exceeded"
@@ -236,17 +268,57 @@ class WebToolService:
                     summary = (
                         f"Web search limit reached for: {context.tool_input['query']}"
                     )
-                for frame in server_tool_result_frames(
-                    result_block, index=index * 2 + 1
-                ):
+                for frame in server_tool_result_frames(result_block, index=index + 1):
                     yield StreamOutput((frame,))
                 summaries.append(summary)
+
+            if client_calls:
+                search_slots = {index: slot for slot, index in enumerate(searches)}
+                indices: dict[int, int] = {}
+                next_index = 0
+                decoder = AnthropicSSEDecoder()
+                for chunk in chunks:
+                    for event in decoder.feed(chunk):
+                        data = event.data
+                        kind = data.get("type")
+                        if kind in {"message_delta", "message_stop"}:
+                            continue
+                        index = data.get("index")
+                        proof = ()
+                        if isinstance(index, int):
+                            if kind == "content_block_start":
+                                indices[index] = next_index
+                                next_index += 2 if index in search_slots else 1
+                                if index in search_slots:
+                                    async for packet in search_frames(
+                                        search_slots[index], indices[index]
+                                    ):
+                                        yield packet
+                                elif index in client_calls:
+                                    proof = (
+                                        replace(
+                                            client_calls[index],
+                                            position=(indices[index],),
+                                        ),
+                                    )
+                            if index in search_slots:
+                                continue
+                            data["index"] = indices.get(index, index)
+                        yield StreamOutput(
+                            (format_sse_event(event.event, data),), proof
+                        )
+            else:
+                for slot in range(len(contexts)):
+                    async for packet in search_frames(slot, slot * 2):
+                        yield packet
+                next_index = len(contexts) * 2
 
         for frame in server_tool_finish_frames(
             contexts[0],
             summary="\n\n".join(summaries),
-            index=len(contexts) * 2,
+            index=next_index,
             request_count=executed,
+            stop_reason="tool_use" if client_calls else "end_turn",
         ):
             yield StreamOutput((frame,))
         trace_event(
@@ -346,6 +418,21 @@ def _tool_calls(message: Mapping[str, object]) -> list[dict[str, object]]:
             continue
         calls.append({str(key): value for key, value in block.items()})
     return calls
+
+
+def _search_query(arguments: object, *, request_id: str) -> str:
+    if not isinstance(arguments, dict) or set(arguments) != {"query"}:
+        raise _protocol_failure(
+            "Upstream model returned malformed arguments for automatic WebSearch.",
+            request_id=request_id,
+        )
+    query = arguments.get("query")
+    if not isinstance(query, str) or not query.strip():
+        raise _protocol_failure(
+            "Upstream model returned an empty query for automatic WebSearch.",
+            request_id=request_id,
+        )
+    return query.strip()
 
 
 def _provider_usage(message: Mapping[str, object]) -> dict[str, object]:

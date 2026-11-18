@@ -2,7 +2,7 @@
 
 import json
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from typing import Literal
 
 from free_claude_code.core.anthropic.errors import anthropic_failure_from_error
@@ -25,9 +25,22 @@ async def collect_response(
     protocol: WireProtocol,
     native_json: bool = False,
 ) -> tuple[str, ...]:
+    packets = await collect_response_packets(
+        body, protocol=protocol, native_json=native_json
+    )
+    return tuple(frame for packet in packets for frame in packet.frames)
+
+
+async def collect_response_packets(
+    body: AsyncIterator[StreamOutput],
+    *,
+    protocol: WireProtocol,
+    native_json: bool = False,
+) -> tuple[StreamOutput, ...]:
+    """Retain completion evidence from the same private attempt as the frames."""
     state = StreamDeliveryState()
     revision = state.attempt_revision
-    frames: list[str] = []
+    packets: list[StreamOutput] = []
     budget = RetentionBudget()
     with bind_stream_delivery(state):
         try:
@@ -36,19 +49,23 @@ async def collect_response(
                     packet = await anext(body)
                 except StopAsyncIteration:
                     if revision != state.attempt_revision:
-                        frames.clear()
+                        packets.clear()
                     break
                 if revision != state.attempt_revision:
                     revision = state.attempt_revision
-                    frames.clear()
+                    packets.clear()
                     budget = RetentionBudget()
                 budget.add(
                     sum(len(frame.encode("utf-8")) for frame in packet.frames),
-                    max(1, len(packet.frames)),
+                    max(1, len(packet.frames), len(packet.completed_calls)),
                 )
-                frames.extend(packet.frames)
-            _validate(frames, protocol=protocol, native_json=native_json)
-            return tuple(frames)
+                packets.append(packet)
+            _validate(
+                (frame for packet in packets for frame in packet.frames),
+                protocol=protocol,
+                native_json=native_json,
+            )
+            return tuple(packets)
         finally:
             await close_stream_input(
                 body,
@@ -65,7 +82,9 @@ async def collected_frames(
         yield frame
 
 
-def _validate(frames: list[str], *, protocol: WireProtocol, native_json: bool) -> None:
+def _validate(
+    frames: Iterable[str], *, protocol: WireProtocol, native_json: bool
+) -> None:
     if native_json:
         data = json.loads("".join(frames))
         if (

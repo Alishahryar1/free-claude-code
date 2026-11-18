@@ -156,6 +156,7 @@ def server_tool_finish_frames(
     summary: str,
     index: int,
     request_count: int = 1,
+    stop_reason: str = "end_turn",
 ) -> Iterator[str]:
     yield format_sse_event(
         "content_block_start",
@@ -180,7 +181,7 @@ def server_tool_finish_frames(
         "message_delta",
         {
             "type": "message_delta",
-            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "delta": {"stop_reason": stop_reason, "stop_sequence": None},
             "usage": _completion_usage(
                 context.input_tokens,
                 summary,
