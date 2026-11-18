@@ -299,6 +299,19 @@ def test_install_ps1_signed_update_does_not_expose_prerequisite_uv_early(
         assert str(uv_bin) in user_path.split(";")
 
 
+def test_install_ps1_reuses_supported_uv_already_on_path(powershell_harness):
+    harness = powershell_harness
+    harness.add_uv(UV_MINIMUM)
+    uv_bin = harness.root / "custom-uv-bin"
+    _write_executable(uv_bin / "uv.cmd", _batch_uv("0.1.0"))
+    harness.env["UV_INSTALL_DIR"] = str(uv_bin)
+
+    installed = harness.run_functions("Ensure-Uv")
+
+    assert installed.returncode == 0, installed.stdout + installed.stderr
+    assert harness.calls() == ["uv:--version"]
+
+
 def test_install_ps1_signed_bundle_does_not_require_uv_for_claude_code(
     powershell_harness,
 ):

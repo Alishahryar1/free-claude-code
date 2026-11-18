@@ -1821,8 +1821,11 @@ function Ensure-Uv {
 
     # Keep prerequisite installation from changing the active FCC route.
     $deferPath = -not $VoiceLocal -or (Test-FccBundleOnUserPath)
-    if ($deferPath) { Add-PathEntry (Get-UvInstallBinDirectory) }
     $uvCommand = Get-ApplicationCommand "uv"
+    if (-not $uvCommand -and $deferPath) {
+        Add-PathEntry (Get-UvInstallBinDirectory)
+        $uvCommand = Get-ApplicationCommand "uv"
+    }
     if ($uvCommand) {
         $version = Get-UvVersion $uvCommand.Source
         if (Test-SupportedStableVersion -Version $version -Minimum $MinUvVersion) {
