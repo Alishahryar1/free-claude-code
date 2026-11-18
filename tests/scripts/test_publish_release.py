@@ -80,9 +80,10 @@ class FakeRemote:
         self.native_builds = []
         self.uploaded = {}
         self.attested = {}
+        self.immutable_releases_enabled = True
         self.real_command = publishing.command
 
-    def command(self, args, *, cwd=None):
+    def command(self, args, *, cwd=None, env=None):
         if "--repo" in args:
             args = args[: args.index("--repo")]
         self.calls.append(args)
@@ -92,6 +93,9 @@ class FakeRemote:
             return git(Path(cwd or self.repo), *args[1:])
         if args[:2] == ["gh", "api"]:
             endpoint = next(arg for arg in args if arg.startswith("repos/"))
+            if endpoint == "repos/owner/repo/immutable-releases":
+                assert env is not None and env["GH_TOKEN"] == "settings-token"
+                return json.dumps({"enabled": self.immutable_releases_enabled})
             fields = dict(
                 field.split("=", 1)
                 for flag, field in pairwise(args)
@@ -214,8 +218,8 @@ class FakeRemote:
         git(self.repo, "update-ref", "refs/remotes/origin/main", head)
         return head
 
-    def publisher(self):
-        return publishing.Publisher("owner/repo")
+    def publisher(self, *, settings_token=""):
+        return publishing.Publisher("owner/repo", settings_token=settings_token)
 
 
 def test_windows_release_waits_for_bundle_and_keeps_python_assets(releases, tmp_path):
@@ -261,6 +265,16 @@ def test_windows_release_waits_for_bundle_and_keeps_python_assets(releases, tmp_
     assert not remote.uploaded
 
     remote.files["v1.2.4", bundle.name] = bundle.read_bytes()
+    with pytest.raises(ValueError, match="RELEASE_SETTINGS_TOKEN"):
+        publisher.publish(target, accepted_windows_digest=bundle_digest)
+    publisher = remote.publisher(settings_token="settings-token")
+    remote.immutable_releases_enabled = False
+    with pytest.raises(ValueError, match="Enable immutable releases"):
+        publisher.publish(target, accepted_windows_digest=bundle_digest)
+    assert not remote.uploaded
+    assert remote.releases["v1.2.4"]["draft"]
+
+    remote.immutable_releases_enabled = True
     publisher.publish(target, accepted_windows_digest=bundle_digest)
 
     assert not remote.releases["v1.2.4"]["draft"]

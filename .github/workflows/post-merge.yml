@@ -316,6 +316,7 @@ jobs:
           CI_PYTHON: ${{ steps.environment.outputs.python-version }}
           ACCEPTED_WINDOWS_DIGEST: ${{ inputs.accepted_windows_digest }}
           SUPERSEDES_WINDOWS_CANDIDATE: ${{ inputs.supersedes_windows_candidate }}
+          RELEASE_SETTINGS_TOKEN: ${{ secrets.RELEASE_SETTINGS_TOKEN }}
         run: |
           uv run --no-project --python "$CI_PYTHON" python -m scripts.publish_release \
             --repository "$RELEASE_REPOSITORY" --commit "$RELEASE_COMMIT" \

@@ -23,9 +23,17 @@ WINDOWS_BUILDER = "scripts/build_windows_bundle.py"
 BUMP_ORDER = ("patch", "minor", "major")
 
 
-def command(args: list[str], *, cwd: Path | None = None) -> str:
+def command(
+    args: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None
+) -> str:
     return subprocess.run(
-        args, cwd=cwd, check=True, capture_output=True, text=True, encoding="utf-8"
+        args,
+        cwd=cwd,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
     ).stdout
 
 
@@ -50,10 +58,11 @@ def verify_asset(file: Path, asset: dict) -> None:
 
 
 class Publisher:
-    def __init__(self, repository: str) -> None:
+    def __init__(self, repository: str, *, settings_token: str = "") -> None:
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
             raise ValueError("Expected owner/repository")
         self.repository = repository
+        self.settings_token = settings_token
 
     def gh(self, *args: str) -> str:
         return command(["gh", "release", *args, "--repo", self.repository])
@@ -252,6 +261,8 @@ class Publisher:
                     raise ValueError(
                         f"The first signed Windows bundle for {tag} requires acceptance of {bundle_digest}"
                     )
+                if bundle_required:
+                    self.require_immutable_releases()
                 command(
                     [
                         "uv",
@@ -274,6 +285,22 @@ class Publisher:
                     raise ValueError("Release worktree escaped its temporary directory")
                 command(["git", "worktree", "remove", "--force", str(source)])
         return None
+
+    def require_immutable_releases(self) -> None:
+        if not self.settings_token:
+            raise ValueError(
+                "Set RELEASE_SETTINGS_TOKEN to verify release immutability"
+            )
+        settings = json.loads(
+            command(
+                ["gh", "api", f"repos/{self.repository}/immutable-releases"],
+                env=dict(os.environ, GH_TOKEN=self.settings_token),
+            )
+        )
+        if settings.get("enabled") is not True:
+            raise ValueError(
+                "Enable immutable releases before publishing a Windows bundle"
+            )
 
     def validate(self, source: Path, dist: Path, version: str) -> None:
         command(
@@ -397,7 +424,9 @@ def main() -> int:
     parser.add_argument("--supersedes-windows-candidate", default="")
     args = parser.parse_args()
     try:
-        result = Publisher(args.repository).publish(
+        result = Publisher(
+            args.repository, settings_token=os.environ.pop("RELEASE_SETTINGS_TOKEN", "")
+        ).publish(
             args.commit,
             stage_only=args.stage_only,
             accepted_windows_digest=args.accepted_windows_digest,
