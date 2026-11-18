@@ -464,10 +464,9 @@ def test_install_ps1_voice_update_prompts_to_refresh_the_terminal(powershell_har
     assert "Open a new terminal from the Start menu" in updated.stdout
 
 
-@pytest.mark.parametrize("failure", ["path-update", "desktop-icon-export"])
 @pytest.mark.parametrize("install_uv", [False, True])
 def test_install_ps1_failed_voice_update_keeps_signed_path(
-    powershell_harness, failure, install_uv
+    powershell_harness, install_uv
 ):
     if os.name != "nt":
         pytest.skip("Windows registry test")
@@ -497,19 +496,78 @@ def test_install_ps1_failed_voice_update_keeps_signed_path(
         winreg.KEY_ALL_ACCESS,
     ) as key:
         winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, old_path)
-        failed = powershell_harness.run("-Update", "-VoiceLocal", fail_step=failure)
+        failed = powershell_harness.run(
+            "-Update", "-VoiceLocal", fail_step="desktop-icon-export"
+        )
         assert failed.returncode != 0
-        diagnostic = "tool update-shell" if failure == "path-update" else "exit code 56"
-        assert diagnostic in failed.stderr
+        assert "exit code 56" in failed.stderr
         assert winreg.QueryValueEx(key, "Path") == (old_path, winreg.REG_EXPAND_SZ)
-        if failure == "desktop-icon-export":
-            assert "uv:tool update-shell" not in powershell_harness.calls()
+        assert "uv:tool update-shell" not in powershell_harness.calls()
 
         retried = powershell_harness.run("-Update", "-VoiceLocal")
         assert retried.returncode == 0, retried.stdout + retried.stderr
         assert "already up to date" not in retried.stdout
-        expected = str(uv_bin) if install_uv else ""
-        assert winreg.QueryValueEx(key, "Path") == (expected, winreg.REG_EXPAND_SZ)
+        expected = [str(Path(powershell_harness.env["FAKE_TOOL_BIN"]))]
+        if install_uv:
+            expected.append(str(uv_bin))
+        assert winreg.QueryValueEx(key, "Path") == (
+            ";".join(expected),
+            winreg.REG_EXPAND_SZ,
+        )
+
+
+def test_install_ps1_voice_switch_prioritizes_verified_uv_and_fcc(powershell_harness):
+    if os.name != "nt":
+        pytest.skip("Windows registry test")
+
+    import winreg
+
+    harness = powershell_harness
+    harness.add_installed_clients()
+    harness.add_uv("0.1.0")
+    uv_bin = harness.root / "verified-uv"
+    tool_bin = harness.root / "verified-voice-fcc"
+    bundle_bin = Path(harness.env["USERPROFILE"]) / ".fcc/windows-app/bin"
+    bundle_bin.mkdir(parents=True)
+    old_path = f"{bundle_bin};{harness.bin_dir};{tool_bin}"
+    harness.env.update(
+        UV_INSTALL_DIR=str(uv_bin),
+        UV_TOOL_BIN_DIR=str(tool_bin),
+        UV_NO_MODIFY_PATH="",
+        FCC_TEST_USER_PATH=old_path,
+        FCC_TEST_UV_STANDALONE_PATH="1",
+    )
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        harness.env["FCC_TEST_ENV_KEY"],
+        0,
+        winreg.KEY_ALL_ACCESS,
+    ) as key:
+        winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, old_path)
+        finished = harness.run("-VoiceLocal")
+        assert finished.returncode == 0, finished.stdout + finished.stderr
+        assert winreg.QueryValueEx(key, "Path") == (
+            f"{tool_bin};{uv_bin};{harness.bin_dir}",
+            winreg.REG_EXPAND_SZ,
+        )
+
+
+def test_install_ps1_completed_voice_update_replays_path_notification(
+    powershell_harness,
+):
+    bundle_bin = Path(powershell_harness.env["USERPROFILE"]) / ".fcc/windows-app/bin"
+    bundle_bin.mkdir(parents=True)
+    (bundle_bin / "fcc-server.exe").touch()
+    _write_executable(
+        powershell_harness.bin_dir / "uv.cmd",
+        f'@echo off\nif "%*"=="tool list" echo free-claude-code v{RELEASE_VERSION}\n',
+    )
+
+    updated = powershell_harness.run("-Update", "-VoiceLocal")
+
+    assert updated.returncode == 0, updated.stdout + updated.stderr
+    assert "already up to date" in updated.stdout
+    assert powershell_harness.calls() == ["fcc-path-changed"]
 
 
 @pytest.mark.parametrize("bootstrap", [False, True])

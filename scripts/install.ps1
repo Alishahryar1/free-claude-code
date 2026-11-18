@@ -1897,8 +1897,15 @@ function Lock-FccInstallation {
     }
 }
 
+function Send-FccPathChange {
+    $launcher = Join-Path (Get-FccBundlePath) 'bin\fcc-server.exe'
+    if (Test-Path -LiteralPath $launcher -PathType Leaf) {
+        Invoke-NativeCommand -FilePath $launcher -Arguments @('--fcc-notify-environment')
+    }
+}
+
 function Set-FccBundlePathEntry {
-    param([switch] $Remove, [string] $AdditionalBin)
+    param([switch] $Remove, [string] $AdditionalBin, [string] $VoiceToolBin)
 
     $binPath = Join-Path (Get-FccBundlePath) 'bin'
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
@@ -1906,13 +1913,29 @@ function Set-FccBundlePathEntry {
         $userPath = $key.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
         $entries = @()
         if ($userPath) { $entries = @($userPath -split ';' | Where-Object { $_ -ine $binPath }) }
-        if (-not $Remove) { $entries = @($binPath) + $entries }
-        if ($AdditionalBin) {
-            $persistentPath = $entries + ([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';')
-            $existing = $persistentPath | Where-Object {
-                Test-EquivalentPath -Left ([Environment]::ExpandEnvironmentVariables($_)) -Right $AdditionalBin
-            } | Select-Object -First 1
-            if (-not $existing) { $entries += $AdditionalBin }
+        if ($VoiceToolBin) {
+            $preferred = @($VoiceToolBin)
+            if ($AdditionalBin -and -not (Test-EquivalentPath -Left $VoiceToolBin -Right $AdditionalBin)) {
+                $preferred += $AdditionalBin
+            }
+            $prioritized = @()
+            foreach ($directory in $preferred) {
+                $matching = @($entries | Where-Object {
+                    Test-EquivalentPath -Left ([Environment]::ExpandEnvironmentVariables($_)) -Right $directory
+                })
+                $prioritized += if ($matching.Count) { $matching[0] } else { $directory }
+                $entries = @($entries | Where-Object { $_ -cnotin $matching })
+            }
+            $entries = $prioritized + $entries
+        } elseif (-not $Remove) {
+            $entries = @($binPath) + $entries
+            if ($AdditionalBin) {
+                $persistentPath = $entries + ([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';')
+                $existing = $persistentPath | Where-Object {
+                    Test-EquivalentPath -Left ([Environment]::ExpandEnvironmentVariables($_)) -Right $AdditionalBin
+                } | Select-Object -First 1
+                if (-not $existing) { $entries += $AdditionalBin }
+            }
         }
         $newPath = $entries -join ';'
         $pathChanged = $newPath -cne $userPath
@@ -1924,12 +1947,7 @@ function Set-FccBundlePathEntry {
         $key.Dispose()
     }
     # An interrupted activation can persist PATH before notifying other processes.
-    if (-not $Remove -or $pathChanged) {
-        $launcher = Join-Path $binPath 'fcc-server.exe'
-        if (Test-Path -LiteralPath $launcher -PathType Leaf) {
-            Invoke-NativeCommand -FilePath $launcher -Arguments @('--fcc-notify-environment')
-        }
-    }
+    if (-not $Remove -or $pathChanged) { Send-FccPathChange }
     $env:Path = ($env:Path -split ';' | Where-Object { $_ -ine $binPath }) -join ';'
     if (-not $Remove) { Prioritize-PathEntry $binPath }
 }
@@ -2090,7 +2108,10 @@ function Configure-AndConfirmFreeClaudeCode {
         Install-FccDesktopShortcuts `
             -DesktopCommand "$binFormat\fcc-desktop.exe" `
             -IconPath $iconPath
-        if ($VoiceLocal) { Write-Host "+ uv tool update-shell" }
+        if ($VoiceLocal) {
+            if (Test-FccBundleOnUserPath) { Write-Host "+ switch User PATH to $binFormat" }
+            else { Write-Host "+ uv tool update-shell" }
+        }
         return
     }
 
@@ -2141,14 +2162,17 @@ function Configure-AndConfirmFreeClaudeCode {
     }
 
     if ($VoiceLocal) {
-        # uv can prepend its tool and install directories. Defer shell changes until
-        # the uv commands and shortcuts work, then register a deferred uv executable too.
-        $uvInstallBin = if ((Test-FccBundleOnUserPath) -and -not ($env:UV_NO_MODIFY_PATH -or $env:UV_UNMANAGED_INSTALL)) {
-            $uvCommandBin = Split-Path -Parent $uvCommand.Source
-            if (Test-EquivalentPath -Left $uvCommandBin -Right (Get-UvInstallBinDirectory)) { $uvCommandBin }
+        if (Test-FccBundleOnUserPath) {
+            # Register the verified voice commands and retire the signed entry in one PATH write.
+            $uvInstallBin = if (-not ($env:UV_NO_MODIFY_PATH -or $env:UV_UNMANAGED_INSTALL)) {
+                $uvCommandBin = Split-Path -Parent $uvCommand.Source
+                if (Test-EquivalentPath -Left $uvCommandBin -Right (Get-UvInstallBinDirectory)) { $uvCommandBin }
+            }
+            Set-FccBundlePathEntry -Remove -VoiceToolBin $toolBin -AdditionalBin $uvInstallBin
+        } else {
+            Invoke-NativeCommand -FilePath $uvCommand.Source -Arguments @("tool", "update-shell")
+            Set-FccBundlePathEntry -Remove
         }
-        Invoke-NativeCommand -FilePath $uvCommand.Source -Arguments @("tool", "update-shell")
-        Set-FccBundlePathEntry -Remove -AdditionalBin $uvInstallBin
         Prioritize-PathEntry $toolBin
         $script:FccVerified = $true
     }
@@ -2472,6 +2496,7 @@ try {
         Recover-FccBundleInstallation
         if (-not $VoiceLocal) { Assert-FccBundleMachinePath }
         if ($Update -and -not (Test-FccUpdateNeeded)) {
+            if ($VoiceLocal -and -not (Test-FccBundleOnUserPath)) { Send-FccPathChange }
             $installSucceeded = $true
             return
         }
