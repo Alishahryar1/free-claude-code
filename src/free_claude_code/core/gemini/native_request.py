@@ -29,6 +29,7 @@ from ..openai_responses import OpenAIResponsesRequest
 from ..reasoning import ReasoningControl, ReasoningPolicy
 from .errors import GeminiConversionError
 from .models import GeminiRequest, InlineData, ThinkingConfig
+from .web_search_replay import restore_web_search_history
 
 
 def _image(url: str) -> dict[str, Any]:
@@ -334,7 +335,7 @@ def messages_to_gemini(
     calls: dict[str, str] = {}
     result_parts: list[dict[str, Any]] | None = None
     result_order: dict[str, int] = {}
-    for message in body["messages"]:
+    for message in restore_web_search_history(body["messages"]):
         role = message["role"]
         parts: list[dict[str, Any]] = []
         if message.get("reasoning_content"):

@@ -4,7 +4,10 @@ import json
 from typing import Any
 
 from free_claude_code.core.anthropic.content import get_block_attr, get_block_type
-from free_claude_code.core.anthropic.conversion import resolve_anthropic_tool_choice
+from free_claude_code.core.anthropic.conversion import (
+    resolve_anthropic_tool_choice,
+    unrepresentable_client_tool_constraints,
+)
 from free_claude_code.core.anthropic.image_sources import (
     AnthropicImageSourceError,
     portable_anthropic_image_url,
@@ -111,13 +114,25 @@ def _validate_supported_request(request: MessagesRequest) -> None:
             f"{sorted(str(key) for key in request.model_extra)}."
         )
     provider_tool_types = sorted(
-        {tool.type for tool in request.tools or () if tool.type is not None}
+        {
+            tool.type
+            for tool in request.tools or ()
+            if tool.type is not None
+            and (tool.type != "custom" or tool.input_schema is None)
+        }
     )
     if provider_tool_types:
         raise ResponsesConversionError(
             "OpenAI Responses cannot represent provider-managed tool types: "
             f"{provider_tool_types}."
         )
+    for tool in request.tools or ():
+        if tool.type == "custom" and (
+            constraints := unrepresentable_client_tool_constraints(tool)
+        ):
+            raise ResponsesConversionError(
+                f"OpenAI Responses cannot enforce {constraints} for tool {tool.name!r}."
+            )
     unsupported: list[str] = []
     if request.stop_sequences:
         unsupported.append("stop_sequences")

@@ -6,16 +6,24 @@ from dataclasses import dataclass
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.core.anthropic import MessagesRequest, Tool
+from free_claude_code.core.anthropic.conversion import (
+    unrepresentable_client_tool_constraints,
+)
 from free_claude_code.core.anthropic.models import (
     ContentBlockServerToolUse,
     ContentBlockText,
+    ContentBlockToolResult,
+    ContentBlockToolUse,
+    ContentBlockWebFetchToolResult,
     ContentBlockWebSearchToolResult,
     Message,
 )
+from free_claude_code.core.anthropic.server_tool_types import HIDDEN_WEB_SEARCH_NAME
+from free_claude_code.core.gemini.web_search_replay import signed_gemini_turn
+from free_claude_code.core.history_replay import HistoryReplayError
 
 WEB_SEARCH_TYPE = "web_search_20250305"
 WEB_FETCH_TYPE = "web_fetch_20250910"
-HIDDEN_WEB_SEARCH_NAME = "fcc_web_search"
 
 _SERVER_TOOL_TYPES = {
     "web_search": WEB_SEARCH_TYPE,
@@ -47,8 +55,9 @@ class AutomaticWebSearchPlan:
     """One exact Claude Code automatic-search request translated for a provider."""
 
     request: MessagesRequest
+    private_name: str
     domains: WebSearchDomainFilter
-    max_uses: int | None
+    remaining_uses: int | None
 
 
 def forced_tool_turn_text(request: MessagesRequest) -> str:
@@ -105,21 +114,37 @@ def plan_automatic_web_search(
     *,
     web_tools_enabled: bool,
 ) -> AutomaticWebSearchPlan | None:
-    """Translate only Claude Code's server-tool-only automatic WebSearch request."""
+    """Translate one WebSearch definition while preserving ordinary client tools."""
     choice = request.tool_choice
-    if choice is not None and choice != {"type": "auto"}:
+    if choice is not None and (
+        choice.get("type") not in ("auto", "any")
+        or choice.get("disable_parallel_tool_use", False) is not False
+        or set(choice) - {"type", "disable_parallel_tool_use"}
+    ):
         return None
 
     tools = request.tools or []
     server_tools = [tool for tool in tools if is_anthropic_server_tool_definition(tool)]
     if not server_tools:
         return None
-    if len(tools) != 1 or len(server_tools) != 1:
+    if len(server_tools) != 1:
         return None
 
     tool = server_tools[0]
     if tool.type != WEB_SEARCH_TYPE:
         return None
+    for other in tools:
+        if other is tool:
+            continue
+        if other.type not in (None, "custom") or other.input_schema is None:
+            return None
+        if constraints := unrepresentable_client_tool_constraints(other):
+            raise InvalidRequestError(
+                f"Automatic web_search cannot enforce {constraints} for tool {other.name!r}."
+            )
+    names = {definition.name for definition in tools}
+    if len(names) != len(tools):
+        raise InvalidRequestError("Automatic web_search requires unique tool names.")
     if not web_tools_enabled:
         raise InvalidRequestError(
             "Anthropic web_search is disabled (ENABLE_WEB_SERVER_TOOLS=false). "
@@ -154,8 +179,9 @@ def plan_automatic_web_search(
             "web_search may define allowed_domains or blocked_domains, not both."
         )
 
+    private_name = _private_search_name(names, request.messages)
     hidden_tool = Tool(
-        name=HIDDEN_WEB_SEARCH_NAME,
+        name=private_name,
         description="Search the public web for current information.",
         input_schema={
             "type": "object",
@@ -164,17 +190,22 @@ def plan_automatic_web_search(
             "additionalProperties": False,
         },
     )
+    try:
+        messages, used_this_turn = _normalized_search_history(request.messages)
+    except HistoryReplayError as error:
+        raise InvalidRequestError(str(error)) from error
     translated = request.model_copy(
         update={
-            "tools": [hidden_tool],
-            "messages": _normalized_search_history(request.messages),
+            "tools": [hidden_tool if other is tool else other for other in tools],
+            "messages": messages,
         },
         deep=True,
     )
     return AutomaticWebSearchPlan(
         request=translated,
+        private_name=private_name,
         domains=WebSearchDomainFilter(allowed=allowed, blocked=blocked),
-        max_uses=max_uses,
+        remaining_uses=None if max_uses is None else max(0, max_uses - used_this_turn),
     )
 
 
@@ -191,11 +222,26 @@ def unsupported_server_tool_error(
         )
     if not forced and has_listed_anthropic_server_tools(request):
         return (
-            "FCC supports automatic Anthropic web_search only for Claude Code's "
-            f"{WEB_SEARCH_TYPE} server-tool-only request. Automatic web_fetch, "
-            "mixed tools, and other server-tool choices are not supported."
+            f"FCC supports one {WEB_SEARCH_TYPE} alongside custom tools with "
+            "automatic or required tool choice."
         )
     return None
+
+
+def _private_search_name(names: set[str], messages: list[Message]) -> str:
+    names.update(
+        block.name
+        for message in messages
+        if message.role == "assistant" and isinstance(message.content, list)
+        for block in message.content
+        if isinstance(block, ContentBlockToolUse)
+    )
+    private_name = HIDDEN_WEB_SEARCH_NAME
+    suffix = 0
+    while private_name in names:
+        suffix += 1
+        private_name = f"{HIDDEN_WEB_SEARCH_NAME}_{suffix}"
+    return private_name
 
 
 _INCOMPLETE_HISTORY = (
@@ -204,11 +250,18 @@ _INCOMPLETE_HISTORY = (
 )
 
 
-def _normalized_search_history(messages: list[Message]) -> list[Message]:
-    """Quote completed local search data for every upstream transport."""
+def _normalized_search_history(messages: list[Message]) -> tuple[list[Message], int]:
+    """Carry forward completed web results and count current-turn search attempts."""
     normalized: list[Message] = []
+    used_this_turn = 0
     for message in messages:
         content = message.content
+        if message.role == "user" and not (
+            isinstance(content, list)
+            and content
+            and isinstance(content[0], ContentBlockToolResult)
+        ):
+            used_this_turn = 0
         if not isinstance(content, list) or not any(
             getattr(block, "type", None) in _SERVER_HISTORY_TYPES for block in content
         ):
@@ -218,37 +271,78 @@ def _normalized_search_history(messages: list[Message]) -> list[Message]:
             raise InvalidRequestError(_INCOMPLETE_HISTORY)
 
         uses: dict[str, ContentBlockServerToolUse] = {}
-        results: dict[str, ContentBlockWebSearchToolResult] = {}
-        for block in content:
+        results: dict[
+            str,
+            tuple[
+                int, ContentBlockWebSearchToolResult | ContentBlockWebFetchToolResult
+            ],
+        ] = {}
+        for index, block in enumerate(content):
             if isinstance(block, ContentBlockServerToolUse):
-                query = block.input.get("query")
+                argument = {"web_search": "query", "web_fetch": "url"}.get(block.name)
+                value = block.input.get(argument) if argument is not None else None
                 if (
-                    block.name != "web_search"
+                    argument is None
                     or not block.id
                     or block.id in uses
-                    or set(block.input) != {"query"}
-                    or not isinstance(query, str)
-                    or not query.strip()
+                    or set(block.input) != {argument}
+                    or not isinstance(value, str)
+                    or not value.strip()
                 ):
                     raise InvalidRequestError(_INCOMPLETE_HISTORY)
                 uses[block.id] = block
-            elif isinstance(block, ContentBlockWebSearchToolResult):
+            elif isinstance(
+                block, (ContentBlockWebSearchToolResult, ContentBlockWebFetchToolResult)
+            ):
                 if not block.tool_use_id or block.tool_use_id in results:
                     raise InvalidRequestError(_INCOMPLETE_HISTORY)
-                results[block.tool_use_id] = block
-            elif getattr(block, "type", None) in _SERVER_HISTORY_TYPES:
-                raise InvalidRequestError(_INCOMPLETE_HISTORY)
+                results[block.tool_use_id] = (index, block)
         if not uses or uses.keys() != results.keys():
             raise InvalidRequestError(_INCOMPLETE_HISTORY)
 
+        signed_turn = any(use.name == "web_search" for use in uses.values()) and (
+            signed_gemini_turn(content) is not None
+        )
         projected = []
         for block in content:
             if isinstance(block, ContentBlockServerToolUse):
-                projected.append(_search_history_text(block, results[block.id]))
-            elif not isinstance(block, ContentBlockWebSearchToolResult):
+                result_index, result = results[block.id]
+                if block.name == "web_search" and isinstance(
+                    result, ContentBlockWebSearchToolResult
+                ):
+                    quoted = _search_history_text(block, result)
+                    projected.append(block if signed_turn else quoted)
+                    if (
+                        not isinstance(result.content, dict)
+                        or result.content.get("error_code") != "max_uses_exceeded"
+                    ):
+                        used_this_turn += 1
+                elif block.name == "web_fetch" and isinstance(
+                    result, ContentBlockWebFetchToolResult
+                ):
+                    next_index = result_index + 1
+                    following = (
+                        content[next_index] if next_index < len(content) else None
+                    )
+                    projected.append(
+                        _fetch_history_text(
+                            block,
+                            result,
+                            following.text
+                            if isinstance(following, ContentBlockText)
+                            else None,
+                        )
+                    )
+                else:
+                    raise InvalidRequestError(_INCOMPLETE_HISTORY)
+            elif (
+                signed_turn and isinstance(block, ContentBlockWebSearchToolResult)
+            ) or not isinstance(
+                block, (ContentBlockWebSearchToolResult, ContentBlockWebFetchToolResult)
+            ):
                 projected.append(block)
         normalized.append(message.model_copy(update={"content": projected}, deep=True))
-    return normalized
+    return normalized, used_this_turn
 
 
 def _search_history_text(
@@ -278,6 +372,46 @@ def _search_history_text(
     return ContentBlockText(
         type="text",
         text="[Earlier web search data]\n"
+        + json.dumps(record, ensure_ascii=False, separators=(",", ":")),
+    )
+
+
+def _fetch_history_text(
+    use: ContentBlockServerToolUse,
+    result: ContentBlockWebFetchToolResult,
+    following_text: str | None,
+) -> ContentBlockText:
+    content = result.content
+    if not isinstance(content, dict):
+        raise InvalidRequestError(_INCOMPLETE_HISTORY)
+    match content.get("type"):
+        case "web_fetch_tool_error" | "web_fetch_tool_result_error" if isinstance(
+            content.get("error_code"), str
+        ):
+            record = {"url": use.input["url"], "error_code": content["error_code"]}
+        case "web_fetch_result":
+            document = content.get("content")
+            url = content.get("url")
+            if not isinstance(document, dict) or document.get("type") != "document":
+                raise InvalidRequestError(_INCOMPLETE_HISTORY)
+            source = document.get("source")
+            if (
+                not isinstance(url, str)
+                or not isinstance(source, dict)
+                or source.get("type") != "text"
+                or not isinstance(source.get("data"), str)
+            ):
+                raise InvalidRequestError(_INCOMPLETE_HISTORY)
+            record = {"url": url}
+            if isinstance(document.get("title"), str):
+                record["title"] = document["title"]
+            if source["data"] != following_text:
+                record["text"] = source["data"]
+        case _:
+            raise InvalidRequestError(_INCOMPLETE_HISTORY)
+    return ContentBlockText(
+        type="text",
+        text="[Earlier web fetch data]\n"
         + json.dumps(record, ensure_ascii=False, separators=(",", ":")),
     )
 

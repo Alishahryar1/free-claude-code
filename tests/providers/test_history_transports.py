@@ -11,6 +11,7 @@ import httpx2
 import pytest
 
 from free_claude_code.application.execution import ProviderExecutor
+from free_claude_code.application.response_collection import collected_frames
 from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
@@ -247,8 +248,6 @@ async def _harness(
 
 
 async def _saved_reply(stream, wire):
-    from free_claude_code.application.response_collection import collected_frames
-
     stream = collected_frames(stream, protocol=wire)
     if wire == "messages":
         message, error, saw_stop = await aggregate_anthropic_sse_to_message(stream)
@@ -256,6 +255,75 @@ async def _saved_reply(stream, wire):
         return [{"role": "assistant", "content": message["content"]}]
     events = parse_sse_text("".join([event async for event in stream]))
     return events[-1].data["response"]["output"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("finish_reason", "stop_reason"), [("stop", "refusal"), ("length", "max_tokens")]
+)
+@pytest.mark.parametrize("unfinished_tool", [False, True])
+async def test_chat_to_messages_preserves_explicit_refusal(
+    finish_reason: str, stop_reason: str, unfinished_tool: bool
+) -> None:
+    refusal = "I can't answer that."
+    payload = _events_for("chat")[-1]
+    payload["choices"][0]["delta"] = {"refusal": refusal}
+    payload["choices"][0]["finish_reason"] = finish_reason
+    events = [payload]
+    if unfinished_tool:
+        events.insert(
+            0,
+            {
+                **payload,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_partial",
+                                    "type": "function",
+                                    "function": {"arguments": "{"},
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            },
+        )
+    async with _harness("chat", lambda _: (200, events)) as (send, _, _):
+        reply, error, complete = await aggregate_anthropic_sse_to_message(
+            collected_frames(
+                send("messages", [{"role": "user", "content": "Request"}]),
+                protocol="messages",
+            )
+        )
+    assert complete and error is None
+    assert reply["stop_reason"] == stop_reason
+    assert reply["content"] == [{"type": "text", "text": refusal}]
+
+
+@pytest.mark.asyncio
+async def test_chat_refusal_is_not_sent_as_ordinary_responses_text() -> None:
+    payload = _events_for("chat")[-1]
+    payload["choices"][0]["delta"] = {"refusal": "I can't answer that."}
+    async with _harness("chat", lambda _: (200, [payload])) as (send, _, _):
+        events = [
+            frame
+            async for frame in collected_frames(
+                send("responses", [{"role": "user", "content": "Request"}]),
+                protocol="responses",
+            )
+        ]
+    parsed = parse_sse_text("".join(events))
+    assert parsed[-1].event == "response.completed"
+    assert all(
+        not event.data["delta"].strip()
+        for event in parsed
+        if event.event == "response.output_text.delta"
+    )
 
 
 @pytest.mark.asyncio

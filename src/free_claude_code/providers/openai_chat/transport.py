@@ -257,6 +257,7 @@ class _ChatStreamPresenter:
         )
         self._output.reasoning_replay = self._structured_reasoning
         self._finish_reason: Any = None
+        self._refused = False
         self._raw_stop_seen = False
         self._usage_info: Any = None
         self._tool_argument_aliases: dict[str, dict[str, str]] = {}
@@ -392,6 +393,9 @@ class _ChatStreamPresenter:
 
         yield from self._extra_reasoning_events(delta, self._output)
 
+        if isinstance(self._output, AnthropicChatStreamOutput) and delta.refusal:
+            self._refused = True
+            yield from _iter_visible_text_events(self._output, delta.refusal)
         if delta.content:
             for part in self._think_parser.feed(delta.content):
                 if part.type == ContentType.THINKING:
@@ -471,8 +475,11 @@ class _ChatStreamPresenter:
         if self._completed:
             return
         completion = self.completion
+        stop_reason = map_stop_reason(completion.finish_reason)
+        if self._refused and stop_reason != "max_tokens":
+            stop_reason = "refusal"
         yield from self._output.finish_success(
-            stop_reason=map_stop_reason(completion.finish_reason),
+            stop_reason=stop_reason,
             usage=usage,
         )
         self._completed = True

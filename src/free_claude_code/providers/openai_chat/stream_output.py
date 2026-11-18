@@ -254,11 +254,6 @@ class ChatStreamOutput(ABC):
     def has_content_block(self) -> bool:
         return self._content_started
 
-    def final_stop_reason(self, fallback: str) -> str:
-        if self.has_emitted_tool_block():
-            return "tool_use"
-        return "end_turn" if fallback == "tool_use" else fallback
-
     def estimate_output_tokens(self) -> int:
         block_count = (
             int(bool(self.accumulated_reasoning))
@@ -427,7 +422,7 @@ class AnthropicChatStreamOutput(ChatStreamOutput):
     def _finish_success(self, *, stop_reason: str, usage: ChatStreamUsage) -> list[str]:
         return [
             self._ledger.message_delta(
-                self.final_stop_reason(stop_reason),
+                self._ledger.final_stop_reason(stop_reason),
                 usage.output_tokens,
                 input_tokens=usage.input_tokens,
                 usage_fields=usage.anthropic_fields,
