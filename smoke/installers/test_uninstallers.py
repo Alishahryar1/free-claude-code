@@ -889,7 +889,9 @@ def test_uninstall_ps1_removes_bundle_and_its_path_without_usable_uv(
     harness.remove_entry_points()
     bundle_bin = harness.fcc_home / "windows-app" / "bin"
     bundle_bin.mkdir(parents=True)
-    harness.env["FCC_TEST_USER_PATH"] = str(bundle_bin)
+    harness.env["FCC_TEST_USER_PATH"] = (
+        f"{bundle_bin}\\" if expandable_bundle_entry else str(bundle_bin)
+    )
     (bundle_bin / "fcc-server.exe").touch()
     desktop = harness.home / "Desktop" / "Free Claude Code.lnk"
     shortcut_target = bundle_bin / "fcc-desktop.exe"
@@ -898,7 +900,7 @@ def test_uninstall_ps1_removes_bundle_and_its_path_without_usable_uv(
         harness.powershell, desktop, shortcut_target, harness.env["PSMODULEPATH"]
     )
     bundle_entry = (
-        r"%USERPROFILE%\.fcc\windows-app\bin"
+        "%USERPROFILE%\\.fcc\\windows-app\\bin\\"
         if expandable_bundle_entry
         else str(bundle_bin)
     )

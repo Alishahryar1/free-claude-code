@@ -516,9 +516,9 @@ def test_install_ps1_failed_voice_update_keeps_signed_path(
         )
 
 
-@pytest.mark.parametrize("expandable_bundle_entry", [False, True])
+@pytest.mark.parametrize("path_style", ["absolute", "expandable", "literal"])
 def test_install_ps1_voice_switch_prioritizes_verified_uv_and_fcc(
-    powershell_harness, expandable_bundle_entry: bool
+    powershell_harness, path_style: str
 ):
     if os.name != "nt":
         pytest.skip("Windows registry test")
@@ -529,20 +529,29 @@ def test_install_ps1_voice_switch_prioritizes_verified_uv_and_fcc(
     harness.add_installed_clients()
     harness.add_uv("0.1.0")
     uv_bin = harness.root / "verified-uv"
-    tool_bin = harness.root / "verified-voice-fcc"
-    bundle_bin = Path(harness.env["USERPROFILE"]) / ".fcc/windows-app/bin"
+    home = Path(harness.env["USERPROFILE"])
+    tool_bin = home / "verified-voice-fcc"
+    bundle_bin = home / ".fcc/windows-app/bin"
     bundle_bin.mkdir(parents=True)
     bundle_entry = (
-        r"%USERPROFILE%\.fcc\windows-app\bin"
-        if expandable_bundle_entry
+        "%USERPROFILE%\\.fcc\\windows-app\\bin\\"
+        if path_style == "expandable"
         else str(bundle_bin)
     )
-    old_path = f"{bundle_entry};{harness.bin_dir};{tool_bin}"
+    tool_entry = (
+        r"%USERPROFILE%\verified-voice-fcc"
+        if path_style == "literal"
+        else str(tool_bin)
+    )
+    path_type = winreg.REG_SZ if path_style == "literal" else winreg.REG_EXPAND_SZ
+    old_path = f"{bundle_entry};{harness.bin_dir};{tool_entry}"
     harness.env.update(
         UV_INSTALL_DIR=str(uv_bin),
         UV_TOOL_BIN_DIR=str(tool_bin),
         UV_NO_MODIFY_PATH="",
-        FCC_TEST_USER_PATH=f"{bundle_bin};{harness.bin_dir};{tool_bin}",
+        FCC_TEST_USER_PATH=old_path.replace("%USERPROFILE%", str(home))
+        if path_style == "expandable"
+        else old_path,
         FCC_TEST_UV_STANDALONE_PATH="1",
     )
     with winreg.OpenKey(
@@ -551,13 +560,13 @@ def test_install_ps1_voice_switch_prioritizes_verified_uv_and_fcc(
         0,
         winreg.KEY_ALL_ACCESS,
     ) as key:
-        winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, old_path)
+        winreg.SetValueEx(key, "Path", 0, path_type, old_path)
         finished = harness.run("-VoiceLocal")
         assert finished.returncode == 0, finished.stdout + finished.stderr
-        assert winreg.QueryValueEx(key, "Path") == (
-            f"{tool_bin};{uv_bin};{harness.bin_dir}",
-            winreg.REG_EXPAND_SZ,
-        )
+        expected = [str(tool_bin), str(uv_bin), str(harness.bin_dir)]
+        if path_style == "literal":
+            expected.append(tool_entry)
+        assert winreg.QueryValueEx(key, "Path") == (";".join(expected), path_type)
 
 
 @pytest.mark.parametrize("fail_notification", [False, True])

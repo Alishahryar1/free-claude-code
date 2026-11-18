@@ -166,8 +166,7 @@ function Initialize-UvContext {
     Write-Host "+ $commandText"
     $result = Invoke-NativeResult -FilePath $script:UvPath -Arguments @("tool", "dir", "--bin")
     if ($Optional -and ($result.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($result.Output))) {
-        $userPath = [Environment]::GetEnvironmentVariable("Path", "User") -split ';'
-        if ((Get-FccBundleBin) -iin $userPath) { return }
+        if (Test-FccBundleOnUserPath) { return }
     }
     if ($result.ExitCode -ne 0) {
         if (-not [string]::IsNullOrWhiteSpace($result.Output)) {
@@ -229,8 +228,7 @@ function Disconnect-FccIntegrations {
             }
         }
     }
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User") -split ';'
-    if ((-not $doctorPath -or $bundleBin -iin $userPath) -and (Test-Path -LiteralPath $bundleDoctor -PathType Leaf)) {
+    if ((-not $doctorPath -or (Test-FccBundleOnUserPath)) -and (Test-Path -LiteralPath $bundleDoctor -PathType Leaf)) {
         $doctorPath = $bundleDoctor
     }
     if (-not $doctorPath) {
@@ -271,16 +269,18 @@ function Confirm-FccCommandsRemoved {
 function Test-EquivalentPath {
     param(
         [string] $Left,
-        [string] $Right
+        [string] $Right,
+        [switch] $ExpandLeft
     )
 
     if ([string]::IsNullOrWhiteSpace($Left) -or [string]::IsNullOrWhiteSpace($Right)) {
         return $false
     }
     try {
+        if ($ExpandLeft) { $Left = [Environment]::ExpandEnvironmentVariables($Left) }
         return [string]::Equals(
-            [IO.Path]::GetFullPath($Left),
-            [IO.Path]::GetFullPath($Right),
+            [IO.Path]::GetFullPath($Left).TrimEnd('\', '/'),
+            [IO.Path]::GetFullPath($Right).TrimEnd('\', '/'),
             [StringComparison]::OrdinalIgnoreCase
         )
     }
@@ -315,6 +315,14 @@ function Get-FccBundleBin {
     return Join-Path (Get-FccBundlePath) 'bin'
 }
 
+function Test-FccBundleOnUserPath {
+    $bin = Get-FccBundleBin
+    foreach ($directory in ([Environment]::GetEnvironmentVariable("Path", "User") -split ';')) {
+        if (Test-EquivalentPath -Left $directory -Right $bin) { return $true }
+    }
+    return $false
+}
+
 function Remove-FccBundlePathEntry {
     param([string] $BundlePath)
 
@@ -325,9 +333,9 @@ function Remove-FccBundlePathEntry {
         $path = $key.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
         if ($path) {
             $kind = $key.GetValueKind("Path")
+            $expand = $kind -eq 'ExpandString'
             $newPath = ($path -split ';' | Where-Object {
-                $directory = if ($kind -eq 'ExpandString') { [Environment]::ExpandEnvironmentVariables($_) } else { $_ }
-                $directory -ine $bin
+                -not (Test-EquivalentPath -Left $_ -Right $bin -ExpandLeft:$expand)
             }) -join ';'
             if ($newPath -cne $path) { $key.SetValue("Path", $newPath, $kind) }
         }
@@ -338,7 +346,9 @@ function Remove-FccBundlePathEntry {
     if (Test-Path -LiteralPath $launcher -PathType Leaf) {
         $null = Invoke-NativeResult -FilePath $launcher -Arguments @('--fcc-notify-environment')
     }
-    $env:Path = ($env:Path -split ';' | Where-Object { $_ -ine $bin }) -join ';'
+    $env:Path = ($env:Path -split ';' | Where-Object {
+        -not (Test-EquivalentPath -Left $_ -Right $bin)
+    }) -join ';'
 }
 
 function Remove-FccDesktopShortcuts {

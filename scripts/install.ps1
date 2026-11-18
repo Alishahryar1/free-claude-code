@@ -1848,7 +1848,10 @@ function Get-FccBundlePath {
 
 function Test-FccBundleOnUserPath {
     $bundleBin = Join-Path (Get-FccBundlePath) 'bin'
-    return $bundleBin -iin ([Environment]::GetEnvironmentVariable("Path", "User") -split ';')
+    foreach ($directory in ([Environment]::GetEnvironmentVariable("Path", "User") -split ';')) {
+        if (Test-EquivalentPath -Left $directory -Right $bundleBin) { return $true }
+    }
+    return $false
 }
 
 function Recover-FccBundleInstallation {
@@ -1916,11 +1919,11 @@ function Set-FccBundlePathEntry {
     try {
         $userPath = $key.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
         $kind = if ("Path" -iin $key.GetValueNames()) { $key.GetValueKind("Path") } else { "ExpandString" }
+        $expand = $kind -eq 'ExpandString'
         $entries = @()
         if ($userPath) {
             $entries = @($userPath -split ';' | Where-Object {
-                $directory = if ($kind -eq 'ExpandString') { [Environment]::ExpandEnvironmentVariables($_) } else { $_ }
-                $directory -ine $binPath
+                -not (Test-EquivalentPath -Left $_ -Right $binPath -ExpandLeft:$expand)
             })
         }
         if ($VoiceToolBin) {
@@ -1931,7 +1934,7 @@ function Set-FccBundlePathEntry {
             $prioritized = @()
             foreach ($directory in $preferred) {
                 $matching = @($entries | Where-Object {
-                    Test-EquivalentPath -Left ([Environment]::ExpandEnvironmentVariables($_)) -Right $directory
+                    Test-EquivalentPath -Left $_ -Right $directory -ExpandLeft:$expand
                 })
                 $prioritized += if ($matching.Count) { $matching[0] } else { $directory }
                 $entries = @($entries | Where-Object { $_ -cnotin $matching })
@@ -1940,11 +1943,13 @@ function Set-FccBundlePathEntry {
         } elseif (-not $Remove) {
             $entries = @($binPath) + $entries
             if ($AdditionalBin) {
-                $persistentPath = $entries + ([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';')
-                $existing = $persistentPath | Where-Object {
-                    Test-EquivalentPath -Left ([Environment]::ExpandEnvironmentVariables($_)) -Right $AdditionalBin
+                $userMatch = $entries | Where-Object {
+                    Test-EquivalentPath -Left $_ -Right $AdditionalBin -ExpandLeft:$expand
                 } | Select-Object -First 1
-                if (-not $existing) { $entries += $AdditionalBin }
+                $machineMatch = [Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';' | Where-Object {
+                    Test-EquivalentPath -Left $_ -Right $AdditionalBin
+                } | Select-Object -First 1
+                if (-not ($userMatch -or $machineMatch)) { $entries += $AdditionalBin }
             }
         }
         $newPath = $entries -join ';'
@@ -1957,7 +1962,9 @@ function Set-FccBundlePathEntry {
     }
     # An interrupted activation can persist PATH before notifying other processes.
     if (-not $Remove -or $pathChanged) { Send-FccPathChange }
-    $env:Path = ($env:Path -split ';' | Where-Object { $_ -ine $binPath }) -join ';'
+    $env:Path = ($env:Path -split ';' | Where-Object {
+        -not (Test-EquivalentPath -Left $_ -Right $binPath)
+    }) -join ';'
     if (-not $Remove) { Prioritize-PathEntry $binPath }
 }
 
@@ -2190,16 +2197,18 @@ function Configure-AndConfirmFreeClaudeCode {
 function Test-EquivalentPath {
     param(
         [string] $Left,
-        [string] $Right
+        [string] $Right,
+        [switch] $ExpandLeft
     )
 
     if ([string]::IsNullOrWhiteSpace($Left) -or [string]::IsNullOrWhiteSpace($Right)) {
         return $false
     }
     try {
+        if ($ExpandLeft) { $Left = [Environment]::ExpandEnvironmentVariables($Left) }
         return [string]::Equals(
-            [IO.Path]::GetFullPath($Left),
-            [IO.Path]::GetFullPath($Right),
+            [IO.Path]::GetFullPath($Left).TrimEnd('\', '/'),
+            [IO.Path]::GetFullPath($Right).TrimEnd('\', '/'),
             [StringComparison]::OrdinalIgnoreCase
         )
     }
