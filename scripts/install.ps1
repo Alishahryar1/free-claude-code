@@ -44,6 +44,7 @@ $script:InstallDsh = $true
 $script:InstallGrok = $true
 $script:InstallMuse = $true
 $script:InstallAider = $true
+$script:VerifiedAiderBin = ''
 $script:InstallAgy = $true
 $script:PiAvailable = $false
 $script:MuseAvailable = $false
@@ -1460,6 +1461,9 @@ function Ensure-Aider {
     }
 
     Confirm-Application -CommandName "aider" -DisplayName "Aider"
+    if (-not $DryRun) {
+        $script:VerifiedAiderBin = Split-Path -Parent (Get-ApplicationCommand 'aider').Source
+    }
 }
 
 function Ensure-Muse {
@@ -1835,7 +1839,7 @@ function Get-FccBundlePath {
 }
 
 function Set-FccBundlePathEntry {
-    param([switch] $Remove)
+    param([switch] $Remove, [string] $AiderBin)
 
     $binPath = Join-Path (Get-FccBundlePath) 'bin'
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
@@ -1843,7 +1847,16 @@ function Set-FccBundlePathEntry {
         $userPath = $key.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
         $entries = @()
         if ($userPath) { $entries = @($userPath -split ';' | Where-Object { $_ -ine $binPath }) }
-        if (-not $Remove) { $entries = @($binPath) + $entries }
+        if (-not $Remove) {
+            $entries = @($binPath) + $entries
+            if ($AiderBin) {
+                $persistentPath = $entries + ([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';')
+                $existing = $persistentPath | Where-Object {
+                    Test-EquivalentPath -Left ([Environment]::ExpandEnvironmentVariables($_)) -Right $AiderBin
+                } | Select-Object -First 1
+                if (-not $existing) { $entries += $AiderBin }
+            }
+        }
         $newPath = $entries -join ';'
         if ($newPath -cne $userPath) {
             $kind = if ("Path" -iin $key.GetValueNames()) { $key.GetValueKind("Path") } else { "ExpandString" }
@@ -2032,7 +2045,7 @@ function Configure-AndConfirmFreeClaudeCode {
         Invoke-NativeCommand -FilePath $uvCommand.Source -Arguments @("tool", "update-shell")
         $toolBin = Add-UvToolBinDirectory -UvPath $uvCommand.Source
     } else {
-        Set-FccBundlePathEntry
+        Set-FccBundlePathEntry -AiderBin $script:VerifiedAiderBin
         $toolBin = Join-Path (Get-FccBundlePath) 'bin'
     }
     Start-InstallStep "FCC verification"

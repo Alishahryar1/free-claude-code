@@ -259,6 +259,41 @@ def test_install_ps1_signed_bundle_does_not_require_uv_for_claude_code(
 
 
 @pytest.mark.parametrize("preinstalled", [False, True])
+def test_install_ps1_signed_bundle_persists_verified_aider_bin(
+    powershell_harness, preinstalled
+):
+    if os.name != "nt":
+        pytest.skip("Windows registry test")
+
+    import winreg
+
+    custom_bin = powershell_harness.root / "custom-aider-bin"
+    powershell_harness.env["UV_TOOL_BIN_DIR"] = str(custom_bin)
+    if preinstalled:
+        _write_executable(custom_bin / "aider.cmd", _batch_client("aider"))
+    else:
+        powershell_harness.add_uv(UV_MINIMUM)
+    existing = {"opencode", "aider"} if preinstalled else {"opencode"}
+    answers = [
+        "y" if agent == "aider" else "n"
+        for agent in CODING_AGENTS
+        if agent not in existing
+    ] + ["n"]
+
+    result = powershell_harness.run_interactive(answers)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "aider:--version" in powershell_harness.calls()
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER, powershell_harness.env["FCC_TEST_ENV_KEY"]
+    ) as key:
+        user_path, _ = winreg.QueryValueEx(key, "Path")
+    assert str(custom_bin) in user_path.split(";")
+    if preinstalled:
+        assert not any(call.startswith("uv:") for call in powershell_harness.calls())
+
+
+@pytest.mark.parametrize("preinstalled", [False, True])
 def test_install_ps1_signed_bundle_survives_policy_blocked_aider(
     powershell_harness, preinstalled
 ):
@@ -4171,9 +4206,8 @@ def test_install_ps1_checks_existing_aider_in_custom_uv_tool_bin_before_installi
     calls = powershell_harness.calls()
     if interactive:
         assert "for fcc-aider?" not in result.stdout
-        assert "aider:--version" in calls
-    else:
-        assert calls.index("uv:tool dir --bin") < calls.index("aider:--version")
+    assert "aider:--version" in calls
+    assert "uv:tool dir --bin" not in calls
     assert not any("aider-chat@latest" in call for call in calls)
     assert existing_aider.read_bytes() == original
 
