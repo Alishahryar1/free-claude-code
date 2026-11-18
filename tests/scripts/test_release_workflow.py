@@ -25,14 +25,13 @@ def test_post_merge_serializes_and_limits_publish_permissions():
         "cancel-in-progress": False,
         "queue": "max",
     }
+    assert len(config["jobs"]) == 2
     cache = config["jobs"]["warm-dependency-cache"]
     assert {e["os"] for e in cache["strategy"]["matrix"]["include"]} == {
         "Linux",
         "Windows",
         "macOS",
     }
-    stage = config["jobs"]["stage"]
-    windows = config["jobs"]["windows"]
     publish = config["jobs"]["publish"]
     assert publish["runs-on"] == "macos-latest"
     assert {e["runner"] for e in cache["strategy"]["matrix"]["include"]} == set(
@@ -44,39 +43,11 @@ def test_post_merge_serializes_and_limits_publish_permissions():
         if step.get("uses") == "./.github/actions/ci-environment"
     )
     assert setup["with"]["runner-label"] == publish["runs-on"]
-    assert stage["permissions"] == {"contents": "write"}
-    assert windows["needs"] == "stage"
-    assert windows["if"] == "needs.stage.outputs.windows_needed == 'true'"
-    assert windows["environment"] == "windows-signing"
-    assert windows["permissions"] == {
-        "attestations": "write",
-        "contents": "write",
-        "id-token": "write",
-    }
-    attest = next(
-        s for s in windows["steps"] if s.get("uses", "").startswith("actions/attest@")
-    )
-    upload = next(
-        s
-        for s in windows["steps"]
-        if s.get("name") == "Stage the signed Windows bundle"
-    )
-    assert windows["steps"].index(attest) < windows["steps"].index(upload)
-    assert upload["if"] == "steps.asset.outputs.uploaded != 'true'"
-    assert publish["needs"] == ["stage", "windows"]
-    assert "needs.stage.result == 'success'" in publish["if"]
-    assert "needs.windows.result == 'success'" in publish["if"]
-    assert "needs.windows.result == 'skipped'" in publish["if"]
-    assert "needs.stage.outputs.windows_acceptance_required != 'true'" in publish["if"]
-    assert "inputs.accepted_windows_digest != ''" in publish["if"]
+    assert "needs" not in publish
     assert publish["environment"] == "pypi"
-    assert publish["permissions"] == {
-        "attestations": "read",
-        "contents": "write",
-        "id-token": "write",
-    }
+    assert publish["permissions"] == {"contents": "write", "id-token": "write"}
     assert cache["permissions"] == {"contents": "read"}
-    for job in (cache, stage):
+    for job in (cache, publish):
         assert job["if"] == "github.ref == 'refs/heads/main'"
         checkout = next(
             s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout@")
