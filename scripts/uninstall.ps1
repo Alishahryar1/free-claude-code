@@ -386,6 +386,7 @@ function Purge-FccHome {
         Get-ChildItem -LiteralPath $fccHome -Force | Where-Object { $_.FullName -ine $bundlePath } | ForEach-Object {
             Remove-Item -LiteralPath $_.FullName -Recurse -Force
         }
+        Remove-FccBundlePathEntry
     }
     Remove-Item -LiteralPath $fccHome -Recurse -Force
     if (Test-Path -LiteralPath $fccHome) {
@@ -445,7 +446,6 @@ try {
 
     Write-Step "Removing Free Claude Code desktop shortcuts"
     Remove-FccDesktopShortcuts
-    if ($hasBundle) { Remove-FccBundlePathEntry }
 
     Write-Step "Purging FCC config and data from ~/.fcc"
     Purge-FccHome -BundleLast:$hasBundle

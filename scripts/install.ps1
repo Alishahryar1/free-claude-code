@@ -82,6 +82,7 @@ $FccCommands = @(
     "fcc-init",
     "free-claude-code"
 )
+$FccBundleCommands = @($FccCommands | Where-Object { $_ -notin @('fcc-init', 'free-claude-code') })
 
 function Show-Usage {
     @"
@@ -1845,9 +1846,12 @@ function Assert-FccBundleMachinePath {
     $originalPath = $env:Path
     try {
         $env:Path = $MachinePath
-        $command = Get-ApplicationCommand 'fcc-server'
-        if ($command -and -not (Test-EquivalentPath -Left (Split-Path -Parent $command.Source) -Right (Join-Path (Get-FccBundlePath) 'bin'))) {
-            throw "The machine PATH selects '$($command.Source)' before the per-user FCC bundle. Remove the machine-wide FCC command from PATH, then rerun the installer."
+        $bundleBin = Join-Path (Get-FccBundlePath) 'bin'
+        foreach ($name in $FccBundleCommands) {
+            $command = Get-ApplicationCommand $name
+            if ($command -and -not (Test-EquivalentPath -Left (Split-Path -Parent $command.Source) -Right $bundleBin)) {
+                throw "The machine PATH selects '$($command.Source)' before the per-user FCC bundle. Remove the machine-wide FCC command from PATH, then rerun the installer."
+            }
         }
     } finally {
         $env:Path = $originalPath
@@ -1906,7 +1910,7 @@ function Confirm-FccBundle {
     param([string] $Path)
 
     $bin = Join-Path $Path 'bin'
-    foreach ($name in ($FccCommands | Where-Object { $_ -notin @('fcc-update', 'fcc-init', 'free-claude-code') })) {
+    foreach ($name in ($FccBundleCommands | Where-Object { $_ -ne 'fcc-update' })) {
         if (-not (Test-Path -LiteralPath (Join-Path $bin "$name.exe") -PathType Leaf)) {
             throw "The Windows bundle is missing $name.exe."
         }
@@ -2078,7 +2082,8 @@ function Configure-AndConfirmFreeClaudeCode {
         [IO.Path]::AltDirectorySeparatorChar
     )
     $installedCommands = @{}
-    foreach ($commandName in @("fcc-desktop", "fcc-server", "fcc-claude", "fcc-codex", "fcc-pi", "fcc-opencode", "fcc-cline", "fcc-hermes", "fcc-dsh", "fcc-grok", "fcc-muse", "fcc-aider", "fcc-agy", "fcc-doctor", "fcc-update.cmd")) {
+    foreach ($name in $FccBundleCommands) {
+        $commandName = if ($name -eq 'fcc-update') { 'fcc-update.cmd' } else { $name }
         $command = Get-ApplicationCommand $commandName
         if (-not $command) {
             throw "Free Claude Code installation did not create '$commandName'."

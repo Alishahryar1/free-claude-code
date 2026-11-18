@@ -938,9 +938,16 @@ def test_uninstall_ps1_cleans_integrations_with_active_uv_install(
     assert not harness.fcc_home.exists()
 
 
-def test_uninstall_ps1_can_retry_signed_bundle_purge_without_uv(
+@pytest.mark.parametrize("include_uv", [False, True])
+def test_uninstall_ps1_can_retry_signed_bundle_purge_without_usable_uv(
     powershell_uninstall_harness: PowerShellUninstallHarness,
+    include_uv: bool,
 ):
+    if os.name != "nt":
+        pytest.skip("Windows registry test")
+
+    import winreg
+
     harness = powershell_uninstall_harness
     harness.remove_entry_points()
     bundle_bin = harness.fcc_home / "windows-app" / "bin"
@@ -950,13 +957,26 @@ def test_uninstall_ps1_can_retry_signed_bundle_purge_without_uv(
     data.parent.mkdir()
     data.write_bytes(b"test data")
 
-    with data.open("rb"):
-        interrupted = harness.run(include_uv=False, keep_integrations=True)
+    harness.env["FCC_TEST_USER_PATH"] = str(bundle_bin)
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        harness.env["FCC_TEST_ENV_KEY"],
+        0,
+        winreg.KEY_ALL_ACCESS,
+    ) as key:
+        winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, str(bundle_bin))
+        with data.open("rb"):
+            interrupted = harness.run(
+                include_uv=include_uv, fail_step="tool-dir", keep_integrations=True
+            )
+        harness.env["FCC_TEST_USER_PATH"], _ = winreg.QueryValueEx(key, "Path")
 
     assert interrupted.returncode != 0
     assert data.is_file()
     assert bundle_bin.is_dir()
-    removed = harness.run(include_uv=False, keep_integrations=True)
+    removed = harness.run(
+        include_uv=include_uv, fail_step="tool-dir", keep_integrations=True
+    )
     assert removed.returncode == 0, removed.stdout + removed.stderr
     assert not harness.fcc_home.exists()
     unchanged = harness.run(include_uv=False)

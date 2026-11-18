@@ -276,9 +276,10 @@ def test_install_ps1_rejects_concurrent_fcc_operation(powershell_harness):
     assert not lock.exists()
 
 
-def test_install_ps1_rejects_fcc_shadowed_by_machine_path(powershell_harness):
+@pytest.mark.parametrize("command", ["fcc-server", "fcc-update"])
+def test_install_ps1_rejects_fcc_shadowed_by_machine_path(powershell_harness, command):
     machine_bin = powershell_harness.root / "machine-bin"
-    _write_executable(machine_bin / "fcc-server.cmd", _batch_client("fcc-server"))
+    _write_executable(machine_bin / f"{command}.cmd", _batch_client(command))
     powershell_harness.env["FCC_TEST_MACHINE_PATH"] = str(machine_bin)
 
     blocked = powershell_harness.run_functions(
@@ -287,7 +288,7 @@ def test_install_ps1_rejects_fcc_shadowed_by_machine_path(powershell_harness):
 
     assert blocked.returncode != 0
     assert "machine PATH" in blocked.stderr
-    assert "fcc-server.cmd" in blocked.stderr
+    assert f"{command}.cmd" in blocked.stderr
 
 
 @pytest.mark.parametrize("preinstalled", [False, True])

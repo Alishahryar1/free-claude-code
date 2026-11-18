@@ -68,8 +68,16 @@ static int run(BOOL graphical) {
     startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
     startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
     startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
-    SetConsoleCtrlHandler(console_handler, TRUE);
-    if (!CreateProcessW(python, command, NULL, NULL, TRUE, CREATE_SUSPENDED,
+    DWORD creation_flags = CREATE_SUSPENDED;
+    if (!graphical) {
+        DWORD console_process;
+        if (GetConsoleProcessList(&console_process, 1) == 0) {
+            creation_flags |= DETACHED_PROCESS;
+        } else {
+            SetConsoleCtrlHandler(console_handler, TRUE);
+        }
+    }
+    if (!CreateProcessW(python, command, NULL, NULL, TRUE, creation_flags,
         NULL, NULL, &startup, &process)) {
         DWORD error = GetLastError();
         if (!graphical) {
