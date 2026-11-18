@@ -18,7 +18,7 @@ PRs without changes to those paths must not use a release prefix. Do not edit ve
 
 ## Windows release signing
 
-The post-merge workflow builds the x64 ZIP from the exact staged FCC wheel and the locked dependencies. It preserves valid upstream signatures, signs the unsigned executables and libraries, and verifies the ZIP before publishing the release.
+The post-merge workflow builds the x64 ZIP from the exact staged FCC wheel and the locked dependencies. It preserves valid upstream signatures, signs the unsigned executables and libraries, and checks the ZIP's GitHub build attestation before publishing the release.
 
 Before enabling this release path, configure an [Azure Artifact Signing Public Trust profile](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart) for the verified publisher. Create a GitHub Actions environment named `windows-signing`, restricted to the `main` deployment branch. Follow the [Azure OIDC setup](https://github.com/Azure/artifact-signing-action/blob/main/docs/OIDC.md) for that environment and grant the federated identity the Artifact Signing Certificate Profile Signer role on the profile. Set these environment variables in Actions.
 

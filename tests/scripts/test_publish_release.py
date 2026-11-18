@@ -3,6 +3,7 @@
 import hashlib
 import json
 import shutil
+import zipfile
 from itertools import pairwise
 from pathlib import Path
 from typing import TypedDict
@@ -76,6 +77,7 @@ class FakeRemote:
         self.builds = 0
         self.native_builds = []
         self.uploaded = {}
+        self.attested = set()
         self.real_command = publishing.command
 
     def command(self, args, *, cwd=None):
@@ -149,6 +151,16 @@ class FakeRemote:
                 self.fail = None
                 raise RuntimeError("interrupted finalization")
             self.releases[args[3]]["draft"] = False
+        elif args[:3] == ["gh", "attestation", "verify"]:
+            assert args[4:] == [
+                "--signer-workflow",
+                "owner/repo/.github/workflows/post-merge.yml",
+                "--source-ref",
+                "refs/heads/main",
+                "--deny-self-hosted-runners",
+            ]
+            if Path(args[3]).read_bytes() not in self.attested:
+                raise RuntimeError("No verified provenance")
         elif args[:2] == ["uv", "build"]:
             self.builds += 1
             assert cwd is not None
@@ -201,9 +213,22 @@ def test_windows_release_waits_for_bundle_and_keeps_python_assets(releases, tmp_
     assert remote.builds == 1
 
     bundle = tmp_path / "free_claude_code-1.2.4-windows-x64.zip"
-    bundle.write_bytes(b"signed Windows bundle")
+    with zipfile.ZipFile(bundle, "w") as archive:
+        archive.writestr("version.txt", "1.2.4\n")
     remote.command(["gh", "release", "upload", "v1.2.4", str(bundle)])
     assert publisher.publish(target, stage_only=True) == ("1.2.4", False)
+    with pytest.raises(RuntimeError, match="No verified provenance"):
+        publisher.publish(target)
+    assert not remote.uploaded
+    assert remote.releases["v1.2.4"]["draft"]
+
+    remote.attested.add(bundle.read_bytes())
+    remote.files["v1.2.4", bundle.name] += b"changed"
+    with pytest.raises(ValueError, match="Staged asset failed verification"):
+        publisher.publish(target)
+    assert not remote.uploaded
+
+    remote.files["v1.2.4", bundle.name] = bundle.read_bytes()
     publisher.publish(target)
 
     assert not remote.releases["v1.2.4"]["draft"]

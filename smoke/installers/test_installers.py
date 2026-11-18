@@ -212,6 +212,56 @@ def test_install_ps1_bundle_rejects_failed_update_before_activation(
     assert not list(root.parent.glob("windows-app.staging-*"))
 
 
+def test_install_ps1_preserves_expandable_user_path(powershell_harness):
+    import winreg
+
+    root = Path(powershell_harness.env["USERPROFILE"]) / ".fcc" / "windows-app"
+    bin_dir = root / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "fcc-server.exe").touch()
+    previous = r"%USERPROFILE%\bin;%JAVA_HOME%\bin"
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        powershell_harness.env["FCC_TEST_ENV_KEY"],
+        0,
+        winreg.KEY_ALL_ACCESS,
+    ) as key:
+        winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, previous)
+        installed = powershell_harness.run_functions("Set-FccBundlePathEntry")
+        assert installed.returncode == 0, installed.stdout + installed.stderr
+        assert winreg.QueryValueEx(key, "Path") == (
+            f"{bin_dir};{previous}",
+            winreg.REG_EXPAND_SZ,
+        )
+        removed = powershell_harness.run_functions("Set-FccBundlePathEntry -Remove")
+        assert removed.returncode == 0, removed.stdout + removed.stderr
+        assert winreg.QueryValueEx(key, "Path") == (previous, winreg.REG_EXPAND_SZ)
+    assert powershell_harness.calls() == ["fcc-path-changed", "fcc-path-changed"]
+
+
+def test_install_ps1_update_enables_requested_voice_with_bundle_active(
+    powershell_harness,
+):
+    root = Path(powershell_harness.env["USERPROFILE"]) / ".fcc" / "windows-app"
+    root.mkdir(parents=True)
+    (root / "version.txt").write_text(RELEASE_VERSION, encoding="ascii")
+    powershell_harness.env["FCC_TEST_USER_PATH"] = str(root / "bin")
+    _write_executable(
+        powershell_harness.bin_dir / "uv.cmd",
+        f'@echo off\nif "%*"=="tool list" echo free-claude-code v{RELEASE_VERSION}\n',
+    )
+    scenario = (
+        "if (Test-FccUpdateNeeded) { 'decision:install' } else { 'decision:skip' }"
+    )
+
+    _assert_update_decision(
+        powershell_harness.run_functions(scenario), False, "up to date"
+    )
+    _assert_update_decision(
+        powershell_harness.run_functions(scenario, "-VoiceLocal"), True, ""
+    )
+
+
 FCC_UPDATE_DECISIONS = [
     pytest.param(None, True, "", id="not-installed"),
     pytest.param("1.2.2", True, "FCC update available: 1.2.2 -> 1.2.3.", id="older"),
@@ -2780,6 +2830,7 @@ def powershell_harness(
     tmp_path: Path,
     request: pytest.FixtureRequest,
     powershell_module_paths,
+    windows_user_environment,
 ) -> PowerShellHarness:
     powershell = request.param
     if powershell is None or os.name != "nt":
@@ -3111,8 +3162,11 @@ $installerSource = $installerSource.Replace(
     '[Environment]::GetEnvironmentVariable("Path", "User")',
     '$env:FCC_TEST_USER_PATH'
 ).Replace(
-    '[Environment]::SetEnvironmentVariable("Path", $newPath, "User")',
-    '$env:FCC_TEST_USER_PATH = $newPath'
+    '[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")',
+    '[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($env:FCC_TEST_ENV_KEY)'
+).Replace(
+    "Invoke-NativeCommand -FilePath `$launcher -Arguments @('--fcc-notify-environment')",
+    'Add-Content -LiteralPath $env:CALL_LOG -Value "fcc-path-changed"'
 )
 $installerSource = $installerSource.Replace(
     'function Invoke-Utf8NativeCapture {',
@@ -3245,6 +3299,7 @@ $installer = [scriptblock]::Create($installerSource)
             "FCC_INSTALLER_ANSWERS": "",
             "FCC_INSTALLER_SCENARIO": "",
             "FCC_TEST_USER_PATH": "",
+            "FCC_TEST_ENV_KEY": windows_user_environment,
         }
     )
     env.pop("XDG_BIN_HOME", None)
@@ -3823,9 +3878,10 @@ def test_install_ps1_fresh_install_is_verified(
     assert f"download:{BUNDLE_URL}" in calls
     assert not any("--refresh-package free-claude-code" in call for call in calls)
     assert not any(call.startswith("git:") for call in calls)
-    assert calls[-4:-1] == [
+    assert calls[-5:-1] == [
         f"download:{BUNDLE_URL}",
         "fcc-server:--version",
+        "fcc-path-changed",
         "fcc-server:--version",
     ]
     home = Path(powershell_harness.env["USERPROFILE"])
@@ -6259,7 +6315,7 @@ def test_install_ps1_preview_creates_no_log_or_probe(
     assert powershell_harness.calls() == []
     assert not (Path(powershell_harness.env["USERPROFILE"]) / ".fcc/logs").exists()
     if option == "-DryRun":
-        assert "free-claude-code==<selected-release>" in result.stdout
+        assert "free_claude_code-<selected-release>-windows-x64.zip" in result.stdout
 
 
 @pytest.mark.parametrize("option", ["--help", "--dry-run"])

@@ -33,6 +33,17 @@ def distribution_names(version: str) -> tuple[str, str]:
     return f"{stem}-py3-none-any.whl", f"{stem}.tar.gz"
 
 
+def verify_asset(file: Path, asset: dict) -> None:
+    with file.open("rb") as stream:
+        digest = "sha256:" + hashlib.file_digest(stream, "sha256").hexdigest()
+    if (
+        asset["state"] != "uploaded"
+        or asset["size"] != file.stat().st_size
+        or asset.get("digest") != digest
+    ):
+        raise ValueError(f"Staged asset failed verification: {file.name}")
+
+
 class Publisher:
     def __init__(self, repository: str) -> None:
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
@@ -149,7 +160,12 @@ class Publisher:
                 if command(["git", "status", "--porcelain"], cwd=source).strip():
                     raise ValueError("Release source must be clean")
                 windows_bundle_needed = self.stage(
-                    tag, release["id"], version, source, dist
+                    tag,
+                    release["id"],
+                    version,
+                    source,
+                    dist,
+                    verify_windows=not stage_only,
                 )
                 if stage_only:
                     return version, windows_bundle_needed
@@ -184,7 +200,14 @@ class Publisher:
         )
 
     def stage(
-        self, tag: str, release_id: int, version: str, source: Path, dist: Path
+        self,
+        tag: str,
+        release_id: int,
+        version: str,
+        source: Path,
+        dist: Path,
+        *,
+        verify_windows: bool,
     ) -> bool:
         names = set(distribution_names(version))
         windows_name = (
@@ -229,24 +252,31 @@ class Publisher:
         if {asset["name"] for asset in assets} != names or len(assets) != 2:
             raise ValueError(f"Incomplete staged distributions for {tag}")
         for asset in assets:
-            data = (dist / asset["name"]).read_bytes()
-            digest = "sha256:" + hashlib.sha256(data).hexdigest()
-            if (
-                asset["state"] != "uploaded"
-                or asset["size"] != len(data)
-                or asset.get("digest") != digest
-            ):
-                raise ValueError(f"Staged asset failed verification: {asset['name']}")
+            verify_asset(dist / asset["name"], asset)
         self.validate(source, dist, version)
-        windows_uploaded = (
-            windows_asset is not None and windows_asset["state"] == "uploaded"
-        )
-        if windows_uploaded and (
-            windows_asset["size"] <= 0
-            or not re.fullmatch(r"sha256:[a-f0-9]{64}", windows_asset.get("digest", ""))
-        ):
-            raise ValueError(f"Staged asset failed verification: {windows_name}")
-        return windows_name is not None and not windows_uploaded
+        if windows_asset is None or windows_asset["state"] != "uploaded":
+            return windows_name is not None
+        if verify_windows:
+            bundle_name = windows_asset["name"]
+            self.gh("download", tag, "--dir", str(dist), "--pattern", bundle_name)
+            bundle = dist / bundle_name
+            verify_asset(bundle, windows_asset)
+            command(
+                [
+                    "gh",
+                    "attestation",
+                    "verify",
+                    str(bundle),
+                    "--signer-workflow",
+                    f"{self.repository}/.github/workflows/post-merge.yml",
+                    "--source-ref",
+                    "refs/heads/main",
+                    "--deny-self-hosted-runners",
+                    "--repo",
+                    self.repository,
+                ]
+            )
+        return False
 
 
 def main() -> int:

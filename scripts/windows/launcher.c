@@ -6,6 +6,8 @@
 /* CreateProcessW allows at most 32767 characters including the null terminator. */
 #define COMMAND_SIZE 32767
 
+#pragma comment(lib, "user32.lib")
+
 static BOOL WINAPI console_handler(DWORD event) {
     /* The Python child receives the same console event. */
     return event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT;
@@ -21,6 +23,14 @@ static const wchar_t *argument_tail(void) {
 }
 
 static int run(BOOL graphical) {
+    const wchar_t *arguments = argument_tail();
+    if (!graphical && wcscmp(arguments + wcsspn(arguments, L" \t"),
+        L"--fcc-notify-environment") == 0) {
+        SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)L"Environment",
+            SMTO_ABORTIFHUNG, 1000, NULL);
+        return 0;
+    }
+
     wchar_t launcher[COMMAND_SIZE];
     wchar_t python[COMMAND_SIZE];
     wchar_t command[COMMAND_SIZE];
@@ -35,7 +45,7 @@ static int run(BOOL graphical) {
     }
     if (swprintf_s(command, COMMAND_SIZE,
         L"\"%ls\" -X utf8 -m free_claude_code.cli.windows_entrypoint \"%ls\"%ls",
-        python, launcher, argument_tail()) < 0) {
+        python, launcher, arguments) < 0) {
         return 1;
     }
 

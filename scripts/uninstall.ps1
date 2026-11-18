@@ -299,15 +299,23 @@ function Get-FccBundleBin {
 }
 
 function Remove-FccBundlePathEntry {
+    if ($DryRun) { return }
     $bin = Get-FccBundleBin
-    $path = [Environment]::GetEnvironmentVariable("Path", "User")
-    $newPath = ($path -split ';' | Where-Object { $_ -ine $bin }) -join ';'
-    if (-not $DryRun) {
-        if ($path -and $newPath -cne $path) {
-            [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
+    try {
+        $path = $key.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        $newPath = ($path -split ';' | Where-Object { $_ -ine $bin }) -join ';'
+        if ($newPath -cne $path) {
+            $key.SetValue("Path", $newPath, $key.GetValueKind("Path"))
+            $launcher = Join-Path $bin 'fcc-server.exe'
+            if (Test-Path -LiteralPath $launcher -PathType Leaf) {
+                $null = Invoke-NativeResult -FilePath $launcher -Arguments @('--fcc-notify-environment')
+            }
         }
-        $env:Path = ($env:Path -split ';' | Where-Object { $_ -ine $bin }) -join ';'
+    } finally {
+        $key.Dispose()
     }
+    $env:Path = ($env:Path -split ';' | Where-Object { $_ -ine $bin }) -join ';'
 }
 
 function Remove-FccDesktopShortcuts {

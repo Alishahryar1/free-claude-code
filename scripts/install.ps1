@@ -1814,13 +1814,23 @@ function Set-FccBundlePathEntry {
     param([switch] $Remove)
 
     $binPath = Join-Path (Get-FccBundlePath) 'bin'
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $entries = if ($userPath) { @($userPath -split ';' | Where-Object { $_ -ine $binPath }) } else { @() }
-    $entries = @($entries)
-    if (-not $Remove) { $entries = @($binPath) + $entries }
-    $newPath = $entries -join ';'
-    if ($newPath -cne $userPath) {
-        [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
+    try {
+        $userPath = $key.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        $entries = @()
+        if ($userPath) { $entries = @($userPath -split ';' | Where-Object { $_ -ine $binPath }) }
+        if (-not $Remove) { $entries = @($binPath) + $entries }
+        $newPath = $entries -join ';'
+        if ($newPath -cne $userPath) {
+            $kind = if ("Path" -iin $key.GetValueNames()) { $key.GetValueKind("Path") } else { "ExpandString" }
+            $key.SetValue("Path", $newPath, $kind)
+            $launcher = Join-Path $binPath 'fcc-server.exe'
+            if (Test-Path -LiteralPath $launcher -PathType Leaf) {
+                Invoke-NativeCommand -FilePath $launcher -Arguments @('--fcc-notify-environment')
+            }
+        }
+    } finally {
+        $key.Dispose()
     }
     $env:Path = ($env:Path -split ';' | Where-Object { $_ -ine $binPath }) -join ';'
     if (-not $Remove) { Prioritize-PathEntry $binPath }
@@ -1856,7 +1866,8 @@ function Confirm-FccBundle {
 }
 
 function Install-FccBundle {
-    $name = "free_claude_code-$FccInstallVersion-windows-x64.zip"
+    $version = if ($FccInstallVersion) { $FccInstallVersion } else { '<selected-release>' }
+    $name = "free_claude_code-$version-windows-x64.zip"
     Write-Host "+ download, verify, and install $name"
     if ($DryRun) { return }
 
@@ -2162,7 +2173,8 @@ function Get-InstalledFccVersion {
     $bundleBin = Join-Path $bundle 'bin'
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User") -split ';'
     $versionFile = Join-Path $bundle 'version.txt'
-    if (-not $VoiceLocal -and $bundleBin -iin $userPath -and (Test-Path -LiteralPath $versionFile -PathType Leaf)) {
+    if ($bundleBin -iin $userPath -and (Test-Path -LiteralPath $versionFile -PathType Leaf)) {
+        if ($VoiceLocal) { return $null }
         return (Get-Content -LiteralPath $versionFile -Raw).Trim()
     }
     # Look where uv usually lives without changing the PATH the installer preserves.

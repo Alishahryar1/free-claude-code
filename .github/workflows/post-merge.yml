@@ -120,13 +120,27 @@ jobs:
     timeout-minutes: 25
     environment: windows-signing
     permissions:
+      attestations: write
       contents: write
       id-token: write
     env:
       RELEASE_REPOSITORY: ${{ github.repository }}
       RELEASE_VERSION: ${{ needs.stage.outputs.version }}
     steps:
+      - name: Check for an uploaded bundle
+        id: asset
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $name = "free_claude_code-$env:RELEASE_VERSION-windows-x64.zip"
+          $release = gh release view "v$env:RELEASE_VERSION" --repo $env:RELEASE_REPOSITORY --json isDraft,assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $release.isDraft) { throw 'Expected a draft release' }
+          $uploaded = @($release.assets | Where-Object { $_.name -ceq $name -and $_.state -eq 'uploaded' }).Count -eq 1
+          "uploaded=$($uploaded.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        if: steps.asset.outputs.uploaded != 'true'
         with:
           ref: ${{ inputs.release_commit || github.sha }}
           fetch-depth: 0
@@ -134,6 +148,7 @@ jobs:
 
       - name: Set up CI environment
         id: environment
+        if: steps.asset.outputs.uploaded != 'true'
         uses: ./.github/actions/ci-environment
         with:
           runner-label: windows-2025
@@ -141,6 +156,7 @@ jobs:
           sync-dependencies: 'false'
 
       - name: Build bundle from staged wheel
+        if: steps.asset.outputs.uploaded != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           CI_PYTHON: ${{ steps.environment.outputs.python-version }}
@@ -168,6 +184,7 @@ jobs:
           Set-Content -LiteralPath (Join-Path $root 'fcc-sign-files.txt') -Value $relative -Encoding utf8NoBOM
 
       - name: Sign in to Azure with OIDC
+        if: steps.asset.outputs.uploaded != 'true'
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -175,6 +192,7 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Sign native binaries
+        if: steps.asset.outputs.uploaded != 'true'
         uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
         with:
           endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
@@ -182,12 +200,11 @@ jobs:
           certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
           files-catalog: ${{ runner.temp }}\fcc-sign-files.txt
 
-      - name: Verify and stage the signed bundle
+      - name: Verify and archive the signed bundle
+        if: steps.asset.outputs.uploaded != 'true'
+        id: archive
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "v$env:RELEASE_VERSION"
           $name = "free_claude_code-$env:RELEASE_VERSION-windows-x64.zip"
           $bundle = Join-Path $env:RUNNER_TEMP 'bundle'
           & ./scripts/windows/signing_files.ps1 -Bundle $bundle -RequireSigned
@@ -195,6 +212,24 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $version -cne "free-claude-code $env:RELEASE_VERSION") { throw 'Signed launcher test failed' }
           $archive = Join-Path $env:RUNNER_TEMP $name
           [IO.Compression.ZipFile]::CreateFromDirectory($bundle, $archive)
+          "path=$archive" >> $env:GITHUB_OUTPUT
+
+      - name: Attest the verified Windows bundle
+        if: steps.asset.outputs.uploaded != 'true'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.archive.outputs.path }}
+
+      - name: Stage the signed Windows bundle
+        if: steps.asset.outputs.uploaded != 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_ARCHIVE: ${{ steps.archive.outputs.path }}
+        run: |
+          $tag = "v$env:RELEASE_VERSION"
+          $archive = $env:BUNDLE_ARCHIVE
+          $name = [IO.Path]::GetFileName($archive)
           $release = gh release view $tag --repo $env:RELEASE_REPOSITORY --json isDraft,assets | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or -not $release.isDraft) { throw "Expected draft $tag" }
           $existing = @($release.assets | Where-Object name -eq $name)
@@ -219,6 +254,7 @@ jobs:
     timeout-minutes: 15
     environment: pypi
     permissions:
+      attestations: read
       contents: write
       id-token: write
     steps:

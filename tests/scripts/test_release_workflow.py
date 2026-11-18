@@ -48,13 +48,31 @@ def test_post_merge_serializes_and_limits_publish_permissions():
     assert windows["needs"] == "stage"
     assert windows["if"] == "needs.stage.outputs.windows_needed == 'true'"
     assert windows["environment"] == "windows-signing"
-    assert windows["permissions"] == {"contents": "write", "id-token": "write"}
+    assert windows["permissions"] == {
+        "attestations": "write",
+        "contents": "write",
+        "id-token": "write",
+    }
+    attest = next(
+        s for s in windows["steps"] if s.get("uses", "").startswith("actions/attest@")
+    )
+    upload = next(
+        s
+        for s in windows["steps"]
+        if s.get("name") == "Stage the signed Windows bundle"
+    )
+    assert windows["steps"].index(attest) < windows["steps"].index(upload)
+    assert upload["if"] == "steps.asset.outputs.uploaded != 'true'"
     assert publish["needs"] == ["stage", "windows"]
     assert "needs.stage.result == 'success'" in publish["if"]
     assert "needs.windows.result == 'success'" in publish["if"]
     assert "needs.windows.result == 'skipped'" in publish["if"]
     assert publish["environment"] == "pypi"
-    assert publish["permissions"] == {"contents": "write", "id-token": "write"}
+    assert publish["permissions"] == {
+        "attestations": "read",
+        "contents": "write",
+        "id-token": "write",
+    }
     assert cache["permissions"] == {"contents": "read"}
     for job in (cache, stage):
         assert job["if"] == "github.ref == 'refs/heads/main'"
