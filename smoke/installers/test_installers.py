@@ -457,7 +457,7 @@ def _assert_uv_ready_without_fcc_install(calls: list[str]) -> None:
 
 def _write_executable(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8", newline="\n")
     path.chmod(0o755)
 
 
@@ -1865,14 +1865,23 @@ def test_install_sh_macos_python_selection_overrides_only_its_preference(
         posix_harness.env.update(
             FAKE_MANAGED_GIL_PYTHON="installed", FAIL_STEP="python-install"
         )
-    _write_executable(
-        posix_harness.bin_dir / "uv",
-        _posix_uv_command(UV_MINIMUM).replace(
-            "#!/bin/sh\n",
-            f'#!/bin/sh\n[ "${{UV_PYTHON_PREFERENCE-unset}}" = "{preference}" ] || exit 83\n',
-            1,
-        ),
+    uv_stub = _posix_uv_command(UV_MINIMUM)
+    uv_stub = uv_stub.replace(
+        '#!/bin/sh\n',
+        f'#!/bin/sh\n',
+        1,
     )
+    uv_stub = uv_stub.replace(
+        'if [ "${{1:-}}" = "python" ] && [ "${{2:-}}" = "find" ]; then',
+        f'if [ "${{1:-}}" = "python" ] && [ "${{2:-}}" = "find" ]; then\n    [ "${{UV_PYTHON_PREFERENCE-unset}}" = "{preference}" ] || exit 83',
+        1,
+    )
+    uv_stub = uv_stub.replace(
+        'if [ "${{1:-}}" = "python" ] && [ "${{2:-}}" = "install" ]; then',
+        f'if [ "${{1:-}}" = "python" ] && [ "${{2:-}}" = "install" ]; then\n    [ "${{UV_PYTHON_PREFERENCE-unset}}" = "{preference}" ] || exit 83',
+        1,
+    )
+    _write_executable(posix_harness.bin_dir / "uv", uv_stub)
     result = posix_harness.run_functions("install_free_claude_code")
     assert result.returncode == 0, result.stderr
     calls = posix_harness.calls()
