@@ -278,8 +278,8 @@ def test_install_ps1_rejects_concurrent_fcc_operation(powershell_harness):
 
 def test_install_ps1_preserves_pending_signed_bundle_removal(powershell_harness):
     home = Path(powershell_harness.env["USERPROFILE"])
-    removing = home / ".fcc" / "windows-app.removing"
-    removing.mkdir(parents=True)
+    removing = home / ".fcc.removing"
+    removing.mkdir()
 
     result = powershell_harness.run_interactive(["n"] * 11)
 

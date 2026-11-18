@@ -2417,7 +2417,7 @@ $installLock = $null
 try {
     if (-not $DryRun) {
         $installLock = Lock-FccInstallation
-        if (Test-Path -LiteralPath "$(Get-FccBundlePath).removing" -PathType Container) {
+        if (Test-Path -LiteralPath (Join-Path $env:USERPROFILE '.fcc.removing') -PathType Container) {
             throw 'The previous FCC uninstall did not finish. Rerun the uninstaller before installing again.'
         }
         if (-not $VoiceLocal) { Assert-FccBundleMachinePath }

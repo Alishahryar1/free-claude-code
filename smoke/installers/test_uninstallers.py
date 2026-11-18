@@ -917,6 +917,7 @@ def test_uninstall_ps1_removes_bundle_and_its_path_without_usable_uv(
     assert not bundle_bin.exists()
     assert not desktop.exists()
     assert "fcc-path-changed" in harness.calls()
+    assert "uv could not verify any separate uv installation" in result.stdout
     uv_calls = [call for call in harness.calls() if call.startswith("uv:")]
     assert uv_calls == (["uv:tool dir --bin"] if include_uv else [])
     assert (harness.bin_dir / "claude.cmd").exists()
@@ -986,17 +987,23 @@ def test_uninstall_ps1_can_retry_signed_bundle_purge_without_usable_uv(
     assert unchanged.returncode == 0, unchanged.stdout + unchanged.stderr
 
 
-def test_uninstall_ps1_resumes_after_bundle_was_detached(
+@pytest.mark.parametrize("empty", [False, True])
+def test_uninstall_ps1_resumes_after_signed_home_was_detached(
     powershell_uninstall_harness: PowerShellUninstallHarness,
+    empty: bool,
 ):
     harness = powershell_uninstall_harness
     harness.remove_entry_points()
-    (harness.fcc_home / "windows-app.removing" / "runtime").mkdir(parents=True)
+    removing = harness.home / ".fcc.removing"
+    if empty:
+        (harness.fcc_home / "config.json").unlink()
+    harness.fcc_home.rename(removing)
 
     removed = harness.run(fail_step="tool-dir")
 
     assert removed.returncode == 0, removed.stdout + removed.stderr
     assert not harness.fcc_home.exists()
+    assert not removing.exists()
     assert not any(call.startswith(("uv:", "doctor:")) for call in harness.calls())
 
 
