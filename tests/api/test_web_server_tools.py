@@ -58,6 +58,7 @@ from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.gemini.native_request import messages_to_gemini
 from free_claude_code.core.history_replay import ReplayOrigin, prepare_history
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
+from free_claude_code.core.openai_responses.errors import ResponsesConversionError
 from free_claude_code.core.openai_responses.provider_input import (
     build_responses_provider_request,
 )
@@ -544,6 +545,32 @@ def test_does_not_plan_unsupported_typed_tools_or_extended_auto_choice() -> None
 
 
 @pytest.mark.parametrize(
+    "options",
+    [
+        {"allowed_callers": ["code_execution_20260120"]},
+        {"strict": True},
+        {"defer_loading": True},
+    ],
+)
+def test_automatic_web_search_rejects_unrepresentable_client_tool_constraints(
+    options: dict[str, Any],
+) -> None:
+    request = _automatic_search_request()
+    tool = Tool(
+        name="lookup", type="custom", input_schema={"type": "object"}, **options
+    )
+    assert request.tools is not None
+    request.tools.append(tool)
+    field = next(iter(options))
+    with pytest.raises(InvalidRequestError, match=field):
+        plan_automatic_web_search(request, web_tools_enabled=True)
+
+    request.tools = [tool]
+    with pytest.raises(ResponsesConversionError, match=field):
+        build_responses_provider_request(request, reasoning=ReasoningPolicy.off())
+
+
+@pytest.mark.parametrize(
     ("tool", "message"),
     [
         (
@@ -604,6 +631,37 @@ def test_rejects_automatic_web_search_with_server_tool_history() -> None:
     )
 
     with pytest.raises(InvalidRequestError, match="prior Anthropic server-tool"):
+        plan_automatic_web_search(request, web_tools_enabled=True)
+
+
+def test_automatic_web_search_rejects_malformed_history_replay_as_client_error() -> (
+    None
+):
+    request = _automatic_search_request()
+    request.messages.insert(
+        0,
+        Message.model_validate(
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "redacted_thinking", "data": "fcc:history:v1:bad"},
+                    {
+                        "type": "server_tool_use",
+                        "id": "prior",
+                        "name": "web_search",
+                        "input": {"query": "hours"},
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "prior",
+                        "content": [],
+                    },
+                ],
+            }
+        ),
+    )
+
+    with pytest.raises(InvalidRequestError):
         plan_automatic_web_search(request, web_tools_enabled=True)
 
 
@@ -772,9 +830,9 @@ async def test_automatic_web_search_uses_model_query_and_filters_domains(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [True, False])
-@pytest.mark.parametrize("include_search", [True, False])
+@pytest.mark.parametrize("selection", ["client", "search-first", "client-first"])
 async def test_automatic_web_search_keeps_client_tool_and_its_result(
-    stream: bool, include_search: bool, monkeypatch: pytest.MonkeyPatch
+    stream: bool, selection: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     retrieve = Tool(
         name="headroom_retrieve",
@@ -783,11 +841,16 @@ async def test_automatic_web_search_keeps_client_tool_and_its_result(
         input_schema={"type": "object", "properties": {"ref": {"type": "string"}}},
     )
     arguments: dict[str, object] = {"ref": "saved-content"}
-    events = (
-        _provider_tool_events(ordinary_calls=[(retrieve.name, arguments)])
-        if include_search
-        else _provider_tool_events(name=retrieve.name, arguments=arguments)
-    )
+    if selection == "search-first":
+        events = _provider_tool_events(ordinary_calls=[(retrieve.name, arguments)])
+    else:
+        events = _provider_tool_events(
+            name=retrieve.name,
+            arguments=arguments,
+            ordinary_calls=[(HIDDEN_WEB_SEARCH_NAME, {"query": "selected"})]
+            if selection == "client-first"
+            else None,
+        )
     provider = ScriptedSelectionProvider(events)
     search = AsyncMock(
         return_value=[
@@ -814,7 +877,7 @@ async def test_automatic_web_search_keeps_client_tool_and_its_result(
         assert response.status_code == 200
         body = _json_body(response)
     assert body["stop_reason"] == "tool_use"
-    call_id = "call_1" if include_search else "call_0"
+    call_id = "call_1" if selection == "search-first" else "call_0"
     assert [block for block in body["content"] if block["type"] == "tool_use"] == [
         {"type": "tool_use", "id": call_id, "name": retrieve.name, "input": arguments}
     ]
@@ -831,7 +894,7 @@ async def test_automatic_web_search_keeps_client_tool_and_its_result(
     ]
     assert wire["tools"][1]["parameters"] == retrieve.input_schema
     assert wire["tool_choice"] == "required"
-    if include_search:
+    if selection != "client":
         search.assert_awaited_once_with("selected")
         assert body["usage"]["server_tool_use"] == {"web_search_requests": 1}
     else:
@@ -866,7 +929,8 @@ async def test_automatic_web_search_keeps_client_tool_and_its_result(
     assert [
         message["tool_call_id"] for message in messages if message["role"] == "tool"
     ] == [call_id]
-    if include_search:
+    assert messages[-1]["role"] == "tool"
+    if selection != "client":
         assert "https://example.com/mixed" in json.dumps(messages)
 
 

@@ -6,6 +6,9 @@ from dataclasses import dataclass
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.core.anthropic import MessagesRequest, Tool
+from free_claude_code.core.anthropic.conversion import (
+    unrepresentable_client_tool_constraints,
+)
 from free_claude_code.core.anthropic.models import (
     ContentBlockServerToolUse,
     ContentBlockText,
@@ -16,6 +19,7 @@ from free_claude_code.core.anthropic.models import (
 )
 from free_claude_code.core.anthropic.server_tool_types import HIDDEN_WEB_SEARCH_NAME
 from free_claude_code.core.gemini.web_search_replay import signed_gemini_turn
+from free_claude_code.core.history_replay import HistoryReplayError
 
 WEB_SEARCH_TYPE = "web_search_20250305"
 WEB_FETCH_TYPE = "web_fetch_20250910"
@@ -124,12 +128,15 @@ def plan_automatic_web_search(
     tool = server_tools[0]
     if tool.type != WEB_SEARCH_TYPE:
         return None
-    if any(
-        other is not tool
-        and (other.type not in (None, "custom") or other.input_schema is None)
-        for other in tools
-    ):
-        return None
+    for other in tools:
+        if other is tool:
+            continue
+        if other.type not in (None, "custom") or other.input_schema is None:
+            return None
+        if constraints := unrepresentable_client_tool_constraints(other):
+            raise InvalidRequestError(
+                f"Automatic web_search cannot enforce {constraints} for tool {other.name!r}."
+            )
     names = {definition.name for definition in tools}
     if len(names) != len(tools):
         raise InvalidRequestError("Automatic web_search requires unique tool names.")
@@ -178,10 +185,14 @@ def plan_automatic_web_search(
             "additionalProperties": False,
         },
     )
+    try:
+        messages = _normalized_search_history(request.messages)
+    except HistoryReplayError as error:
+        raise InvalidRequestError(str(error)) from error
     translated = request.model_copy(
         update={
             "tools": [hidden_tool if other is tool else other for other in tools],
-            "messages": _normalized_search_history(request.messages),
+            "messages": messages,
         },
         deep=True,
     )

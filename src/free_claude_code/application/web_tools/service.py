@@ -277,7 +277,14 @@ class WebToolService:
                 summaries.append(summary)
 
             if client_calls:
-                search_slots = {index: slot for slot, index in enumerate(searches)}
+                if preserve_signed_turn:
+                    schedule = {index: (slot,) for slot, index in enumerate(searches)}
+                else:
+                    # Finish local searches before placing the ordinary calls
+                    # the client still needs to execute. The search data then
+                    # stays in the assistant message that precedes tool results.
+                    first_call = min(searches.keys() | client_calls.keys())
+                    schedule = {first_call: tuple(range(len(contexts)))}
                 indices: dict[int, int] = {}
                 next_index = 0
                 decoder = AnthropicSSEDecoder()
@@ -291,21 +298,21 @@ class WebToolService:
                         proof = ()
                         if isinstance(index, int):
                             if kind == "content_block_start":
-                                indices[index] = next_index
-                                next_index += 2 if index in search_slots else 1
-                                if index in search_slots:
-                                    async for packet in search_frames(
-                                        search_slots[index], indices[index]
-                                    ):
+                                for slot in schedule.get(index, ()):
+                                    async for packet in search_frames(slot, next_index):
                                         yield packet
-                                elif index in client_calls:
+                                    next_index += 2
+                                if index not in searches:
+                                    indices[index] = next_index
+                                    next_index += 1
+                                if index in client_calls:
                                     proof = (
                                         replace(
                                             client_calls[index],
                                             position=(indices[index],),
                                         ),
                                     )
-                            if index in search_slots:
+                            if index in searches:
                                 continue
                             data["index"] = indices.get(index, index)
                         yield StreamOutput(
@@ -319,7 +326,7 @@ class WebToolService:
 
         for frame in server_tool_finish_frames(
             contexts[0],
-            summary=None if preserve_signed_turn else "\n\n".join(summaries),
+            summary=None if client_calls else "\n\n".join(summaries),
             index=next_index,
             request_count=executed,
             stop_reason="tool_use" if client_calls else "end_turn",

@@ -27,7 +27,7 @@ from free_claude_code.core.tool_schema_patterns import translate_tool_schema_pat
 
 from .content import get_block_attr, get_block_type
 from .image_sources import AnthropicImageSourceError, portable_anthropic_image_url
-from .models import MessagesRequest
+from .models import MessagesRequest, Tool
 from .request_serialization import serialize_tool_result_content
 from .tool_results import (
     ToolResultImage,
@@ -63,6 +63,19 @@ def resolve_anthropic_tool_choice(
     if tool_choice is not None:
         return tool_choice
     return {"type": "auto"}
+
+
+def unrepresentable_client_tool_constraints(tool: Tool) -> list[str]:
+    """Identify Anthropic constraints a plain upstream function cannot enforce."""
+    options = tool.model_extra or {}
+    unsupported = [
+        key
+        for key in ("strict", "defer_loading")
+        if options.get(key) not in (None, False)
+    ]
+    if options.get("allowed_callers") not in (None, ["direct"]):
+        unsupported.append("allowed_callers")
+    return unsupported
 
 
 def _set_replayed_reasoning(
