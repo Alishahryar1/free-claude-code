@@ -1849,7 +1849,7 @@ function Get-FccBundlePath {
 function Test-FccBundleOnUserPath {
     $bundleBin = Join-Path (Get-FccBundlePath) 'bin'
     foreach ($directory in ([Environment]::GetEnvironmentVariable("Path", "User") -split ';')) {
-        if (Test-EquivalentPath -Left $directory -Right $bundleBin) { return $true }
+        if (Test-PathEntry -Entry $directory -Directory $bundleBin) { return $true }
     }
     return $false
 }
@@ -1923,7 +1923,7 @@ function Set-FccBundlePathEntry {
         $entries = @()
         if ($userPath) {
             $entries = @($userPath -split ';' | Where-Object {
-                -not (Test-EquivalentPath -Left $_ -Right $binPath -ExpandLeft:$expand)
+                -not (Test-PathEntry -Entry $_ -Directory $binPath -Expand:$expand)
             })
         }
         if ($VoiceToolBin) {
@@ -1934,7 +1934,7 @@ function Set-FccBundlePathEntry {
             $prioritized = @()
             foreach ($directory in $preferred) {
                 $matching = @($entries | Where-Object {
-                    Test-EquivalentPath -Left $_ -Right $directory -ExpandLeft:$expand
+                    Test-PathEntry -Entry $_ -Directory $directory -Expand:$expand
                 })
                 $prioritized += if ($matching.Count) { $matching[0] } else { $directory }
                 $entries = @($entries | Where-Object { $_ -cnotin $matching })
@@ -1944,10 +1944,10 @@ function Set-FccBundlePathEntry {
             $entries = @($binPath) + $entries
             if ($AdditionalBin) {
                 $userMatch = $entries | Where-Object {
-                    Test-EquivalentPath -Left $_ -Right $AdditionalBin -ExpandLeft:$expand
+                    Test-PathEntry -Entry $_ -Directory $AdditionalBin -Expand:$expand
                 } | Select-Object -First 1
                 $machineMatch = [Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';' | Where-Object {
-                    Test-EquivalentPath -Left $_ -Right $AdditionalBin
+                    Test-PathEntry -Entry $_ -Directory $AdditionalBin
                 } | Select-Object -First 1
                 if (-not ($userMatch -or $machineMatch)) { $entries += $AdditionalBin }
             }
@@ -1963,7 +1963,7 @@ function Set-FccBundlePathEntry {
     # An interrupted activation can persist PATH before notifying other processes.
     if (-not $Remove -or $pathChanged) { Send-FccPathChange }
     $env:Path = ($env:Path -split ';' | Where-Object {
-        -not (Test-EquivalentPath -Left $_ -Right $binPath)
+        -not (Test-PathEntry -Entry $_ -Directory $binPath)
     }) -join ';'
     if (-not $Remove) { Prioritize-PathEntry $binPath }
 }
@@ -2194,18 +2194,24 @@ function Configure-AndConfirmFreeClaudeCode {
     }
 }
 
+function Test-PathEntry {
+    param([string] $Entry, [string] $Directory, [switch] $Expand)
+    if ($Expand) { $Entry = [Environment]::ExpandEnvironmentVariables($Entry) }
+    # Relative entries can resolve differently in the next shell.
+    if ($Entry -notmatch '^(?:[a-z]:[\\/]|[\\/]{2}[^\\/])') { return $false }
+    return Test-EquivalentPath -Left $Entry -Right $Directory
+}
+
 function Test-EquivalentPath {
     param(
         [string] $Left,
-        [string] $Right,
-        [switch] $ExpandLeft
+        [string] $Right
     )
 
     if ([string]::IsNullOrWhiteSpace($Left) -or [string]::IsNullOrWhiteSpace($Right)) {
         return $false
     }
     try {
-        if ($ExpandLeft) { $Left = [Environment]::ExpandEnvironmentVariables($Left) }
         return [string]::Equals(
             [IO.Path]::GetFullPath($Left).TrimEnd('\', '/'),
             [IO.Path]::GetFullPath($Right).TrimEnd('\', '/'),

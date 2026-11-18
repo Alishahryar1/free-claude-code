@@ -223,7 +223,11 @@ def test_install_ps1_preserves_expandable_user_path(powershell_harness):
     bin_dir = root / "bin"
     bin_dir.mkdir(parents=True)
     (bin_dir / "fcc-server.exe").touch()
-    previous = r"%USERPROFILE%\bin;%JAVA_HOME%\bin"
+    previous = r".;%USERPROFILE%\bin;%JAVA_HOME%\bin"
+    set_path = (
+        "[Environment]::CurrentDirectory = (Join-Path (Get-FccBundlePath) 'bin')\n"
+        "Set-FccBundlePathEntry"
+    )
     with winreg.OpenKey(
         winreg.HKEY_CURRENT_USER,
         powershell_harness.env["FCC_TEST_ENV_KEY"],
@@ -231,19 +235,19 @@ def test_install_ps1_preserves_expandable_user_path(powershell_harness):
         winreg.KEY_ALL_ACCESS,
     ) as key:
         winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, previous)
-        installed = powershell_harness.run_functions("Set-FccBundlePathEntry")
+        installed = powershell_harness.run_functions(set_path)
         assert installed.returncode == 0, installed.stdout + installed.stderr
         assert winreg.QueryValueEx(key, "Path") == (
             f"{bin_dir};{previous}",
             winreg.REG_EXPAND_SZ,
         )
-        retried = powershell_harness.run_functions("Set-FccBundlePathEntry")
+        retried = powershell_harness.run_functions(set_path)
         assert retried.returncode == 0, retried.stdout + retried.stderr
         assert winreg.QueryValueEx(key, "Path") == (
             f"{bin_dir};{previous}",
             winreg.REG_EXPAND_SZ,
         )
-        removed = powershell_harness.run_functions("Set-FccBundlePathEntry -Remove")
+        removed = powershell_harness.run_functions(set_path + " -Remove")
         assert removed.returncode == 0, removed.stdout + removed.stderr
         assert winreg.QueryValueEx(key, "Path") == (previous, winreg.REG_EXPAND_SZ)
     assert powershell_harness.calls() == ["fcc-path-changed"] * 3

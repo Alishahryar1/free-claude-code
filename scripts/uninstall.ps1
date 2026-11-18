@@ -266,18 +266,24 @@ function Confirm-FccCommandsRemoved {
     }
 }
 
+function Test-PathEntry {
+    param([string] $Entry, [string] $Directory, [switch] $Expand)
+    if ($Expand) { $Entry = [Environment]::ExpandEnvironmentVariables($Entry) }
+    # Relative entries can resolve differently in the next shell.
+    if ($Entry -notmatch '^(?:[a-z]:[\\/]|[\\/]{2}[^\\/])') { return $false }
+    return Test-EquivalentPath -Left $Entry -Right $Directory
+}
+
 function Test-EquivalentPath {
     param(
         [string] $Left,
-        [string] $Right,
-        [switch] $ExpandLeft
+        [string] $Right
     )
 
     if ([string]::IsNullOrWhiteSpace($Left) -or [string]::IsNullOrWhiteSpace($Right)) {
         return $false
     }
     try {
-        if ($ExpandLeft) { $Left = [Environment]::ExpandEnvironmentVariables($Left) }
         return [string]::Equals(
             [IO.Path]::GetFullPath($Left).TrimEnd('\', '/'),
             [IO.Path]::GetFullPath($Right).TrimEnd('\', '/'),
@@ -318,7 +324,7 @@ function Get-FccBundleBin {
 function Test-FccBundleOnUserPath {
     $bin = Get-FccBundleBin
     foreach ($directory in ([Environment]::GetEnvironmentVariable("Path", "User") -split ';')) {
-        if (Test-EquivalentPath -Left $directory -Right $bin) { return $true }
+        if (Test-PathEntry -Entry $directory -Directory $bin) { return $true }
     }
     return $false
 }
@@ -335,7 +341,7 @@ function Remove-FccBundlePathEntry {
             $kind = $key.GetValueKind("Path")
             $expand = $kind -eq 'ExpandString'
             $newPath = ($path -split ';' | Where-Object {
-                -not (Test-EquivalentPath -Left $_ -Right $bin -ExpandLeft:$expand)
+                -not (Test-PathEntry -Entry $_ -Directory $bin -Expand:$expand)
             }) -join ';'
             if ($newPath -cne $path) { $key.SetValue("Path", $newPath, $kind) }
         }
@@ -347,7 +353,7 @@ function Remove-FccBundlePathEntry {
         $null = Invoke-NativeResult -FilePath $launcher -Arguments @('--fcc-notify-environment')
     }
     $env:Path = ($env:Path -split ';' | Where-Object {
-        -not (Test-EquivalentPath -Left $_ -Right $bin)
+        -not (Test-PathEntry -Entry $_ -Directory $bin)
     }) -join ';'
 }
 
