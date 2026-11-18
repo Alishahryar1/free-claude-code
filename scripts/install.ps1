@@ -1823,7 +1823,14 @@ function Ensure-Uv {
         Write-Host "uv is not installed; installing the current standalone uv."
     }
 
-    Invoke-DownloadedPowerShellInstaller -Url $UvInstallUrl -Name "uv"
+    $deferPath = $VoiceLocal -and (Test-FccBundleOnUserPath)
+    $previousNoModifyPath = $env:UV_NO_MODIFY_PATH
+    try {
+        if ($deferPath) { $env:UV_NO_MODIFY_PATH = '1' }
+        Invoke-DownloadedPowerShellInstaller -Url $UvInstallUrl -Name "uv"
+    } finally {
+        if ($deferPath) { $env:UV_NO_MODIFY_PATH = $previousNoModifyPath }
+    }
     Prioritize-PathEntry (Get-UvInstallBinDirectory)
     Confirm-Uv
 }
@@ -1837,6 +1844,11 @@ function Get-PackageSpec {
 
 function Get-FccBundlePath {
     return Join-Path $env:USERPROFILE '.fcc\windows-app'
+}
+
+function Test-FccBundleOnUserPath {
+    $bundleBin = Join-Path (Get-FccBundlePath) 'bin'
+    return $bundleBin -iin ([Environment]::GetEnvironmentVariable("Path", "User") -split ';')
 }
 
 function Recover-FccBundleInstallation {
@@ -1886,7 +1898,7 @@ function Lock-FccInstallation {
 }
 
 function Set-FccBundlePathEntry {
-    param([switch] $Remove, [string] $AiderBin)
+    param([switch] $Remove, [string] $AdditionalBin)
 
     $binPath = Join-Path (Get-FccBundlePath) 'bin'
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
@@ -1894,15 +1906,13 @@ function Set-FccBundlePathEntry {
         $userPath = $key.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
         $entries = @()
         if ($userPath) { $entries = @($userPath -split ';' | Where-Object { $_ -ine $binPath }) }
-        if (-not $Remove) {
-            $entries = @($binPath) + $entries
-            if ($AiderBin) {
-                $persistentPath = $entries + ([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';')
-                $existing = $persistentPath | Where-Object {
-                    Test-EquivalentPath -Left ([Environment]::ExpandEnvironmentVariables($_)) -Right $AiderBin
-                } | Select-Object -First 1
-                if (-not $existing) { $entries += $AiderBin }
-            }
+        if (-not $Remove) { $entries = @($binPath) + $entries }
+        if ($AdditionalBin) {
+            $persistentPath = $entries + ([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';')
+            $existing = $persistentPath | Where-Object {
+                Test-EquivalentPath -Left ([Environment]::ExpandEnvironmentVariables($_)) -Right $AdditionalBin
+            } | Select-Object -First 1
+            if (-not $existing) { $entries += $AdditionalBin }
         }
         $newPath = $entries -join ';'
         $pathChanged = $newPath -cne $userPath
@@ -2070,7 +2080,6 @@ function Configure-AndConfirmFreeClaudeCode {
     if ($DryRun) {
         $binFormat = if ($VoiceLocal) { '<uv-tool-bin>' } else { '<fcc-windows-bin>' }
         if ($VoiceLocal) {
-            Write-Host "+ uv tool update-shell"
             Write-Host "+ uv tool dir --bin"
         }
         Write-Host "+ verify FCC commands in $binFormat"
@@ -2081,6 +2090,7 @@ function Configure-AndConfirmFreeClaudeCode {
         Install-FccDesktopShortcuts `
             -DesktopCommand "$binFormat\fcc-desktop.exe" `
             -IconPath $iconPath
+        if ($VoiceLocal) { Write-Host "+ uv tool update-shell" }
         return
     }
 
@@ -2089,11 +2099,10 @@ function Configure-AndConfirmFreeClaudeCode {
         if ($VoiceLocal) {
             $uvCommand = Get-ApplicationCommand "uv"
             if (-not $uvCommand) { throw "uv is not available for PATH configuration." }
-            Invoke-NativeCommand -FilePath $uvCommand.Source -Arguments @("tool", "update-shell")
             $toolBin = Add-UvToolBinDirectory -UvPath $uvCommand.Source
             Prioritize-PathEntry $toolBin
         } else {
-            Set-FccBundlePathEntry -AiderBin $script:VerifiedAiderBin
+            Set-FccBundlePathEntry -AdditionalBin $script:VerifiedAiderBin
             $toolBin = Join-Path (Get-FccBundlePath) 'bin'
         }
         Start-InstallStep "FCC verification"
@@ -2132,8 +2141,14 @@ function Configure-AndConfirmFreeClaudeCode {
     }
 
     if ($VoiceLocal) {
-        # Keep the previous route registered until the uv commands and shortcuts work.
-        Set-FccBundlePathEntry -Remove
+        # uv can prepend its tool and install directories. Defer shell changes until
+        # the uv commands and shortcuts work, then register a deferred uv executable too.
+        $uvInstallBin = if ((Test-FccBundleOnUserPath) -and -not ($env:UV_NO_MODIFY_PATH -or $env:UV_UNMANAGED_INSTALL)) {
+            $uvCommandBin = Split-Path -Parent $uvCommand.Source
+            if (Test-EquivalentPath -Left $uvCommandBin -Right (Get-UvInstallBinDirectory)) { $uvCommandBin }
+        }
+        Invoke-NativeCommand -FilePath $uvCommand.Source -Arguments @("tool", "update-shell")
+        Set-FccBundlePathEntry -Remove -AdditionalBin $uvInstallBin
         Prioritize-PathEntry $toolBin
         $script:FccVerified = $true
     }
@@ -2256,10 +2271,8 @@ function Show-InstallerNextSteps {
 
 function Get-InstalledFccVersion {
     $bundle = Get-FccBundlePath
-    $bundleBin = Join-Path $bundle 'bin'
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User") -split ';'
     $versionFile = Join-Path $bundle 'version.txt'
-    if ($bundleBin -iin $userPath) {
+    if (Test-FccBundleOnUserPath) {
         # The archived version becomes visible before the installer finishes integration.
         $installedVersion = Join-Path $bundle '.installed-version'
         if ((Test-Path -LiteralPath $versionFile -PathType Leaf) -and

@@ -465,14 +465,25 @@ def test_install_ps1_voice_update_prompts_to_refresh_the_terminal(powershell_har
 
 
 @pytest.mark.parametrize("failure", ["path-update", "desktop-icon-export"])
-def test_install_ps1_failed_voice_update_keeps_signed_path(powershell_harness, failure):
+@pytest.mark.parametrize("install_uv", [False, True])
+def test_install_ps1_failed_voice_update_keeps_signed_path(
+    powershell_harness, failure, install_uv
+):
     if os.name != "nt":
         pytest.skip("Windows registry test")
 
     import winreg
 
     powershell_harness.add_installed_clients()
-    powershell_harness.add_uv(UV_MINIMUM)
+    uv_bin = powershell_harness.root / "custom-uv-bin"
+    if install_uv:
+        powershell_harness.env.update(
+            UV_INSTALL_DIR=str(uv_bin),
+            UV_NO_MODIFY_PATH="",
+            FCC_TEST_UV_STANDALONE_PATH="1",
+        )
+    else:
+        powershell_harness.add_uv(UV_MINIMUM)
     bundle_bin = Path(powershell_harness.env["USERPROFILE"]) / ".fcc/windows-app/bin"
     bundle_bin.mkdir(parents=True)
     (bundle_bin.parent / "version.txt").write_text("1.9.0", encoding="ascii")
@@ -491,11 +502,14 @@ def test_install_ps1_failed_voice_update_keeps_signed_path(powershell_harness, f
         diagnostic = "tool update-shell" if failure == "path-update" else "exit code 56"
         assert diagnostic in failed.stderr
         assert winreg.QueryValueEx(key, "Path") == (old_path, winreg.REG_EXPAND_SZ)
+        if failure == "desktop-icon-export":
+            assert "uv:tool update-shell" not in powershell_harness.calls()
 
         retried = powershell_harness.run("-Update", "-VoiceLocal")
         assert retried.returncode == 0, retried.stdout + retried.stderr
         assert "already up to date" not in retried.stdout
-        assert winreg.QueryValueEx(key, "Path") == ("", winreg.REG_EXPAND_SZ)
+        expected = str(uv_bin) if install_uv else ""
+        assert winreg.QueryValueEx(key, "Path") == (expected, winreg.REG_EXPAND_SZ)
 
 
 @pytest.mark.parametrize("bootstrap", [False, True])
@@ -3296,6 +3310,13 @@ else {
 }
 New-Item -ItemType Directory -Force -Path $bin | Out-Null
 Copy-Item (Join-Path $env:FAKE_FIXTURES "uv-command.cmd") (Join-Path $bin "uv.cmd") -Force
+if ($env:FCC_TEST_UV_STANDALONE_PATH -and $env:UV_NO_MODIFY_PATH -ne '1') {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($env:FCC_TEST_ENV_KEY, $true)
+    try {
+        $path = $key.GetValue('Path', '')
+        $key.SetValue('Path', "$bin;$path", [Microsoft.Win32.RegistryValueKind]::ExpandString)
+    } finally { $key.Dispose() }
+}
 Add-Content -LiteralPath $env:CALL_LOG -Value "uv-install"
 """,
         encoding="utf-8",
