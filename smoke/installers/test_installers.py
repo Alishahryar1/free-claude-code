@@ -258,6 +258,38 @@ def test_install_ps1_signed_bundle_does_not_require_uv_for_claude_code(
     assert not any(call.startswith("uv:") for call in calls)
 
 
+def test_install_ps1_rejects_concurrent_fcc_operation(powershell_harness):
+    if os.name != "nt":
+        pytest.skip("Windows file sharing test")
+
+    home = Path(powershell_harness.env["USERPROFILE"])
+    lock = home / ".fcc-install.lock"
+    with lock.open("wb"):
+        busy = powershell_harness.run_interactive(["n"] * 11)
+    assert busy.returncode != 0
+    assert "Could not lock the FCC installation" in busy.stderr
+    assert not (home / ".fcc" / "logs").exists()
+    assert f"download:{BUNDLE_URL}" not in powershell_harness.calls()
+
+    installed = powershell_harness.run_interactive(["n"] * 11)
+    assert installed.returncode == 0, installed.stdout + installed.stderr
+    assert not lock.exists()
+
+
+def test_install_ps1_rejects_fcc_shadowed_by_machine_path(powershell_harness):
+    machine_bin = powershell_harness.root / "machine-bin"
+    _write_executable(machine_bin / "fcc-server.cmd", _batch_client("fcc-server"))
+    powershell_harness.env["FCC_TEST_MACHINE_PATH"] = str(machine_bin)
+
+    blocked = powershell_harness.run_functions(
+        "Assert-FccBundleMachinePath -MachinePath $env:FCC_TEST_MACHINE_PATH"
+    )
+
+    assert blocked.returncode != 0
+    assert "machine PATH" in blocked.stderr
+    assert "fcc-server.cmd" in blocked.stderr
+
+
 @pytest.mark.parametrize("preinstalled", [False, True])
 def test_install_ps1_signed_bundle_persists_verified_aider_bin(
     powershell_harness, preinstalled
@@ -291,6 +323,26 @@ def test_install_ps1_signed_bundle_persists_verified_aider_bin(
     assert str(custom_bin) in user_path.split(";")
     if preinstalled:
         assert not any(call.startswith("uv:") for call in powershell_harness.calls())
+
+
+def test_install_ps1_signed_bundle_does_not_persist_session_only_aider_bin(
+    powershell_harness,
+):
+    if os.name != "nt":
+        pytest.skip("Windows registry test")
+
+    import winreg
+
+    powershell_harness.add_client("aider")
+    result = powershell_harness.run_interactive(["n"] * 10)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "aider:--version" in powershell_harness.calls()
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER, powershell_harness.env["FCC_TEST_ENV_KEY"]
+    ) as key:
+        user_path, _ = winreg.QueryValueEx(key, "Path")
+    assert str(powershell_harness.bin_dir) not in user_path.split(";")
 
 
 @pytest.mark.parametrize("preinstalled", [False, True])

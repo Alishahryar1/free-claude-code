@@ -938,6 +938,31 @@ def test_uninstall_ps1_cleans_integrations_with_active_uv_install(
     assert not harness.fcc_home.exists()
 
 
+def test_uninstall_ps1_can_retry_signed_bundle_purge_without_uv(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+):
+    harness = powershell_uninstall_harness
+    harness.remove_entry_points()
+    bundle_bin = harness.fcc_home / "windows-app" / "bin"
+    bundle_bin.mkdir(parents=True)
+    (bundle_bin / "fcc-server.exe").touch()
+    data = harness.fcc_home / "z-locked" / "data.txt"
+    data.parent.mkdir()
+    data.write_bytes(b"test data")
+
+    with data.open("rb"):
+        interrupted = harness.run(include_uv=False, keep_integrations=True)
+
+    assert interrupted.returncode != 0
+    assert data.is_file()
+    assert bundle_bin.is_dir()
+    removed = harness.run(include_uv=False, keep_integrations=True)
+    assert removed.returncode == 0, removed.stdout + removed.stderr
+    assert not harness.fcc_home.exists()
+    unchanged = harness.run(include_uv=False)
+    assert unchanged.returncode == 0, unchanged.stdout + unchanged.stderr
+
+
 def test_uninstall_ps1_preserves_unowned_desktop_shortcut(
     powershell_uninstall_harness: PowerShellUninstallHarness,
 ) -> None:
@@ -961,6 +986,24 @@ def test_uninstall_ps1_preserves_unowned_desktop_shortcut(
     assert result.returncode == 0, result.stderr
     assert "not managed by Free Claude Code" in result.stdout
     assert desktop_shortcut.read_bytes() == original_shortcut
+
+
+def test_uninstall_ps1_preserves_installation_during_concurrent_operation(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+):
+    harness = powershell_uninstall_harness
+    lock = harness.home / ".fcc-install.lock"
+    with lock.open("wb"):
+        busy = harness.run()
+    assert busy.returncode != 0
+    assert "Could not lock the FCC installation" in busy.stderr
+    assert harness.fcc_home.is_dir()
+    assert not harness.calls()
+
+    removed = harness.run()
+    assert removed.returncode == 0, removed.stdout + removed.stderr
+    assert not harness.fcc_home.exists()
+    assert not lock.exists()
 
 
 def test_uninstall_ps1_is_idempotent_when_tool_is_already_absent(

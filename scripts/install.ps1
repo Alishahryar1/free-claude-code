@@ -266,6 +266,13 @@ function Read-YesNo {
     }
 }
 
+function Get-ExpectedUvToolBin {
+    if ($env:UV_TOOL_BIN_DIR) { return $env:UV_TOOL_BIN_DIR }
+    if ($env:XDG_BIN_HOME) { return $env:XDG_BIN_HOME }
+    if ($env:XDG_DATA_HOME) { return Join-Path $env:XDG_DATA_HOME '..\bin' }
+    if ($env:USERPROFILE) { return Join-Path $env:USERPROFILE '.local\bin' }
+}
+
 function Find-InstalledCodingAgent {
     param([string] $CommandName)
 
@@ -285,18 +292,7 @@ function Find-InstalledCodingAgent {
         $command = Get-ApplicationCommand $CommandName
         if (-not $command) {
             if ($CommandName -eq "aider") {
-                if ($env:UV_TOOL_BIN_DIR) {
-                    Add-PathEntry $env:UV_TOOL_BIN_DIR
-                }
-                elseif ($env:XDG_BIN_HOME) {
-                    Add-PathEntry $env:XDG_BIN_HOME
-                }
-                elseif ($env:XDG_DATA_HOME) {
-                    Add-PathEntry (Join-Path $env:XDG_DATA_HOME "..\bin")
-                }
-                elseif ($env:USERPROFILE) {
-                    Add-PathEntry (Join-Path $env:USERPROFILE ".local\bin")
-                }
+                Add-PathEntry (Get-ExpectedUvToolBin)
                 $command = Get-ApplicationCommand $CommandName
             }
             elseif ($CommandName -eq "muse") {
@@ -1441,13 +1437,14 @@ function Add-UvToolBinDirectory {
 }
 
 function Ensure-Aider {
+    $toolBin = Get-ExpectedUvToolBin
     $command = Find-InstalledCodingAgent "aider"
     if ((-not $command) -and (-not $DryRun)) {
         $uvCommand = Get-ApplicationCommand "uv"
         if (-not $uvCommand) {
             throw "Aider installation requires the verified uv command, but it is not available on PATH."
         }
-        $null = Add-UvToolBinDirectory -UvPath $uvCommand.Source
+        $toolBin = Add-UvToolBinDirectory -UvPath $uvCommand.Source
         $command = Get-ApplicationCommand "aider"
     }
 
@@ -1462,7 +1459,10 @@ function Ensure-Aider {
 
     Confirm-Application -CommandName "aider" -DisplayName "Aider"
     if (-not $DryRun) {
-        $script:VerifiedAiderBin = Split-Path -Parent (Get-ApplicationCommand 'aider').Source
+        $commandBin = Split-Path -Parent (Get-ApplicationCommand 'aider').Source
+        if (Test-EquivalentPath -Left $commandBin -Right $toolBin) {
+            $script:VerifiedAiderBin = $commandBin
+        }
     }
 }
 
@@ -1838,6 +1838,35 @@ function Get-FccBundlePath {
     return Join-Path $env:USERPROFILE '.fcc\windows-app'
 }
 
+function Assert-FccBundleMachinePath {
+    param([string] $MachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine'))
+
+    if (-not $MachinePath) { return }
+    $originalPath = $env:Path
+    try {
+        $env:Path = $MachinePath
+        $command = Get-ApplicationCommand 'fcc-server'
+        if ($command -and -not (Test-EquivalentPath -Left (Split-Path -Parent $command.Source) -Right (Join-Path (Get-FccBundlePath) 'bin'))) {
+            throw "The machine PATH selects '$($command.Source)' before the per-user FCC bundle. Remove the machine-wide FCC command from PATH, then rerun the installer."
+        }
+    } finally {
+        $env:Path = $originalPath
+    }
+}
+
+function Lock-FccInstallation {
+    # Keep the lock outside ~/.fcc so uninstall can purge the directory while holding it.
+    $path = Join-Path $env:USERPROFILE '.fcc-install.lock'
+    try {
+        return [IO.FileStream]::new(
+            $path, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite,
+            [IO.FileShare]::None, 4096, [IO.FileOptions]::DeleteOnClose
+        )
+    } catch {
+        throw "Could not lock the FCC installation. Wait for any other FCC installer or uninstaller to finish. $($_.Exception.Message)"
+    }
+}
+
 function Set-FccBundlePathEntry {
     param([switch] $Remove, [string] $AiderBin)
 
@@ -1933,20 +1962,15 @@ function Install-FccBundle {
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         [IO.Compression.ZipFile]::ExtractToDirectory($archive, $expanded)
         Confirm-FccBundle -Path $expanded
-        $lock = [IO.File]::Open("$root.lock", 'OpenOrCreate', 'ReadWrite', 'None')
+        Assert-NoFccProcessesRunning
+        if (Test-Path -LiteralPath $root) { [IO.Directory]::Move($root, $backup) }
         try {
-            Assert-NoFccProcessesRunning
-            if (Test-Path -LiteralPath $root) { [IO.Directory]::Move($root, $backup) }
-            try {
-                [IO.Directory]::Move($expanded, $root)
-            } catch {
-                if (Test-Path -LiteralPath $backup) { [IO.Directory]::Move($backup, $root) }
-                throw
-            }
-            if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force }
-        } finally {
-            $lock.Dispose()
+            [IO.Directory]::Move($expanded, $root)
+        } catch {
+            if (Test-Path -LiteralPath $backup) { [IO.Directory]::Move($backup, $root) }
+            throw
         }
+        if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force }
     } finally {
         Remove-Item -LiteralPath $staging -Recurse -Force
     }
@@ -2381,27 +2405,30 @@ if (-not $DryRun) {
         Invoke-SelectedReleaseInstaller -InstallerArguments $installerParameters
         return
     }
-    if ($Update -and -not (Test-FccUpdateNeeded)) {
-        return
-    }
-    try {
-        $requirements = Get-ReleaseToolchain
-    } catch {
-        if ($FccInstallVersion) {
-            Write-Host "Could not load toolchain requirements for FCC $FccInstallVersion."
-            Write-Host "Retry: $(Get-InstallerRetryCommand)"
-        }
-        throw
-    }
-    # Windows on ARM emulates x64 for broader Python wheel support.
-    $PythonRequest = "cpython-$($requirements.Python)-windows-x86_64-none"
-    $MinUvVersion = $requirements.Uv
 }
-Initialize-InstallLog
-$script:InstallSteps["Preflight"] = "Not attempted"
 $installSucceeded = $false
 $installError = $null
+$installLock = $null
 try {
+    if (-not $DryRun) {
+        $installLock = Lock-FccInstallation
+        if (-not $VoiceLocal) { Assert-FccBundleMachinePath }
+        if ($Update -and -not (Test-FccUpdateNeeded)) {
+            $installSucceeded = $true
+            return
+        }
+        try {
+            $requirements = Get-ReleaseToolchain
+        } catch {
+            Write-Host "Could not load toolchain requirements for FCC $FccInstallVersion."
+            throw
+        }
+        # Windows on ARM emulates x64 for broader Python wheel support.
+        $PythonRequest = "cpython-$($requirements.Python)-windows-x86_64-none"
+        $MinUvVersion = $requirements.Uv
+    }
+    $script:InstallSteps["Preflight"] = "Not attempted"
+    Initialize-InstallLog
     Start-InstallStep "Preflight"
     # Preserve the user's winning command before adding installer search paths.
     $script:OriginalOpenCode = Get-ApplicationCommand "opencode"
@@ -2500,11 +2527,15 @@ catch {
     throw
 }
 finally {
-    $cancelled = (-not $installSucceeded) -and ($null -eq $installError)
-    if ($cancelled) { Complete-InstallStep "Cancelled" }
-    elseif (-not $installSucceeded) { Complete-InstallStep "Failed" }
-    Show-InstallReport -Succeeded $installSucceeded -Cancelled $cancelled
-    if ($script:FccVerified) { Show-InstallerNextSteps }
+    try {
+        $cancelled = (-not $installSucceeded) -and ($null -eq $installError)
+        if ($cancelled) { Complete-InstallStep "Cancelled" }
+        elseif (-not $installSucceeded) { Complete-InstallStep "Failed" }
+        Show-InstallReport -Succeeded $installSucceeded -Cancelled $cancelled
+        if ($script:FccVerified) { Show-InstallerNextSteps }
+    } finally {
+        if ($installLock) { $installLock.Dispose() }
+    }
 }
 
 if ($DryRun) { Write-Host "Dry run complete. No changes were made." }

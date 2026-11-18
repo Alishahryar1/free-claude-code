@@ -303,8 +303,12 @@ function Test-FccDesktopShortcutTarget {
     return $false
 }
 
+function Get-FccBundlePath {
+    return Join-Path $env:USERPROFILE "$FccHomeDirname\windows-app"
+}
+
 function Get-FccBundleBin {
-    return Join-Path $env:USERPROFILE "$FccHomeDirname\windows-app\bin"
+    return Join-Path (Get-FccBundlePath) 'bin'
 }
 
 function Remove-FccBundlePathEntry {
@@ -356,6 +360,8 @@ function Remove-FccDesktopShortcuts {
 }
 
 function Purge-FccHome {
+    param([switch] $BundleLast)
+
     $fccHome = Join-Path $env:USERPROFILE $FccHomeDirname
     if (-not (Test-Path -LiteralPath $fccHome)) {
         Write-Host "No FCC config directory at $fccHome; skipping purge."
@@ -374,9 +380,29 @@ function Purge-FccHome {
         return
     }
 
+    if ($BundleLast) {
+        # Keep the signed commands available for a retry if some data is still in use.
+        $bundlePath = Get-FccBundlePath
+        Get-ChildItem -LiteralPath $fccHome -Force | Where-Object { $_.FullName -ine $bundlePath } | ForEach-Object {
+            Remove-Item -LiteralPath $_.FullName -Recurse -Force
+        }
+    }
     Remove-Item -LiteralPath $fccHome -Recurse -Force
     if (Test-Path -LiteralPath $fccHome) {
         throw "FCC config directory still exists after deletion: $fccHome"
+    }
+}
+
+function Lock-FccInstallation {
+    # Use the installer lock without holding a file inside the directory being purged.
+    $path = Join-Path $env:USERPROFILE '.fcc-install.lock'
+    try {
+        return [IO.FileStream]::new(
+            $path, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite,
+            [IO.FileShare]::None, 4096, [IO.FileOptions]::DeleteOnClose
+        )
+    } catch {
+        throw "Could not lock the FCC installation. Wait for any other FCC installer or uninstaller to finish. $($_.Exception.Message)"
     }
 }
 
@@ -392,28 +418,40 @@ if ([string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
     throw "USERPROFILE is not set; cannot locate Free Claude Code data."
 }
 
-Write-Step "Checking for running Free Claude Code processes"
-Assert-NoFccProcessesRunning
+$installLock = $null
+try {
+    if (-not $DryRun) { $installLock = Lock-FccInstallation }
+    Write-Step "Checking for running Free Claude Code processes"
+    Assert-NoFccProcessesRunning
 
-Write-Step "Locating the Free Claude Code installation"
-$hasBundle = Test-Path -LiteralPath (Get-FccBundleBin) -PathType Container
-Initialize-UvContext -Optional:$hasBundle
+    Write-Step "Locating the Free Claude Code installation"
+    $hasBundle = Test-Path -LiteralPath (Get-FccBundlePath) -PathType Container
+    $hasFccHome = Test-Path -LiteralPath (Join-Path $env:USERPROFILE $FccHomeDirname)
+    Initialize-UvContext -Optional:($hasBundle -or -not $hasFccHome)
+    if (-not $DryRun -and -not $hasFccHome -and -not $script:UvPath -and
+        -not ($FccCommands | Where-Object { Get-ApplicationCommand $_ } | Select-Object -First 1)) {
+        Write-Host "Free Claude Code is already absent."
+        return
+    }
 
-Write-Step "Disconnecting FCC editor/app integrations"
-Disconnect-FccIntegrations
+    Write-Step "Disconnecting FCC editor/app integrations"
+    Disconnect-FccIntegrations
 
-Write-Step "Removing any Free Claude Code uv tool installation"
-Uninstall-FreeClaudeCode
+    Write-Step "Removing any Free Claude Code uv tool installation"
+    Uninstall-FreeClaudeCode
 
-Write-Step "Verifying Free Claude Code entry points were removed"
-Confirm-FccCommandsRemoved
+    Write-Step "Verifying Free Claude Code entry points were removed"
+    Confirm-FccCommandsRemoved
 
-Write-Step "Removing Free Claude Code desktop shortcuts"
-Remove-FccDesktopShortcuts
-if ($hasBundle) { Remove-FccBundlePathEntry }
+    Write-Step "Removing Free Claude Code desktop shortcuts"
+    Remove-FccDesktopShortcuts
+    if ($hasBundle) { Remove-FccBundlePathEntry }
 
-Write-Step "Purging FCC config and data from ~/.fcc"
-Purge-FccHome
+    Write-Step "Purging FCC config and data from ~/.fcc"
+    Purge-FccHome -BundleLast:$hasBundle
+} finally {
+    if ($installLock) { $installLock.Dispose() }
+}
 
 Write-Host ""
 if ($DryRun) {
