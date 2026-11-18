@@ -14,10 +14,11 @@ from free_claude_code.core.anthropic.models import (
     ContentBlockWebSearchToolResult,
     Message,
 )
+from free_claude_code.core.anthropic.server_tool_types import HIDDEN_WEB_SEARCH_NAME
+from free_claude_code.core.gemini.web_search_replay import signed_gemini_turn
 
 WEB_SEARCH_TYPE = "web_search_20250305"
 WEB_FETCH_TYPE = "web_fetch_20250910"
-HIDDEN_WEB_SEARCH_NAME = "fcc_web_search"
 
 _SERVER_TOOL_TYPES = {
     "web_search": WEB_SEARCH_TYPE,
@@ -276,6 +277,9 @@ def _normalized_search_history(messages: list[Message]) -> list[Message]:
         if not uses or uses.keys() != results.keys():
             raise InvalidRequestError(_INCOMPLETE_HISTORY)
 
+        signed_turn = any(use.name == "web_search" for use in uses.values()) and (
+            signed_gemini_turn(content) is not None
+        )
         projected = []
         for block in content:
             if isinstance(block, ContentBlockServerToolUse):
@@ -283,7 +287,8 @@ def _normalized_search_history(messages: list[Message]) -> list[Message]:
                 if block.name == "web_search" and isinstance(
                     result, ContentBlockWebSearchToolResult
                 ):
-                    projected.append(_search_history_text(block, result))
+                    quoted = _search_history_text(block, result)
+                    projected.append(block if signed_turn else quoted)
                 elif block.name == "web_fetch" and isinstance(
                     result, ContentBlockWebFetchToolResult
                 ):
@@ -302,7 +307,9 @@ def _normalized_search_history(messages: list[Message]) -> list[Message]:
                     )
                 else:
                     raise InvalidRequestError(_INCOMPLETE_HISTORY)
-            elif not isinstance(
+            elif (
+                signed_turn and isinstance(block, ContentBlockWebSearchToolResult)
+            ) or not isinstance(
                 block, (ContentBlockWebSearchToolResult, ContentBlockWebFetchToolResult)
             ):
                 projected.append(block)

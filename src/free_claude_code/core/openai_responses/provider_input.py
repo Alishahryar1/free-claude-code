@@ -111,7 +111,12 @@ def _validate_supported_request(request: MessagesRequest) -> None:
             f"{sorted(str(key) for key in request.model_extra)}."
         )
     provider_tool_types = sorted(
-        {tool.type for tool in request.tools or () if tool.type is not None}
+        {
+            tool.type
+            for tool in request.tools or ()
+            if tool.type is not None
+            and (tool.type != "custom" or tool.input_schema is None)
+        }
     )
     if provider_tool_types:
         raise ResponsesConversionError(

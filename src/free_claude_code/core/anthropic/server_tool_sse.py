@@ -153,11 +153,31 @@ def server_tool_result_frames(result_block: JsonObject, *, index: int) -> Iterat
 def server_tool_finish_frames(
     context: ServerToolResponseContext,
     *,
-    summary: str,
+    summary: str | None,
     index: int,
     request_count: int = 1,
     stop_reason: str = "end_turn",
 ) -> Iterator[str]:
+    if summary is not None:
+        yield from _summary_frames(summary, index=index)
+    yield format_sse_event(
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+            "usage": _completion_usage(
+                context.input_tokens,
+                summary or "",
+                context.provider_usage,
+                usage_key=f"{context.tool_name}_requests",
+                request_count=request_count,
+            ),
+        },
+    )
+    yield format_sse_event("message_stop", {"type": "message_stop"})
+
+
+def _summary_frames(summary: str, *, index: int) -> Iterator[str]:
     yield format_sse_event(
         "content_block_start",
         {
@@ -177,21 +197,6 @@ def server_tool_finish_frames(
     yield format_sse_event(
         "content_block_stop", {"type": "content_block_stop", "index": index}
     )
-    yield format_sse_event(
-        "message_delta",
-        {
-            "type": "message_delta",
-            "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-            "usage": _completion_usage(
-                context.input_tokens,
-                summary,
-                context.provider_usage,
-                usage_key=f"{context.tool_name}_requests",
-                request_count=request_count,
-            ),
-        },
-    )
-    yield format_sse_event("message_stop", {"type": "message_stop"})
 
 
 def _message_start_usage(

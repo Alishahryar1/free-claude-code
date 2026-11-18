@@ -33,6 +33,7 @@ from free_claude_code.core.anthropic.server_tool_sse import (
 from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.gemini.web_search_replay import signed_gemini_turn
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_output import (
     CompletedCall,
@@ -190,7 +191,7 @@ class WebToolService:
             message.get("stop_reason") == "tool_use"
             or (
                 plan.request.tool_choice == {"type": "any"}
-                and message.get("stop_reason") != "max_tokens"
+                and message.get("stop_reason") == "end_turn"
             )
         ):
             raise _protocol_failure(
@@ -209,6 +210,9 @@ class WebToolService:
                 yield packet
             return
         provider_usage = _provider_usage(message)
+        preserve_signed_turn = bool(client_calls) and (
+            signed_gemini_turn(message["content"]) is not None
+        )
         input_tokens = _integer_field(provider_usage, "input_tokens")
         if input_tokens is None:
             input_tokens = fallback_input_tokens
@@ -315,7 +319,7 @@ class WebToolService:
 
         for frame in server_tool_finish_frames(
             contexts[0],
-            summary="\n\n".join(summaries),
+            summary=None if preserve_signed_turn else "\n\n".join(summaries),
             index=next_index,
             request_count=executed,
             stop_reason="tool_use" if client_calls else "end_turn",

@@ -55,6 +55,8 @@ from free_claude_code.core.anthropic.stream_contracts import (
 )
 from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.gemini.native_request import messages_to_gemini
+from free_claude_code.core.history_replay import ReplayOrigin, prepare_history
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.openai_responses.provider_input import (
     build_responses_provider_request,
@@ -65,6 +67,10 @@ from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.core.version import package_version
 from free_claude_code.core.web_tools import WebFetchResult, WebSearchResult
 from free_claude_code.messaging.event_parser import parse_cli_event
+from free_claude_code.providers.gemini.stream import GeminiStream
+from free_claude_code.providers.openai_chat.stream_output import (
+    AnthropicChatStreamOutput,
+)
 from free_claude_code.runtime.web_tools import egress as web_egress
 from free_claude_code.runtime.web_tools.client import (
     HTTPWebToolsClient,
@@ -244,7 +250,7 @@ class ScriptedSelectionProvider:
             self.close_count += 1
 
 
-def _provider_text_events(text: str) -> list[str]:
+def _provider_text_events(text: str, *, stop_reason: str = "end_turn") -> list[str]:
     return [
         format_sse_event(
             "message_start",
@@ -285,7 +291,7 @@ def _provider_text_events(text: str) -> list[str]:
             "message_delta",
             {
                 "type": "message_delta",
-                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "delta": {"stop_reason": stop_reason, "stop_sequence": None},
                 "usage": {"output_tokens": 3},
             },
         ),
@@ -816,6 +822,15 @@ async def test_automatic_web_search_keeps_client_tool_and_its_result(
     assert provider.requests[0].tools is not None
     assert provider.requests[0].tools[1] == retrieve
     assert provider.requests[0].tool_choice == {"type": "any"}
+    wire = build_responses_provider_request(
+        provider.requests[0], reasoning=ReasoningPolicy.off()
+    )
+    assert [tool["name"] for tool in wire["tools"]] == [
+        HIDDEN_WEB_SEARCH_NAME,
+        retrieve.name,
+    ]
+    assert wire["tools"][1]["parameters"] == retrieve.input_schema
+    assert wire["tool_choice"] == "required"
     if include_search:
         search.assert_awaited_once_with("selected")
         assert body["usage"]["server_tool_use"] == {"web_search_requests": 1}
@@ -857,6 +872,165 @@ async def test_automatic_web_search_keeps_client_tool_and_its_result(
 
 async def _single_sse_chunk(text: str) -> AsyncIterator[str]:
     yield text
+
+
+@pytest.mark.asyncio
+async def test_automatic_web_search_uses_distinct_name_from_client_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_name = f"{HIDDEN_WEB_SEARCH_NAME}_1"
+    provider = ScriptedSelectionProvider(
+        _provider_tool_events(
+            name=private_name,
+            ordinary_calls=[(HIDDEN_WEB_SEARCH_NAME, {"ref": "client-owned"})],
+        )
+    )
+    search = AsyncMock(return_value=[])
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
+    request = _automatic_search_request(stream=False)
+    request.tools = [
+        Tool(name=HIDDEN_WEB_SEARCH_NAME, input_schema={"type": "object"}),
+        *(request.tools or []),
+    ]
+    request.tool_choice = None
+    response = await _automatic_search_service(provider).create(request)
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 200
+    sent_tools = provider.requests[0].tools
+    assert sent_tools is not None
+    assert [tool.name for tool in sent_tools] == [HIDDEN_WEB_SEARCH_NAME, private_name]
+    search.assert_awaited_once_with("selected")
+    body = _json_body(response)
+    assert [
+        (block["name"], block["input"])
+        for block in body["content"]
+        if block["type"] == "tool_use"
+    ] == [(HIDDEN_WEB_SEARCH_NAME, {"ref": "client-owned"})]
+    assert private_name not in json.dumps(body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("search_first", [True, False])
+@pytest.mark.parametrize("search_id", ["native_search_id", None])
+async def test_automatic_web_search_restores_signed_gemini_turn(
+    search_first: bool, search_id: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    origin = ReplayOrigin(
+        "gemini", "gemini", "fixture-endpoint", "fixture-key", "fixture"
+    )
+    presenter = GeminiStream(
+        model="fixture",
+        origin=origin,
+        output=AnthropicChatStreamOutput(
+            message_id="msg_gemini", model="fixture", input_tokens=10
+        ),
+        tool_names=frozenset({HIDDEN_WEB_SEARCH_NAME, "retrieve"}),
+        tool_defaults={},
+        include_thoughts=True,
+    )
+    search_call: dict[str, object] = {
+        "name": HIDDEN_WEB_SEARCH_NAME,
+        "args": {"query": " local hours "},
+    }
+    if search_id is not None:
+        search_call["id"] = search_id
+    calls: list[dict[str, object]] = [
+        {"functionCall": search_call},
+        {
+            "functionCall": {
+                "id": "client_id",
+                "name": "retrieve",
+                "args": {"key": "hours"},
+            }
+        },
+    ]
+    if not search_first:
+        calls.reverse()
+    calls[0]["thoughtSignature"] = "native-thought-signature"
+    native_parts = [{"text": "I'll look that up"}, *calls]
+    provider = ScriptedSelectionProvider(
+        presenter.feed(
+            {
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": native_parts},
+                        "finishReason": "STOP",
+                    }
+                ]
+            }
+        )
+        + presenter.finish()
+    )
+    monkeypatch.setattr(
+        "tests.web_tools_support.StubWebToolsClient.search",
+        AsyncMock(
+            return_value=[
+                WebSearchResult(title="Found", url="https://example.com/found")
+            ]
+        ),
+    )
+    service = _automatic_search_service(provider)
+    request = _automatic_search_request(stream=False)
+    assert request.tools is not None
+    request.tools.append(Tool(name="retrieve", input_schema={"type": "object"}))
+
+    response = await service.create(request)
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 200
+    body = _json_body(response)
+    assert body["stop_reason"] == "tool_use"
+    assert [
+        block["name"] for block in body["content"] if block["type"] == "tool_use"
+    ] == ["retrieve"]
+    request.messages.extend(
+        [
+            Message.model_validate({"role": "assistant", "content": body["content"]}),
+            Message.model_validate(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "client_id",
+                            "content": "retrieved body",
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    plan = plan_automatic_web_search(request, web_tools_enabled=True)
+    assert plan is not None
+    wire: Any = prepare_history(messages_to_gemini(plan.request), origin)
+    model_turn, result_turn = wire["contents"][-2:]
+    assert model_turn["parts"] == native_parts
+    responses = [part["functionResponse"] for part in result_turn["parts"]]
+    names = [HIDDEN_WEB_SEARCH_NAME, "retrieve"]
+    assert [result["name"] for result in responses] == (
+        names if search_first else names[::-1]
+    )
+    search_response, client_response = responses if search_first else responses[::-1]
+    assert search_response.get("id") == search_id
+    assert "https://example.com/found" in json.dumps(search_response)
+    assert client_response["id"] == "client_id"
+    assert client_response["response"] == {"output": "retrieved body"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop_reason", ["refusal", "max_tokens", "stop_sequence"])
+async def test_automatic_web_search_preserves_nonselection_stop_reasons(
+    stop_reason: str,
+) -> None:
+    provider = ScriptedSelectionProvider(
+        _provider_text_events("Stopped", stop_reason=stop_reason)
+    )
+    response = await _automatic_search_service(provider).create(
+        _automatic_search_request(stream=False, tool_choice={"type": "any"})
+    )
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 200
+    assert _json_body(response)["stop_reason"] == stop_reason
 
 
 @pytest.mark.asyncio
