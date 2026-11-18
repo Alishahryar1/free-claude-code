@@ -2189,7 +2189,7 @@ function Install-FccDesktopShortcuts {
 }
 
 function Show-InstallerNextSteps {
-    if ($Update -and -not $VoiceLocal) {
+    if ($Update) {
         Write-Host "Open a new terminal from the Start menu before running FCC commands."
     }
     Write-Host "`nFree Claude Code is installed and verified."

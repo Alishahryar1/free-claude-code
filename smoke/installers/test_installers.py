@@ -443,6 +443,21 @@ def test_install_ps1_retries_update_after_desktop_integration_failure(
     assert "already up to date" in completed.stdout
 
 
+def test_install_ps1_voice_update_prompts_to_refresh_the_terminal(powershell_harness):
+    powershell_harness.add_installed_clients()
+    powershell_harness.add_uv(UV_MINIMUM)
+    root = Path(powershell_harness.env["USERPROFILE"]) / ".fcc" / "windows-app"
+    root.mkdir(parents=True)
+    (root / "version.txt").write_text("1.9.0", encoding="ascii")
+    (root / ".installed-version").write_text("1.9.0", encoding="ascii")
+    powershell_harness.env["FCC_TEST_USER_PATH"] = str(root / "bin")
+
+    updated = powershell_harness.run("-Update", "-VoiceLocal")
+
+    assert updated.returncode == 0, updated.stdout + updated.stderr
+    assert "Open a new terminal from the Start menu" in updated.stdout
+
+
 def test_install_ps1_restores_previous_bundle_before_loading_release(
     powershell_harness,
 ):
