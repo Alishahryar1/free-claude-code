@@ -516,7 +516,10 @@ def test_install_ps1_failed_voice_update_keeps_signed_path(
         )
 
 
-def test_install_ps1_voice_switch_prioritizes_verified_uv_and_fcc(powershell_harness):
+@pytest.mark.parametrize("expandable_bundle_entry", [False, True])
+def test_install_ps1_voice_switch_prioritizes_verified_uv_and_fcc(
+    powershell_harness, expandable_bundle_entry: bool
+):
     if os.name != "nt":
         pytest.skip("Windows registry test")
 
@@ -529,12 +532,17 @@ def test_install_ps1_voice_switch_prioritizes_verified_uv_and_fcc(powershell_har
     tool_bin = harness.root / "verified-voice-fcc"
     bundle_bin = Path(harness.env["USERPROFILE"]) / ".fcc/windows-app/bin"
     bundle_bin.mkdir(parents=True)
-    old_path = f"{bundle_bin};{harness.bin_dir};{tool_bin}"
+    bundle_entry = (
+        r"%USERPROFILE%\.fcc\windows-app\bin"
+        if expandable_bundle_entry
+        else str(bundle_bin)
+    )
+    old_path = f"{bundle_entry};{harness.bin_dir};{tool_bin}"
     harness.env.update(
         UV_INSTALL_DIR=str(uv_bin),
         UV_TOOL_BIN_DIR=str(tool_bin),
         UV_NO_MODIFY_PATH="",
-        FCC_TEST_USER_PATH=old_path,
+        FCC_TEST_USER_PATH=f"{bundle_bin};{harness.bin_dir};{tool_bin}",
         FCC_TEST_UV_STANDALONE_PATH="1",
     )
     with winreg.OpenKey(
@@ -552,8 +560,9 @@ def test_install_ps1_voice_switch_prioritizes_verified_uv_and_fcc(powershell_har
         )
 
 
+@pytest.mark.parametrize("fail_notification", [False, True])
 def test_install_ps1_completed_voice_update_replays_path_notification(
-    powershell_harness,
+    powershell_harness, fail_notification: bool
 ):
     bundle_bin = Path(powershell_harness.env["USERPROFILE"]) / ".fcc/windows-app/bin"
     bundle_bin.mkdir(parents=True)
@@ -563,11 +572,17 @@ def test_install_ps1_completed_voice_update_replays_path_notification(
         f'@echo off\nif "%*"=="tool list" echo free-claude-code v{RELEASE_VERSION}\n',
     )
 
-    updated = powershell_harness.run("-Update", "-VoiceLocal")
+    updated = powershell_harness.run(
+        "-Update",
+        "-VoiceLocal",
+        fail_step="path-notifier" if fail_notification else "",
+    )
 
     assert updated.returncode == 0, updated.stdout + updated.stderr
     assert "already up to date" in updated.stdout
     assert powershell_harness.calls() == ["fcc-path-changed"]
+    if fail_notification:
+        assert "Sign out and back in" in updated.stdout
 
 
 @pytest.mark.parametrize("bootstrap", [False, True])
@@ -3551,7 +3566,10 @@ $installerSource = $installerSource.Replace(
     '[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($env:FCC_TEST_ENV_KEY)'
 ).Replace(
     "Invoke-NativeCommand -FilePath `$launcher -Arguments @('--fcc-notify-environment')",
-    'Add-Content -LiteralPath $env:CALL_LOG -Value "fcc-path-changed"'
+    @'
+Add-Content -LiteralPath $env:CALL_LOG -Value "fcc-path-changed"
+if ($env:FAIL_STEP -eq "path-notifier") { throw "simulated notifier launch failure" }
+'@
 )
 $installerSource = $installerSource.Replace(
     'function Invoke-Utf8NativeCapture {',

@@ -874,9 +874,11 @@ def test_uninstall_ps1_removes_and_verifies_only_fcc(
 
 
 @pytest.mark.parametrize("include_uv", [False, True])
+@pytest.mark.parametrize("expandable_bundle_entry", [False, True])
 def test_uninstall_ps1_removes_bundle_and_its_path_without_usable_uv(
     powershell_uninstall_harness: PowerShellUninstallHarness,
     include_uv: bool,
+    expandable_bundle_entry: bool,
 ) -> None:
     if os.name != "nt":
         pytest.skip("Windows registry test")
@@ -895,6 +897,11 @@ def test_uninstall_ps1_removes_bundle_and_its_path_without_usable_uv(
     _create_windows_shortcut(
         harness.powershell, desktop, shortcut_target, harness.env["PSMODULEPATH"]
     )
+    bundle_entry = (
+        r"%USERPROFILE%\.fcc\windows-app\bin"
+        if expandable_bundle_entry
+        else str(bundle_bin)
+    )
     with winreg.OpenKey(
         winreg.HKEY_CURRENT_USER,
         harness.env["FCC_TEST_ENV_KEY"],
@@ -902,7 +909,7 @@ def test_uninstall_ps1_removes_bundle_and_its_path_without_usable_uv(
         winreg.KEY_ALL_ACCESS,
     ) as key:
         winreg.SetValueEx(
-            key, "Path", 0, winreg.REG_EXPAND_SZ, f"{bundle_bin};%USERPROFILE%\\bin"
+            key, "Path", 0, winreg.REG_EXPAND_SZ, f"{bundle_entry};%USERPROFILE%\\bin"
         )
 
         result = harness.run(

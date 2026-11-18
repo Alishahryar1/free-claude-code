@@ -323,9 +323,13 @@ function Remove-FccBundlePathEntry {
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
     try {
         $path = $key.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-        $newPath = ($path -split ';' | Where-Object { $_ -ine $bin }) -join ';'
-        if ($newPath -cne $path) {
-            $key.SetValue("Path", $newPath, $key.GetValueKind("Path"))
+        if ($path) {
+            $kind = $key.GetValueKind("Path")
+            $newPath = ($path -split ';' | Where-Object {
+                $directory = if ($kind -eq 'ExpandString') { [Environment]::ExpandEnvironmentVariables($_) } else { $_ }
+                $directory -ine $bin
+            }) -join ';'
+            if ($newPath -cne $path) { $key.SetValue("Path", $newPath, $kind) }
         }
     } finally {
         $key.Dispose()

@@ -1900,7 +1900,11 @@ function Lock-FccInstallation {
 function Send-FccPathChange {
     $launcher = Join-Path (Get-FccBundlePath) 'bin\fcc-server.exe'
     if (Test-Path -LiteralPath $launcher -PathType Leaf) {
-        Invoke-NativeCommand -FilePath $launcher -Arguments @('--fcc-notify-environment')
+        try {
+            Invoke-NativeCommand -FilePath $launcher -Arguments @('--fcc-notify-environment')
+        } catch {
+            Write-Warning "Could not notify Windows of the saved PATH. Sign out and back in to refresh it. $($_.Exception.Message)"
+        }
     }
 }
 
@@ -1911,8 +1915,14 @@ function Set-FccBundlePathEntry {
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
     try {
         $userPath = $key.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        $kind = if ("Path" -iin $key.GetValueNames()) { $key.GetValueKind("Path") } else { "ExpandString" }
         $entries = @()
-        if ($userPath) { $entries = @($userPath -split ';' | Where-Object { $_ -ine $binPath }) }
+        if ($userPath) {
+            $entries = @($userPath -split ';' | Where-Object {
+                $directory = if ($kind -eq 'ExpandString') { [Environment]::ExpandEnvironmentVariables($_) } else { $_ }
+                $directory -ine $binPath
+            })
+        }
         if ($VoiceToolBin) {
             $preferred = @($VoiceToolBin)
             if ($AdditionalBin -and -not (Test-EquivalentPath -Left $VoiceToolBin -Right $AdditionalBin)) {
@@ -1940,7 +1950,6 @@ function Set-FccBundlePathEntry {
         $newPath = $entries -join ';'
         $pathChanged = $newPath -cne $userPath
         if ($pathChanged) {
-            $kind = if ("Path" -iin $key.GetValueNames()) { $key.GetValueKind("Path") } else { "ExpandString" }
             $key.SetValue("Path", $newPath, $kind)
         }
     } finally {
