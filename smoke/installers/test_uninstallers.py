@@ -939,9 +939,11 @@ def test_uninstall_ps1_cleans_integrations_with_active_uv_install(
 
 
 @pytest.mark.parametrize("include_uv", [False, True])
+@pytest.mark.parametrize("locked_bundle", [False, True])
 def test_uninstall_ps1_can_retry_signed_bundle_purge_without_usable_uv(
     powershell_uninstall_harness: PowerShellUninstallHarness,
     include_uv: bool,
+    locked_bundle: bool,
 ):
     if os.name != "nt":
         pytest.skip("Windows registry test")
@@ -953,7 +955,8 @@ def test_uninstall_ps1_can_retry_signed_bundle_purge_without_usable_uv(
     bundle_bin = harness.fcc_home / "windows-app" / "bin"
     bundle_bin.mkdir(parents=True)
     (bundle_bin / "fcc-server.exe").touch()
-    data = harness.fcc_home / "z-locked" / "data.txt"
+    data_root = bundle_bin.parent if locked_bundle else harness.fcc_home
+    data = data_root / "z-locked" / "data.txt"
     data.parent.mkdir()
     data.write_bytes(b"test data")
 
@@ -981,6 +984,20 @@ def test_uninstall_ps1_can_retry_signed_bundle_purge_without_usable_uv(
     assert not harness.fcc_home.exists()
     unchanged = harness.run(include_uv=False)
     assert unchanged.returncode == 0, unchanged.stdout + unchanged.stderr
+
+
+def test_uninstall_ps1_resumes_after_bundle_was_detached(
+    powershell_uninstall_harness: PowerShellUninstallHarness,
+):
+    harness = powershell_uninstall_harness
+    harness.remove_entry_points()
+    (harness.fcc_home / "windows-app.removing" / "runtime").mkdir(parents=True)
+
+    removed = harness.run(fail_step="tool-dir")
+
+    assert removed.returncode == 0, removed.stdout + removed.stderr
+    assert not harness.fcc_home.exists()
+    assert not any(call.startswith(("uv:", "doctor:")) for call in harness.calls())
 
 
 def test_uninstall_ps1_preserves_unowned_desktop_shortcut(

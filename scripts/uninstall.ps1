@@ -312,6 +312,8 @@ function Get-FccBundleBin {
 }
 
 function Remove-FccBundlePathEntry {
+    param([string] $BundlePath)
+
     if ($DryRun) { return }
     $bin = Get-FccBundleBin
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
@@ -320,7 +322,7 @@ function Remove-FccBundlePathEntry {
         $newPath = ($path -split ';' | Where-Object { $_ -ine $bin }) -join ';'
         if ($newPath -cne $path) {
             $key.SetValue("Path", $newPath, $key.GetValueKind("Path"))
-            $launcher = Join-Path $bin 'fcc-server.exe'
+            $launcher = Join-Path $BundlePath 'bin\fcc-server.exe'
             if (Test-Path -LiteralPath $launcher -PathType Leaf) {
                 $null = Invoke-NativeResult -FilePath $launcher -Arguments @('--fcc-notify-environment')
             }
@@ -383,10 +385,16 @@ function Purge-FccHome {
     if ($BundleLast) {
         # Keep the signed commands available for a retry if some data is still in use.
         $bundlePath = Get-FccBundlePath
-        Get-ChildItem -LiteralPath $fccHome -Force | Where-Object { $_.FullName -ine $bundlePath } | ForEach-Object {
+        $removingPath = "$bundlePath.removing"
+        Get-ChildItem -LiteralPath $fccHome -Force | Where-Object {
+            $_.FullName -notin @($bundlePath, $removingPath)
+        } | ForEach-Object {
             Remove-Item -LiteralPath $_.FullName -Recurse -Force
         }
-        Remove-FccBundlePathEntry
+        # Move the intact bundle before discarding any of its commands. The renamed
+        # directory also records that integration and uv cleanup already ran.
+        if (Test-Path -LiteralPath $bundlePath) { [IO.Directory]::Move($bundlePath, $removingPath) }
+        Remove-FccBundlePathEntry -BundlePath $removingPath
     }
     Remove-Item -LiteralPath $fccHome -Recurse -Force
     if (Test-Path -LiteralPath $fccHome) {
@@ -425,30 +433,34 @@ try {
     Write-Step "Checking for running Free Claude Code processes"
     Assert-NoFccProcessesRunning
 
-    Write-Step "Locating the Free Claude Code installation"
-    $hasBundle = Test-Path -LiteralPath (Get-FccBundlePath) -PathType Container
-    $hasFccHome = Test-Path -LiteralPath (Join-Path $env:USERPROFILE $FccHomeDirname)
-    Initialize-UvContext -Optional:($hasBundle -or -not $hasFccHome)
-    if (-not $DryRun -and -not $hasFccHome -and -not $script:UvPath -and
-        -not ($FccCommands | Where-Object { Get-ApplicationCommand $_ } | Select-Object -First 1)) {
-        Write-Host "Free Claude Code is already absent."
-        return
+    $bundlePath = Get-FccBundlePath
+    $resumingBundleRemoval = Test-Path -LiteralPath "$bundlePath.removing" -PathType Container
+    $hasBundle = Test-Path -LiteralPath $bundlePath -PathType Container
+    if (-not $resumingBundleRemoval) {
+        Write-Step "Locating the Free Claude Code installation"
+        $hasFccHome = Test-Path -LiteralPath (Join-Path $env:USERPROFILE $FccHomeDirname)
+        Initialize-UvContext -Optional:($hasBundle -or -not $hasFccHome)
+        if (-not $DryRun -and -not $hasFccHome -and -not $script:UvPath -and
+            -not ($FccCommands | Where-Object { Get-ApplicationCommand $_ } | Select-Object -First 1)) {
+            Write-Host "Free Claude Code is already absent."
+            return
+        }
+
+        Write-Step "Disconnecting FCC editor/app integrations"
+        Disconnect-FccIntegrations
+
+        Write-Step "Removing any Free Claude Code uv tool installation"
+        Uninstall-FreeClaudeCode
+
+        Write-Step "Verifying Free Claude Code entry points were removed"
+        Confirm-FccCommandsRemoved
+
+        Write-Step "Removing Free Claude Code desktop shortcuts"
+        Remove-FccDesktopShortcuts
     }
 
-    Write-Step "Disconnecting FCC editor/app integrations"
-    Disconnect-FccIntegrations
-
-    Write-Step "Removing any Free Claude Code uv tool installation"
-    Uninstall-FreeClaudeCode
-
-    Write-Step "Verifying Free Claude Code entry points were removed"
-    Confirm-FccCommandsRemoved
-
-    Write-Step "Removing Free Claude Code desktop shortcuts"
-    Remove-FccDesktopShortcuts
-
     Write-Step "Purging FCC config and data from ~/.fcc"
-    Purge-FccHome -BundleLast:$hasBundle
+    Purge-FccHome -BundleLast:($hasBundle -or $resumingBundleRemoval)
 } finally {
     if ($installLock) { $installLock.Dispose() }
 }
@@ -458,7 +470,9 @@ if ($DryRun) {
     Write-Host "Dry run complete. No changes were made."
 }
 else {
-    if ($script:UvPath -and -not $script:UvToolBin) {
+    if ($resumingBundleRemoval) {
+        Write-Host "Finished removing the signed Windows bundle and FCC data."
+    } elseif ($script:UvPath -and -not $script:UvToolBin) {
         Write-Host "The signed Windows bundle has been removed. uv could not verify any separate uv installation."
     } else {
         Write-Host "Free Claude Code has been removed and verified."

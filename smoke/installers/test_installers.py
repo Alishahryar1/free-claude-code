@@ -276,6 +276,19 @@ def test_install_ps1_rejects_concurrent_fcc_operation(powershell_harness):
     assert not lock.exists()
 
 
+def test_install_ps1_preserves_pending_signed_bundle_removal(powershell_harness):
+    home = Path(powershell_harness.env["USERPROFILE"])
+    removing = home / ".fcc" / "windows-app.removing"
+    removing.mkdir(parents=True)
+
+    result = powershell_harness.run_interactive(["n"] * 11)
+
+    assert result.returncode != 0
+    assert "previous FCC uninstall did not finish" in result.stderr
+    assert removing.is_dir()
+    assert f"download:{BUNDLE_URL}" not in powershell_harness.calls()
+
+
 @pytest.mark.parametrize("command", ["fcc-server", "fcc-update"])
 def test_install_ps1_rejects_fcc_shadowed_by_machine_path(powershell_harness, command):
     machine_bin = powershell_harness.root / "machine-bin"
