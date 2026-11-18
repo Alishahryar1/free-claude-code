@@ -1839,12 +1839,18 @@ function Get-FccBundlePath {
     return Join-Path $env:USERPROFILE '.fcc\windows-app'
 }
 
-function Restore-FccPreviousBundle {
+function Recover-FccBundleInstallation {
     $bundle = Get-FccBundlePath
     $previous = "$bundle.previous"
-    if ((Test-Path -LiteralPath $previous -PathType Container) -and -not (Test-Path -LiteralPath $bundle)) {
-        [IO.Directory]::Move($previous, $bundle)
+    if (Test-Path -LiteralPath $previous -PathType Container) {
+        if (Test-Path -LiteralPath $bundle) {
+            Remove-Item -LiteralPath $previous -Recurse -Force
+        } else {
+            [IO.Directory]::Move($previous, $bundle)
+        }
     }
+    $staging = "$bundle.staging"
+    if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
 }
 
 function Assert-FccBundleMachinePath {
@@ -1959,7 +1965,7 @@ function Install-FccBundle {
     }
 
     $root = Get-FccBundlePath
-    $staging = "$root.staging-$([Guid]::NewGuid().ToString('N'))"
+    $staging = "$root.staging"
     $backup = "$root.previous"
     New-Item -ItemType Directory -Path $staging -Force | Out-Null
     try {
@@ -1975,7 +1981,6 @@ function Install-FccBundle {
         [IO.Compression.ZipFile]::ExtractToDirectory($archive, $expanded)
         Confirm-FccBundle -Path $expanded
         Assert-NoFccProcessesRunning
-        if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force }
         if (Test-Path -LiteralPath $root) { [IO.Directory]::Move($root, $backup) }
         try {
             [IO.Directory]::Move($expanded, $root)
@@ -2075,47 +2080,59 @@ function Configure-AndConfirmFreeClaudeCode {
         return
     }
 
-    if ($VoiceLocal) {
-        Set-FccBundlePathEntry -Remove
-        $uvCommand = Get-ApplicationCommand "uv"
-        if (-not $uvCommand) { throw "uv is not available for PATH configuration." }
-        Invoke-NativeCommand -FilePath $uvCommand.Source -Arguments @("tool", "update-shell")
-        $toolBin = Add-UvToolBinDirectory -UvPath $uvCommand.Source
-    } else {
-        Set-FccBundlePathEntry -AiderBin $script:VerifiedAiderBin
-        $toolBin = Join-Path (Get-FccBundlePath) 'bin'
-    }
-    Start-InstallStep "FCC verification"
-    $toolBinPath = ([IO.Path]::GetFullPath($toolBin)).TrimEnd(
-        [IO.Path]::DirectorySeparatorChar,
-        [IO.Path]::AltDirectorySeparatorChar
-    )
-    $installedCommands = @{}
-    foreach ($name in $FccBundleCommands) {
-        $commandName = if ($name -eq 'fcc-update') { 'fcc-update.cmd' } else { $name }
-        $command = Get-ApplicationCommand $commandName
-        if (-not $command) {
-            throw "Free Claude Code installation did not create '$commandName'."
+    $originalPath = $env:Path
+    try {
+        if ($VoiceLocal) {
+            $uvCommand = Get-ApplicationCommand "uv"
+            if (-not $uvCommand) { throw "uv is not available for PATH configuration." }
+            Invoke-NativeCommand -FilePath $uvCommand.Source -Arguments @("tool", "update-shell")
+            $toolBin = Add-UvToolBinDirectory -UvPath $uvCommand.Source
+            Prioritize-PathEntry $toolBin
+        } else {
+            Set-FccBundlePathEntry -AiderBin $script:VerifiedAiderBin
+            $toolBin = Join-Path (Get-FccBundlePath) 'bin'
         }
-        $commandDirectory = ([IO.Path]::GetFullPath((Split-Path -Parent $command.Source))).TrimEnd(
+        Start-InstallStep "FCC verification"
+        $toolBinPath = ([IO.Path]::GetFullPath($toolBin)).TrimEnd(
             [IO.Path]::DirectorySeparatorChar,
             [IO.Path]::AltDirectorySeparatorChar
         )
-        if (-not $commandDirectory.Equals($toolBinPath, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "'$commandName' resolved outside the FCC command directory: $($command.Source)"
+        $installedCommands = @{}
+        foreach ($name in $FccBundleCommands) {
+            $commandName = if ($name -eq 'fcc-update') { 'fcc-update.cmd' } else { $name }
+            $command = Get-ApplicationCommand $commandName
+            if (-not $command) {
+                throw "Free Claude Code installation did not create '$commandName'."
+            }
+            $commandDirectory = ([IO.Path]::GetFullPath((Split-Path -Parent $command.Source))).TrimEnd(
+                [IO.Path]::DirectorySeparatorChar,
+                [IO.Path]::AltDirectorySeparatorChar
+            )
+            if (-not $commandDirectory.Equals($toolBinPath, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "'$commandName' resolved outside the FCC command directory: $($command.Source)"
+            }
+            $installedCommands[$commandName] = $command.Source
         }
-        $installedCommands[$commandName] = $command.Source
+
+        Write-Host (Invoke-Utf8NativeCapture -FilePath $installedCommands["fcc-server"] -Arguments @("--version"))
+        $script:FccVerified = -not $VoiceLocal
+        Start-InstallStep "Desktop integration"
+        Export-FccDesktopIcon `
+            -DesktopCommand $installedCommands["fcc-desktop"] `
+            -IconPath $iconPath
+        Install-FccDesktopShortcuts `
+            -DesktopCommand $installedCommands["fcc-desktop"] `
+            -IconPath $iconPath
+    } finally {
+        if ($VoiceLocal) { $env:Path = $originalPath }
     }
 
-    Write-Host (Invoke-Utf8NativeCapture -FilePath $installedCommands["fcc-server"] -Arguments @("--version"))
-    $script:FccVerified = $true
-    Start-InstallStep "Desktop integration"
-    Export-FccDesktopIcon `
-        -DesktopCommand $installedCommands["fcc-desktop"] `
-        -IconPath $iconPath
-    Install-FccDesktopShortcuts `
-        -DesktopCommand $installedCommands["fcc-desktop"] `
-        -IconPath $iconPath
+    if ($VoiceLocal) {
+        # Keep the previous route registered until the uv commands and shortcuts work.
+        Set-FccBundlePathEntry -Remove
+        Prioritize-PathEntry $toolBin
+        $script:FccVerified = $true
+    }
 }
 
 function Test-EquivalentPath {
@@ -2415,6 +2432,12 @@ if (-not $DryRun) {
     if ($installerRelease -and $installerRelease -cne $FccInstallVersion) { throw "Invalid FCC release handoff." }
     Remove-Item Env:_FCC_INSTALLER_RELEASE -ErrorAction SilentlyContinue
     if (-not $installerRelease) {
+        $bundle = Get-FccBundlePath
+        if ((Test-Path -LiteralPath "$bundle.previous") -or (Test-Path -LiteralPath "$bundle.staging")) {
+            $recoveryLock = Lock-FccInstallation
+            try { Recover-FccBundleInstallation }
+            finally { $recoveryLock.Dispose() }
+        }
         $installerParameters = @{} + $PSBoundParameters
         Invoke-SelectedReleaseInstaller -InstallerArguments $installerParameters
         return
@@ -2429,7 +2452,7 @@ try {
         if (Test-Path -LiteralPath (Join-Path $env:USERPROFILE '.fcc.removing') -PathType Container) {
             throw 'The previous FCC uninstall did not finish. Rerun the uninstaller before installing again.'
         }
-        Restore-FccPreviousBundle
+        Recover-FccBundleInstallation
         if (-not $VoiceLocal) { Assert-FccBundleMachinePath }
         if ($Update -and -not (Test-FccUpdateNeeded)) {
             $installSucceeded = $true

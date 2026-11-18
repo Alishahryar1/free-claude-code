@@ -203,14 +203,14 @@ def test_install_ps1_bundle_rejects_failed_update_before_activation(
     assert failed.returncode != 0
     assert diagnostic in failed.stderr
     assert (root / "version.txt").read_text(encoding="ascii").strip() == "1.9.0"
-    assert not list(root.parent.glob("windows-app.staging-*"))
+    assert not (root.parent / "windows-app.staging").exists()
 
     installed = powershell_harness.run_functions("Install-FreeClaudeCode")
 
     assert installed.returncode == 0, installed.stdout + installed.stderr
     assert (root / "version.txt").read_text(encoding="ascii").strip() == RELEASE_VERSION
     assert (root / "bin" / "fcc-server.exe").is_file()
-    assert not list(root.parent.glob("windows-app.staging-*"))
+    assert not (root.parent / "windows-app.staging").exists()
 
 
 def test_install_ps1_preserves_expandable_user_path(powershell_harness):
@@ -458,22 +458,70 @@ def test_install_ps1_voice_update_prompts_to_refresh_the_terminal(powershell_har
     assert "Open a new terminal from the Start menu" in updated.stdout
 
 
+@pytest.mark.parametrize("failure", ["path-update", "desktop-icon-export"])
+def test_install_ps1_failed_voice_update_keeps_signed_path(powershell_harness, failure):
+    if os.name != "nt":
+        pytest.skip("Windows registry test")
+
+    import winreg
+
+    powershell_harness.add_installed_clients()
+    powershell_harness.add_uv(UV_MINIMUM)
+    bundle_bin = Path(powershell_harness.env["USERPROFILE"]) / ".fcc/windows-app/bin"
+    bundle_bin.mkdir(parents=True)
+    (bundle_bin.parent / "version.txt").write_text("1.9.0", encoding="ascii")
+    (bundle_bin.parent / ".installed-version").write_text("1.9.0", encoding="ascii")
+    old_path = str(bundle_bin)
+    powershell_harness.env["FCC_TEST_USER_PATH"] = old_path
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        powershell_harness.env["FCC_TEST_ENV_KEY"],
+        0,
+        winreg.KEY_ALL_ACCESS,
+    ) as key:
+        winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, old_path)
+        failed = powershell_harness.run("-Update", "-VoiceLocal", fail_step=failure)
+        assert failed.returncode != 0
+        diagnostic = "tool update-shell" if failure == "path-update" else "exit code 56"
+        assert diagnostic in failed.stderr
+        assert winreg.QueryValueEx(key, "Path") == (old_path, winreg.REG_EXPAND_SZ)
+
+        retried = powershell_harness.run("-Update", "-VoiceLocal")
+        assert retried.returncode == 0, retried.stdout + retried.stderr
+        assert "already up to date" not in retried.stdout
+        assert winreg.QueryValueEx(key, "Path") == ("", winreg.REG_EXPAND_SZ)
+
+
+@pytest.mark.parametrize("bootstrap", [False, True])
 def test_install_ps1_restores_previous_bundle_before_loading_release(
     powershell_harness,
+    bootstrap,
 ):
     root = Path(powershell_harness.env["USERPROFILE"]) / ".fcc" / "windows-app"
     previous = root.with_name("windows-app.previous")
     previous.mkdir(parents=True)
     (previous / "version.txt").write_text("1.9.0", encoding="ascii")
     (previous / ".installed-version").write_text("1.9.0", encoding="ascii")
+    staging = root.with_name("windows-app.staging")
+    staging.mkdir()
+    (staging / "incomplete.zip").touch()
     powershell_harness.env["FCC_TEST_USER_PATH"] = str(root / "bin")
+    if bootstrap:
+        powershell_harness.env["_FCC_INSTALLER_RELEASE"] = ""
 
-    failed = powershell_harness.run("-Update", fail_step="toolchain-download")
+    failure = "pinned-installer-download" if bootstrap else "toolchain-download"
+    failed = powershell_harness.run("-Update", fail_step=failure)
 
     assert failed.returncode != 0
-    assert "simulated metadata failure" in failed.stderr
+    diagnostic = (
+        "simulated release download failure"
+        if bootstrap
+        else "simulated metadata failure"
+    )
+    assert diagnostic in failed.stderr
     assert (root / "version.txt").read_text(encoding="ascii") == "1.9.0"
     assert not previous.exists()
+    assert not staging.exists()
 
 
 @pytest.mark.parametrize("skip_download", [False, True])
@@ -3314,6 +3362,9 @@ function Invoke-RestMethod {
 
     Add-Content -LiteralPath $env:CALL_LOG -Value "download:$Uri"
     $version = $env:FCC_INSTALL_VERSION
+    if ($env:FAIL_STEP -eq 'pinned-installer-download' -and $Uri.EndsWith("/v$version/scripts/install.ps1")) {
+        throw 'simulated release download failure'
+    }
     if ($Uri -ceq "https://api.github.com/repos/Alishahryar1/free-claude-code/releases/tags/v$version") {
         $archive = Get-Item -LiteralPath (Join-Path $env:FAKE_FIXTURES 'fcc-bundle.zip')
         $digest = (Get-FileHash -LiteralPath $archive.FullName).Hash.ToLowerInvariant()
