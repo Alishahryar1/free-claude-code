@@ -669,7 +669,7 @@ requires-dist = [
     { name = "anyio", specifier = ">=4.16.0" },
     { name = "discord-py", specifier = ">=2.7.1" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.141.1" },
-    { name = "github-copilot-sdk", specifier = ">=1.0.31" },
+    { name = "github-copilot-sdk", specifier = ">=1.0.34" },
     { name = "google-auth", extras = ["requests"], specifier = ">=2.56.3" },
     { name = "grpcio", specifier = ">=1.85.1" },
     { name = "grpcio-tools", specifier = ">=1.85.1" },
@@ -677,11 +677,11 @@ requires-dist = [
     { name = "httpx2", extras = ["socks"], specifier = ">=2.7.0,<3" },
     { name = "json5", specifier = ">=0.17.3" },
     { name = "jsonschema", specifier = ">=4.25.0" },
-    { name = "librosa", marker = "extra == 'voice-local'", specifier = ">=1.0.0" },
+    { name = "librosa", marker = "extra == 'voice-local'", specifier = ">=1.0.1" },
     { name = "loguru", specifier = ">=0.8.0" },
     { name = "markdown-it-py", specifier = ">=4.3.0" },
     { name = "nvidia-riva-client", specifier = ">=2.28.0" },
-    { name = "openai", specifier = ">=3.49.0" },
+    { name = "openai", specifier = ">=3.51.0" },
     { name = "packaging", specifier = ">=26.3" },
     { name = "pillow", marker = "sys_platform == 'darwin' or sys_platform == 'win32'", specifier = ">=13.0.0" },
     { name = "pydantic", specifier = ">=2.14.3" },
@@ -696,23 +696,23 @@ requires-dist = [
     { name = "tiktoken", specifier = ">=0.13.0" },
     { name = "tomlkit", specifier = ">=0.15.2" },
     { name = "torch", marker = "extra == 'voice-local'", specifier = ">=2.14.1", index = "https://download.pytorch.org/whl/cu130" },
-    { name = "transformers", marker = "extra == 'voice-local'", specifier = ">=5.22.2" },
+    { name = "transformers", marker = "extra == 'voice-local'", specifier = ">=5.23.0" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]
 provides-extras = ["voice-local"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "google-genai", specifier = ">=3.2.0" },
-    { name = "pytest", specifier = ">=9.1.1,<9.3" },
-    { name = "pytest-asyncio", specifier = ">=1.4.1.post1" },
+    { name = "google-genai", specifier = ">=3.3.0" },
+    { name = "pytest", specifier = ">=9.1.1,<9.2" },
+    { name = "pytest-asyncio", specifier = ">=1.5.0" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "pytest-playwright", specifier = ">=0.10.0" },
     { name = "pytest-split", specifier = ">=0.11.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "ruff", specifier = ">=0.17.4" },
-    { name = "ty", specifier = ">=0.0.101" },
+    { name = "ruff", specifier = ">=0.17.5" },
+    { name = "ty", specifier = ">=0.0.104" },
 ]
 
 [[package]]
@@ -1945,7 +1945,7 @@ wheels = [
 
 [[package]]
 name = "pytest"
-version = "9.2.0"
+version = "9.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "colorama", marker = "sys_platform == 'win32'" },
@@ -1954,9 +1954,9 @@ dependencies = [
     { name = "pluggy" },
     { name = "pygments" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/79/42/bb4641652e58dedeac2ec51abc1f8cae4fee4ec63899a0999016229a0f2a/pytest-9.2.0.tar.gz", hash = "sha256:97c4f3b1f3c7414aa36465e09b8220f1d03627993bd51b1282e193753c80557b", size = 1797555, upload-time = "2026-10-27T21:30:20.728Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e4/47/b9efed96c114afcfa3c9d3fe98a76a1d14c74a9e266d397cf6eb64be5e01/pytest-9.1.1.tar.gz", hash = "sha256:1088fbde8f2b49d95a549a195707afa7a76a3ce9bcadc26b6d71f0ffda5fe313", size = 1636369, upload-time = "2026-06-19T10:58:32.857Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/51/39/1f5d8c8877a0fa327db959c19341d4be61660de1ab6b7391f9eb805bcd67/pytest-9.2.0-py3-none-any.whl", hash = "sha256:07acdcf88ec174f907dc01af70bf52d49b014bbab03faeeade31c96b18c2e588", size = 411776, upload-time = "2026-10-27T21:30:19.131Z" },
+    { url = "https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl", hash = "sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c", size = 386536, upload-time = "2026-06-19T10:58:31.347Z" },
 ]
 
 [[package]]
