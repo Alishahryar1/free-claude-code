@@ -97,7 +97,7 @@ explicit = true
 [dependency-groups]
 dev = [
     # pytest 9.2 breaks xdist provider grouping: pytest-dev/pytest#15303.
-    "pytest>=9.1.1,<9.2",
+    "pytest>=9.1.1,<9.3",
     "pytest-asyncio>=1.5.0",
     "pytest-cov>=7.1.0",
     "ty>=0.0.104",
