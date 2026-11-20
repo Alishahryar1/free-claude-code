@@ -34,7 +34,7 @@ def test_catalog_local_assignments_are_exact() -> None:
         provider_id
         for provider_id, descriptor in PROVIDER_CATALOG.items()
         if descriptor.local
-    } == {"lmstudio", "llamacpp", "ollama"}
+    } == {"lmstudio", "llamacpp", "ollama", "rapid_mlx"}
 
 
 def test_ollama_cloud_is_remote_and_distinct_from_local_ollama() -> None:

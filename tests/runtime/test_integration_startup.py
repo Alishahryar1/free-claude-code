@@ -56,7 +56,7 @@ def runtime():
     async def construct(
         _id, _settings, _admission_registry, _api_key_number, _history_cache=None
     ):
-        if _id in {"lmstudio", "llamacpp", "ollama"}:
+        if _id in {"lmstudio", "llamacpp", "ollama", "rapid_mlx"}:
             raise ConnectionError("Local fixture is offline")
         return provider
 

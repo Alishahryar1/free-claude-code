@@ -839,6 +839,11 @@ OPENAI_CHAT_PROFILES: dict[str, OpenAIChatProfile] = {
         ),
         NO_REASONING,
     ),
+    "rapid_mlx": OpenAIChatProfile(
+        _policy("Rapid-MLX", ReasoningReplayMode.REASONING_CONTENT),
+        NO_REASONING,
+        normalize_base_url=True,
+    ),
     "llamacpp": OpenAIChatProfile(
         _policy(
             "LLAMACPP",
