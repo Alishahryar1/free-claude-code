@@ -82,6 +82,7 @@ PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
     "together": "together/zai-org/GLM-5.2",
     "deepinfra": "deepinfra/deepseek-ai/DeepSeek-V4-Flash",
     "siliconflow": "siliconflow/Qwen/Qwen3-32B",
+    "modelscope": "modelscope/Qwen/Qwen3.8-27B",
     "nebius": "nebius/Qwen/Qwen3-30B-A3B",
     "scaleway": "scaleway/deepseek/deepseek-v4-flash",
     "opper": "opper/claude-sonnet-4-6",

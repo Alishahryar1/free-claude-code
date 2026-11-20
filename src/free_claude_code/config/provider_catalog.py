@@ -67,6 +67,8 @@ TOGETHER_DEFAULT_BASE = "https://api.together.ai/v1"
 DEEPINFRA_DEFAULT_BASE = "https://api.deepinfra.com/v1/openai"
 # SiliconFlow OpenAI-compatible Chat Completions API.
 SILICONFLOW_DEFAULT_BASE = "https://api.siliconflow.com/v1"
+# ModelScope API-Inference OpenAI-compatible Chat Completions API.
+MODELSCOPE_DEFAULT_BASE = "https://api-inference.modelscope.cn/v1"
 # Nebius Token Factory OpenAI-compatible Chat Completions API.
 NEBIUS_DEFAULT_BASE = "https://api.tokenfactory.nebius.com/v1"
 # Scaleway Generative APIs OpenAI-compatible Chat Completions API.
@@ -305,6 +307,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="siliconflow_api_keys",
         default_base_url=SILICONFLOW_DEFAULT_BASE,
         proxy_attr="siliconflow_proxy",
+    ),
+    "modelscope": ProviderDescriptor(
+        provider_id="modelscope",
+        display_name="ModelScope",
+        website_url="https://www.modelscope.cn/",
+        logo_filename="modelscope-color.svg",
+        credential_env="MODELSCOPE_API_KEY",
+        credential_url="https://modelscope.cn/my/myaccesstokens",
+        credential_attr="modelscope_api_keys",
+        default_base_url=MODELSCOPE_DEFAULT_BASE,
+        proxy_attr="modelscope_proxy",
     ),
     "nebius": ProviderDescriptor(
         provider_id="nebius",
