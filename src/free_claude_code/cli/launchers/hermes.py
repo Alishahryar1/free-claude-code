@@ -77,6 +77,7 @@ SPEC = HarnessSpec(
         ("--version",),
         lambda output: version_at_least(output, _VERSION_PATTERN, (0, 20, 4)),
         "FCC requires Hermes 0.20.4 or newer.",
+        timeout_seconds=15.0,
     ),
 )
 
