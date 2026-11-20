@@ -37,9 +37,15 @@ def _failure(error: BaseException) -> DeliveryFailure:
 
     discord.py already retries rate limits, server errors and the macOS and
     Windows connection resets, so only connection failures it lets through
-    count as lost calls.
+    and responses cut off midway count as lost calls. A failed certificate
+    check fails the same way on every attempt.
     """
-    if isinstance(error, aiohttp.ClientConnectionError | TimeoutError):
+    if isinstance(error, aiohttp.ClientConnectorCertificateError):
+        return DeliveryFailure(FailureKind.REJECTED)
+    if isinstance(
+        error,
+        aiohttp.ClientConnectionError | aiohttp.ClientPayloadError | TimeoutError,
+    ):
         return DeliveryFailure(FailureKind.NETWORK)
     return DeliveryFailure(FailureKind.REJECTED)
 

@@ -696,3 +696,38 @@ class TestDiscordDeliveryRetry:
             await _messenger(channel).edit_message("123", "456", "text")
 
         assert msg.edit.await_count == MAX_ATTEMPTS
+
+    @pytest.mark.asyncio
+    async def test_edit_is_delivered_after_a_truncated_response(self, discord_sleeps):
+        import aiohttp
+
+        msg = AsyncMock()
+        channel = AsyncMock()
+        channel.fetch_message = AsyncMock(
+            side_effect=[
+                aiohttp.ClientPayloadError("Response payload is not completed"),
+                msg,
+            ]
+        )
+
+        await _messenger(channel).edit_message("123", "456", "Stopped.")
+
+        assert channel.fetch_message.await_count == 2
+        msg.edit.assert_awaited_once_with(content="Stopped.")
+
+    @pytest.mark.asyncio
+    async def test_certificate_failure_is_not_retried(self, discord_sleeps):
+        import aiohttp
+
+        channel = AsyncMock()
+        channel.send = AsyncMock(
+            side_effect=aiohttp.ClientConnectorCertificateError(
+                MagicMock(), Exception("hostname mismatch")
+            )
+        )
+
+        with pytest.raises(aiohttp.ClientConnectorCertificateError):
+            await _messenger(channel).send_message("123", "Hello")
+
+        assert channel.send.await_count == 1
+        discord_sleeps.assert_not_awaited()
