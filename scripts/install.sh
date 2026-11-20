@@ -440,11 +440,17 @@ add_known_bin_directories() {
         add_path_entry "$XDG_BIN_HOME"
     fi
 
+    if [ -n "${HERMES_HOME:-}" ]; then
+        add_path_entry "$HERMES_HOME/bin"
+    fi
+
     if [ -n "${HOME:-}" ]; then
         add_path_entry "$HOME/.local/bin"
         add_path_entry "$HOME/.cargo/bin"
         add_path_entry "$HOME/.opencode/bin"
         add_path_entry "${XDG_DATA_HOME:-$HOME/.local/share}/pi-node/current/bin"
+        add_path_entry "$HOME/.hermes/bin"
+        add_path_entry "${XDG_DATA_HOME:-$HOME/.local/share}/hermes/bin"
     fi
 
     if [ -n "${GROK_BIN_DIR:-}" ]; then
