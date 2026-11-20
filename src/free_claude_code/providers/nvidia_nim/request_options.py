@@ -15,6 +15,9 @@ from free_claude_code.providers.openai_chat import (
 
 from .tool_schema import sanitize_nim_tool_schemas
 
+_TEXT_ONLY_NIM_MODELS = frozenset({"z-ai/glm-5.3"})
+_IMAGE_OMITTED_TEXT = "[Image omitted: this model does not accept image input.]"
+
 NIM_REASONING = NamedEffortReasoning(
     tuple((effort, effort.value) for effort in ReasoningEffort),
     disabled_value="none",
@@ -58,6 +61,7 @@ def apply_nim_request_options(
     reasoning: ReasoningPolicy,
 ) -> None:
     """Apply source-independent NIM policy to one Chat body."""
+    _replace_images_for_text_only_model(body)
     sanitize_nim_tool_schemas(body)
 
     max_tokens = body.get("max_tokens")
@@ -94,6 +98,21 @@ def apply_nim_request_options(
         body["extra_body"] = extra_body
     else:
         body.pop("extra_body", None)
+
+
+def _replace_images_for_text_only_model(body: dict[str, Any]) -> None:
+    if body.get("model") not in _TEXT_ONLY_NIM_MODELS:
+        return
+    for message in body.get("messages") or []:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        message["content"] = [
+            {"type": "text", "text": _IMAGE_OMITTED_TEXT}
+            if isinstance(part, dict) and part.get("type") == "image_url"
+            else part
+            for part in content
+        ]
 
 
 def _set_extra(
