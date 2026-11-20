@@ -9,6 +9,7 @@ import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import MappingProxyType
 
 from free_claude_code.application.connected_accounts import (
     ConnectedAccountLoginMode,
@@ -125,6 +126,11 @@ class CopilotAuthManager:
 
     def is_connected(self) -> bool:
         return self._enabled and not self._closed
+
+    @property
+    def current_models(self) -> Mapping[str, CopilotModel]:
+        broker = self._broker
+        return broker.current_models if broker is not None else MappingProxyType({})
 
     def connected_provider_ids(self) -> tuple[str, ...]:
         return (self.provider_id,) if self.is_connected() else ()

@@ -220,3 +220,42 @@ async def test_cached_discovery_rejects_changed_or_signed_out_native_identity(
             await broker.snapshot(refresh=False)
     finally:
         await broker.close()
+
+
+@pytest.mark.asyncio
+async def test_lease_supports_auto_and_prefixed_alias_and_rejects_auto_when_named_models_exist() -> (
+    None
+):
+    # 1. Student account with auto
+    runtime = FakeRuntime()
+    runtime.available = (model("auto"),)
+    broker = CopilotBroker(runtime)
+    try:
+        async with broker.lease("auto") as lease:
+            assert lease.model.info.model_id == "auto"
+            endpoint = await lease.endpoint()
+            assert endpoint.base_url == "https://copilot.invalid"
+
+        async with broker.lease("github_copilot/auto") as lease:
+            assert lease.model.info.model_id == "auto"
+            endpoint = await lease.endpoint()
+            assert endpoint.base_url == "https://copilot.invalid"
+    finally:
+        await broker.close()
+
+    # 2. Account with named models: leasing auto fails with "Choose a concrete model"
+    runtime2 = FakeRuntime()
+    runtime2.available = (model("claude-model"),)
+    broker2 = CopilotBroker(runtime2)
+    try:
+        with pytest.raises(InvalidRequestError, match="concrete model"):
+            async with broker2.lease("auto"):
+                pytest.fail("auto was leased when account only has named models")
+
+        with pytest.raises(InvalidRequestError, match="concrete model"):
+            async with broker2.lease("github_copilot/auto"):
+                pytest.fail(
+                    "github_copilot/auto was leased when account only has named models"
+                )
+    finally:
+        await broker2.close()
