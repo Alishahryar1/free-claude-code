@@ -117,11 +117,14 @@ def test_accounting_does_not_hide_late_content_or_contradictions(native, change)
 
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("usage", [None, [], "", 0])
-def test_empty_repeated_choice_requires_accounting(native, usage):
+def test_empty_repeated_choice_is_ignored_without_accounting(native, usage):
+    # OpenRouter :free routes repeat the empty final chunk without usage.
     buffer = ChatToolCallBuffer(native=native)
     buffer.feed(terminal())
-    with pytest.raises(ExecutionFailure):
-        buffer.feed({**terminal(), "usage": usage})
+    assert all(
+        not frame["choices"]
+        for frame in frames(buffer.feed({**terminal(), "usage": usage}))
+    )
 
 
 @pytest.mark.parametrize("native", [False, True])

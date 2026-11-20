@@ -119,6 +119,21 @@ def test_native_choice_cannot_change_after_termination():
         buffer.feed(event(content="late"))
 
 
+@pytest.mark.parametrize("native", [False, True])
+def test_empty_duplicate_final_chunk_is_ignored(native):
+    buffer = ChatToolCallBuffer(native=native)
+    buffer.feed(event(content="hi", finish="stop"))
+    assert buffer.feed(event(finish="stop")) == [{"id": "chat", "choices": []}]
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_duplicate_final_chunk_with_content_still_fails(native):
+    buffer = ChatToolCallBuffer(native=native)
+    buffer.feed(event(finish="stop"))
+    with pytest.raises(ExecutionFailure):
+        buffer.feed(event(content="late", finish="stop"))
+
+
 def test_native_standard_mixed_chunk_streams_text_before_its_pending_call():
     buffer = ChatToolCallBuffer(native=True)
     first = event([call(0, "read", "{}", "a")], content="before")
