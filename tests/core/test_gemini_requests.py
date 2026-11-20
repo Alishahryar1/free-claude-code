@@ -328,6 +328,22 @@ def test_gemini_request_accepts_session_id():
     assert req.session_id == "acp-session-xyz-123"
 
 
+def test_native_gemini_body_excludes_session_id():
+    from free_claude_code.core.gemini.native_request import native_gemini_body
+
+    req = GeminiRequest.model_validate(
+        {
+            "model": "gemini-2.5-flash",
+            "sessionId": "acp-session-xyz-123",
+            "contents": [{"parts": [{"text": "hello"}]}],
+        }
+    )
+    dumped = native_gemini_body(req)
+    assert dumped["model"] == "gemini-2.5-flash"
+    assert "sessionId" not in dumped
+    assert "session_id" not in dumped
+
+
 @pytest.mark.parametrize(
     "raw_level, expected_policy_effort",
     [
