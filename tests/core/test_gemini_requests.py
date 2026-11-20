@@ -314,3 +314,47 @@ def test_conflicting_echoed_replay_bundles_are_not_silently_deduplicated():
     )
     with pytest.raises(GeminiConversionError, match="Conflicting"):
         build_gemini_chat_request(value)
+
+
+def test_gemini_request_accepts_session_id():
+    req = GeminiRequest.model_validate(
+        {
+            "model": "gemini-2.5-flash",
+            "sessionId": "acp-session-xyz-123",
+            "contents": [{"parts": [{"text": "hello"}]}],
+        }
+    )
+    assert req.model == "gemini-2.5-flash"
+    assert req.session_id == "acp-session-xyz-123"
+
+
+@pytest.mark.parametrize(
+    "raw_level, expected_policy_effort",
+    [
+        ("low", "low"),
+        ("LOW", "low"),
+        ("medium", "medium"),
+        ("MEDIUM", "medium"),
+        ("high", "high"),
+        ("HIGH", "high"),
+        ("minimal", "minimal"),
+        ("MINIMAL", "minimal"),
+        ("THINKING_LEVEL_LOW", "low"),
+        ("thinking_level_low", "low"),
+        ("THINKING_LEVEL_MEDIUM", "medium"),
+        ("THINKING_LEVEL_HIGH", "high"),
+        ("THINKING_LEVEL_MINIMAL", "minimal"),
+    ],
+)
+def test_thinking_level_normalizes_casing_and_prefixes(
+    raw_level, expected_policy_effort
+):
+    req = request(
+        generationConfig={
+            "thinkingConfig": {
+                "thinkingLevel": raw_level,
+            }
+        }
+    )
+    policy = req.reasoning_policy()
+    assert policy.effort == expected_policy_effort
