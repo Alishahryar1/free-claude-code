@@ -1698,7 +1698,7 @@ def test_openai_build_accepts_declared_native_top_level_hints() -> None:
             "mcp_servers": [{"type": "url", "url": "https://x.com"}],
         }
     )
-    body = build_base_request_body(req, default_max_tokens=100)
+    body = build_base_request_body(req)
     assert "context_management" not in body
     assert "output_config" not in body
     assert "mcp_servers" not in body
@@ -1781,3 +1781,24 @@ def test_convert_hosted_tool_history_preserves_results_and_rejects_active_calls(
     else:
         result = AnthropicToOpenAIConverter.convert_messages(messages)
         assert "[Earlier tool record]" in result[0]["content"]
+
+
+def test_body_policy_fills_default_cap_under_the_profile_field() -> None:
+    from free_claude_code.core.anthropic import ReasoningReplayMode
+    from free_claude_code.providers.openai_chat.request_policy import (
+        OpenAIChatRequestPolicy,
+        apply_openai_chat_body_policy,
+    )
+
+    policy = OpenAIChatRequestPolicy(
+        provider_name="TEST",
+        reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
+        default_max_tokens=100,
+        max_tokens_field="max_completion_tokens",
+    )
+    body: dict = {"model": "m", "messages": []}
+
+    apply_openai_chat_body_policy(body, policy)
+
+    assert body["max_completion_tokens"] == 100
+    assert "max_tokens" not in body

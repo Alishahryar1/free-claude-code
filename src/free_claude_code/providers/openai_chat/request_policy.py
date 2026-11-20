@@ -65,7 +65,6 @@ def build_openai_chat_request_body(
     try:
         body = build_base_request_body(
             request_data,
-            default_max_tokens=policy.default_max_tokens,
             reasoning_replay=policy.reasoning_replay,
             structured_reasoning_details=structured_reasoning_details,
         )
@@ -120,6 +119,13 @@ def apply_openai_chat_body_policy(
     if isinstance(extra_body, dict):
         for key in policy.unsupported_body_keys:
             extra_body.pop(key, None)
+
+    if (
+        policy.default_max_tokens is not None
+        and body.get("max_tokens") is None
+        and body.get("max_completion_tokens") is None
+    ):
+        body["max_tokens"] = policy.default_max_tokens
 
     if policy.max_tokens_field == "max_completion_tokens":
         _normalize_max_completion_tokens(body)

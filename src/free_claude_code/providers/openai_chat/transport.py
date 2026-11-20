@@ -952,8 +952,6 @@ class OpenAIChatTransport:
                 raise InvalidRequestError(
                     f"{self._provider_name} cannot represent Gemini control {key}"
                 )
-        if "max_tokens" not in body and policy.default_max_tokens is not None:
-            body["max_tokens"] = policy.default_max_tokens
         apply_openai_chat_body_policy(body, policy)
         self._profile.apply_reasoning_to_body(body, reasoning)
         body = self._behavior.finalize_chat_body(body, reasoning=reasoning)

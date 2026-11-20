@@ -828,7 +828,6 @@ class AnthropicToOpenAIConverter:
 def build_base_request_body(
     request_data: MessagesRequest,
     *,
-    default_max_tokens: int | None = None,
     reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.REASONING_CONTENT,
     structured_reasoning_details: bool = False,
 ) -> dict[str, Any]:
@@ -848,8 +847,7 @@ def build_base_request_body(
 
     body: dict[str, Any] = {"model": request_data.model, "messages": messages}
 
-    max_tokens = request_data.max_tokens
-    set_if_not_none(body, "max_tokens", max_tokens or default_max_tokens)
+    set_if_not_none(body, "max_tokens", request_data.max_tokens)
     set_if_not_none(body, "temperature", request_data.temperature)
     set_if_not_none(body, "top_p", request_data.top_p)
 

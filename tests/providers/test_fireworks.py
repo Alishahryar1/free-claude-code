@@ -8,6 +8,7 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.config.provider_catalog import FIREWORKS_DEFAULT_BASE
 from free_claude_code.core.anthropic.models import Message, MessagesRequest
+from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.support import (
     REASONING_OFF,
@@ -71,6 +72,22 @@ def test_build_request_body_default_max_tokens(fireworks_provider):
     )
 
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+
+
+def test_responses_body_gets_default_max_tokens(fireworks_provider):
+    request = OpenAIResponsesRequest(model="m", input="x")
+
+    translated = fireworks_provider._chat._build_responses_request_body(request)
+
+    assert translated.body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
+
+
+def test_responses_body_keeps_explicit_max_output_tokens(fireworks_provider):
+    request = OpenAIResponsesRequest(model="m", input="x", max_output_tokens=123)
+
+    translated = fireworks_provider._chat._build_responses_request_body(request)
+
+    assert translated.body["max_tokens"] == 123
 
 
 def test_replay_is_independent_of_current_turn_reasoning_control():
