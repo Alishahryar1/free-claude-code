@@ -474,6 +474,10 @@ Responses replies always stream. To stream Messages or Chat Completions replies,
 Run coding tasks from Discord or Telegram, and send voice notes. Configure them
 in **Admin UI → Messaging**, then click **Apply**.
 
+Table normalization no longer adds blank lines inside Markdown code blocks,
+including list-contained fences, `~~~` fences and longer backtick fences.
+Platform rendering may still trim trailing blank lines from code blocks.
+
 <details>
 <summary><strong>Discord bot</strong></summary>
 
