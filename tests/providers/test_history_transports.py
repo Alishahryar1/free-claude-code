@@ -33,9 +33,10 @@ from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.anthropic_messages.transport import (
     AnthropicMessagesTransport,
 )
-from free_claude_code.providers.base import BaseProvider
+from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.history_replay import replay_origin
 from free_claude_code.providers.open_router import OpenRouterProvider
+from free_claude_code.providers.openai_chat.provider import OpenAIChatProvider
 from free_claude_code.providers.openai_responses.transport import (
     OpenAIResponsesTransport,
 )
@@ -170,6 +171,7 @@ class _Send(Protocol):
         model: str = "requested",
         continuation: ContinuationSeed | None = None,
         reasoning: ReasoningPolicy | None = None,
+        endpoint_context: EndpointContext | None = None,
     ) -> AsyncIterator[StreamOutput]: ...
 
 
@@ -192,7 +194,7 @@ def _harness(
     responder: _Responder | None = None,
     *,
     key: str = "a",
-    chat_provider_factory: Callable[[], BaseProvider] | None = None,
+    chat_provider_factory: Callable[[], OpenAIChatProvider] | None = None,
     max_attempts: int = 5,
 ) -> AsyncGenerator[_Harness[AnthropicMessagesTransport]]: ...
 
@@ -204,14 +206,14 @@ def _harness(
     responder: _Responder | None = None,
     *,
     key: str = "a",
-    chat_provider_factory: Callable[[], BaseProvider] | None = None,
+    chat_provider_factory: Callable[[], OpenAIChatProvider] | None = None,
     max_attempts: int = 5,
 ) -> AsyncGenerator[_Harness[OpenAIResponsesTransport]]: ...
 
 
 @overload
 @asynccontextmanager
-def _harness[T: BaseProvider](
+def _harness[T: OpenAIChatProvider](
     protocol: Literal["chat"],
     responder: _Responder | None = None,
     *,
@@ -240,10 +242,10 @@ def _harness(
     responder: _Responder | None = None,
     *,
     key: str = "a",
-    chat_provider_factory: Callable[[], BaseProvider] | None = None,
+    chat_provider_factory: Callable[[], OpenAIChatProvider] | None = None,
     max_attempts: int = 5,
 ) -> AsyncGenerator[
-    _Harness[AnthropicMessagesTransport | OpenAIResponsesTransport | BaseProvider]
+    _Harness[AnthropicMessagesTransport | OpenAIResponsesTransport | OpenAIChatProvider]
 ]: ...
 
 
@@ -253,10 +255,10 @@ async def _harness(
     responder: _Responder | None = None,
     *,
     key: str = "a",
-    chat_provider_factory: Callable[[], BaseProvider] | None = None,
+    chat_provider_factory: Callable[[], OpenAIChatProvider] | None = None,
     max_attempts: int = 5,
 ) -> AsyncGenerator[
-    _Harness[AnthropicMessagesTransport | OpenAIResponsesTransport | BaseProvider]
+    _Harness[AnthropicMessagesTransport | OpenAIResponsesTransport | OpenAIChatProvider]
 ]:
     bodies: _CapturedRequests = []
 
@@ -301,14 +303,14 @@ async def _harness(
             content=sse_text(payload),
         )
 
-    endpoint = None
+    messages_endpoint = None
     if protocol == "messages":
         client = httpx.AsyncClient(transport=httpx.MockTransport(reply_messages))
         provider = messages_transport(
             client, immediate_admission(max_attempts=max_attempts)
         )
-        endpoint = Endpoint()
-        endpoint.token = key
+        messages_endpoint = Endpoint()
+        messages_endpoint.token = key
     else:
         client = _client(reply_openai, api_key=key)
         if protocol == "responses":
@@ -337,6 +339,7 @@ async def _harness(
         model: str = "requested",
         continuation: ContinuationSeed | None = None,
         reasoning: ReasoningPolicy | None = None,
+        endpoint_context: EndpointContext | None = None,
     ) -> AsyncIterator[StreamOutput]:
         if reasoning is None:
             reasoning = (
@@ -350,6 +353,9 @@ async def _harness(
             "reasoning": reasoning,
             "continuation": continuation,
         }
+        endpoint = (
+            endpoint_context if endpoint_context is not None else messages_endpoint
+        )
         if wire == "responses":
             responses_request = OpenAIResponsesRequest.model_validate(
                 {"model": model, "input": history, "tools": tools}
@@ -360,7 +366,7 @@ async def _harness(
                     responses_request, endpoint_context=endpoint, **options
                 )
             return provider.stream_responses(
-                responses_request, input_tokens=0, **options
+                responses_request, input_tokens=0, endpoint_context=endpoint, **options
             )
 
         messages_request = MessagesRequest.model_validate(
@@ -371,7 +377,9 @@ async def _harness(
             return provider.stream_messages(
                 messages_request, endpoint_context=endpoint, **options
             )
-        return provider.stream_messages(messages_request, input_tokens=0, **options)
+        return provider.stream_messages(
+            messages_request, input_tokens=0, endpoint_context=endpoint, **options
+        )
 
     try:
         yield stream, bodies, provider
