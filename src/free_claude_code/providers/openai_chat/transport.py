@@ -523,6 +523,26 @@ class _ChatStreamPresenter:
         self._completed = True
 
 
+def _native_chunk_payload(chunk: ChatCompletionChunk) -> JsonObject:
+    """Normalize empty provider arrays at the native Chat SDK boundary."""
+    payload: JsonObject = chunk.model_dump(mode="json", exclude_unset=True)
+    choices = payload.get("choices")
+    if isinstance(choices, (dict, str)) and not choices:
+        empty_choices: list[JsonObject] = []
+        payload["choices"] = empty_choices
+    if isinstance(choices, list):
+        for choice in choices:
+            if not isinstance(choice, dict) or not isinstance(
+                delta := choice.get("delta"), dict
+            ):
+                continue
+            for field in ("tool_calls", "reasoning_details"):
+                value = delta.get(field)
+                if isinstance(value, (dict, str)) and not value:
+                    delta[field] = []
+    return payload
+
+
 class _NativeChatStreamPresenter(_ChatStreamPresenter):
     """Use the existing attempt owner without translating native Chat chunks."""
 
@@ -555,7 +575,7 @@ class _NativeChatStreamPresenter(_ChatStreamPresenter):
 
     @override
     def feed(self, chunk: ChatCompletionChunk) -> Iterator[StreamOutput]:
-        payload: JsonObject = chunk.model_dump(mode="json", exclude_unset=True)
+        payload = _native_chunk_payload(chunk)
         if chunk.usage is not None:
             self._usage_info = chunk.usage
         for choice in json_objects(payload.get("choices", [])):
@@ -840,25 +860,12 @@ class OpenAIChatTransport:
             if on_event is not None:
                 on_event(event)
 
-        def normalize(event: ChatCompletionChunk) -> ChatCompletionChunk:
-            event = self._behavior.normalize_chunk(event)
-            choices: object = event.choices
-            if (
-                native_chat
-                and event.usage is not None
-                and isinstance(choices, dict)
-                and not choices
-            ):
-                # Some compatible providers use an empty object on usage trailers.
-                return event.model_copy(update={"choices": []})
-            return event
-
         stream = scope.retain(
             OpenAIStreamAdapter(
                 await client.chat.completions.create(**create_body, stream=True),
                 read_timeout_s=self._read_timeout_s,
                 on_event=observed,
-                transform_event=normalize,
+                transform_event=self._behavior.normalize_chunk,
             )
         )
         if native_chat:
@@ -1402,7 +1409,7 @@ class _ChatAttempt(TransportAttempt):
         if self._runner._native_chat:
             source.observe(
                 "chat",
-                chunk.model_dump(mode="json", exclude_unset=True),
+                _native_chunk_payload(chunk),
                 continuing=continuing,
             )
             return
