@@ -258,6 +258,11 @@ class Settings(BaseModel):
     # ==================== Opper (OpenAI-compatible) ====================
     opper_api_keys: ApiKeyList = Field(default=(), validation_alias="OPPER_API_KEY")
 
+    # ==================== iFlytek Astron Token Plan ====================
+    iflytek_token_plan_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="IFLYTEK_TOKEN_PLAN_API_KEY"
+    )
+
     # ==================== Fireworks AI Config ====================
     fireworks_api_keys: ApiKeyList = Field(
         default=(), validation_alias="FIREWORKS_API_KEY"
@@ -571,6 +576,9 @@ class Settings(BaseModel):
     )
     opper_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="OPPER_PROXY"
+    )
+    iflytek_token_plan_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="IFLYTEK_TOKEN_PLAN_PROXY"
     )
     fireworks_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="FIREWORKS_PROXY"

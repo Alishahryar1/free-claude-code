@@ -103,6 +103,7 @@ AGNES_DEFAULT_BASE = "https://apihub.agnes-ai.com/v1"
 ZENMUX_DEFAULT_BASE = "https://zenmux.ai/api/v1"
 # W&B Serverless Inference OpenAI-compatible API.
 WANDB_INFERENCE_DEFAULT_BASE = "https://api.inference.wandb.ai/v1"
+IFLYTEK_TOKEN_PLAN_DEFAULT_BASE = "https://maas-token-api.cn-huabei-1.xf-yun.com/v2"
 
 
 class ProviderAuthKind(StrEnum):
@@ -777,6 +778,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="opper_api_keys",
         default_base_url=OPPER_DEFAULT_BASE,
         proxy_attr="opper_proxy",
+    ),
+    "iflytek_token_plan": ProviderDescriptor(
+        provider_id="iflytek_token_plan",
+        display_name="iFlytek Astron Token Plan",
+        website_url="https://maas.xfyun.cn/",
+        logo_filename="iflytekcloud-color.svg",
+        credential_env="IFLYTEK_TOKEN_PLAN_API_KEY",
+        credential_url="https://maas.xfyun.cn/packageSubscription",
+        credential_attr="iflytek_token_plan_api_keys",
+        default_base_url=IFLYTEK_TOKEN_PLAN_DEFAULT_BASE,
+        proxy_attr="iflytek_token_plan_proxy",
     ),
     "ollama_cloud": ProviderDescriptor(
         provider_id="ollama_cloud",
