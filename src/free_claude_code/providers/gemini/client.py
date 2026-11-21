@@ -1,6 +1,7 @@
 """Google AI Studio provider using native GenerateContent and model discovery."""
 
 from collections.abc import AsyncIterator, Mapping
+from decimal import Decimal, InvalidOperation
 from typing import override
 from uuid import uuid4
 
@@ -18,7 +19,11 @@ from free_claude_code.core.gemini.native_request import (
     native_gemini_body,
     responses_to_gemini,
 )
-from free_claude_code.core.json_types import JsonObject, JsonValue, json_array
+from free_claude_code.core.json_types import (
+    DecimalJsonObject,
+    DecimalJsonValue,
+    json_array,
+)
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesToolAdapter,
@@ -50,6 +55,21 @@ from free_claude_code.providers.reasoning_compatibility import (
 )
 
 from .transport import GeminiTransport
+
+
+def _model_token_limit(value: DecimalJsonValue) -> int | None:
+    """Decode an optional Gemini int32 token limit from ProtoJSON."""
+    if isinstance(value, str):
+        try:
+            value = Decimal(value)
+        except InvalidOperation:
+            return None
+    if isinstance(value, Decimal):
+        if not value.is_finite() or value != value.to_integral_value():
+            return None
+    elif type(value) is not int:
+        return None
+    return int(value) if -(2**31) <= value < 2**31 else None
 
 
 class GeminiProvider(BaseProvider):
@@ -92,14 +112,16 @@ class GeminiProvider(BaseProvider):
         seen: set[str] = set()
         while True:
 
-            async def fetch(page_token: str | None = page_token) -> JsonObject:
+            async def fetch(
+                page_token: str | None = page_token,
+            ) -> DecimalJsonObject:
                 response = await self._http.get(
                     f"{self._snapshot.base_url}/models",
                     headers={"x-goog-api-key": self._snapshot.api_key or ""},
                     params={"pageToken": page_token} if page_token else {},
                 )
                 response.raise_for_status()
-                payload: JsonValue = response.json()
+                payload: DecimalJsonValue = response.json(parse_float=Decimal)
                 if not isinstance(payload, dict) or not isinstance(
                     payload.get("models"), list
                 ):
@@ -128,12 +150,10 @@ class GeminiProvider(BaseProvider):
                     reasoning_capability=ReasoningCapability.NONE
                     if model.get("thinking") is False
                     else ReasoningCapability.UNKNOWN,
-                    context_window_tokens=context
-                    if isinstance(context := model.get("inputTokenLimit"), int)
-                    else None,
-                    max_output_tokens=output
-                    if isinstance(output := model.get("outputTokenLimit"), int)
-                    else None,
+                    context_window_tokens=_model_token_limit(
+                        model.get("inputTokenLimit")
+                    ),
+                    max_output_tokens=_model_token_limit(model.get("outputTokenLimit")),
                 )
             next_page_token = payload.get("nextPageToken")
             if not next_page_token:

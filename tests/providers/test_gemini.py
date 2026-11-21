@@ -454,7 +454,22 @@ async def test_explicit_off_rejection_does_not_relax_caller_control():
 
 
 @pytest.mark.asyncio
-async def test_native_model_discovery_follows_pages_and_keeps_native_names():
+@pytest.mark.parametrize(
+    ("input_limit", "output_limit", "expected_input", "expected_output"),
+    [
+        (1000, 100, 1000, 100),
+        (1048576.0, 32768.0, 1048576, 32768),
+        ("1.048576e6", "32768", 1048576, 32768),
+        (1000.5, "100.00000000000000001", None, None),
+        (True, "1e100", None, None),
+    ],
+)
+async def test_native_model_discovery_follows_pages_and_keeps_native_names(
+    input_limit: JsonValue,
+    output_limit: JsonValue,
+    expected_input: int | None,
+    expected_output: int | None,
+):
     urls = []
 
     def reply(request: httpx.Request):
@@ -480,8 +495,8 @@ async def test_native_model_discovery_follows_pages_and_keeps_native_names():
                         "name": "models/first",
                         "supportedGenerationMethods": ["generateContent"],
                         "thinking": True,
-                        "inputTokenLimit": 1000,
-                        "outputTokenLimit": 100,
+                        "inputTokenLimit": input_limit,
+                        "outputTokenLimit": output_limit,
                     },
                     {
                         "name": "models/embedding",
@@ -500,8 +515,10 @@ async def test_native_model_discovery_follows_pages_and_keeps_native_names():
     try:
         models = {model.model_id: model for model in await provider.list_model_infos()}
         assert set(models) == {"models/first", "models/second"}
-        assert models["models/first"].context_window_tokens == 1000
-        assert models["models/first"].max_output_tokens == 100
+        assert models["models/first"].context_window_tokens == expected_input
+        assert models["models/first"].max_output_tokens == expected_output
+        assert models["models/second"].context_window_tokens is None
+        assert models["models/second"].max_output_tokens is None
         assert len(urls) == 2
     finally:
         await provider.cleanup()
