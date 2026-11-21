@@ -1,7 +1,7 @@
 """Mistral La Plateforme provider implementation (OpenAI-compatible chat completions)."""
 
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from typing import Any, override
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic import ReasoningReplayMode
@@ -9,6 +9,7 @@ from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.diagnostics import extract_upstream_error_detail
 from free_claude_code.core.gemini import GeminiRequest
+from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
@@ -61,23 +62,31 @@ class MistralChatBehavior(OpenAIChatBehavior):
     """Mistral Chat adaptation without HTTP ownership."""
 
     @property
+    @override
     def reasoning_off_fields(self) -> tuple[tuple[str, ...], ...]:
         return (("reasoning_effort",),)
 
+    @override
     def finalize_chat_body(
         self,
         body: dict[str, Any],
         *,
         reasoning: ReasoningPolicy,
-    ) -> dict:
+    ) -> dict[str, Any]:
         apply_mistral_reasoning_request_shape(body, reasoning=reasoning)
         return body
 
-    def prepare_history_body(self, body, origin):
+    @override
+    def prepare_history_body(
+        self, body: dict[str, Any], origin: ReplayOrigin
+    ) -> dict[str, Any]:
         apply_mistral_history_shape(body)
         return body
 
-    def retry_request_body(self, error: Exception, body: dict) -> Proposal | None:
+    @override
+    def retry_request_body(
+        self, error: Exception, body: dict[str, Any]
+    ) -> Proposal | None:
         """Retry once without Mistral reasoning fields when a model rejects them."""
         detail = extract_upstream_error_detail(error)
         if not is_mistral_reasoning_rejection(error) or "reasoning_effort" not in (
@@ -89,6 +98,7 @@ class MistralChatBehavior(OpenAIChatBehavior):
             return None
         return Proposal(retry_body, "dropped reasoning")
 
+    @override
     def normalize_stream(self, stream: Any, _body: Mapping[str, Any]) -> Any:
         return normalize_mistral_stream(stream)
 
@@ -110,6 +120,7 @@ class MistralProvider(OpenAIChatProvider):
             history_cache=history_cache,
         )
 
+    @override
     def stream_messages(
         self,
         request: MessagesRequest,
@@ -141,6 +152,7 @@ class MistralProvider(OpenAIChatProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_chat(
         self,
         request: ChatRequest,
@@ -166,6 +178,7 @@ class MistralProvider(OpenAIChatProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_gemini(
         self,
         request: GeminiRequest,
@@ -191,6 +204,7 @@ class MistralProvider(OpenAIChatProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_responses(
         self,
         request: OpenAIResponsesRequest,

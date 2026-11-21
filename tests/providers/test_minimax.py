@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from openai.types.chat import ChatCompletionChunk
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
@@ -26,8 +27,8 @@ from tests.providers.support import (
 )
 
 
-class AsyncStream(SDKStreamDouble):
-    def __init__(self, chunks):
+class AsyncStream(SDKStreamDouble[ChatCompletionChunk]):
+    def __init__(self, chunks: list[ChatCompletionChunk]):
         self._chunks = chunks
         self.closed = False
         super().__init__(self._iter(), close=self.aclose)
@@ -75,7 +76,7 @@ def test_default_base_url():
     assert MINIMAX_DEFAULT_BASE == "https://api.minimax.io/v1"
 
 
-def test_init_uses_openai_chat_provider(minimax_provider):
+def test_init_uses_openai_chat_provider(minimax_provider: OpenAIChatProvider):
     assert isinstance(minimax_provider, OpenAIChatProvider)
     assert minimax_provider._api_key == "test-minimax-key"
     assert minimax_provider._base_url == MINIMAX_DEFAULT_BASE
@@ -83,7 +84,7 @@ def test_init_uses_openai_chat_provider(minimax_provider):
 
 
 def test_build_request_body_requests_split_output_and_max_completion_tokens(
-    minimax_provider,
+    minimax_provider: OpenAIChatProvider,
 ):
     request = MessagesRequest.model_validate(
         {
@@ -112,7 +113,7 @@ def test_build_request_body_requests_split_output_and_max_completion_tokens(
 
 
 def test_build_request_body_does_not_invent_unsupported_compute_control(
-    minimax_provider,
+    minimax_provider: OpenAIChatProvider,
 ):
     request = MessagesRequest(
         model="MiniMax-M3",
@@ -125,11 +126,21 @@ def test_build_request_body_does_not_invent_unsupported_compute_control(
 
 
 @pytest.mark.asyncio
-async def test_lists_models_from_openai_models_endpoint(minimax_provider):
-    minimax_provider._client.models.list = AsyncMock(
-        return_value=SimpleNamespace(
-            data=[SimpleNamespace(id="MiniMax-M3"), SimpleNamespace(id="MiniMax-M2.7")]
-        )
+async def test_lists_models_from_openai_models_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    minimax_provider: OpenAIChatProvider,
+):
+    monkeypatch.setattr(
+        minimax_provider._client.models,
+        "list",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                data=[
+                    SimpleNamespace(id="MiniMax-M3"),
+                    SimpleNamespace(id="MiniMax-M2.7"),
+                ]
+            )
+        ),
     )
 
     assert await minimax_provider.list_model_infos() == frozenset(
@@ -138,7 +149,7 @@ async def test_lists_models_from_openai_models_endpoint(minimax_provider):
 
 
 @pytest.mark.asyncio
-async def test_stream_preserves_reasoning_content(minimax_provider):
+async def test_stream_preserves_reasoning_content(minimax_provider: OpenAIChatProvider):
     request = MessagesRequest(
         model="MiniMax-M3",
         messages=[Message(role="user", content="hi")],
@@ -171,7 +182,7 @@ async def test_stream_preserves_reasoning_content(minimax_provider):
 
 
 @pytest.mark.asyncio
-async def test_cleanup_closes_openai_client(minimax_provider):
+async def test_cleanup_closes_openai_client(minimax_provider: OpenAIChatProvider):
     minimax_provider._client = MagicMock()
     minimax_provider._client.close = AsyncMock()
 

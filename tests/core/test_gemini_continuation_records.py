@@ -25,7 +25,7 @@ from tests.core.test_native_gemini_history import ORIGIN
 from tests.wire_payload import object_array
 
 
-def recovered(*, echo=True):
+def recovered(*, echo: bool = True):
     return ReplayRecord(
         ORIGIN,
         {
@@ -46,7 +46,7 @@ def recovered(*, echo=True):
     )
 
 
-def request(record):
+def request(record: ReplayRecord):
     return {
         "contents": [
             {"role": "user", "parts": [{"text": "original"}]},
@@ -64,7 +64,9 @@ def request(record):
 
 @pytest.mark.parametrize("mode", list(HistoryMode))
 @pytest.mark.parametrize("removed_prefix", [False, True])
-def test_roundtrip_restores_exact_context_and_native_parts(mode, removed_prefix):
+def test_roundtrip_restores_exact_context_and_native_parts(
+    mode: HistoryMode, removed_prefix: bool
+):
     record = recovered()
     assert record.continuation is not None
     if removed_prefix:
@@ -90,7 +92,7 @@ def test_roundtrip_restores_exact_context_and_native_parts(mode, removed_prefix)
 
 
 @pytest.mark.parametrize("damage", ["text", "origin", "unfinished"])
-def test_invalid_echo_or_origin_never_replays(damage):
+def test_invalid_echo_or_origin_never_replays(damage: str):
     record = recovered(echo=damage != "unfinished")
     body = request(record)
     origin = ORIGIN
@@ -114,7 +116,7 @@ def test_invalid_echo_or_origin_never_replays(damage):
         "extra_context",
     ],
 )
-def test_continuation_metadata_is_validated(damage):
+def test_continuation_metadata_is_validated(damage: str):
     record = recovered()
     assert record.continuation is not None and record.continuation.echo is not None
     context: list[JsonObject] = deepcopy(list(record.continuation.context))
@@ -140,7 +142,7 @@ def test_continuation_metadata_is_validated(damage):
         encode_replay(record)
 
 
-def test_complete_encoded_record_is_bounded(monkeypatch):
+def test_complete_encoded_record_is_bounded(monkeypatch: pytest.MonkeyPatch):
     record = recovered()
     size = len(encode_replay(record))
     monkeypatch.setattr(
@@ -170,7 +172,7 @@ def test_captures_corrected_sent_context():
 
 
 @pytest.mark.parametrize("remove_prefix", [False, True])
-def test_context_mapping_excludes_expanded_previous_replay(remove_prefix):
+def test_context_mapping_excludes_expanded_previous_replay(remove_prefix: bool):
     owner = ContinuationRequest("gemini")
     original: JsonObject = {**request(recovered()), "model": ORIGIN.model}
     body = owner.build(
@@ -197,7 +199,9 @@ def test_context_mapping_excludes_expanded_previous_replay(remove_prefix):
 
 
 @pytest.mark.parametrize("mode", list(HistoryMode))
-def test_fragmented_model_turn_restores_once_and_maps_original_carrier(mode):
+def test_fragmented_model_turn_restores_once_and_maps_original_carrier(
+    mode: HistoryMode,
+):
     record = recovered()
     body = request(record)
     body["contents"][1:2] = [
@@ -224,7 +228,7 @@ def test_fragmented_model_turn_restores_once_and_maps_original_carrier(mode):
 
 
 @pytest.mark.parametrize("damage", ["edited_prefix", "cross_user", "second_carrier"])
-def test_fragmented_replay_cannot_hide_edits_or_cross_turns(damage):
+def test_fragmented_replay_cannot_hide_edits_or_cross_turns(damage: str):
     record = recovered()
     body = request(record)
     carrier = {"thoughtSignature": encode_gemini_replay(record)}

@@ -2,7 +2,8 @@
 
 import asyncio
 import sqlite3
-from unittest.mock import patch
+from collections.abc import Callable
+from unittest.mock import MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -10,18 +11,21 @@ import pytest_asyncio
 from free_claude_code.messaging.models import IncomingMessage
 from free_claude_code.messaging.platforms.ports import MessagingStartupNotice
 from free_claude_code.messaging.trees import MessagingStorageError, TreeQueueManager
+from free_claude_code.messaging.trees.transitions import FailureResult, NodeClaim
 from free_claude_code.messaging.workflow import MessagingWorkflow
+from free_claude_code.runtime.messaging_sqlite import SQLiteMessagingStore
+from tests.fixture_types import MessagingStoreFactory
 
 pytestmark = pytest.mark.asyncio
 
 
-def message(node):
+def message(node: str):
     return IncomingMessage(
         platform="telegram", chat_id="chat", user_id="user", message_id=node, text=node
     )
 
 
-async def control(workflow, operation):
+async def control(workflow: MessagingWorkflow, operation: str):
     if operation == "stop":
         return await workflow.stop_all_tasks()
     return await workflow.clear_chat("telegram", "chat")
@@ -30,14 +34,18 @@ async def control(workflow, operation):
 @pytest.mark.parametrize("operation", ["stop", "clear"])
 @pytest.mark.parametrize("write_fails", [False, True])
 async def test_delayed_prompt_is_invalidated_only_by_committed_control(
-    messaging_store_factory, mock_platform, mock_cli_manager, operation, write_fails
+    messaging_store_factory: MessagingStoreFactory,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    operation: str,
+    write_fails: bool,
 ):
     storage = await messaging_store_factory()
     workflow = MessagingWorkflow(mock_platform, mock_cli_manager, storage)
     release, status_started, status_release = (asyncio.Event() for _ in range(3))
     processed = []
 
-    async def process(claim):
+    async def process(claim: NodeClaim):
         processed.append(claim.node.node_id)
         await release.wait()
         await manager.complete_claim(claim, "native")
@@ -46,7 +54,7 @@ async def test_delayed_prompt_is_invalidated_only_by_committed_control(
     workflow._tree_queue = manager
     await manager.admit(message("existing"), "status-existing")
 
-    async def send(*args, **kwargs):
+    async def send(*args: object, **kwargs: object):
         status_started.set()
         await status_release.wait()
         return "status-new"
@@ -57,7 +65,7 @@ async def test_delayed_prompt_is_invalidated_only_by_committed_control(
     before = await storage.load_conversation_snapshot()
     execute = storage.database.execute
 
-    def reject(operation, *, write=True):
+    def reject[T](operation: Callable[[sqlite3.Connection], T], *, write: bool = True):
         if write:
             raise sqlite3.OperationalError("test disk failure")
         return execute(operation, write=False)
@@ -92,7 +100,9 @@ async def test_delayed_prompt_is_invalidated_only_by_committed_control(
 
 
 async def test_failed_clear_preserves_delayed_startup_notice(
-    messaging_store_factory, mock_platform, mock_cli_manager
+    messaging_store_factory: MessagingStoreFactory,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
 ):
     storage = await messaging_store_factory()
     workflow = MessagingWorkflow(
@@ -100,7 +110,7 @@ async def test_failed_clear_preserves_delayed_startup_notice(
     )
     started, release = asyncio.Event(), asyncio.Event()
 
-    async def send(*args, **kwargs):
+    async def send(*args: object, **kwargs: object):
         started.set()
         await release.wait()
         return "notice"
@@ -114,7 +124,7 @@ async def test_failed_clear_preserves_delayed_startup_notice(
     await started.wait()
     execute = storage.database.execute
 
-    def reject(operation, *, write=True):
+    def reject[T](operation: Callable[[sqlite3.Connection], T], *, write: bool = True):
         if write:
             raise sqlite3.OperationalError("test disk failure")
         return execute(operation, write=False)
@@ -137,7 +147,10 @@ async def test_failed_clear_preserves_delayed_startup_notice(
 
 @pytest_asyncio.fixture
 async def interrupted_workflow(
-    messaging_store_factory, mock_platform, mock_cli_manager, monkeypatch
+    messaging_store_factory: MessagingStoreFactory,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(
         "free_claude_code.messaging.trees.manager.CANCEL_TASK_DRAIN_TIMEOUT_S", 0.01
@@ -145,9 +158,10 @@ async def interrupted_workflow(
     storage = await messaging_store_factory()
     workflow = MessagingWorkflow(mock_platform, mock_cli_manager, storage)
     fail_now, faulted, release = (asyncio.Event() for _ in range(3))
-    cancelled, notifications = set(), []
+    cancelled: set[str] = set()
+    notifications: list[FailureResult] = []
 
-    async def process(claim):
+    async def process(claim: NodeClaim):
         node = claim.node.node_id
         if node == "root":
             await fail_now.wait()
@@ -210,7 +224,16 @@ async def interrupted_workflow(
     ],
 )
 async def test_controls_during_interrupted_cleanup_preserve_ownership_and_feedback(
-    interrupted_workflow, mock_cli_manager, operation, remaining_feedback
+    interrupted_workflow: tuple[
+        MessagingWorkflow,
+        SQLiteMessagingStore,
+        asyncio.Event,
+        list[FailureResult],
+        set[str],
+    ],
+    mock_cli_manager: MagicMock,
+    operation: str,
+    remaining_feedback: set[str],
 ):
     workflow, storage, release, notifications, cancelled = interrupted_workflow
     manager = workflow.tree_queue
@@ -245,14 +268,22 @@ async def test_controls_during_interrupted_cleanup_preserve_ownership_and_feedba
     "operation", ["stop-all", "stop-root", "clear-child", "clear-status", "clear-all"]
 )
 async def test_failed_control_during_cleanup_preserves_other_workers_and_gate(
-    interrupted_workflow, mock_cli_manager, operation
+    interrupted_workflow: tuple[
+        MessagingWorkflow,
+        SQLiteMessagingStore,
+        asyncio.Event,
+        list[FailureResult],
+        set[str],
+    ],
+    mock_cli_manager: MagicMock,
+    operation: str,
 ):
     workflow, storage, _release, _notifications, cancelled = interrupted_workflow
     manager = workflow.tree_queue
     before = await storage.load_conversation_snapshot()
     execute = storage.database.execute
 
-    def reject(operation, *, write=True):
+    def reject[T](operation: Callable[[sqlite3.Connection], T], *, write: bool = True):
         if write:
             raise sqlite3.OperationalError("test disk failure")
         return execute(operation, write=False)
@@ -287,7 +318,11 @@ async def test_failed_control_during_cleanup_preserves_other_workers_and_gate(
     [("stop", "callback"), ("clear", "callback"), ("stop", "cli")],
 )
 async def test_committed_barrier_survives_postcommit_failure(
-    messaging_store_factory, mock_platform, mock_cli_manager, operation, failure
+    messaging_store_factory: MessagingStoreFactory,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    operation: str,
+    failure: str,
 ):
     storage = await messaging_store_factory()
     workflow = MessagingWorkflow(mock_platform, mock_cli_manager, storage)
@@ -296,7 +331,7 @@ async def test_committed_barrier_survives_postcommit_failure(
     )
     processed = []
 
-    async def process(claim):
+    async def process(claim: NodeClaim):
         processed.append(claim.node.node_id)
         await asyncio.Event().wait()
 
@@ -317,7 +352,7 @@ async def test_committed_barrier_survives_postcommit_failure(
     assert root.claim is not None
     await manager.admit(message("child"), "status-child", parent_reference_id="root")
 
-    async def send(*args, **kwargs):
+    async def send(*args: object, **kwargs: object):
         status_started.set()
         await status_release.wait()
         return "status-new"
@@ -359,13 +394,16 @@ async def test_committed_barrier_survives_postcommit_failure(
 
 @pytest.mark.parametrize("operation", ["stop", "clear"])
 async def test_successful_empty_control_still_invalidates_delayed_admission(
-    messaging_store_factory, mock_platform, mock_cli_manager, operation
+    messaging_store_factory: MessagingStoreFactory,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    operation: str,
 ):
     storage = await messaging_store_factory()
     workflow = MessagingWorkflow(mock_platform, mock_cli_manager, storage)
     started, release = asyncio.Event(), asyncio.Event()
 
-    async def send(*args, **kwargs):
+    async def send(*args: object, **kwargs: object):
         started.set()
         await release.wait()
         return "status-new"

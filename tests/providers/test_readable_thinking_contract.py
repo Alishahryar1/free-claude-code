@@ -3,11 +3,13 @@
 import asyncio
 import json
 from copy import deepcopy
+from typing import override
 from unittest.mock import Mock
 
 import httpx2
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.gemini.replay import decode_bundle
@@ -34,7 +36,7 @@ from tests.providers.test_history_transports import (
 from tests.wire_payload import object_array, object_payload, string_payload
 
 
-def unsigned_events(protocol):
+def unsigned_events(protocol: str):
     events = deepcopy(_events_for(protocol))
     if protocol == "chat":
         object_array(events[0]["choices"])[0]["delta"] = {
@@ -59,7 +61,9 @@ def unsigned_events(protocol):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses", "gemini"])
-async def test_unsigned_thinking_has_only_client_native_history(protocol, wire):
+async def test_unsigned_thinking_has_only_client_native_history(
+    protocol: str, wire: WireProtocol
+):
     async with _harness(protocol, lambda _: (200, unsigned_events(protocol))) as (
         send,
         _,
@@ -196,7 +200,7 @@ def test_gemini_signature_cannot_clear_unsupported_native_evidence():
 @pytest.mark.parametrize("parsed_first", [False, True])
 @pytest.mark.parametrize("parsed", ["Independent parsed.", "Native 🧠é."])
 async def test_parsed_thinking_is_not_owned_by_native_signature(
-    wire, scalar_first, parsed_first, parsed
+    wire: WireProtocol, scalar_first: bool, parsed_first: bool, parsed: str
 ):
     native = "Native 🧠é."
     detail = {
@@ -268,7 +272,7 @@ async def test_parsed_thinking_is_not_owned_by_native_signature(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses", "gemini"])
-async def test_owned_thinking_and_answer_stream_before_late_signature(wire):
+async def test_owned_thinking_and_answer_stream_before_late_signature(wire: str):
     prefix = _chat_reasoning_events(
         [
             {"reasoning_content": "Native thought."},
@@ -293,6 +297,7 @@ async def test_owned_thinking_and_answer_stream_before_late_signature(wire):
     delivered = asyncio.Event()
 
     class Gated(httpx2.AsyncByteStream):
+        @override
         async def __aiter__(self):
             for event in prefix:
                 yield f"data: {json.dumps(event)}\n\n".encode()
@@ -331,7 +336,9 @@ async def test_owned_thinking_and_answer_stream_before_late_signature(wire):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("echo", ["streamed", "merged", "cli"])
-async def test_gemini_protected_owners_survive_reused_indices_and_client_echo(echo):
+async def test_gemini_protected_owners_survive_reused_indices_and_client_echo(
+    echo: str,
+):
     first = {
         "type": "reasoning.text",
         "text": "First.",

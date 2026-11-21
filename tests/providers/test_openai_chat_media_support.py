@@ -6,6 +6,7 @@ import httpx2
 import openai
 import pytest
 
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_chat import ChatToolResultImages
 from free_claude_code.providers.openai_chat.media_support import (
     TextOnlyModels,
@@ -51,7 +52,7 @@ def _in_stream(body: object) -> openai.APIError:
         ),
     ],
 )
-def test_media_rejections_are_recognized(error):
+def test_media_rejections_are_recognized(error: Exception):
     assert is_media_rejection(error)
 
 
@@ -69,7 +70,7 @@ def test_media_rejections_are_recognized(error):
         ValueError(VLLM),
     ],
 )
-def test_other_failures_are_not_media_rejections(error):
+def test_other_failures_are_not_media_rejections(error: Exception):
     assert not is_media_rejection(error)
 
 
@@ -139,7 +140,7 @@ def test_relocated_tool_images_keep_their_history_marker():
         {"model": "m"},
     ],
 )
-def test_a_body_without_media_is_left_alone(body):
+def test_a_body_without_media_is_left_alone(body: JsonObject):
     assert without_media(body) is None
 
 

@@ -32,7 +32,7 @@ def _exercise_server_logging(
     settings = Settings(host="127.0.0.1", port=8082, log_level=level)
     instances = []
 
-    def build_app(settings, restart_callback):
+    def build_app(settings: Settings, restart_callback: object):
         instances.append(f"instance-{len(instances) + 1}")
         configure_logging(path, level=settings.log_level)
         runtime = MagicMock(
@@ -50,7 +50,7 @@ def _exercise_server_logging(
         )
         return SimpleNamespace(runtime=runtime)
 
-    def run(server, sockets):
+    def run(server: RuntimeServer, sockets: object):
         server._on_started()
         logging.getLogger("uvicorn.access").info(
             '%s - "%s %s HTTP/%s" %d',
@@ -90,7 +90,7 @@ def _exercise_server_logging(
 )
 @pytest.mark.parametrize("level", ["INFO", "WARNING"])
 def test_server_logs_reach_file_once_per_start(
-    tmp_path, console, level, without_streams
+    tmp_path: Path, console: bool, level: str, without_streams: bool
 ):
     path = tmp_path / "server.log"
     result = subprocess.run(

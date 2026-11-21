@@ -10,7 +10,7 @@ import pytest
 from fastapi import Request
 from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.types import ASGIApp, Message, Scope
+from starlette.types import ASGIApp, Message, Scope, Send
 
 from free_claude_code.api.request_ids import (
     RequestCorrelationMiddleware,
@@ -61,7 +61,7 @@ async def test_correlation_context_and_headers_span_the_complete_stream() -> Non
     context_exits: list[dict[str, object]] = []
     app_request_id: str | None = None
 
-    async def app(scope: Scope, _receive, send) -> None:
+    async def app(scope: Scope, _receive, send: Send) -> None:
         nonlocal app_request_id
         app_request_id = get_request_id(Request(scope))
         await send(

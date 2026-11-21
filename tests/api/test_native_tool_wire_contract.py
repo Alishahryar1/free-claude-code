@@ -1,5 +1,6 @@
 """Buffered native calls still satisfy the destination's executable wire contract."""
 
+from collections.abc import AsyncIterator
 from copy import deepcopy
 
 import httpx
@@ -12,22 +13,32 @@ from free_claude_code.api.response_streams import (
     ManagedStreamingResponse,
     chat_sse_streaming_response,
 )
-from free_claude_code.application.response_collection import collect_response
+from free_claude_code.application.response_collection import (
+    WireProtocol,
+    collect_response,
+)
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.chat_completions.request import ChatRequest
+from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.stream_output import StreamOutput
 from tests.api.test_tool_call_buffer import _response
 from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
-from tests.wire_payload import array_payload, object_array, object_payload
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
-async def public_frames(body, wire):
+async def public_frames(body: AsyncIterator[StreamOutput], wire: str):
     if wire == "chat":
 
-        def fail(error):
+        def fail(error: BaseException):
             raise error
 
         response = await chat_sse_streaming_response(
@@ -65,11 +76,11 @@ def truncated_messages():
 @pytest.mark.parametrize("passthrough", [False, True])
 @pytest.mark.parametrize("public", [False, True])
 async def test_filtered_messages_blocks_have_dense_consistent_client_indexes(
-    passthrough, public
+    passthrough: bool, public: bool
 ):
     events = truncated_messages()
 
-    async def consume(body):
+    async def consume(body: AsyncIterator[StreamOutput]):
         return (
             await public_frames(body, "messages")
             if public
@@ -77,13 +88,15 @@ async def test_filtered_messages_blocks_have_dense_consistent_client_indexes(
         )
 
     if passthrough:
-        p = provider(
-            lambda _: httpx.Response(
+
+        def callback(_: object):
+            return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
                 stream=Wire([_sse(*events)]),
             )
-        )
+
+        p = provider(callback)
         try:
             frames = await consume(
                 p.stream_native_messages(
@@ -145,7 +158,7 @@ def parallel_responses():
 @pytest.mark.parametrize("snapshot_only", [False, True])
 @pytest.mark.parametrize("public", [False, True])
 async def test_native_responses_number_every_emitted_event_in_output_order(
-    snapshot_only, public
+    snapshot_only: bool, public: bool
 ):
     events = parallel_responses()
     if snapshot_only:
@@ -173,7 +186,9 @@ async def test_native_responses_number_every_emitted_event_in_output_order(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid", [None, "", "   ", "duplicate"])
-async def test_native_chat_never_releases_calls_without_unambiguous_ids(invalid):
+async def test_native_chat_never_releases_calls_without_unambiguous_ids(
+    invalid: str | None,
+):
     events = tool_events("chat", "{}")
     first = object_array(
         object_payload(object_array(events[0]["choices"])[0]["delta"])["tool_calls"]
@@ -232,17 +247,21 @@ async def test_native_chat_never_releases_calls_without_unambiguous_ids(invalid)
         ("responses", "name"),
     ],
 )
-async def test_native_complete_calls_require_execution_identity(protocol, field):
+async def test_native_complete_calls_require_execution_identity(
+    protocol: str, field: str
+):
     events = tool_events(protocol, "{}")
     if protocol == "messages":
         object_payload(events[1]["content_block"]).pop(field)
-        p = provider(
-            lambda _: httpx.Response(
+
+        def callback(_: object):
+            return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
                 stream=Wire([_sse(*events)]),
             )
-        )
+
+        p = provider(callback)
         try:
             frames = await public_frames(
                 p.stream_native_messages(
@@ -278,18 +297,22 @@ async def test_native_complete_calls_require_execution_identity(protocol, field)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid", ["id", "name", "duplicate"])
-async def test_native_json_messages_validate_the_same_complete_call_identity(invalid):
-    block = {"type": "tool_use", "id": "call", "name": "read", "input": {}}
+async def test_native_json_messages_validate_the_same_complete_call_identity(
+    invalid: str,
+):
+    block: JsonObject = {"type": "tool_use", "id": "call", "name": "read", "input": {}}
     content = [block]
     if invalid == "duplicate":
         content.append(deepcopy(block))
     else:
         block.pop(invalid)
-    p = provider(
-        lambda _: httpx.Response(
+
+    def callback(_: object):
+        return httpx.Response(
             200, json={"type": "message", "stop_reason": "tool_use", "content": content}
         )
-    )
+
+    p = provider(callback)
     try:
         from free_claude_code.core.failures import ExecutionFailure
 
@@ -307,12 +330,14 @@ async def test_native_json_messages_validate_the_same_complete_call_identity(inv
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("complete", [False, True])
 async def test_generated_alias_with_arguments_waits_for_remaining_name_and_source_completion(
-    wire, complete
+    wire: str, complete: bool
 ):
     original = "synthetic.invalid/name:" + "long_" * 20
 
-    def reply(bodies):
-        alias = bodies[-1]["tools"][0]["function"]["name"]
+    def reply(bodies: list[JsonObject]):
+        alias = string_payload(
+            object_payload(object_array(bodies[-1]["tools"])[0]["function"])["name"]
+        )
         events = tool_events("chat", "{}")
         first = object_array(
             object_payload(object_array(events[0]["choices"])[0]["delta"])["tool_calls"]
@@ -351,7 +376,7 @@ async def test_generated_alias_with_arguments_waits_for_remaining_name_and_sourc
 )
 @pytest.mark.parametrize("public", [False, True])
 async def test_contradictory_snapshot_never_replaces_a_completed_native_call(
-    kind, public
+    kind: str, public: bool
 ):
     from free_claude_code.core.failures import ExecutionFailure
 
@@ -392,7 +417,7 @@ async def test_contradictory_snapshot_never_replaces_a_completed_native_call(
 @pytest.mark.parametrize("public", [False, True])
 @pytest.mark.parametrize("placeholder", [None, "", " \t"])
 async def test_chat_fragment_placeholders_preserve_the_resolved_execution_id(
-    wire, public, placeholder
+    wire: WireProtocol, public: bool, placeholder: str | None
 ):
     events = tool_events("chat", "{}")
     object_array(

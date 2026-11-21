@@ -6,15 +6,32 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
+class InstalledDesktop(TypedDict):
+    root: Path
+    home: Path
+    venv: Path
+    python: Path
+    app: Path
+    output: Path
+    env: dict[str, str]
+    launch_env: dict[str, str]
+    runtime: dict[str, object]
+    create_venv: Callable[[Path], None]
+
+
 @pytest.fixture(scope="session")
-def installed_desktop(tmp_path_factory):
+def installed_desktop(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[InstalledDesktop]:
     if sys.platform != "darwin":
         pytest.skip("requires a macOS GUI session")
     root = tmp_path_factory.mktemp("FCC's 日本語 desktop")
@@ -65,7 +82,7 @@ def installed_desktop(tmp_path_factory):
         "requires-python"
     ].removeprefix("==")
 
-    def create_venv(venv):
+    def create_venv(venv: Path) -> None:
         subprocess.run(
             ["uv", "venv", "--managed-python", "--python", f"{version}+gil", str(venv)],
             env=env,

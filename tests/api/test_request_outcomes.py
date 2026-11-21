@@ -2,11 +2,14 @@
 
 import asyncio
 import json
+from collections.abc import Iterator
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 from loguru import logger
+from starlette.types import Message, Receive, Scope, Send
 
 from free_claude_code.api.request_ids import RequestCorrelationMiddleware
 from free_claude_code.api.request_outcomes import RequestOutcomeMiddleware
@@ -22,10 +25,13 @@ from free_claude_code.core.stream_output import StreamOutput
 from tests.api.support import create_test_app
 from tests.api.test_request_lifetime import _http_scope
 
+if TYPE_CHECKING:
+    from loguru import Record
+
 
 @pytest.fixture
-def outcomes():
-    records = []
+def outcomes() -> Iterator[list[Record]]:
+    records: list[Record] = []
     sink = logger.add(
         lambda message: records.append(message.record),
         level="INFO",
@@ -38,19 +44,19 @@ def outcomes():
 
 
 class OutcomeProvider:
-    def __init__(self, result):
+    def __init__(self, result: str):
         self.result = result
         self.started = asyncio.Event()
 
-    async def stream_messages(self, request, **kwargs):
+    async def stream_messages(self, request: object, **kwargs: object):
         async for chunk in self._stream("messages"):
             yield chunk
 
-    async def stream_responses(self, request, **kwargs):
+    async def stream_responses(self, request: object, **kwargs: object):
         async for chunk in self._stream("responses"):
             yield chunk
 
-    async def _stream(self, wire_api):
+    async def _stream(self, wire_api: str):
         failure = ExecutionFailure(
             FailureKind.RATE_LIMIT, 429, "private error text", True
         )
@@ -106,7 +112,9 @@ class OutcomeProvider:
 
 @pytest.mark.parametrize("wire_api", ["messages", "responses"])
 @pytest.mark.parametrize("result", ["success", "pre_start", "exception", "wire_error"])
-def test_one_final_outcome_for_streamed_inference(outcomes, wire_api, result):
+def test_one_final_outcome_for_streamed_inference(
+    outcomes: list[Record], wire_api: str, result: str
+):
     payload: JsonObject = {"model": "nvidia_nim/test-model", "stream": True}
     if wire_api == "messages":
         payload.update(
@@ -147,7 +155,9 @@ def test_one_final_outcome_for_streamed_inference(outcomes, wire_api, result):
     assert "private error text" not in str(record)
 
 
-def test_fallback_records_selected_provider_without_logging_failed_attempt(outcomes):
+def test_fallback_records_selected_provider_without_logging_failed_attempt(
+    outcomes: list[Record],
+):
     settings = Settings(
         model_fallbacks=[ModelFallback(model="open_router/fallback-model")]
     )
@@ -155,10 +165,14 @@ def test_fallback_records_selected_provider_without_logging_failed_attempt(outco
         "nvidia_nim": OutcomeProvider("pre_start"),
         "open_router": OutcomeProvider("success"),
     }
+
+    def resolve_provider_2(name: str, _api_key_number: int, **kwargs: object):
+        return providers[name]
+
     with (
         patch(
             "free_claude_code.api.routes.resolve_provider",
-            side_effect=lambda name, _api_key_number, **kwargs: providers[name],
+            side_effect=resolve_provider_2,
         ),
         TestClient(create_test_app(settings)) as client,
     ):
@@ -187,7 +201,7 @@ def test_fallback_records_selected_provider_without_logging_failed_attempt(outco
 
 
 @pytest.mark.parametrize("result", ["success", "exception", "wire_error"])
-def test_non_streaming_messages_have_one_outcome(outcomes, result):
+def test_non_streaming_messages_have_one_outcome(outcomes: list[Record], result: str):
     with (
         patch(
             "free_claude_code.api.routes.resolve_provider",
@@ -225,7 +239,9 @@ def test_non_streaming_messages_have_one_outcome(outcomes, result):
         ),
     ],
 )
-def test_rejections_before_execution_are_recorded(outcomes, payload, status, reason):
+def test_rejections_before_execution_are_recorded(
+    outcomes: list[Record], payload: JsonObject, status: int, reason: str
+):
     with TestClient(create_test_app(Settings())) as client:
         response = client.post("/v1/responses", json=payload)
     assert response.status_code == status
@@ -239,7 +255,9 @@ def test_rejections_before_execution_are_recorded(outcomes, payload, status, rea
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire_api", ["messages", "responses"])
 @pytest.mark.parametrize("stage", ["wait_before_start", "wait_after_start"])
-async def test_disconnect_logs_cancellation_after_cleanup(outcomes, wire_api, stage):
+async def test_disconnect_logs_cancellation_after_cleanup(
+    outcomes: list[Record], wire_api: str, stage: str
+):
     provider = OutcomeProvider(stage)
     frames = asyncio.Queue()
     payload: JsonObject = {"model": "nvidia_nim/test-model", "stream": True}
@@ -251,7 +269,7 @@ async def test_disconnect_logs_cancellation_after_cleanup(outcomes, wire_api, st
     await frames.put({"type": "http.request", "body": json.dumps(payload).encode()})
     sent = []
 
-    async def send(message):
+    async def send(message: Message):
         sent.append(message)
 
     with patch("free_claude_code.api.routes.resolve_provider", return_value=provider):
@@ -287,8 +305,10 @@ async def test_disconnect_logs_cancellation_after_cleanup(outcomes, wire_api, st
         ("/v1/messages", "OPTIONS"),
     ],
 )
-async def test_other_endpoints_do_not_emit_inference_outcomes(outcomes, path, method):
-    async def app(scope, receive, send):
+async def test_other_endpoints_do_not_emit_inference_outcomes(
+    outcomes: list[Record], path: str, method: str
+):
+    async def app(scope: object, receive: object, send: Send):
         assert current_request_outcome.get() is None
         await send({"type": "http.response.start", "status": 200})
         await send({"type": "http.response.body", "body": b"{}"})
@@ -296,7 +316,7 @@ async def test_other_endpoints_do_not_emit_inference_outcomes(outcomes, path, me
     async def receive():
         return {"type": "http.disconnect"}
 
-    async def send(message):
+    async def send(message: object):
         pass
 
     await RequestOutcomeMiddleware(app)(_http_scope(path, method=method), receive, send)
@@ -307,8 +327,10 @@ async def test_other_endpoints_do_not_emit_inference_outcomes(outcomes, path, me
 @pytest.mark.parametrize(
     "ending", ["send_failure", "late_disconnect", "exception", "cancelled"]
 )
-async def test_delivery_outcomes_preserve_control_flow(outcomes, ending):
-    async def app(scope, receive, send):
+async def test_delivery_outcomes_preserve_control_flow(
+    outcomes: list[Record], ending: str
+):
+    async def app(scope: object, receive: Receive, send: Send):
         if ending == "exception":
             raise ValueError("private exception message")
         if ending == "cancelled":
@@ -320,7 +342,7 @@ async def test_delivery_outcomes_preserve_control_flow(outcomes, ending):
     async def receive():
         return {"type": "http.disconnect"}
 
-    async def send(message):
+    async def send(message: Message):
         if ending == "send_failure" and message["type"] == "http.response.body":
             raise OSError("connection closed")
 
@@ -354,7 +376,9 @@ async def test_delivery_outcomes_preserve_control_flow(outcomes, ending):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("event_header", ["event: error\r\n", ""])
-async def test_wire_observation_preserves_split_utf8_body(outcomes, event_header):
+async def test_wire_observation_preserves_split_utf8_body(
+    outcomes: list[Record], event_header: str
+):
     frame = (
         event_header
         + 'data: {"type":"error","error":{"type":"api_error","message":"☃"}}\r\n\r\n'
@@ -362,7 +386,7 @@ async def test_wire_observation_preserves_split_utf8_body(outcomes, event_header
     chunks = [frame[index : index + 2] for index in range(0, len(frame), 2)]
     sent = []
 
-    async def app(scope, receive, send):
+    async def app(scope: object, receive: object, send: Send):
         await send(
             {
                 "type": "http.response.start",
@@ -377,7 +401,7 @@ async def test_wire_observation_preserves_split_utf8_body(outcomes, event_header
     async def receive():
         return {"type": "http.disconnect"}
 
-    async def send(message):
+    async def send(message: Message):
         sent.append(message)
 
     await RequestCorrelationMiddleware(RequestOutcomeMiddleware(app))(
@@ -391,13 +415,13 @@ async def test_wire_observation_preserves_split_utf8_body(outcomes, event_header
 
 
 @pytest.mark.asyncio
-async def test_successful_named_events_skip_json_decoding(outcomes):
+async def test_successful_named_events_skip_json_decoding(outcomes: list[Record]):
     frame = (
         b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hello"}\n\n'
         b'event: response.completed\ndata: {"type":"response.completed","response":{"output":[]}}\n\n'
     )
 
-    async def app(scope, receive, send):
+    async def app(scope: object, receive: object, send: Send):
         await send(
             {
                 "type": "http.response.start",
@@ -410,7 +434,7 @@ async def test_successful_named_events_skip_json_decoding(outcomes):
     async def receive():
         return {"type": "http.disconnect"}
 
-    async def send(message):
+    async def send(message: object):
         pass
 
     with patch(
@@ -425,11 +449,11 @@ async def test_successful_named_events_skip_json_decoding(outcomes):
 
 
 @pytest.mark.asyncio
-async def test_overlapping_requests_keep_separate_outcomes(outcomes):
+async def test_overlapping_requests_keep_separate_outcomes(outcomes: list[Record]):
     ready = asyncio.Event()
     count = 0
 
-    async def app(scope, receive, send):
+    async def app(scope: Scope, receive: object, send: Send):
         nonlocal count
         name = scope["query_string"].decode()
         record_request_route(name, f"{name}-model")
@@ -444,7 +468,7 @@ async def test_overlapping_requests_keep_separate_outcomes(outcomes):
         await asyncio.Event().wait()
         return {"type": "http.disconnect"}
 
-    async def send(message):
+    async def send(message: object):
         pass
 
     middleware = RequestCorrelationMiddleware(RequestOutcomeMiddleware(app))

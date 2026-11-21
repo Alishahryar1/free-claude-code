@@ -31,7 +31,11 @@ POWERSHELLS = _powershells()
 
 
 @pytest.fixture(autouse=True)
-def _isolate_modules(powershell, powershell_module_paths, monkeypatch):
+def _isolate_modules(
+    powershell: str,
+    powershell_module_paths: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+):
     if os.name == "nt":
         monkeypatch.setenv("PSMODULEPATH", powershell_module_paths[powershell])
 

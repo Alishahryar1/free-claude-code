@@ -5,8 +5,10 @@ import sys
 import time
 from pathlib import Path
 
+from free_claude_code.core.json_types import JsonValue
 
-def emit(value):
+
+def emit(value: JsonValue):
     encoded = (json.dumps(value, ensure_ascii=False) + "\n").encode("utf-8")
     # Exercise framing across both large messages and UTF-8 boundaries.
     for start in range(0, len(encoded), 32767):

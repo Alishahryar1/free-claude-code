@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from fastapi.applications import FastAPI
 from fastapi.testclient import TestClient
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
@@ -36,7 +37,7 @@ def _settings(
     )
 
 
-def _cache_models(app, provider_id: str, *model_ids: str) -> None:
+def _cache_models(app: FastAPI, provider_id: str, *model_ids: str) -> None:
     provider_manager_for_app(app).cache_model_infos(
         provider_id,
         {ProviderModelInfo(model_id) for model_id in model_ids},
@@ -46,7 +47,7 @@ def _cache_models(app, provider_id: str, *model_ids: str) -> None:
 @pytest.mark.parametrize("view", ["claude", "claude-desktop"])
 @pytest.mark.parametrize("overrides", [False, True])
 def test_claude_shortcuts_are_exactly_four_current_versions_and_route_by_tier(
-    view, overrides
+    view: str, overrides: bool
 ):
     expected = {
         "claude-fable-5-2": "Claude Fable 5.2",
@@ -76,7 +77,7 @@ def test_claude_shortcuts_are_exactly_four_current_versions_and_route_by_tier(
 
 
 @pytest.mark.parametrize("view", ["messages", "responses"])
-def test_context_fallback_round_trip_preserves_reported_capabilities(view):
+def test_context_fallback_round_trip_preserves_reported_capabilities(view: str):
     from free_claude_code.application.model_catalog import read_model_catalog
     from free_claude_code.cli.launchers.catalog_http import model_catalog_from_response
     from free_claude_code.cli.launchers.opencode_config import build_opencode_config
@@ -108,7 +109,7 @@ def test_context_fallback_round_trip_preserves_reported_capabilities(view):
 
 
 @pytest.mark.parametrize("view", ["messages", "responses"])
-def test_sorted_catalog_retains_an_explicit_no_thinking_server_default(view):
+def test_sorted_catalog_retains_an_explicit_no_thinking_server_default(view: str):
     settings = _settings(
         model="open_router/Zulu",
         model_opus=None,
@@ -539,7 +540,10 @@ def test_muse_catalog_uses_native_metadata_for_known_limits_and_reasoning():
     ],
 )
 def test_muse_limits_are_complete_without_changing_reported_capabilities(
-    context_tokens, output_tokens, expected_context, expected_output
+    context_tokens: int | None,
+    output_tokens: int | None,
+    expected_context: int,
+    expected_output: int,
 ):
     from free_claude_code.application.model_catalog import read_model_catalog
 
@@ -577,7 +581,9 @@ def test_unknown_model_view_is_rejected():
 
 
 @pytest.mark.parametrize("view", ["messages", "responses"])
-def test_real_json_catalog_agrees_with_application_identity_and_known_metadata(view):
+def test_real_json_catalog_agrees_with_application_identity_and_known_metadata(
+    view: str,
+):
     from free_claude_code.application.model_catalog import read_model_catalog
     from free_claude_code.cli.launchers.catalog_http import model_catalog_from_response
 

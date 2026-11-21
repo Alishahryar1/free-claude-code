@@ -1,5 +1,6 @@
 """Discord inbound event normalization."""
 
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -87,7 +88,7 @@ def discord_voice_request_from_event(
         else None
     )
 
-    async def _download_to(tmp_path) -> None:
+    async def _download_to(tmp_path: Path) -> None:
         await attachment.save(str(tmp_path))
 
     async def _reply_text(text: str) -> None:

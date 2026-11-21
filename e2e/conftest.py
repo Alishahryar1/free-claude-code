@@ -5,7 +5,7 @@ import socket
 import sys
 import threading
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -19,6 +19,7 @@ from free_claude_code.api.app import create_app
 from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config import env_migrations, paths
+from free_claude_code.config.admin.credentials import CredentialSubmission
 from free_claude_code.config.env_migrations import recognized_env_keys
 from free_claude_code.config.loader import (
     ManagedConfigStore,
@@ -115,7 +116,7 @@ class _ModelListingProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-        continuation=None,
+        continuation: object = None,
     ) -> AsyncIterator[StreamOutput]:
         if False:
             yield StreamOutput(("",))
@@ -130,14 +131,14 @@ class _ModelListingProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-        continuation=None,
+        continuation: object = None,
     ) -> AsyncIterator[StreamOutput]:
         if False:
             yield StreamOutput(("",))
 
 
 @pytest.fixture
-def code_control(tmp_path):
+def code_control(tmp_path: Path):
     return CodeControl(tmp_path / "code")
 
 
@@ -167,8 +168,8 @@ def admin_base_url(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     code_control: CodeControl,
-    admin_client_files,
-    provider_load_guard,
+    admin_client_files: object,
+    provider_load_guard: object,
 ) -> Iterator[str]:
     """Serve one fully isolated Admin application on an OS-assigned port."""
 
@@ -233,7 +234,9 @@ def admin_base_url(
     monkeypatch.setattr(env_migrations, "verified_checkout_env_path", lambda: None)
     clear_settings_cache()
 
-    async def verified_credentials(settings, submissions):
+    async def verified_credentials(
+        settings: object, submissions: Sequence[CredentialSubmission]
+    ):
         return tuple(
             CredentialCheck(
                 submission.key,
@@ -322,10 +325,16 @@ def admin_base_url(
         code_service=code_control.service,
         database=code_control.database,
     )
+
+    async def pick_folder(
+        picker: NativeFolderPicker, initial: str | None, stop: asyncio.Event
+    ) -> str | None:
+        return await code_control.folder_picker.select(initial, stop)
+
     monkeypatch.setattr(
         NativeFolderPicker,
         "_select",
-        lambda _picker, initial, stop: code_control.folder_picker.select(initial, stop),
+        pick_folder,
     )
     app = RuntimeASGIApp(
         create_app(

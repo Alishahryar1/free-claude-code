@@ -1,16 +1,21 @@
 """Public API routes preserve parallel Chat calls with imperfect indexes."""
 
 import json
+from collections.abc import Mapping, Sequence
 
 import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from openai import AsyncOpenAI
 
-from free_claude_code.application.response_collection import collect_response
+from free_claude_code.application.response_collection import (
+    WireProtocol,
+    collect_response,
+)
 from free_claude_code.config.settings import Settings
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.anthropic.stream_contracts import SSEEvent, parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.providers.google_openai import GoogleOpenAIProvider
 from free_claude_code.providers.vertex.client import _PROFILE as GOOGLE_PROFILE
 from tests.api.support import create_test_app
@@ -23,7 +28,7 @@ from tests.providers.test_native_tool_arguments import tool_events
 from tests.wire_payload import object_array
 
 
-def chat_chunk(delta, finish=None):
+def chat_chunk(delta: JsonObject, finish: str | None = None):
     return {
         "id": "chat_identity",
         "object": "chat.completion.chunk",
@@ -33,14 +38,21 @@ def chat_chunk(delta, finish=None):
     }
 
 
-def google_compat_api_response(monkeypatch, events, wire, streaming, *, max_attempts=2):
+def google_compat_api_response(
+    monkeypatch: pytest.MonkeyPatch,
+    events: Sequence[Mapping[str, JsonValue]],
+    wire: str,
+    streaming: bool,
+    *,
+    max_attempts: int = 2,
+):
     sent = []
     upstream = (
         "".join(f"data: {json.dumps(event)}\n\n" for event in events)
         + "data: [DONE]\n\n"
     )
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         sent.append(json.loads(request.content))
         return httpx2.Response(
             200, headers={"content-type": "text/event-stream"}, content=upstream
@@ -52,8 +64,12 @@ def google_compat_api_response(monkeypatch, events, wire, streaming, *, max_atte
         max_retries=0,
         http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply)),
     )
+
+    def callback(**_: object):
+        return sdk
+
     monkeypatch.setattr(
-        "free_claude_code.providers.openai_chat.client.AsyncOpenAI", lambda **_: sdk
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI", callback
     )
     provider = GoogleOpenAIProvider(
         make_provider_config(api_key="fixture", base_url="https://fixture.invalid/v1"),
@@ -141,7 +157,11 @@ def google_compat_api_response(monkeypatch, events, wire, streaming, *, max_atte
     "wire,streaming", [("messages", True), ("messages", False), ("responses", True)]
 )
 def test_google_compat_parallel_calls_reach_public_api(
-    monkeypatch, deltas, expected_ids, wire, streaming
+    monkeypatch: pytest.MonkeyPatch,
+    deltas: list[list[JsonObject]],
+    expected_ids: tuple[str, ...],
+    wire: str,
+    streaming: bool,
 ):
     events = [chat_chunk({"tool_calls": calls}) for calls in deltas]
     events.append(chat_chunk({}, "tool_calls"))
@@ -199,7 +219,7 @@ def test_google_compat_parallel_calls_reach_public_api(
     "wire,streaming", [("messages", True), ("messages", False), ("responses", True)]
 )
 def test_google_compat_unresolvable_calls_cannot_complete(
-    monkeypatch, anonymous, wire, streaming
+    monkeypatch: pytest.MonkeyPatch, anonymous: bool, wire: str, streaming: bool
 ):
     if anonymous:
         events = [
@@ -246,7 +266,7 @@ def test_google_compat_unresolvable_calls_cannot_complete(
         assert isinstance(response.json().get("error"), dict)
 
 
-def completed_arguments(events, wire):
+def completed_arguments(events: list[SSEEvent], wire: str):
     if wire == "messages":
         return "".join(
             event.data["delta"]["partial_json"]
@@ -261,7 +281,9 @@ def completed_arguments(events, wire):
     )
 
 
-def ambiguous_events(stop, *, incomplete=False, fragment_index=0):
+def ambiguous_events(
+    stop: str | None, *, incomplete: bool = False, fragment_index: int | None = 0
+):
     events = [
         chat_chunk(
             {
@@ -300,7 +322,12 @@ def ambiguous_events(stop, *, incomplete=False, fragment_index=0):
 @pytest.mark.parametrize("max_attempts", [1, 2])
 @pytest.mark.parametrize("fragment_index", [0, None])
 async def test_public_identity_failure_respects_delivery_stop_and_budget(
-    monkeypatch, wire, prefix, stop, max_attempts, fragment_index
+    monkeypatch: pytest.MonkeyPatch,
+    wire: WireProtocol,
+    prefix: str | None,
+    stop: str | None,
+    max_attempts: int,
+    fragment_index: int | None,
 ):
     first = ambiguous_events(stop, fragment_index=fragment_index)
     if prefix:
@@ -381,7 +408,13 @@ async def test_public_identity_failure_respects_delivery_stop_and_budget(
     ],
 )
 async def test_private_identity_failure_never_salvages_or_repairs(
-    monkeypatch, wire, incomplete, committed, stop, max_attempts, fragment_index
+    monkeypatch: pytest.MonkeyPatch,
+    wire: WireProtocol,
+    incomplete: bool,
+    committed: bool,
+    stop: str | None,
+    max_attempts: int,
+    fragment_index: int | None,
 ):
     first = ambiguous_events(stop, incomplete=incomplete, fragment_index=fragment_index)
     async with _harness("chat", lambda _: (200, first), max_attempts=max_attempts) as (
@@ -407,7 +440,9 @@ async def test_private_identity_failure_never_salvages_or_repairs(
         ((0, 1), ("reused", "reused")),
     ],
 )
-async def test_google_compat_metadata_replays_under_each_public_id(wire, indexes, ids):
+async def test_google_compat_metadata_replays_under_each_public_id(
+    wire: WireProtocol, indexes: tuple[int | None, int | None], ids: tuple[str, ...]
+):
     first = [
         chat_chunk(
             {

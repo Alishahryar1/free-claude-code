@@ -2,10 +2,14 @@
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import httpx2
 import pytest
 from loguru import logger
+
+if TYPE_CHECKING:
+    from loguru import Message
 
 from free_claude_code.application.model_fallback import stream_model_candidates
 from free_claude_code.application.routing import (
@@ -136,7 +140,7 @@ async def _run(
         for i in range(len(script))
     )
 
-    def sink(message) -> None:
+    def sink(message: Message) -> None:
         payload = message.record["extra"].get("trace_payload")
         if payload is None:
             return
@@ -174,7 +178,7 @@ async def test_first_candidate_success_never_falls_back():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("retryable", [True, False])
-async def test_failure_without_context_before_any_delivery_restarts(retryable):
+async def test_failure_without_context_before_any_delivery_restarts(retryable: bool):
     outcome = await _run(
         open_fails(_failure(NO_CONTEXT, status=400, retryable=retryable)), ok("b")
     )
@@ -253,7 +257,9 @@ async def test_released_tool_calls_hand_off_instead_of_falling_back():
         ),
     ],
 )
-async def test_unsafe_transitions_raise_without_falling_back(source, release):
+async def test_unsafe_transitions_raise_without_falling_back(
+    source: SourceRecoverySnapshot, release: bool
+):
     outcome = await _run(
         fails_after("a", failure=_failure(source), release=release), ok("b")
     )
@@ -354,7 +360,9 @@ async def test_lmstudio_budget_rejection_of_a_continuation_keeps_the_seed():
     seeds: list[str | None] = []
     async with provider_with_http(handler) as lmstudio:
 
-        async def open_candidate(index, _candidate, continuation):
+        async def open_candidate(
+            index: int, _candidate, continuation: ContinuationSeed | None
+        ):
             seeds.append(continuation.readable_text("text") if continuation else None)
             if index == 1:
                 return lmstudio.stream_messages(

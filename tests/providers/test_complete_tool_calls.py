@@ -26,7 +26,7 @@ from tests.wire_payload import object_array, object_payload
     "name,fragments", [("Read", ("Re", "ad")), ("foofoo", ("foo", "foo"))]
 )
 async def test_parallel_name_fragments_wait_for_source_completion(
-    wire, name, fragments
+    wire: str, name: str, fragments: tuple[str, ...]
 ):
     template = _events_for("chat")[0]
     deltas = [
@@ -131,7 +131,7 @@ async def test_incomplete_response_item_never_becomes_a_complete_message_tool():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses", "chat", "gemini"])
-async def test_completed_response_call_survives_an_earlier_unfinished_call(wire):
+async def test_completed_response_call_survives_an_earlier_unfinished_call(wire: str):
     original = tool_events("responses", "{}")
     first = deepcopy(object_payload(original[1]["item"]))
     first.update(
@@ -209,7 +209,7 @@ async def test_completed_response_call_survives_an_earlier_unfinished_call(wire)
                 )
                 wrap = gemini_sse_streaming_response
 
-            def unexpected(error):
+            def unexpected(error: BaseException):
                 raise error
 
             response = await wrap(

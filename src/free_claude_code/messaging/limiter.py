@@ -35,7 +35,7 @@ class MessagingRateLimiter:
         # Custom queue state - using deque for O(1) popleft
         self._queue_list: deque[str] = deque()  # Deque of dedup_keys in order
         self._queue_map: dict[
-            str, tuple[Callable[[], Awaitable[Any]], list[asyncio.Future]]
+            str, tuple[Callable[[], Awaitable[Any]], list[asyncio.Future[Any]]]
         ] = {}
         self._condition = asyncio.Condition()
         self._shutdown = asyncio.Event()

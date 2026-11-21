@@ -32,7 +32,7 @@ def novita_provider():
     )
 
 
-def test_init_uses_openai_chat_provider(novita_provider):
+def test_init_uses_openai_chat_provider(novita_provider: OpenAIChatProvider):
     assert isinstance(novita_provider, OpenAIChatProvider)
     assert novita_provider._api_key == "test_novita_key"
     assert novita_provider._base_url == NOVITA_DEFAULT_BASE
@@ -42,7 +42,7 @@ def test_base_url_constant():
     assert NOVITA_DEFAULT_BASE == "https://api.novita.ai/openai/v1"
 
 
-def test_build_request_body_openai_chat_shape(novita_provider):
+def test_build_request_body_openai_chat_shape(novita_provider: OpenAIChatProvider):
     request = MessagesRequest(
         model="deepseek/deepseek-v4-flash-0731",
         max_tokens=100,
@@ -62,7 +62,7 @@ def test_build_request_body_openai_chat_shape(novita_provider):
     ]
 
 
-def test_build_request_body_default_max_tokens(novita_provider):
+def test_build_request_body_default_max_tokens(novita_provider: OpenAIChatProvider):
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="x")],
@@ -75,7 +75,9 @@ def test_build_request_body_default_max_tokens(novita_provider):
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 
 
-def test_build_request_body_preserves_validated_extra_body(novita_provider):
+def test_build_request_body_preserves_validated_extra_body(
+    novita_provider: OpenAIChatProvider,
+):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -92,7 +94,7 @@ def test_build_request_body_preserves_validated_extra_body(novita_provider):
 
 
 def test_build_request_body_rejects_reserved_reasoning_extra_body_keys(
-    novita_provider,
+    novita_provider: OpenAIChatProvider,
 ):
     request = MessagesRequest.model_validate(
         {
@@ -108,7 +110,9 @@ def test_build_request_body_rejects_reserved_reasoning_extra_body_keys(
         )
 
 
-def test_build_request_body_disables_thinking_when_reasoning_off(novita_provider):
+def test_build_request_body_disables_thinking_when_reasoning_off(
+    novita_provider: OpenAIChatProvider,
+):
     request = MessagesRequest(
         model="zai-org/glm-5.2",
         messages=[Message(role="user", content="x")],
@@ -119,7 +123,9 @@ def test_build_request_body_disables_thinking_when_reasoning_off(novita_provider
     assert body["extra_body"]["enable_thinking"] is False
 
 
-def test_build_request_body_enables_thinking_when_reasoning_on(novita_provider):
+def test_build_request_body_enables_thinking_when_reasoning_on(
+    novita_provider: OpenAIChatProvider,
+):
     request = MessagesRequest(
         model="zai-org/glm-5.2",
         messages=[Message(role="user", content="x")],
@@ -130,7 +136,9 @@ def test_build_request_body_enables_thinking_when_reasoning_on(novita_provider):
     assert body["extra_body"]["enable_thinking"] is True
 
 
-def test_build_request_body_omits_thinking_field_by_default(novita_provider):
+def test_build_request_body_omits_thinking_field_by_default(
+    novita_provider: OpenAIChatProvider,
+):
     request = MessagesRequest(
         model="zai-org/glm-5.2",
         messages=[Message(role="user", content="x")],
@@ -144,7 +152,7 @@ def test_build_request_body_omits_thinking_field_by_default(novita_provider):
 
 
 @pytest.mark.asyncio
-async def test_cleanup_closes_openai_client(novita_provider):
+async def test_cleanup_closes_openai_client(novita_provider: OpenAIChatProvider):
     novita_provider._client = MagicMock()
     novita_provider._client.close = AsyncMock()
 

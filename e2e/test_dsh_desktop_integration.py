@@ -3,12 +3,17 @@
 import asyncio
 import json
 import threading
+from pathlib import Path
+from typing import Literal
 
-from playwright.sync_api import expect
+import pytest
+from playwright.sync_api import Page, expect
 from ruamel.yaml import YAML
 
+from free_claude_code.runtime.integration_service import IntegrationService
 
-def install(tmp_path):
+
+def install(tmp_path: Path):
     home = tmp_path / ".dsh"
     profile = home / "profiles/desktop"
     profile.mkdir(parents=True, exist_ok=True)
@@ -26,7 +31,9 @@ def install(tmp_path):
     return home
 
 
-def test_connect_disconnect_preserves_native_settings(page, admin_base_url, tmp_path):
+def test_connect_disconnect_preserves_native_settings(
+    page: Page, admin_base_url: str, tmp_path: Path
+):
     home = install(tmp_path)
     patch = home / "profiles/desktop/cordis.patch.yml"
     patch.write_text("- id: unrelated\n  config: {keep: unchanged}\n")
@@ -59,7 +66,9 @@ def test_connect_disconnect_preserves_native_settings(page, admin_base_url, tmp_
     expect(page.locator("#dirtyState")).to_have_text("No changes")
 
 
-def test_setup_error_and_retry_remain_in_dialog(page, admin_base_url, tmp_path):
+def test_setup_error_and_retry_remain_in_dialog(
+    page: Page, admin_base_url: str, tmp_path: Path
+):
     page.goto(admin_base_url + "/admin/integrations")
     opener = page.locator("#openDshDesktopIntegration")
     expect(opener).to_have_text("Connect")
@@ -75,7 +84,7 @@ def test_setup_error_and_retry_remain_in_dialog(page, admin_base_url, tmp_path):
 
 
 def test_superseded_connect_notice_matches_real_disconnect(
-    page, admin_base_url, tmp_path, monkeypatch
+    page: Page, admin_base_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     from contextlib import asynccontextmanager
 
@@ -88,7 +97,10 @@ def test_superseded_connect_notice_matches_real_disconnect(
     entered, release = threading.Event(), threading.Event()
     original = IntegrationService._dsh_desktop
 
-    async def held(service, action):
+    async def held(
+        service: IntegrationService,
+        action: Literal["connect", "disconnect", "refresh", "status"],
+    ):
         if action == "connect":
             write = service._dsh_update.access.write
             first = True
@@ -127,7 +139,7 @@ def test_superseded_connect_notice_matches_real_disconnect(
 
 
 def test_changed_fcc_setting_shows_connect_and_is_replaced(
-    page, admin_base_url, tmp_path
+    page: Page, admin_base_url: str, tmp_path: Path
 ):
     home = install(tmp_path)
     page.goto(admin_base_url + "/admin/integrations")

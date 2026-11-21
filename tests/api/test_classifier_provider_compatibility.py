@@ -9,11 +9,15 @@ import httpx2 as httpx
 import pytest
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import APIError, AsyncOpenAI, BadRequestError
+from openai.types.chat import ChatCompletionChunk
 
 from free_claude_code.api.handlers import MessagesHandler
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
-from free_claude_code.config.reasoning import FALLBACK_REASONING_PREFERENCES
+from free_claude_code.config.reasoning import (
+    FALLBACK_REASONING_PREFERENCES,
+    ReasoningPreference,
+)
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
@@ -21,6 +25,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     text_content,
     thinking_content,
 )
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.reasoning import ReasoningCapability
 from free_claude_code.providers.gemini import GeminiProvider
 from free_claude_code.providers.open_router import OpenRouterProvider
@@ -36,9 +41,10 @@ from tests.providers.support import (
 )
 from tests.providers.test_gemini import _sse
 from tests.web_tools_support import StubWebToolsClient
+from tests.wire_payload import int_payload, object_payload
 
 
-class ClassifierStream(SDKStreamDouble):
+class ClassifierStream(SDKStreamDouble[ChatCompletionChunk]):
     def __init__(self, *, starved: bool = False, error: Exception | None = None):
         self.starved = starved
         self.error = error
@@ -105,11 +111,11 @@ def classifier_request():
 )
 @pytest.mark.parametrize("rejection", [None, "mandatory", "field", "unrelated"])
 async def test_native_gemini_classifier_preserves_reasoning_preparation(
-    capability, off, limit, rejection
+    capability: str, off: bool, limit: int | None, rejection: str | None
 ):
     bodies = []
 
-    def reply(request):
+    def reply(request: native_httpx.Request):
         body = json.loads(request.content)
         bodies.append(body)
         config = body["generationConfig"]
@@ -193,13 +199,13 @@ async def test_native_gemini_classifier_preserves_reasoning_preparation(
     ids=["numeric", "metadata", "unrelated", "other-field", "permission"],
 )
 async def test_openrouter_numeric_sse_rejection_uses_classifier_correction(
-    error, corrects
+    error: JsonObject, corrects: bool
 ):
     bodies = []
 
-    def upstream(request):
+    def upstream(request: httpx.Request):
         bodies.append(json.loads(request.content))
-        chunk = {
+        chunk: JsonObject = {
             "id": "gen-test",
             "object": "chat.completion.chunk",
             "created": 1,
@@ -238,11 +244,13 @@ async def test_openrouter_numeric_sse_rejection_uses_classifier_correction(
             admission=immediate_admission(),
         )
     try:
+
+        def resolve_provider(_: str, _api_key_number: int):
+            return provider
+
         response = await MessagesHandler(
             Settings(),
-            provider_resolver=AsyncMock(
-                side_effect=lambda _, _api_key_number: provider
-            ),
+            provider_resolver=AsyncMock(side_effect=resolve_provider),
             web_tools=StubWebToolsClient(),
         ).create(classifier_request())
         assert isinstance(response, JSONResponse)
@@ -270,7 +278,7 @@ async def test_openrouter_numeric_sse_rejection_uses_classifier_correction(
     ids=["off-ignored", "off-rejected", "off-stream-rejected"],
 )
 async def test_classifier_mandatory_reasoning_still_returns_verdict(
-    reject_off, stream, fallback_effort
+    reject_off: bool | str, stream: bool, fallback_effort: ReasoningPreference | None
 ):
     provider = OpenRouterProvider(
         make_provider_config(api_key="test", base_url="https://openrouter.test/v1"),
@@ -290,11 +298,14 @@ async def test_classifier_mandatory_reasoning_still_returns_verdict(
         )
         request = request.model_copy(update={"model": "nvidia_nim/primary"})
 
-    async def upstream(**body):
+    async def upstream(**body: JsonValue):
         bodies.append(body)
         if (
             reject_off
-            and body.get("extra_body", {}).get("reasoning", {}).get("enabled") is False
+            and object_payload(
+                object_payload(body.get("extra_body", {})).get("reasoning", {})
+            ).get("enabled")
+            is False
         ):
             error = {
                 "error": {
@@ -325,18 +336,18 @@ async def test_classifier_mandatory_reasoning_still_returns_verdict(
                 ),
                 body=error,
             )
-        result = ClassifierStream(starved=body.get("max_tokens", 0) < 2048)
+        result = ClassifierStream(starved=int_payload(body.get("max_tokens", 0)) < 2048)
         streams.append(result)
         return result
 
     try:
+
+        def resolve_provider(provider_id: str, _api_key_number: int):
+            return primary if provider_id == "nvidia_nim" else provider
+
         handler = MessagesHandler(
             settings,
-            provider_resolver=AsyncMock(
-                side_effect=lambda provider_id, _api_key_number: (
-                    primary if provider_id == "nvidia_nim" else provider
-                )
-            ),
+            provider_resolver=AsyncMock(side_effect=resolve_provider),
             web_tools=StubWebToolsClient(),
         )
         with patch.object(
@@ -379,7 +390,7 @@ async def test_classifier_mandatory_reasoning_still_returns_verdict(
     ],
 )
 async def test_handler_uses_cached_capabilities_for_the_selected_provider(
-    capability, off, limit
+    capability: str, off: bool, limit: int
 ):
     provider = OpenRouterProvider(
         make_provider_config("test", "https://provider.invalid/v1"),
@@ -387,16 +398,18 @@ async def test_handler_uses_cached_capabilities_for_the_selected_provider(
     )
     bodies = []
 
-    async def upstream(**body):
+    async def upstream(**body: JsonValue):
         bodies.append(body)
         return ClassifierStream()
 
     try:
+
+        def resolve_provider(_: str, _api_key_number: int):
+            return provider
+
         handler = MessagesHandler(
             Settings(),
-            provider_resolver=AsyncMock(
-                side_effect=lambda _, _api_key_number: provider
-            ),
+            provider_resolver=AsyncMock(side_effect=resolve_provider),
             model_info_lookup=lambda provider_id, model_id: next(
                 (
                     info
@@ -423,7 +436,10 @@ async def test_handler_uses_cached_capabilities_for_the_selected_provider(
             {"type": "text", "text": "<severity>0</severity>"}
         ]
         assert (
-            bodies[0].get("extra_body", {}).get("reasoning", {}).get("enabled") is False
+            object_payload(
+                object_payload(bodies[0].get("extra_body", {})).get("reasoning", {})
+            ).get("enabled")
+            is False
         ) is off
         assert bodies[0]["max_tokens"] == limit
     finally:

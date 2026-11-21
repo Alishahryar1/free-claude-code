@@ -25,6 +25,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     parse_sse_lines,
     text_content,
 )
+from free_claude_code.core.json_types import JsonValue
 from free_claude_code.harnesses.claude import build_claude_proxy_env
 from free_claude_code.messaging.models import IncomingMessage, MessageScope
 from free_claude_code.messaging.voice import VoiceCancellationResult
@@ -723,7 +724,7 @@ def assistant_content_from_events(events: list[SSEEvent]) -> list[dict[str, Any]
                 try:
                     block["input"] = json.loads(partial)
                 except json.JSONDecodeError:
-                    block["input"] = {}
+                    block["input"] = dict[str, JsonValue]()
         content.append(block)
     return content
 

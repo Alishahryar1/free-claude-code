@@ -170,6 +170,7 @@ markers = [
 ]
 
 [tool.pyrefly]
+preset = "strict"
 min-severity = "warn"
 enabled-ignores = []
 python-version = "3.14"

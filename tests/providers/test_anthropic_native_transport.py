@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+from collections.abc import Mapping
 from dataclasses import replace
+from typing import override
 
 import httpx
 import pytest
@@ -14,17 +16,31 @@ from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.history_replay import ReplayRecord, encode_replay
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_delivery import current_stream_delivery
+from free_claude_code.providers.anthropic.provider import AnthropicProvider
 from free_claude_code.providers.history_replay import replay_origin
 from tests.providers.test_anthropic_messages_transport import Wire, _events, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 
 
-async def collect(p, body=None, **kwargs):
+async def collect(
+    p: AnthropicProvider,
+    body: JsonObject | None = None,
+    *,
+    request_id: str | None = None,
+    response_model: str | None = None,
+    request_headers: Mapping[str, str] | None = None,
+    reasoning_override: ReasoningPolicy | None = None,
+):
     return [
         frame
         async for event in p.stream_native_messages(
-            NativeMessagesRequest(body or native_body()), **kwargs
+            NativeMessagesRequest(body or native_body()),
+            request_id=request_id,
+            response_model=response_model,
+            request_headers=request_headers,
+            reasoning_override=reasoning_override,
         )
         for frame in event.frames
     ]
@@ -34,7 +50,7 @@ async def collect(p, body=None, **kwargs):
 async def test_native_omissions_helpers_controls_and_cookie_isolation():
     received = []
 
-    def handle(request):
+    def handle(request: httpx.Request):
         received.append(request)
         return httpx.Response(
             200,
@@ -104,8 +120,8 @@ async def test_native_omissions_helpers_controls_and_cookie_isolation():
         {"stream": True},
     ],
 )
-async def test_helpers_cannot_override_transport_ownership(helper):
-    def handle(request):
+async def test_helpers_cannot_override_transport_ownership(helper: JsonObject):
+    def handle(request: object):
         raise AssertionError("Invalid helpers reached upstream")
 
     p = provider(handle)
@@ -119,12 +135,13 @@ async def test_helpers_cannot_override_transport_ownership(helper):
 @pytest.mark.asyncio
 async def test_hosted_tool_stream_preserves_signatures_usage_and_pause_turn():
     events = _events(stop="pause_turn")
-    events[1]["content_block"] = {
+    content_block: JsonObject = {
         "type": "server_tool_use",
         "id": "srv",
         "name": "web_search",
         "input": {},
     }
+    events[1]["content_block"] = content_block
     events[2]["delta"] = {
         "type": "input_json_delta",
         "partial_json": '{"query":"hello"}',
@@ -163,11 +180,13 @@ async def test_hosted_tool_stream_preserves_signatures_usage_and_pause_turn():
         {"type": "content_block_stop", "index": 2},
     ]
     wire = Wire([_sse(*events)])
-    p = provider(
-        lambda request: httpx.Response(
+
+    def callback(request: object):
+        return httpx.Response(
             200, headers={"content-type": "text/event-stream"}, stream=wire
         )
-    )
+
+    p = provider(callback)
     try:
         output = parse_sse_text(
             "".join(await collect(p, native_body(True), response_model="alias"))
@@ -183,10 +202,12 @@ async def test_hosted_tool_stream_preserves_signatures_usage_and_pause_turn():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("status", [401, 402, 403, 429, 529])
-async def test_http_failure_status_evidence_and_bounded_recovery(streaming, status):
+async def test_http_failure_status_evidence_and_bounded_recovery(
+    streaming: bool, status: int
+):
     wires = []
 
-    def handle(request):
+    def handle(request: object):
         wire = Wire(
             [
                 json.dumps(
@@ -222,7 +243,9 @@ async def test_http_failure_status_evidence_and_bounded_recovery(streaming, stat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_connection_recovery_before_output_closes_failed_response(streaming):
+async def test_connection_recovery_before_output_closes_failed_response(
+    streaming: bool,
+):
     first = Wire([httpx.ReadError("connection closed")])
     second = Wire(
         [
@@ -232,15 +255,17 @@ async def test_connection_recovery_before_output_closes_failed_response(streamin
         ]
     )
     wires = iter([first, second])
-    p = provider(
-        lambda request: httpx.Response(
+
+    def callback(request: object):
+        return httpx.Response(
             200,
             stream=next(wires),
             headers={
                 "content-type": "text/event-stream" if streaming else "application/json"
             },
         )
-    )
+
+    p = provider(callback)
     try:
         assert await collect(p, native_body(streaming))
         assert first.closed and second.closed
@@ -250,7 +275,7 @@ async def test_connection_recovery_before_output_closes_failed_response(streamin
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_connect_timeout_before_acceptance_uses_admission_retry(streaming):
+async def test_connect_timeout_before_acceptance_uses_admission_retry(streaming: bool):
     calls = 0
     success = Wire(
         [
@@ -260,7 +285,7 @@ async def test_connect_timeout_before_acceptance_uses_admission_retry(streaming)
         ]
     )
 
-    def handle(request):
+    def handle(request: httpx.Request):
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -284,7 +309,7 @@ async def test_connect_timeout_before_acceptance_uses_admission_retry(streaming)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["error", "connection", "eof"])
-async def test_leading_ping_does_not_accept_attempt_or_prevent_retry(failure):
+async def test_leading_ping_does_not_accept_attempt_or_prevent_retry(failure: str):
     tail = {
         "error": _sse({"type": "error", "error": {"type": "overloaded_error"}}),
         "connection": httpx.ReadError("connection lost"),
@@ -295,13 +320,13 @@ async def test_leading_ping_does_not_accept_attempt_or_prevent_retry(failure):
     events.insert(1, {"type": "ping", "extension": "preserve after start"})
     second = Wire([_sse({"type": "ping"}, *events)])
     wires = iter([first, second])
-    p = provider(
-        lambda request: httpx.Response(
-            200,
-            headers={"content-type": "text/event-stream"},
-            stream=next(wires),
+
+    def callback(request: object):
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, stream=next(wires)
         )
-    )
+
+    p = provider(callback)
     try:
         output = parse_sse_text(
             "".join(await collect(p, native_body(True), response_model="native"))
@@ -323,11 +348,13 @@ async def test_leading_ping_does_not_accept_attempt_or_prevent_retry(failure):
         _sse({"type": "message_start", "message": {}}),
     ],
 )
-async def test_malformed_or_incomplete_stream_after_output_never_replays(bad_tail):
+async def test_malformed_or_incomplete_stream_after_output_never_replays(
+    bad_tail: bytes,
+):
     calls = []
     wire = Wire([_sse(_events()[0]), bad_tail])
 
-    def handle(request):
+    def handle(request: httpx.Request):
         calls.append(request)
         return httpx.Response(
             200, headers={"content-type": "text/event-stream"}, stream=wire
@@ -351,11 +378,13 @@ async def test_malformed_or_incomplete_stream_after_output_never_replays(bad_tai
 @pytest.mark.asyncio
 async def test_early_consumer_exit_releases_admission_and_response():
     wire = Wire([_sse(*_events())])
-    p = provider(
-        lambda request: httpx.Response(
+
+    def callback(request: object):
+        return httpx.Response(
             200, headers={"content-type": "text/event-stream"}, stream=wire
         )
-    )
+
+    p = provider(callback)
     stream = p.stream_native_messages(NativeMessagesRequest(native_body(True)))
     try:
         await anext(stream)
@@ -369,21 +398,23 @@ async def test_early_consumer_exit_releases_admission_and_response():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_cancelled_read_closes_response_without_retry(streaming):
+async def test_cancelled_read_closes_response_without_retry(streaming: bool):
     reading = asyncio.Event()
     closed = asyncio.Event()
     calls = []
 
     class BlockingWire(httpx.AsyncByteStream):
+        @override
         async def __aiter__(self):
             reading.set()
             await asyncio.Event().wait()
             yield b""
 
+        @override
         async def aclose(self):
             closed.set()
 
-    def handle(request):
+    def handle(request: httpx.Request):
         calls.append(request)
         return httpx.Response(
             200, headers={"content-type": "text/event-stream"}, stream=BlockingWire()
@@ -406,7 +437,7 @@ async def test_cancelled_read_closes_response_without_retry(streaming):
 async def test_native_history_restores_matching_fcc_carriers_and_rejects_foreign():
     received = []
 
-    def handle(request):
+    def handle(request: httpx.Request):
         received.append(json.loads(request.content))
         return httpx.Response(
             200, json={"stop_reason": "end_turn", "type": "message", "content": []}

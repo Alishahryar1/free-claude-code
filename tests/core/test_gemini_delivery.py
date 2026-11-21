@@ -3,11 +3,15 @@
 from free_claude_code.core.continuation_stream import ContinuationStream
 from free_claude_code.core.delivered_response import DeliveredResponse
 from free_claude_code.core.gemini.response import GeminiResponseAccumulator
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_output import CompletedCall
 
 
-def event(*parts, finish=None):
-    candidate = {"index": 0, "content": {"role": "model", "parts": list(parts)}}
+def event(*parts: JsonObject, finish: str | None = None):
+    candidate: JsonObject = {
+        "index": 0,
+        "content": {"role": "model", "parts": list(parts)},
+    }
     if finish:
         candidate["finishReason"] = finish
     return {"responseId": "old", "modelVersion": "public", "candidates": [candidate]}

@@ -2,8 +2,10 @@
 
 import asyncio
 from collections.abc import Mapping, MutableMapping
+from typing import override
 
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from free_claude_code.api.app import create_app
 from free_claude_code.api.ports import ApiServices
@@ -13,17 +15,22 @@ from free_claude_code.application.model_metadata import ProviderModelRefreshResu
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonValue
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime, RestartCallback
 from free_claude_code.runtime.configuration import ConfigurationService
-from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from free_claude_code.runtime.provider_manager import (
+    ProviderRuntimeManager,
+    _ProviderGeneration,
+)
 from tests.config.credential_support import credential_edit
 from tests.web_tools_support import StubWebToolsClient
+from tests.wire_payload import object_payload
 
 
-def post_config(client, path, *, json):
-    values = json.get("values", {})
+def post_config(client: TestClient, path: str, *, json: Mapping[str, JsonValue]):
+    values = object_payload(json.get("values", {}))
     credential_keys = {
         d.credential_env for d in PROVIDER_CATALOG.values() if d.credential_env
     }
@@ -36,13 +43,20 @@ def post_config(client, path, *, json):
             else value
             for key, value in values.items()
         }
-    return client.post(path, json=json | {"values": values})
+    return client.post(path, json={**json, "values": values})
 
 
 class ApiTestRuntime(ProviderRuntimeManager):
     """API-only tests supply metadata explicitly; startup/discovery has separate tests."""
 
-    def _catalog_task(self, generation, provider_id, *, refresh=False):
+    @override
+    def _catalog_task(
+        self,
+        generation: _ProviderGeneration,
+        provider_id: str,
+        *,
+        refresh: bool = False,
+    ):
         if refresh:
             return super()._catalog_task(generation, provider_id, refresh=True)
         task = generation.catalog_tasks.get(provider_id)

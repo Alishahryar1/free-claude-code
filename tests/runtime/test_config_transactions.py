@@ -1,11 +1,13 @@
 import asyncio
 import threading
+from collections.abc import Mapping
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from free_claude_code.application.errors import ApplicationUnavailableError
-from free_claude_code.config.loader import ManagedConfigStore
+from free_claude_code.config.loader import ManagedConfigSnapshot, ManagedConfigStore
 from free_claude_code.harnesses import claude_integration
 from free_claude_code.runtime.application import ApplicationRuntime
 from free_claude_code.runtime.configuration import ConfigurationService
@@ -16,7 +18,7 @@ from tests.runtime.test_application_runtime import TrackingFactory, _prepared, _
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_writer", [False, True])
 async def test_integration_write_finishes_before_configuration_publication(
-    tmp_path, monkeypatch, cancel_writer
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_writer: bool
 ):
     factory = TrackingFactory()
     manager = ProviderRuntimeManager(
@@ -31,10 +33,12 @@ async def test_integration_write_finishes_before_configuration_publication(
     apply_started = asyncio.Event()
     configure = claude_integration.configure
 
-    def held(*args, **kwargs):
+    def held(
+        path: Path, proxy_root_url: str, auth_token: str, connected: bool | None = None
+    ):
         entered.set()
         assert release.wait(5)
-        return configure(*args, **kwargs)
+        return configure(path, proxy_root_url, auth_token, connected)
 
     async def apply_config():
         apply_started.set()
@@ -74,7 +78,9 @@ async def test_integration_write_finishes_before_configuration_publication(
 
 
 @pytest.mark.asyncio
-async def test_credential_validation_does_not_block_integrations(tmp_path, monkeypatch):
+async def test_credential_validation_does_not_block_integrations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     manager = ProviderRuntimeManager(_settings("nvidia_nim/old"))
     configuration = AsyncMock(spec=ConfigurationService)
     configuration.prepare.return_value = _prepared(
@@ -102,7 +108,9 @@ async def test_credential_validation_does_not_block_integrations(tmp_path, monke
 
 
 @pytest.mark.asyncio
-async def test_awaitable_restart_callback_is_not_executed_under_apply_lock(tmp_path):
+async def test_awaitable_restart_callback_is_not_executed_under_apply_lock(
+    tmp_path: Path,
+):
     manager = ProviderRuntimeManager(_settings("nvidia_nim/old"))
     configuration = AsyncMock(spec=ConfigurationService)
     prepared = _prepared(
@@ -153,7 +161,9 @@ async def test_awaitable_restart_callback_is_not_executed_under_apply_lock(tmp_p
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pending", [(), ("PORT",)])
 @pytest.mark.parametrize("fail", [False, True])
-async def test_cancelled_commit_settles_before_shutdown(tmp_path, pending, fail):
+async def test_cancelled_commit_settles_before_shutdown(
+    tmp_path: Path, pending: tuple[str, ...], fail: bool
+):
     factory = TrackingFactory()
     manager = ProviderRuntimeManager(
         _settings("nvidia_nim/old"), runtime_factory=factory
@@ -207,7 +217,10 @@ async def test_cancelled_commit_settles_before_shutdown(tmp_path, pending, fail)
 @pytest.mark.parametrize("cancel_during_apply", [False, True])
 @pytest.mark.parametrize("previous_cancellation", [False, True])
 async def test_cancellation_at_finalization_handoff_prevents_persistence(
-    monkeypatch, restart_required, cancel_during_apply, previous_cancellation
+    monkeypatch: pytest.MonkeyPatch,
+    restart_required: bool,
+    cancel_during_apply: bool,
+    previous_cancellation: bool,
 ):
     monkeypatch.delenv("MODEL", raising=False)
     monkeypatch.delenv("PORT", raising=False)
@@ -271,7 +284,7 @@ async def test_cancellation_at_finalization_handoff_prevents_persistence(
 
 
 @pytest.mark.asyncio
-async def test_cancellation_waiting_for_replacement_does_not_persist(tmp_path):
+async def test_cancellation_waiting_for_replacement_does_not_persist(tmp_path: Path):
     manager = ProviderRuntimeManager(_settings("nvidia_nim/old"))
     configuration = AsyncMock(spec=ConfigurationService)
     configuration.prepare.return_value = _prepared(
@@ -297,7 +310,7 @@ async def test_cancellation_waiting_for_replacement_does_not_persist(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("shutdown", [False, True])
 async def test_worker_commit_retains_ownership_against_queued_apply(
-    monkeypatch, shutdown
+    monkeypatch: pytest.MonkeyPatch, shutdown: bool
 ):
     monkeypatch.delenv("LOG_LEVEL", raising=False)
     store = ManagedConfigStore()
@@ -314,7 +327,9 @@ async def test_worker_commit_retains_ownership_against_queued_apply(
     original = store.commit
     writes = []
 
-    def blocked_commit(values, expected=None):
+    def blocked_commit(
+        values: Mapping[str, str], expected: ManagedConfigSnapshot | None = None
+    ):
         entered.set()
         assert release.wait(5)
         writes.append(values["LOG_LEVEL"])

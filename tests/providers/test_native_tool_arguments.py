@@ -14,6 +14,7 @@ from free_claude_code.core.openai_responses.streaming.event_builders import (
     ResponseEventBuilder,
 )
 from tests.providers.test_history_transports import _events_for, _harness
+from tests.wire_payload import array_payload, object_payload
 
 ARGUMENTS = [
     '{"path":"ok"}',
@@ -121,7 +122,9 @@ def tool_events(protocol: str, arguments: str) -> list[JsonObject]:
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("arguments", ARGUMENTS)
-async def test_completed_native_arguments_are_transparent(protocol, wire, arguments):
+async def test_completed_native_arguments_are_transparent(
+    protocol: str, wire: str, arguments: str
+):
     async with _harness(
         protocol, lambda _: (200, tool_events(protocol, arguments))
     ) as (send, bodies, _):
@@ -179,7 +182,9 @@ async def test_completed_native_arguments_are_transparent(protocol, wire, argume
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses"])
 @pytest.mark.parametrize("arguments", ARGUMENTS)
-async def test_harness_tool_error_is_kept_in_next_request(protocol, arguments):
+async def test_harness_tool_error_is_kept_in_next_request(
+    protocol: str, arguments: str
+):
     async with _harness(
         protocol, lambda _: (200, tool_events(protocol, arguments))
     ) as (send, bodies, _):
@@ -209,11 +214,26 @@ async def test_harness_tool_error_is_kept_in_next_request(protocol, arguments):
         ]
         if protocol == "chat":
             sent = bodies[-1]["messages"]
-            assert sent[-2]["tool_calls"][0]["function"]["arguments"] == arguments
-            assert sent[-1]["tool_call_id"] == call["call_id"]
-            assert sent[-1]["content"] == history[-1]["output"]
+            assert (
+                object_payload(
+                    object_payload(
+                        array_payload(
+                            object_payload(array_payload(sent)[-2])["tool_calls"]
+                        )[0]
+                    )["function"]
+                )["arguments"]
+                == arguments
+            )
+            assert (
+                object_payload(array_payload(sent)[-1])["tool_call_id"]
+                == call["call_id"]
+            )
+            assert (
+                object_payload(array_payload(sent)[-1])["content"]
+                == history[-1]["output"]
+            )
         else:
-            assert bodies[-1]["input"][-2:] == history[-2:]
+            assert array_payload(bodies[-1]["input"])[-2:] == history[-2:]
 
 
 @pytest.mark.asyncio
@@ -222,7 +242,7 @@ async def test_harness_tool_error_is_kept_in_next_request(protocol, arguments):
 )
 @pytest.mark.parametrize("upstream_error", [False, True])
 async def test_nonstream_messages_requires_an_object_and_preserves_upstream_errors(
-    arguments, upstream_error
+    arguments: str, upstream_error: bool
 ):
     error = {"type": "overloaded_error", "message": "Try again"}
 
@@ -255,7 +275,9 @@ async def test_nonstream_messages_requires_an_object_and_preserves_upstream_erro
         "before <|im_end|> after",
     ],
 )
-async def test_tool_looking_text_stays_literal_across_chunk_boundaries(wire, text):
+async def test_tool_looking_text_stays_literal_across_chunk_boundaries(
+    wire: str, text: str
+):
     template = _events_for("chat")[0]
     for split in range(len(text) + 1):
         events = [

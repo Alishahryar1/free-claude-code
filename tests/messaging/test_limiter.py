@@ -79,7 +79,7 @@ class TestMessagingRateLimiter:
 
         edits = []
 
-        async def mock_edit(msg_id, content):
+        async def mock_edit(msg_id: str, content: str):
             edits.append((msg_id, content))
             return f"done_{content}"
 
@@ -103,11 +103,11 @@ class TestMessagingRateLimiter:
         call_counts = {}
         msg_id = "test_msg_hang"
 
-        async def mock_edit(mid, content):
+        async def mock_edit(mid: str, content: str):
             call_counts[mid] = call_counts.get(mid, 0) + 1
             return f"result_{content}"
 
-        async def task(i):
+        async def task(i: int):
             return await limiter.enqueue(
                 lambda i=i: mock_edit(msg_id, f"v{i}"), dedup_key=f"edit:{msg_id}"
             )
@@ -227,11 +227,13 @@ class TestMessagingRateLimiter:
             await future2
 
     @pytest.mark.asyncio
-    async def test_fire_and_forget_failure_logged(self, caplog, monkeypatch):
+    async def test_fire_and_forget_failure_logged(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ):
         """fire_and_forget logs its own failure and does not re-raise."""
         limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
 
-        async def failing_enqueue(func, dedup_key=None):
+        async def failing_enqueue(func: object, dedup_key: object = None):
             raise ValueError("secret upstream detail")
 
         async def task():
@@ -244,7 +246,7 @@ class TestMessagingRateLimiter:
 
         errors = [r.message for r in caplog.records if r.levelname == "ERROR"]
         assert any("fire_fail" in m and "ValueError" in m for m in errors)
-        joined = " ".join(str(r.message) for r in caplog.records)
+        joined = " ".join(r.message for r in caplog.records)
         assert "secret upstream detail" not in joined
 
     @pytest.mark.asyncio

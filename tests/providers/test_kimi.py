@@ -31,13 +31,13 @@ def kimi_provider():
     )
 
 
-def test_init_uses_openai_chat_provider(kimi_provider):
+def test_init_uses_openai_chat_provider(kimi_provider: OpenAIChatProvider):
     assert isinstance(kimi_provider, OpenAIChatProvider)
     assert kimi_provider._api_key == "test_kimi_key"
     assert kimi_provider._base_url == "https://api.moonshot.ai/v1"
 
 
-def test_build_request_body_openai_chat(kimi_provider):
+def test_build_request_body_openai_chat(kimi_provider: OpenAIChatProvider):
     request = MessagesRequest(
         model="kimi-k2.5",
         max_tokens=50,
@@ -54,7 +54,7 @@ def test_build_request_body_openai_chat(kimi_provider):
     assert "extra_body" not in body
 
 
-def test_build_request_body_default_max_tokens(kimi_provider):
+def test_build_request_body_default_max_tokens(kimi_provider: OpenAIChatProvider):
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="x")],
@@ -67,7 +67,9 @@ def test_build_request_body_default_max_tokens(kimi_provider):
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 
 
-def test_build_request_body_rejects_caller_extra_body(kimi_provider):
+def test_build_request_body_rejects_caller_extra_body(
+    kimi_provider: OpenAIChatProvider,
+):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -82,7 +84,7 @@ def test_build_request_body_rejects_caller_extra_body(kimi_provider):
         )
 
 
-def test_build_request_body_disables_kimi_thinking(kimi_provider):
+def test_build_request_body_disables_kimi_thinking(kimi_provider: OpenAIChatProvider):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -99,20 +101,24 @@ def test_build_request_body_disables_kimi_thinking(kimi_provider):
 
 
 @pytest.mark.asyncio
-async def test_model_list_uses_openai_client_models_endpoint(kimi_provider):
-    kimi_provider._client.models.list = AsyncMock(
+async def test_model_list_uses_openai_client_models_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    kimi_provider: OpenAIChatProvider,
+):
+    mock_list = AsyncMock(
         return_value=SimpleNamespace(data=[SimpleNamespace(id="kimi-k2.5")])
     )
+    monkeypatch.setattr(kimi_provider._client.models, "list", mock_list)
 
     assert await kimi_provider.list_model_infos() == frozenset(
         {ProviderModelInfo("kimi-k2.5")}
     )
 
-    kimi_provider._client.models.list.assert_awaited_once_with()
+    mock_list.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio
-async def test_cleanup_closes_openai_client(kimi_provider):
+async def test_cleanup_closes_openai_client(kimi_provider: OpenAIChatProvider):
     kimi_provider._client = MagicMock()
     kimi_provider._client.close = AsyncMock()
 

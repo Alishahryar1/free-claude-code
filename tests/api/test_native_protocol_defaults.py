@@ -5,7 +5,9 @@ import json
 import httpx2
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Request
 
+from free_claude_code.core.json_types import JsonObject
 from tests.api.test_four_protocol_matrix import (
     ingress_request,
     matrix_app,
@@ -30,15 +32,15 @@ from tests.providers.test_gemini import _sse
         },
     ],
 )
-def test_signed_no_argument_call_can_be_echoed(wire, native_part):
+def test_signed_no_argument_call_can_be_echoed(wire: str, native_part: JsonObject):
     sent = []
 
-    def reply(request):
+    def reply(request: Request):
         sent.append(json.loads(request.content))
         return _sse([native_part] if len(sent) == 1 else [{"text": "done"}])
 
     streaming = wire == "responses"
-    with TestClient(matrix_app("gemini", reply)) as client:
+    with TestClient(matrix_app("gemini", native_reply=reply)) as client:
         path, body = ingress_request(wire, streaming)
         first = response_value(client.post(path, json=body), wire, streaming)
         initial = {"role": "user", "content": "hello"}
@@ -91,7 +93,7 @@ def test_signed_no_argument_call_can_be_echoed(wire, native_part):
 def test_native_chat_allows_documented_allowed_tools_choice():
     sent = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         sent.append(json.loads(request.content))
         event = {
             "id": "chatcmpl-test",
@@ -115,9 +117,8 @@ def test_native_chat_allows_documented_allowed_tools_choice():
             "tools": [{"type": "function", "function": {"name": "read"}}],
         },
     }
-    with TestClient(matrix_app("chat", reply)) as client:
+    with TestClient(matrix_app("chat", sdk_reply=reply)) as client:
         path, body = ingress_request("chat", False)
-        body["tool_choice"] = choice
-        response = client.post(path, json=body)
+        response = client.post(path, json={**body, "tool_choice": choice})
         assert response.status_code == 200, response.text
         assert sent[0]["tool_choice"] == choice

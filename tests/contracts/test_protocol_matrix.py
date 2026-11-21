@@ -14,6 +14,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     parse_sse_text,
     text_content,
 )
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
 from free_claude_code.core.stream_output import StreamOutput
@@ -130,7 +131,7 @@ def _client(handler: Callable[[httpx2.Request], httpx2.Response]) -> AsyncOpenAI
 
 
 def _chat_sse(text: str) -> str:
-    chunks = (
+    chunks: tuple[JsonObject, ...] = (
         {
             "id": "chatcmpl_matrix",
             "object": "chat.completion.chunk",
@@ -162,8 +163,8 @@ def _chat_sse(text: str) -> str:
     )
 
 
-def _response_payload(*, status: str, text: str) -> dict[str, object]:
-    output = (
+def _response_payload(*, status: str, text: str) -> JsonObject:
+    output: list[JsonObject] = (
         []
         if status == "in_progress"
         else [
@@ -229,7 +230,7 @@ def _response_payload(*, status: str, text: str) -> dict[str, object]:
 
 
 def _responses_sse(text: str) -> str:
-    events = (
+    events: tuple[JsonObject, ...] = (
         {
             "type": "response.created",
             "sequence_number": 0,

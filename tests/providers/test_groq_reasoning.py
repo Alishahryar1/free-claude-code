@@ -10,11 +10,13 @@ import pytest
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
+from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
     parse_sse_text,
     text_content,
 )
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import (
     ReasoningCapability,
     ReasoningEffort,
@@ -107,7 +109,11 @@ async def _successful_stream(text: str = "visible"):
     yield _chunk(finish_reason="stop")
 
 
-async def _drain(provider: GroqProvider, reasoning: ReasoningPolicy, request=None):
+async def _drain(
+    provider: GroqProvider,
+    reasoning: ReasoningPolicy,
+    request: MessagesRequest | None = None,
+):
     _ = [
         frame
         async for event in provider.stream_messages(
@@ -117,7 +123,7 @@ async def _drain(provider: GroqProvider, reasoning: ReasoningPolicy, request=Non
     ]
 
 
-def _sent(create: AsyncMock, index: int) -> dict:
+def _sent(create: AsyncMock, index: int) -> JsonObject:
     return dict(create.await_args_list[index].kwargs)
 
 
@@ -130,11 +136,11 @@ def _sent(create: AsyncMock, index: int) -> dict:
         "accepted options for reasoning_effort include default",
     ],
 )
-async def test_classifier_correction_does_not_change_later_requests(message):
+async def test_classifier_correction_does_not_change_later_requests(message: str):
     provider = _provider()
     sent = []
 
-    async def create(**body):
+    async def create(**body: object):
         sent.append(body)
         if len(sent) == 1:
             raise _BadRequest(message, body={"message": message})

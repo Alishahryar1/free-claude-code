@@ -4,7 +4,7 @@ import json
 import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, override
 
 import openai
 
@@ -104,6 +104,7 @@ class GroqChatBehavior(OpenAIChatBehavior):
         super().__init__(_PROFILE)
         self._model_reasoning_vocabularies: dict[str, frozenset[str]] = {}
 
+    @override
     def failure_override(self, error: Exception) -> ExecutionFailure | None:
         if token_limit_message(error) is None:
             return None
@@ -116,6 +117,7 @@ class GroqChatBehavior(OpenAIChatBehavior):
             False,
         )
 
+    @override
     def finalize_chat_body(
         self,
         body: dict[str, Any],
@@ -130,10 +132,12 @@ class GroqChatBehavior(OpenAIChatBehavior):
             return body
         return _rewrite_reasoning_effort(body, accepted) or body
 
+    @override
     def reasoning_disable_rejected(self, error: Exception) -> bool:
         accepted = _parse_reasoning_vocabulary(error)
         return accepted is not None and "none" not in accepted
 
+    @override
     def retry_request_body(
         self, error: Exception, body: dict[str, Any]
     ) -> Proposal | None:
@@ -158,6 +162,7 @@ class GroqChatBehavior(OpenAIChatBehavior):
     def learn_reasoning_vocabulary(self, model: str, accepted: frozenset[str]) -> None:
         self._model_reasoning_vocabularies[model] = accepted
 
+    @override
     def retry_after_standard_corrections(
         self,
         error: Exception,

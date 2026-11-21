@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,7 +18,7 @@ def test_hermes_uses_native_defaults_and_keeps_user_commands(
 ) -> None:
     launch_ids = []
 
-    def inspect(command, env):
+    def inspect(command: object, env: Mapping[str, str]):
         config = json.loads(
             (Path(env["HERMES_MANAGED_DIR"]) / "config.yaml").read_text()
         )
@@ -61,7 +62,7 @@ def test_hermes_failed_activation_cleans_configuration(
 ) -> None:
     original = launch_capture.probe
 
-    def probe(command, **kwargs):
+    def probe(command: list[str], **kwargs: object):
         if "config" in command:
             return subprocess.CompletedProcess(command, 0, output, "")
         return original(command, **kwargs)
@@ -85,7 +86,7 @@ def test_hermes_activation_timeout_stops_and_cleans(
 ) -> None:
     original = launch_capture.probe
 
-    def probe(command, **kwargs):
+    def probe(command: list[str], **kwargs: object):
         if "config" in command:
             assert kwargs["timeout"] == 15.0
             raise subprocess.TimeoutExpired(command, 15)

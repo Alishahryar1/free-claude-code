@@ -1,6 +1,7 @@
 """Tests for the xKiro OpenAI-chat gateway profile and catalog."""
 
 import json
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -50,7 +51,7 @@ async def xkiro_provider():
 
 
 @asynccontextmanager
-async def _wire_provider(handler):
+async def _wire_provider(handler: Callable[[httpx2.Request], httpx2.Response]):
     async with AsyncOpenAI(
         api_key="wire-xkiro-key",
         base_url=XKIRO_DEFAULT_BASE,
@@ -194,18 +195,18 @@ def test_replays_reasoning_content_with_tool_history(
 
 @pytest.mark.asyncio
 async def test_model_catalog_extracts_bare_model_ids(
+    monkeypatch: pytest.MonkeyPatch,
     xkiro_provider: OpenAIChatProvider,
 ) -> None:
-    xkiro_provider._client.get = AsyncMock(
-        return_value={"data": [{"id": _MODEL}, {"id": "xkiro/free"}]}
-    )
+    mock_get = AsyncMock(return_value={"data": [{"id": _MODEL}, {"id": "xkiro/free"}]})
+    monkeypatch.setattr(xkiro_provider._client, "get", mock_get)
 
     model_infos = await xkiro_provider.list_model_infos()
 
     assert model_infos == frozenset(
         {ProviderModelInfo(_MODEL), ProviderModelInfo("xkiro/free")}
     )
-    xkiro_provider._client.get.assert_awaited_once_with(
+    mock_get.assert_awaited_once_with(
         "/models",
         cast_to=object,
     )
@@ -221,11 +222,12 @@ async def test_model_catalog_extracts_bare_model_ids(
     ],
 )
 async def test_rejects_malformed_or_empty_catalog_atomically(
+    monkeypatch: pytest.MonkeyPatch,
     xkiro_provider: OpenAIChatProvider,
     payload: object,
     message: str,
 ) -> None:
-    xkiro_provider._client.get = AsyncMock(return_value=payload)
+    monkeypatch.setattr(xkiro_provider._client, "get", AsyncMock(return_value=payload))
 
     with pytest.raises(ModelListResponseError, match=message):
         await xkiro_provider.list_model_infos()
@@ -249,30 +251,41 @@ async def test_model_catalog_uses_documented_url_and_bearer_auth() -> None:
 
 
 @pytest.mark.asyncio
-async def test_full_catalog_retains_tiers_and_maps_capabilities(xkiro_provider):
-    xkiro_provider._client.get = AsyncMock(
-        return_value={
-            "data": [
-                {
-                    "id": _MODEL,
-                    "access_tier": "free",
-                    "capabilities": {"reasoning": True, "vision": True, "tools": True},
-                    "context_length": 128000,
-                    "max_output_tokens": 8192,
-                },
-                {
-                    "id": "paid/model:free",
-                    "access_tier": "paid",
-                    "capabilities": {
-                        "reasoning": False,
-                        "vision": False,
-                        "tools": False,
+async def test_full_catalog_retains_tiers_and_maps_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+    xkiro_provider: OpenAIChatProvider,
+):
+    monkeypatch.setattr(
+        xkiro_provider._client,
+        "get",
+        AsyncMock(
+            return_value={
+                "data": [
+                    {
+                        "id": _MODEL,
+                        "access_tier": "free",
+                        "capabilities": {
+                            "reasoning": True,
+                            "vision": True,
+                            "tools": True,
+                        },
+                        "context_length": 128000,
+                        "max_output_tokens": 8192,
                     },
-                },
-                {"id": "premium/model", "access_tier": "premium"},
-                {"id": _MODEL},
-            ]
-        }
+                    {
+                        "id": "paid/model:free",
+                        "access_tier": "paid",
+                        "capabilities": {
+                            "reasoning": False,
+                            "vision": False,
+                            "tools": False,
+                        },
+                    },
+                    {"id": "premium/model", "access_tier": "premium"},
+                    {"id": _MODEL},
+                ]
+            }
+        ),
     )
     infos = {info.model_id: info for info in await xkiro_provider.list_model_infos()}
     assert set(infos) == {_MODEL, "paid/model:free", "premium/model"}
@@ -292,7 +305,9 @@ async def test_full_catalog_retains_tiers_and_maps_capabilities(xkiro_provider):
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-def test_image_and_named_effort_translation(xkiro_provider, wire):
+def test_image_and_named_effort_translation(
+    xkiro_provider: OpenAIChatProvider, wire: str
+):
     image = "https://example.test/image.png"
     if wire == "messages":
         request = _request(
@@ -327,7 +342,9 @@ def test_image_and_named_effort_translation(xkiro_provider, wire):
         ).body
     assert body["reasoning_effort"] == "xhigh"
     assert body["model"] == _MODEL
-    assert body["messages"][0]["content"][0] == {
+    messages = body["messages"]
+    assert isinstance(messages, list)
+    assert messages[0]["content"][0] == {
         "type": "image_url",
         "image_url": {"url": image},
     }
@@ -335,9 +352,9 @@ def test_image_and_named_effort_translation(xkiro_provider, wire):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_chat_stream_preserves_reasoning_tools_and_usage(wire):
+async def test_chat_stream_preserves_reasoning_tools_and_usage(wire: str):
     requests = []
-    chunks = [
+    chunks: list[JsonObject] = [
         {"choices": [{"index": 0, "delta": {"reasoning_content": "Inspecting."}}]},
         {
             "choices": [
@@ -378,7 +395,7 @@ async def test_chat_stream_preserves_reasoning_tools_and_usage(wire):
         },
     ]
 
-    def handler(request):
+    def handler(request: httpx2.Request):
         requests.append(request)
         frames = [
             {

@@ -1,3 +1,4 @@
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.openai_chat.reasoning import (
     ChatTemplateReasoning,
@@ -15,7 +16,7 @@ _EFFORTS = (
 
 
 def test_named_effort_encoder_translates_only_documented_values() -> None:
-    body: dict = {}
+    body: JsonObject = {}
     encoder = NamedEffortReasoning(
         _EFFORTS,
         disabled_value="none",
@@ -28,8 +29,8 @@ def test_named_effort_encoder_translates_only_documented_values() -> None:
 
 
 def test_named_effort_encoder_uses_exact_budget_only_with_budget_field() -> None:
-    unsupported_body: dict = {}
-    supported_body: dict = {}
+    unsupported_body: JsonObject = {}
+    supported_body: JsonObject = {}
     policy = ReasoningPolicy.on(budget_tokens=2048)
 
     NamedEffortReasoning(_EFFORTS, enabled_value="high").encode(
@@ -46,9 +47,9 @@ def test_named_effort_encoder_uses_exact_budget_only_with_budget_field() -> None
 
 
 def test_reasoning_object_keeps_effort_budget_and_disable_shapes_exclusive() -> None:
-    effort_body: dict = {}
-    budget_body: dict = {}
-    off_body: dict = {}
+    effort_body: JsonObject = {}
+    budget_body: JsonObject = {}
+    off_body: JsonObject = {}
     encoder = ReasoningObject(_EFFORTS)
 
     encoder.encode(
@@ -64,7 +65,7 @@ def test_reasoning_object_keeps_effort_budget_and_disable_shapes_exclusive() -> 
 
 
 def test_thinking_object_leaves_provider_default_unmodified() -> None:
-    body: dict = {}
+    body: JsonObject = {}
     encoder = ThinkingObjectReasoning(
         enabled={"type": "enabled"},
         disabled={"type": "disabled"},
@@ -76,7 +77,7 @@ def test_thinking_object_leaves_provider_default_unmodified() -> None:
 
 
 def test_chat_template_encoder_maps_named_effort_to_boolean_capability() -> None:
-    body: dict = {}
+    body: JsonObject = {}
 
     ChatTemplateReasoning().encode(
         body,
@@ -89,9 +90,9 @@ def test_chat_template_encoder_maps_named_effort_to_boolean_capability() -> None
 
 
 def test_llamacpp_encoder_maps_effort_preserves_exact_budget_and_disables() -> None:
-    effort_body: dict = {}
-    budget_body: dict = {}
-    off_body: dict = {}
+    effort_body: JsonObject = {}
+    budget_body: JsonObject = {}
+    off_body: JsonObject = {}
     encoder = LlamaCppReasoning()
 
     encoder.encode(effort_body, ReasoningPolicy.on(effort=ReasoningEffort.HIGH))
@@ -104,7 +105,7 @@ def test_llamacpp_encoder_maps_effort_preserves_exact_budget_and_disables() -> N
 
 
 def test_split_reasoning_output_does_not_invent_compute_control() -> None:
-    body: dict = {}
+    body: JsonObject = {}
 
     SplitReasoningOutput().encode(body, ReasoningPolicy.off())
 

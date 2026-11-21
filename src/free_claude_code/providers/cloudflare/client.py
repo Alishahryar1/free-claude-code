@@ -3,7 +3,7 @@
 import math
 from collections.abc import Iterator, Mapping
 from dataclasses import replace
-from typing import Any
+from typing import Any, override
 from urllib.parse import quote
 
 import httpx
@@ -73,6 +73,7 @@ def _cloudflare_account_api_url(api_root: str | None, account_id: str) -> str:
 class CloudflareChatBehavior(OpenAIChatBehavior):
     """Cloudflare Chat adaptation without HTTP ownership."""
 
+    @override
     def normalize_chunk(self, chunk: ChatCompletionChunk) -> ChatCompletionChunk:
         choices = []
         changed = False
@@ -94,6 +95,7 @@ class CloudflareChatBehavior(OpenAIChatBehavior):
                 )
         return chunk.model_copy(update={"choices": choices}) if changed else chunk
 
+    @override
     def extra_reasoning_events(
         self, delta: Any, output: ChatStreamOutput, *, output_reasoning: bool
     ) -> Iterator[str]:
@@ -136,11 +138,13 @@ class CloudflareProvider(OpenAIChatProvider):
             history_cache=history_cache,
         )
 
+    @override
     async def cleanup(self) -> None:
         """Release provider client resources."""
         await super().cleanup()
         await self._model_list_client.aclose()
 
+    @override
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
         """Return Cloudflare Workers AI metadata from account model search."""
 

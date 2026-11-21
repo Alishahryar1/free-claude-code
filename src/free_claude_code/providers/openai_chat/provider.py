@@ -2,7 +2,7 @@
 
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import replace
-from typing import Any
+from typing import Any, override
 
 import httpx2
 from openai import AsyncOpenAI
@@ -236,6 +236,7 @@ class OpenAIChatProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_chat(
         self,
         request: ChatRequest,
@@ -259,6 +260,7 @@ class OpenAIChatProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_gemini(
         self,
         request: GeminiRequest,

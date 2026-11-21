@@ -5,6 +5,7 @@ import json
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from pathlib import Path
+from typing import override
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -77,7 +78,7 @@ from tests.providers.test_openai_responses_transport import (
 @pytest.mark.parametrize("responses", [False, True])
 @pytest.mark.parametrize("seeded", [False, True])
 async def test_conversion_runs_once_under_current_account_lease(
-    tmp_path, egress, responses, seeded
+    tmp_path: Path, egress: CopilotEgress, responses: bool, seeded: bool
 ):
     harness = Harness(tmp_path, egress)
     cls, name = {
@@ -99,7 +100,13 @@ async def test_conversion_runs_once_under_current_account_lease(
     }[egress, responses]
     original = getattr(cls, name)
 
-    def build(transport, *args, **kwargs):
+    def build(
+        transport: AnthropicMessagesTransport
+        | OpenAIChatTransport
+        | OpenAIResponsesTransport,
+        *args: object,
+        **kwargs: object,
+    ):
         assert harness.runtime.session_calls == 1
         assert not harness.runtime.sessions[0].closed
         assert harness.provider._active == 1
@@ -139,11 +146,13 @@ class Wire(httpx.AsyncByteStream, httpx2.AsyncByteStream):
         self.read_gate.set()
         self.read_entered = asyncio.Event()
 
+    @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
         self.read_entered.set()
         await self.read_gate.wait()
         yield self.content
 
+    @override
     async def aclose(self) -> None:
         self.close_entered.set()
         await self.close_gate.wait()
@@ -172,6 +181,7 @@ class Runtime(FakeRuntime):
             ),
         )
 
+    @override
     async def session(self, model_id: str) -> FakeSession:
         session = await super().session(model_id)
         session.value = CopilotEndpoint(
@@ -330,7 +340,7 @@ class Harness:
 @pytest.mark.parametrize("egress", list(CopilotEgress))
 @pytest.mark.parametrize("supports_off", [False, True])
 async def test_classifier_uses_current_lease_controls_and_clears_raw_hints(
-    tmp_path, egress, supports_off
+    tmp_path: Path, egress: CopilotEgress, supports_off: bool
 ):
     harness = Harness(tmp_path, egress)
     current = harness.runtime.available[0]

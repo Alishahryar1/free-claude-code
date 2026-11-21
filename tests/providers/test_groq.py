@@ -6,6 +6,8 @@ import pytest
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
+from free_claude_code.core.json_types import JsonObject
+from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.groq import GroqProvider
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
@@ -16,7 +18,7 @@ from tests.providers.support import (
 )
 
 
-def make_request(**overrides):
+def make_request(**overrides: object):
     return make_messages_request("llama-3.3-70b-versatile", **overrides)
 
 
@@ -29,11 +31,11 @@ def groq_config():
 
 
 @pytest.fixture
-def groq_provider(groq_config):
+def groq_provider(groq_config: ProviderConfig):
     return GroqProvider(groq_config, admission=immediate_admission())
 
 
-def test_init(groq_config):
+def test_init(groq_config: ProviderConfig):
     """Test provider initialization."""
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
@@ -49,7 +51,9 @@ def test_default_base_url_constant():
 
 
 @pytest.mark.asyncio
-async def test_model_catalog_extracts_documented_token_limits(groq_provider) -> None:
+async def test_model_catalog_extracts_documented_token_limits(
+    groq_provider: GroqProvider,
+) -> None:
     with patch.object(
         groq_provider,
         "_list_models_payload",
@@ -78,7 +82,7 @@ async def test_model_catalog_extracts_documented_token_limits(groq_provider) -> 
     )
 
 
-def test_build_request_body_basic(groq_provider):
+def test_build_request_body_basic(groq_provider: GroqProvider):
     """Basic request body conversion attaches system message from Claude request."""
     req = make_request()
     body = groq_provider._chat._build_request_body(req)
@@ -88,7 +92,9 @@ def test_build_request_body_basic(groq_provider):
     assert "max_completion_tokens" in body
 
 
-def test_build_request_body_replays_reasoning_in_native_field(groq_provider):
+def test_build_request_body_replays_reasoning_in_native_field(
+    groq_provider: GroqProvider,
+):
     request = make_request(
         messages=[
             {"role": "user", "content": "Inspect the file."},
@@ -154,11 +160,13 @@ def test_build_request_body_global_disable_blocks_reasoning_mapping():
     assert "assistant_reasoning_content" not in roles
 
 
-def test_build_request_body_sanitizes_and_remaps_via_mock_converter(groq_provider):
+def test_build_request_body_sanitizes_and_remaps_via_mock_converter(
+    groq_provider: GroqProvider,
+):
     with patch(
         "free_claude_code.providers.openai_chat.request_policy.build_base_request_body"
     ) as mock_convert:
-        mock_convert.return_value = {
+        converted: JsonObject = {
             "model": "llama-3.3-70b-versatile",
             "messages": [
                 {"role": "user", "name": "bad", "content": "hello"},
@@ -175,6 +183,7 @@ def test_build_request_body_sanitizes_and_remaps_via_mock_converter(groq_provide
             "max_tokens": 42,
             "n": 4,
         }
+        mock_convert.return_value = converted
         req = make_request()
         body = groq_provider._chat._build_request_body(req)
 
@@ -187,7 +196,9 @@ def test_build_request_body_sanitizes_and_remaps_via_mock_converter(groq_provide
     assert body["n"] == 1
 
 
-def test_build_request_body_prefers_existing_max_completion_tokens(groq_provider):
+def test_build_request_body_prefers_existing_max_completion_tokens(
+    groq_provider: GroqProvider,
+):
     with patch(
         "free_claude_code.providers.openai_chat.request_policy.build_base_request_body"
     ) as mock_convert:
@@ -203,7 +214,7 @@ def test_build_request_body_prefers_existing_max_completion_tokens(groq_provider
     assert "max_tokens" not in body
 
 
-def test_build_request_body_preserves_caller_extra_body(groq_provider):
+def test_build_request_body_preserves_caller_extra_body(groq_provider: GroqProvider):
     req = make_request(extra_body={"metadata": {"user": "u1"}})
 
     body = groq_provider._chat._build_request_body(req)
@@ -214,7 +225,7 @@ def test_build_request_body_preserves_caller_extra_body(groq_provider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_text(groq_provider):
+async def test_stream_messages_text(groq_provider: GroqProvider):
     """Text content deltas are emitted as text blocks."""
     req = make_request()
 
@@ -251,7 +262,7 @@ async def test_stream_messages_text(groq_provider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_reasoning_content(groq_provider):
+async def test_stream_messages_reasoning_content(groq_provider: GroqProvider):
     """reasoning_content deltas are emitted as thinking blocks."""
     req = make_request()
 
@@ -288,7 +299,7 @@ async def test_stream_messages_reasoning_content(groq_provider):
 
 
 @pytest.mark.asyncio
-async def test_cleanup(groq_provider):
+async def test_cleanup(groq_provider: GroqProvider):
     groq_provider._client = AsyncMock()
 
     await groq_provider.cleanup()

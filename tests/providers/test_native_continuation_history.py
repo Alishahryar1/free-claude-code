@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.history_replay import HistoryMode, ReplayOrigin
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_recovery import ContinuationSeed
@@ -15,7 +16,7 @@ from free_claude_code.providers.history_negotiation import (
 )
 
 
-def native_seed(wire):
+def native_seed(wire: WireProtocol):
     items: list[JsonObject]
     if wire == "messages":
         items = [
@@ -46,7 +47,9 @@ def native_seed(wire):
 @pytest.mark.parametrize("wire", ["messages", "responses", "gemini"])
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("mode", list(HistoryMode))
-def test_partial_thinking_is_governed_by_history_mode(wire, protocol, mode):
+def test_partial_thinking_is_governed_by_history_mode(
+    wire: WireProtocol, protocol: WireProtocol, mode: HistoryMode
+):
     field = "input" if protocol == "responses" else "messages"
     body = {"model": "model", field: [{"role": "user", "content": "Question"}]}
     original = deepcopy(body)
@@ -70,7 +73,9 @@ def test_partial_thinking_is_governed_by_history_mode(wire, protocol, mode):
 
 
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
-def test_current_keeps_current_history_and_prefix_but_not_old_thinking(protocol):
+def test_current_keeps_current_history_and_prefix_but_not_old_thinking(
+    protocol: WireProtocol,
+):
     field = "input" if protocol == "responses" else "messages"
     request = ContinuationRequest(protocol)
     first = request.build({"model": "model", field: []}, native_seed("messages"))
@@ -125,7 +130,7 @@ def test_response_continuation_preserves_delivered_part_text():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses"])
-async def test_fallback_prefix_follows_effective_sdk_history_override(protocol):
+async def test_fallback_prefix_follows_effective_sdk_history_override(protocol: str):
     from free_claude_code.core.anthropic.models import MessagesRequest
     from free_claude_code.core.openai_responses import OpenAIResponsesRequest
     from free_claude_code.core.reasoning import ReasoningPolicy

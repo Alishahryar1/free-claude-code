@@ -1,26 +1,32 @@
 import re
 import sys
 import uuid
+from pathlib import Path
 
 import pytest
-from playwright.sync_api import expect
+from playwright.sync_api import BrowserContext, Page, Route, expect
 
+from e2e.code_support import CodeControl
 from e2e.form_support import assert_autofill_opt_out
+from e2e.layout import visible_bounds
 from e2e.provider_support import api_key_input, open_provider
 from free_claude_code.application.code_sessions.models import (
     HarnessEvent,
     PromptRequest,
+    RunStatus,
 )
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.runtime.codex_protocol import CodexProtocol
 from tests.code_sessions_support import CodexPackets
+from tests.wire_payload import object_payload
 
 
 def test_model_picker_uses_application_order_and_keeps_configured_selection(
-    page,
-    admin_base_url,
-    tmp_path,
-    code_control,
-    monkeypatch,
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     from free_claude_code.application.model_metadata import ProviderModelInfo
     from free_claude_code.config.settings import Settings
@@ -59,7 +65,7 @@ def test_model_picker_uses_application_order_and_keeps_configured_selection(
 
 
 def test_catalog_growth_preserves_open_search_selection_and_draft(
-    page, admin_base_url, tmp_path, code_control
+    page: Page, admin_base_url: str, tmp_path: Path, code_control: CodeControl
 ):
     code_control.harness.configurations.update({"provider/model-two": "two"})
     create_session(page, admin_base_url, tmp_path)
@@ -90,7 +96,11 @@ def test_catalog_growth_preserves_open_search_selection_and_draft(
 
 @pytest.mark.parametrize("width", [1440, 900, 390])
 def test_five_header_controls_fit_without_hiding_composer(
-    page, admin_base_url, tmp_path, code_control, width
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    width: int,
 ):
     page.set_viewport_size({"width": width, "height": 900})
     create_session(page, admin_base_url, tmp_path)
@@ -103,10 +113,10 @@ def test_five_header_controls_fit_without_hiding_composer(
         "codeMode",
     ):
         expect(page.locator(f"#{control}")).to_be_visible()
-        box = page.locator(f"#{control}").bounding_box()
+        box = visible_bounds(page.locator(f"#{control}"))
         assert box["x"] >= 0 and box["x"] + box["width"] <= width
-    controls = page.locator(".session-controls").bounding_box()
-    composer = page.locator("#codeComposer").bounding_box()
+    controls = visible_bounds(page.locator(".session-controls"))
+    composer = visible_bounds(page.locator("#codeComposer"))
     assert composer["y"] >= controls["y"] + controls["height"]
     assert composer["y"] + composer["height"] <= 900
     page.screenshot(path=str(tmp_path / f"code-modes-{width}.png"))
@@ -114,7 +124,11 @@ def test_five_header_controls_fit_without_hiding_composer(
 
 @pytest.mark.parametrize("width", [1440, 390])
 def test_context_usage_is_live_persistent_and_uses_only_raw_provider_capacity(
-    page, admin_base_url, tmp_path, code_control, width
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    width: int,
 ):
     code_control.harness.context_windows["provider/model"] = 100_000
     code_control.harness.configurations["provider/unknown"] = "unknown"
@@ -135,8 +149,8 @@ def test_context_usage_is_live_persistent_and_uses_only_raw_provider_capacity(
     expect(usage).to_have_accessible_name(
         "Context used: 12,438 of 100,000 tokens (12%)"
     )
-    usage_box = usage.bounding_box()
-    stop_box = page.locator("#codeStop").bounding_box()
+    usage_box = visible_bounds(usage)
+    stop_box = visible_bounds(page.locator("#codeStop"))
     assert usage_box["x"] + usage_box["width"] <= stop_box["x"]
     assert stop_box["x"] + stop_box["width"] <= width
 
@@ -160,7 +174,7 @@ def test_context_usage_is_live_persistent_and_uses_only_raw_provider_capacity(
 
 
 def test_delayed_settings_response_cannot_replace_newer_context_usage(
-    page, admin_base_url, tmp_path, code_control
+    page: Page, admin_base_url: str, tmp_path: Path, code_control: CodeControl
 ):
     code_control.harness.context_windows["provider/model"] = 100_000
     create_session(page, admin_base_url, tmp_path)
@@ -199,7 +213,11 @@ def test_delayed_settings_response_cannot_replace_newer_context_usage(
 
 
 def test_header_provider_draft_and_mode_sync(
-    page, context, admin_base_url, tmp_path, code_control
+    page: Page,
+    context: BrowserContext,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
 ):
     code_control.harness.configurations.update(
         {"other/vendor/model": "other", "other/second": "second"}
@@ -242,7 +260,12 @@ def test_header_provider_draft_and_mode_sync(
 
 @pytest.mark.parametrize("reset", ["refresh", "conflict"])
 def test_unfinished_provider_selection_is_discarded_without_losing_message(
-    page, context, admin_base_url, tmp_path, code_control, reset
+    page: Page,
+    context: BrowserContext,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    reset: str,
 ):
     code_control.harness.configurations["other/model"] = "other"
     url = create_session(page, admin_base_url, tmp_path)
@@ -265,7 +288,11 @@ def test_unfinished_provider_selection_is_discarded_without_losing_message(
 
 
 def test_provider_change_in_another_tab_closes_old_model_options(
-    page, context, admin_base_url, tmp_path, code_control
+    page: Page,
+    context: BrowserContext,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
 ):
     code_control.harness.configurations["other/model"] = "other"
     url = create_session(page, admin_base_url, tmp_path)
@@ -285,7 +312,7 @@ def test_provider_change_in_another_tab_closes_old_model_options(
 
 
 def test_failed_mode_patch_restores_saved_controls_and_keeps_draft(
-    page, admin_base_url, tmp_path, code_control
+    page: Page, admin_base_url: str, tmp_path: Path, code_control: CodeControl
 ):
     url = create_session(page, admin_base_url, tmp_path)
     path = f"**/admin/api/code/sessions/{url.rsplit('/', 1)[1]}"
@@ -306,13 +333,17 @@ def test_failed_mode_patch_restores_saved_controls_and_keeps_draft(
 
 
 def test_review_updates_inline_and_unfinished_review_settles_after_restart_view(
-    page, context, admin_base_url, tmp_path, code_control
+    page: Page,
+    context: BrowserContext,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
 ):
     url = create_session(page, admin_base_url, tmp_path)
     send(page, "Review a command")
     connection = code_control.connection()
     protocol = CodexProtocol(connection.generation)
-    payload = {
+    payload: JsonObject = {
         "threadId": connection.thread_id,
         "turnId": "turn-1",
         "reviewId": "one",
@@ -325,29 +356,29 @@ def test_review_updates_inline_and_unfinished_review_settles_after_restart_view(
         },
         "review": {"status": "inProgress"},
     }
+
+    async def notify(method: str, body: JsonObject) -> None:
+        event = protocol.notification(method, body)
+        assert event is not None
+        await connection.sink(event)
+
     second = context.new_page()
     try:
         second.goto(url)
-        code_control.run(
-            connection.sink(
-                protocol.notification("item/autoApprovalReview/started", payload)
-            )
-        )
+        code_control.run(notify("item/autoApprovalReview/started", payload))
         review = page.locator('[data-kind="auto_review"]')
         expect(review.locator("summary")).to_have_text("Auto-review: Reviewing")
         review.locator("summary").click()
         code_control.run(
-            connection.sink(
-                protocol.notification(
-                    "item/autoApprovalReview/completed",
-                    {
-                        **payload,
-                        "review": {
-                            "status": "approved",
-                            "rationale": "Harmless local action",
-                        },
+            notify(
+                "item/autoApprovalReview/completed",
+                {
+                    **payload,
+                    "review": {
+                        "status": "approved",
+                        "rationale": "Harmless local action",
                     },
-                )
+                },
             )
         )
         expect(review.locator("summary")).to_have_text("Auto-review: Approved")
@@ -357,11 +388,7 @@ def test_review_updates_inline_and_unfinished_review_settles_after_restart_view(
             "Auto-review: Approved"
         )
         code_control.run(
-            connection.sink(
-                protocol.notification(
-                    "item/autoApprovalReview/started", {**payload, "reviewId": "two"}
-                )
-            )
+            notify("item/autoApprovalReview/started", {**payload, "reviewId": "two"})
         )
         code_control.run(connection.finish("turn-1", "interrupted"))
         expect(page.locator('[data-kind="auto_review"] summary')).to_have_text(
@@ -376,7 +403,11 @@ def test_review_updates_inline_and_unfinished_review_settles_after_restart_view(
 
 
 def test_child_review_outlives_parent_and_updates_in_place_in_both_tabs(
-    page, context, admin_base_url, tmp_path, code_control
+    page: Page,
+    context: BrowserContext,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
 ):
     url = create_session(page, admin_base_url, tmp_path)
     send(page, "Delegate work")
@@ -449,7 +480,14 @@ def test_child_review_outlives_parent_and_updates_in_place_in_both_tabs(
     ],
 )
 def test_pending_child_review_outside_page_survives_refresh_in_both_tabs(
-    page, context, admin_base_url, tmp_path, code_control, delivery, status, title
+    page: Page,
+    context: BrowserContext,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    delivery: str,
+    status: str,
+    title: str,
 ):
     control_feed(page)
     url = create_session(page, admin_base_url, tmp_path)
@@ -524,7 +562,11 @@ def test_pending_child_review_outside_page_survives_refresh_in_both_tabs(
 
 
 def test_reobserved_child_review_outside_page_appears_without_refresh(
-    page, context, admin_base_url, tmp_path, code_control
+    page: Page,
+    context: BrowserContext,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
 ):
     url = create_session(page, admin_base_url, tmp_path)
     send(page, "Delegate")
@@ -575,7 +617,11 @@ def test_reobserved_child_review_outside_page_appears_without_refresh(
 
 @pytest.mark.parametrize("change", ["start", "close"])
 def test_child_review_liveness_ignores_an_older_detail_snapshot(
-    page, admin_base_url, tmp_path, code_control, change
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    change: str,
 ):
     url = create_session(page, admin_base_url, tmp_path)
     send(page, "Delegate")
@@ -598,7 +644,7 @@ def test_child_review_liveness_ignores_an_older_detail_snapshot(
     expect(summary).to_have_text(title)
 
 
-def create_session(page, base_url, directory):
+def create_session(page: Page, base_url: str, directory: Path):
     page.goto(f"{base_url}/admin/code")
     page.get_by_role("button", name="New code session", exact=True).click()
     page.get_by_role("textbox", name="Folder", exact=True).fill(str(directory))
@@ -611,24 +657,24 @@ def create_session(page, base_url, directory):
     return page.url
 
 
-def send(page, text):
+def send(page: Page, text: str):
     page.get_by_role("textbox", name="Message", exact=True).fill(text)
     page.get_by_role("button", name="Send", exact=True).click()
     expect(page.get_by_role("button", name="Stop", exact=True)).to_be_visible()
 
 
-def open_creation(page, base_url):
+def open_creation(page: Page, base_url: str):
     page.goto(f"{base_url}/admin/code")
     page.get_by_role("button", name="New code session", exact=True).click()
     return page.get_by_role("dialog", name="New code session", exact=True)
 
 
 def test_settings_apply_preserves_open_creation_and_picker(
-    page, admin_base_url, tmp_path, code_control
+    page: Page, admin_base_url: str, tmp_path: Path, code_control: CodeControl
 ):
     pending = []
 
-    def capture_apply(route):
+    def capture_apply(route: Route):
         pending.append(route)
         page.evaluate("window.applyRequestIntercepted = true")
 
@@ -665,7 +711,12 @@ def test_settings_apply_preserves_open_creation_and_picker(
     ("suffix", "display"), [("\nA", "␊A"), ("\rA", "␍A"), ("\r\nA", "␍␊A")]
 )
 def test_picker_preserves_line_breaks_in_hint_and_submission(
-    page, admin_base_url, tmp_path, code_control, suffix, display
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    suffix: str,
+    display: str,
 ):
     selected = str(tmp_path / f"project{suffix}")
     form = open_creation(page, admin_base_url)
@@ -682,7 +733,8 @@ def test_picker_preserves_line_breaks_in_hint_and_submission(
     code_control.run(code_control.folder_picker.finish(call, None))
     with page.expect_response("**/admin/api/code/sessions") as submission:
         form.get_by_role("button", name="Create session", exact=True).click()
-    assert submission.value.request.post_data_json["cwd"] == selected
+    submitted = object_payload(submission.value.request.post_data_json)
+    assert submitted["cwd"] == selected
     # The directory deliberately does not exist; the form stays available.
     expect(folder).to_have_value(str(tmp_path / f"project{display}"))
     expect(folder).not_to_be_editable()
@@ -690,7 +742,11 @@ def test_picker_preserves_line_breaks_in_hint_and_submission(
 
 @pytest.mark.parametrize("replacement", ["manual", "browse"])
 def test_replacing_line_break_selection_uses_the_new_path(
-    page, admin_base_url, tmp_path, code_control, replacement
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    replacement: str,
 ):
     form = open_creation(page, admin_base_url)
     folder = form.get_by_role("textbox", name="Folder", exact=True)
@@ -729,7 +785,7 @@ def test_replacing_line_break_selection_uses_the_new_path(
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows forbids CR/LF in names")
 def test_picker_creates_in_selected_folder_not_its_line_break_free_neighbor(
-    page, admin_base_url, tmp_path, code_control
+    page: Page, admin_base_url: str, tmp_path: Path, code_control: CodeControl
 ):
     selected = tmp_path / "project\r\nA"
     selected.mkdir()
@@ -747,7 +803,11 @@ def test_picker_creates_in_selected_folder_not_its_line_break_free_neighbor(
 
 
 def test_browse_fills_only_its_tab_and_waits_for_create(
-    page, context, admin_base_url, tmp_path, code_control
+    page: Page,
+    context: BrowserContext,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
 ):
     second = context.new_page()
     try:
@@ -799,7 +859,11 @@ def test_browse_fills_only_its_tab_and_waits_for_create(
 
 @pytest.mark.parametrize("failure", [False, True])
 def test_picker_cancel_or_error_preserves_manual_entry(
-    page, admin_base_url, tmp_path, code_control, failure
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    failure: bool,
 ):
     form = open_creation(page, admin_base_url)
     folder = form.get_by_role("textbox", name="Folder", exact=True)
@@ -823,7 +887,7 @@ def test_picker_cancel_or_error_preserves_manual_entry(
 
 @pytest.mark.parametrize("leave", ["cancel", "escape", "refresh", "navigate", "view"])
 def test_dismissing_creation_closes_native_picker(
-    page, admin_base_url, code_control, leave
+    page: Page, admin_base_url: str, code_control: CodeControl, leave: str
 ):
     form = open_creation(page, admin_base_url)
     form.get_by_role("button", name="Browse…", exact=True).click()
@@ -846,7 +910,7 @@ def test_dismissing_creation_closes_native_picker(
 
 
 def test_closed_form_ignores_a_late_picker_response(
-    page, admin_base_url, tmp_path, code_control
+    page: Page, admin_base_url: str, tmp_path: Path, code_control: CodeControl
 ):
     form = open_creation(page, admin_base_url)
     page.evaluate("""() => {
@@ -873,7 +937,11 @@ def test_closed_form_ignores_a_late_picker_response(
 
 
 def test_existing_session_keeps_streaming_while_folder_picker_is_open(
-    page, context, admin_base_url, tmp_path, code_control
+    page: Page,
+    context: BrowserContext,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
 ):
     url = create_session(page, admin_base_url, tmp_path)
     send(page, "Keep running")
@@ -901,7 +969,7 @@ def test_existing_session_keeps_streaming_while_folder_picker_is_open(
         observer.close()
 
 
-def pause_clock(page):
+def pause_clock(page: Page):
     # Freeze wall time first so pausing cannot target the past on a busy runner.
     page.clock.set_fixed_time(1000)
     page.clock.pause_at(1000)
@@ -911,7 +979,11 @@ def pause_clock(page):
 
 @pytest.mark.parametrize("terminal", ["completed", "failed", "interrupted"])
 def test_thinking_fills_quiet_gaps_without_changing_transcript(
-    page, admin_base_url, tmp_path, code_control, terminal
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    terminal: RunStatus,
 ):
     create_session(page, admin_base_url, tmp_path)
     pause_clock(page)
@@ -967,7 +1039,12 @@ def test_thinking_fills_quiet_gaps_without_changing_transcript(
 @pytest.mark.parametrize("quiet_elapsed", [200, 500])
 @pytest.mark.parametrize("recovered_item", ["reply", "new-reply"])
 def test_recovered_output_restarts_thinking_quiet_interval(
-    page, admin_base_url, tmp_path, code_control, quiet_elapsed, recovered_item
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    quiet_elapsed: int,
+    recovered_item: str,
 ):
     control_feed(page)
     create_session(page, admin_base_url, tmp_path)
@@ -1000,7 +1077,7 @@ def test_recovered_output_restarts_thinking_quiet_interval(
 
 
 def test_thinking_respects_prompts_refresh_navigation_and_stop(
-    page, admin_base_url, tmp_path, code_control
+    page: Page, admin_base_url: str, tmp_path: Path, code_control: CodeControl
 ):
     control_feed(page)
     url = create_session(page, admin_base_url, tmp_path)
@@ -1064,12 +1141,12 @@ def test_thinking_respects_prompts_refresh_navigation_and_stop(
     expect(page.locator("#codeActivity")).to_be_hidden()
 
 
-async def release_interrupt(code_control):
+async def release_interrupt(code_control: CodeControl):
     code_control.harness.interrupt_gate.set()
 
 
 def test_thinking_preserves_expanded_items_and_scroll_position(
-    page, admin_base_url, tmp_path, code_control
+    page: Page, admin_base_url: str, tmp_path: Path, code_control: CodeControl
 ):
     create_session(page, admin_base_url, tmp_path)
     pause_clock(page)
@@ -1106,7 +1183,7 @@ def test_thinking_preserves_expanded_items_and_scroll_position(
 
 
 def test_deletion_error_stays_beside_delete_and_survives_refresh(
-    page, admin_base_url, tmp_path, code_control
+    page: Page, admin_base_url: str, tmp_path: Path, code_control: CodeControl
 ):
     create_session(page, admin_base_url, tmp_path)
     send(page, "Inspect")
@@ -1130,7 +1207,11 @@ def test_deletion_error_stays_beside_delete_and_survives_refresh(
 
 
 def test_code_streams_survive_refresh_and_all_viewers_leaving(
-    page, context, admin_base_url, tmp_path, code_control
+    page: Page,
+    context: BrowserContext,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
 ):
     url = create_session(page, admin_base_url, tmp_path)
     send(page, "Inspect this project")
@@ -1174,7 +1255,11 @@ def test_code_streams_survive_refresh_and_all_viewers_leaving(
 
 
 def test_prompt_claim_syncs_tabs_and_stop_keeps_output(
-    page, context, admin_base_url, tmp_path, code_control
+    page: Page,
+    context: BrowserContext,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
 ):
     url = create_session(page, admin_base_url, tmp_path)
     send(page, "Run a command")
@@ -1214,7 +1299,7 @@ def test_prompt_claim_syncs_tabs_and_stop_keeps_output(
 
 
 def test_old_detail_cannot_replace_streamed_output(
-    page, admin_base_url, tmp_path, code_control
+    page: Page, admin_base_url: str, tmp_path: Path, code_control: CodeControl
 ):
     url = create_session(page, admin_base_url, tmp_path)
     send(page, "Keep the latest output")
@@ -1250,7 +1335,11 @@ def test_old_detail_cannot_replace_streamed_output(
 
 
 def test_competing_tabs_keep_the_rejected_draft(
-    page, context, admin_base_url, tmp_path, code_control
+    page: Page,
+    context: BrowserContext,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
 ):
     url = create_session(page, admin_base_url, tmp_path)
     second = context.new_page()
@@ -1287,7 +1376,7 @@ def test_competing_tabs_keep_the_rejected_draft(
 
 
 def test_lost_send_response_keeps_later_typing_and_does_not_replay(
-    page, admin_base_url, tmp_path, code_control
+    page: Page, admin_base_url: str, tmp_path: Path, code_control: CodeControl
 ):
     create_session(page, admin_base_url, tmp_path)
     page.evaluate("""() => {
@@ -1317,7 +1406,11 @@ def test_lost_send_response_keeps_later_typing_and_does_not_replay(
 
 
 def test_rename_and_delete_sync_library_without_touching_project(
-    page, context, admin_base_url, tmp_path, code_control
+    page: Page,
+    context: BrowserContext,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
 ):
     url = create_session(page, admin_base_url, tmp_path)
     project = tmp_path / "project.txt"
@@ -1341,7 +1434,11 @@ def test_rename_and_delete_sync_library_without_touching_project(
 
 
 def test_answered_question_keeps_its_place_across_turns_tabs_and_refresh(
-    page, context, admin_base_url, tmp_path, code_control
+    page: Page,
+    context: BrowserContext,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
 ):
     url = create_session(page, admin_base_url, tmp_path)
     send(page, "First request")
@@ -1422,7 +1519,7 @@ def test_answered_question_keeps_its_place_across_turns_tabs_and_refresh(
 
 
 def test_question_input_survives_streaming_and_secret_answer_is_not_stored(
-    page, admin_base_url, tmp_path, code_control
+    page: Page, admin_base_url: str, tmp_path: Path, code_control: CodeControl
 ):
     control_feed(page)
     create_session(page, admin_base_url, tmp_path)
@@ -1517,7 +1614,7 @@ def test_question_input_survives_streaming_and_secret_answer_is_not_stored(
     )
 
 
-def delete_from_other_client(code_control, session_id):
+def delete_from_other_client(code_control: CodeControl, session_id: str):
     async def remove():
         detail = await code_control.service.get_detail(session_id)
         await code_control.service.delete_session(session_id, detail.session.revision)
@@ -1526,7 +1623,7 @@ def delete_from_other_client(code_control, session_id):
     code_control.run(remove())
 
 
-def hold_deleted_detail(page, code_control, session_id):
+def hold_deleted_detail(page: Page, code_control: CodeControl, session_id: str):
     page.evaluate("window.dropCodeEvents = ['session.deleted']")
     delete_from_other_client(code_control, session_id)
     endpoint = f"/admin/api/code/sessions/{session_id}"
@@ -1540,7 +1637,11 @@ def hold_deleted_detail(page, code_control, session_id):
 
 @pytest.mark.parametrize("source", ["event", "detail404"])
 def test_hidden_code_removal_preserves_providers_and_deleted_history(
-    page, admin_base_url, tmp_path, code_control, source
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    source: str,
 ):
     control_feed(page)
     url = create_session(page, admin_base_url, tmp_path)
@@ -1589,7 +1690,11 @@ def test_hidden_code_removal_preserves_providers_and_deleted_history(
 
 @pytest.mark.parametrize("source", ["event", "detail404", "returned_detail404"])
 def test_visible_code_removal_replaces_history(
-    page, admin_base_url, tmp_path, code_control, source
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    source: str,
 ):
     control_feed(page)
     url = create_session(page, admin_base_url, tmp_path)
@@ -1626,7 +1731,11 @@ def test_visible_code_removal_replaces_history(
 
 @pytest.mark.parametrize("source", ["event", "detail404"])
 def test_code_removal_does_not_redirect_another_code_session(
-    page, admin_base_url, tmp_path, code_control, source
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    source: str,
 ):
     control_feed(page)
     url = create_session(page, admin_base_url, tmp_path)
@@ -1663,7 +1772,7 @@ def test_code_removal_does_not_redirect_another_code_session(
     expect(composer).to_have_value("Keep B's draft")
 
 
-def control_feed(page):
+def control_feed(page: Page):
     page.add_init_script("""(() => {
       const Native = window.EventSource;
       window.EventSource = class extends Native {
@@ -1688,7 +1797,7 @@ def control_feed(page):
     })();""")
 
 
-def hold_code_reads(page, endpoint=None):
+def hold_code_reads(page: Page, endpoint: str | None = None):
     page.evaluate(
         """endpoint => {
       const original = window.fetch;
@@ -1712,7 +1821,7 @@ def hold_code_reads(page, endpoint=None):
     )
 
 
-def send_from_other_client(page, url, text):
+def send_from_other_client(page: Page, url: str, text: str):
     endpoint = url.replace("/admin/code/", "/admin/api/code/sessions/")
     detail = page.request.get(endpoint).json()
     response = page.request.post(
@@ -1730,7 +1839,11 @@ def send_from_other_client(page, url, text):
 
 @pytest.mark.parametrize("choice", ["off", "low", "medium", "high", "xhigh", "max"])
 def test_effort_options_persist_and_reach_the_harness(
-    page, admin_base_url, tmp_path, code_control, choice
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    choice: str,
 ):
     create_session(page, admin_base_url, tmp_path)
     effort = page.get_by_role("combobox", name="Effort", exact=True)
@@ -1752,7 +1865,11 @@ def test_effort_options_persist_and_reach_the_harness(
 
 
 def test_off_clears_effort_when_reasoning_becomes_unavailable(
-    page, context, admin_base_url, tmp_path, code_control
+    page: Page,
+    context: BrowserContext,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
 ):
     url = create_session(page, admin_base_url, tmp_path)
     effort = page.locator("#codeReasoning")
@@ -1792,7 +1909,7 @@ def test_off_clears_effort_when_reasoning_becomes_unavailable(
     ) as reset:
         effort.select_option("off")
     assert reset.value.json()["reasoning_effort"] == "off"
-    assert len(patches) == 1 and patches[0]["reasoning_effort"] == "off"
+    assert len(patches) == 1 and object_payload(patches[0])["reasoning_effort"] == "off"
     expect(page.locator("#codeSelectionError")).to_be_hidden()
     expect(page.locator("#codeSend")).to_be_enabled()
     page.reload()
@@ -1813,7 +1930,11 @@ def test_off_clears_effort_when_reasoning_becomes_unavailable(
 
 @pytest.mark.parametrize("status", ["completed", "failed"])
 def test_library_reconnect_retires_missed_completion_and_loads_real_outcome(
-    page, admin_base_url, tmp_path, code_control, status
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    status: RunStatus,
 ):
     control_feed(page)
     create_session(page, admin_base_url, tmp_path)
@@ -1862,7 +1983,11 @@ def test_library_reconnect_retires_missed_completion_and_loads_real_outcome(
 
 @pytest.mark.parametrize("snapshot_active", [False, True])
 def test_new_run_survives_delayed_reconnect_reads(
-    page, admin_base_url, tmp_path, code_control, snapshot_active
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    snapshot_active: bool,
 ):
     control_feed(page)
     url = create_session(page, admin_base_url, tmp_path)
@@ -1897,7 +2022,11 @@ def test_new_run_survives_delayed_reconnect_reads(
 
 @pytest.mark.parametrize("source", ["sse", "detail"])
 def test_stale_ready_snapshot_preserves_newer_activity(
-    page, admin_base_url, tmp_path, code_control, source
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    source: str,
 ):
     control_feed(page)
     url = create_session(page, admin_base_url, tmp_path)
@@ -1936,7 +2065,7 @@ def test_stale_ready_snapshot_preserves_newer_activity(
 
 @pytest.mark.parametrize("endpoint", ["sessions", "bootstrap"])
 def test_first_http_sync_failure_recovers_without_reloading(
-    page, admin_base_url, endpoint
+    page: Page, admin_base_url: str, endpoint: str
 ):
     page.add_init_script(
         """(endpoint => {
@@ -1961,9 +2090,9 @@ def test_first_http_sync_failure_recovers_without_reloading(
 
 
 def test_unavailable_feed_shows_reason_and_clears_it_on_recovery(
-    page, admin_base_url, code_control
+    page: Page, admin_base_url: str, code_control: CodeControl
 ):
-    async def availability(available):
+    async def availability(available: bool):
         await code_control.service.start()
         code_control.service._accepting = available
         code_control.service._message = (
@@ -1980,7 +2109,7 @@ def test_unavailable_feed_shows_reason_and_clears_it_on_recovery(
 
 
 def test_reconnect_retires_out_of_page_prompt_without_discarding_live_form_input(
-    page, admin_base_url, tmp_path, code_control
+    page: Page, admin_base_url: str, tmp_path: Path, code_control: CodeControl
 ):
     control_feed(page)
     create_session(page, admin_base_url, tmp_path)
@@ -2008,7 +2137,7 @@ def test_reconnect_retires_out_of_page_prompt_without_discarding_live_form_input
 
 
 def test_failed_reply_stays_after_its_output_once_and_not_in_composer(
-    page, admin_base_url, tmp_path, code_control
+    page: Page, admin_base_url: str, tmp_path: Path, code_control: CodeControl
 ):
     url = create_session(page, admin_base_url, tmp_path)
     send(page, "First")
@@ -2043,7 +2172,12 @@ def test_failed_reply_stays_after_its_output_once_and_not_in_composer(
 
 @pytest.mark.parametrize("refresh_first", [True, False])
 def test_model_effort_picker_syncs_tabs_and_keeps_missing_selection(
-    page, context, admin_base_url, tmp_path, code_control, refresh_first
+    page: Page,
+    context: BrowserContext,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    refresh_first: bool,
 ):
     code_control.harness.configurations["provider/other"] = "other"
     url = create_session(page, admin_base_url, tmp_path)
@@ -2081,7 +2215,7 @@ def test_model_effort_picker_syncs_tabs_and_keeps_missing_selection(
 
 
 def test_library_reconnect_removes_missed_deletion_and_searches_beyond_first_page(
-    page, admin_base_url, tmp_path, code_control
+    page: Page, admin_base_url: str, tmp_path: Path, code_control: CodeControl
 ):
     control_feed(page)
 
@@ -2122,7 +2256,12 @@ def test_library_reconnect_removes_missed_deletion_and_searches_beyond_first_pag
 
 @pytest.mark.parametrize("width,height", [(1440, 1000), (390, 844)])
 def test_code_composer_fits_viewport_and_preserves_focus(
-    page, admin_base_url, tmp_path, code_control, width, height
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    code_control: CodeControl,
+    width: int,
+    height: int,
 ):
     page.set_viewport_size({"width": width, "height": height})
     create_session(page, admin_base_url, tmp_path)
@@ -2140,7 +2279,7 @@ def test_code_composer_fits_viewport_and_preserves_focus(
         6,
     ]
     assert (
-        page.locator("#codeComposer").bounding_box()["y"]
-        + page.locator("#codeComposer").bounding_box()["height"]
+        visible_bounds(page.locator("#codeComposer"))["y"]
+        + visible_bounds(page.locator("#codeComposer"))["height"]
         <= height
     )

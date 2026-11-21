@@ -12,13 +12,14 @@ import httpx
 import pytest
 
 from free_claude_code.cli.commands import ServerStatus
+from smoke.desktop.conftest import InstalledDesktop
 from smoke.desktop.support import bundle_pids, capture, launched, wait_report
 
 ROOT = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS")
 
 
-def wait_status(port, *, previous=None):
+def wait_status(port: int, *, previous: str | None = None):
     deadline = time.monotonic() + 30
     with httpx.Client(trust_env=False, timeout=1) as client:
         while time.monotonic() < deadline:
@@ -34,13 +35,13 @@ def wait_status(port, *, previous=None):
     raise AssertionError("FCC did not serve a new running instance")
 
 
-def command(output, action):
+def command(output: Path, action: str):
     pending = output.with_suffix(".next-command")
     pending.write_text(action)
     pending.replace(output.with_suffix(".command"))
 
 
-def test_installed_native_app_lifecycle(installed_desktop):
+def test_installed_native_app_lifecycle(installed_desktop: InstalledDesktop):
     installed = installed_desktop
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1", 0))

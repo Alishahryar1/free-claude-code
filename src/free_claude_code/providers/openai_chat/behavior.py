@@ -81,7 +81,9 @@ class OpenAIChatBehavior:
         """Hook for provider-specific reasoning."""
         return iter(())
 
-    def retry_request_body(self, error: Exception, body: dict) -> Proposal | None:
+    def retry_request_body(
+        self, error: Exception, body: dict[str, Any]
+    ) -> Proposal | None:
         """Return a corrected request for one retry, or None."""
         return None
 

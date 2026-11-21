@@ -1,4 +1,7 @@
 import asyncio
+from collections.abc import AsyncIterator
+from pathlib import Path
+from typing import Any, Protocol, override
 
 import pytest
 import pytest_asyncio
@@ -14,7 +17,7 @@ pytestmark = [pytest.mark.live, pytest.mark.smoke_target("messaging")]
 @pytest.mark.asyncio
 @pytest.mark.parametrize("platform_name", ["discord", "telegram"])
 async def test_messaging_fake_full_flow_e2e(
-    driver_factory, platform_name: str, tmp_path
+    driver_factory: DriverFactory, platform_name: str, tmp_path: Path
 ) -> None:
     driver = await driver_factory(platform_name, tmp_path)
 
@@ -36,7 +39,7 @@ async def test_messaging_fake_full_flow_e2e(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("platform_name", ["discord", "telegram"])
 async def test_messaging_subagent_control_e2e(
-    driver_factory, platform_name: str, tmp_path
+    driver_factory: DriverFactory, platform_name: str, tmp_path: Path
 ) -> None:
     task_events = [
         {"type": "session_info", "session_id": "sess_task"},
@@ -69,7 +72,7 @@ async def test_messaging_subagent_control_e2e(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("platform_name", ["discord", "telegram"])
 async def test_messaging_commands_stop_clear_stats_e2e(
-    driver_factory, platform_name: str, tmp_path
+    driver_factory: DriverFactory, platform_name: str, tmp_path: Path
 ) -> None:
     driver = await driver_factory(platform_name, tmp_path)
     root = await driver.send("start work", message_id="root_1")
@@ -100,9 +103,9 @@ async def test_messaging_commands_stop_clear_stats_e2e(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("platform_name", ["discord", "telegram"])
 async def test_reply_clear_uses_literal_platform_subtree_e2e(
-    driver_factory,
+    driver_factory: DriverFactory,
     platform_name: str,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     driver = await driver_factory(platform_name, tmp_path)
     root = await driver.send("root", message_id="root")
@@ -164,7 +167,7 @@ async def test_reply_clear_uses_literal_platform_subtree_e2e(
 
 @pytest.mark.asyncio
 async def test_messaging_startup_notice_is_clearable_e2e(
-    driver_factory, tmp_path
+    driver_factory: DriverFactory, tmp_path: Path
 ) -> None:
     first_driver = await driver_factory("telegram", tmp_path)
     scope = MessageScope(platform="telegram", chat_id="chat_1")
@@ -211,15 +214,16 @@ async def test_messaging_startup_notice_is_clearable_e2e(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("platform_name", ["discord", "telegram"])
 async def test_messaging_active_stop_uses_status_only_e2e(
-    driver_factory,
+    driver_factory: DriverFactory,
     platform_name: str,
-    tmp_path,
-    monkeypatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     driver = await driver_factory(platform_name, tmp_path)
     started = asyncio.Event()
 
     class GatedActiveSession(FakeCLISession):
+        @override
         async def start_task(
             self,
             prompt: str,
@@ -280,7 +284,9 @@ async def test_messaging_active_stop_uses_status_only_e2e(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("platform_name", ["discord", "telegram"])
-async def test_tree_threading_e2e(driver_factory, platform_name: str, tmp_path) -> None:
+async def test_tree_threading_e2e(
+    driver_factory: DriverFactory, platform_name: str, tmp_path: Path
+) -> None:
     batches = [default_cli_events("sess_root"), default_cli_events("sess_branch")]
     driver = await driver_factory(platform_name, tmp_path, event_batches=batches)
 
@@ -302,16 +308,17 @@ async def test_tree_threading_e2e(driver_factory, platform_name: str, tmp_path) 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("platform_name", ["discord", "telegram"])
 async def test_messaging_queued_scoped_cancel_e2e(
-    driver_factory,
+    driver_factory: DriverFactory,
     platform_name: str,
-    tmp_path,
-    monkeypatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     driver = await driver_factory(platform_name, tmp_path)
     root_started = asyncio.Event()
     release_root = asyncio.Event()
 
     class GatedRootSession(FakeCLISession):
+        @override
         async def start_task(
             self,
             prompt: str,
@@ -408,7 +415,7 @@ async def test_messaging_queued_scoped_cancel_e2e(
 
 @pytest.mark.asyncio
 async def test_restart_restore_and_session_persistence_e2e(
-    driver_factory, tmp_path
+    driver_factory: DriverFactory, tmp_path: Path
 ) -> None:
     first = await driver_factory("telegram", tmp_path)
     root = await first.send("persist me", message_id="root_1")
@@ -447,9 +454,9 @@ async def test_restart_restore_and_session_persistence_e2e(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("platform_name", ["discord", "telegram"])
 async def test_same_message_ids_are_isolated_by_chat_e2e(
-    driver_factory,
+    driver_factory: DriverFactory,
     platform_name: str,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     driver = await driver_factory(platform_name, tmp_path)
     first = await driver.send("first chat", chat_id="chat_a", message_id="42")
@@ -475,7 +482,7 @@ async def test_same_message_ids_are_isolated_by_chat_e2e(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("platform_name", ["discord", "telegram"])
 async def test_voice_platform_fake_e2e(
-    driver_factory, platform_name: str, tmp_path
+    driver_factory: DriverFactory, platform_name: str, tmp_path: Path
 ) -> None:
     driver = await driver_factory(platform_name, tmp_path)
     driver.platform.seed_pending_voice("chat_1", "voice_msg_1", "voice_status_1")
@@ -498,12 +505,25 @@ async def test_voice_platform_fake_e2e(
     )
 
 
+class DriverFactory(Protocol):
+    async def __call__(
+        self,
+        platform_name: str,
+        tmp_path: Path,
+        event_batches: list[list[dict[str, Any]]] | None = None,
+    ) -> FakePlatformDriver: ...
+
+
 @pytest_asyncio.fixture
-async def driver_factory():
+async def driver_factory() -> AsyncIterator[DriverFactory]:
     drivers = []
 
-    async def create(*args, **kwargs):
-        driver = FakePlatformDriver(*args, **kwargs)
+    async def create(
+        platform_name: str,
+        tmp_path: Path,
+        event_batches: list[list[dict[str, Any]]] | None = None,
+    ) -> FakePlatformDriver:
+        driver = FakePlatformDriver(platform_name, tmp_path, event_batches)
         await driver.start()
         drivers.append(driver)
         return driver

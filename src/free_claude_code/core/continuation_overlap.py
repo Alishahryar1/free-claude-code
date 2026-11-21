@@ -145,7 +145,8 @@ class ContinuationOverlap:
                 break
         if terminal or candidate == self._expected or candidate not in self._expected:
             self._resolve(candidate, candidates)
-            frames, self._frames = self._frames, []
+            frames = self._frames
+            self._frames = []
             self._frame_bytes = 0
             self._check_size()
             return [

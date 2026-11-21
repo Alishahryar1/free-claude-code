@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from typing import Never
 from unittest.mock import patch
 
 import httpx
@@ -11,20 +13,33 @@ import pytest
 from fastapi.testclient import TestClient
 from openai import AsyncOpenAI
 
+from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.provider_catalog import GEMINI_DEFAULT_BASE
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.chat_completions.response import ChatResponseAccumulator
 from free_claude_code.core.gemini.response import GeminiResponseAccumulator
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.providers.gemini import GeminiProvider
 from free_claude_code.providers.open_router import OpenRouterProvider
 from tests.api.support import create_test_app, provider_manager_for_app
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    MockHandler,
+    immediate_admission,
+    make_provider_config,
+    mock_response,
+)
 from tests.providers.test_custom_provider import definition, provider
 from tests.providers.test_history_transports import _native
 from tests.providers.test_native_tool_arguments import tool_events
-from tests.wire_payload import array_payload, int_payload, object_payload
+from tests.wire_payload import (
+    array_payload,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 SCHEMA = {"type": "object", "properties": {"path": {"type": "string"}}}
 GEMINI_PARTS = [
@@ -37,19 +52,21 @@ GEMINI_PARTS = [
 
 
 @pytest.mark.parametrize("tool_type", [None, "custom", "web_search_20250305"])
-def test_messages_custom_tool_type_is_translated_to_native_gemini(tool_type):
+def test_messages_custom_tool_type_is_translated_to_native_gemini(
+    tool_type: str | None,
+):
     from tests.providers.test_gemini import _sse
 
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request | httpx2.Request):
         bodies.append(json.loads(request.content))
         return _sse([{"text": "hello"}])
 
     tool = {"name": "read", "description": "Read a file", "input_schema": SCHEMA}
     if tool_type is not None:
         tool["type"] = tool_type
-    with TestClient(matrix_app("gemini", reply)) as client:
+    with TestClient(matrix_app("gemini", native_reply=reply)) as client:
         response = client.post(
             "/v1/messages",
             json={
@@ -77,7 +94,7 @@ def test_messages_custom_tool_type_is_translated_to_native_gemini(tool_type):
         ]
 
 
-def source_events(protocol):
+def source_events(protocol: str):
     if protocol == "gemini":
         return [
             {
@@ -123,12 +140,33 @@ def source_events(protocol):
     return [{**event, "sequence_number": index} for index, event in enumerate(events)]
 
 
-def matrix_app(protocol, reply, *, max_attempts=2, model_fallbacks=None):
+def matrix_app(
+    protocol: str,
+    *,
+    native_reply: MockHandler[httpx.Request] | None = None,
+    sdk_reply: MockHandler[httpx2.Request] | None = None,
+    max_attempts: int = 2,
+    model_fallbacks: list[ModelFallback] | None = None,
+):
+    if protocol in {"gemini", "messages"}:
+        if native_reply is None:
+            raise ValueError(f"{protocol} requires native_reply")
+    elif sdk_reply is None:
+        raise ValueError(f"{protocol} requires sdk_reply")
+
+    async def native_handler(request: httpx.Request) -> httpx.Response:
+        assert native_reply is not None
+        return await mock_response(native_reply(request), httpx.Response)
+
+    async def sdk_handler(request: httpx2.Request) -> httpx2.Response:
+        assert sdk_reply is not None
+        return await mock_response(sdk_reply(request), httpx2.Response)
+
     if protocol == "gemini":
         instance = GeminiProvider(
             make_provider_config(api_key="upstream-key", base_url=GEMINI_DEFAULT_BASE),
             admission=immediate_admission(max_attempts=max_attempts),
-            transport=httpx.MockTransport(reply),
+            transport=httpx.MockTransport(native_handler),
         )
         provider_id = "gemini"
         settings = Settings(MODEL="gemini/models/backend")
@@ -137,7 +175,7 @@ def matrix_app(protocol, reply, *, max_attempts=2, model_fallbacks=None):
             api_key="upstream-key",
             base_url="https://upstream.invalid/v1",
             max_retries=0,
-            http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply)),
+            http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(sdk_handler)),
         )
         with patch(
             "free_claude_code.providers.openai_chat.client.AsyncOpenAI",
@@ -160,7 +198,9 @@ def matrix_app(protocol, reply, *, max_attempts=2, model_fallbacks=None):
             else "openai_responses",
             api_keys=["upstream-key"],
         )
-        instance = provider(configured, openai_handler=reply, messages_handler=reply)
+        instance = provider(
+            configured, openai_handler=sdk_reply, messages_handler=native_reply
+        )
         provider_id = configured.provider_id
         settings = Settings(
             MODEL=f"{provider_id}/backend", custom_providers=(configured,)
@@ -168,7 +208,29 @@ def matrix_app(protocol, reply, *, max_attempts=2, model_fallbacks=None):
     return create_test_app(settings, providers={provider_id: instance})
 
 
-def ingress_request(wire, streaming, history=None):
+@pytest.mark.parametrize(
+    ("protocol", "required"),
+    [
+        ("gemini", "native_reply"),
+        ("messages", "native_reply"),
+        ("chat", "sdk_reply"),
+        ("responses", "sdk_reply"),
+    ],
+)
+def test_matrix_requires_the_handler_for_its_protocol(protocol: str, required: str):
+    def unexpected_request(request: httpx.Request | httpx2.Request) -> Never:
+        raise AssertionError("A mismatched handler was invoked")
+
+    with pytest.raises(ValueError, match=required):
+        if required == "native_reply":
+            matrix_app(protocol, sdk_reply=unexpected_request)
+        else:
+            matrix_app(protocol, native_reply=unexpected_request)
+
+
+def ingress_request(
+    wire: str, streaming: bool, history: Sequence[Mapping[str, JsonValue]] | None = None
+):
     tools = (
         [{"name": "read", "input_schema": SCHEMA}]
         if wire == "messages"
@@ -191,7 +253,7 @@ def ingress_request(wire, streaming, history=None):
             ],
             "generationConfig": {"thinkingConfig": {"includeThoughts": True}},
         }
-    body = {
+    body: JsonObject = {
         "model": "public",
         "stream": streaming,
         "tools": tools,
@@ -203,7 +265,7 @@ def ingress_request(wire, streaming, history=None):
     return "/v1/chat/completions" if wire == "chat" else f"/v1/{wire}", body
 
 
-def response_value(response, wire, streaming):
+def response_value(response: httpx.Response, wire: str, streaming: bool):
     assert response.status_code == 200, response.text
     if not streaming:
         return response.json()
@@ -233,11 +295,15 @@ def response_value(response, wire, streaming):
     return accumulator.result()
 
 
-def reply_history(value, wire):
+def reply_history(value: JsonObject, wire: str):
     initial = {"role": "user", "content": "hello"}
     if wire == "messages":
-        call = next(block for block in value["content"] if block["type"] == "tool_use")
-        assert call["input"] == {"path": "kept"}
+        call = next(
+            block
+            for block in object_array(value["content"])
+            if object_payload(block)["type"] == "tool_use"
+        )
+        assert object_payload(call)["input"] == {"path": "kept"}
         return [
             initial,
             {"role": "assistant", "content": value["content"]},
@@ -246,38 +312,54 @@ def reply_history(value, wire):
                 "content": [
                     {
                         "type": "tool_result",
-                        "tool_use_id": call["id"],
+                        "tool_use_id": object_payload(call)["id"],
                         "content": "tool-value",
                     }
                 ],
             },
         ]
     if wire == "responses":
-        call = next(item for item in value["output"] if item["type"] == "function_call")
-        assert json.loads(call["arguments"]) == {"path": "kept"}
+        call = next(
+            item
+            for item in object_array(value["output"])
+            if object_payload(item)["type"] == "function_call"
+        )
+        assert json.loads(string_payload(object_payload(call)["arguments"])) == {
+            "path": "kept"
+        }
         return [
             initial,
-            *value["output"],
+            *object_array(value["output"]),
             {
                 "type": "function_call_output",
-                "call_id": call["call_id"],
+                "call_id": object_payload(call)["call_id"],
                 "output": "tool-value",
             },
         ]
     if wire == "chat":
-        message = value["choices"][0]["message"]
-        call = message["tool_calls"][0]
-        assert json.loads(call["function"]["arguments"]) == {"path": "kept"}
+        message = object_payload(array_payload(value["choices"])[0])["message"]
+        call = array_payload(object_payload(message)["tool_calls"])[0]
+        assert json.loads(
+            string_payload(
+                object_payload(object_payload(call)["function"])["arguments"]
+            )
+        ) == {"path": "kept"}
         return [
             initial,
             message,
-            {"role": "tool", "tool_call_id": call["id"], "content": "tool-value"},
+            {
+                "role": "tool",
+                "tool_call_id": object_payload(call)["id"],
+                "content": "tool-value",
+            },
         ]
-    content = value["candidates"][0]["content"]
+    content = object_payload(array_payload(value["candidates"])[0])["content"]
     call = next(
-        part["functionCall"] for part in content["parts"] if "functionCall" in part
+        object_payload(part)["functionCall"]
+        for part in object_array(object_payload(content)["parts"])
+        if "functionCall" in part
     )
-    assert call["args"] == {"path": "kept"}
+    assert object_payload(call)["args"] == {"path": "kept"}
     return [
         {"role": "user", "parts": [{"text": "hello"}]},
         content,
@@ -286,7 +368,7 @@ def reply_history(value, wire):
             "parts": [
                 {
                     "functionResponse": {
-                        "id": call["id"],
+                        "id": object_payload(call)["id"],
                         "name": "read",
                         "response": {"output": "tool-value"},
                     }
@@ -307,11 +389,11 @@ def reply_history(value, wire):
     ],
 )
 def test_all_sixteen_paths_replay_native_state_and_tool_results(
-    protocol, wire, streaming
+    protocol: str, wire: str, streaming: bool
 ):
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request | httpx2.Request):
         bodies.append(json.loads(request.content))
         events = source_events(protocol)
         raw = "".join(
@@ -324,7 +406,7 @@ def test_all_sixteen_paths_replay_native_state_and_tool_results(
         )
         return response(200, headers={"content-type": "text/event-stream"}, text=raw)
 
-    app = matrix_app(protocol, reply)
+    app = matrix_app(protocol, native_reply=reply, sdk_reply=reply)
     with TestClient(app) as client:
         path, body = ingress_request(wire, streaming)
         first = response_value(client.post(path, json=body), wire, streaming)

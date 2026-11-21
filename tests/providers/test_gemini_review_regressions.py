@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import replace
+from typing import Literal
 
 import httpx2
 import pytest
@@ -16,6 +17,7 @@ from free_claude_code.core.history_replay import ReplayOrigin, ReplayRecord
 from free_claude_code.providers.deepseek.client import _PROFILE, DeepSeekChatBehavior
 from free_claude_code.providers.google_openai.provider import GoogleChatBehavior
 from free_claude_code.providers.openai_chat import OpenAIChatTransport
+from free_claude_code.providers.openai_chat.client import OpenAIAsyncCredentialProvider
 from free_claude_code.providers.vertex.client import _PROFILE as GOOGLE_PROFILE
 from tests.providers.support import immediate_admission
 from tests.providers.test_gemini_transport import chat_response, collect, gemini_request
@@ -26,7 +28,13 @@ from tests.providers.test_lmstudio import (
 )
 
 
-def transport(client, behavior, **kwargs):
+def transport(
+    client: AsyncOpenAI,
+    behavior: DeepSeekChatBehavior | GoogleChatBehavior,
+    *,
+    api_key_provider: OpenAIAsyncCredentialProvider | None = None,
+    endpoint_transport: httpx2.AsyncBaseTransport | None = None,
+):
     return OpenAIChatTransport(
         client=client,
         behavior=behavior,
@@ -34,7 +42,8 @@ def transport(client, behavior, **kwargs):
         read_timeout_s=2,
         log_raw_sse_events=False,
         log_api_error_tracebacks=False,
-        **kwargs,
+        api_key_provider=api_key_provider,
+        endpoint_transport=endpoint_transport,
     )
 
 
@@ -51,10 +60,12 @@ CALL = {
 @pytest.mark.parametrize("visible", [False, True])
 @pytest.mark.parametrize("with_call", [False, True])
 @pytest.mark.parametrize("field", ["reasoning_content", "reasoning"])
-async def test_plain_reasoning_survives_gemini_round_trip(visible, with_call, field):
+async def test_plain_reasoning_survives_gemini_round_trip(
+    visible: bool, with_call: bool, field: Literal["reasoning_content", "reasoning"]
+):
     sent = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         sent.append(json.loads(request.content))
         return chat_response(
             [
@@ -120,7 +131,7 @@ async def test_google_signature_cache_does_not_cross_credentials():
         "extra_content": {"google": {"thought_signature": "account-a-signature"}},
     }
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         sent.append(json.loads(request.content))
         return chat_response([{"tool_calls": [call]}], finish="tool_calls")
 
@@ -161,10 +172,10 @@ async def test_google_signature_cache_does_not_cross_credentials():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["replay", "image"])
-async def test_lmstudio_counts_projected_replay_and_images(kind):
+async def test_lmstudio_counts_projected_replay_and_images(kind: str):
     sent = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         if request.method == "GET":
             return metadata_response(100 if kind == "image" else 1024)
         sent.append(json.loads(request.content))

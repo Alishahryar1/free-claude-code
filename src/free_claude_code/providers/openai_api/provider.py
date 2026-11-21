@@ -2,6 +2,7 @@
 
 import re
 from collections.abc import AsyncIterator, Mapping
+from typing import override
 
 import httpx2
 from openai import APIError, APIStatusError, AsyncOpenAI, DefaultAsyncHttpx2Client
@@ -148,6 +149,7 @@ class OpenAIAPIProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_chat(
         self,
         request: ChatRequest,
@@ -169,6 +171,7 @@ class OpenAIAPIProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_gemini(
         self,
         request: GeminiRequest,

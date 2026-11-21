@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from typing import override
 
 import httpx2
 import pytest
@@ -20,8 +21,20 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatTransport,
 )
 from tests.providers.request_factory import make_messages_request
+from tests.providers.support import capture_openai_chat_wire_body
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_capture_rejects_stream_in_prepared_body():
+    with pytest.raises(TypeError, match="stream"):
+        await capture_openai_chat_wire_body(
+            {
+                "model": "model",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": False,
+            }
+        )
 
 
 def _transport(client: AsyncOpenAI) -> OpenAIChatTransport:
@@ -95,7 +108,9 @@ async def test_error_shaped_model_text_is_not_a_protocol_error() -> None:
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_borrowed_client_remains_usable_after_failed_and_successful_turns(wire):
+async def test_borrowed_client_remains_usable_after_failed_and_successful_turns(
+    wire: str,
+):
     calls = 0
 
     def reply(request: httpx2.Request) -> httpx2.Response:
@@ -124,16 +139,18 @@ async def test_borrowed_client_remains_usable_after_failed_and_successful_turns(
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_cancelled_turn_closes_its_stream_and_releases_admission(wire):
+async def test_cancelled_turn_closes_its_stream_and_releases_admission(wire: str):
     reading = asyncio.Event()
     closed = asyncio.Event()
 
     class BlockedStream(httpx2.AsyncByteStream):
+        @override
         async def __aiter__(self) -> AsyncIterator[bytes]:
             reading.set()
             await asyncio.Event().wait()
             yield b""
 
+        @override
         async def aclose(self) -> None:
             closed.set()
 

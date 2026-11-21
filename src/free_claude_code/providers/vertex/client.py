@@ -1,7 +1,7 @@
 """Google Vertex AI provider using the OpenAI-compatible Chat Completions API."""
 
 from dataclasses import replace
-from typing import Any
+from typing import Any, override
 
 import httpx
 
@@ -79,6 +79,7 @@ class VertexProvider(GoogleOpenAIProvider):
             default_headers={"x-goog-user-project": self._project_id},
         )
 
+    @override
     async def cleanup(self) -> None:
         """Release both OpenAI-compatible and native model-list clients."""
         try:
@@ -86,6 +87,7 @@ class VertexProvider(GoogleOpenAIProvider):
         finally:
             await self._model_list_client.aclose()
 
+    @override
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
         """List Vertex publisher models and translate their resource names."""
         model_ids: set[str] = set()

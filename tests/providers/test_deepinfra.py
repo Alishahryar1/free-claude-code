@@ -225,9 +225,10 @@ def test_build_request_body_replays_documented_reasoning_content(
 
 @pytest.mark.asyncio
 async def test_lists_only_active_text_models_with_thinking_metadata(
+    monkeypatch: pytest.MonkeyPatch,
     deepinfra_provider: OpenAIChatProvider,
 ) -> None:
-    deepinfra_provider._client.get = AsyncMock(
+    mock_get = AsyncMock(
         return_value=[
             _catalog_model("reasoning-model", tags=("openai", "reasoning", "tools")),
             _catalog_model("plain-model", tags=("openai", "non-reasoning", "tools")),
@@ -241,6 +242,7 @@ async def test_lists_only_active_text_models_with_thinking_metadata(
             _catalog_model("image-model", reported_type="text-to-image"),
         ]
     )
+    monkeypatch.setattr(deepinfra_provider._client, "get", mock_get)
 
     model_infos = await deepinfra_provider.list_model_infos()
 
@@ -256,7 +258,7 @@ async def test_lists_only_active_text_models_with_thinking_metadata(
             ProviderModelInfo("unknown-model"),
         }
     )
-    deepinfra_provider._client.get.assert_awaited_once_with(
+    mock_get.assert_awaited_once_with(
         _CATALOG_URL,
         cast_to=object,
     )
@@ -330,11 +332,14 @@ async def test_model_catalog_uses_absolute_public_url() -> None:
 )
 @pytest.mark.asyncio
 async def test_rejects_malformed_or_unusable_catalog_atomically(
+    monkeypatch: pytest.MonkeyPatch,
     deepinfra_provider: OpenAIChatProvider,
     payload: object,
     message: str,
 ) -> None:
-    deepinfra_provider._client.get = AsyncMock(return_value=payload)
+    monkeypatch.setattr(
+        deepinfra_provider._client, "get", AsyncMock(return_value=payload)
+    )
 
     with pytest.raises(ModelListResponseError, match=message):
         await deepinfra_provider.list_model_infos()
@@ -343,10 +348,15 @@ async def test_rejects_malformed_or_unusable_catalog_atomically(
 @pytest.mark.parametrize("tags", [_MISSING, None, [7], "reasoning"])
 @pytest.mark.asyncio
 async def test_malformed_optional_tags_leave_reasoning_unknown(
+    monkeypatch: pytest.MonkeyPatch,
     deepinfra_provider: OpenAIChatProvider,
     tags: object,
 ) -> None:
-    deepinfra_provider._client.get = AsyncMock(return_value=[_catalog_model(tags=tags)])
+    monkeypatch.setattr(
+        deepinfra_provider._client,
+        "get",
+        AsyncMock(return_value=[_catalog_model(tags=tags)]),
+    )
 
     assert await deepinfra_provider.list_model_infos() == frozenset(
         {ProviderModelInfo("model")}
@@ -355,6 +365,7 @@ async def test_malformed_optional_tags_leave_reasoning_unknown(
 
 @pytest.mark.asyncio
 async def test_model_catalog_uses_shared_retry_admission(
+    monkeypatch: pytest.MonkeyPatch,
     deepinfra_provider: OpenAIChatProvider,
 ) -> None:
     request = httpx.Request("GET", _CATALOG_URL)
@@ -364,12 +375,13 @@ async def test_model_catalog_uses_shared_retry_admission(
         request=request,
         response=response,
     )
-    deepinfra_provider._client.get = AsyncMock(
+    mock_get_next = AsyncMock(
         side_effect=[
             rate_limit_error,
             [_catalog_model(_MODEL, tags=("reasoning", "tools"))],
         ]
     )
+    monkeypatch.setattr(deepinfra_provider._client, "get", mock_get_next)
 
     model_infos = await deepinfra_provider.list_model_infos()
 
@@ -381,4 +393,4 @@ async def test_model_catalog_uses_shared_retry_admission(
             )
         }
     )
-    assert deepinfra_provider._client.get.await_count == 2
+    assert mock_get_next.await_count == 2

@@ -1,6 +1,7 @@
 """Tests for Discord platform adapter."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,6 +16,7 @@ from free_claude_code.messaging.platforms.discord_inbound import (
     parse_allowed_channels,
 )
 from free_claude_code.messaging.platforms.discord_io import truncate_discord_message
+from free_claude_code.messaging.voice import Transcriber
 
 
 def _limiter_mock() -> MagicMock:
@@ -24,12 +26,22 @@ def _limiter_mock() -> MagicMock:
     return limiter
 
 
-def _discord_runtime(*args, limiter=None, transcriber=None, **kwargs) -> DiscordRuntime:
+def _discord_runtime(
+    bot_token: str | None = None,
+    allowed_channel_ids: str | None = None,
+    *,
+    limiter: MagicMock | None = None,
+    transcriber: Transcriber | None = None,
+    log_raw_messaging_content: bool = False,
+    log_api_error_tracebacks: bool = False,
+) -> DiscordRuntime:
     return DiscordRuntime(
-        *args,
+        bot_token,
+        allowed_channel_ids,
         limiter=limiter or _limiter_mock(),
         transcriber=transcriber,
-        **kwargs,
+        log_raw_messaging_content=log_raw_messaging_content,
+        log_api_error_tracebacks=log_api_error_tracebacks,
     )
 
 
@@ -190,13 +202,18 @@ class TestDiscordRuntime:
             await platform.outbound.send_message("123", "Hello")
 
     @pytest.mark.asyncio
-    async def test_queue_send_message_uses_required_limiter(self):
+    async def test_queue_send_message_uses_required_limiter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
         platform = _discord_runtime(bot_token="token")
 
-        async def enqueue(operation, dedup_key=None):
+        async def enqueue(
+            operation: Callable[[], Awaitable[object]], dedup_key: object = None
+        ):
             return await operation()
 
-        platform._limiter.enqueue = AsyncMock(side_effect=enqueue)
+        mock_enqueue = AsyncMock(side_effect=enqueue)
+        monkeypatch.setattr(platform._limiter, "enqueue", mock_enqueue)
         platform._connected = True
         mock_channel = AsyncMock()
         mock_msg = MagicMock()
@@ -209,17 +226,22 @@ class TestDiscordRuntime:
                 "123", "hi", fire_and_forget=False
             )
         assert result == "42"
-        platform._limiter.enqueue.assert_awaited_once()
+        mock_enqueue.assert_awaited_once()
         mock_channel.send.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_queue_edit_message_uses_required_limiter(self):
+    async def test_queue_edit_message_uses_required_limiter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
         platform = _discord_runtime(bot_token="token")
 
-        async def enqueue(operation, dedup_key=None):
+        async def enqueue(
+            operation: Callable[[], Awaitable[object]], dedup_key: object = None
+        ):
             return await operation()
 
-        platform._limiter.enqueue = AsyncMock(side_effect=enqueue)
+        mock_enqueue_next = AsyncMock(side_effect=enqueue)
+        monkeypatch.setattr(platform._limiter, "enqueue", mock_enqueue_next)
         platform._connected = True
         mock_msg = AsyncMock()
         mock_channel = AsyncMock()
@@ -230,7 +252,7 @@ class TestDiscordRuntime:
             await platform.outbound.queue_edit_message(
                 "123", "456", "Updated", fire_and_forget=False
             )
-        platform._limiter.enqueue.assert_awaited_once()
+        mock_enqueue_next.assert_awaited_once()
         mock_msg.edit.assert_called_once_with(content="Updated")
 
     @pytest.mark.asyncio
@@ -599,7 +621,7 @@ class TestDiscordRuntime:
 
 
 @pytest.fixture
-def discord_sleeps(monkeypatch):
+def discord_sleeps(monkeypatch: pytest.MonkeyPatch):
     sleep = AsyncMock()
     monkeypatch.setattr(asyncio, "sleep", sleep)
     return sleep
@@ -633,7 +655,7 @@ class TestDiscordDeliveryRetry:
 
     @pytest.mark.asyncio
     async def test_edit_is_delivered_after_a_linux_connection_reset(
-        self, discord_sleeps
+        self, discord_sleeps: AsyncMock
     ):
         import aiohttp
 
@@ -650,7 +672,7 @@ class TestDiscordDeliveryRetry:
         msg.edit.assert_awaited_with(content="Stopped.")
 
     @pytest.mark.asyncio
-    async def test_send_is_retried_with_the_same_nonce(self, discord_sleeps):
+    async def test_send_is_retried_with_the_same_nonce(self, discord_sleeps: AsyncMock):
         import aiohttp
 
         sent = MagicMock()
@@ -667,7 +689,7 @@ class TestDiscordDeliveryRetry:
         assert nonces[0] == nonces[1]
 
     @pytest.mark.asyncio
-    async def test_rejected_edit_is_not_retried(self, discord_sleeps):
+    async def test_rejected_edit_is_not_retried(self, discord_sleeps: AsyncMock):
         msg = AsyncMock()
         msg.edit = AsyncMock(side_effect=_http_exception(400))
         channel = AsyncMock()
@@ -680,7 +702,9 @@ class TestDiscordDeliveryRetry:
         discord_sleeps.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_network_failures_stop_after_the_attempt_budget(self, discord_sleeps):
+    async def test_network_failures_stop_after_the_attempt_budget(
+        self, discord_sleeps: AsyncMock
+    ):
         import aiohttp
 
         from free_claude_code.messaging.delivery_failures import MAX_ATTEMPTS
@@ -698,7 +722,9 @@ class TestDiscordDeliveryRetry:
         assert msg.edit.await_count == MAX_ATTEMPTS
 
     @pytest.mark.asyncio
-    async def test_edit_is_delivered_after_a_truncated_response(self, discord_sleeps):
+    async def test_edit_is_delivered_after_a_truncated_response(
+        self, discord_sleeps: AsyncMock
+    ):
         import aiohttp
 
         msg = AsyncMock()
@@ -716,7 +742,7 @@ class TestDiscordDeliveryRetry:
         msg.edit.assert_awaited_once_with(content="Stopped.")
 
     @pytest.mark.asyncio
-    async def test_certificate_failure_is_not_retried(self, discord_sleeps):
+    async def test_certificate_failure_is_not_retried(self, discord_sleeps: AsyncMock):
         import aiohttp
 
         channel = AsyncMock()

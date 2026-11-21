@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import aclosing
 from functools import partial
-from typing import Any
+from typing import Any, override
 from urllib.parse import quote
 
 import httpx
@@ -200,9 +200,11 @@ class _GeminiAttempt(TransportAttempt):
         self._origin: ReplayOrigin | None = None
 
     @property
+    @override
     def normal_stop_seen(self) -> bool:
         return self._presenter is not None and self._presenter.normal_stop_seen
 
+    @override
     async def prepare(self) -> None:
         context = self.context
         snapshot = await self._endpoint.resolve()
@@ -232,6 +234,7 @@ class _GeminiAttempt(TransportAttempt):
             },
         )
 
+    @override
     async def stream(self, scope: ProviderAttemptScope) -> AsyncIterator[StreamOutput]:
         assert self._request is not None and self._origin is not None
         history = self.context.history

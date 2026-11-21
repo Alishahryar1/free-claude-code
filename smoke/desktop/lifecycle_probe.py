@@ -5,7 +5,9 @@ import multiprocessing
 import os
 import sys
 import traceback
+from collections.abc import Callable, Sequence
 from importlib import import_module
+from multiprocessing.queues import Queue
 from pathlib import Path
 from typing import Never
 from unittest.mock import patch
@@ -13,7 +15,7 @@ from unittest.mock import patch
 _installed = False
 
 
-def _spawned_child(queue):
+def _spawned_child(queue: Queue[dict[str, str | None]]):
     import free_claude_code
 
     queue.put(
@@ -60,11 +62,15 @@ def install():
     if "FCC_NATIVE_DIALOG_RESULT" in os.environ:
         original_exec = os.execv
 
-        def dialog_exec(path, argv, /) -> Never:
+        def dialog_exec(
+            path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            argv: Sequence[str | bytes],
+            /,
+        ) -> Never:
             if path == "/usr/bin/osascript":
                 print(os.environ["FCC_NATIVE_DIALOG_RESULT"], flush=True)
                 raise SystemExit(0)
-            original_exec(path, argv)
+            original_exec(path, tuple(argv))
 
         patch.object(os, "execv", dialog_exec).start()
     identity = import_module("fcc_identity_probe")
@@ -78,16 +84,21 @@ def install():
     from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 
     # Keep the real tray/server lifecycle, with external discovery and harness writes disabled.
-    ProviderRuntimeManager.start_model_list_refresh = lambda self: None
+    def skip_refresh(manager: ProviderRuntimeManager) -> None:
+        pass
 
-    async def no_integrations(self):
+    patch.object(
+        ProviderRuntimeManager, "start_model_list_refresh", skip_refresh
+    ).start()
+
+    async def no_integrations(service: IntegrationService):
         return None
 
-    IntegrationService.start = no_integrations
+    patch.object(IntegrationService, "start", no_integrations).start()
     original_run = PystrayDesktopTray.run
     Foundation = import_module("Foundation")
 
-    def observed_run(self, setup):
+    def observed_run(self: PystrayDesktopTray, setup: Callable[[], None]):
         output = Path(os.environ["FCC_MACOS_PROBE_OUTPUT"])
         control = output.with_suffix(".command")
         report = identity.process_report()
@@ -124,4 +135,4 @@ def install():
             report["loop_finished"] = True
             identity.write_report(output, report)
 
-    PystrayDesktopTray.run = observed_run
+    patch.object(PystrayDesktopTray, "run", observed_run).start()

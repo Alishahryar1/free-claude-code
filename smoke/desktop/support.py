@@ -6,11 +6,13 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager, suppress
 from pathlib import Path
+from typing import Any
 
 
-def pid_alive(pid):
+def pid_alive(pid: int):
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -18,16 +20,21 @@ def pid_alive(pid):
     return True
 
 
-def wait_exit(pid):
+def wait_exit(pid: int):
     deadline = time.monotonic() + 10
     while pid_alive(pid) and time.monotonic() < deadline:
         time.sleep(0.1)
     assert not pid_alive(pid), f"Test process {pid} did not exit"
 
 
-def wait_report(output, predicate, process, timeout=30):
+def wait_report(
+    output: Path,
+    predicate: Callable[[dict[str, Any]], object],
+    process: subprocess.Popen[str] | subprocess.Popen[bytes],
+    timeout: float = 30,
+) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
-    report = {}
+    report: dict[str, Any] = {}
     while time.monotonic() < deadline:
         if output.exists():
             report = json.loads(output.read_text())
@@ -42,7 +49,7 @@ def wait_report(output, predicate, process, timeout=30):
     raise AssertionError(f"Native observation timed out: {report}")
 
 
-def capture(output):
+def capture(output: Path):
     result = subprocess.run(
         ["/usr/sbin/screencapture", "-x", str(output.with_suffix(".png"))],
         capture_output=True,
@@ -69,7 +76,7 @@ def process_paths():
     return result
 
 
-def bundle_pids(app):
+def bundle_pids(app: Path):
     return {
         pid
         for pid, executable in process_paths().items()
@@ -78,7 +85,14 @@ def bundle_pids(app):
 
 
 @contextmanager
-def launched(app, output, env, *, args=(), wait=True):
+def launched(
+    app: Path,
+    output: Path,
+    env: dict[str, str],
+    *,
+    args: Sequence[str] = (),
+    wait: bool = True,
+) -> Generator[subprocess.Popen[str]]:
     existing = set(process_paths())
     for path in (
         output,

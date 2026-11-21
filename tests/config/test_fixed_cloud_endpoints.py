@@ -17,7 +17,9 @@ from tests.api.support import create_test_app
     ],
 )
 @pytest.mark.parametrize("source", ["managed", "process", "both"])
-def test_retired_url_cannot_override_cloud_endpoint(provider_id, retired_key, source):
+def test_retired_url_cannot_override_cloud_endpoint(
+    provider_id: str, retired_key: str, source: str
+):
     descriptor = PROVIDER_CATALOG[provider_id]
     assert descriptor.credential_env is not None
     managed = {descriptor.credential_env: "test-key"}

@@ -1,10 +1,12 @@
 import json
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.harnesses import jetbrains_acp_integration as jb
 from free_claude_code.harnesses.jetbrains_acp_integration import (
     registry_path,
@@ -12,12 +14,14 @@ from free_claude_code.harnesses.jetbrains_acp_integration import (
 )
 
 
-def write(path, value):
+def write(path: Path, value: JsonObject):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
-def install(registry, systems, version="0.79.0", ide="IDE 2026.2"):
+def install(
+    registry: Path, systems: Path, version: str = "0.79.0", ide: str = "IDE 2026.2"
+):
     write(
         registry,
         {
@@ -66,7 +70,7 @@ def install(registry, systems, version="0.79.0", ide="IDE 2026.2"):
 
 
 @pytest.fixture
-def files(tmp_path, monkeypatch):
+def files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     config, registry, systems = (
         tmp_path / "acp.json",
         tmp_path / "installed.json",
@@ -74,16 +78,24 @@ def files(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(jb, "registry_path", lambda: registry)
     monkeypatch.setattr(jb, "system_root", lambda: systems)
-    monkeypatch.setattr(jb.shutil, "which", lambda _: None)
-    monkeypatch.setattr(
-        jb.subprocess,
-        "run",
-        lambda args, **kw: subprocess.CompletedProcess(args, 0, "v24.19.0\n", ""),
-    )
+
+    def replace_which(_: object):
+        return None
+
+    monkeypatch.setattr(jb.shutil, "which", replace_which)
+
+    def run_probe(
+        args: Sequence[str], **options: object
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 0, "v24.19.0\n", "")
+
+    monkeypatch.setattr(jb.subprocess, "run", run_probe)
     return config, registry, systems
 
 
-def test_lifecycle_preserves_other_agents_and_refreshes_owned_settings(files):
+def test_lifecycle_preserves_other_agents_and_refreshes_owned_settings(
+    files: tuple[Path, Path, Path],
+):
     config, registry, systems = files
     node, script = install(registry, systems)
     original = registry.read_bytes()
@@ -138,7 +150,7 @@ def test_lifecycle_preserves_other_agents_and_refreshes_owned_settings(files):
     ]
 
 
-def test_missing_installation_never_creates_config(files):
+def test_missing_installation_never_creates_config(files: tuple[Path, Path, Path]):
     config, _, _ = files
     assert not jb.refresh_connected(config, "http://localhost:8082", "token")
     with pytest.raises(jb.SetupError):
@@ -156,7 +168,9 @@ def test_missing_installation_never_creates_config(files):
         '{"agent_servers":{},"agent_servers":{}}',
     ],
 )
-def test_invalid_or_unowned_configuration_is_never_overwritten(files, source):
+def test_invalid_or_unowned_configuration_is_never_overwritten(
+    files: tuple[Path, Path, Path], source: str
+):
     config, _, _ = files
     config.write_text(source)
     for action in [None, True, False]:
@@ -165,12 +179,18 @@ def test_invalid_or_unowned_configuration_is_never_overwritten(files, source):
         assert config.read_text() == source
 
 
-def test_status_and_disconnect_do_not_discover_or_run_programs(files, monkeypatch):
+def test_status_and_disconnect_do_not_discover_or_run_programs(
+    files: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
+):
     config, registry, systems = files
     install(registry, systems)
     jb.configure(config, "http://localhost:8082", "token", True)
     monkeypatch.setattr(jb, "registry_path", lambda: pytest.fail("registry access"))
-    monkeypatch.setattr(jb.subprocess, "run", lambda *a, **k: pytest.fail("subprocess"))
+
+    def replace_run(*a: object, **k: object):
+        return pytest.fail("subprocess")
+
+    monkeypatch.setattr(jb.subprocess, "run", replace_run)
     assert jb.configure(config, "http://localhost:8082", "token")["connected"]
     assert not jb.configure(config, "http://localhost:8082", "token", False)[
         "connected"
@@ -178,7 +198,9 @@ def test_status_and_disconnect_do_not_discover_or_run_programs(files, monkeypatc
 
 
 @pytest.mark.parametrize("fault", ["marker", "version", "escape", "engine", "node"])
-def test_unusable_installation_preserves_connected_entry(files, monkeypatch, fault):
+def test_unusable_installation_preserves_connected_entry(
+    files: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch, fault: str
+):
     config, registry, systems = files
     _, script = install(registry, systems)
     jb.configure(config, "http://localhost:8082", "token", True)
@@ -194,11 +216,13 @@ def test_unusable_installation_preserves_connected_entry(files, monkeypatch, fau
     elif fault == "engine":
         metadata["engines"]["node"] = "^22"
     else:
-        monkeypatch.setattr(
-            jb.subprocess,
-            "run",
-            lambda args, **kw: subprocess.CompletedProcess(args, 0, "v20.0.0", ""),
-        )
+
+        def run_probe(
+            args: Sequence[str], **options: object
+        ) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(args, 0, "v20.0.0", "")
+
+        monkeypatch.setattr(jb.subprocess, "run", run_probe)
     write(package, metadata)
     with pytest.raises(jb.SetupError):
         jb.refresh_connected(config, "http://localhost:8082", "new")
@@ -215,7 +239,12 @@ def test_unusable_installation_preserves_connected_entry(files, monkeypatch, fau
     ],
 )
 def test_platform_layout_and_launch(
-    files, monkeypatch, tmp_path, platform, data, cache
+    files: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    platform: str,
+    data: str,
+    cache: str,
 ):
     monkeypatch.setattr(jb, "sys", SimpleNamespace(platform=platform))
     monkeypatch.setattr(jb.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
@@ -232,7 +261,9 @@ def test_platform_layout_and_launch(
     assert entry["args"][0] == str(script)
 
 
-def test_previous_ide_is_preferred_and_system_node_is_fallback(files, monkeypatch):
+def test_previous_ide_is_preferred_and_system_node_is_fallback(
+    files: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
+):
     config, registry, systems = files
     node, script = install(registry, systems, ide="Z IDE")
     jb.configure(config, "http://localhost:8082", "token", True)
@@ -241,20 +272,26 @@ def test_previous_ide_is_preferred_and_system_node_is_fallback(files, monkeypatc
     system = config.parent / "system node.exe"
     system.touch()
     node.unlink()
-    monkeypatch.setattr(jb.shutil, "which", lambda _: str(system))
+
+    def replace_which(_: object):
+        return str(system)
+
+    monkeypatch.setattr(jb.shutil, "which", replace_which)
     jb.refresh_connected(config, "http://localhost:8082", "token")
     entry = json.loads(config.read_text())["agent_servers"]["Claude Code (FCC)"]
     assert entry["command"] == str(system.resolve())
     assert entry["args"][0] == str(script)
 
 
-def test_timed_out_node_leaves_config_unchanged(files, monkeypatch):
+def test_timed_out_node_leaves_config_unchanged(
+    files: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
+):
     config, registry, systems = files
     install(registry, systems)
     write(config, {"agent_servers": {"Other": {"command": "other"}}})
     before = config.read_bytes()
 
-    def timeout(args, **kwargs):
+    def timeout(args: list[str], **kwargs: object):
         assert kwargs["timeout"] == 3
         raise subprocess.TimeoutExpired(args, 3)
 
@@ -264,7 +301,9 @@ def test_timed_out_node_leaves_config_unchanged(files, monkeypatch):
     assert config.read_bytes() == before
 
 
-def test_failed_atomic_replace_preserves_existing_config(files, monkeypatch):
+def test_failed_atomic_replace_preserves_existing_config(
+    files: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
+):
     from free_claude_code.harnesses import config_file
 
     config, registry, systems = files
@@ -272,7 +311,7 @@ def test_failed_atomic_replace_preserves_existing_config(files, monkeypatch):
     write(config, {"agent_servers": {"Other": {"command": "other"}}})
     before = config.read_bytes()
 
-    def fail(*args):
+    def fail(*args: object):
         raise PermissionError("busy")
 
     monkeypatch.setattr(config_file.os, "replace", fail)

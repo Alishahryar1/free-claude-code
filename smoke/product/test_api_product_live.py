@@ -11,6 +11,7 @@ from smoke.lib.e2e import (
     assert_product_stream,
     echo_tool_schema,
 )
+from smoke.lib.server import RunningServer
 
 pytestmark = [pytest.mark.live, pytest.mark.smoke_target("api")]
 
@@ -34,7 +35,7 @@ def test_api_basic_conversation_e2e(smoke_config: SmokeConfig) -> None:
 
 
 def test_api_count_tokens_full_payload_e2e(
-    smoke_server,
+    smoke_server: RunningServer,
     smoke_config: SmokeConfig,
     smoke_headers: dict[str, str],
 ) -> None:
@@ -93,7 +94,7 @@ def test_api_count_tokens_full_payload_e2e(
 
 
 def test_api_error_shape_e2e(
-    smoke_server,
+    smoke_server: RunningServer,
     smoke_config: SmokeConfig,
     smoke_headers: dict[str, str],
 ) -> None:
@@ -109,7 +110,9 @@ def test_api_error_shape_e2e(
     assert payload["error"]["type"] == "invalid_request_error"
 
 
-def test_api_stop_e2e(smoke_server, smoke_headers: dict[str, str]) -> None:
+def test_api_stop_e2e(
+    smoke_server: RunningServer, smoke_headers: dict[str, str]
+) -> None:
     response = httpx.post(
         f"{smoke_server.base_url}/stop",
         headers=smoke_headers,

@@ -1,7 +1,9 @@
 import json
 import subprocess
+from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from pathlib import Path
+from typing import override
 from unittest.mock import MagicMock
 
 import httpx
@@ -11,6 +13,7 @@ from free_claude_code.config import env_migrations, paths
 from free_claude_code.config.env_migrations import atomic_write_managed_config
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject
 from smoke.lib import child_process
 from smoke.lib import e2e as smoke_e2e
 from smoke.lib import http as smoke_http
@@ -29,7 +32,7 @@ from smoke.product import test_provider_product_live as provider_smoke
 
 
 def test_isolated_smoke_client_uses_server_token_without_importing_legacy_config(
-    monkeypatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     original = paths.managed_env_path()
     atomic_write_managed_config({"ANTHROPIC_AUTH_TOKEN": "server-token"}, path=original)
@@ -104,7 +107,9 @@ def test_fcc_server_command_uses_cli_entrypoint() -> None:
     ]
 
 
-def test_start_server_disables_cli_admin_browser(monkeypatch, tmp_path: Path) -> None:
+def test_start_server_disables_cli_admin_browser(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     ManagedConfigStore().initialize({})
     captured: dict[str, object] = {}
 
@@ -132,10 +137,16 @@ def test_start_server_disables_cli_admin_browser(monkeypatch, tmp_path: Path) ->
 
     monkeypatch.setattr(smoke_server, "find_free_port", lambda: 4567)
     monkeypatch.setattr(smoke_server.subprocess, "Popen", FakeProcess)
-    monkeypatch.setattr(
-        smoke_server, "_wait_for_health", lambda _server, *, timeout_s: None
-    )
-    monkeypatch.setattr(smoke_server, "_stop_process", lambda _process: None)
+
+    def replace_wait_for_health(_server: object, *, timeout_s: object):
+        return None
+
+    monkeypatch.setattr(smoke_server, "_wait_for_health", replace_wait_for_health)
+
+    def replace_stop_process(_process: object):
+        return None
+
+    monkeypatch.setattr(smoke_server, "_stop_process", replace_stop_process)
 
     with smoke_server.start_server(config):
         pass
@@ -149,7 +160,7 @@ def test_start_server_disables_cli_admin_browser(monkeypatch, tmp_path: Path) ->
 
 
 def test_collect_message_stream_explicitly_requests_sse(
-    monkeypatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     captured: dict[str, object] = {}
 
@@ -158,7 +169,7 @@ def test_collect_message_stream_explicitly_requests_sse(
         return _FakeStreamResponse()
 
     monkeypatch.setattr(smoke_http.httpx, "stream", fake_stream)
-    payload = {"model": "m", "messages": [], "stream": False}
+    payload: JsonObject = {"model": "m", "messages": [], "stream": False}
 
     events = collect_message_stream(
         _running_server(tmp_path),
@@ -173,7 +184,7 @@ def test_collect_message_stream_explicitly_requests_sse(
 
 
 def test_conversation_driver_explicitly_requests_sse(
-    monkeypatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     captured: dict[str, object] = {}
 
@@ -182,7 +193,7 @@ def test_conversation_driver_explicitly_requests_sse(
         return _FakeStreamResponse()
 
     monkeypatch.setattr(smoke_e2e.httpx, "stream", fake_stream)
-    payload = {"model": "m", "messages": [], "stream": False}
+    payload: JsonObject = {"model": "m", "messages": [], "stream": False}
 
     turn = ConversationDriver(
         _running_server(tmp_path),
@@ -196,12 +207,14 @@ def test_conversation_driver_explicitly_requests_sse(
 
 
 def test_smoke_conversation_identity_survives_turns_and_tool_results(
-    monkeypatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     captured = []
 
-    def fake_stream(_method, _url, **kwargs):
-        captured.append(httpx.Headers(kwargs["headers"]))
+    def fake_stream(
+        _method: str, _url: str, *, headers: Mapping[str, str], **kwargs: object
+    ):
+        captured.append(httpx.Headers(headers))
         return _FakeStreamResponse()
 
     monkeypatch.setattr(smoke_e2e.httpx, "stream", fake_stream)
@@ -237,12 +250,12 @@ def test_smoke_conversation_identity_survives_turns_and_tool_results(
     "helper", [smoke_http.collect_message_stream, smoke_http.post_json]
 )
 def test_standalone_smoke_requests_identify_themselves_without_changing_auth(
-    monkeypatch, tmp_path: Path, helper
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, helper: Callable[..., object]
 ) -> None:
     captured = []
 
-    def capture(*args, **kwargs):
-        captured.append(httpx.Headers(kwargs["headers"]))
+    def capture(*args: object, headers: Mapping[str, str], **kwargs: object):
+        captured.append(httpx.Headers(headers))
         return _FakeStreamResponse()
 
     monkeypatch.setattr(smoke_http.httpx, "stream", capture)
@@ -268,10 +281,13 @@ def test_standalone_smoke_requests_identify_themselves_without_changing_auth(
     assert explicit["X-OpenCode-Session"] == "caller"
 
 
-def test_provider_responses_smoke_sends_conversation_identity(monkeypatch, tmp_path):
+def test_provider_responses_smoke_sends_conversation_identity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     captured = []
 
     class ResponsesStream(_FakeStreamResponse):
+        @override
         def iter_lines(self):
             return iter(
                 (
@@ -287,14 +303,17 @@ def test_provider_responses_smoke_sends_conversation_identity(monkeypatch, tmp_p
                 )
             )
 
-    def capture(*args, **kwargs):
-        captured.append(httpx.Headers(kwargs["headers"]))
+    def capture(*args: object, headers: Mapping[str, str], **kwargs: object):
+        captured.append(httpx.Headers(headers))
         return ResponsesStream()
+
+    def replace_server_for_provider(*args: object):
+        return nullcontext(_running_server(tmp_path))
 
     monkeypatch.setattr(
         provider_smoke,
         "_server_for_provider",
-        lambda *args: nullcontext(_running_server(tmp_path)),
+        replace_server_for_provider,
     )
     monkeypatch.setattr(provider_smoke.httpx, "stream", capture)
     model = ProviderModel("opencode_go", "opencode_go/minimax-m2.7", "test")
@@ -306,22 +325,29 @@ def test_provider_responses_smoke_sends_conversation_identity(monkeypatch, tmp_p
     assert all(h["user-agent"].startswith("fcc-smoke/") for h in captured)
 
 
-def test_disconnect_smoke_reuses_identity_for_followup(monkeypatch, tmp_path):
+def test_disconnect_smoke_reuses_identity_for_followup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     captured = []
 
-    def capture(*args, **kwargs):
-        captured.append(httpx.Headers(kwargs["headers"]))
+    def capture(*args: object, headers: Mapping[str, str], **kwargs: object):
+        captured.append(httpx.Headers(headers))
         return _FakeStreamResponse()
+
+    def replace_server_for_provider(*args: object):
+        return nullcontext(_running_server(tmp_path))
 
     monkeypatch.setattr(
         provider_smoke,
         "_server_for_provider",
-        lambda *args: nullcontext(_running_server(tmp_path)),
+        replace_server_for_provider,
     )
     monkeypatch.setattr(provider_smoke.httpx, "stream", capture)
-    monkeypatch.setattr(
-        provider_smoke.httpx, "get", lambda *args, **kwargs: httpx.Response(200)
-    )
+
+    def replace_get(*args: object, **kwargs: object):
+        return httpx.Response(200)
+
+    monkeypatch.setattr(provider_smoke.httpx, "get", replace_get)
     model = ProviderModel("opencode_go", "opencode_go/minimax-m2.7", "test")
     provider_smoke._scenario_disconnect(_smoke_config(tmp_path), model)
 
@@ -330,7 +356,9 @@ def test_disconnect_smoke_reuses_identity_for_followup(monkeypatch, tmp_path):
     assert all(h["user-agent"].startswith("fcc-smoke/") for h in captured)
 
 
-def test_run_captured_text_uses_utf8_replacement(monkeypatch, tmp_path: Path) -> None:
+def test_run_captured_text_uses_utf8_replacement(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     calls: dict[str, object] = {}
 
     def fake_run(

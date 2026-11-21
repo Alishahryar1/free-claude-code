@@ -40,7 +40,7 @@ def _request(
     return request, settings
 
 
-def _lease(*, provider=None, error: Exception | None = None):
+def _lease(*, provider: MagicMock | None = None, error: Exception | None = None):
     lease = MagicMock(spec=RequestRuntimeLease)
     lease.is_provider_cached.return_value = False
     if error is None:

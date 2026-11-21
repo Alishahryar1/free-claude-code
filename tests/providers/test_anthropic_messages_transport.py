@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
+from typing import override
 
 import httpx
 import pytest
@@ -54,11 +55,11 @@ from tests.providers.support import immediate_admission
 )
 @pytest.mark.parametrize("cap", [None, 4096])
 async def test_tolerant_classifier_corrects_required_reasoning(
-    stream_error, error, cap
+    stream_error: bool, error: JsonObject, cap: int | None
 ):
     bodies = []
 
-    def handler(request):
+    def handler(request: httpx.Request):
         body = json.loads(request.content)
         bodies.append(body)
         if body.get("thinking", {}).get("type") == "disabled":
@@ -199,12 +200,14 @@ class Wire(httpx.AsyncByteStream):
         self._on_close = closed
         self._close_gate = close_gate
 
+    @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
         for chunk in self.chunks:
             if isinstance(chunk, Exception):
                 raise chunk
             yield chunk
 
+    @override
     async def aclose(self) -> None:
         if self._close_gate is not None:
             await self._close_gate.wait()
@@ -274,11 +277,11 @@ def _transport(
     [(2048, 4096, 2048), (4096, 2048, 2048), (4096, None, 4096)],
 )
 async def test_model_metadata_cannot_relax_declared_profile_cap(
-    profile_cap, model_cap, expected
+    profile_cap: int, model_cap: int | None, expected: int
 ):
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         bodies.append(json.loads(request.content))
         return httpx.Response(
             200,
@@ -601,6 +604,7 @@ async def test_task_cancellation_closes_live_http_response() -> None:
     entered = asyncio.Event()
 
     class BlockingWire(Wire):
+        @override
         async def __aiter__(self) -> AsyncIterator[bytes]:
             yield _sse(*_events("x" * 70_000)[:3])
             entered.set()

@@ -14,6 +14,7 @@ from free_claude_code.core.diagnostics import (
     attach_upstream_error_body,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.failure_classification import classify
 from free_claude_code.providers.failure_reporting import finalize_provider_failure
 from free_claude_code.providers.recovery_errors import ProviderRecoveryExhausted
@@ -89,7 +90,9 @@ def test_stream_retry_classification_distinguishes_protocol_and_status() -> None
         {"error": {"type": "invalid_request_error", "code": 400}},
     ],
 )
-def test_structured_invalid_request_is_terminal_despite_transient_prose(body) -> None:
+def test_structured_invalid_request_is_terminal_despite_transient_prose(
+    body: JsonObject,
+) -> None:
     error = _statusless_openai_error("overloaded: rate limit", body)
     failure = finalize_provider_failure(
         error, provider_name="TEST", read_timeout_s=1, request_id="req_invalid"
@@ -122,7 +125,9 @@ def test_structured_invalid_request_is_terminal_despite_transient_prose(body) ->
         ),
     ],
 )
-def test_authoritative_rate_limit_status_beats_invalid_request_body(error) -> None:
+def test_authoritative_rate_limit_status_beats_invalid_request_body(
+    error: Exception,
+) -> None:
     failure = finalize_provider_failure(
         error, provider_name="TEST", read_timeout_s=1, request_id=None
     )
@@ -882,7 +887,7 @@ def test_shared_recovery_exhaustion_preserves_last_provider_failure() -> None:
 
 
 @pytest.mark.parametrize("deadline", [None, 1234.0])
-def test_recovery_rewrap_preserves_selected_cause_and_deadline(deadline):
+def test_recovery_rewrap_preserves_selected_cause_and_deadline(deadline: float | None):
     cause = RuntimeError("selected upstream error")
     first = ProviderRecoveryExhausted(cause, retry_not_before=deadline)
     copied = ProviderRecoveryExhausted(first)

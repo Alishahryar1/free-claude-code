@@ -16,6 +16,7 @@ from free_claude_code.core.history_replay import (
     ReplayRecord,
     encode_replay,
 )
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.anthropic_messages.transport import (
     AnthropicMessagesTransport,
@@ -35,7 +36,7 @@ from tests.providers.test_anthropic_messages_transport import (
     _transport,
 )
 from tests.providers.test_history_transports import _events_for, _harness, _saved_reply
-from tests.wire_payload import object_array, object_payload
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 def readable_history():
@@ -62,7 +63,7 @@ def readable_history():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("foreign_carrier", [False, True])
 async def test_deepseek_tool_history_keeps_empty_reasoning_after_native_filtering(
-    foreign_carrier,
+    foreign_carrier: bool,
 ):
     opaque = "cipher"
     if foreign_carrier:
@@ -114,8 +115,12 @@ async def test_deepseek_tool_history_keeps_empty_reasoning_after_native_filterin
     )
     original = request.model_dump()
 
-    def reply(bodies):
-        assistant = next(m for m in bodies[-1]["messages"] if m["role"] == "assistant")
+    def reply(bodies: list[JsonObject]):
+        assistant = next(
+            m
+            for m in object_array(bodies[-1]["messages"])
+            if object_payload(m)["role"] == "assistant"
+        )
         if "reasoning_content" not in assistant:
             return 400, {
                 "message": "Missing reasoning_content in assistant tool history"
@@ -160,7 +165,7 @@ async def test_deepseek_tool_history_keeps_empty_reasoning_after_native_filterin
 
 @pytest.mark.asyncio
 async def test_http_400_tries_all_current_none_without_changing_source():
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) < 3:
             return 400, {"type": "invalid_request_error", "message": "Rejected"}
         return 200, _events_for("chat")
@@ -192,8 +197,8 @@ async def test_http_400_tries_all_current_none_without_changing_source():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages"])
-async def test_modes_are_shared_across_transports_and_cached(protocol):
-    def reply(bodies):
+async def test_modes_are_shared_across_transports_and_cached(protocol: str):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) < 3:
             return 400, {"type": "invalid_request_error", "message": "Rejected"}
         return 200, _events_for(protocol)
@@ -212,8 +217,8 @@ async def test_modes_are_shared_across_transports_and_cached(protocol):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages"])
-async def test_cached_none_rejection_restores_all(protocol):
-    def reply(bodies):
+async def test_cached_none_rejection_restores_all(protocol: str):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) in {1, 2, 4}:
             return 400, {"message": "Rejected"}
         return 200, _events_for(protocol)
@@ -230,8 +235,8 @@ async def test_cached_none_rejection_restores_all(protocol):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages"])
 @pytest.mark.parametrize("status", [401, 403, 404, 422, 429, 500])
-async def test_non_400_does_not_change_mode(protocol, status):
-    def reply(bodies):
+async def test_non_400_does_not_change_mode(protocol: str, status: int):
+    def reply(bodies: object):
         return status, {"type": "invalid_request_error", "message": "Rejected"}
 
     async with _harness(protocol, reply, max_attempts=3) as (send, bodies, _):
@@ -245,10 +250,10 @@ async def test_non_400_does_not_change_mode(protocol, status):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages"])
-async def test_total_rejection_does_not_teach_success(protocol):
+async def test_total_rejection_does_not_teach_success(protocol: str):
     reject = True
 
-    def reply(bodies):
+    def reply(bodies: object):
         return (
             (400, {"message": "Rejected"}) if reject else (200, _events_for(protocol))
         )
@@ -264,7 +269,7 @@ async def test_total_rejection_does_not_teach_success(protocol):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages"])
-async def test_equivalent_current_and_none_are_not_sent_twice(protocol):
+async def test_equivalent_current_and_none_are_not_sent_twice(protocol: str):
     history = readable_history()[:3]
     async with _harness(protocol, lambda _: (400, {"message": "Rejected"})) as (
         send,
@@ -294,7 +299,7 @@ def cache_source():
 
 
 @pytest.mark.parametrize("dimension", ["endpoint", "model"])
-def test_destination_change_restarts_mode_order_and_seen_shapes(dimension):
+def test_destination_change_restarts_mode_order_and_seen_shapes(dimension: str):
     cache = HistoryModeCache()
     origin = cache_origin()
     state = HistoryNegotiation(cache, origin)
@@ -341,11 +346,13 @@ def test_credential_refresh_at_same_destination_keeps_negotiation_progress():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("new_status", [200, 400])
-async def test_auth_refresh_uses_new_endpoint_mode_with_same_attempt_budget(new_status):
+async def test_auth_refresh_uses_new_endpoint_mode_with_same_attempt_budget(
+    new_status: int,
+):
     class Endpoint:
         fresh = False
 
-        async def endpoint(self, *, force_refresh=False):
+        async def endpoint(self, *, force_refresh: bool = False):
             self.fresh |= force_refresh
             return HttpEndpoint(
                 "https://new.test/v1" if self.fresh else "https://old.test/v1",
@@ -355,7 +362,7 @@ async def test_auth_refresh_uses_new_endpoint_mode_with_same_attempt_budget(new_
 
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         bodies.append((request.url.host, json.loads(request.content)))
         if request.url.host == "old.test":
             return httpx.Response(
@@ -445,7 +452,7 @@ def test_cached_invalidation_keeps_update_token_but_cannot_replace_newer_accepta
         ("model", "other"),
     ],
 )
-def test_cache_dimensions(field, value):
+def test_cache_dimensions(field: str, value: str):
     cache = HistoryModeCache()
     origin = cache_origin()
     state = HistoryNegotiation(cache, origin)
@@ -453,10 +460,17 @@ def test_cache_dimensions(field, value):
     state.rejected()
     state.prepare(cache_source(), origin)
     state.accepted()
-    assert (
-        HistoryNegotiation(cache, replace(origin, **{field: value})).mode
-        is HistoryMode.ALL
-    )
+    if field == "protocol":
+        assert value == "responses"
+        other = replace(origin, protocol=value)
+    elif field == "provider":
+        other = replace(origin, provider=value)
+    elif field == "endpoint":
+        other = replace(origin, endpoint=value)
+    else:
+        assert field == "model"
+        other = replace(origin, model=value)
+    assert HistoryNegotiation(cache, other).mode is HistoryMode.ALL
     assert (
         HistoryNegotiation(cache, replace(origin, connection="another-account")).mode
         is HistoryMode.CURRENT
@@ -466,7 +480,7 @@ def test_cache_dimensions(field, value):
 
 
 def test_sdk_history_and_model_override_project_without_conflicting_overlay():
-    original = {
+    original: JsonObject = {
         "model": "wrong",
         "messages": [],
         "extra_body": {**cache_source(), "temperature": 0.4},
@@ -493,11 +507,13 @@ class _NativeEndpoint:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_native_messages_negotiates_stream_and_json_and_reuses_cache(streaming):
+async def test_native_messages_negotiates_stream_and_json_and_reuses_cache(
+    streaming: bool,
+):
     bodies = []
     cache = HistoryModeCache()
 
-    def respond(request):
+    def respond(request: httpx.Request):
         bodies.append(json.loads(request.content))
         if len(bodies) < 3:
             return httpx.Response(
@@ -621,7 +637,7 @@ def test_precise_native_repair_keeps_other_records_in_same_carrier():
 
 @pytest.mark.asyncio
 async def test_scoped_native_correction_then_all_restores_only_readable_source():
-    history = [
+    history: list[JsonObject] = [
         {
             "type": "reasoning",
             "content": [{"type": "reasoning_text", "text": "Old"}],
@@ -644,11 +660,14 @@ async def test_scoped_native_correction_then_all_restores_only_readable_source()
     ]
     original = deepcopy(history)
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) in {1, 2, 5}:
             return 400, {"message": "Rejected"}
         if len(bodies) == 4:
-            assert bodies[-1]["input"][0]["id"] == "rs_signed"
+            assert (
+                object_payload(array_payload(bodies[-1]["input"])[0])["id"]
+                == "rs_signed"
+            )
             return 400, {
                 "code": "invalid_encrypted_content",
                 "message": "Invalid cipher",
@@ -668,11 +687,11 @@ async def test_scoped_native_correction_then_all_restores_only_readable_source()
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages"])
 async def test_first_in_band_error_neither_changes_mode_nor_teaches_acceptance(
-    protocol,
+    protocol: str,
 ):
     reject = True
 
-    def reply(bodies):
+    def reply(bodies: object):
         if reject:
             event = {
                 "type": "error",
@@ -696,7 +715,7 @@ async def test_first_in_band_error_neither_changes_mode_nor_teaches_acceptance(
 
 @pytest.mark.asyncio
 async def test_non_history_correction_survives_all_three_modes():
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 400, {
                 "message": "Unsupported parameter: stream_options.include_usage"

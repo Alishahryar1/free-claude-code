@@ -8,6 +8,7 @@ from free_claude_code.application.reasoning import (
 )
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import (
     ReasoningControl,
@@ -16,8 +17,8 @@ from free_claude_code.core.reasoning import (
 )
 
 
-def _request(**overrides) -> MessagesRequest:
-    payload = {
+def _request(**overrides: JsonValue) -> MessagesRequest:
+    payload: JsonObject = {
         "model": "provider/model",
         "messages": [{"role": "user", "content": "hello"}],
     }

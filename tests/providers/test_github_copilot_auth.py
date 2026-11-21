@@ -5,6 +5,7 @@ import json
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
+from typing import override
 from unittest.mock import AsyncMock
 
 import pytest
@@ -302,6 +303,7 @@ async def test_cancel_reports_and_retains_failed_runtime_cleanup(
     class Runtime(FakeRuntime):
         fail_close = True
 
+        @override
         async def close(self) -> None:
             if self.fail_close:
                 raise CopilotUnavailable("Owned runtime could not be stopped.")

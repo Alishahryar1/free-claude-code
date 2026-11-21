@@ -3,13 +3,16 @@
 import asyncio
 import json
 from itertools import pairwise
+from typing import override
 
 import httpx
 import httpx2
 import pytest
 from openai import AsyncOpenAI
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.core.stream_output import completed_output
 from tests.api.test_delivered_stream_recovery import public_text, text_events
@@ -25,22 +28,27 @@ from tests.providers.test_native_tool_arguments import tool_events
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("metadata_first", [False, True])
 async def test_continuation_timeout_retains_delivered_output(
-    monkeypatch, protocol, wire, metadata_first
+    monkeypatch: pytest.MonkeyPatch,
+    protocol: str,
+    wire: WireProtocol,
+    metadata_first: bool,
 ):
     module = httpx if protocol == "messages" else httpx2
     closed = []
 
     class TimedOutStream(httpx.AsyncByteStream, httpx2.AsyncByteStream):
+        @override
         async def __aiter__(self):
             if metadata_first:
                 start = text_events(protocol, "")[0]
                 yield ("data: " + json.dumps(start) + "\n\n").encode()
             raise module.ReadTimeout("Continuation read timed out")
 
+        @override
         async def aclose(self):
             closed.append(True)
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events(protocol, "Hello ", complete=False)
         return 200, TimedOutStream()
@@ -109,7 +117,9 @@ async def test_continuation_timeout_retains_delivered_output(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("handoff", [False, True])
-async def test_pending_recovery_failure_does_not_require_successful_closures(handoff):
+async def test_pending_recovery_failure_does_not_require_successful_closures(
+    handoff: bool,
+):
     prefix = (
         tool_events("responses", '{"path":"x"}')[:-1]
         if handoff

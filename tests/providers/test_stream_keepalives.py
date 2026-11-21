@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+from collections.abc import AsyncIterable, Callable
 from contextlib import asynccontextmanager
+from typing import override
 
 import httpx
 import httpx2
@@ -48,13 +50,14 @@ READ_TIMEOUT = 0.2
 
 
 class Heartbeats(httpx.AsyncByteStream, httpx2.AsyncByteStream):
-    def __init__(self, frame, *, prefix=b""):
+    def __init__(self, frame: bytes, *, prefix: bytes = b""):
         self.frame = frame
         self.prefix = prefix
         self.started = asyncio.Event()
         self.closed = False
         self.reads = 0
 
+    @override
     async def __aiter__(self):
         if self.prefix:
             yield self.prefix
@@ -64,12 +67,19 @@ class Heartbeats(httpx.AsyncByteStream, httpx2.AsyncByteStream):
             self.reads += 1
             yield self.frame
 
+    @override
     async def aclose(self):
         self.closed = True
 
 
 @asynccontextmanager
-async def upstream(egress, body_factory, *, timeout=READ_TIMEOUT, attempts=1):
+async def upstream(
+    egress: str,
+    body_factory: Callable[[], httpx.AsyncByteStream | httpx2.AsyncByteStream],
+    *,
+    timeout: float | int = READ_TIMEOUT,
+    attempts: int = 1,
+):
     admission = ProviderAdmissionController(
         provider_name="TEST",
         rate_limit=10000,
@@ -81,11 +91,13 @@ async def upstream(egress, body_factory, *, timeout=READ_TIMEOUT, attempts=1):
         jitter=0,
     )
 
-    def reply(request):
+    def reply(request: object):
+        body = body_factory()
+        assert isinstance(body, httpx.AsyncByteStream)
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
-            stream=body_factory(),
+            stream=body,
         )
 
     http = httpx.AsyncClient(transport=httpx.MockTransport(reply))
@@ -93,11 +105,13 @@ async def upstream(egress, body_factory, *, timeout=READ_TIMEOUT, attempts=1):
     transport = None
     if egress in {"chat", "responses"}:
 
-        def sdk_reply(request):
+        def sdk_reply(request: object):
+            body = body_factory()
+            assert isinstance(body, httpx2.AsyncByteStream)
             return httpx2.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
-                stream=body_factory(),
+                stream=body,
             )
 
         sdk = AsyncOpenAI(
@@ -192,7 +206,7 @@ async def upstream(egress, body_factory, *, timeout=READ_TIMEOUT, attempts=1):
         admission.close()
 
 
-async def collect(stream):
+async def collect[T](stream: AsyncIterable[T]) -> list[T]:
     return [event async for event in stream]
 
 
@@ -206,7 +220,9 @@ async def collect(stream):
         b"event: ping\ndata: {}\n\n",
     ],
 )
-async def test_keepalive_only_upstream_times_out_and_releases_capacity(egress, frame):
+async def test_keepalive_only_upstream_times_out_and_releases_capacity(
+    egress: str, frame: bytes
+):
     if egress in {"chat", "responses"} and b"data: {}" in frame:
         pytest.skip("SDK does not retain arbitrary SSE names")
     wire = Heartbeats(frame)
@@ -226,7 +242,7 @@ async def test_keepalive_only_upstream_times_out_and_releases_capacity(egress, f
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("egress", EGRESSES)
-async def test_keepalive_timeout_uses_existing_attempt_budget(egress):
+async def test_keepalive_timeout_uses_existing_attempt_budget(egress: str):
     wires = []
 
     def body():
@@ -245,7 +261,7 @@ async def test_keepalive_timeout_uses_existing_attempt_budget(egress):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("egress", EGRESSES)
-async def test_cancellation_during_heartbeats_closes_and_releases(egress):
+async def test_cancellation_during_heartbeats_closes_and_releases(egress: str):
     wire = Heartbeats(b": keep-alive\n\n")
     async with upstream(egress, lambda: wire, timeout=10) as (stream, admission):
         task = asyncio.create_task(collect(stream()))
@@ -266,7 +282,7 @@ async def test_cancellation_during_heartbeats_closes_and_releases(egress):
             await asyncio.gather(task, return_exceptions=True)
 
 
-def successful_frames(egress):
+def successful_frames(egress: str):
     if egress == "chat":
         return [
             _chat_chunk("hello"),
@@ -294,21 +310,23 @@ def successful_frames(egress):
 
 
 class Frames(httpx.AsyncByteStream, httpx2.AsyncByteStream):
-    def __init__(self, chunks):
+    def __init__(self, chunks: list[bytes]):
         self.chunks = chunks
         self.closed = False
 
+    @override
     async def __aiter__(self):
         for chunk in self.chunks:
             yield chunk
 
+    @override
     async def aclose(self):
         self.closed = True
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("egress", EGRESSES)
-async def test_pings_are_discarded_before_and_during_valid_responses(egress):
+async def test_pings_are_discarded_before_and_during_valid_responses(egress: str):
     ping = b'event: ping\ndata: {"type":"ping"}\n\n'
     raw = b"".join(ping + frame for frame in successful_frames(egress))
     # Exercise framing across arbitrary network chunk boundaries as well.
@@ -325,7 +343,9 @@ async def test_pings_are_discarded_before_and_during_valid_responses(egress):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("egress", EGRESSES)
-async def test_timeout_after_public_output_preserves_prefix_and_reports_failure(egress):
+async def test_timeout_after_public_output_preserves_prefix_and_reports_failure(
+    egress: str,
+):
     frames = successful_frames(egress)
     prefix = b"".join(frames[:3] if "messages" in egress else frames[:1])
     wire = Heartbeats(b": keep-alive\n\n", prefix=prefix)
@@ -345,7 +365,14 @@ async def test_timeout_after_public_output_preserves_prefix_and_reports_failure(
             )
             assert isinstance(response, ManagedStreamingResponse)
             try:
-                result = "".join(await collect(response.body_iterator))
+                result = "".join(
+                    [
+                        bytes(chunk).decode()
+                        if isinstance(chunk, (bytes, memoryview))
+                        else chunk
+                        for chunk in await collect(response.body_iterator)
+                    ]
+                )
             finally:
                 await response.aclose()
         assert result.count("hello") == 1
@@ -372,7 +399,7 @@ async def test_chat_buffered_recovery_read_also_times_out():
 @pytest.mark.parametrize("egress", ["chat", "gemini"])
 @pytest.mark.parametrize("done", [False, True])
 async def test_stopped_generation_is_not_retried_when_tail_keeps_sending_pings(
-    egress, done
+    egress: str, done: bool
 ):
     if egress == "gemini" and done:
         pytest.skip("Gemini has no DONE sentinel")
@@ -403,7 +430,14 @@ async def test_stopped_generation_is_not_retried_when_tail_keeps_sending_pings(
             )
             assert isinstance(response, ManagedStreamingResponse)
             try:
-                result = "".join(await collect(response.body_iterator))
+                result = "".join(
+                    [
+                        bytes(chunk).decode()
+                        if isinstance(chunk, (bytes, memoryview))
+                        else chunk
+                        for chunk in await collect(response.body_iterator)
+                    ]
+                )
             finally:
                 await response.aclose()
         assert '"error"' in result

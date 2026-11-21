@@ -38,7 +38,9 @@ def zai_provider(request: pytest.FixtureRequest):
     )
 
 
-def test_init_uses_surface_specific_openai_chat_endpoint(zai_provider):
+def test_init_uses_surface_specific_openai_chat_endpoint(
+    zai_provider: OpenAIChatProvider,
+):
     assert isinstance(zai_provider, OpenAIChatProvider)
     assert zai_provider._api_key == "test_zai_key"
     expected_base = {
@@ -48,7 +50,7 @@ def test_init_uses_surface_specific_openai_chat_endpoint(zai_provider):
     assert zai_provider._base_url == expected_base
 
 
-def test_build_request_body_openai_chat(zai_provider):
+def test_build_request_body_openai_chat(zai_provider: OpenAIChatProvider):
     request = MessagesRequest.model_validate(
         {
             "model": "glm-5.2",
@@ -71,7 +73,7 @@ def test_build_request_body_openai_chat(zai_provider):
     }
 
 
-def test_build_request_body_default_max_tokens(zai_provider):
+def test_build_request_body_default_max_tokens(zai_provider: OpenAIChatProvider):
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="x")],
@@ -84,7 +86,7 @@ def test_build_request_body_default_max_tokens(zai_provider):
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 
 
-def test_build_request_body_rejects_caller_extra_body(zai_provider):
+def test_build_request_body_rejects_caller_extra_body(zai_provider: OpenAIChatProvider):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -99,7 +101,7 @@ def test_build_request_body_rejects_caller_extra_body(zai_provider):
         )
 
 
-def test_build_request_body_disables_zai_thinking(zai_provider):
+def test_build_request_body_disables_zai_thinking(zai_provider: OpenAIChatProvider):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -115,7 +117,9 @@ def test_build_request_body_disables_zai_thinking(zai_provider):
     assert body["extra_body"]["thinking"] == {"type": "disabled"}
 
 
-def test_build_request_body_replays_prior_reasoning_content(zai_provider):
+def test_build_request_body_replays_prior_reasoning_content(
+    zai_provider: OpenAIChatProvider,
+):
     request = MessagesRequest.model_validate(
         {
             "model": "glm-5.2",
@@ -138,7 +142,7 @@ def test_build_request_body_replays_prior_reasoning_content(zai_provider):
 
 
 @pytest.mark.asyncio
-async def test_cleanup_closes_openai_client(zai_provider):
+async def test_cleanup_closes_openai_client(zai_provider: OpenAIChatProvider):
     zai_provider._client = MagicMock()
     zai_provider._client.close = AsyncMock()
 

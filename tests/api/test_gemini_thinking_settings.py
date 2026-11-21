@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from free_claude_code.config.provider_catalog import GEMINI_DEFAULT_BASE
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.gemini import GeminiProvider
 from tests.api.support import create_test_app
 from tests.providers.support import immediate_admission, make_provider_config
@@ -31,11 +32,11 @@ from tests.providers.test_gemini import _sse
 )
 @pytest.mark.parametrize("visible", [False, True])
 def test_native_root_route_and_fallback_precedence(
-    root, route, fallback, expected, visible
+    root: str, route: str, fallback: str | None, expected: JsonObject, visible: bool
 ):
     sent = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         body = json.loads(request.content)
         sent.append((request.url.path, body))
         if fallback is not None and "/primary:" in request.url.path:

@@ -51,6 +51,7 @@ from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
 from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.alibaba_cloud import AlibabaCloudProvider
 from free_claude_code.providers.anthropic import AnthropicProvider
+from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.cloudflare import CloudflareProvider
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.gemini import GeminiProvider
@@ -76,7 +77,7 @@ from free_claude_code.providers.runtime import (
 from free_claude_code.providers.vertex import VertexProvider
 
 
-def _make_settings(**overrides):
+def _make_settings(**overrides: object):
     mock = MagicMock()
     mock.model = "nvidia_nim/meta/llama3"
     mock.model_fable = None
@@ -1233,21 +1234,26 @@ async def test_create_provider_instantiates_each_builtin():
     }
     sentinel_admission = MagicMock(spec=ProviderAdmissionController)
     auth = MagicMock()
+
+    def callback(
+        config: ProviderConfig,
+        _settings: object,
+        admission: MagicMock,
+        history_cache: object = None,
+    ):
+        return OpenAICodexProvider(config, auth=auth, admission=admission)
+
+    def callback_2(
+        config: ProviderConfig,
+        _settings: object,
+        admission: MagicMock,
+        history_cache: object = None,
+    ):
+        return GitHubCopilotProvider(config, auth=auth, admission=admission)
+
     injected_factories = {
-        "openai": lambda config, _settings, admission, history_cache=None: (
-            OpenAICodexProvider(
-                config,
-                auth=auth,
-                admission=admission,
-            )
-        ),
-        "github_copilot": lambda config, _settings, admission, history_cache=None: (
-            GitHubCopilotProvider(
-                config,
-                auth=auth,
-                admission=admission,
-            )
-        ),
+        "openai": callback,
+        "github_copilot": callback_2,
     }
 
     with (
@@ -1311,7 +1317,7 @@ async def test_provider_runtime_caches_by_provider_id():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancelled", [False, True])
-async def test_provider_creation_retries_after_shared_failure(cancelled):
+async def test_provider_creation_retries_after_shared_failure(cancelled: bool):
     entered, release = asyncio.Event(), asyncio.Event()
     provider = MagicMock(cleanup=AsyncMock())
     attempts = 0
@@ -1337,7 +1343,7 @@ async def test_provider_creation_retries_after_shared_failure(cancelled):
         ),
         provider_constructor=construct,
     )
-    waiting = []
+    waiting: list[asyncio.Task[BaseProvider]] = []
     try:
         for attempt in (1, 2):
             entered.clear()

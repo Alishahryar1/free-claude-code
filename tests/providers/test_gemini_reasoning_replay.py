@@ -28,7 +28,7 @@ from tests.providers.test_gemini_transport import chat_response, collect, gemini
     ids=["default", "on", "prefer_off", "off"],
 )
 async def test_native_fallback_field_and_computation_policy(
-    visible, structured, policy
+    visible: bool, structured: bool, policy: ReasoningPolicy
 ):
     profile = replace(
         _PROFILE,
@@ -38,7 +38,7 @@ async def test_native_fallback_field_and_computation_policy(
     )
     details = [{"type": "reasoning.encrypted", "data": "signed", "index": 0}]
 
-    def reply(request):
+    def reply(request: object):
         return chat_response(
             [
                 {
@@ -83,10 +83,10 @@ async def test_native_fallback_field_and_computation_policy(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native", ["full thought", "different native"])
-async def test_mixed_native_and_structured_reasoning_retains_distinct_text(native):
+async def test_mixed_native_and_structured_reasoning_retains_distinct_text(native: str):
     profile = replace(_PROFILE, structured_reasoning_details=True)
 
-    def reply(request):
+    def reply(request: object):
         return chat_response(
             [
                 {"reasoning_content": native},
@@ -138,10 +138,10 @@ async def test_mixed_native_and_structured_reasoning_retains_distinct_text(nativ
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("structured", [False, True])
-async def test_equal_independent_groups_are_not_deduplicated(structured):
+async def test_equal_independent_groups_are_not_deduplicated(structured: bool):
     profile = replace(_PROFILE, structured_reasoning_details=structured)
 
-    def reply(request):
+    def reply(request: object):
         return chat_response(
             [
                 {"reasoning_content": "same thought"},
@@ -174,7 +174,7 @@ async def test_equal_independent_groups_are_not_deduplicated(structured):
 
 @pytest.mark.asyncio
 async def test_parsed_think_tags_do_not_become_native_reasoning_fields():
-    def reply(request):
+    def reply(request: object):
         return chat_response([{"content": "<think>parsed thought</think>answer"}])
 
     async with AsyncOpenAI(
@@ -197,10 +197,12 @@ async def test_parsed_think_tags_do_not_become_native_reasoning_fields():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("visible", [False, True])
-async def test_abandoned_invisible_attempt_does_not_publish_its_reasoning(visible):
+async def test_abandoned_invisible_attempt_does_not_publish_its_reasoning(
+    visible: bool,
+):
     calls = 0
 
-    def reply(request):
+    def reply(request: object):
         nonlocal calls
         calls += 1
         prefix = "discarded" if calls == 1 else "winning"

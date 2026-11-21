@@ -21,7 +21,7 @@ def normalize_api_keys(value: object) -> tuple[SecretStr, ...]:
                 raise ValueError("API keys must be a valid JSON array") from None
         else:
             value = [value]
-    if not isinstance(value, list | tuple):
+    if not isinstance(value, (list, tuple)):
         raise ValueError("API keys must be a key or an array of keys")
     keys: list[SecretStr] = []
     seen: dict[str, int] = {}

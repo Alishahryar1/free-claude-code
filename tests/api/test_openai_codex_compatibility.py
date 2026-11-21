@@ -1,4 +1,5 @@
 import json
+from typing import override
 
 import httpx2
 import pytest
@@ -20,9 +21,11 @@ from tests.providers.support import make_provider_config
 
 
 class _FakeOpenAIAuth(OpenAIAuthManager):
+    @override
     async def access(self, *, force_refresh: bool = False) -> OpenAIAccess:
         return OpenAIAccess("access", "account", False)
 
+    @override
     async def recover_unauthorized(self, rejected_token: str) -> OpenAIAccess:
         raise AssertionError("The compatibility request must not require auth recovery")
 

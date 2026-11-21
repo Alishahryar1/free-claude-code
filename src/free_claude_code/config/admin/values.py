@@ -29,9 +29,9 @@ def normalize_for_env(value: object, *, key: str | None = None) -> str | None:
 
     if value is None:
         return None
-    if key in _CREDENTIAL_KEYS and isinstance(value, list | tuple):
+    if key in _CREDENTIAL_KEYS and isinstance(value, (list, tuple)):
         return encode_api_keys(normalize_api_keys(value))
-    if key == "MODEL_FALLBACKS" and isinstance(value, list | tuple):
+    if key == "MODEL_FALLBACKS" and isinstance(value, (list, tuple)):
         return (
             json.dumps(
                 [

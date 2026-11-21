@@ -1,6 +1,7 @@
 """Native Aider configuration replaces FCC argument rewriting."""
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -17,7 +18,7 @@ def test_aider_receives_native_files_and_a_private_credential_reference(
     key_names: list[str] = []
     launch_ids: list[str] = []
 
-    def inspect(command, env):
+    def inspect(command: list[str], env: Mapping[str, str]):
         settings_path = Path(env["AIDER_MODEL_SETTINGS_FILE"])
         metadata_path = Path(env["AIDER_MODEL_METADATA_FILE"])
         settings = json.loads(settings_path.read_text())

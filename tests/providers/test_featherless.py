@@ -239,9 +239,10 @@ def test_build_request_body_replays_reasoning_and_tool_history(
 
 @pytest.mark.asyncio
 async def test_catalog_fetches_all_pages_filters_strictly_and_deduplicates_overlap(
+    monkeypatch: pytest.MonkeyPatch,
     featherless_provider: OpenAIChatProvider,
 ) -> None:
-    featherless_provider._client.get = AsyncMock(
+    mock_get = AsyncMock(
         side_effect=[
             _page(
                 1,
@@ -263,6 +264,7 @@ async def test_catalog_fetches_all_pages_filters_strictly_and_deduplicates_overl
             ),
         ]
     )
+    monkeypatch.setattr(featherless_provider._client, "get", mock_get)
 
     with patch("free_claude_code.providers.admission.trace_event") as trace:
         model_infos = await featherless_provider.list_model_infos()
@@ -281,9 +283,9 @@ async def test_catalog_fetches_all_pages_filters_strictly_and_deduplicates_overl
             ),
         }
     )
-    assert featherless_provider._client.get.await_count == 2
+    assert mock_get.await_count == 2
     for index, call in enumerate(
-        featherless_provider._client.get.await_args_list,
+        mock_get.await_args_list,
         start=1,
     ):
         assert call.args == ("/models",)
@@ -322,11 +324,16 @@ async def test_catalog_fetches_all_pages_filters_strictly_and_deduplicates_overl
 )
 @pytest.mark.asyncio
 async def test_catalog_rejects_missing_or_wrong_typed_metadata_atomically(
+    monkeypatch: pytest.MonkeyPatch,
     featherless_provider: OpenAIChatProvider,
     model: dict[str, object],
     message: str,
 ) -> None:
-    featherless_provider._client.get = AsyncMock(return_value=_page(1, 1, [model]))
+    monkeypatch.setattr(
+        featherless_provider._client,
+        "get",
+        AsyncMock(return_value=_page(1, 1, [model])),
+    )
 
     with pytest.raises(ModelListResponseError, match=message):
         await featherless_provider.list_model_infos()
@@ -334,13 +341,18 @@ async def test_catalog_rejects_missing_or_wrong_typed_metadata_atomically(
 
 @pytest.mark.asyncio
 async def test_catalog_validates_overlapping_records_before_deduplicating(
+    monkeypatch: pytest.MonkeyPatch,
     featherless_provider: OpenAIChatProvider,
 ) -> None:
-    featherless_provider._client.get = AsyncMock(
-        side_effect=[
-            _page(1, 2, [_catalog_model()]),
-            _page(2, 2, [{"id": _MODEL}]),
-        ]
+    monkeypatch.setattr(
+        featherless_provider._client,
+        "get",
+        AsyncMock(
+            side_effect=[
+                _page(1, 2, [_catalog_model()]),
+                _page(2, 2, [{"id": _MODEL}]),
+            ]
+        ),
     )
 
     with pytest.raises(ModelListResponseError, match=r"features\.tool_use as bool"):
@@ -350,11 +362,16 @@ async def test_catalog_validates_overlapping_records_before_deduplicating(
 @pytest.mark.parametrize("image_input", [None, "yes", 1, []])
 @pytest.mark.asyncio
 async def test_catalog_degrades_invalid_optional_image_capability_to_unknown(
+    monkeypatch: pytest.MonkeyPatch,
     featherless_provider: OpenAIChatProvider,
     image_input: object,
 ) -> None:
     model = _catalog_model(image_input=image_input)
-    featherless_provider._client.get = AsyncMock(return_value=_page(1, 1, [model]))
+    monkeypatch.setattr(
+        featherless_provider._client,
+        "get",
+        AsyncMock(return_value=_page(1, 1, [model])),
+    )
 
     assert await featherless_provider.list_model_infos() == frozenset(
         {ProviderModelInfo(_MODEL)}
@@ -372,13 +389,16 @@ async def test_catalog_degrades_invalid_optional_image_capability_to_unknown(
 )
 @pytest.mark.asyncio
 async def test_catalog_rejects_invalid_pagination_metadata(
+    monkeypatch: pytest.MonkeyPatch,
     featherless_provider: OpenAIChatProvider,
     current_page: object,
     total_pages: object,
     message: str,
 ) -> None:
-    featherless_provider._client.get = AsyncMock(
-        return_value=_page(current_page, total_pages, [_catalog_model()])
+    monkeypatch.setattr(
+        featherless_provider._client,
+        "get",
+        AsyncMock(return_value=_page(current_page, total_pages, [_catalog_model()])),
     )
 
     with pytest.raises(ModelListResponseError, match=message):
@@ -394,15 +414,20 @@ async def test_catalog_rejects_invalid_pagination_metadata(
 )
 @pytest.mark.asyncio
 async def test_catalog_rejects_inconsistent_later_page_metadata(
+    monkeypatch: pytest.MonkeyPatch,
     featherless_provider: OpenAIChatProvider,
     second_page: dict[str, object],
     message: str,
 ) -> None:
-    featherless_provider._client.get = AsyncMock(
-        side_effect=[
-            _page(1, 2, [_catalog_model()]),
-            second_page,
-        ]
+    monkeypatch.setattr(
+        featherless_provider._client,
+        "get",
+        AsyncMock(
+            side_effect=[
+                _page(1, 2, [_catalog_model()]),
+                second_page,
+            ]
+        ),
     )
 
     with pytest.raises(ModelListResponseError, match=message):
@@ -411,13 +436,18 @@ async def test_catalog_rejects_inconsistent_later_page_metadata(
 
 @pytest.mark.asyncio
 async def test_later_page_failure_cannot_return_a_partial_catalog(
+    monkeypatch: pytest.MonkeyPatch,
     featherless_provider: OpenAIChatProvider,
 ) -> None:
-    featherless_provider._client.get = AsyncMock(
-        side_effect=[
-            _page(1, 2, [_catalog_model()]),
-            RuntimeError("page two failed"),
-        ]
+    monkeypatch.setattr(
+        featherless_provider._client,
+        "get",
+        AsyncMock(
+            side_effect=[
+                _page(1, 2, [_catalog_model()]),
+                RuntimeError("page two failed"),
+            ]
+        ),
     )
 
     with pytest.raises(RuntimeError, match="page two failed"):

@@ -1,9 +1,11 @@
 """Custom endpoint resource ownership using FCC's existing wire transports."""
 
 from collections.abc import AsyncIterator, Mapping
+from typing import override
 
 import httpx
 import httpx2
+from openai import AsyncOpenAI
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
@@ -110,11 +112,11 @@ class CustomProvider(BaseProvider):
             base_url=config.base_url, api_key=config.api_key, headers={}
         )
         self._openai_transport = openai_transport
-        self._sdk = None
-        self._http = None
-        self._chat = None
-        self._responses = None
-        self._messages = None
+        self._sdk: AsyncOpenAI | None = None
+        self._http: httpx.AsyncClient | None = None
+        self._chat: OpenAIChatTransport | None = None
+        self._responses: OpenAIResponsesTransport | None = None
+        self._messages: AnthropicMessagesTransport | None = None
         if definition.api_format == "anthropic_messages":
             self._http = httpx.AsyncClient(
                 timeout=httpx.Timeout(
@@ -267,6 +269,7 @@ class CustomProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_chat(
         self,
         request: ChatRequest,
@@ -302,6 +305,7 @@ class CustomProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_gemini(
         self,
         request: GeminiRequest,

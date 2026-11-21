@@ -1,22 +1,26 @@
+from pathlib import Path
+
 import pytest
-from playwright.sync_api import expect
+from playwright.sync_api import Page, Route, expect
 
 from e2e.provider_support import api_key_input, open_provider
 from e2e.test_code_sessions import create_session
 
 
-def test_code_bootstrap_cannot_stall_other_pages_status(page, admin_base_url):
+def test_code_bootstrap_cannot_stall_other_pages_status(
+    page: Page, admin_base_url: str
+):
     pending = []
     starting = True
 
-    def status(route):
+    def status(route: Route):
         payload = route.fetch().json()
         payload["startup"]["providers"]["open_router"] = (
             "starting" if starting else "ready"
         )
         route.fulfill(json=payload)
 
-    def hold(route):
+    def hold(route: Route):
         pending.append(route)
         page.evaluate("window.heldBootstrap = true")
 
@@ -39,9 +43,9 @@ def test_code_bootstrap_cannot_stall_other_pages_status(page, admin_base_url):
 
 
 def test_partial_catalog_keeps_code_selection_and_send_usable(
-    page, admin_base_url, tmp_path
+    page: Page, admin_base_url: str, tmp_path: Path
 ):
-    def bootstrap(route):
+    def bootstrap(route: Route):
         payload = route.fetch().json()
         assert payload["models"]
         payload["startup"]["catalog"] = "starting"
@@ -54,14 +58,16 @@ def test_partial_catalog_keeps_code_selection_and_send_usable(
     expect(page.locator("#codeSend")).to_be_enabled()
 
 
-def test_saved_settings_finish_before_unrelated_account_check(page, admin_base_url):
+def test_saved_settings_finish_before_unrelated_account_check(
+    page: Page, admin_base_url: str
+):
     page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
     open_provider(page, "nvidia_nim")
     api_key_input(page, "NVIDIA_NIM_API_KEY").fill("test-new-key")
     pending = []
 
-    def hold(route):
+    def hold(route: Route):
         pending.append(route)
         page.evaluate("window.heldAccountCheck = true")
 
@@ -83,7 +89,7 @@ def test_saved_settings_finish_before_unrelated_account_check(page, admin_base_u
 
 
 def test_provider_refresh_finishes_before_optional_model_suggestions(
-    page, admin_base_url
+    page: Page, admin_base_url: str
 ):
     page.goto(f"{admin_base_url}/admin")
     dialog = open_provider(page, "open_router")
@@ -91,7 +97,7 @@ def test_provider_refresh_finishes_before_optional_model_suggestions(
     expect(button).to_be_enabled()
     pending = []
 
-    def hold(route):
+    def hold(route: Route):
         pending.append(route)
         page.evaluate("window.heldModelSuggestions = true")
 
@@ -105,14 +111,14 @@ def test_provider_refresh_finishes_before_optional_model_suggestions(
     page.unroute("**/admin/api/models", hold)
 
 
-def test_refresh_all_finishes_without_waiting_for_code(page, admin_base_url):
+def test_refresh_all_finishes_without_waiting_for_code(page: Page, admin_base_url: str):
     page.goto(f"{admin_base_url}/admin")
     page.get_by_role("button", name="Model Config", exact=True).click()
     button = page.locator("[data-startup-catalog]")
     expect(button).to_be_enabled()
     pending = []
 
-    def hold(route):
+    def hold(route: Route):
         pending.append(route)
         page.evaluate("window.heldRefreshBootstrap = true")
 
@@ -138,11 +144,11 @@ def test_refresh_all_finishes_without_waiting_for_code(page, admin_base_url):
     ],
 )
 def test_each_integration_finishes_without_slowest_card(
-    page, admin_base_url, held_id, held_button
+    page: Page, admin_base_url: str, held_id: str, held_button: str
 ):
     pending = []
 
-    def hold(route):
+    def hold(route: Route):
         pending.append(route)
         page.evaluate("window.heldChecks = (window.heldChecks || 0) + 1")
 
@@ -169,10 +175,10 @@ def test_each_integration_finishes_without_slowest_card(
         expect(page.locator(f"#{held_button}")).to_be_enabled()
 
 
-def test_local_cards_render_before_slowest_check(page, admin_base_url):
+def test_local_cards_render_before_slowest_check(page: Page, admin_base_url: str):
     pending = []
 
-    def hold(route):
+    def hold(route: Route):
         pending.append(route)
         page.evaluate("window.heldLocalCheck = true")
 
@@ -227,11 +233,11 @@ def test_local_cards_render_before_slowest_check(page, admin_base_url):
 
 
 def test_integration_check_from_previous_config_cannot_overwrite_new_result(
-    page, admin_base_url
+    page: Page, admin_base_url: str
 ):
     pending = []
 
-    def hold(route):
+    def hold(route: Route):
         pending.append(route)
         page.evaluate("window.statusChecks = (window.statusChecks || 0) + 1")
 

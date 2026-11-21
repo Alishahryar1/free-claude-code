@@ -32,7 +32,9 @@ def test_decoder_returns_one_unterminated_final_event():
 
 
 @pytest.mark.parametrize("ending", ["\n\n", ""])
-def test_event_filter_skips_json_and_preserves_unnamed_events_at_every_split(ending):
+def test_event_filter_skips_json_and_preserves_unnamed_events_at_every_split(
+    ending: str,
+):
     wire = (
         'event: delta\r\ndata: {"text":"ignored"}\r\n\r\n'
         'data: {"type":"error"}\nevent: error\n\n'

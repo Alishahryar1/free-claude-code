@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, override
 
 import httpx
 import pytest
@@ -139,12 +139,14 @@ async def _run(
             record.bodies.append(context.body)
             record.kinds.append(context.operation_kind)
 
+        @override
         async def prepare(self) -> None:
             record.attempts_at_prepare.append(execution.attempts_started)
             if self.step.prepare_error is not None:
                 raise self.step.prepare_error
             self.sent_body = {**self.body, "sent": True}
 
+        @override
         async def stream(
             self, scope: ProviderAttemptScope
         ) -> AsyncIterator[StreamOutput]:
@@ -158,15 +160,19 @@ async def _run(
                 raise self.step.error
 
         @property
+        @override
         def normal_stop_seen(self) -> bool:
             return self.stopped
 
+        @override
         def resolvable(self, error: Exception) -> bool:
             return not isinstance(error, _Unresolvable)
 
+        @override
         def abandon(self, error: Exception) -> tuple[StreamOutput, ...]:
             return (StreamOutput(("abandoned",)),) if self.streamed else ()
 
+        @override
         def handoff(self) -> tuple[StreamOutput, ...]:
             return (StreamOutput(("handoff",)),)
 
@@ -206,7 +212,9 @@ def _plan(
 
 
 @pytest.mark.asyncio
-async def test_success_prepares_before_admission_and_traces_its_lifecycle(record):
+async def test_success_prepares_before_admission_and_traces_its_lifecycle(
+    record: Record,
+):
     frames, raised = await _run(record, Step(frames=("a", "b")))
 
     assert (frames, raised) == (["a", "b"], None)
@@ -220,7 +228,7 @@ async def test_success_prepares_before_admission_and_traces_its_lifecycle(record
 
 
 @pytest.mark.asyncio
-async def test_preparation_failure_opens_no_attempt_and_is_terminal(record):
+async def test_preparation_failure_opens_no_attempt_and_is_terminal(record: Record):
     frames, raised = await _run(record, Step(prepare_error=_failure(503)), Step())
 
     assert isinstance(raised, ExecutionFailure) and raised.status_code == 503
@@ -230,7 +238,9 @@ async def test_preparation_failure_opens_no_attempt_and_is_terminal(record):
 
 
 @pytest.mark.asyncio
-async def test_retryable_failure_before_acceptance_retries_the_same_body(record):
+async def test_retryable_failure_before_acceptance_retries_the_same_body(
+    record: Record,
+):
     frames, raised = await _run(record, Step(error=_failure(503)), Step(frames=("ok",)))
 
     assert (frames, raised) == (["abandoned", "ok"], None)
@@ -257,7 +267,7 @@ def _teaching(rejections: list[Rejection], lesson: _Taught) -> CorrectionStep:
 
 
 @pytest.mark.asyncio
-async def test_corrected_rejection_retries_with_the_corrected_body(record):
+async def test_corrected_rejection_retries_with_the_corrected_body(record: Record):
     rejections: list[Rejection] = []
     lesson = _Taught()
 
@@ -279,7 +289,7 @@ async def test_corrected_rejection_retries_with_the_corrected_body(record):
 
 
 @pytest.mark.asyncio
-async def test_a_lesson_is_applied_even_when_no_attempt_remains(record):
+async def test_a_lesson_is_applied_even_when_no_attempt_remains(record: Record):
     lesson = _Taught()
 
     _, raised = await _run(
@@ -295,7 +305,7 @@ async def test_a_lesson_is_applied_even_when_no_attempt_remains(record):
 
 
 @pytest.mark.asyncio
-async def test_exhausted_attempts_raise_the_resolved_failure(record):
+async def test_exhausted_attempts_raise_the_resolved_failure(record: Record):
     frames, raised = await _run(
         record, Step(error=_failure(503)), Step(error=_failure(503)), max_attempts=2
     )
@@ -308,7 +318,7 @@ async def test_exhausted_attempts_raise_the_resolved_failure(record):
 
 
 @pytest.mark.asyncio
-async def test_unsafe_failure_owes_no_abandoned_frames(record):
+async def test_unsafe_failure_owes_no_abandoned_frames(record: Record):
     frames, raised = await _run(
         record, Step(frames=("a",), error=_failure(503, unsafe=True)), max_attempts=1
     )
@@ -318,7 +328,7 @@ async def test_unsafe_failure_owes_no_abandoned_frames(record):
 
 
 @pytest.mark.asyncio
-async def test_unresolvable_error_is_raised_without_resolution(record):
+async def test_unresolvable_error_is_raised_without_resolution(record: Record):
     error = _Unresolvable("local check")
     frames, raised = await _run(record, Step(error=error), Step(frames=("ok",)))
 
@@ -329,7 +339,7 @@ async def test_unresolvable_error_is_raised_without_resolution(record):
 
 
 @pytest.mark.asyncio
-async def test_unfinalized_failure_is_raised_as_itself(record):
+async def test_unfinalized_failure_is_raised_as_itself(record: Record):
     error = _Unfinalized("caller error")
     _, raised = await _run(record, Step(error=error), max_attempts=1)
 
@@ -357,7 +367,7 @@ def _delivered(text: str) -> StreamDeliveryState:
 
 
 @pytest.mark.asyncio
-async def test_preparation_failure_after_delivered_content_is_terminal(record):
+async def test_preparation_failure_after_delivered_content_is_terminal(record: Record):
     # The first attempt delivers text and fails, so the loop continues. A
     # retryable credential failure while preparing that continuation must end
     # the execution: it spent no attempt, so continuing again would never stop.
@@ -387,6 +397,7 @@ async def test_early_close_finishes_transport_cleanup_before_releasing_admission
             events.append("scope resource closed")
 
     class Held(TransportAttempt):
+        @override
         async def stream(
             self, scope: ProviderAttemptScope
         ) -> AsyncIterator[StreamOutput]:
@@ -408,7 +419,7 @@ async def test_early_close_finishes_transport_cleanup_before_releasing_admission
 
 
 @pytest.mark.asyncio
-async def test_hidden_stop_accepts_and_never_restarts(record):
+async def test_hidden_stop_accepts_and_never_restarts(record: Record):
     frames, raised = await _run(
         record,
         Step(error=TIMEOUT, normal_stop=True),
@@ -423,7 +434,7 @@ async def test_hidden_stop_accepts_and_never_restarts(record):
 
 
 @pytest.mark.asyncio
-async def test_accepted_undelivered_attempt_restarts_cleanly(record):
+async def test_accepted_undelivered_attempt_restarts_cleanly(record: Record):
     frames, raised = await _run(
         record,
         Step(frames=("a",), error=TIMEOUT),
@@ -453,9 +464,16 @@ async def test_accepted_undelivered_attempt_restarts_cleanly(record):
     ],
 )
 async def test_delivered_content_recovers_publicly(
-    monkeypatch, record, recovered, frames, kinds
+    monkeypatch: pytest.MonkeyPatch,
+    record: Record,
+    recovered: PublicRecovery,
+    frames: list[str],
+    kinds: list[ProviderOperationKind],
 ):
-    monkeypatch.setattr(loop_module, "public_recovery", lambda *_, **__: recovered)
+    def replace_public_recovery(*_: object, **__: object):
+        return recovered
+
+    monkeypatch.setattr(loop_module, "public_recovery", replace_public_recovery)
     outputs, raised = await _run(
         record,
         Step(frames=("a",), error=TIMEOUT),
@@ -468,7 +486,7 @@ async def test_delivered_content_recovers_publicly(
 
 
 @pytest.mark.asyncio
-async def test_terminal_report_and_message_trace_are_opt_in(record):
+async def test_terminal_report_and_message_trace_are_opt_in(record: Record):
     reported: list[Exception] = []
     rejected = _failure(400)
     _, raised = await _run(
@@ -487,7 +505,7 @@ async def test_terminal_report_and_message_trace_are_opt_in(record):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("upstream_evidence", [False, True])
 async def test_upstream_evidence_is_reported_only_when_requested(
-    record, upstream_evidence
+    record: Record, upstream_evidence: bool
 ):
     rejected = _failure(400)
     attach_upstream_error_body(rejected, '{"type":"error","detail":"evidence"}')

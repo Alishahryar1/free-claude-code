@@ -13,6 +13,8 @@ from free_claude_code.cli.uvicorn_server import (
     uvicorn_log_config,
 )
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.gemini.models import GeminiRequest
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_output import StreamOutput
 from tests.api.support import create_test_app, provider_manager_for_app
 
@@ -27,7 +29,7 @@ def body():
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("model", ["model:free", "model%3Afree", "model:region:free"])
 @pytest.mark.parametrize("prefix", PREFIXES)
-def test_routed_model_preserves_colons(prefix, streaming, model):
+def test_routed_model_preserves_colons(prefix: str, streaming: bool, model: str):
     provider, calls = fixture_provider()
     app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
     action = "streamGenerateContent?alt=sse" if streaming else "generateContent"
@@ -44,7 +46,7 @@ def fixture_provider():
     provider.list_model_infos = AsyncMock(return_value=frozenset())
     calls = []
 
-    async def stream(request, **kwargs):
+    async def stream(request: GeminiRequest, **kwargs: object):
         calls.append((request, kwargs))
         for part in ({"text": "Hello "}, {"text": "world"}):
             yield (
@@ -95,7 +97,7 @@ def fixture_provider():
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("prefix", PREFIXES)
 def test_generation_routes_use_the_selected_backend_and_release_lease(
-    prefix, streaming
+    prefix: str, streaming: bool
 ):
     provider, calls = fixture_provider()
     app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
@@ -124,7 +126,9 @@ def test_generation_routes_use_the_selected_backend_and_release_lease(
 
 @pytest.mark.parametrize("credential", ["header", "query", "bearer"])
 @pytest.mark.parametrize("prefix", PREFIXES)
-def test_gemini_credentials_authenticate_the_proxy_not_the_upstream(prefix, credential):
+def test_gemini_credentials_authenticate_the_proxy_not_the_upstream(
+    prefix: str, credential: str
+):
     provider, calls = fixture_provider()
     app = create_test_app(
         Settings(
@@ -162,7 +166,9 @@ def test_gemini_credentials_authenticate_the_proxy_not_the_upstream(prefix, cred
     ],
 )
 @pytest.mark.parametrize("prefix", PREFIXES)
-def test_invalid_auth_is_a_google_error_before_inference(prefix, headers, query):
+def test_invalid_auth_is_a_google_error_before_inference(
+    prefix: str, headers: dict[str, str], query: str
+):
     provider, calls = fixture_provider()
     app = create_test_app(
         Settings(
@@ -193,7 +199,7 @@ def test_invalid_auth_is_a_google_error_before_inference(prefix, headers, query)
 )
 @pytest.mark.parametrize("prefix", PREFIXES)
 def test_invalid_or_unsupported_requests_are_rejected_before_inference(
-    prefix, request_body
+    prefix: str, request_body: JsonObject
 ):
     provider, calls = fixture_provider()
     app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
@@ -218,7 +224,9 @@ def test_invalid_or_unsupported_requests_are_rejected_before_inference(
         ("POST", "/v1/models/model:generateContent?alt=sse", 400),
     ],
 )
-def test_gemini_route_family_errors_use_google_envelopes(method, path, status):
+def test_gemini_route_family_errors_use_google_envelopes(
+    method: str, path: str, status: int
+):
     provider, calls = fixture_provider()
     app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
     with TestClient(app) as client:
@@ -230,7 +238,7 @@ def test_gemini_route_family_errors_use_google_envelopes(method, path, status):
 
 
 @pytest.mark.parametrize("prefix", PREFIXES)
-def test_repeated_material_json_key_is_rejected_before_inference(prefix):
+def test_repeated_material_json_key_is_rejected_before_inference(prefix: str):
     provider, calls = fixture_provider()
     app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
     with TestClient(app) as client:
@@ -246,7 +254,7 @@ def test_repeated_material_json_key_is_rejected_before_inference(prefix):
 @pytest.mark.parametrize("console", [False, True])
 @pytest.mark.parametrize("prefix", PREFIXES)
 def test_query_api_key_is_masked_before_uvicorn_console_and_file_handlers(
-    prefix, console
+    prefix: str, console: bool
 ):
     config = uvicorn_log_config(console=console)
     loggers = config["loggers"]
@@ -285,7 +293,9 @@ def test_query_api_key_is_masked_before_uvicorn_console_and_file_handlers(
         ("/v1/models/model:unknown", None),
     ],
 )
-def test_only_gemini_generation_methods_are_gemini_under_v1_models(path, expected):
+def test_only_gemini_generation_methods_are_gemini_under_v1_models(
+    path: str, expected: str | None
+):
     assert generation_api(path) == expected
 
 

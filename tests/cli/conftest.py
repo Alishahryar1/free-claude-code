@@ -121,7 +121,11 @@ def launch_capture(monkeypatch: pytest.MonkeyPatch) -> LaunchCapture:
         "HERMES_MANAGED_DIR",
     ):
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setattr(common.shutil, "which", lambda name: name)
+
+    def replace_which(name: str):
+        return name
+
+    monkeypatch.setattr(common.shutil, "which", replace_which)
     monkeypatch.setattr(local_http._DIRECT_OPENER, "open", capture.open)
     monkeypatch.setattr(subprocess, "run", capture.probe)
     monkeypatch.setattr(subprocess, "Popen", capture.start)

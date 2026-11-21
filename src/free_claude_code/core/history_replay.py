@@ -1203,7 +1203,10 @@ def _restore_gemini_parts(
     )
     for echoed, native_part in zip(visible_echo, visible_native, strict=False):
         expected_call = native_part.get("functionCall")
-        call = next(native_calls, {}) if isinstance(expected_call, dict) else None
+        empty_call: dict[str, Any] = {}
+        call = (
+            next(native_calls, empty_call) if isinstance(expected_call, dict) else None
+        )
         echo_call = echoed.get("functionCall")
         if isinstance(call, dict) and isinstance(echo_call, dict):
             original_args = call.get("args") or {}
@@ -1267,7 +1270,7 @@ def _prepare_gemini_history(
         ),
         default=-1,
     )
-    projected = []
+    projected: list[dict[str, Any]] = []
     call_aliases: set[str] = set()
     for index, content, part_sources in _gemini_replay_turns(
         contents, continuation=continuation
@@ -1302,7 +1305,7 @@ def _prepare_gemini_history(
             target = ("contents", len(projected))
             paths[target] = source
         include = scope.includes(index, last_user)
-        kept = []
+        kept: list[dict[str, Any]] = []
         for part_index, part in enumerate(parts):
             if (
                 not continuation_context

@@ -10,9 +10,15 @@ from fastapi.responses import JSONResponse
 
 from free_claude_code.api.handlers import MessagesHandler
 from free_claude_code.application.execution import ProviderExecutor
-from free_claude_code.application.response_collection import collect_response
+from free_claude_code.application.response_collection import (
+    WireProtocol,
+    collect_response,
+)
 from free_claude_code.application.routing import ModelRouter
-from free_claude_code.config.reasoning import FALLBACK_REASONING_PREFERENCES
+from free_claude_code.config.reasoning import (
+    FALLBACK_REASONING_PREFERENCES,
+    ReasoningPreference,
+)
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
@@ -37,10 +43,12 @@ from tests.web_tools_support import StubWebToolsClient
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("effort", FALLBACK_REASONING_PREFERENCES)
-async def test_classifier_fallback_keeps_manual_thinking_compatible(effort):
+async def test_classifier_fallback_keeps_manual_thinking_compatible(
+    effort: ReasoningPreference,
+):
     captured = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         captured.append(json.loads(request.content))
         return httpx.Response(
             200,
@@ -62,13 +70,13 @@ async def test_classifier_fallback_keeps_manual_thinking_compatible(effort):
             {"model": f"{configuration.provider_id}/backup", "reasoning": effort}
         ],
     )
+
+    def resolve_provider(provider_id: str, _api_key_number: int):
+        return primary if provider_id == "nvidia_nim" else fallback
+
     handler = MessagesHandler(
         settings,
-        provider_resolver=AsyncMock(
-            side_effect=lambda provider_id, _api_key_number: (
-                primary if provider_id == "nvidia_nim" else fallback
-            )
-        ),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         web_tools=StubWebToolsClient(),
     )
     try:
@@ -91,11 +99,11 @@ async def test_classifier_fallback_keeps_manual_thinking_compatible(effort):
 @pytest.mark.parametrize("egress", ["openai_chat", "openai_responses"])
 @pytest.mark.parametrize("effort", ["off", "low", "high", "max"])
 async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
-    wire_api, egress, effort
+    wire_api: WireProtocol, egress: str, effort: str
 ):
     captured = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         captured.append(json.loads(request.content))
         response = completion(egress)
         if egress == "openai_chat":
@@ -132,12 +140,12 @@ async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
             {"model": f"{configuration.provider_id}/backup", "reasoning": effort}
         ],
     )
+
+    def resolve_provider(provider_id: str, _api_key_number: int):
+        return primary if provider_id == "nvidia_nim" else fallback
+
     executor = ProviderExecutor(
-        AsyncMock(
-            side_effect=lambda provider_id, _api_key_number: (
-                primary if provider_id == "nvidia_nim" else fallback
-            )
-        ),
+        AsyncMock(side_effect=resolve_provider),
     )
     router = ModelRouter(settings)
     if wire_api == "messages":
@@ -194,11 +202,13 @@ async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire_api", ["messages", "responses"])
-async def test_candidate_efforts_survive_retry_and_continuation(monkeypatch, wire_api):
+async def test_candidate_efforts_survive_retry_and_continuation(
+    monkeypatch: pytest.MonkeyPatch, wire_api: WireProtocol
+):
     bodies = []
     attempts = {"primary": 0, "low": 0, "inherited": 0}
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         body = json.loads(request.content)
         bodies.append(body)
         model = body["model"]

@@ -129,9 +129,11 @@ def test_reasoning_history_replays_in_native_field() -> None:
 
 
 @pytest.mark.asyncio
-async def test_model_discovery_does_not_advertise_model_ids_as_deployments() -> None:
+async def test_model_discovery_does_not_advertise_model_ids_as_deployments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     provider = _provider()
-    provider._client.models.list = AsyncMock(
+    mock_list = AsyncMock(
         return_value=SimpleNamespace(
             data=[
                 SimpleNamespace(id="gpt-5.1"),
@@ -139,6 +141,7 @@ async def test_model_discovery_does_not_advertise_model_ids_as_deployments() -> 
             ]
         )
     )
+    monkeypatch.setattr(provider._client.models, "list", mock_list)
 
     assert await provider.list_model_infos() == frozenset()
-    provider._client.models.list.assert_awaited_once_with()
+    mock_list.assert_awaited_once_with()

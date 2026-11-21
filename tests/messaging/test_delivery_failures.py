@@ -16,11 +16,14 @@ from free_claude_code.messaging.delivery_failures import (
     decide,
     queue_pause,
 )
+from free_claude_code.messaging.delivery_failures.decision import Decision
 
 K = FailureKind
 
 
-def _state(attempts=1, *, formatted=False, suppress_known=True) -> CallState:
+def _state(
+    attempts: int = 1, *, formatted: bool = False, suppress_known: bool = True
+) -> CallState:
     return CallState(
         attempts=attempts, formatted=formatted, suppress_known=suppress_known
     )
@@ -67,7 +70,7 @@ def _state(attempts=1, *, formatted=False, suppress_known=True) -> CallState:
         pytest.param(DeliveryFailure(K.REJECTED), _state(), Raise(), id="rejected"),
     ],
 )
-def test_decide(failure, state, expected) -> None:
+def test_decide(failure: DeliveryFailure, state: CallState, expected: Decision) -> None:
     assert decide(failure, state) == expected
 
 
@@ -84,5 +87,5 @@ def test_every_kind_is_decided() -> None:
         (RuntimeError("Timed out waiting"), None),
     ],
 )
-def test_queue_pause(error, expected) -> None:
+def test_queue_pause(error: Exception, expected: int | None) -> None:
     assert queue_pause(error) == expected

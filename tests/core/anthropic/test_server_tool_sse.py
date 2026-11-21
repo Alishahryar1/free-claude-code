@@ -11,6 +11,7 @@ from free_claude_code.core.anthropic.server_tool_sse import (
     web_tool_error_block,
 )
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.web_tools import WebFetchResult, WebSearchResult
 
 
@@ -43,7 +44,11 @@ from free_claude_code.core.web_tools import WebFetchResult, WebSearchResult
 @pytest.mark.parametrize("tool_name", ["web_search", "web_fetch"])
 @pytest.mark.parametrize("failed", [False, True])
 def test_local_tool_event_order_linked_results_and_usage(
-    usage, expected_start, expected_end, tool_name, failed
+    usage: JsonObject | None,
+    expected_start: JsonObject,
+    expected_end: JsonObject,
+    tool_name: str,
+    failed: bool,
 ):
     context = ServerToolResponseContext(
         message_id="msg_local",

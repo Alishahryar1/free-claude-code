@@ -168,10 +168,13 @@ def test_replays_reasoning_content_with_tool_history(
 
 @pytest.mark.asyncio
 async def test_model_catalog_returns_pool_ids(
+    monkeypatch: pytest.MonkeyPatch,
     opper_provider: OpenAIChatProvider,
 ) -> None:
-    opper_provider._client.get = AsyncMock(
-        return_value={"data": [{"id": "gpt-5.5"}, {"id": _MODEL}]}
+    monkeypatch.setattr(
+        opper_provider._client,
+        "get",
+        AsyncMock(return_value={"data": [{"id": "gpt-5.5"}, {"id": _MODEL}]}),
     )
 
     assert await opper_provider.list_model_infos() == frozenset(
@@ -181,10 +184,13 @@ async def test_model_catalog_returns_pool_ids(
 
 @pytest.mark.asyncio
 async def test_model_catalog_returns_route_pinned_ids(
+    monkeypatch: pytest.MonkeyPatch,
     opper_provider: OpenAIChatProvider,
 ) -> None:
-    opper_provider._client.get = AsyncMock(
-        return_value={"data": [{"id": "azure/gpt-5.5"}, {"id": _MODEL}]}
+    monkeypatch.setattr(
+        opper_provider._client,
+        "get",
+        AsyncMock(return_value={"data": [{"id": "azure/gpt-5.5"}, {"id": _MODEL}]}),
     )
 
     assert await opper_provider.list_model_infos() == frozenset(
@@ -194,9 +200,12 @@ async def test_model_catalog_returns_route_pinned_ids(
 
 @pytest.mark.asyncio
 async def test_model_catalog_rejects_missing_id(
+    monkeypatch: pytest.MonkeyPatch,
     opper_provider: OpenAIChatProvider,
 ) -> None:
-    opper_provider._client.get = AsyncMock(return_value={"data": [{}]})
+    monkeypatch.setattr(
+        opper_provider._client, "get", AsyncMock(return_value={"data": [{}]})
+    )
 
     with pytest.raises(ModelListResponseError, match="include id"):
         await opper_provider.list_model_infos()
@@ -204,9 +213,12 @@ async def test_model_catalog_rejects_missing_id(
 
 @pytest.mark.asyncio
 async def test_model_catalog_rejects_empty_catalog(
+    monkeypatch: pytest.MonkeyPatch,
     opper_provider: OpenAIChatProvider,
 ) -> None:
-    opper_provider._client.get = AsyncMock(return_value={"data": []})
+    monkeypatch.setattr(
+        opper_provider._client, "get", AsyncMock(return_value={"data": []})
+    )
 
     with pytest.raises(ModelListResponseError, match="did not include any model ids"):
         await opper_provider.list_model_infos()

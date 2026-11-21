@@ -1,18 +1,20 @@
 """Independent answer partitions exercise the overlap policy and its bounds."""
 
 from copy import deepcopy
+from typing import Literal
 
 import pytest
 
 from free_claude_code.core.continuation_overlap import ContinuationOverlap
 from free_claude_code.core.delivered_response import DeliveredResponse
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject
 from tests.api.test_continuation_overlap import responses_parts
 from tests.wire_payload import array_payload, object_array, object_payload
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-def test_empty_delta_stays_invisible_with_no_prior_answer_text(wire):
+def test_empty_delta_stays_invisible_with_no_prior_answer_text(wire: str):
     event = (
         {
             "type": "content_block_delta",
@@ -32,7 +34,9 @@ def test_empty_delta_stays_invisible_with_no_prior_answer_text(wire):
 
 
 @pytest.mark.parametrize("channel", ["text", "thinking", "summary"])
-def test_complete_prefix_match_releases_other_channels_before_item_closes(channel):
+def test_complete_prefix_match_releases_other_channels_before_item_closes(
+    channel: Literal["text", "thinking"],
+):
     kind = {
         "text": "response.output_text.delta",
         "thinking": "response.reasoning_text.delta",
@@ -62,7 +66,7 @@ def test_complete_prefix_match_releases_other_channels_before_item_closes(channe
     assert overlap.feed(more) == [more]
 
 
-def retained_parts(prefix, parts):
+def retained_parts(prefix: str, parts: list[str]):
     text = "".join(parts)
     overlap = max(
         size
@@ -102,7 +106,7 @@ def retained_parts(prefix, parts):
 )
 @pytest.mark.parametrize("separate_items", [False, True])
 def test_text_representation_preserves_each_source_part(
-    prefix, parts, representation, separate_items
+    prefix: str, parts: list[str], representation: str, separate_items: bool
 ):
     source = responses_parts(
         parts, representation=representation, separate_items=separate_items
@@ -181,7 +185,7 @@ def test_interleaved_parts_wait_for_the_earlier_open_part():
 
 
 @pytest.mark.parametrize("change", ["prefix", "order", "insert"])
-def test_late_snapshot_cannot_rewrite_a_decided_prefix(change):
+def test_late_snapshot_cannot_rewrite_a_decided_prefix(change: str):
     source = responses_parts(
         ["He", "llo world."], representation="text_done", separate_items=True
     )
@@ -212,7 +216,9 @@ def test_terminal_cannot_omit_pending_source_text():
         overlap.feed(source[-1])
 
 
-def test_unresolved_frames_are_bounded_and_discarded_on_failure(monkeypatch):
+def test_unresolved_frames_are_bounded_and_discarded_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(
         "free_claude_code.core.continuation_overlap.RECOVERY_RETENTION_BYTES", 1000
     )
@@ -223,12 +229,12 @@ def test_unresolved_frames_are_bounded_and_discarded_on_failure(monkeypatch):
     with pytest.raises(ExecutionFailure, match="retained-data limit"):
         for _ in range(30):
             overlap.feed({"type": "ping", "padding": "x" * 60})
-    failure = {"type": "response.failed", "response": {"output": []}}
+    failure: JsonObject = {"type": "response.failed", "response": {"output": []}}
     assert overlap.feed(failure) == [failure]
 
 
 def test_large_immediately_resolvable_snapshot_does_not_fill_the_pending_buffer(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(
         "free_claude_code.core.continuation_overlap.RECOVERY_RETENTION_BYTES", 300
@@ -239,7 +245,9 @@ def test_large_immediately_resolvable_snapshot_does_not_fill_the_pending_buffer(
     assert events[-1]["response"]["output"][0]["content"][0]["text"] == "x" * 10000
 
 
-def test_resolved_overlap_does_not_retain_unaffected_later_items(monkeypatch):
+def test_resolved_overlap_does_not_retain_unaffected_later_items(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(
         "free_claude_code.core.continuation_overlap.RECOVERY_RETENTION_BYTES", 400
     )
@@ -263,7 +271,7 @@ def test_resolved_overlap_does_not_retain_unaffected_later_items(monkeypatch):
 @pytest.mark.parametrize(
     "surface", ["item_added", "part_added", "text_done", "part_done", "item_done"]
 )
-def test_snapshot_only_text_counts_as_new_public_progress_once(surface):
+def test_snapshot_only_text_counts_as_new_public_progress_once(surface: str):
     response = DeliveredResponse("responses")
     source = responses_parts(["Novel"], representation=surface)
     kind = {

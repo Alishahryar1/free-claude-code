@@ -86,8 +86,8 @@ class CodeService:
         self._version = 0
         self._events = EventPublisher()
         self.epoch = str(uuid.uuid4())
-        self._commands: set[asyncio.Task] = set()
-        self._jobs: set[asyncio.Task] = set()
+        self._commands: set[asyncio.Task[object]] = set()
+        self._jobs: set[asyncio.Task[None]] = set()
         self._accepting = False
         self._started = False
         self._stopping = False
@@ -216,7 +216,7 @@ class CodeService:
         task.add_done_callback(self._command_done)
         return await asyncio.shield(task)
 
-    def _command_done(self, task: asyncio.Task) -> None:
+    def _command_done(self, task: asyncio.Task[object]) -> None:
         self._commands.discard(task)
         if not task.cancelled():
             task.exception()
@@ -227,7 +227,7 @@ class CodeService:
         task.add_done_callback(self._job_done)
         return task
 
-    def _job_done(self, task: asyncio.Task) -> None:
+    def _job_done(self, task: asyncio.Task[None]) -> None:
         self._jobs.discard(task)
         if not task.cancelled() and (error := task.exception()) is not None:
             logger.warning(

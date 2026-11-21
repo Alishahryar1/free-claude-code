@@ -191,9 +191,9 @@ def content_parts(value: Any) -> list[dict[str, Any]]:
 
 
 def function_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
-    calls = message.get("tool_calls", [])
+    calls: object = message.get("tool_calls", [])
     if calls is None:
-        calls = []
+        return []
     if not isinstance(calls, list):
         raise ChatConversionError("tool_calls must be an array")
     for call in calls:

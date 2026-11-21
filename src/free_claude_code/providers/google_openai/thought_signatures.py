@@ -4,6 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 from free_claude_code.core.history_replay import is_replay
+from free_claude_code.core.json_types import JsonValue
 
 GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR = "skip_thought_signature_validator"
 
@@ -40,11 +41,11 @@ def _tool_call_thought_signature(tool_call: dict[str, Any]) -> str | None:
 def _set_thought_signature(tool_call: dict[str, Any], signature: str) -> None:
     extra_content = tool_call.get("extra_content")
     if not isinstance(extra_content, dict):
-        extra_content = {}
+        extra_content = dict[str, JsonValue]()
         tool_call["extra_content"] = extra_content
     google = extra_content.get("google")
     if not isinstance(google, dict):
-        google = {}
+        google = dict[str, JsonValue]()
         extra_content["google"] = google
     google["thought_signature"] = signature
 

@@ -138,7 +138,7 @@ def test_orphan_close_with_valid_think_pair():
         "consecutive_orphans",
     ],
 )
-def test_orphan_close_tag_parametrized(input_text, expected_text):
+def test_orphan_close_tag_parametrized(input_text: str, expected_text: str):
     """Parametrized: orphan </think> tags should be stripped from various positions."""
     parser = ThinkTagParser()
     chunks = list(parser.feed(input_text))

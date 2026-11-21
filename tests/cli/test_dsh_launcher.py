@@ -1,6 +1,7 @@
 """DSH keeps its native profile grammar and receives one FCC patch."""
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import URLError
@@ -75,7 +76,7 @@ from tests.cli.test_launcher_workflow import launch
 def test_dsh_attaches_patch_without_overriding_native_profile(
     args: list[str], expected: list[str], launch_capture: LaunchCapture
 ) -> None:
-    def inspect(command, env):
+    def inspect(command: list[str], env: Mapping[str, str]):
         path = Path(command[command.index("--patch") + 1])
         patch = json.loads(path.read_text())
         serialized = json.dumps(patch)

@@ -64,7 +64,7 @@ def sanitize_trace_value(obj: Any) -> Any:
             else:
                 out[str(k)] = sanitize_trace_value(v)
         return out
-    if isinstance(obj, tuple | list):
+    if isinstance(obj, (tuple, list)):
         return [sanitize_trace_value(x) for x in obj]
     return obj
 

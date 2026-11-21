@@ -57,7 +57,7 @@ def test_parse_cap_from_groq_message():
         ("maximum allowed value of 32768 for max_tokens", 32768),
     ],
 )
-def test_parse_cap_various_phrasings(message, expected):
+def test_parse_cap_various_phrasings(message: str, expected: int):
     assert parse_output_token_cap(_BadRequest(message)) == expected
 
 
@@ -76,7 +76,7 @@ def test_parse_cap_reads_json_body():
         ("range of max_completion_tokens should be [ 1 , `8192` ]", 8192),
     ],
 )
-def test_parse_cap_from_inclusive_range(message, expected):
+def test_parse_cap_from_inclusive_range(message: str, expected: int):
     assert parse_output_token_cap(_BadRequest(message)) == expected
 
 
@@ -89,7 +89,7 @@ def test_parse_cap_from_inclusive_range(message, expected):
         "Range of max_tokens is [1, 4096]",
     ],
 )
-def test_parse_cap_ignores_unrecognized_ranges(message):
+def test_parse_cap_ignores_unrecognized_ranges(message: str):
     assert parse_output_token_cap(_BadRequest(message)) is None
 
 
@@ -111,7 +111,7 @@ def test_parse_cap_ignores_unrelated_400():
         "maximum allowed value of 2 for temperature; max_tokens is invalid",
     ],
 )
-def test_parse_cap_does_not_bind_unrelated_comparator_to_output_field(message):
+def test_parse_cap_does_not_bind_unrelated_comparator_to_output_field(message: str):
     assert parse_output_token_cap(_BadRequest(message)) is None
 
 
@@ -260,7 +260,9 @@ def _ok():
 
 
 @pytest.mark.asyncio
-async def test_cap_rejection_clamps_and_learns_for_the_next_request(groq_provider):
+async def test_cap_rejection_clamps_and_learns_for_the_next_request(
+    groq_provider: GroqProvider,
+):
     error = _BadRequest(
         "invalid request",
         body={
@@ -284,7 +286,7 @@ async def test_cap_rejection_clamps_and_learns_for_the_next_request(groq_provide
 
 @pytest.mark.asyncio
 async def test_learned_cap_clamps_a_later_request_without_a_rejection(
-    groq_provider,
+    groq_provider: GroqProvider,
 ):
     error = _BadRequest("max_completion_tokens must be less than or equal to 40960")
     create = AsyncMock(side_effect=[error, _ok(), _ok()])
@@ -297,7 +299,7 @@ async def test_learned_cap_clamps_a_later_request_without_a_rejection(
 
 
 @pytest.mark.asyncio
-async def test_unrelated_400_is_not_clamped_and_propagates(groq_provider):
+async def test_unrelated_400_is_not_clamped_and_propagates(groq_provider: GroqProvider):
     create = AsyncMock(
         side_effect=[_BadRequest("messages: invalid role 'wizard'"), _ok()]
     )
@@ -314,7 +316,9 @@ async def test_unrelated_400_is_not_clamped_and_propagates(groq_provider):
 
 
 @pytest.mark.asyncio
-async def test_mixed_field_400_does_not_retry_or_poison_learned_cap(groq_provider):
+async def test_mixed_field_400_does_not_retry_or_poison_learned_cap(
+    groq_provider: GroqProvider,
+):
     error_body = {
         "param": "temperature",
         "message": "max_completion_tokens must not exceed 2",

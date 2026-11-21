@@ -1,14 +1,16 @@
 """Chat clients retain upstream tools and protected history through real HTTP."""
 
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.anthropic.stream_contracts import SSEEvent, parse_sse_text
 from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.chat_completions.response import ChatResponseAccumulator
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.anthropic_messages.transport import (
     AnthropicMessagesTransport,
 )
@@ -22,7 +24,7 @@ from tests.providers.test_native_tool_arguments import tool_events
 from tests.wire_payload import array_payload, object_array, object_payload
 
 
-async def collect(stream):
+async def collect(stream: AsyncIterator[StreamOutput]):
     accumulator = ChatResponseAccumulator()
     chunks = [frame async for chunk in stream for frame in chunk.frames]
     for event in parse_sse_text("".join(chunks)):
@@ -60,7 +62,7 @@ def _stream_chat(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["messages", "responses"])
-async def test_chat_round_trip_preserves_native_reasoning_once(protocol):
+async def test_chat_round_trip_preserves_native_reasoning_once(protocol: str):
     async with _harness(protocol) as (_, bodies, transport):
         request = ChatRequest.model_validate(
             {
@@ -85,10 +87,11 @@ async def test_chat_round_trip_preserves_native_reasoning_once(protocol):
         )
         await collect(_stream_chat(transport, second, ReasoningPolicy()))
     history = (
-        bodies[-1]["messages"][1]["content"]
+        object_payload(array_payload(bodies[-1]["messages"])[1])["content"]
         if protocol == "messages"
         else bodies[-1]["input"]
     )
+    history = object_array(history)
     assert history.count(_native(protocol)) == 1
     reasoning = [
         item for item in history if item.get("type") in {"thinking", "reasoning"}
@@ -98,7 +101,9 @@ async def test_chat_round_trip_preserves_native_reasoning_once(protocol):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["messages", "responses"])
-async def test_chat_explicit_off_keeps_protected_state_without_readable_echo(protocol):
+async def test_chat_explicit_off_keeps_protected_state_without_readable_echo(
+    protocol: str,
+):
     async with _harness(protocol) as (_, _, transport):
         request = ChatRequest(
             model="test", messages=[{"role": "user", "content": "hello"}]
@@ -115,7 +120,9 @@ async def test_chat_explicit_off_keeps_protected_state_without_readable_echo(pro
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["messages", "responses", "chat"])
 @pytest.mark.parametrize("arguments", ['{"path":', "[]", "null", "", '{"path":42}'])
-async def test_completed_chat_tool_arguments_remain_opaque(protocol, arguments):
+async def test_completed_chat_tool_arguments_remain_opaque(
+    protocol: str, arguments: str
+):
     async with _harness(
         protocol, lambda _: (200, tool_events(protocol, arguments))
     ) as (_, _, transport):
@@ -252,7 +259,7 @@ async def test_chat_refusal_round_trip_preserves_responses_refusal_part():
     ("kind", "field"), [("reasoning.text", "text"), ("reasoning.summary", "summary")]
 )
 async def test_native_chat_json_reassembles_readable_reasoning_but_keeps_opaque_boundaries(
-    kind, field
+    kind: str, field: str
 ):
     opaque = [
         {"type": "reasoning.encrypted", "index": 0, "id": "a", "data": "first"},
@@ -317,7 +324,7 @@ async def test_native_chat_json_reassembles_readable_reasoning_but_keeps_opaque_
     assert object_array(bodies[-1]["messages"])[1]["reasoning_details"] == expected
 
 
-def _tool_names(event):
+def _tool_names(event: SSEEvent):
     data = event.data
     block = data.get("content_block")
     if isinstance(block, dict) and block.get("type") == "tool_use":
@@ -335,7 +342,7 @@ def _tool_names(event):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_fragmented_tool_name_starts_with_complete_name(wire):
+async def test_fragmented_tool_name_starts_with_complete_name(wire: str):
     template = _events_for("chat")[0]
     deltas = [
         {

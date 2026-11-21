@@ -2,10 +2,17 @@
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Iterator,
+    Mapping,
+)
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, cast
+from typing import Any, cast, override
 
 import httpx2
 from loguru import logger
@@ -27,6 +34,7 @@ from free_claude_code.core.anthropic.streaming import (
 from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.chat_completions.response import NativeChatRelay
 from free_claude_code.core.chat_completions.tool_calls import (
+    ChatSourceOutput,
     ChatToolCallBuffer,
     CompletedChatBatch,
     CompletedChatCall,
@@ -318,7 +326,9 @@ class _ChatStreamPresenter:
     def abandon(self) -> Iterator[StreamOutput]:
         yield from self._present(self._tool_buffer.abandon())
 
-    def _present(self, items) -> Iterator[StreamOutput]:
+    def _present(
+        self, items: Iterable[ChatSourceOutput | CompletedChatBatch]
+    ) -> Iterator[StreamOutput]:
         for item in items:
             if isinstance(item, CompletedChatCall):
                 call = finalize_chat_call(
@@ -352,6 +362,7 @@ class _ChatStreamPresenter:
                 ]
                 yield completed_output(frames)
             else:
+                assert isinstance(item, dict)
                 frames = tuple(self._feed_frame(item))
                 if frames:
                     yield StreamOutput(frames)
@@ -497,20 +508,25 @@ class _NativeChatStreamPresenter(_ChatStreamPresenter):
         self._generated = False
 
     @property
+    @override
     def generated_output(self) -> bool:
         return self._generated
 
     @property
+    @override
     def normal_stop_seen(self) -> bool:
         return self._relay.normal_stop_seen
 
+    @override
     def observe_upstream_chunk(self, chunk: Any) -> None:
         pass
 
+    @override
     def start_events(self) -> Iterator[str]:
         self._started = True
         return iter(())
 
+    @override
     def feed(self, chunk: Any) -> Iterator[StreamOutput]:
         payload = chunk.model_dump(mode="json", exclude_unset=True)
         if getattr(chunk, "usage", None) is not None:
@@ -524,13 +540,18 @@ class _NativeChatStreamPresenter(_ChatStreamPresenter):
             )
         yield from self._present(self._tool_buffer.feed(payload))
 
-    def _present(self, items) -> Iterator[StreamOutput]:
+    @override
+    def _present(
+        self, items: Iterable[ChatSourceOutput | CompletedChatBatch]
+    ) -> Iterator[StreamOutput]:
         for item in items:
             if isinstance(item, CompletedChatBatch):
                 yield completed_output(self._relay.feed(frame) for frame in item.frames)
             else:
+                assert isinstance(item, dict)
                 yield StreamOutput((self._relay.feed(item),))
 
+    @override
     def finish_upstream(self) -> Iterator[str]:
         if not self._relay.normal_stop_seen:
             raise TruncatedProviderStreamError(
@@ -539,6 +560,7 @@ class _NativeChatStreamPresenter(_ChatStreamPresenter):
         self._upstream_finished = True
         return iter(())
 
+    @override
     def prepare_completion(self, *, pad_empty: bool) -> Iterator[str]:
         provider_input = usage_int(self._usage_info, "prompt_tokens")
         self._completion = _OpenAIChatCompletion(
@@ -549,6 +571,7 @@ class _NativeChatStreamPresenter(_ChatStreamPresenter):
         )
         return iter(())
 
+    @override
     def terminal_events(self, *, usage: ChatStreamUsage) -> Iterator[str]:
         yield from self._relay.finish()
 
@@ -692,7 +715,7 @@ class OpenAIChatTransport:
 
     async def _prepare_create(
         self,
-        body: dict,
+        body: dict[str, Any],
         operation_kind: ProviderOperationKind,
         *,
         history: RequestHistory,
@@ -702,7 +725,7 @@ class OpenAIChatTransport:
         on_origin: Callable[[ReplayOrigin], None] | None = None,
         call_replay: tuple[CallReplay, ...] = (),
         native_chat: bool = False,
-    ) -> tuple[dict, dict[str, Any], AsyncOpenAI]:
+    ) -> tuple[dict[str, Any], dict[str, Any], AsyncOpenAI]:
         """Return the intended body, the body to send, and the client to send it."""
         body = self._output_caps.clamp(body)
         body, replaced = self._text_only.strip(body)
@@ -778,7 +801,7 @@ class OpenAIChatTransport:
         scope: ProviderAttemptScope,
         client: AsyncOpenAI,
         create_body: dict[str, Any],
-        body: dict,
+        body: dict[str, Any],
         *,
         history: RequestHistory,
         on_event: Callable[[Any], None] | None = None,
@@ -1189,9 +1212,11 @@ class _ChatAttempt(TransportAttempt):
         self._validating = False
 
     @property
+    @override
     def normal_stop_seen(self) -> bool:
         return self._presenter.normal_stop_seen
 
+    @override
     async def prepare(self) -> None:
         runner = self._runner
         (
@@ -1210,6 +1235,7 @@ class _ChatAttempt(TransportAttempt):
             native_chat=runner._native_chat,
         )
 
+    @override
     async def stream(self, scope: ProviderAttemptScope) -> AsyncIterator[StreamOutput]:
         assert self._client is not None
         runner = self._runner
@@ -1310,19 +1336,23 @@ class _ChatAttempt(TransportAttempt):
             if event:
                 yield StreamOutput((event,))
 
+    @override
     def resolvable(self, error: Exception) -> bool:
         # A local check sent nothing upstream; the permit is abandoned without
         # teaching correction or recovery state about a rejection.
         return not self._validating
 
+    @override
     def abandon(self, error: Exception) -> Iterator[StreamOutput]:
         return iter(self._presenter.abandon())
 
+    @override
     def failure_payload(
         self, error: Exception, failure: ExecutionFailure
     ) -> JsonObject | None:
         return self._presenter.output.failure_payload(failure)
 
+    @override
     def completed_fields(self) -> dict[str, Any]:
         completion = self._presenter.completion
         return {

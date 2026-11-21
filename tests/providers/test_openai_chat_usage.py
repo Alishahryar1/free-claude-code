@@ -1,12 +1,13 @@
 """OpenAI-chat streamed usage helper tests."""
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, override
 from unittest.mock import AsyncMock, patch
 
 import openai
 import pytest
 from httpx2 import Request, Response
+from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
 from openai.types.completion_usage import CompletionUsage, PromptTokensDetails
 
 from free_claude_code.application.response_collection import collected_frames
@@ -16,6 +17,7 @@ from free_claude_code.core.anthropic.sse_aggregation import (
     aggregate_anthropic_sse_to_message,
 )
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.providers.openai_chat import (
@@ -42,12 +44,13 @@ from tests.providers.support import (
 
 
 class _UsageTestBehavior(OpenAIChatBehavior):
+    @override
     def build_messages_body(
         self,
         request: MessagesRequest,
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> dict:
+    ) -> JsonObject:
         return {"model": request.model, "messages": [{"role": "user", "content": "x"}]}
 
 
@@ -79,7 +82,7 @@ def _bad_request(message: str, body: object | None = None) -> openai.BadRequestE
     return openai.BadRequestError(message, response=response, body=body)
 
 
-async def _stream(chunks):
+async def _stream(chunks: list[ChatCompletionChunk]):
     for chunk in chunks:
         yield chunk
 
@@ -193,7 +196,9 @@ def test_usage_int_reads_dict_object_and_model_extra():
         ({"prompt_tokens_details": None}, None),
     ],
 )
-def test_extracts_standard_chat_cache_write_tokens(usage, expected) -> None:
+def test_extracts_standard_chat_cache_write_tokens(
+    usage: JsonObject | CompletionUsage | SimpleNamespace | None, expected: int | None
+) -> None:
     provider = _UsageTestProvider()
 
     assert provider._behavior.cache_write_input_tokens(usage) == expected
@@ -282,7 +287,9 @@ def test_extracts_standard_chat_cache_write_tokens(usage, expected) -> None:
         ),
     ],
 )
-def test_maps_standard_chat_cache_usage_to_anthropic_fields(usage, expected):
+def test_maps_standard_chat_cache_usage_to_anthropic_fields(
+    usage: JsonObject | CompletionUsage | SimpleNamespace | None, expected: JsonObject
+):
     provider = _UsageTestProvider()
 
     assert provider._behavior.anthropic_usage_fields(usage) == expected
@@ -335,7 +342,9 @@ def test_maps_standard_chat_cache_usage_to_anthropic_fields(usage, expected):
         },
     ],
 )
-def test_ignores_incomplete_or_inconsistent_standard_cache_usage(usage):
+def test_ignores_incomplete_or_inconsistent_standard_cache_usage(
+    usage: JsonObject | CompletionUsage | SimpleNamespace | None,
+):
     provider = _UsageTestProvider()
 
     assert provider._behavior.anthropic_usage_fields(usage) == {}

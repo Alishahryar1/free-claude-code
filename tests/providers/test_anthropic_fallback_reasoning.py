@@ -12,7 +12,9 @@ from tests.providers.test_anthropic_native_transport import collect
 from tests.providers.test_anthropic_provider import native_body, provider
 
 
-def model_metadata(*, adaptive=True, supported_efforts=None):
+def model_metadata(
+    *, adaptive: bool = True, supported_efforts: list[str] | None = None
+):
     return {
         "id": "claude-test",
         "max_tokens": 10000,
@@ -40,12 +42,12 @@ def model_metadata(*, adaptive=True, supported_efforts=None):
 @pytest.mark.parametrize("adaptive", [False, True])
 @pytest.mark.parametrize("effort", ["off", "low", "medium", "high", "xhigh", "max"])
 async def test_native_override_replaces_controls_and_preserves_extensions(
-    adaptive, effort
+    adaptive: bool, effort: str
 ):
     received = []
     lookups = []
 
-    def handle(request):
+    def handle(request: httpx.Request):
         if request.method == "GET":
             lookups.append(request.url.path)
             return httpx.Response(200, json=model_metadata(adaptive=adaptive))
@@ -124,10 +126,10 @@ async def test_native_override_replaces_controls_and_preserves_extensions(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", ["unknown", "unsupported_effort", "small_output"])
-async def test_native_override_uses_existing_capability_validation(case):
+async def test_native_override_uses_existing_capability_validation(case: str):
     sent = []
 
-    def handle(request):
+    def handle(request: httpx.Request):
         if request.method == "GET":
             if case == "unknown":
                 return httpx.Response(404, json={"error": "unknown"})
@@ -160,7 +162,7 @@ async def test_native_override_uses_existing_capability_validation(case):
 async def test_native_inherit_preserves_unknown_controls_without_metadata():
     sent = []
 
-    def handle(request):
+    def handle(request: httpx.Request):
         assert request.method == "POST"
         sent.append(json.loads(request.content))
         return httpx.Response(

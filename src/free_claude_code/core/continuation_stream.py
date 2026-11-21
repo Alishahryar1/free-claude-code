@@ -64,7 +64,8 @@ class ContinuationStream:
         self._initial_progress = self.delivered.progress
 
     def boundary(self) -> list[dict[str, Any]]:
-        events, self._boundary = self._boundary, []
+        events = self._boundary
+        self._boundary = []
         return events
 
     def _item_id(self, value: str) -> str:

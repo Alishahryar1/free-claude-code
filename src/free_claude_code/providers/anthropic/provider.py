@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType
-from typing import cast
+from typing import cast, override
 from urllib.parse import quote
 
 import httpx
@@ -200,6 +200,7 @@ class AnthropicProvider(BaseProvider):
             ),
         )
 
+    @override
     def stream_native_messages(
         self,
         request: NativeMessagesRequest,
@@ -282,6 +283,7 @@ class AnthropicProvider(BaseProvider):
         finally:
             await maybe_await_aclose(stream)
 
+    @override
     async def stream_chat(
         self,
         request: ChatRequest,
@@ -310,6 +312,7 @@ class AnthropicProvider(BaseProvider):
         finally:
             await maybe_await_aclose(stream)
 
+    @override
     async def stream_gemini(
         self,
         request: GeminiRequest,

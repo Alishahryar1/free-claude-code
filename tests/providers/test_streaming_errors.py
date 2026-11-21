@@ -1,13 +1,17 @@
 """Tests for streaming error handling in providers/nvidia_nim/client.py."""
 
 import asyncio
+from collections.abc import Sequence
 from types import SimpleNamespace
+from typing import override
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import httpx2
 import openai
 import pytest
+from openai.types.chat import ChatCompletionChunk
+from openai.types.chat.chat_completion_chunk import Choice
 
 from free_claude_code.api.response_streams import (
     ManagedStreamingResponse,
@@ -15,11 +19,13 @@ from free_claude_code.api.response_streams import (
 )
 from free_claude_code.application.response_collection import collect_response
 from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
+from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
     parse_sse_text,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
@@ -41,12 +47,15 @@ from tests.providers.support import (
     profiled_provider,
     sdk_chat_chunk,
 )
+from tests.wire_payload import string_payload
 
 
-class AsyncStreamMock(SDKStreamDouble):
+class AsyncStreamMock(SDKStreamDouble[ChatCompletionChunk]):
     """Async iterable mock that yields chunks then optionally raises."""
 
-    def __init__(self, chunks, error=None):
+    def __init__(
+        self, chunks: list[ChatCompletionChunk], error: BaseException | None = None
+    ):
         self._chunks = chunks
         self._error = error
         super().__init__(self._aiter())
@@ -61,7 +70,13 @@ class AsyncStreamMock(SDKStreamDouble):
 class ClosableAsyncStreamMock(AsyncStreamMock):
     """Async stream mock that records cleanup."""
 
-    def __init__(self, chunks, error=None, *, close_error=None):
+    def __init__(
+        self,
+        chunks: list[ChatCompletionChunk],
+        error: BaseException | None = None,
+        *,
+        close_error: BaseException | None = None,
+    ):
         super().__init__(chunks, error=error)
         self.closed = False
         self.close_calls = 0
@@ -73,15 +88,16 @@ class ClosableAsyncStreamMock(AsyncStreamMock):
         if self._close_error is not None:
             raise self._close_error
 
+    @override
     async def close(self):
         await super().close()
         await self.aclose()
 
 
-class BlockingClosableAsyncStreamMock(SDKStreamDouble):
+class BlockingClosableAsyncStreamMock(SDKStreamDouble[None]):
     """Async stream that blocks until its consumer is cancelled."""
 
-    def __init__(self, *, close_error=None):
+    def __init__(self, *, close_error: BaseException | None = None):
         self.entered = asyncio.Event()
         self.close_calls = 0
         self._close_error = close_error
@@ -138,7 +154,7 @@ def _make_request(model: str = "test-model", stream: bool = True, **overrides: o
 def _make_stream_runner(
     provider: NvidiaNimProvider,
     *,
-    request=None,
+    request: MessagesRequest | None = None,
     request_id: str | None = None,
 ) -> _OpenAIChatStreamRunner:
     concrete_request = request or _make_request()
@@ -156,10 +172,14 @@ def _make_stream_runner(
 
 
 def _make_chunk(
-    content=None, finish_reason=None, tool_calls=None, reasoning_content=None
+    content: str | None = None,
+    finish_reason: str | None = None,
+    tool_calls: Sequence[SimpleNamespace | MagicMock] | None = None,
+    reasoning_content: str | None = None,
 ):
+    from openai._models import construct_type
     from openai.types.chat import ChatCompletionChunk
-    from openai.types.chat.chat_completion_chunk import Choice, ChoiceDelta
+    from openai.types.chat.chat_completion_chunk import Choice
 
     calls = [
         tool
@@ -174,24 +194,25 @@ def _make_chunk(
         }
         for tool in tool_calls or []
     ]
+    choice = construct_type(
+        type_=Choice,
+        value={
+            "index": 0,
+            "delta": {
+                "content": content,
+                "tool_calls": calls or None,
+                "reasoning_content": reasoning_content,
+            },
+            "finish_reason": finish_reason,
+        },
+    )
+    assert isinstance(choice, Choice)
     return ChatCompletionChunk.model_construct(
         id="chat_test",
         object="chat.completion.chunk",
         created=0,
         model="test-model",
-        choices=[
-            Choice.model_construct(
-                index=0,
-                delta=ChoiceDelta.model_validate(
-                    {
-                        "content": content,
-                        "tool_calls": calls or None,
-                        "reasoning_content": reasoning_content,
-                    }
-                ),
-                finish_reason=finish_reason,
-            )
-        ],
+        choices=[choice],
         usage=None,
     )
 
@@ -243,8 +264,8 @@ def _make_tool_calls_chunk(
 
 
 async def _collect_stream(
-    provider,
-    request,
+    provider: NvidiaNimProvider,
+    request: MessagesRequest,
     *,
     reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
 ):
@@ -258,28 +279,36 @@ async def _collect_stream(
     )
 
 
-async def _collect_stream_error(provider, request, **kwargs) -> ExecutionFailure:
+async def _collect_stream_error(
+    provider: NvidiaNimProvider,
+    request: MessagesRequest,
+    *,
+    request_id: str | None = None,
+) -> ExecutionFailure:
     with pytest.raises(ExecutionFailure) as exc_info:
         [
             frame
-            async for e in provider.stream_messages(request, **kwargs)
+            async for e in provider.stream_messages(request, request_id=request_id)
             for frame in e.frames
         ]
     return exc_info.value
 
 
 async def _collect_stream_and_error(
-    provider, request, **kwargs
+    provider: NvidiaNimProvider,
+    request: MessagesRequest,
+    *,
+    request_id: str | None = None,
 ) -> tuple[list[str], ExecutionFailure]:
     events: list[str] = []
 
-    def reject(error):
+    def reject(error: BaseException):
         raise error
 
     response = None
     with pytest.raises(ExecutionFailure) as exc_info:
         response = await _first_chunk_streaming_response(
-            provider.stream_messages(request, **kwargs),
+            provider.stream_messages(request, request_id=request_id),
             wire_api="messages",
             headers={},
             pre_start_error_response=reject,
@@ -295,7 +324,7 @@ async def _collect_stream_and_error(
     return events, exc_info.value
 
 
-def _tool_use_starts(events: list[str]) -> list[dict]:
+def _tool_use_starts(events: list[str]) -> list[JsonObject]:
     return [
         event.data["content_block"]
         for event in parse_sse_text("".join(events))
@@ -704,7 +733,10 @@ class TestStreamingExceptionHandling:
         ],
     )
     async def test_empty_reasoning_placeholders_preserve_content_blocks(
-        self, wire, deltas, expected
+        self,
+        wire: str,
+        deltas: list[tuple[str | None, str | None]],
+        expected: JsonValue,
     ):
         provider = profiled_provider(
             "qwencloud",
@@ -715,11 +747,15 @@ class TestStreamingExceptionHandling:
             for reasoning, content in deltas
         ] + [_make_chunk(finish_reason="stop")]
         try:
+
+            def side_effect_2(**kwargs: object):
+                return AsyncStreamMock(chunks)
+
             with patch.object(
                 provider._client.chat.completions,
                 "create",
                 new_callable=AsyncMock,
-                side_effect=lambda **kwargs: AsyncStreamMock(chunks),
+                side_effect=side_effect_2,
             ):
                 # Empty placeholders do not create output items on either request.
                 for _ in range(2):
@@ -928,7 +964,7 @@ class TestStreamingExceptionHandling:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("finish_reason", ["tool_calls", "stop"])
-    async def test_legacy_tool_markup_remains_visible_text(self, finish_reason):
+    async def test_legacy_tool_markup_remains_visible_text(self, finish_reason: str):
         """Legacy markup cannot manufacture executable tool calls."""
         provider = _make_provider()
         request = _make_request()
@@ -1150,7 +1186,9 @@ class TestStreamingExceptionHandling:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("committed", [False, True])
-    async def test_literal_markup_respects_connection_commit_boundary(self, committed):
+    async def test_literal_markup_respects_connection_commit_boundary(
+        self, committed: bool
+    ):
         """Literal markup follows ordinary retry and continuation boundaries."""
         provider = _make_provider()
         request = _make_request(
@@ -1245,7 +1283,7 @@ class TestStreamingExceptionHandling:
         parsed = parse_sse_text("".join(events))
         [start] = _tool_use_starts(events)
         assert mock_create.await_count == 2
-        assert start["id"].startswith("tool_")
+        assert string_payload(start["id"]).startswith("tool_")
         assert start["id"] != "call_abandoned"
         assert sum(event.event == "message_start" for event in parsed) == 1
         assert sum(event.event == "content_block_start" for event in parsed) == 1
@@ -1832,7 +1870,7 @@ class TestStreamChunkEdgeCases:
         request = _make_request()
 
         empty_choices_chunk = MagicMock()
-        empty_choices_chunk.choices = []
+        empty_choices_chunk.choices = list[Choice]()
         empty_choices_chunk.usage = None
 
         finish_chunk = _make_chunk(finish_reason="stop")

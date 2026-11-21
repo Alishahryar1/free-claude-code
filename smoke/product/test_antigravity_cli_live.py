@@ -16,6 +16,8 @@ import httpx2
 import pytest
 import uvicorn
 from PIL import Image
+from starlette.middleware.base import RequestResponseEndpoint
+from starlette.requests import Request
 
 from free_claude_code.cli.process_registry import kill_pid_tree_best_effort
 from free_claude_code.config import env_migrations, paths
@@ -25,6 +27,7 @@ from tests.api.support import create_test_app, provider_manager_for_app
 from tests.harnesses.antigravity_support import write_previous_connection
 from tests.providers.test_custom_provider import definition, event, provider
 from tests.providers.test_gemini_transport import chat_response
+from tests.wire_payload import string_payload
 
 pytestmark = [pytest.mark.live, pytest.mark.smoke_target("clients")]
 
@@ -165,7 +168,7 @@ def _reply(wire: str, calls: list[Path], reasoning: bool):
     return httpx.Response(
         200,
         headers={"content-type": "text/event-stream"},
-        text="".join(event(item["type"], item) for item in events),
+        text="".join(event(string_payload(item["type"]), item) for item in events),
     )
 
 
@@ -177,7 +180,11 @@ def _reply(wire: str, calls: list[Path], reasoning: bool):
     "previous_connection", [False, True], ids=["fresh", "migrated"]
 )
 def test_native_launcher_session_tools_and_resume(
-    wire, mode, previous_connection, tmp_path, monkeypatch
+    wire: str,
+    mode: str,
+    previous_connection: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     native = shutil.which("agy")
     if native is None:
@@ -206,10 +213,11 @@ def test_native_launcher_session_tools_and_resume(
     monkeypatch.setattr(paths, "config_dir_path", lambda: home / ".fcc")
     monkeypatch.setattr(env_migrations, "legacy_env_paths", lambda: ())
     monkeypatch.setattr(env_migrations, "verified_checkout_env_path", lambda: None)
-    sent, ingress = [], []
+    sent: list[JsonObject] = []
+    ingress: list[str] = []
     issued = False
 
-    def upstream(request):
+    def upstream(request: httpx.Request | httpx2.Request):
         nonlocal issued
         body = json.loads(request.content)
         sent.append(body)
@@ -247,7 +255,7 @@ def test_native_launcher_session_tools_and_resume(
     )
 
     @app.middleware("http")
-    async def capture(request, call_next):
+    async def capture(request: Request, call_next: RequestResponseEndpoint):
         ingress.append(request.url.path)
         return await call_next(request)
 
@@ -296,7 +304,7 @@ def test_native_launcher_session_tools_and_resume(
     for key in ("LOCALAPPDATA", "APPDATA", "TEMP"):
         Path(env[key]).mkdir(parents=True, exist_ok=True)
 
-    def run(phase, *args):
+    def run(phase: str, *args: str):
         process = subprocess.Popen(
             [str(launcher), *args],
             cwd=workspace,

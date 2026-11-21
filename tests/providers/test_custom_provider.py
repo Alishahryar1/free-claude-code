@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import Never
 
 import httpx
 import httpx2
@@ -10,13 +11,14 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.custom import CustomProvider
 from free_claude_code.providers.runtime.config import build_custom_provider_config
-from tests.providers.support import continuation_seed
+from tests.providers.support import MockHandler, continuation_seed, mock_response
 
 pytestmark = pytest.mark.asyncio
 
@@ -24,10 +26,10 @@ pytestmark = pytest.mark.asyncio
 @pytest.mark.parametrize(
     "api_format", ["openai_chat", "openai_responses", "anthropic_messages"]
 )
-async def test_custom_requests_use_first_key_in_each_protocol(api_format):
+async def test_custom_requests_use_first_key_in_each_protocol(api_format: str):
     requests = []
 
-    def reply(request):
+    def reply(request: httpx.Request | httpx2.Request):
         requests.append(request)
         response = (
             httpx.Response if api_format == "anthropic_messages" else httpx2.Response
@@ -74,10 +76,12 @@ async def test_custom_requests_use_first_key_in_each_protocol(api_format):
         {"type": "enabled", "budget_tokens": 1536},
     ],
 )
-async def test_native_default_preserves_controls_without_advertised_support(thinking):
+async def test_native_default_preserves_controls_without_advertised_support(
+    thinking: JsonObject | None,
+):
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         bodies.append(json.loads(request.content))
         return httpx.Response(
             200,
@@ -119,10 +123,12 @@ async def test_native_default_preserves_controls_without_advertised_support(thin
     "limit,cap,expected",
     [(2048, 4096, 2048), (8192, 4096, 4096), (None, 4096, 4096), (8192, None, 8192)],
 )
-async def test_messages_egress_obeys_request_model_limit(ingress, limit, cap, expected):
+async def test_messages_egress_obeys_request_model_limit(
+    ingress: str, limit: int | None, cap: int | None, expected: int
+):
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         bodies.append(json.loads(request.content))
         return httpx.Response(
             200,
@@ -163,10 +169,12 @@ async def test_messages_egress_obeys_request_model_limit(ingress, limit, cap, ex
 @pytest.mark.parametrize("ingress", ["messages", "responses"])
 @pytest.mark.parametrize("exact", [False, True])
 @pytest.mark.parametrize("cap", [1024, 4096])
-async def test_manual_preset_respects_cap_before_resolving_budget(ingress, exact, cap):
+async def test_manual_preset_respects_cap_before_resolving_budget(
+    ingress: str, exact: bool, cap: int
+):
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         bodies.append(json.loads(request.content))
         return httpx.Response(
             200,
@@ -226,11 +234,15 @@ async def test_manual_preset_respects_cap_before_resolving_budget(ingress, exact
         ({"type": "enabled", "budget_tokens": 6000}, "below max_tokens"),
     ],
 )
-async def test_native_default_does_not_invent_or_shrink_exact_budget(thinking, error):
-    bodies = []
+async def test_native_default_does_not_invent_or_shrink_exact_budget(
+    thinking: JsonObject | None, error: str
+):
+    def unexpected_request(request: httpx.Request) -> Never:
+        raise AssertionError("Invalid request reached the provider")
+
     instance = provider(
         definition(api_format="anthropic_messages"),
-        messages_handler=lambda request: bodies.append(request),
+        messages_handler=unexpected_request,
     )
     try:
         with pytest.raises(InvalidRequestError, match=error):
@@ -244,7 +256,6 @@ async def test_native_default_does_not_invent_or_shrink_exact_budget(thinking, e
                 model_info=ProviderModelInfo("m", max_output_tokens=4096),
             )
             [frame async for item in stream for frame in item.frames]
-        assert not bodies
     finally:
         await instance.cleanup()
 
@@ -253,7 +264,7 @@ async def test_concurrent_models_keep_independent_limits():
     bodies = []
     both_started = asyncio.Event()
 
-    async def reply(request):
+    async def reply(request: httpx.Request):
         bodies.append(json.loads(request.content))
         if len(bodies) == 2:
             both_started.set()
@@ -268,7 +279,7 @@ async def test_concurrent_models_keep_independent_limits():
         definition(api_format="anthropic_messages"), messages_handler=reply
     )
 
-    async def call(model, cap):
+    async def call(model: str, cap: int):
         stream = instance.stream_messages(
             MessagesRequest(
                 model=model,
@@ -289,7 +300,7 @@ async def test_concurrent_models_keep_independent_limits():
         await instance.cleanup()
 
 
-def definition(**changes):
+def definition(**changes: object):
     return CustomProviderDefinition.model_validate(
         {
             "provider_id": "custom_" + "a" * 32,
@@ -300,7 +311,20 @@ def definition(**changes):
     )
 
 
-def provider(config, *, openai_handler=None, messages_handler=None):
+def provider(
+    config: CustomProviderDefinition,
+    *,
+    openai_handler: MockHandler[httpx2.Request] | None = None,
+    messages_handler: MockHandler[httpx.Request] | None = None,
+):
+    async def openai_reply(request: httpx2.Request) -> httpx2.Response:
+        assert openai_handler is not None
+        return await mock_response(openai_handler(request), httpx2.Response)
+
+    async def messages_reply(request: httpx.Request) -> httpx.Response:
+        assert messages_handler is not None
+        return await mock_response(messages_handler(request), httpx.Response)
+
     settings = Settings(provider_rate_limit=1000)
     return CustomProvider(
         build_custom_provider_config(config, settings),
@@ -311,20 +335,18 @@ def provider(config, *, openai_handler=None, messages_handler=None):
             rate_window=1,
             max_concurrency=2,
         ),
-        openai_transport=httpx2.MockTransport(openai_handler)
-        if openai_handler
-        else None,
-        messages_transport=httpx.MockTransport(messages_handler)
+        openai_transport=httpx2.MockTransport(openai_reply) if openai_handler else None,
+        messages_transport=httpx.MockTransport(messages_reply)
         if messages_handler
         else None,
     )
 
 
-def event(name, data):
+def event(name: str, data: JsonObject):
     return f"event: {name}\ndata: {json.dumps(data)}\n\n"
 
 
-def completion(api_format):
+def completion(api_format: str):
     if api_format == "openai_chat":
         data = {
             "id": "chat",
@@ -442,14 +464,19 @@ def completion(api_format):
 @pytest.mark.parametrize("key", [None, "custom-key"])
 @pytest.mark.parametrize("seeded", [False, True])
 async def test_six_paths_use_exact_endpoint_and_credentials(
-    api_format, path, ingress, key, seeded, monkeypatch
+    api_format: str,
+    path: str,
+    ingress: str,
+    key: str | None,
+    seeded: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated-key")
     monkeypatch.setenv("OPENAI_ORG_ID", "unrelated-org")
     monkeypatch.setenv("OPENAI_PROJECT_ID", "unrelated-project")
     requests = []
 
-    def reply(request):
+    def reply(request: httpx.Request | httpx2.Request):
         requests.append(request)
         cls = httpx.Response if api_format == "anthropic_messages" else httpx2.Response
         return cls(
@@ -521,12 +548,12 @@ async def test_six_paths_use_exact_endpoint_and_credentials(
     "api_format", ["openai_chat", "openai_responses", "anthropic_messages"]
 )
 async def test_discovery_is_bound_and_manual_inventory_needs_no_network(
-    api_format, monkeypatch
+    api_format: str, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setenv("OPENAI_API_KEY", "do-not-send")
     requests = []
 
-    def reply(request):
+    def reply(request: httpx.Request | httpx2.Request):
         requests.append(request)
         cls = httpx.Response if api_format == "anthropic_messages" else httpx2.Response
         return cls(200, json={"data": [{"id": "org/model"}], "has_more": False})
@@ -587,11 +614,11 @@ async def test_discovery_is_bound_and_manual_inventory_needs_no_network(
     ],
 )
 async def test_reasoning_presets_encode_controls_on_the_wire(
-    api_format, mode, field, expected
+    api_format: str, mode: str, field: str, expected: JsonValue
 ):
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request | httpx2.Request):
         bodies.append(json.loads(request.content))
         cls = httpx.Response if api_format == "anthropic_messages" else httpx2.Response
         return cls(
@@ -625,10 +652,12 @@ async def test_reasoning_presets_encode_controls_on_the_wire(
     "api_format", ["openai_chat", "openai_responses", "anthropic_messages"]
 )
 @pytest.mark.parametrize("ingress", ["messages", "responses"])
-async def test_tool_continuation_keeps_tool_results_and_images(api_format, ingress):
+async def test_tool_continuation_keeps_tool_results_and_images(
+    api_format: str, ingress: str
+):
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request | httpx2.Request):
         bodies.append(json.loads(request.content))
         cls = httpx.Response if api_format == "anthropic_messages" else httpx2.Response
         return cls(
@@ -731,7 +760,7 @@ async def test_tool_continuation_keeps_tool_results_and_images(api_format, ingre
 async def test_messages_discovery_rejects_repeating_cursor_without_partial_results():
     calls = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         calls.append(request)
         return httpx.Response(
             200, json={"data": [{"id": "same"}], "has_more": True, "last_id": "same"}
@@ -750,7 +779,7 @@ async def test_messages_discovery_rejects_repeating_cursor_without_partial_resul
 
 
 @pytest.mark.parametrize("vision", [True, False])
-async def test_messages_discovery_retains_text_and_advertised_limits(vision):
+async def test_messages_discovery_retains_text_and_advertised_limits(vision: bool):
     instance = provider(
         definition(api_format="anthropic_messages"),
         messages_handler=lambda request: httpx.Response(

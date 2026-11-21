@@ -1,6 +1,7 @@
 """All client protocols exercise native Gemini over HTTP, including replay."""
 
 import json
+from collections.abc import AsyncIterator, Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
@@ -16,13 +17,15 @@ from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.chat_completions.response import ChatResponseAccumulator
 from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.gemini.response import GeminiResponseAccumulator
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.gemini import GeminiProvider
 from tests.providers.support import immediate_admission, make_provider_config
 
 
-def _sse(parts):
+def _sse(parts: Sequence[Mapping[str, JsonValue]]):
     events: list[dict[str, Any]] = [
         {"candidates": [{"index": 0, "content": {"role": "model", "parts": [part]}}]}
         for part in parts
@@ -46,7 +49,7 @@ def _sse(parts):
     )
 
 
-def _request(wire, history=None):
+def _request(wire: str, history: list[JsonObject] | None = None):
     model = "models/test-model"
     if wire == "messages":
         return MessagesRequest(
@@ -73,7 +76,7 @@ def _request(wire, history=None):
     )
 
 
-async def _collect(wire, stream):
+async def _collect(wire: str, stream: AsyncIterator[StreamOutput]):
     if wire == "messages":
         message, error, stopped = await aggregate_anthropic_sse_to_message(
             collected_frames(stream, protocol="messages")
@@ -101,7 +104,7 @@ async def _collect(wire, stream):
 @pytest.mark.parametrize("wire", ["messages", "responses", "chat", "gemini"])
 @pytest.mark.parametrize("interleaved", [False, True])
 async def test_all_ingresses_use_native_gemini_and_replay_signed_parts(
-    wire, interleaved
+    wire: str, interleaved: bool
 ):
     bodies = []
     parts = [
@@ -117,7 +120,7 @@ async def test_all_ingresses_use_native_gemini_and_replay_signed_parts(
             [{"text": "a later thought", "thought": True}, {"text": "a later answer"}]
         )
 
-    def reply(request):
+    def reply(request: httpx.Request):
         assert request.url.path == "/v1beta/models/test-model:streamGenerateContent"
         assert request.url.params["alt"] == "sse"
         assert request.headers["x-goog-api-key"] == "test-key"
@@ -136,6 +139,7 @@ async def test_all_ingresses_use_native_gemini_and_replay_signed_parts(
                 _request(wire), response_model="public"
             ),
         )
+        history: list[JsonObject]
         if wire == "messages":
             history = [
                 {"role": "user", "content": "hello"},
@@ -176,7 +180,7 @@ async def test_all_ingresses_use_native_gemini_and_replay_signed_parts(
 @pytest.mark.parametrize("wire", ["messages", "responses", "chat"])
 @pytest.mark.parametrize("native_id", [None, "google-call"])
 async def test_native_signed_tool_round_trip_keeps_original_parts_and_ids(
-    wire, native_id
+    wire: str, native_id: str | None
 ):
     parts = [
         {"text": "inspect the tool", "thought": True},
@@ -192,7 +196,7 @@ async def test_native_signed_tool_round_trip_keeps_original_parts_and_ids(
     ]
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         bodies.append(json.loads(request.content))
         return _sse(parts if len(bodies) == 1 else [{"text": "complete"}])
 
@@ -281,11 +285,11 @@ async def test_native_signed_tool_round_trip_keeps_original_parts_and_ids(
     "model", ["models/gemini-2.5-pro", "models/gemini-3.5-flash-lite", "unknown-model"]
 )
 async def test_prefer_off_uses_normal_allowance_without_unavailable_disable_control(
-    model,
+    model: str,
 ):
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         bodies.append(json.loads(request.content))
         return _sse([{"text": "verdict"}])
 
@@ -316,7 +320,7 @@ async def test_prefer_off_uses_normal_allowance_without_unavailable_disable_cont
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses", "chat"])
-async def test_explicit_off_hides_native_thoughts_but_keeps_signed_replay(wire):
+async def test_explicit_off_hides_native_thoughts_but_keeps_signed_replay(wire: str):
     provider = GeminiProvider(
         make_provider_config(api_key="key", base_url=GEMINI_DEFAULT_BASE),
         admission=immediate_admission(),
@@ -348,7 +352,7 @@ async def test_explicit_off_rejection_does_not_relax_caller_control():
 
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         bodies.append(json.loads(request.content))
         return httpx.Response(
             400, json={"error": {"message": "Thinking cannot be disabled"}}
@@ -377,7 +381,7 @@ async def test_explicit_off_rejection_does_not_relax_caller_control():
 async def test_native_model_discovery_follows_pages_and_keeps_native_names():
     urls = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         urls.append(str(request.url))
         assert request.headers["x-goog-api-key"] == "key"
         if request.url.params.get("pageToken") == "second":
@@ -442,10 +446,12 @@ async def test_native_model_discovery_follows_pages_and_keeps_native_names():
         (ReasoningPolicy.off(), {"includeThoughts": False, "thinkingBudget": 0}),
     ],
 )
-async def test_native_reasoning_uses_one_computation_control(reasoning, expected):
+async def test_native_reasoning_uses_one_computation_control(
+    reasoning: ReasoningPolicy, expected: JsonObject
+):
     bodies: list[dict[str, Any]] = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         bodies.append(json.loads(request.content))
         return _sse([{"text": "answer"}])
 
@@ -505,13 +511,13 @@ async def test_native_empty_signed_part_does_not_emit_empty_text_block():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("code", [400, 429, 503])
 async def test_native_inband_error_preserves_retry_semantics_without_history_probes(
-    code,
+    code: int,
 ):
     from free_claude_code.core.failures import ExecutionFailure
 
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         bodies.append(json.loads(request.content))
         return httpx.Response(
             200,
@@ -554,7 +560,7 @@ async def test_native_inband_error_preserves_retry_semantics_without_history_pro
 async def test_native_history_modes_share_attempt_budget_and_restore_source():
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         bodies.append(json.loads(request.content))
         if len(bodies) < 3:
             return httpx.Response(
@@ -567,7 +573,7 @@ async def test_native_history_modes_share_attempt_budget_and_restore_source():
         admission=immediate_admission(max_attempts=3),
         transport=httpx.MockTransport(reply),
     )
-    history = [
+    history: list[JsonObject] = [
         {
             "role": "model",
             "parts": [{"text": "old thought", "thought": True}, {"text": "old answer"}],

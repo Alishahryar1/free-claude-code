@@ -13,8 +13,10 @@ from pathlib import Path
 from PIL import Image
 from pystray import Icon, Menu, MenuItem
 
+from free_claude_code.core.json_types import JsonObject
 
-def write_report(output, report):
+
+def write_report(output: Path, report: JsonObject):
     pending = output.with_suffix(".pending")
     pending.write_text(json.dumps(report, indent=2), encoding="utf-8")
     pending.replace(output)
@@ -55,7 +57,7 @@ def process_report():
     }
 
 
-def tray_report(icon):
+def tray_report(icon: Icon):
     Foundation = import_module("Foundation")
     item = icon._status_item
     window = item.button().window()
@@ -81,11 +83,15 @@ def main():
     output = Path(os.environ["FCC_MACOS_PROBE_OUTPUT"])
     report = process_report()
     write_report(output, report)
+
+    def quit_probe(item: Icon) -> None:
+        item.stop()
+
     icon = Icon(
         "fcc-launcher-probe",
         Image.new("RGB", (32, 32), "red"),
         "FCC launcher probe",
-        Menu(MenuItem("Quit", lambda item: item.stop())),
+        Menu(MenuItem("Quit", quit_probe)),
     )
     # Give both launch paths the same AppKit layout observation interval.
     ready_at = time.monotonic() + 2

@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator
+from typing import override
 
 import pytest
 
@@ -12,6 +13,7 @@ from free_claude_code.application.web_tools.ports import WebFetchEgressPolicy
 from free_claude_code.application.web_tools.service import WebToolService
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import Message, MessagesRequest, Tool
+from free_claude_code.core.anthropic.tokens import TokenCounter
 from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.web_tools import WebFetchResult
 from tests.web_tools_support import StubWebToolsClient
@@ -21,7 +23,16 @@ async def _no_provider(_provider_id, _api_key_number):
     pytest.fail("This request must not resolve a provider")
 
 
-def _service(settings, client, *, token_counter=lambda *_: 5):
+def callback(*_: object):
+    return 5
+
+
+def _service(
+    settings: Settings,
+    client: StubWebToolsClient,
+    *,
+    token_counter: TokenCounter = callback,
+):
     return WebToolService(
         settings=settings,
         client=client,
@@ -30,7 +41,7 @@ def _service(settings, client, *, token_counter=lambda *_: 5):
     )
 
 
-def _request(tool, *, typed=True):
+def _request(tool: str, *, typed: bool = True):
     return MessagesRequest(
         model="claude-sonnet",
         messages=[Message(role="user", content="https://example.com/")],
@@ -83,6 +94,7 @@ async def test_concurrent_requests_keep_their_own_egress_policy():
         def __init__(self):
             self.policies = []
 
+        @override
         async def fetch(
             self, url: str, *, egress: WebFetchEgressPolicy
         ) -> WebFetchResult:

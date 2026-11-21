@@ -8,13 +8,14 @@ from threading import Barrier
 import pytest
 
 from free_claude_code.application.model_catalog import CatalogModel, ModelCatalog
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.harnesses import antigravity
 from tests.harnesses.antigravity_support import write_previous_connection
 
 
 @pytest.fixture
-def native_files(tmp_path):
+def native_files(tmp_path: Path):
     path, state = (
         tmp_path / "native/settings.json",
         tmp_path / "fcc/antigravity-integration.json",
@@ -70,7 +71,7 @@ def test_session_catalog_preserves_native_model_contract():
     }
 
 
-def test_unrecorded_settings_are_not_even_read(native_files):
+def test_unrecorded_settings_are_not_even_read(native_files: tuple[Path, Path]):
     path, state = native_files
     path.write_text("not JSON; native owns this")
     assert not antigravity.cleanup_previous_connection(path, state)
@@ -82,7 +83,7 @@ def test_unrecorded_settings_are_not_even_read(native_files):
     "previous", [{}, {"modelProvider": ""}, {"modelProvider": "gemini"}]
 )
 def test_cleanup_restores_only_previous_connection_and_preserves_history(
-    native_files, previous
+    native_files: tuple[Path, Path], previous: JsonObject
 ):
     path, state = native_files
     document = json.loads(path.read_text())
@@ -103,7 +104,7 @@ def test_cleanup_restores_only_previous_connection_and_preserves_history(
     "field,value", [("modelName", "user-model"), ("label", "Personal")]
 )
 def test_cleanup_preserves_external_provider_and_modified_model(
-    native_files, field, value
+    native_files: tuple[Path, Path], field: str, value: str
 ):
     path, state = native_files
     write_previous_connection(path, state)
@@ -117,7 +118,9 @@ def test_cleanup_preserves_external_provider_and_modified_model(
 
 
 @pytest.mark.parametrize("bad_state", ["{broken", "{}", '{"model_keys": [3]}'])
-def test_invalid_record_is_preserved_without_native_mutation(native_files, bad_state):
+def test_invalid_record_is_preserved_without_native_mutation(
+    native_files: tuple[Path, Path], bad_state: str
+):
     path, state = native_files
     write_previous_connection(path, state)
     state.write_text(bad_state)
@@ -127,7 +130,7 @@ def test_invalid_record_is_preserved_without_native_mutation(native_files, bad_s
     assert (path.read_bytes(), state.read_bytes()) == before
 
 
-def test_record_for_another_path_is_not_used(native_files):
+def test_record_for_another_path_is_not_used(native_files: tuple[Path, Path]):
     path, state = native_files
     write_previous_connection(path, state)
     record = json.loads(state.read_text())
@@ -151,7 +154,9 @@ def test_record_for_another_path_is_not_used(native_files):
         "[]",
     ],
 )
-def test_invalid_native_settings_are_not_replaced(native_files, source):
+def test_invalid_native_settings_are_not_replaced(
+    native_files: tuple[Path, Path], source: str
+):
     path, state = native_files
     write_previous_connection(path, state)
     path.write_text(source)
@@ -161,13 +166,15 @@ def test_invalid_native_settings_are_not_replaced(native_files, source):
     assert (path.read_bytes(), state.read_bytes()) == before
 
 
-def test_failed_native_write_keeps_record_for_retry(native_files, monkeypatch):
+def test_failed_native_write_keeps_record_for_retry(
+    native_files: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+):
     path, state = native_files
     original = write_previous_connection(path, state)
     before = path.read_bytes(), state.read_bytes()
     with monkeypatch.context() as patch:
 
-        def denied(*args, **kwargs):
+        def denied(*args: object, **kwargs: object):
             raise PermissionError("native file locked")
 
         patch.setattr(antigravity, "atomic_write_text", denied)
@@ -178,16 +185,18 @@ def test_failed_native_write_keeps_record_for_retry(native_files, monkeypatch):
     assert json.loads(path.read_text()) == original and not state.exists()
 
 
-def test_interrupted_record_removal_is_safe_to_retry(native_files, monkeypatch):
+def test_interrupted_record_removal_is_safe_to_retry(
+    native_files: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+):
     path, state = native_files
     original = write_previous_connection(path, state)
     unlink = Path.unlink
     with monkeypatch.context() as patch:
 
-        def denied(target, *args, **kwargs):
+        def denied(target: Path, missing_ok: bool = False):
             if target == state:
                 raise PermissionError("record locked")
-            return unlink(target, *args, **kwargs)
+            return unlink(target, missing_ok=missing_ok)
 
         patch.setattr(Path, "unlink", denied)
         with pytest.raises(PermissionError):
@@ -197,7 +206,7 @@ def test_interrupted_record_removal_is_safe_to_retry(native_files, monkeypatch):
     assert json.loads(path.read_text()) == original and not state.exists()
 
 
-def test_two_first_launches_safely_share_cleanup(native_files):
+def test_two_first_launches_safely_share_cleanup(native_files: tuple[Path, Path]):
     path, state = native_files
     original = write_previous_connection(path, state)
     gate = Barrier(2)

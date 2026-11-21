@@ -7,11 +7,13 @@ import pytest
 from loguru import logger
 
 from free_claude_code.config.logging_config import configure_logging
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.trace import (
     TRACE_PAYLOAD_BINDING,
     trace_event,
     traced_async_stream,
 )
+from tests.wire_payload import object_payload
 
 
 class _CloseTrackingIterator:
@@ -46,7 +48,7 @@ class _CloseTrackingIterator:
             raise self._close_error
 
 
-def _json_log_rows(log_file: str) -> list[dict]:
+def _json_log_rows(log_file: str) -> list[JsonObject]:
     logger.complete()
     text = Path(log_file).read_text(encoding="utf-8").strip()
     if not text:
@@ -54,30 +56,33 @@ def _json_log_rows(log_file: str) -> list[dict]:
     return [json.loads(line) for line in text.split("\n")]
 
 
-def _trace_payloads(log_file: str) -> list[dict]:
+def _trace_payloads(log_file: str) -> list[JsonObject]:
     return [
-        row["record"]["extra"][TRACE_PAYLOAD_BINDING]
+        object_payload(extra[TRACE_PAYLOAD_BINDING])
         for row in _json_log_rows(log_file)
-        if TRACE_PAYLOAD_BINDING in row["record"]["extra"]
+        if TRACE_PAYLOAD_BINDING
+        in (extra := object_payload(object_payload(row["record"])["extra"]))
     ]
 
 
-def test_trace_payload_preserved_in_native_json(tmp_path) -> None:
+def test_trace_payload_preserved_in_native_json(tmp_path: Path) -> None:
     log_file = str(tmp_path / "t.log")
     configure_logging(log_file, force=True, level="DEBUG")
     trace_event(stage="s", event="e.v1", source="unit", hello="world", n=42)
     row = _json_log_rows(log_file)[-1]
-    assert row["record"]["level"]["name"] == "DEBUG"
-    row = row["record"]["extra"][TRACE_PAYLOAD_BINDING]
-    assert row["stage"] == "s"
-    assert row["event"] == "e.v1"
-    assert row["source"] == "unit"
-    assert row["hello"] == "world"
-    assert row["n"] == 42
+    assert object_payload(object_payload(row["record"])["level"])["name"] == "DEBUG"
+    row = object_payload(
+        object_payload(object_payload(row["record"])["extra"])[TRACE_PAYLOAD_BINDING]
+    )
+    assert object_payload(row)["stage"] == "s"
+    assert object_payload(row)["event"] == "e.v1"
+    assert object_payload(row)["source"] == "unit"
+    assert object_payload(row)["hello"] == "world"
+    assert object_payload(row)["n"] == 42
     assert TRACE_PAYLOAD_BINDING == "trace_payload"
 
 
-def test_trace_payload_excluded_from_default_info_logs(tmp_path) -> None:
+def test_trace_payload_excluded_from_default_info_logs(tmp_path: Path) -> None:
     log_file = str(tmp_path / "default.log")
     configure_logging(log_file, force=True)
 
@@ -85,7 +90,9 @@ def test_trace_payload_excluded_from_default_info_logs(tmp_path) -> None:
     logger.info("visible lifecycle event")
 
     rows = _json_log_rows(log_file)
-    assert [row["record"]["message"] for row in rows] == ["visible lifecycle event"]
+    assert [object_payload(row["record"])["message"] for row in rows] == [
+        "visible lifecycle event"
+    ]
 
 
 def test_sanitize_masks_nested_api_key_strings() -> None:
@@ -156,7 +163,7 @@ def test_trace_redacts_provider_api_keys_in_json(tmp_path: Path, header: str) ->
 
 
 @pytest.mark.asyncio
-async def test_traced_async_stream_logs_completion(tmp_path) -> None:
+async def test_traced_async_stream_logs_completion(tmp_path: Path) -> None:
     log_file = str(tmp_path / "complete.log")
     configure_logging(log_file, force=True, level="DEBUG")
 
@@ -185,7 +192,7 @@ async def test_traced_async_stream_logs_completion(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_traced_async_stream_logs_real_exception(tmp_path) -> None:
+async def test_traced_async_stream_logs_real_exception(tmp_path: Path) -> None:
     log_file = str(tmp_path / "error.log")
     configure_logging(log_file, force=True, level="DEBUG")
 
@@ -218,18 +225,33 @@ async def test_traced_async_stream_logs_real_exception(tmp_path) -> None:
     close_failed = [
         row["record"]
         for row in _json_log_rows(log_file)
-        if row["record"]["extra"].get("event") == "stream.input.close_failed"
+        if object_payload(object_payload(row["record"])["extra"]).get("event")
+        == "stream.input.close_failed"
     ]
     assert len(close_failed) == 1
-    assert close_failed[0]["level"]["name"] == "WARNING"
-    assert close_failed[0]["exception"]["value"] == "close boom"
-    assert close_failed[0]["extra"]["owner"] == "traced_async_stream"
-    assert close_failed[0]["extra"]["close_exc_type"] == "RuntimeError"
-    assert close_failed[0]["extra"]["preserved_exc_type"] == "RuntimeError"
+    assert object_payload(object_payload(close_failed[0])["level"])["name"] == "WARNING"
+    assert (
+        object_payload(object_payload(close_failed[0])["exception"])["value"]
+        == "close boom"
+    )
+    assert (
+        object_payload(object_payload(close_failed[0])["extra"])["owner"]
+        == "traced_async_stream"
+    )
+    assert (
+        object_payload(object_payload(close_failed[0])["extra"])["close_exc_type"]
+        == "RuntimeError"
+    )
+    assert (
+        object_payload(object_payload(close_failed[0])["extra"])["preserved_exc_type"]
+        == "RuntimeError"
+    )
 
 
 @pytest.mark.asyncio
-async def test_traced_async_stream_closes_quietly_on_generator_exit(tmp_path) -> None:
+async def test_traced_async_stream_closes_quietly_on_generator_exit(
+    tmp_path: Path,
+) -> None:
     log_file = str(tmp_path / "generator_exit.log")
     configure_logging(log_file, force=True, level="DEBUG")
 

@@ -1,6 +1,7 @@
 """Tests for Google Vertex AI authentication, discovery, and Chat Completions."""
 
 import asyncio
+from typing import override
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -16,6 +17,7 @@ from free_claude_code.application.errors import (
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import VERTEX_AI_API_ROOT
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.vertex import VertexProvider
@@ -61,6 +63,7 @@ class FakeCredentials(Credentials):
         self.refresh_request: object | None = None
 
     @property
+    @override
     def expired(self) -> bool:
         return self._expired
 
@@ -98,7 +101,7 @@ def _provider(
     )
 
 
-def _simulate_openai_sdk_wire_json(body: dict) -> dict:
+def _simulate_openai_sdk_wire_json(body: JsonObject) -> JsonObject:
     wire = {key: value for key, value in body.items() if key != "extra_body"}
     sdk_extra = body.get("extra_body")
     if isinstance(sdk_extra, dict):
@@ -106,7 +109,7 @@ def _simulate_openai_sdk_wire_json(body: dict) -> dict:
     return wire
 
 
-def _google_thinking_config(wire: dict) -> dict | None:
+def _google_thinking_config(wire: JsonObject) -> JsonObject | None:
     literal_extra_body = wire.get("extra_body")
     if not isinstance(literal_extra_body, dict):
         return None
@@ -297,7 +300,7 @@ def test_vertex_request_maps_reasoning_off_to_zero_budget() -> None:
 )
 def test_vertex_reasoning_has_one_google_wire_owner(
     reasoning: ReasoningPolicy,
-    expected_thinking_config: dict | None,
+    expected_thinking_config: JsonObject | None,
 ) -> None:
     provider = _provider()
 

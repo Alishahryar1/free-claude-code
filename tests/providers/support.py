@@ -2,20 +2,23 @@
 
 import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
+from inspect import isawaitable
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import Mock
 
+import httpx
 import httpx2
 from openai import AsyncOpenAI
 from openai._models import construct_type
 from openai.types.chat import ChatCompletionChunk
+from openai.types.chat.completion_create_params import CompletionCreateParamsStreaming
 
 from free_claude_code.application.reasoning import client_reasoning_policy
 from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.async_iterators import AsyncCloseable
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
@@ -23,6 +26,22 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatProvider,
     create_openai_chat_provider,
 )
+from tests.wire_payload import object_array, string_payload
+
+type MockResponse = httpx.Response | httpx2.Response
+type MockHandler[RequestT] = Callable[
+    [RequestT], MockResponse | Awaitable[MockResponse]
+]
+
+
+async def mock_response[ResponseT: (httpx.Response, httpx2.Response)](
+    result: MockResponse | Awaitable[MockResponse],
+    expected: type[ResponseT],
+) -> ResponseT:
+    response = await result if isawaitable(result) else result
+    assert isinstance(response, expected)
+    return response
+
 
 REASONING_DEFAULT = ReasoningPolicy.provider_default()
 REASONING_ON = ReasoningPolicy.on()
@@ -130,9 +149,16 @@ def make_provider_config(
     )
 
 
-async def capture_openai_chat_wire_body(body: dict) -> dict:
+class PreparedChatRequest(CompletionCreateParamsStreaming, closed=True):
+    """Configured provider options sent through the OpenAI SDK."""
+
+
+async def capture_openai_chat_wire_body(body: JsonObject) -> JsonObject:
     """Return the JSON body serialized by the OpenAI chat client."""
-    captured: list[dict] = []
+    if "stream" in body:
+        raise TypeError("Prepared chat body already contains stream")
+
+    captured: list[JsonObject] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         payload = json.loads(request.content)
@@ -151,7 +177,9 @@ async def capture_openai_chat_wire_body(body: dict) -> dict:
         max_retries=0,
     )
     try:
-        stream = await client.chat.completions.create(**body, stream=True)
+        # The provider prepared these SDK options, including provider extensions.
+        params = cast(PreparedChatRequest, {**body, "stream": True})
+        stream = await client.chat.completions.create(**params)
         await stream.close()
     finally:
         await client.close()
@@ -204,7 +232,7 @@ def without_empty_reasoning(value: Any) -> Any:
     Populated reasoning and all other request fields remain observable. Projection
     tests assert the empty representations themselves.
     """
-    empty_items = (
+    empty_items: tuple[JsonObject, ...] = (
         {"type": "thinking", "thinking": ""},
         {
             "type": "reasoning",
@@ -240,10 +268,10 @@ def continuation_seed(text: str = "", thinking: str = ""):
     return ContinuationSeed("messages", tuple(items))
 
 
-def assistant_history_text(rows):
+def assistant_history_text(rows: JsonValue):
     """Read actual assistant answer text across both upstream request formats."""
     parts = []
-    for row in rows:
+    for row in object_array(rows):
         if row.get("role") != "assistant":
             continue
         content = row.get("content", "")
@@ -251,8 +279,8 @@ def assistant_history_text(rows):
             parts.append(content)
         else:
             parts.extend(
-                part.get("text", "")
-                for part in content
+                string_payload(part.get("text", ""))
+                for part in object_array(content)
                 if part.get("type") in {"text", "output_text"}
             )
     return "".join(parts)

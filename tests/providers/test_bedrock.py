@@ -129,9 +129,11 @@ def test_reasoning_history_replays_in_native_field() -> None:
 
 
 @pytest.mark.asyncio
-async def test_model_discovery_uses_mantle_openai_models_endpoint() -> None:
+async def test_model_discovery_uses_mantle_openai_models_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     provider = _provider()
-    provider._client.models.list = AsyncMock(
+    mock_list = AsyncMock(
         return_value=SimpleNamespace(
             data=[
                 SimpleNamespace(id="openai.gpt-oss-120b"),
@@ -139,6 +141,7 @@ async def test_model_discovery_uses_mantle_openai_models_endpoint() -> None:
             ]
         )
     )
+    monkeypatch.setattr(provider._client.models, "list", mock_list)
 
     assert await provider.list_model_infos() == frozenset(
         {
@@ -146,4 +149,4 @@ async def test_model_discovery_uses_mantle_openai_models_endpoint() -> None:
             ProviderModelInfo("amazon.nova-pro-v1:0"),
         }
     )
-    provider._client.models.list.assert_awaited_once_with()
+    mock_list.assert_awaited_once_with()

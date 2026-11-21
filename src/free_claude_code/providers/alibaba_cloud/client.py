@@ -1,6 +1,6 @@
 """Model Studio chat transport with native DashScope model discovery."""
 
-from typing import Any
+from typing import Any, override
 from urllib.parse import urljoin
 
 from openai import AsyncOpenAI
@@ -61,6 +61,7 @@ class AlibabaCloudProvider(OpenAIChatProvider):
             client=client,
         )
 
+    @override
     async def _list_models_payload(self) -> Any:
         # An absolute URL avoids the OpenAI SDK appending to /compatible-mode/v1.
         url = urljoin(self._base_url, "/api/v1/models")

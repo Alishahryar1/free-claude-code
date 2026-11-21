@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -6,7 +7,11 @@ import pytest
 from free_claude_code.messaging.platforms.outbox import PlatformOutbox
 
 
-def _noop_outbox(*, limiter=None, delete_many=None) -> PlatformOutbox:
+def _noop_outbox(
+    *,
+    limiter: MagicMock | None = None,
+    delete_many: Callable[[str, list[str]], Awaitable[None]] | None = None,
+) -> PlatformOutbox:
     async def send(
         chat_id: str,
         text: str,
@@ -39,7 +44,9 @@ def _noop_outbox(*, limiter=None, delete_many=None) -> PlatformOutbox:
 async def test_queue_send_awaits_required_limiter() -> None:
     limiter = MagicMock()
 
-    async def enqueue(operation, dedup_key=None):
+    async def enqueue(
+        operation: Callable[[], Awaitable[object]], dedup_key: object = None
+    ):
         return await operation()
 
     limiter.enqueue = AsyncMock(side_effect=enqueue)

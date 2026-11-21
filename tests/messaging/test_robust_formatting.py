@@ -30,7 +30,7 @@ def _ctx() -> RenderCtx:
     )
 
 
-def test_truncation_closes_code_blocks(handler):
+def test_truncation_closes_code_blocks(handler: object):
     """Verify that truncation correctly closes open code blocks."""
     t = TranscriptBuffer()
     t.apply(
@@ -53,7 +53,7 @@ def test_truncation_closes_code_blocks(handler):
     assert msg.endswith("```") or "✅ *Complete*" in msg.split("```")[-1]
 
 
-def test_truncation_preserves_status(handler):
+def test_truncation_preserves_status(handler: object):
     """Verify that status is still appended after truncation."""
     status = "READY_STATUS"
     t = TranscriptBuffer()
@@ -64,7 +64,7 @@ def test_truncation_preserves_status(handler):
     assert status in msg
 
 
-def test_empty_components_with_status(handler):
+def test_empty_components_with_status(handler: object):
     """Verify message building with just a status."""
     status = "Simple Status"
     t = TranscriptBuffer()

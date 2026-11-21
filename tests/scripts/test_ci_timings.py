@@ -4,10 +4,14 @@ import io
 import json
 import sys
 import zipfile
+from collections.abc import Sequence
 from copy import deepcopy
+from pathlib import Path
+from typing import override
 
 import pytest
 
+from free_claude_code.core.json_types import JsonValue
 from scripts import ci_timings as timing
 from scripts.ci_shards import RUNNERS, matrix
 
@@ -26,7 +30,7 @@ def maps():
     return {name: {"test_example.py::test_work": 0.5} for name in timing.MAP_NAMES}
 
 
-def archive(manifest, values=None):
+def archive(manifest: object, values: dict[str, dict[str, float]] | None = None):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as output:
         output.writestr("manifest.json", json.dumps(manifest))
@@ -36,26 +40,34 @@ def archive(manifest, values=None):
 
 
 class FakeGitHub(timing.GitHub):
-    def __init__(self, runs=(), artifacts=None, blobs=None):
+    def __init__(
+        self,
+        runs: Sequence[timing._WorkflowRun] = (),
+        artifacts: dict[int, list[timing._Artifact]] | None = None,
+        blobs: dict[int, bytes] | None = None,
+    ):
         self.runs = list(runs)
         self.by_run = artifacts or {}
         self.blobs = blobs or {}
         self.downloaded = []
         self.queried_history = False
 
-    def successful_runs(self):
+    @override
+    def successful_runs(self) -> list[timing._WorkflowRun]:
         self.queried_history = True
         return self.runs
 
-    def artifacts(self, run_id):
+    @override
+    def artifacts(self, run_id: int) -> list[timing._Artifact]:
         return self.by_run.get(run_id, [])
 
-    def download(self, artifact_id):
+    @override
+    def download(self, artifact_id: int):
         self.downloaded.append(artifact_id)
         return self.blobs[artifact_id]
 
 
-def prior(run, attempt=1):
+def prior(run: timing.Run, attempt: int = 1) -> timing._WorkflowRun:
     return {
         "id": run.run_id,
         "run_attempt": attempt,
@@ -65,11 +77,13 @@ def prior(run, attempt=1):
     }
 
 
-def artifact(artifact_id, name, expired=False):
+def artifact(artifact_id: int, name: str, expired: bool = False) -> timing._Artifact:
     return {"id": artifact_id, "name": name, "expired": expired}
 
 
-def test_preparation_uses_latest_complete_source_and_normalizes_zero(run, tmp_path):
+def test_preparation_uses_latest_complete_source_and_normalizes_zero(
+    run: timing.Run, tmp_path: Path
+):
     source = timing.Run(2, 1, "b" * 40, run.matrices)
     values = maps()
     values["pytest-Linux.json"]["test_example.py::test_work"] = 0
@@ -86,7 +100,9 @@ def test_preparation_uses_latest_complete_source_and_normalizes_zero(run, tmp_pa
     assert restored["pytest-Windows.json"] == values["pytest-Windows.json"]
 
 
-def test_bad_expired_and_missing_history_fall_back_to_older_source(run, tmp_path):
+def test_bad_expired_and_missing_history_fall_back_to_older_source(
+    run: timing.Run, tmp_path: Path
+):
     source = timing.Run(1, 1, "b" * 40, run.matrices)
     newer = timing.Run(2, 2, "c" * 40, run.matrices)
     github = FakeGitHub(
@@ -107,7 +123,7 @@ def test_bad_expired_and_missing_history_fall_back_to_older_source(run, tmp_path
 
 @pytest.mark.parametrize("unavailable", [False, True])
 def test_cold_start_is_a_valid_frozen_empty_bundle(
-    run, tmp_path, unavailable, monkeypatch
+    run: timing.Run, tmp_path: Path, unavailable: bool, monkeypatch: pytest.MonkeyPatch
 ):
     github = FakeGitHub()
     if unavailable:
@@ -122,9 +138,9 @@ def test_cold_start_is_a_valid_frozen_empty_bundle(
     assert all(not values for values in restored.values())
 
 
-def test_rerun_reuses_original_input_even_when_cold(run, tmp_path):
+def test_rerun_reuses_original_input_even_when_cold(run: timing.Run, tmp_path: Path):
     original = run.manifest("input") | {"source_artifact_id": None}
-    empty = {name: {} for name in timing.MAP_NAMES}
+    empty: dict[str, dict[str, float]] = {name: {} for name in timing.MAP_NAMES}
     github = FakeGitHub(
         artifacts={100: [artifact(42, timing.INPUT_NAME)]},
         blobs={42: archive(original, empty)},
@@ -136,7 +152,9 @@ def test_rerun_reuses_original_input_even_when_cold(run, tmp_path):
 
 
 @pytest.mark.parametrize("warm", [False, True])
-def test_rerun_rebuilds_missing_input_for_restarted_shards(run, tmp_path, warm):
+def test_rerun_rebuilds_missing_input_for_restarted_shards(
+    run: timing.Run, tmp_path: Path, warm: bool
+):
     source = timing.Run(2, 1, "b" * 40, run.matrices)
     github = FakeGitHub(
         runs=[prior(source)] if warm else [],
@@ -155,12 +173,16 @@ def test_rerun_rebuilds_missing_input_for_restarted_shards(run, tmp_path, warm):
 
 
 @pytest.mark.parametrize("problem", ["sha", "matrix", "duplicate", "download"])
-def test_rerun_rejects_unusable_existing_input(run, tmp_path, problem):
+def test_rerun_rejects_unusable_existing_input(
+    run: timing.Run, tmp_path: Path, problem: str
+):
     manifest = run.manifest("input")
     if problem == "sha":
         manifest["sha"] = "b" * 40
     if problem == "matrix":
-        manifest["matrices"]["pytest"] = matrix(dict.fromkeys(RUNNERS, 1))
+        matrices = manifest["matrices"]
+        assert isinstance(matrices, dict)
+        matrices["pytest"] = matrix(dict.fromkeys(RUNNERS, 1))
     github = FakeGitHub(
         artifacts={
             100: [artifact(42, timing.INPUT_NAME)]
@@ -174,12 +196,12 @@ def test_rerun_rejects_unusable_existing_input(run, tmp_path, problem):
 
 
 @pytest.mark.parametrize("value", [-1, True, "1", float("nan"), float("inf"), 10**400])
-def test_rejects_invalid_durations(value):
+def test_rejects_invalid_durations(value: bool | float | int | str):
     with pytest.raises(ValueError):
         timing.durations({"test.py::test_one": value})
 
 
-def test_json_and_archive_validation(run, monkeypatch):
+def test_json_and_archive_validation(run: timing.Run, monkeypatch: pytest.MonkeyPatch):
     with pytest.raises(ValueError, match="Duplicate"):
         timing.load_json('{"test": 1, "test": 2}')
     with pytest.raises(ValueError):
@@ -191,7 +213,7 @@ def test_json_and_archive_validation(run, monkeypatch):
         timing.read_archive(archive(run.manifest("complete")))
 
 
-def records(run, baseline=42):
+def records(run: timing.Run, baseline: int = 42):
     for (suite, system, shard), count in timing.expected_shards(run.matrices).items():
         yield run.manifest("shard") | {
             "input_artifact_id": baseline,
@@ -203,7 +225,7 @@ def records(run, baseline=42):
         }
 
 
-def test_merge_requires_complete_current_attempt_and_disjoint_ids(run):
+def test_merge_requires_complete_current_attempt_and_disjoint_ids(run: timing.Run):
     values = list(records(run))
     merged = timing.merge(run, 42, values)
     assert merged == {
@@ -227,7 +249,7 @@ def test_merge_requires_complete_current_attempt_and_disjoint_ids(run):
         "unexpected",
     ],
 )
-def test_merge_rejects_mixed_or_ambiguous_measurements(run, problem):
+def test_merge_rejects_mixed_or_ambiguous_measurements(run: timing.Run, problem: str):
     values = deepcopy(list(records(run)))
     if problem == "duplicate_shard":
         values.append(values[0])
@@ -250,13 +272,13 @@ def test_merge_rejects_mixed_or_ambiguous_measurements(run, problem):
 @pytest.mark.parametrize(
     "manifest", [None, [], {}, {"schema": True}, {"schema": 1, "kind": "unknown"}]
 )
-def test_malformed_manifests_are_rejected(manifest):
+def test_malformed_manifests_are_rejected(manifest: JsonValue):
     with pytest.raises(ValueError):
         timing.read_archive(archive(manifest))
 
 
 def test_newest_run_wins_over_rerun_of_an_older_run_and_prior_counts_may_differ(
-    run, tmp_path
+    run: timing.Run, tmp_path: Path
 ):
     old = timing.Run(1, 5, "b" * 40, run.matrices)
     new = timing.Run(
@@ -286,20 +308,23 @@ def test_newest_run_wins_over_rerun_of_an_older_run_and_prior_counts_may_differ(
     "status,conclusion",
     [("in_progress", None), ("completed", "failure"), ("completed", "cancelled")],
 )
-def test_failed_or_running_sources_are_not_reused(run, tmp_path, status, conclusion):
+def test_failed_or_running_sources_are_not_reused(
+    run: timing.Run, tmp_path: Path, status: str, conclusion: str | None
+):
     source = timing.Run(2, 1, "b" * 40, run.matrices)
-    github = FakeGitHub(
-        runs=[prior(source) | {"status": status, "conclusion": conclusion}]
-    )
+    previous = prior(source)
+    previous["status"] = status
+    previous["conclusion"] = conclusion
+    github = FakeGitHub(runs=[previous])
     timing.prepare(run, tmp_path, github)
     assert github.downloaded == []
     assert timing.read_bundle(tmp_path)[0]["source_artifact_id"] is None
 
 
-def test_api_artifacts_are_paginated(monkeypatch):
+def test_api_artifacts_are_paginated(monkeypatch: pytest.MonkeyPatch):
     calls = []
 
-    def api(self, suffix, *args):
+    def api(self: object, suffix: str, *args: str):
         calls.append((suffix, args))
         return json.dumps(
             [{"artifacts": [{"id": 1}]}, {"artifacts": [{"id": 2}]}]
@@ -311,11 +336,13 @@ def test_api_artifacts_are_paginated(monkeypatch):
 
 
 def test_commands_copy_record_and_merge_real_files_with_same_input_on_partial_rerun(
-    run, tmp_path, monkeypatch
+    run: timing.Run, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     root = tmp_path / "fcc-ci-timings"
     baseline = root / "baseline"
     timing.write_bundle(baseline, run.manifest("input"), maps())
+    matrices = run.matrices
+    assert isinstance(matrices, dict)
     env = {
         "GITHUB_RUN_ID": str(run.run_id),
         "GITHUB_RUN_ATTEMPT": "1",
@@ -325,7 +352,7 @@ def test_commands_copy_record_and_merge_real_files_with_same_input_on_partial_re
         "GITHUB_OUTPUT": str(tmp_path / "output"),
         **{
             f"CI_{suite.upper()}_MATRIX": json.dumps(value)
-            for suite, value in run.matrices.items()
+            for suite, value in matrices.items()
         },
     }
     for key, value in env.items():

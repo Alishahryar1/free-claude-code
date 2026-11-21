@@ -194,16 +194,16 @@ def test_build_request_body_replays_reasoning_content_verbatim(
 
 @pytest.mark.asyncio
 async def test_model_catalog_uses_chat_query(
+    monkeypatch: pytest.MonkeyPatch,
     siliconflow_provider: OpenAIChatProvider,
 ) -> None:
-    siliconflow_provider._client.get = AsyncMock(
-        return_value={"data": [{"id": _MODEL}]}
-    )
+    mock_get = AsyncMock(return_value={"data": [{"id": _MODEL}]})
+    monkeypatch.setattr(siliconflow_provider._client, "get", mock_get)
 
     model_infos = await siliconflow_provider.list_model_infos()
 
     assert model_infos == frozenset({ProviderModelInfo(_MODEL)})
-    siliconflow_provider._client.get.assert_awaited_once_with(
+    mock_get.assert_awaited_once_with(
         "/models",
         cast_to=object,
         options={"params": {"sub_type": "chat"}},
@@ -257,11 +257,14 @@ async def test_model_catalog_uses_documented_endpoint_query_and_auth() -> None:
     ],
 )
 async def test_rejects_malformed_or_empty_catalog_atomically(
+    monkeypatch: pytest.MonkeyPatch,
     siliconflow_provider: OpenAIChatProvider,
     payload: object,
     message: str,
 ) -> None:
-    siliconflow_provider._client.get = AsyncMock(return_value=payload)
+    monkeypatch.setattr(
+        siliconflow_provider._client, "get", AsyncMock(return_value=payload)
+    )
 
     with pytest.raises(ModelListResponseError, match=message):
         await siliconflow_provider.list_model_infos()
@@ -269,6 +272,7 @@ async def test_rejects_malformed_or_empty_catalog_atomically(
 
 @pytest.mark.asyncio
 async def test_model_catalog_uses_shared_retry_admission(
+    monkeypatch: pytest.MonkeyPatch,
     siliconflow_provider: OpenAIChatProvider,
 ) -> None:
     request = httpx.Request("GET", _CATALOG_URL)
@@ -278,11 +282,12 @@ async def test_model_catalog_uses_shared_retry_admission(
         request=request,
         response=response,
     )
-    siliconflow_provider._client.get = AsyncMock(
+    mock_get_next = AsyncMock(
         side_effect=[rate_limit_error, {"data": [{"id": _MODEL}]}]
     )
+    monkeypatch.setattr(siliconflow_provider._client, "get", mock_get_next)
 
     model_infos = await siliconflow_provider.list_model_infos()
 
     assert model_infos == frozenset({ProviderModelInfo(_MODEL)})
-    assert siliconflow_provider._client.get.await_count == 2
+    assert mock_get_next.await_count == 2

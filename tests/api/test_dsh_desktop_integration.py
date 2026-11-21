@@ -36,7 +36,7 @@ def client():
         yield client
 
 
-def test_configure_status_disconnect_hide_credentials(client):
+def test_configure_status_disconnect_hide_credentials(client: TestClient):
     before = client.get(ROOT)
     assert before.status_code == 200
     assert not before.json()["connected"]
@@ -55,7 +55,7 @@ def test_configure_status_disconnect_hide_credentials(client):
 
 
 @pytest.mark.parametrize("action", ["", "/connect", "/disconnect", "/refresh"])
-def test_routes_reject_foreign_origins(client, action):
+def test_routes_reject_foreign_origins(client: TestClient, action: str):
     response = client.request(
         "POST" if action else "GET",
         ROOT + action,
@@ -65,7 +65,7 @@ def test_routes_reject_foreign_origins(client, action):
     assert not (desktop.config_home() / ".credentials.yaml").exists()
 
 
-def test_invalid_yaml_does_not_leak_its_secret_line(client):
+def test_invalid_yaml_does_not_leak_its_secret_line(client: TestClient):
     path = desktop.config_home() / ".credentials.yaml"
     path.write_text("refs: {KEY: secret-one, KEY: secret-two}")
     response = client.post(ROOT + "/connect")
@@ -74,7 +74,7 @@ def test_invalid_yaml_does_not_leak_its_secret_line(client):
     assert "secret-two" not in response.text
 
 
-def test_missing_native_app_returns_setup_guidance(client):
+def test_missing_native_app_returns_setup_guidance(client: TestClient):
     (desktop.config_home() / "profiles/desktop/package.json").unlink()
     response = client.post(ROOT + "/connect")
     assert response.status_code == 400

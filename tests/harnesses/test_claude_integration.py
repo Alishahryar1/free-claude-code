@@ -12,12 +12,12 @@ ENV = "claudeCode.environmentVariables"
 LOGIN = "claudeCode.disableLoginPrompt"
 
 
-def operate(path, connected=None):
+def operate(path: Path, connected: bool | None = None):
     result = claude_integration.configure(path, URL, TOKEN, connected)
     return {"connected": result["connected"]}
 
 
-def test_vscode_operations_preserve_global_state(tmp_path):
+def test_vscode_operations_preserve_global_state(tmp_path: Path):
     path = tmp_path / "settings.json"
     state_path = tmp_path / ".claude.json"
     state_path.write_text('{"theme":"dark","hasCompletedOnboarding":false}')
@@ -32,7 +32,9 @@ def test_vscode_operations_preserve_global_state(tmp_path):
 
 
 @pytest.mark.parametrize("flag", [None, False, 1, "true"])
-def test_connection_is_independent_of_onboarding(tmp_path, flag):
+def test_connection_is_independent_of_onboarding(
+    tmp_path: Path, flag: bool | int | str | None
+):
     path = tmp_path / "settings.json"
     state_path = tmp_path / ".claude.json"
     operate(path, True)
@@ -43,7 +45,7 @@ def test_connection_is_independent_of_onboarding(tmp_path, flag):
     assert operate(path) == {"connected": True}
 
 
-def test_vscode_operations_do_not_create_global_state(tmp_path):
+def test_vscode_operations_do_not_create_global_state(tmp_path: Path):
     path = tmp_path / "settings.json"
     state_path = tmp_path / ".claude.json"
     operate(path, True)
@@ -56,7 +58,7 @@ def test_vscode_operations_do_not_create_global_state(tmp_path):
 
 
 @pytest.mark.parametrize("source", ["{invalid", "[]", '{"a":1,"a":2}', '{"a":NaN}'])
-def test_invalid_global_state_does_not_affect_vscode(tmp_path, source):
+def test_invalid_global_state_does_not_affect_vscode(tmp_path: Path, source: str):
     path = tmp_path / "settings.json"
     state_path = tmp_path / ".claude.json"
     operate(path, True)
@@ -71,7 +73,7 @@ def test_invalid_global_state_does_not_affect_vscode(tmp_path, source):
     assert state_path.read_text() == source
 
 
-def test_invalid_vscode_settings_do_not_update_onboarding(tmp_path):
+def test_invalid_vscode_settings_do_not_update_onboarding(tmp_path: Path):
     path = tmp_path / "settings.json"
     state_path = tmp_path / ".claude.json"
     path.write_text('{"claudeCode.environmentVariables":{}}')
@@ -81,7 +83,7 @@ def test_invalid_vscode_settings_do_not_update_onboarding(tmp_path):
     assert state_path.read_text() == '{"hasCompletedOnboarding":false}'
 
 
-def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(tmp_path):
+def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(tmp_path: Path):
     path = tmp_path / "settings.json"
     path.write_text(
         """{
@@ -153,7 +155,7 @@ def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(tmp_path
     }
 
 
-def test_missing_file_and_idempotent_operations(tmp_path):
+def test_missing_file_and_idempotent_operations(tmp_path: Path):
     path = tmp_path / "Code" / "User" / "settings.json"
     assert operate(path) == {"connected": False}
     assert operate(path, False) == {"connected": False}
@@ -170,7 +172,9 @@ def test_missing_file_and_idempotent_operations(tmp_path):
 
 
 @pytest.mark.parametrize("connected", [True, False])
-def test_escaped_unicode_survives_connect_and_disconnect(tmp_path, connected):
+def test_escaped_unicode_survives_connect_and_disconnect(
+    tmp_path: Path, connected: bool
+):
     path = tmp_path / "settings.json"
     data = {"keep": "\U0001f600"}
     if not connected:
@@ -183,7 +187,9 @@ def test_escaped_unicode_survives_connect_and_disconnect(tmp_path, connected):
 
 @pytest.mark.parametrize("connected", [True, False])
 @pytest.mark.parametrize("target_exists", [True, False])
-def test_settings_symlink_is_preserved(tmp_path, connected, target_exists):
+def test_settings_symlink_is_preserved(
+    tmp_path: Path, connected: bool, target_exists: bool
+):
     target = tmp_path / "dotfiles" / "settings.json"
     link = tmp_path / "settings.json"
     if target_exists:
@@ -210,7 +216,7 @@ def test_settings_symlink_is_preserved(tmp_path, connected, target_exists):
 
 
 @pytest.mark.parametrize("url", ["http://localhost:8000/", URL, "http://[::1]:8000"])
-def test_manual_setup_only_requires_connection_fields(tmp_path, url):
+def test_manual_setup_only_requires_connection_fields(tmp_path: Path, url: str):
     path = tmp_path / "settings.json"
     path.write_text(
         json.dumps(
@@ -235,7 +241,7 @@ def test_manual_setup_only_requires_connection_fields(tmp_path, url):
     assert entries["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] == "1"
 
 
-def test_refresh_connected_extends_waiting_without_changing_retries(tmp_path):
+def test_refresh_connected_extends_waiting_without_changing_retries(tmp_path: Path):
     path = tmp_path / "settings.json"
     path.write_text(
         json.dumps(
@@ -280,7 +286,9 @@ def test_refresh_connected_extends_waiting_without_changing_retries(tmp_path):
         ("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "0"),
     ],
 )
-def test_partial_or_different_setup_is_disconnected(tmp_path, field, value):
+def test_partial_or_different_setup_is_disconnected(
+    tmp_path: Path, field: str, value: str
+):
     path = tmp_path / "settings.json"
     operate(path, True)
     data = json.loads(path.read_text())
@@ -306,7 +314,7 @@ def test_partial_or_different_setup_is_disconnected(tmp_path, field, value):
         '{"name": "ANTHROPIC_AUTH_TOKEN", "value": "b"}]}',
     ],
 )
-def test_invalid_settings_are_never_overwritten(tmp_path, source):
+def test_invalid_settings_are_never_overwritten(tmp_path: Path, source: str):
     path = tmp_path / "settings.json"
     path.write_text(source)
     for action in (None, True, False):
@@ -317,7 +325,7 @@ def test_invalid_settings_are_never_overwritten(tmp_path, source):
 
 @pytest.mark.parametrize("readonly", [False, True])
 def test_failed_replace_preserves_original_and_removes_tempfile(
-    tmp_path, monkeypatch, readonly
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, readonly: bool
 ):
     path = tmp_path / "settings.json"
     state_path = tmp_path / ".claude.json"
@@ -326,7 +334,7 @@ def test_failed_replace_preserves_original_and_removes_tempfile(
     if readonly:
         path.chmod(0o444)
 
-    def fail_replace(self, target):
+    def fail_replace(self: object, target: object):
         raise PermissionError("test write failure")
 
     monkeypatch.setattr(Path, "replace", fail_replace)
@@ -348,7 +356,9 @@ def test_failed_replace_preserves_original_and_removes_tempfile(
         ("linux", ".config/Code/User/settings.json"),
     ],
 )
-def test_standard_global_path(tmp_path, monkeypatch, platform, suffix):
+def test_standard_global_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, suffix: str
+):
     monkeypatch.setattr(claude_integration.sys, "platform", platform)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("APPDATA", raising=False)
@@ -359,7 +369,9 @@ def test_standard_global_path(tmp_path, monkeypatch, platform, suffix):
 @pytest.mark.parametrize(
     "platform,variable", [("win32", "APPDATA"), ("linux", "XDG_CONFIG_HOME")]
 )
-def test_config_root_override(tmp_path, monkeypatch, platform, variable):
+def test_config_root_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, variable: str
+):
     monkeypatch.setattr(claude_integration.sys, "platform", platform)
     monkeypatch.setenv(variable, str(tmp_path))
     assert settings_path() == tmp_path / "Code/User/settings.json"

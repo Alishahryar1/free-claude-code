@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping
+from typing import override
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -28,6 +29,7 @@ from free_claude_code.core.reasoning import ReasoningCapability, ReasoningPolicy
 from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
+from tests.assertions import record_extra, require_exception_info
 
 
 class FakeProvider:
@@ -116,7 +118,7 @@ class FakeProvider:
 
     def _record_stream_call(
         self,
-        request: MessagesRequest,
+        request: MessagesRequest | OpenAIResponsesRequest,
         *,
         input_tokens: int,
         request_id: str | None,
@@ -207,9 +209,10 @@ class ControlledProvider(FakeProvider):
         super().__init__()
         self._steps = steps
 
+    @override
     async def stream_messages(
         self,
-        request: MessagesRequest,
+        request: MessagesRequest | OpenAIResponsesRequest,
         input_tokens: int = 0,
         *,
         request_id: str | None = None,
@@ -245,6 +248,7 @@ class ControlledProvider(FakeProvider):
 
 
 class FailingValidationProvider(FakeProvider):
+    @override
     def stream_messages(
         self,
         request: MessagesRequest,
@@ -262,6 +266,7 @@ class ApplicationErrorValidationProvider(FakeProvider):
         super().__init__()
         self._error = error
 
+    @override
     def stream_messages(
         self,
         request: MessagesRequest,
@@ -275,6 +280,7 @@ class ApplicationErrorValidationProvider(FakeProvider):
 
 
 class FailingStreamConstructionProvider(FakeProvider):
+    @override
     def stream_messages(
         self,
         request: MessagesRequest,
@@ -295,6 +301,7 @@ class ExecutionFailureStreamConstructionProvider(FakeProvider):
         super().__init__()
         self._failure = failure
 
+    @override
     def stream_messages(
         self,
         request: MessagesRequest,
@@ -325,6 +332,7 @@ class CloseControlledProvider(FakeProvider):
         self._close_error = close_error
         self._read = False
 
+    @override
     def stream_messages(
         self,
         request: MessagesRequest,
@@ -395,15 +403,36 @@ def _routed_request(
 @pytest.mark.parametrize("ingress", ["messages", "responses"])
 @pytest.mark.parametrize("unknown_fallback", [False, True])
 async def test_fallback_receives_its_own_cached_capability_in_stream(
-    ingress, unknown_fallback
+    ingress: str, unknown_fallback: bool
 ):
     seen = []
     resolved = set()
 
     class MetadataProvider(ControlledProvider):
-        async def stream_messages(self, request, input_tokens=0, **kwargs):
-            seen.append(("stream", request.model, kwargs["model_info"]))
-            async for event in super().stream_messages(request, input_tokens, **kwargs):
+        @override
+        async def stream_messages(
+            self,
+            request: MessagesRequest | OpenAIResponsesRequest,
+            input_tokens: int = 0,
+            *,
+            request_id: str | None = None,
+            response_model: str | None = None,
+            reasoning: ReasoningPolicy,
+            request_headers: Mapping[str, str] | None = None,
+            model_info: ProviderModelInfo | None = None,
+            continuation: ContinuationSeed | None = None,
+        ) -> AsyncIterator[StreamOutput]:
+            seen.append(("stream", request.model, model_info))
+            async for event in super().stream_messages(
+                request,
+                input_tokens,
+                request_id=request_id,
+                response_model=response_model,
+                reasoning=reasoning,
+                request_headers=request_headers,
+                model_info=model_info,
+                continuation=continuation,
+            ):
                 yield event
 
         stream_responses = stream_messages
@@ -424,11 +453,11 @@ async def test_fallback_receives_its_own_cached_capability_in_stream(
     fallback = MetadataProvider(["verdict"])
     providers = {"provider": primary, "fallback": fallback}
 
-    async def resolve(name, _api_key_number):
+    async def resolve(name: str, _api_key_number):
         resolved.add(name)
         return providers[name]
 
-    def lookup(provider_id, model_id):
+    def lookup(provider_id: str, model_id: str):
         assert provider_id in resolved
         return {
             "provider/provider-model": primary_info,
@@ -480,8 +509,11 @@ def _executor_stream(
     *,
     request_id: str,
 ) -> AsyncIterator[StreamOutput]:
+    def resolve_provider(_provider_id: str, _api_key_number: int):
+        return provider
+
     executor = ProviderExecutor(
-        AsyncMock(side_effect=lambda _provider_id, _api_key_number: provider),
+        AsyncMock(side_effect=resolve_provider),
         token_counter=lambda _messages, _system, _tools: 17,
     )
     return executor.stream_messages(
@@ -496,8 +528,12 @@ async def test_executor_routes_native_responses_without_messages_conversion() ->
     provider = ResponsesFakeProvider()
     routed = _routed_responses_request()
     request = routed.request
+
+    def resolve_provider(_provider_id: str, _api_key_number: int):
+        return provider
+
     executor = ProviderExecutor(
-        AsyncMock(side_effect=lambda _provider_id, _api_key_number: provider),
+        AsyncMock(side_effect=resolve_provider),
         responses_token_counter=lambda _request: 23,
     )
 
@@ -530,8 +566,12 @@ async def test_executor_uses_structural_provider_port_and_defers_stream_startup(
     provider = FakeProvider()
     routed = _routed_request()
     request = routed.request
+
+    def resolve_provider(_provider_id: str, _api_key_number: int):
+        return provider
+
     executor = ProviderExecutor(
-        AsyncMock(side_effect=lambda _provider_id, _api_key_number: provider),
+        AsyncMock(side_effect=resolve_provider),
         token_counter=lambda _messages, _system, _tools: 17,
     )
 
@@ -683,10 +723,12 @@ async def test_fallback_chain_preserves_exact_last_failure() -> None:
         "provider": ControlledProvider([first]),
         "second": ControlledProvider([second]),
     }
+
+    def resolve_provider(provider_id: str, _api_key_number: int):
+        return providers[provider_id]
+
     executor = ProviderExecutor(
-        AsyncMock(
-            side_effect=lambda provider_id, _api_key_number: providers[provider_id]
-        ),
+        AsyncMock(side_effect=resolve_provider),
     )
     stream = executor.stream_messages(
         _routed_request(_target("second", "model")),
@@ -854,10 +896,12 @@ async def test_primary_canonical_startup_failure_selects_fallback() -> None:
     primary = ExecutionFailureStreamConstructionProvider(primary_failure)
     fallback = ControlledProvider(["fallback-frame"])
     providers = {"provider": primary, "fallback": fallback}
+
+    def resolve_provider(provider_id: str, _api_key_number: int):
+        return providers[provider_id]
+
     executor = ProviderExecutor(
-        AsyncMock(
-            side_effect=lambda provider_id, _api_key_number: providers[provider_id]
-        ),
+        AsyncMock(side_effect=resolve_provider),
     )
 
     stream = executor.stream_messages(
@@ -886,10 +930,12 @@ async def test_nonretryable_stream_construction_failure_selects_fallback() -> No
     primary = ExecutionFailureStreamConstructionProvider(primary_failure)
     fallback = ControlledProvider(["fallback-frame"])
     providers = {"provider": primary, "fallback": fallback}
+
+    def resolve_provider(provider_id: str, _api_key_number: int):
+        return providers[provider_id]
+
     executor = ProviderExecutor(
-        AsyncMock(
-            side_effect=lambda provider_id, _api_key_number: providers[provider_id]
-        ),
+        AsyncMock(side_effect=resolve_provider),
     )
     stream = executor.stream_messages(
         _routed_request(_target("fallback", "model")),
@@ -938,10 +984,12 @@ async def test_lazy_fallback_startup_application_error_stops_unchanged() -> None
     startup_error = InvalidRequestError("fallback is misconfigured")
     fallback = ApplicationErrorValidationProvider(startup_error)
     providers = {"provider": primary, "fallback": fallback}
+
+    def resolve_provider(provider_id: str, _api_key_number: int):
+        return providers[provider_id]
+
     executor = ProviderExecutor(
-        AsyncMock(
-            side_effect=lambda provider_id, _api_key_number: providers[provider_id]
-        ),
+        AsyncMock(side_effect=resolve_provider),
     )
     stream = executor.stream_messages(
         _routed_request(_target("fallback", "model")),
@@ -960,9 +1008,10 @@ async def test_lazy_fallback_startup_application_error_stops_unchanged() -> None
 @pytest.mark.asyncio
 async def test_candidate_requests_are_isolated_from_provider_mutation() -> None:
     class MutatingProvider(ControlledProvider):
+        @override
         async def stream_messages(
             self,
-            request: MessagesRequest,
+            request: MessagesRequest | OpenAIResponsesRequest,
             input_tokens: int = 0,
             *,
             request_id: str | None = None,
@@ -972,6 +1021,7 @@ async def test_candidate_requests_are_isolated_from_provider_mutation() -> None:
             model_info: ProviderModelInfo | None = None,
             continuation: ContinuationSeed | None = None,
         ) -> AsyncIterator[StreamOutput]:
+            assert isinstance(request, MessagesRequest)
             request.messages[0].content = "mutated"
             async for chunk in super().stream_messages(
                 request,
@@ -986,10 +1036,12 @@ async def test_candidate_requests_are_isolated_from_provider_mutation() -> None:
     fallback = FakeProvider()
     providers = {"provider": primary, "fallback": fallback}
     routed = _routed_request(_target("fallback", "model"))
+
+    def resolve_provider(provider_id: str, _api_key_number: int):
+        return providers[provider_id]
+
     executor = ProviderExecutor(
-        AsyncMock(
-            side_effect=lambda provider_id, _api_key_number: providers[provider_id]
-        ),
+        AsyncMock(side_effect=resolve_provider),
     )
 
     assert [
@@ -1010,8 +1062,12 @@ async def test_candidate_requests_are_isolated_from_provider_mutation() -> None:
 async def test_closing_executor_stream_closes_provider_stream_once() -> None:
     provider = FakeProvider()
     routed = _routed_request()
+
+    def resolve_provider(_provider_id: str, _api_key_number: int):
+        return provider
+
     executor = ProviderExecutor(
-        AsyncMock(side_effect=lambda _provider_id, _api_key_number: provider),
+        AsyncMock(side_effect=resolve_provider),
         token_counter=lambda _messages, _system, _tools: 17,
     )
     stream = executor.stream_messages(
@@ -1058,8 +1114,12 @@ async def test_stream_construction_failure_remains_deferred_to_iteration() -> No
 async def test_executor_validation_is_deferred_until_iteration() -> None:
     provider = FailingValidationProvider()
     token_counter = MagicMock(return_value=17)
+
+    def resolve_provider(_provider_id: str, _api_key_number: int):
+        return provider
+
     executor = ProviderExecutor(
-        AsyncMock(side_effect=lambda _provider_id, _api_key_number: provider),
+        AsyncMock(side_effect=resolve_provider),
         token_counter=token_counter,
     )
 
@@ -1075,7 +1135,9 @@ async def test_executor_validation_is_deferred_until_iteration() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cleanup_warning_names_preserved_provider_failure(caplog) -> None:
+async def test_cleanup_warning_names_preserved_provider_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     failure = _execution_failure("primary overloaded")
     provider = CloseControlledProvider(
         failure,
@@ -1092,12 +1154,12 @@ async def test_cleanup_warning_names_preserved_provider_failure(caplog) -> None:
     assert exc_info.value is failure
     warnings = [record for record in caplog.records if record.levelname == "WARNING"]
     assert len(warnings) == 1
-    assert warnings[0].extra["event"] == "stream.input.close_failed"
-    assert warnings[0].extra["owner"] == "model_fallback"
-    assert warnings[0].extra["source"] == "application"
-    assert warnings[0].extra["close_exc_type"] == "RuntimeError"
-    assert warnings[0].extra["preserved_exc_type"] == "ExecutionFailure"
-    assert str(warnings[0].exc_info[1]) == "close failed"
+    assert record_extra(warnings[0])["event"] == "stream.input.close_failed"
+    assert record_extra(warnings[0])["owner"] == "model_fallback"
+    assert record_extra(warnings[0])["source"] == "application"
+    assert record_extra(warnings[0])["close_exc_type"] == "RuntimeError"
+    assert record_extra(warnings[0])["preserved_exc_type"] == "ExecutionFailure"
+    assert str(require_exception_info(warnings[0].exc_info)[1]) == "close failed"
 
 
 @pytest.mark.asyncio
@@ -1146,7 +1208,7 @@ async def test_cancelling_progress_wait_remains_cancellation() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
-async def test_fallback_waits_for_provider_cleanup_and_obeys_cancellation(cancel):
+async def test_fallback_waits_for_provider_cleanup_and_obeys_cancellation(cancel: bool):
     close_wait = WaitStep()
     primary = CloseControlledProvider(
         _execution_failure("primary overloaded"), close_wait=close_wait

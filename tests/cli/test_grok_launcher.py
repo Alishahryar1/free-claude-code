@@ -27,7 +27,7 @@ from tests.cli.test_launcher_workflow import launch
     ],
 )
 def test_grok_connection_options_use_native_scopes(
-    args, expected, launch_capture: LaunchCapture
+    args: list[str], expected: list[str], launch_capture: LaunchCapture
 ) -> None:
     launch("grok", args)
     assert launch_capture.commands == [expected]

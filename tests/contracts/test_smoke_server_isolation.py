@@ -5,6 +5,7 @@ import sys
 import textwrap
 from dataclasses import replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 import pytest
@@ -18,11 +19,11 @@ from free_claude_code.config.loader import ManagedConfigStore, get_settings
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
 from smoke.lib.child_process import cmd_fcc_server
 from smoke.lib.config import SmokeConfig
-from smoke.lib.server import start_server
+from smoke.lib.server import RunningServer, start_server
 
 
 @pytest.fixture
-def smoke_config(tmp_path, monkeypatch):
+def smoke_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     home = tmp_path / "user-home"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
@@ -94,11 +95,13 @@ def probe_command():
     return [sys.executable, "-c", probe + "\n" + cmd_fcc_server()[-1]]
 
 
-def snapshot(server):
+def snapshot(server: RunningServer):
     return json.loads(server.log_path.read_text().splitlines()[0])
 
 
-def test_smoke_servers_isolate_runtime_and_share_original_auth(smoke_config):
+def test_smoke_servers_isolate_runtime_and_share_original_auth(
+    smoke_config: SmokeConfig,
+):
     source = paths.config_dir_path()
     original = paths.managed_env_path().read_bytes()
     overrides = {"MODEL": "nvidia_nim/override"}
@@ -140,7 +143,9 @@ def test_smoke_servers_isolate_runtime_and_share_original_auth(smoke_config):
     assert first.log_path.is_file() and second.log_path.is_file()
 
 
-def test_explicit_smoke_home_remains_authoritative(smoke_config, tmp_path):
+def test_explicit_smoke_home_remains_authoritative(
+    smoke_config: SmokeConfig, tmp_path: Path
+):
     home = tmp_path / "caller-home"
     atomic_write_managed_config(
         {"FCC_CONFIG_SCHEMA": CONFIG_SCHEMA_VERSION, "ANTHROPIC_AUTH_TOKEN": "caller"},
@@ -161,15 +166,19 @@ def test_explicit_smoke_home_remains_authoritative(smoke_config, tmp_path):
 
 
 @pytest.mark.parametrize("failure", ["health", "spawn"])
-def test_failed_smoke_start_cleans_private_state(smoke_config, monkeypatch, failure):
+def test_failed_smoke_start_cleans_private_state(
+    smoke_config: SmokeConfig, monkeypatch: pytest.MonkeyPatch, failure: str
+):
     from smoke.lib import server as smoke_server
 
-    captured = {}
+    captured: dict[str, str] = {}
     command = ["custom-command", "--custom-arg"]
 
-    def popen(args, **kwargs):
+    def popen(args: list[str], **kwargs: object):
         assert args == command
-        captured.update(kwargs["env"])
+        env = kwargs["env"]
+        assert isinstance(env, dict)
+        captured.update(env)
         if failure == "spawn":
             raise OSError("spawn failed")
         return object()
@@ -179,7 +188,11 @@ def test_failed_smoke_start_cleans_private_state(smoke_config, monkeypatch, fail
 
     monkeypatch.setattr(smoke_server.subprocess, "Popen", popen)
     monkeypatch.setattr(smoke_server, "_wait_for_health", unhealthy)
-    monkeypatch.setattr(smoke_server, "_stop_process", lambda _process: None)
+
+    def replace_stop_process(_process: object):
+        return None
+
+    monkeypatch.setattr(smoke_server, "_stop_process", replace_stop_process)
     with (
         pytest.raises(OSError, match=f"{failure} failed"),
         start_server(replace(smoke_config, timeout_s=0.1), command=command),
@@ -194,13 +207,15 @@ class WindowsPermissionError(PermissionError):
     winerror: int
 
 
-def test_smoke_cleanup_waits_for_windows_handle_release(smoke_config, monkeypatch):
+def test_smoke_cleanup_waits_for_windows_handle_release(
+    smoke_config: SmokeConfig, monkeypatch: pytest.MonkeyPatch
+):
     from smoke.lib import server_runtime
 
     cleanup = server_runtime.TemporaryDirectory.cleanup
     attempts = []
 
-    def sharing_violation_once(directory):
+    def sharing_violation_once(directory: TemporaryDirectory[str]):
         attempts.append(directory.name)
         if len(attempts) == 1:
             error = WindowsPermissionError("file is still held by terminating child")
@@ -220,14 +235,14 @@ def test_smoke_cleanup_waits_for_windows_handle_release(smoke_config, monkeypatc
 
 @pytest.mark.parametrize("winerror", [5, 32])
 def test_smoke_cleanup_does_not_hide_permanent_failures(
-    smoke_config, monkeypatch, winerror
+    smoke_config: SmokeConfig, monkeypatch: pytest.MonkeyPatch, winerror: int
 ):
     from smoke.lib import server_runtime
 
     cleanup = server_runtime.TemporaryDirectory.cleanup
     retained = []
 
-    def fail(directory):
+    def fail(directory: TemporaryDirectory[str]):
         retained.append(directory)
         error = WindowsPermissionError("cleanup failed")
         error.winerror = winerror

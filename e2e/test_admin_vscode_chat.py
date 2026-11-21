@@ -1,15 +1,16 @@
 import json
 
 import pytest
-from playwright.sync_api import expect
+from playwright.sync_api import Page, Route, expect
 
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.harnesses import vscode_chat_integration as vscode
 
 
-def test_connect_and_disconnect_native_chat(page, admin_base_url):
+def test_connect_and_disconnect_native_chat(page: Page, admin_base_url: str):
     path = vscode.config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    other = {"vendor": "customendpoint", "name": "Other", "models": []}
+    other: JsonObject = {"vendor": "customendpoint", "name": "Other", "models": []}
     path.write_text(json.dumps([other]))
     page.goto(f"{admin_base_url}/admin/integrations")
     button = page.locator("#openVSCodeChatIntegration")
@@ -41,7 +42,9 @@ def test_connect_and_disconnect_native_chat(page, admin_base_url):
 
 
 @pytest.mark.parametrize("status_read_failed", [False, True])
-def test_failed_update_has_actionable_retry(page, admin_base_url, status_read_failed):
+def test_failed_update_has_actionable_retry(
+    page: Page, admin_base_url: str, status_read_failed: bool
+):
     progress: dict[str, str | bool | None] = {
         "state": "failed",
         "changed": False,
@@ -49,14 +52,14 @@ def test_failed_update_has_actionable_retry(page, admin_base_url, status_read_fa
     }
     retries = []
 
-    def startup(route):
+    def startup(route: Route):
         response = route.fetch()
         payload = response.json()
         payload["startup"]["integrations"]["vscode-chat"] = dict(progress)
         payload["startup"]["messaging"]["state"] = "starting"
         route.fulfill(response=response, json=payload)
 
-    def status(route):
+    def status(route: Route):
         if status_read_failed and progress["state"] == "failed":
             route.fulfill(status=503, json={"detail": "Could not read settings."})
         else:
@@ -64,7 +67,7 @@ def test_failed_update_has_actionable_retry(page, admin_base_url, status_read_fa
                 json={"connected": True, "paths": None, "update": dict(progress)}
             )
 
-    def retry(route):
+    def retry(route: Route):
         retries.append(route.request.method)
         progress.update(state="ready", message=None)
         route.fulfill(json={"update": dict(progress)})

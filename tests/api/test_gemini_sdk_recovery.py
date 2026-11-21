@@ -42,7 +42,11 @@ with warnings.catch_warnings():
     ],
 )
 def test_sdk_recovers_and_replays_native_generation(
-    streaming, client_api, empty_terminal, case, monkeypatch
+    streaming: bool,
+    client_api: str,
+    empty_terminal: bool,
+    case: str,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     args = {
         "integer": {"amount": 9007199254740993},
@@ -77,7 +81,7 @@ def test_sdk_recovers_and_replays_native_generation(
         signed_parts.append({"thoughtSignature": signature})
     bodies = []
 
-    def upstream(request):
+    def upstream(request: httpx.Request):
         value = json.loads(request.content)
         bodies.append(deepcopy(value))
         event: JsonObject
@@ -144,10 +148,10 @@ def test_sdk_recovers_and_replays_native_generation(
             text="".join("data: " + json.dumps(item) + "\n\n" for item in events),
         )
 
-    app = matrix_app("gemini", upstream)
+    app = matrix_app("gemini", native_reply=upstream)
     with TestClient(app) as fcc:
 
-        def bridge(request):
+        def bridge(request: httpx.Request):
             return fcc.request(
                 request.method,
                 str(request.url),
@@ -263,7 +267,7 @@ def test_sdk_recovers_and_replays_native_generation(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("async_client", [False, True])
 async def test_sdk_chat_automatic_tool_result_preserves_recovered_history(
-    async_client, monkeypatch
+    async_client: bool, monkeypatch: pytest.MonkeyPatch
 ):
     bodies = []
     executed = []
@@ -277,7 +281,7 @@ async def test_sdk_chat_automatic_tool_result_preserves_recovered_history(
         ],
     }
 
-    def upstream(request):
+    def upstream(request: httpx.Request):
         value = json.loads(request.content)
         bodies.append(deepcopy(value))
         if len(bodies) == 1:
@@ -314,10 +318,10 @@ async def test_sdk_chat_automatic_tool_result_preserves_recovered_history(
         executed.append(amount)
         return {"result": "ok"}
 
-    app = matrix_app("gemini", upstream)
+    app = matrix_app("gemini", native_reply=upstream)
     with TestClient(app) as fcc:
 
-        def bridge(request):
+        def bridge(request: httpx.Request):
             return fcc.request(
                 request.method,
                 str(request.url),
@@ -325,7 +329,7 @@ async def test_sdk_chat_automatic_tool_result_preserves_recovered_history(
                 headers=request.headers,
             )
 
-        async def async_bridge(request):
+        async def async_bridge(request: httpx.Request):
             response = bridge(request)
             return httpx.Response(
                 response.status_code, headers=response.headers, content=response.content

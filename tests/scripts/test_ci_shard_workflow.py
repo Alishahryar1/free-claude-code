@@ -20,7 +20,7 @@ def workflow():
 
 
 @pytest.mark.parametrize("suite", ["pytest", "playwright"])
-def test_shard_jobs_use_generated_matrices_and_existing_parallelism(suite):
+def test_shard_jobs_use_generated_matrices_and_existing_parallelism(suite: str):
     config = workflow()
     prepare = config["jobs"]["prepare-shards"]
     assert f"{suite}_matrix" in prepare["outputs"]
@@ -68,7 +68,9 @@ def test_workflow_uses_three_shards_except_two_for_macos_pytest():
 
 
 @pytest.mark.parametrize("suite", ["pytest", "playwright"])
-def test_external_timing_path_preserves_config_and_collection_scope(tmp_path, suite):
+def test_external_timing_path_preserves_config_and_collection_scope(
+    tmp_path: Path, suite: str
+):
     checkout = tmp_path / "checkout"
     checkout.mkdir()
     (checkout / "pyproject.toml").write_text(
@@ -161,7 +163,7 @@ def test_timing_preparation_freezes_one_input_and_reuses_it_on_reruns():
 
 
 @pytest.mark.parametrize("suite", ["pytest", "playwright"])
-def test_timing_shards_share_the_frozen_input_and_upload_only_after_success(suite):
+def test_timing_shards_share_the_frozen_input_and_upload_only_after_success(suite: str):
     job = workflow()["jobs"][f"{suite}-shards"]
     assert job["permissions"] == {"contents": "read"}
     assert job["env"]["CI_TIMINGS_SUITE"] == suite
@@ -236,7 +238,7 @@ def test_timing_collector_publishes_only_complete_current_attempts():
     ],
 )
 def test_summary_only_passes_when_preparation_and_all_shards_succeed(
-    suite, preparation, shards
+    suite: str, preparation: str, shards: str
 ):
     job = workflow()["jobs"][f"{suite}-summary"]
     assert job["name"] == suite

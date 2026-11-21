@@ -2,11 +2,13 @@
 
 import unicodedata
 
+from playwright.sync_api import Page
+
 from free_claude_code.core.tool_schema_patterns import translate_tool_schema_patterns
 from tests.core.test_tool_schema_patterns import ARTIFACT_PATTERN
 
 
-def test_artifact_pattern_matches_javascript_reference(page):
+def test_artifact_pattern_matches_javascript_reference(page: Page):
     converted = translate_tool_schema_patterns({"pattern": ARTIFACT_PATTERN})["pattern"]
     samples = [
         "",

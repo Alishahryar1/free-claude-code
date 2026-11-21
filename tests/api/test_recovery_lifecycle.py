@@ -2,14 +2,17 @@
 
 import asyncio
 from collections import Counter
+from collections.abc import Callable
 from copy import deepcopy
-from typing import Any
+from typing import Any, override
 
 import httpx2
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.delivered_response import DeliveredResponse
+from free_claude_code.core.json_types import JsonObject
 from tests.api.test_delivered_stream_recovery import (
     assert_completed,
     public_text,
@@ -23,21 +26,24 @@ from tests.wire_payload import array_payload, object_array, object_payload
 
 
 @pytest.mark.asyncio
-async def test_partial_closure_with_delayed_source_frames(monkeypatch):
+async def test_partial_closure_with_delayed_source_frames(
+    monkeypatch: pytest.MonkeyPatch,
+):
     original_transport = httpx2.MockTransport
 
     class PacedStream(httpx2.AsyncByteStream):
-        def __init__(self, raw):
+        def __init__(self, raw: bytes):
             self.raw = raw
 
+        @override
         async def __aiter__(self):
             first, _, rest = self.raw.partition(b"\n\n")
             yield first + b"\n\n"
             await asyncio.sleep(0.8)
             yield rest
 
-    def transport(handler):
-        async def handle(request):
+    def transport(handler: Callable[[httpx2.Request], httpx2.Response]):
+        async def handle(request: httpx2.Request):
             response = handler(request)
             raw = await response.aread()
             await response.aclose()
@@ -87,9 +93,9 @@ async def test_partial_closure_with_delayed_source_frames(monkeypatch):
     ],
 )
 async def test_reasoning_before_continuation_text_keeps_overlap_filter(
-    wire, candidate, expected
+    wire: WireProtocol, candidate: str, expected: str
 ):
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("chat", "Hello ", complete=False)
         reasoning = text_events("chat", "", complete=False)[0]
@@ -106,7 +112,7 @@ async def test_reasoning_before_continuation_text_keeps_overlap_filter(
     assert "Continue the greeting." in raw
 
 
-def refusal_events(*, mixed=False):
+def refusal_events(*, mixed: bool = False):
     events = text_events("responses", "lo world." if mixed else "")
     part = {"type": "refusal", "refusal": "I cannot continue that request."}
     position = 1 if mixed else 0
@@ -137,7 +143,7 @@ def refusal_events(*, mixed=False):
 @pytest.mark.parametrize("mixed", [False, True])
 @pytest.mark.parametrize("limited", [False, True])
 async def test_continuation_preserves_refusal_and_completed_metadata(
-    monkeypatch, mixed, limited
+    monkeypatch: pytest.MonkeyPatch, mixed: bool, limited: bool
 ):
     if limited:
         monkeypatch.setattr(
@@ -199,7 +205,7 @@ async def test_published_refusal_interruption_does_not_generate_again():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cut", [4, 5, 6, 7])
-async def test_recovery_emits_only_missing_text_completion_stages(cut):
+async def test_recovery_emits_only_missing_text_completion_stages(cut: int):
     async with _harness(
         "responses",
         lambda bodies: (
@@ -234,12 +240,12 @@ async def test_recovery_emits_only_missing_text_completion_stages(cut):
 @pytest.mark.parametrize("continued", [False, True])
 @pytest.mark.parametrize("cut", [4, 5, 6])
 async def test_handoff_snapshot_matches_published_closures(
-    monkeypatch, limited, continued, cut
+    monkeypatch: pytest.MonkeyPatch, limited: bool, continued: bool, cut: int
 ):
     if limited:
         original = DeliveredResponse.closing_events
 
-        def cap_during_boundary(self):
+        def cap_during_boundary(self: DeliveredResponse):
             events = original(self)
             if self.snapshot().has_calls:
                 monkeypatch.setattr(
@@ -250,7 +256,7 @@ async def test_handoff_snapshot_matches_published_closures(
 
         monkeypatch.setattr(DeliveredResponse, "closing_events", cap_during_boundary)
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if continued and len(bodies) == 1:
             return 200, text_events("responses", "Before. ", complete=False)
         events = deepcopy(tool_events("responses", '{"path":"kept"}')[:-1])

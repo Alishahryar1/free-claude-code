@@ -9,7 +9,9 @@ from pathlib import Path
 import pytest
 import yaml
 
+from free_claude_code.core.json_types import JsonObject
 from scripts.ci_shards import matrix
+from tests.wire_payload import object_payload, string_payload
 
 CI_SETUP = Path(".github/actions/ci-environment/action.yml")
 UV_WORKFLOWS = (
@@ -92,17 +94,25 @@ def test_python_lock_matches_package_requirement() -> None:
     assert lock["requires-python"] == requirement
 
 
-def _shard_counts(workflow: dict, suite: str) -> dict[str, int]:
+def _shard_counts(workflow: JsonObject, suite: str) -> dict[str, int]:
     return {
-        os_name: int(workflow["env"][f"CI_{suite.upper()}_{os_name.upper()}_SHARDS"])
+        os_name: int(
+            string_payload(
+                object_payload(workflow["env"])[
+                    f"CI_{suite.upper()}_{os_name.upper()}_SHARDS"
+                ]
+            )
+        )
         for os_name in REQUIRED_TEST_RUNNERS
     }
 
 
-def _assert_required_test_matrix(workflow: dict, suite: str, entries: list) -> None:
-    job = workflow["jobs"][f"{suite}-shards"]
+def _assert_required_test_matrix(
+    workflow: JsonObject, suite: str, entries: list[dict[str, str | int]]
+) -> None:
+    job = object_payload(object_payload(workflow["jobs"])[f"{suite}-shards"])
     assert job["runs-on"] == "${{ matrix.runner }}"
-    assert job["strategy"]["matrix"] == (
+    assert object_payload(job["strategy"])["matrix"] == (
         "${{ fromJSON(needs.prepare-shards.outputs." + suite + "_matrix) }}"
     )
     assert len(entries) == sum(_shard_counts(workflow, suite).values())

@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from free_claude_code.config.provider_catalog import CEREBRAS_DEFAULT_BASE
+from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     REASONING_OFF,
@@ -17,7 +19,7 @@ from tests.providers.support import (
 )
 
 
-def make_request(model="llama3.1-8b", **overrides):
+def make_request(model: str = "llama3.1-8b", **overrides: object):
     return make_messages_request(model, **overrides)
 
 
@@ -62,13 +64,13 @@ def cerebras_config():
 
 
 @pytest.fixture
-def cerebras_provider(cerebras_config):
+def cerebras_provider(cerebras_config: ProviderConfig):
     return profiled_provider(
         "cerebras", cerebras_config, admission=immediate_admission()
     )
 
 
-def test_init(cerebras_config):
+def test_init(cerebras_config: ProviderConfig):
     """Test provider initialization."""
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
@@ -85,7 +87,7 @@ def test_default_base_url_constant():
     assert CEREBRAS_DEFAULT_BASE == "https://api.cerebras.ai/v1"
 
 
-def test_build_request_body_basic(cerebras_provider):
+def test_build_request_body_basic(cerebras_provider: OpenAIChatProvider):
     """Basic request body conversion attaches system message from Claude request."""
     req = make_request()
     body = cerebras_provider._chat._build_request_body(
@@ -97,7 +99,9 @@ def test_build_request_body_basic(cerebras_provider):
     assert "max_completion_tokens" in body
 
 
-def test_build_request_body_replays_reasoning_in_native_field(cerebras_provider):
+def test_build_request_body_replays_reasoning_in_native_field(
+    cerebras_provider: OpenAIChatProvider,
+):
     body = cerebras_provider._chat._build_request_body(
         make_reasoning_tool_history_request()
     )
@@ -142,7 +146,9 @@ def test_replay_is_independent_of_current_turn_reasoning_control():
     assert body["reasoning_effort"] == "none"
 
 
-def test_build_request_body_remaps_max_tokens_preserves_message_name(cerebras_provider):
+def test_build_request_body_remaps_max_tokens_preserves_message_name(
+    cerebras_provider: OpenAIChatProvider,
+):
     """Cerebras does not strip message ``name``; ``max_tokens`` maps to completion field."""
     with patch(
         "free_claude_code.providers.openai_chat.request_policy.build_base_request_body"
@@ -162,7 +168,9 @@ def test_build_request_body_remaps_max_tokens_preserves_message_name(cerebras_pr
     assert body["max_completion_tokens"] == 42
 
 
-def test_build_request_body_prefers_existing_max_completion_tokens(cerebras_provider):
+def test_build_request_body_prefers_existing_max_completion_tokens(
+    cerebras_provider: OpenAIChatProvider,
+):
     with patch(
         "free_claude_code.providers.openai_chat.request_policy.build_base_request_body"
     ) as mock_convert:
@@ -178,7 +186,9 @@ def test_build_request_body_prefers_existing_max_completion_tokens(cerebras_prov
     assert "max_tokens" not in body
 
 
-def test_build_request_body_preserves_caller_extra_body(cerebras_provider):
+def test_build_request_body_preserves_caller_extra_body(
+    cerebras_provider: OpenAIChatProvider,
+):
     req = make_request(extra_body={"clear_thinking": False})
 
     body = cerebras_provider._chat._build_request_body(
@@ -191,7 +201,7 @@ def test_build_request_body_preserves_caller_extra_body(cerebras_provider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_text(cerebras_provider):
+async def test_stream_messages_text(cerebras_provider: OpenAIChatProvider):
     """Text content deltas are emitted as text blocks."""
     req = make_request()
 
@@ -228,7 +238,7 @@ async def test_stream_messages_text(cerebras_provider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_reasoning(cerebras_provider):
+async def test_stream_messages_reasoning(cerebras_provider: OpenAIChatProvider):
     """Cerebras reasoning deltas are emitted as thinking blocks."""
     req = make_request()
 
@@ -265,7 +275,7 @@ async def test_stream_messages_reasoning(cerebras_provider):
 
 
 @pytest.mark.asyncio
-async def test_cleanup(cerebras_provider):
+async def test_cleanup(cerebras_provider: OpenAIChatProvider):
     cerebras_provider._client = AsyncMock()
 
     await cerebras_provider.cleanup()

@@ -6,6 +6,7 @@ from typing import Any, cast
 
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.gemini.errors import GeminiConversionError
@@ -36,7 +37,7 @@ ORIGIN = ReplayOrigin("provider", "chat", "https://source.invalid", "account", "
 @pytest.mark.parametrize("edited", [True, False])
 @pytest.mark.parametrize("thought", ["Same", "🧠é"])
 def test_mixed_equal_thoughts_keep_only_protected_echo_exemption(
-    protocol, visible, edited, thought
+    protocol: WireProtocol, visible: bool, edited: bool, thought: str
 ):
     output = GeminiOutput("response", "model", include_thoughts=visible)
     native: JsonObject = {
@@ -80,7 +81,7 @@ def test_mixed_equal_thoughts_keep_only_protected_echo_exemption(
             else not assistant.get("reasoning_content")
         )
     # Foreign protected state keeps its existing fallback; ordinary thinking is separate.
-    ordinary = []
+    ordinary: list[str] = []
     if protocol == "responses":
         ordinary = [
             text
@@ -104,7 +105,9 @@ def test_mixed_equal_thoughts_keep_only_protected_echo_exemption(
 @pytest.mark.parametrize(
     "ranges", [((1, 0, 1),), ((0, -1, 1),), ((0, 1, 1),), ((0, 0, 2), (0, 1, 3))]
 )
-def test_malformed_protected_ranges_are_rejected(ranges):
+def test_malformed_protected_ranges_are_rejected(
+    ranges: tuple[tuple[int, int, int], ...],
+):
     record = ReplayRecord(
         ORIGIN,
         {
@@ -157,7 +160,9 @@ def test_protected_ranges_cannot_exceed_verified_visible_text():
         build(incoming, "chat")
 
 
-def test_protected_pending_metadata_is_bounded_at_capture(monkeypatch):
+def test_protected_pending_metadata_is_bounded_at_capture(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(
         "free_claude_code.core.gemini.response.RECOVERY_RETENTION_BYTES", 100
     )
@@ -175,7 +180,9 @@ def test_protected_pending_metadata_is_bounded_at_capture(monkeypatch):
         )
 
 
-def test_required_call_metadata_is_bounded_before_finish(monkeypatch):
+def test_required_call_metadata_is_bounded_before_finish(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(
         "free_claude_code.core.gemini.response.RECOVERY_RETENTION_BYTES", 100
     )

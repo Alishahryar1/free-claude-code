@@ -10,6 +10,7 @@ import pytest
 from copilot import CopilotClient, CopilotSession
 from copilot.rpc import Model, PermissionDecisionReject, ProviderEndpoint
 
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.providers.github_copilot import native_cli, sdk
 from free_claude_code.providers.github_copilot.types import (
     CopilotEgress,
@@ -344,9 +345,9 @@ def test_endpoint_uses_sdk_family_and_wire_metadata(
     ],
 )
 def test_endpoint_rejects_unsupported_or_unsafe_metadata(
-    field: str, value: object
+    field: str, value: JsonValue
 ) -> None:
-    data = {
+    data: JsonObject = {
         "type": "openai",
         "baseUrl": "https://upstream.invalid",
         "headers": {},

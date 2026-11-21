@@ -8,8 +8,10 @@ from urllib.error import URLError
 import pytest
 
 from free_claude_code.cli.launchers import common, runner
+from free_claude_code.core.json_types import JsonValue
 from tests.cli.conftest import LaunchCapture
 from tests.cli.test_launcher_workflow import HARNESSES, launch
+from tests.wire_payload import object_payload
 
 
 @pytest.mark.parametrize(
@@ -123,9 +125,9 @@ def test_empty_token_stops_before_network(launch_capture: LaunchCapture) -> None
     "payload", ({}, {"data": []}, {"data": [{"id": "no provider reference"}]})
 )
 def test_unusable_catalog_prevents_every_catalog_dependent_child(
-    name: str, payload, launch_capture: LaunchCapture
+    name: str, payload: JsonValue, launch_capture: LaunchCapture
 ) -> None:
-    launch_capture.catalog = payload
+    launch_capture.catalog = object_payload(payload)
     launch(name, [], exit_code=1)
     assert not launch_capture.commands
 

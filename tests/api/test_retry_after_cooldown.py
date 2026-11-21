@@ -16,7 +16,7 @@ from tests.api.test_four_protocol_matrix import ingress_request, matrix_app
 
 
 @pytest.fixture
-def cooldown_clock(monkeypatch):
+def cooldown_clock(monkeypatch: pytest.MonkeyPatch):
     clock = SimpleNamespace(now=100.0)
     monotonic_time = SimpleNamespace(monotonic=lambda: clock.now)
     monkeypatch.setattr(admission, "time", monotonic_time)
@@ -37,11 +37,11 @@ def cooldown_clock(monkeypatch):
 )
 @pytest.mark.asyncio
 async def test_cooldown_reports_remaining_time_for_initial_and_later_requests(
-    wire, protocol, cooldown_clock
+    wire: str, protocol: str, cooldown_clock: SimpleNamespace
 ):
     calls = []
 
-    def rate_limit(request):
+    def rate_limit(request: httpx.Request | httpx2.Request):
         calls.append(request)
         response = (
             httpx.Response if protocol in {"messages", "gemini"} else httpx2.Response
@@ -54,7 +54,9 @@ async def test_cooldown_reports_remaining_time_for_initial_and_later_requests(
             },
         )
 
-    app = matrix_app(protocol, rate_limit, max_attempts=10)
+    app = matrix_app(
+        protocol, native_reply=rate_limit, sdk_reply=rate_limit, max_attempts=10
+    )
     path, body = ingress_request(wire, wire == "responses")
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app), base_url="http://test"
@@ -77,12 +79,12 @@ async def test_cooldown_reports_remaining_time_for_initial_and_later_requests(
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.asyncio
 async def test_continuation_cooldown_uses_terminal_event(
-    protocol, monkeypatch, cooldown_clock
+    protocol: str, monkeypatch: pytest.MonkeyPatch, cooldown_clock: SimpleNamespace
 ):
     calls = []
     response_type = httpx.Response if protocol == "messages" else httpx2.Response
 
-    def reply(request):
+    def reply(request: httpx.Request | httpx2.Request):
         calls.append(request)
         if len(calls) == 1:
             events = text_events(protocol, "Hello", complete=False)
@@ -104,7 +106,7 @@ async def test_continuation_cooldown_uses_terminal_event(
 
     wire = "responses" if protocol == "responses" else "messages"
     path, body = ingress_request(wire, True)
-    app = matrix_app(protocol, reply, max_attempts=10)
+    app = matrix_app(protocol, native_reply=reply, sdk_reply=reply, max_attempts=10)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app), base_url="http://test"
     ) as client:
@@ -121,12 +123,12 @@ async def test_continuation_cooldown_uses_terminal_event(
 @pytest.mark.parametrize("with_backup", [False, True])
 @pytest.mark.asyncio
 async def test_automatic_websearch_preserves_continuation_cooldown(
-    with_backup, cooldown_clock
+    with_backup: bool, cooldown_clock: SimpleNamespace
 ):
     partial = "Partial answer" if with_backup else "a" * 66_000
     calls = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         body = json.loads(request.content)
         calls.append(body)
         if body["model"] == "backup":
@@ -152,7 +154,7 @@ async def test_automatic_websearch_preserves_continuation_cooldown(
 
     app = matrix_app(
         "chat",
-        reply,
+        sdk_reply=reply,
         max_attempts=2 if with_backup else 10,
         model_fallbacks=[ModelFallback(model="open_router/backup")]
         if with_backup

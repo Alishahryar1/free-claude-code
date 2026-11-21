@@ -12,6 +12,7 @@ import pytest
 
 from free_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.groq import GroqProvider
 from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.open_router import OpenRouterProvider
@@ -53,7 +54,7 @@ def _chat(cache: HistoryModeCache, max_attempts: int):
     )
 
 
-def _thoughts(body) -> tuple[bool, bool]:
+def _thoughts(body: JsonObject) -> tuple[bool, bool]:
     serialized = json.dumps(body)
     return "Old" in serialized, "New" in serialized
 

@@ -11,6 +11,7 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.config.provider_catalog import QWENCLOUD_DEFAULT_BASE
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.support import (
@@ -100,7 +101,7 @@ def test_build_request_body_preserves_common_chat_tools_and_images(
 @pytest.mark.parametrize("reasoning", [REASONING_OFF, REASONING_ON])
 def test_build_request_body_does_not_invent_catalog_wide_reasoning_control(
     qwencloud_provider: OpenAIChatProvider,
-    reasoning,
+    reasoning: ReasoningPolicy,
 ) -> None:
     request = MessagesRequest.model_validate(
         {
@@ -216,10 +217,13 @@ async def test_model_catalog_uses_standard_endpoint_base_url_and_auth(
 
 @pytest.mark.asyncio
 async def test_empty_model_catalog_fails_instead_of_publishing_partial_state(
+    monkeypatch: pytest.MonkeyPatch,
     qwencloud_provider: OpenAIChatProvider,
 ) -> None:
-    qwencloud_provider._client.models.list = AsyncMock(
-        return_value=SimpleNamespace(data=[])
+    monkeypatch.setattr(
+        qwencloud_provider._client.models,
+        "list",
+        AsyncMock(return_value=SimpleNamespace(data=[])),
     )
 
     with pytest.raises(ModelListResponseError, match="did not include any model ids"):

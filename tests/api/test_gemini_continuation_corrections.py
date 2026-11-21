@@ -16,14 +16,17 @@ from tests.api.test_gemini_continuation_replay import body, native
 @pytest.mark.parametrize("thinking_only", [False, True])
 @pytest.mark.parametrize("interrupt_again", [False, True])
 def test_corrected_continuation_and_followup_preserve_actual_context(
-    wire, thinking_only, interrupt_again, monkeypatch
+    wire: str,
+    thinking_only: bool,
+    interrupt_again: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     sent = []
     corrected = []
     completed_context = None
     completed_native = None
 
-    def reply(request):
+    def reply(request: httpx.Request):
         nonlocal completed_context, completed_native
         value = json.loads(request.content)
         sent.append(deepcopy(value))
@@ -63,7 +66,7 @@ def test_corrected_continuation_and_followup_preserve_actual_context(
         else {"role": "user", "content": "hello"}
     )
     path, request = body(wire, [initial])
-    app = matrix_app("gemini", reply, max_attempts=7)
+    app = matrix_app("gemini", native_reply=reply, max_attempts=7)
     with TestClient(app) as client:
         response = client.post(path, json=request)
         value = response_value(response, wire, True)

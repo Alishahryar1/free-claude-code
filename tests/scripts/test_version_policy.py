@@ -42,7 +42,7 @@ def commit(repo: Path, title: str = "test change") -> str:
 
 
 @pytest.fixture(scope="session")
-def history_template(tmp_path_factory):
+def history_template(tmp_path_factory: pytest.TempPathFactory):
     tmp_path = tmp_path_factory.mktemp("version-policy-template")
     git(tmp_path, "init", "--template=", "-b", "main")
     git(tmp_path, "config", "core.autocrlf", "false")
@@ -61,7 +61,7 @@ def history_template(tmp_path_factory):
 
 
 @pytest.fixture
-def history(tmp_path, history_template):
+def history(tmp_path: Path, history_template: tuple[Path, str]):
     source, base = history_template
     # Copy the immutable seed, including Git objects and refs. Every test can
     # change its worktree, index, and history without affecting another test.
@@ -108,7 +108,9 @@ def check(repo: Path, base: str, title: str) -> subprocess.CompletedProcess[str]
         ("Fix it", False),
     ],
 )
-def test_release_inputs_require_prefix(history, path, title, allowed):
+def test_release_inputs_require_prefix(
+    history: tuple[Path, str], path: str, title: str, allowed: bool
+):
     repo, base = history
     target = repo / path
     write(repo, path, (target.read_text() if target.exists() else "") + "\n# change\n")
@@ -121,7 +123,7 @@ def test_release_inputs_require_prefix(history, path, title, allowed):
     "title",
     ["patch: Missing release", "minor: Missing release", "major: Missing release"],
 )
-def test_nonrelease_changes_forbid_prefix(history, title):
+def test_nonrelease_changes_forbid_prefix(history: tuple[Path, str], title: str):
     repo, base = history
     write(repo, "README.md", "docs")
     commit(repo)
@@ -141,7 +143,7 @@ def test_nonrelease_changes_forbid_prefix(history, title):
         "major\uff1a Change",
     ],
 )
-def test_malformed_release_title_rejected(history, title):
+def test_malformed_release_title_rejected(history: tuple[Path, str], title: str):
     repo, base = history
     write(repo, "src/file.py", "change")
     commit(repo)
@@ -149,7 +151,7 @@ def test_malformed_release_title_rejected(history, title):
 
 
 @pytest.mark.parametrize("move", [False, True])
-def test_delete_or_move_out_counts_as_release(history, move):
+def test_delete_or_move_out_counts_as_release(history: tuple[Path, str], move: bool):
     repo, base = history
     if move:
         (repo / "src/file.py").rename(repo / "outside.py")
@@ -160,7 +162,9 @@ def test_delete_or_move_out_counts_as_release(history, move):
     assert check(repo, base, "patch: Remove file").returncode == 0
 
 
-def test_unrelated_main_and_dirty_files_do_not_change_pr_classification(history):
+def test_unrelated_main_and_dirty_files_do_not_change_pr_classification(
+    history: tuple[Path, str],
+):
     repo, original = history
     write(repo, "src/main.py", "main")
     base = commit(repo)
@@ -171,7 +175,7 @@ def test_unrelated_main_and_dirty_files_do_not_change_pr_classification(history)
     assert check(repo, base, "Explain setup").returncode == 0
 
 
-def test_title_is_data_and_multiple_commits_have_one_intent(history):
+def test_title_is_data_and_multiple_commits_have_one_intent(history: tuple[Path, str]):
     repo, base = history
     write(repo, "src/file.py", "one")
     commit(repo)
@@ -180,7 +184,7 @@ def test_title_is_data_and_multiple_commits_have_one_intent(history):
     assert check(repo, base, 'patch: $(echo unsafe) `literal` "quoted"').returncode == 0
 
 
-def test_manual_version_is_rejected(history):
+def test_manual_version_is_rejected(history: tuple[Path, str]):
     repo, base = history
     write(
         repo, "pyproject.toml", '[project]\nname="free-claude-code"\nversion="1.2.3"\n'
@@ -189,7 +193,9 @@ def test_manual_version_is_rejected(history):
     assert check(repo, base, "patch: Manual version").returncode != 0
 
 
-def test_pr_snapshot_uses_latest_title_and_rejects_stale_head(history, tmp_path):
+def test_pr_snapshot_uses_latest_title_and_rejects_stale_head(
+    history: tuple[Path, str], tmp_path: Path
+):
     import json
 
     repo, base = history

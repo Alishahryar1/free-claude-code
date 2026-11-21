@@ -14,13 +14,14 @@ from free_claude_code.config.loader import (
 )
 from free_claude_code.config.model_refs import configured_chat_model_refs
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonValue
 
 KEYS = ["synthetic-first", "synthetic-second", "synthetic-third"]
 REVISION_KEY = b"test-fallback-revision"
 CUSTOM_ID = "custom_" + "a" * 32
 
 
-def snapshot(managed, process=None):
+def snapshot(managed: dict[str, str], process: dict[str, str] | None = None):
     process = process or {}
     effective = compose_settings_snapshot(managed, process)
     return ManagedConfigSnapshot(
@@ -28,7 +29,7 @@ def snapshot(managed, process=None):
     )
 
 
-def admin_field(state, key):
+def admin_field(state: ManagedConfigSnapshot, key: str):
     fields = load_config_response(state, revision_key=REVISION_KEY)["fields"]
     assert isinstance(fields, list)
     for field in fields:
@@ -42,8 +43,8 @@ def admin_field(state, key):
     "value",
     ["groq/one", ["groq/one"], [{"model": "groq/one", "reasoning": "high"}]],
 )
-def test_existing_fallback_formats_use_key_one(value):
-    settings = Settings(MODEL_FALLBACKS=value)
+def test_existing_fallback_formats_use_key_one(value: JsonValue):
+    settings = Settings.model_validate({"MODEL_FALLBACKS": value})
     assert settings.model_fallbacks is not None
     assert settings.model_fallbacks[0].api_key_number == 1
 
@@ -92,7 +93,7 @@ def test_different_efforts_do_not_allow_duplicate_model_key_pairs():
 
 
 @pytest.mark.parametrize("number", [0, -1, True, 1.5, "2"])
-def test_key_number_requires_a_positive_integer(number):
+def test_key_number_requires_a_positive_integer(number: bool | float | int | str):
     with pytest.raises(ValidationError) as rejected:
         Settings(
             GROQ_API_KEY=KEYS,
@@ -113,7 +114,7 @@ def test_unavailable_key_is_rejected_without_disclosing_keys():
 
 
 @pytest.mark.parametrize("provider", ["openai", "github_copilot", "vertex", "ollama"])
-def test_other_authentication_has_only_the_default_selection(provider):
+def test_other_authentication_has_only_the_default_selection(provider: str):
     default = Settings(
         MODEL_FALLBACKS=[{"model": f"{provider}/one", "api_key_number": 1}]
     )
@@ -124,7 +125,7 @@ def test_other_authentication_has_only_the_default_selection(provider):
 
 
 @pytest.mark.parametrize("provider", ["zai", "zai_api", "opencode_zen", "opencode_go"])
-def test_shared_credential_owners_supply_the_same_numbered_keys(provider):
+def test_shared_credential_owners_supply_the_same_numbered_keys(provider: str):
     settings = Settings(
         ZAI_API_KEY=KEYS,
         OPENCODE_API_KEY=KEYS,

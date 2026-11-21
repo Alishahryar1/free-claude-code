@@ -4,8 +4,10 @@ from copy import deepcopy
 
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import JsonObject
 from tests.api.test_delivered_stream_recovery import (
     assert_completed,
     public_text,
@@ -21,7 +23,7 @@ from tests.wire_payload import (
 )
 
 
-def reasoning_events(*, field="summary", seeded="", closed=True):
+def reasoning_events(*, field: str = "summary", seeded: str = "", closed: bool = True):
     events = deepcopy(_events_for("responses"))
     part_type = "summary_text" if field == "summary" else "reasoning_text"
     for event in events:
@@ -36,7 +38,7 @@ def reasoning_events(*, field="summary", seeded="", closed=True):
         for item in items:
             item.pop("encrypted_content", None)
             item["content"] = None
-            item["summary"] = []
+            item.update(summary=[])
             text = (
                 seeded
                 if string_payload(event["type"]).endswith(".added")
@@ -53,7 +55,7 @@ def reasoning_events(*, field="summary", seeded="", closed=True):
     return events if closed else events[:3]
 
 
-def followed_by_text(events, text):
+def followed_by_text(events: list[JsonObject], text: str):
     result = deepcopy(events)
     tail = text_events("responses", text, complete=False)[1:]
     for event in tail:
@@ -67,7 +69,9 @@ def followed_by_text(events, text):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_nullable_reasoning_content_preserves_healthy_response(wire):
+async def test_nullable_reasoning_content_preserves_healthy_response(
+    wire: WireProtocol,
+):
     events = _events_for("responses")
     for event in events:
         if "item" in event:
@@ -94,7 +98,9 @@ async def test_nullable_reasoning_content_preserves_healthy_response(wire):
 @pytest.mark.parametrize("field", ["summary", "content"])
 @pytest.mark.parametrize("closed", [False, True])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_readable_reasoning_continues_from_released_content(field, closed, wire):
+async def test_readable_reasoning_continues_from_released_content(
+    field: str, closed: bool, wire: WireProtocol
+):
     first = reasoning_events(field=field, closed=closed)
     if closed:
         first = first[:-1]
@@ -122,7 +128,7 @@ async def test_readable_reasoning_continues_from_released_content(field, closed,
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_readable_reasoning_is_allowed_in_the_continuation(wire):
+async def test_readable_reasoning_is_allowed_in_the_continuation(wire: WireProtocol):
     async with _harness(
         "responses",
         lambda bodies: (
@@ -142,7 +148,9 @@ async def test_readable_reasoning_is_allowed_in_the_continuation(wire):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_completed_readable_carrier_without_deltas_counts_as_output(wire):
+async def test_completed_readable_carrier_without_deltas_counts_as_output(
+    wire: WireProtocol,
+):
     continuation = reasoning_events()
     continuation.pop(2)
     async with _harness(
@@ -162,7 +170,9 @@ async def test_completed_readable_carrier_without_deltas_counts_as_output(wire):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_completed_readable_carrier_without_deltas_is_continuation_context(wire):
+async def test_completed_readable_carrier_without_deltas_is_continuation_context(
+    wire: WireProtocol,
+):
     first = reasoning_events()[:-1]
     first.pop(2)
     first = followed_by_text(first, "Hello ")
@@ -205,12 +215,14 @@ async def test_nullable_reasoning_in_terminal_only_continuation_is_output():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["summary", "content"])
 @pytest.mark.parametrize("seeded", ["", "First, "])
-async def test_synthetic_reasoning_closure_preserves_followup_history(field, seeded):
+async def test_synthetic_reasoning_closure_preserves_followup_history(
+    field: str, seeded: str
+):
     first = followed_by_text(
         reasoning_events(field=field, seeded=seeded, closed=False), "Hello "
     )
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, first
         return 200, text_events("responses", "world." if len(bodies) == 2 else "Next.")
@@ -238,10 +250,12 @@ async def test_synthetic_reasoning_closure_preserves_followup_history(field, see
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_readable_reasoning_survives_repeated_continuation_and_followup(wire):
+async def test_readable_reasoning_survives_repeated_continuation_and_followup(
+    wire: WireProtocol,
+):
     second = followed_by_text(reasoning_events()[:-1], "middle ")
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "First ", complete=False)
         if len(bodies) == 2:
@@ -279,7 +293,7 @@ async def test_readable_reasoning_survives_repeated_continuation_and_followup(wi
 )
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_native_failure_snapshot_preserves_error_and_blocks_recovery(
-    native, failure, wire
+    native: str, failure: str, wire: WireProtocol
 ):
     error = {
         "code": "server_error"
@@ -290,7 +304,7 @@ async def test_native_failure_snapshot_preserves_error_and_blocks_recovery(
         "message": "Model failed to continue.",
     }
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
         events = text_events("responses", "Unpublished failure snapshot")

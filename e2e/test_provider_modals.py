@@ -4,6 +4,8 @@ import pytest
 from playwright.sync_api import Page, Route, expect
 
 from e2e.provider_support import api_key_input, close_provider, open_provider
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import object_payload
 
 
 def test_provider_titles_link_to_websites_and_every_logo_loads(
@@ -161,7 +163,7 @@ def test_modal_groups_all_provider_fields_and_discards_cancelled_edits(
 def test_modal_save_applies_only_its_changes_and_preserves_other_page_edits(
     page: Page, admin_base_url: str, restart: bool
 ) -> None:
-    submissions: list[dict] = []
+    submissions: list[JsonObject] = []
 
     def save(route: Route) -> None:
         payload = route.request.post_data_json
@@ -198,10 +200,10 @@ def test_modal_save_applies_only_its_changes_and_preserves_other_page_edits(
     expect(dialog).not_to_be_visible()
     expect(page.locator("#messageArea")).to_have_text("Applied")
     assert len(submissions) == 1
-    assert set(submissions[0]["values"]) == {"NVIDIA_NIM_API_KEY"}
-    assert submissions[0]["values"]["NVIDIA_NIM_API_KEY"]["entries"] == [
-        {"value": "new-key"}
-    ]
+    assert set(object_payload(submissions[0]["values"])) == {"NVIDIA_NIM_API_KEY"}
+    assert object_payload(
+        object_payload(submissions[0]["values"])["NVIDIA_NIM_API_KEY"]
+    )["entries"] == [{"value": "new-key"}]
     expect(page.locator("#dirtyState")).to_have_text("1 unsaved change")
     page.get_by_role("button", name="Model Config", exact=True).click()
     expect(model).to_have_value("open_router/pending-model")

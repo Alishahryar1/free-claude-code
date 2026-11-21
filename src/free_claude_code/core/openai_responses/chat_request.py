@@ -72,7 +72,8 @@ class _PendingReasoning:
         return not self.items
 
     def take(self) -> list[Mapping[str, JsonValue]]:
-        items, self.items = self.items, []
+        items = self.items
+        self.items = []
         return items
 
 
@@ -615,7 +616,7 @@ def _chat_function_tool(tool: Mapping[str, JsonValue]) -> tuple[dict[str, object
     name = required_str(tool.get("name"), "tool.name")
     parameters = tool.get("parameters")
     if parameters is None:
-        parameters = {"type": "object", "properties": {}}
+        parameters = {"type": "object", "properties": dict[str, JsonValue]()}
     if not isinstance(parameters, Mapping):
         raise ResponsesConversionError(
             f"Responses tool {name!r} parameters must be an object"

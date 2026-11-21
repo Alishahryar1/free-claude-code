@@ -2,15 +2,18 @@
 
 from contextlib import nullcontext
 
+import pytest
+
 from free_claude_code.application.routing import ModelRouter
 from free_claude_code.config.loader import clear_settings_cache, get_settings
 from free_claude_code.config.reasoning import ReasoningPreference
 from smoke.lib.config import ProviderModel, SmokeConfig
 from smoke.lib.e2e import SmokeServerDriver
 from smoke.product.test_provider_product_live import _server_for_provider
+from tests.assertions import require_present
 
 
-def test_provider_smoke_isolates_tiers_and_reasoning(monkeypatch):
+def test_provider_smoke_isolates_tiers_and_reasoning(monkeypatch: pytest.MonkeyPatch):
     for tier in ("FABLE", "OPUS", "SONNET", "HAIKU"):
         monkeypatch.setenv(f"MODEL_{tier}", "groq/wrong-model")
         monkeypatch.setenv(f"REASONING_{tier}", "off")
@@ -18,8 +21,8 @@ def test_provider_smoke_isolates_tiers_and_reasoning(monkeypatch):
     monkeypatch.setenv("REASONING_POLICY", "off")
     captured = {}
 
-    def run(driver):
-        captured.update(driver.env_overrides)
+    def run(driver: SmokeServerDriver):
+        captured.update(require_present(driver.env_overrides))
         return nullcontext()
 
     monkeypatch.setattr(SmokeServerDriver, "run", run)

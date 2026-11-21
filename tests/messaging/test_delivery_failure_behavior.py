@@ -6,11 +6,19 @@ library actually reports a rejected request.
 """
 
 import asyncio
+from collections.abc import Sequence
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TimedOut
+from telegram.error import (
+    BadRequest,
+    Forbidden,
+    NetworkError,
+    RetryAfter,
+    TelegramError,
+    TimedOut,
+)
 
 from free_claude_code.messaging.delivery_failures import PlatformRateLimited
 from free_claude_code.messaging.limiter import MessagingRateLimiter
@@ -21,13 +29,15 @@ OK = object()
 
 
 @pytest.fixture
-def sleeps(monkeypatch):
+def sleeps(monkeypatch: pytest.MonkeyPatch):
     sleep = AsyncMock()
     monkeypatch.setattr(telegram_io.asyncio, "sleep", sleep)
     return sleep
 
 
-async def _run(outcomes, *, parse_mode=None, suppress=True):
+async def _run(
+    outcomes: Sequence[object], *, parse_mode: str | None = None, suppress: bool = True
+):
     """Call _with_retry against scripted outcomes; return the result and calls."""
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
@@ -36,7 +46,7 @@ async def _run(outcomes, *, parse_mode=None, suppress=True):
     calls: list[str | None] = []
     script = iter(outcomes)
 
-    async def call(parse_mode=parse_mode):
+    async def call(parse_mode: str | None = parse_mode):
         calls.append(parse_mode)
         outcome = next(script)
         if isinstance(outcome, BaseException):
@@ -58,7 +68,7 @@ def _delays(sleep: AsyncMock) -> list[float]:
 
 
 @pytest.mark.asyncio
-async def test_network_errors_back_off_then_succeed(sleeps):
+async def test_network_errors_back_off_then_succeed(sleeps: AsyncMock):
     result, calls = await _run([TimedOut(), NetworkError("reset"), OK])
 
     assert result is OK
@@ -67,7 +77,7 @@ async def test_network_errors_back_off_then_succeed(sleeps):
 
 
 @pytest.mark.asyncio
-async def test_network_errors_raise_after_three_attempts(sleeps):
+async def test_network_errors_raise_after_three_attempts(sleeps: AsyncMock):
     error = NetworkError("reset")
     result, calls = await _run([error, error, error])
 
@@ -77,7 +87,7 @@ async def test_network_errors_raise_after_three_attempts(sleeps):
 
 
 @pytest.mark.asyncio
-async def test_unparseable_markdown_is_resent_as_plain_text(sleeps):
+async def test_unparseable_markdown_is_resent_as_plain_text(sleeps: AsyncMock):
     error = BadRequest("Can't parse entities: unsupported start tag")
     result, calls = await _run([error, OK], parse_mode="MarkdownV2")
 
@@ -87,7 +97,7 @@ async def test_unparseable_markdown_is_resent_as_plain_text(sleeps):
 
 
 @pytest.mark.asyncio
-async def test_edit_of_a_missing_message_is_ignored(sleeps):
+async def test_edit_of_a_missing_message_is_ignored(sleeps: AsyncMock):
     result, calls = await _run([BadRequest("Message to edit not found")])
 
     assert result is None
@@ -95,7 +105,7 @@ async def test_edit_of_a_missing_message_is_ignored(sleeps):
 
 
 @pytest.mark.asyncio
-async def test_other_bad_requests_raise_at_once(sleeps):
+async def test_other_bad_requests_raise_at_once(sleeps: AsyncMock):
     error = BadRequest("Chat not found")
     result, calls = await _run([error])
 
@@ -105,7 +115,7 @@ async def test_other_bad_requests_raise_at_once(sleeps):
 
 
 @pytest.mark.asyncio
-async def test_unmodified_message_is_ignored(sleeps):
+async def test_unmodified_message_is_ignored(sleeps: AsyncMock):
     result, calls = await _run(
         [BadRequest("Message is not modified: specified new message content")]
     )
@@ -115,7 +125,7 @@ async def test_unmodified_message_is_ignored(sleeps):
 
 
 @pytest.mark.asyncio
-async def test_forbidden_delete_is_ignored(sleeps):
+async def test_forbidden_delete_is_ignored(sleeps: AsyncMock):
     result, calls = await _run([Forbidden("Not enough rights to delete message")])
 
     assert result is None
@@ -123,7 +133,7 @@ async def test_forbidden_delete_is_ignored(sleeps):
 
 
 @pytest.mark.asyncio
-async def test_known_errors_raise_when_suppression_is_off(sleeps):
+async def test_known_errors_raise_when_suppression_is_off(sleeps: AsyncMock):
     error = Forbidden("Message can't be deleted for everyone")
     result, calls = await _run([error], suppress=False)
 
@@ -132,7 +142,7 @@ async def test_known_errors_raise_when_suppression_is_off(sleeps):
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_waits_then_retries(sleeps):
+async def test_rate_limit_waits_then_retries(sleeps: AsyncMock):
     result, calls = await _run([RetryAfter(5), OK])
 
     assert result is OK
@@ -141,7 +151,7 @@ async def test_rate_limit_waits_then_retries(sleeps):
 
 
 @pytest.mark.asyncio
-async def test_rate_limits_share_the_three_call_budget(sleeps):
+async def test_rate_limits_share_the_three_call_budget(sleeps: AsyncMock):
     result, calls = await _run([RetryAfter(5), RetryAfter(7), OK])
 
     assert result is OK
@@ -150,7 +160,7 @@ async def test_rate_limits_share_the_three_call_budget(sleeps):
 
 
 @pytest.mark.asyncio
-async def test_third_rate_limit_hands_its_wait_to_the_queue(sleeps):
+async def test_third_rate_limit_hands_its_wait_to_the_queue(sleeps: AsyncMock):
     third = RetryAfter(9)
     result, calls = await _run([RetryAfter(5), TimedOut(), third])
 
@@ -162,7 +172,7 @@ async def test_third_rate_limit_hands_its_wait_to_the_queue(sleeps):
 
 
 @pytest.mark.asyncio
-async def test_failed_plain_resend_is_still_retried(sleeps):
+async def test_failed_plain_resend_is_still_retried(sleeps: AsyncMock):
     from telegram.error import TelegramError
 
     result, calls = await _run(
@@ -176,7 +186,7 @@ async def test_failed_plain_resend_is_still_retried(sleeps):
 
 
 @pytest.mark.asyncio
-async def test_unmodified_message_is_ignored_in_any_case(sleeps):
+async def test_unmodified_message_is_ignored_in_any_case(sleeps: AsyncMock):
     result, calls = await _run([NetworkError("message is not modified")])
 
     assert result is None
@@ -219,15 +229,15 @@ async def test_platform_rate_limit_pauses_the_queue_for_its_wait():
     ],
     ids=["wait-wording", "flood-wording", "raw-retry-after", "unrelated"],
 )
-async def test_other_errors_do_not_pause_the_queue(error):
+async def test_other_errors_do_not_pause_the_queue(error: Exception):
     assert await _queue_pause(error) == 0
 
 
-def _bulk_messenger(bulk_outcomes):
+def _bulk_messenger(bulk_outcomes: Sequence[TelegramError]):
     """A messenger whose bot fails bulk deletes as scripted and logs single ones."""
     bulk = iter(bulk_outcomes)
 
-    async def delete_messages(*, chat_id, message_ids):
+    async def delete_messages(*, chat_id: object, message_ids: object):
         outcome = next(bulk)
         if isinstance(outcome, BaseException):
             raise outcome
@@ -244,7 +254,7 @@ def _bulk_messenger(bulk_outcomes):
 
 
 @pytest.mark.asyncio
-async def test_rate_limited_bulk_delete_hands_its_wait_to_the_queue(sleeps):
+async def test_rate_limited_bulk_delete_hands_its_wait_to_the_queue(sleeps: AsyncMock):
     messenger, bot = _bulk_messenger([RetryAfter(5), RetryAfter(6), RetryAfter(7)])
 
     with pytest.raises(PlatformRateLimited) as raised:
@@ -256,7 +266,7 @@ async def test_rate_limited_bulk_delete_hands_its_wait_to_the_queue(sleeps):
 
 
 @pytest.mark.asyncio
-async def test_rejected_bulk_delete_falls_back_to_single_deletes(sleeps):
+async def test_rejected_bulk_delete_falls_back_to_single_deletes(sleeps: AsyncMock):
     messenger, bot = _bulk_messenger([BadRequest("Method not available")])
 
     await messenger.delete_messages("1", ["10", "11"])

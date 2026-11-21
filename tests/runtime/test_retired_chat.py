@@ -19,9 +19,14 @@ from free_claude_code.runtime.retired_chat import remove_retired_chat_history
 
 
 @pytest.fixture(autouse=True)
-def _offline_discovery(monkeypatch):
+def _offline_discovery(monkeypatch: pytest.MonkeyPatch):
+    def replace_start_model_list_refresh(_: object):
+        return None
+
     monkeypatch.setattr(
-        ProviderRuntimeManager, "start_model_list_refresh", lambda _: None
+        ProviderRuntimeManager,
+        "start_model_list_refresh",
+        replace_start_model_list_refresh,
     )
 
 
@@ -49,7 +54,7 @@ def _runtime():
     )
 
 
-async def _start_and_close(runtime=None):
+async def _start_and_close(runtime: ApplicationRuntime | None = None):
     runtime = runtime or _runtime()
     try:
         await runtime.start()
@@ -122,7 +127,9 @@ def test_startup_removes_history_on_uvloop():
 
 
 @pytest.mark.asyncio
-async def test_busy_history_is_left_intact_and_removed_on_next_startup(cleanup_logs):
+async def test_busy_history_is_left_intact_and_removed_on_next_startup(
+    cleanup_logs: list[str],
+):
     directory, owned = _history()
     original = {path: path.read_bytes() for path in owned}
     lock = InterprocessFileLock(directory / "chat.lock")
@@ -140,14 +147,16 @@ async def test_busy_history_is_left_intact_and_removed_on_next_startup(cleanup_l
 
 
 @pytest.mark.asyncio
-async def test_partial_deletion_releases_lock_and_retries(monkeypatch, cleanup_logs):
+async def test_partial_deletion_releases_lock_and_retries(
+    monkeypatch: pytest.MonkeyPatch, cleanup_logs: list[str]
+):
     directory, owned = _history()
     unlink = Path.unlink
 
-    def denied_sidecar(path, *args, **kwargs):
+    def denied_sidecar(path: Path, missing_ok: bool = False):
         if path == owned[1]:
             raise PermissionError("file in use")
-        return unlink(path, *args, **kwargs)
+        return unlink(path, missing_ok=missing_ok)
 
     with monkeypatch.context() as patch:
         patch.setattr(Path, "unlink", denied_sidecar)
@@ -170,7 +179,7 @@ async def test_partial_deletion_releases_lock_and_retries(monkeypatch, cleanup_l
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["resolve", "lstat", "open"])
 async def test_inaccessible_history_does_not_block_startup(
-    monkeypatch, cleanup_logs, operation
+    monkeypatch: pytest.MonkeyPatch, cleanup_logs: list[str], operation: str
 ):
     directory, owned = _history()
     original = getattr(Path, operation)
@@ -178,7 +187,7 @@ async def test_inaccessible_history_does_not_block_startup(
         operation
     ]
 
-    def inaccessible(path, *args, **kwargs):
+    def inaccessible(path: Path, *args: object, **kwargs: object):
         if path == denied:
             raise PermissionError("access denied")
         return original(path, *args, **kwargs)
@@ -193,7 +202,9 @@ async def test_inaccessible_history_does_not_block_startup(
 
 
 @pytest.mark.asyncio
-async def test_redirected_directory_is_left_untouched(tmp_path, cleanup_logs):
+async def test_redirected_directory_is_left_untouched(
+    tmp_path: Path, cleanup_logs: list[str]
+):
     root = paths.config_dir_path()
     root.mkdir()
     outside = tmp_path / "outside"
@@ -219,12 +230,14 @@ def test_empty_chat_directory_does_not_create_a_lock():
     assert list(directory.iterdir()) == []
 
 
-def test_disappearing_files_are_safe_and_deletion_holds_the_lock(monkeypatch):
+def test_disappearing_files_are_safe_and_deletion_holds_the_lock(
+    monkeypatch: pytest.MonkeyPatch,
+):
     directory, owned = _history()
     unlink = Path.unlink
     removed = []
 
-    def disappearing(path, *args, **kwargs):
+    def disappearing(path: Path, missing_ok: bool = False):
         if path in owned:
             probe = InterprocessFileLock(directory / "chat.lock")
             try:
@@ -233,7 +246,7 @@ def test_disappearing_files_are_safe_and_deletion_holds_the_lock(monkeypatch):
                 probe.release()
             removed.append(path)
             unlink(path)
-        return unlink(path, *args, **kwargs)
+        return unlink(path, missing_ok=missing_ok)
 
     monkeypatch.setattr(Path, "unlink", disappearing)
     remove_retired_chat_history()
@@ -256,17 +269,19 @@ def test_concurrent_cleanups_leave_no_history():
 
 
 @pytest.mark.asyncio
-async def test_startup_cancellation_waits_for_cleanup_and_lock_release(monkeypatch):
+async def test_startup_cancellation_waits_for_cleanup_and_lock_release(
+    monkeypatch: pytest.MonkeyPatch,
+):
     directory, owned = _history()
     runtime = _runtime()
     entered, release = threading.Event(), threading.Event()
     unlink = Path.unlink
 
-    def held_unlink(path, *args, **kwargs):
+    def held_unlink(path: Path, missing_ok: bool = False):
         if path == owned[0]:
             entered.set()
             assert release.wait(5), "cleanup worker was not released"
-        return unlink(path, *args, **kwargs)
+        return unlink(path, missing_ok=missing_ok)
 
     monkeypatch.setattr(Path, "unlink", held_unlink)
     await runtime.start()

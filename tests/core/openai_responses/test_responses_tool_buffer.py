@@ -3,10 +3,11 @@
 import pytest
 
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses.tool_calls import ResponsesToolCallBuffer
 
 
-def item(index, status="completed", arguments="{}"):
+def item(index: int, status: str = "completed", arguments: str = "{}"):
     return {
         "type": "function_call",
         "id": f"fc_{index}",
@@ -133,7 +134,7 @@ def test_failed_snapshot_keeps_only_explicit_completed_calls():
 @pytest.mark.parametrize(
     "kind", ["response.output_item.done", "response.function_call_arguments.delta"]
 )
-def test_explicit_index_cannot_change_for_known_item(completed, kind):
+def test_explicit_index_cannot_change_for_known_item(completed: bool, kind: str):
     buffer = ResponsesToolCallBuffer()
     buffer.feed(
         "response.output_item.added",
@@ -176,7 +177,7 @@ def test_explicit_index_cannot_change_for_known_item(completed, kind):
         },
     ],
 )
-def test_all_client_call_types_wait_for_item_completion(tool):
+def test_all_client_call_types_wait_for_item_completion(tool: JsonObject):
     buffer = ResponsesToolCallBuffer()
     final = {"id": "tool", "call_id": "call", "status": "completed", **tool}
     initial = {**final, "status": "in_progress"}
@@ -202,7 +203,7 @@ def test_all_client_call_types_wait_for_item_completion(tool):
         },
     ],
 )
-def test_server_tools_are_not_gated_as_client_calls(tool):
+def test_server_tools_are_not_gated_as_client_calls(tool: JsonObject):
     buffer = ResponsesToolCallBuffer()
     payload = {
         "output_index": 0,
@@ -215,7 +216,9 @@ def test_server_tools_are_not_gated_as_client_calls(tool):
     "field,value",
     [("call_id", "different"), ("name", "different"), ("type", "custom_tool_call")],
 )
-def test_completion_cannot_change_an_observed_execution_identity(field, value):
+def test_completion_cannot_change_an_observed_execution_identity(
+    field: str, value: str
+):
     buffer = ResponsesToolCallBuffer()
     buffer.feed(
         "response.output_item.added",
@@ -258,7 +261,7 @@ def test_distinct_response_items_cannot_share_an_execution_call_id():
     ],
 )
 def test_every_snapshot_preserves_accepted_call_execution_fields(
-    kind, status, field, value
+    kind: str, status: str, field: str, value: str
 ):
     buffer = ResponsesToolCallBuffer()
     original = item(0)
@@ -280,7 +283,7 @@ def test_every_snapshot_preserves_accepted_call_execution_fields(
     ],
 )
 @pytest.mark.parametrize("status", ["completed", "incomplete", "in_progress"])
-def test_unchanged_accepted_call_is_not_reemitted_by_a_snapshot(kind, status):
+def test_unchanged_accepted_call_is_not_reemitted_by_a_snapshot(kind: str, status: str):
     buffer = ResponsesToolCallBuffer()
     buffer.feed("response.output_item.done", {"output_index": 0, "item": item(0)})
     snapshot = {

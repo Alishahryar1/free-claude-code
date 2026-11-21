@@ -1,8 +1,11 @@
 import asyncio
+import inspect
+from collections.abc import Awaitable, Callable
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.messaging.command_context import StopOutcome
 from free_claude_code.messaging.models import IncomingMessage, MessageScope
 from free_claude_code.messaging.node_event_pipeline import process_parsed_cli_event
@@ -28,6 +31,15 @@ from free_claude_code.messaging.trees.transitions import CancellationEffect
 from free_claude_code.messaging.workflow import MessagingWorkflow
 
 _SCOPE = MessageScope(platform="telegram", chat_id="c")
+
+
+def _discard_coroutine(task: Awaitable[object]) -> None:
+    if inspect.iscoroutine(task):
+        task.close()
+
+
+def _format_status(*parts: str) -> str:
+    return " ".join(parts)
 
 
 def _claim() -> NodeClaim:
@@ -185,9 +197,7 @@ def test_get_initial_status_branches():
 async def test_update_queue_positions_renders_immutable_queue_entries():
     platform = MagicMock()
     platform.queue_edit_message = AsyncMock()
-    platform.fire_and_forget = MagicMock(
-        side_effect=lambda c: getattr(c, "close", lambda: None)()
-    )
+    platform.fire_and_forget = MagicMock(side_effect=_discard_coroutine)
 
     cli_manager = MagicMock()
     session_store = MagicMock()
@@ -216,9 +226,7 @@ async def test_update_queue_positions_renders_immutable_queue_entries():
 async def test_node_runner_process_node_session_limit_marks_error_and_updates_ui():
     platform = MagicMock()
     platform.queue_edit_message = AsyncMock()
-    platform.fire_and_forget = MagicMock(
-        side_effect=lambda c: getattr(c, "close", lambda: None)()
-    )
+    platform.fire_and_forget = MagicMock(side_effect=_discard_coroutine)
 
     cli_manager = MagicMock()
     cli_manager.get_or_create_session = AsyncMock(side_effect=RuntimeError("limit"))
@@ -249,11 +257,9 @@ async def test_node_runner_process_node_session_limit_marks_error_and_updates_ui
 async def test_node_runner_cancellation_marks_error_and_saves_tree():
     platform = MagicMock()
     platform.queue_edit_message = AsyncMock()
-    platform.fire_and_forget = MagicMock(
-        side_effect=lambda c: getattr(c, "close", lambda: None)()
-    )
+    platform.fire_and_forget = MagicMock(side_effect=_discard_coroutine)
 
-    async def _cancelled_start_task(*args, **kwargs):
+    async def _cancelled_start_task(*args: object, **kwargs: object):
         raise asyncio.CancelledError
         yield
 
@@ -291,9 +297,7 @@ async def test_node_runner_cancellation_marks_error_and_saves_tree():
 async def test_stop_all_tasks_saves_tree_for_cancelled_nodes():
     platform = MagicMock()
     platform.queue_edit_message = AsyncMock()
-    platform.fire_and_forget = MagicMock(
-        side_effect=lambda c: getattr(c, "close", lambda: None)()
-    )
+    platform.fire_and_forget = MagicMock(side_effect=_discard_coroutine)
 
     cli_manager = MagicMock()
     cli_manager.stop_all = AsyncMock()
@@ -313,7 +317,7 @@ async def test_stop_all_tasks_saves_tree_for_cancelled_nodes():
         snapshots=(snapshot,),
     )
 
-    async def commit_cancel(*, reason, on_committed):
+    async def commit_cancel(*, reason: object, on_committed: Callable[[], None]):
         on_committed()
         return result
 
@@ -378,14 +382,12 @@ async def test_update_ui_handles_transcript_render_exception():
     """When transcript.render raises, update_ui catches and does not crash."""
     platform = MagicMock()
     platform.queue_edit_message = AsyncMock()
-    platform.fire_and_forget = MagicMock(
-        side_effect=lambda c: getattr(c, "close", lambda: None)()
-    )
+    platform.fire_and_forget = MagicMock(side_effect=_discard_coroutine)
 
     cli_manager = MagicMock()
     session_store = MagicMock()
 
-    async def _mock_start_task(*args, **kwargs):
+    async def _mock_start_task(*args: object, **kwargs: object):
         yield {
             "type": "content_block_delta",
             "index": 0,
@@ -533,7 +535,9 @@ async def test_process_parsed_event_failed_complete_does_not_mark_success():
     [{"type": "complete", "status": "success"}, {"type": "error", "message": "failed"}],
 )
 @pytest.mark.parametrize("save_fails", [False, True])
-async def test_terminal_status_waits_for_its_durable_outcome(event, save_fails):
+async def test_terminal_status_waits_for_its_durable_outcome(
+    event: JsonObject, save_fails: bool
+):
     from free_claude_code.messaging.trees import MessagingStorageError
 
     entered, release = asyncio.Event(), asyncio.Event()
@@ -554,7 +558,7 @@ async def test_terminal_status_waits_for_its_durable_outcome(event, save_fails):
             had_transcript_events=True,
             claim=_claim(),
             captured_session_id="session",
-            format_status=lambda *args: " ".join(args),
+            format_status=_format_status,
             complete_claim=save,
             fail_claim=save,
         )
@@ -580,11 +584,9 @@ async def test_handler_update_ui_edit_failure_does_not_crash():
     platform.queue_edit_message = AsyncMock(
         side_effect=RuntimeError("Telegram API error")
     )
-    platform.fire_and_forget = MagicMock(
-        side_effect=lambda c: getattr(c, "close", lambda: None)()
-    )
+    platform.fire_and_forget = MagicMock(side_effect=_discard_coroutine)
 
-    async def _mock_start_task(*args, **kwargs):
+    async def _mock_start_task(*args: object, **kwargs: object):
         yield {
             "type": "content_block_delta",
             "index": 0,

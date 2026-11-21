@@ -27,7 +27,7 @@ def test_terminal_snapshot_reuses_sealed_carrier():
             "content_block": {"type": "text", "text": "prefix suffix"},
         }
     )
-    cache = {}
+    cache: dict[str, str] = {}
     added = {
         "type": "response.output_item.added",
         "item": {"type": "reasoning", "encrypted_content": draft},
@@ -75,7 +75,7 @@ def test_missing_public_prefix_prevents_draft_publication():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("publish_carrier", [False, True])
-async def test_disconnected_public_stream_releases_replay_state(publish_carrier):
+async def test_disconnected_public_stream_releases_replay_state(publish_carrier: bool):
     import json
 
     closed = []

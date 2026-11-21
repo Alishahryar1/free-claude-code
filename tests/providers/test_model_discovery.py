@@ -133,7 +133,7 @@ async def test_nim_lists_openai_compatible_model_infos() -> None:
     ],
 )
 async def test_nim_exclusions_apply_only_to_hosted_nim_discovery(
-    provider_id, provider_base_url, filtered
+    provider_id: str, provider_base_url: str, filtered: bool
 ) -> None:
     config = make_provider_config(api_key="test-key", base_url=provider_base_url)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):

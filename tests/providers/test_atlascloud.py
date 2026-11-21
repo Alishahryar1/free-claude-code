@@ -169,9 +169,10 @@ def test_replays_reasoning_content_with_tool_history(
 
 @pytest.mark.asyncio
 async def test_model_catalog_maps_context_output_and_input_modalities(
+    monkeypatch: pytest.MonkeyPatch,
     atlascloud_provider: OpenAIChatProvider,
 ) -> None:
-    atlascloud_provider._client.get = AsyncMock(
+    mock_get = AsyncMock(
         return_value={
             "data": [
                 {
@@ -191,6 +192,7 @@ async def test_model_catalog_maps_context_output_and_input_modalities(
             ]
         }
     )
+    monkeypatch.setattr(atlascloud_provider._client, "get", mock_get)
 
     model_infos = await atlascloud_provider.list_model_infos()
 
@@ -211,7 +213,7 @@ async def test_model_catalog_maps_context_output_and_input_modalities(
             ),
         }
     )
-    atlascloud_provider._client.get.assert_awaited_once_with(
+    mock_get.assert_awaited_once_with(
         "/models",
         cast_to=object,
     )
@@ -227,11 +229,14 @@ async def test_model_catalog_maps_context_output_and_input_modalities(
     ],
 )
 async def test_rejects_malformed_or_empty_catalog_atomically(
+    monkeypatch: pytest.MonkeyPatch,
     atlascloud_provider: OpenAIChatProvider,
     payload: object,
     message: str,
 ) -> None:
-    atlascloud_provider._client.get = AsyncMock(return_value=payload)
+    monkeypatch.setattr(
+        atlascloud_provider._client, "get", AsyncMock(return_value=payload)
+    )
 
     with pytest.raises(ModelListResponseError, match=message):
         await atlascloud_provider.list_model_infos()

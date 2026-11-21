@@ -136,20 +136,25 @@ def test_reasoning_uses_lightning_documented_effort_vocabulary(
 
 @pytest.mark.asyncio
 async def test_extracts_catalog_metadata(
+    monkeypatch: pytest.MonkeyPatch,
     lightning_provider: OpenAIChatProvider,
 ) -> None:
-    lightning_provider._client.models.list = AsyncMock(
-        return_value={
-            "data": [
-                _catalog_model(
-                    "openai/gpt-5-mini",
-                    context_length=400_000,
-                    max_tokens=128_000,
-                    input_modalities=("text", "image"),
-                ),
-                _catalog_model("bare-model", input_modalities=None),
-            ]
-        }
+    monkeypatch.setattr(
+        lightning_provider._client.models,
+        "list",
+        AsyncMock(
+            return_value={
+                "data": [
+                    _catalog_model(
+                        "openai/gpt-5-mini",
+                        context_length=400_000,
+                        max_tokens=128_000,
+                        input_modalities=("text", "image"),
+                    ),
+                    _catalog_model("bare-model", input_modalities=None),
+                ]
+            }
+        ),
     )
 
     model_infos = await lightning_provider.list_model_infos()
@@ -171,19 +176,28 @@ async def test_extracts_catalog_metadata(
 
 @pytest.mark.asyncio
 async def test_rejects_catalog_item_without_model_id(
+    monkeypatch: pytest.MonkeyPatch,
     lightning_provider: OpenAIChatProvider,
 ) -> None:
     item = _catalog_model()
     item.pop("id")
-    lightning_provider._client.models.list = AsyncMock(return_value={"data": [item]})
+    monkeypatch.setattr(
+        lightning_provider._client.models,
+        "list",
+        AsyncMock(return_value={"data": [item]}),
+    )
 
     with pytest.raises(ModelListResponseError, match="include id"):
         await lightning_provider.list_model_infos()
 
 
 @pytest.mark.asyncio
-async def test_empty_catalog_rejected(lightning_provider: OpenAIChatProvider) -> None:
-    lightning_provider._client.models.list = AsyncMock(return_value={"data": []})
+async def test_empty_catalog_rejected(
+    monkeypatch: pytest.MonkeyPatch, lightning_provider: OpenAIChatProvider
+) -> None:
+    monkeypatch.setattr(
+        lightning_provider._client.models, "list", AsyncMock(return_value={"data": []})
+    )
 
     with pytest.raises(ModelListResponseError, match="did not include any model ids"):
         await lightning_provider.list_model_infos()

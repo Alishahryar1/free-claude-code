@@ -1,5 +1,7 @@
 import pytest
+from typing_extensions import TypedDict
 
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.model_listing import (
     extract_openai_model_infos,
     extract_tool_capable_model_infos,
@@ -17,7 +19,9 @@ from free_claude_code.providers.model_listing import (
         (None, "unknown"),
     ],
 )
-def test_explicit_gateway_reasoning_capability(reasoning, expected):
+def test_explicit_gateway_reasoning_capability(
+    reasoning: JsonObject | None, expected: str
+):
     infos = extract_tool_capable_model_infos(
         {
             "data": [
@@ -31,6 +35,13 @@ def test_explicit_gateway_reasoning_capability(reasoning, expected):
         provider_name="GATEWAY",
     )
     assert next(iter(infos)).reasoning_capability.value == expected
+
+
+class ReasoningModelOptions(TypedDict, total=False, closed=True):
+    tags_field: str
+    non_thinking_tag: str
+    thinking_boolean_path: tuple[str, ...]
+    thinking_sequence_path: tuple[str, ...]
 
 
 @pytest.mark.parametrize(
@@ -56,7 +67,7 @@ def test_explicit_gateway_reasoning_capability(reasoning, expected):
     ],
 )
 def test_intrinsic_capability_is_distinct_from_available_controls(
-    payload, options, expected
+    payload: JsonObject, options: ReasoningModelOptions, expected: str
 ):
     infos = extract_openai_model_infos(
         {"data": [{"id": "route", **payload}]}, provider_name="TEST", **options

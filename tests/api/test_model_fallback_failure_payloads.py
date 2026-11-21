@@ -1,17 +1,26 @@
 """Only the final candidate failure reaches the public Responses lifecycle."""
 
+from collections.abc import AsyncIterator
 from copy import deepcopy
 from itertools import pairwise
 
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_delivery import (
     StreamDeliveryState,
     bind_stream_delivery,
 )
+from free_claude_code.core.stream_output import StreamOutput
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
+from free_claude_code.providers.endpoint_types import EndpointContext
+from free_claude_code.providers.openai_chat.provider import OpenAIChatProvider
 from tests.api.test_delivered_stream_recovery import (
     after_text,
     public_text,
@@ -20,12 +29,13 @@ from tests.api.test_delivered_stream_recovery import (
 from tests.api.test_hidden_stream_retries import partial_tool
 from tests.api.test_midstream_model_fallback import delivered_candidates
 from tests.api.test_tool_call_buffer_transports import _tools
+from tests.assertions import require_present
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
 from tests.wire_payload import array_payload, object_array, object_payload
 
 
-def failed_response(text, label):
+def failed_response(text: str, label: str):
     events = text_events("responses", text)
     for event in events:
         if "response" in event:
@@ -106,7 +116,9 @@ async def test_final_native_snapshot_cannot_release_a_withheld_call():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
-async def test_zero_call_final_candidate_keeps_published_response_identity(protocol):
+async def test_zero_call_final_candidate_keeps_published_response_identity(
+    protocol: str,
+):
     admission = ProviderAdmissionController(
         provider_name="cooled",
         rate_limit=1000,
@@ -127,7 +139,9 @@ async def test_zero_call_final_candidate_keeps_published_response_identity(proto
             max_attempts=1,
         ) as (last, last_bodies, provider),
     ):
-        transport = provider._chat if protocol == "chat" else provider
+        transport = (
+            provider._chat if isinstance(provider, OpenAIChatProvider) else provider
+        )
         transport._admission = admission
         warmup = last(
             "responses",
@@ -141,6 +155,7 @@ async def test_zero_call_final_candidate_keeps_published_response_identity(proto
             ):
                 await anext(warmup)
         finally:
+            assert isinstance(warmup, AsyncCloseable)
             await warmup.aclose()
         prior_calls = len(last_bodies)
         raw = await delivered_candidates([first, last], "responses")
@@ -170,7 +185,7 @@ def failed_overlapping_calls():
         "arguments": '{"path":',
         "status": "incomplete",
     }
-    events = [
+    events: list[JsonObject] = [
         {
             **template[0],
             "response": {**response, "status": "in_progress", "output": []},
@@ -207,7 +222,7 @@ def failed_overlapping_calls():
 @pytest.mark.parametrize("same_candidate", [False, True])
 @pytest.mark.parametrize("hold_final_attempt", [False, True])
 async def test_failed_snapshot_preserves_independently_completed_call(
-    monkeypatch, same_candidate, hold_final_attempt
+    monkeypatch: pytest.MonkeyPatch, same_candidate: bool, hold_final_attempt: bool
 ):
     async with (
         _harness(
@@ -292,17 +307,28 @@ async def test_last_model_error_keeps_combined_output_with_public_item_ids():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_fallback_timeout_before_its_first_frame_retains_prefix_and_closes(wire):
+async def test_fallback_timeout_before_its_first_frame_retains_prefix_and_closes(
+    wire: WireProtocol,
+):
     opened = []
     closed = []
 
-    async def timed_out(*args, **kwargs):
-        opened.append(kwargs["continuation"])
+    async def timed_out(
+        wire: str,
+        history: object,
+        *,
+        tools: object = None,
+        model: str = "requested",
+        continuation: ContinuationSeed | None = None,
+        reasoning: ReasoningPolicy | None = None,
+        endpoint_context: EndpointContext | None = None,
+    ) -> AsyncIterator[StreamOutput]:
+        opened.append(require_present(continuation))
         try:
             raise ExecutionFailure(
                 FailureKind.TIMEOUT, 504, "Provider read timed out", False
             )
-            yield "unreachable"
+            yield StreamOutput(("unreachable",))
         finally:
             closed.append(True)
 

@@ -9,6 +9,7 @@ Loguru's JSON stores exception metadata in ``record.exception`` and context in
 import logging
 import threading
 from pathlib import Path
+from typing import override
 
 from loguru import logger
 
@@ -36,6 +37,7 @@ class InterceptHandler(logging.Handler):
         super().__init__()
         self._local = threading.local()
 
+    @override
     def emit(self, record: logging.LogRecord) -> None:
         if getattr(self._local, "active", False):
             # Avoid deadlock when nested stdlib records fire during a loguru emit.

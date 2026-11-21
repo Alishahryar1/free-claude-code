@@ -1,10 +1,12 @@
 import json
 import tomllib
 from itertools import groupby, pairwise
+from pathlib import Path
 
 import pytest
-from playwright.sync_api import expect
+from playwright.sync_api import Page, Route, expect
 
+from e2e.layout import visible_bounds
 from free_claude_code.harnesses import claude_integration, claude_onboarding
 
 
@@ -19,11 +21,11 @@ from free_claude_code.harnesses import claude_integration, claude_onboarding
 )
 @pytest.mark.parametrize("connected", [False, True])
 def test_connection_check_uses_disabled_loading_button(
-    page, admin_base_url, integration, button_id, connected
+    page: Page, admin_base_url: str, integration: str, button_id: str, connected: bool
 ):
     pending = []
 
-    def hold_check(route):
+    def hold_check(route: Route):
         pending.append(route)
         page.evaluate("window.integrationChecks = (window.integrationChecks || 0) + 1")
 
@@ -63,7 +65,7 @@ def test_connection_check_uses_disabled_loading_button(
 
 @pytest.mark.parametrize("width", [1280, 1200, 390])
 def test_codex_connect_disconnect_and_modal_paths(
-    page, admin_base_url, tmp_path, width
+    page: Page, admin_base_url: str, tmp_path: Path, width: int
 ):
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(f"{admin_base_url}/admin/integrations")
@@ -74,10 +76,10 @@ def test_codex_connect_disconnect_and_modal_paths(
     expect(page.locator("#claudeIntegrationStatus")).to_have_count(0)
     expect(page.locator("#openCodexIntegration")).to_be_enabled()
     expect(page.locator("#codexIntegrationStatus")).to_have_count(0)
-    bounds = [card.bounding_box() for card in cards.all()]
+    bounds = [visible_bounds(card) for card in cards.all()]
     if width >= 1200:
         descriptions = [
-            card.locator(".section-heading p").bounding_box() for card in cards.all()
+            visible_bounds(card.locator(".section-heading p")) for card in cards.all()
         ]
         for _, row in groupby(range(len(bounds)), key=lambda index: bounds[index]["y"]):
             indices = list(row)
@@ -128,7 +130,7 @@ def test_codex_connect_disconnect_and_modal_paths(
     expect(opener).to_have_css("color", "rgb(239, 68, 68)")
     if width >= 1200:
         buttons = [
-            card.get_by_role("button").first.bounding_box() for card in cards.all()
+            visible_bounds(card.get_by_role("button").first) for card in cards.all()
         ]
         for _, row in groupby(range(len(bounds)), key=lambda index: bounds[index]["y"]):
             assert len({buttons[index]["y"] for index in row}) == 1
@@ -159,7 +161,7 @@ def test_codex_connect_disconnect_and_modal_paths(
 
 @pytest.mark.parametrize("width", [1280, 390])
 def test_modal_shows_files_for_the_selected_action(
-    page, admin_base_url, tmp_path, width
+    page: Page, admin_base_url: str, tmp_path: Path, width: int
 ):
     page.set_viewport_size({"width": width, "height": 900})
     page.goto(f"{admin_base_url}/admin/integrations")
@@ -181,7 +183,9 @@ def test_modal_shows_files_for_the_selected_action(
     expect(dialog).not_to_be_visible()
 
 
-def test_connect_disconnect_and_modal_dismissal(page, admin_base_url, tmp_path):
+def test_connect_disconnect_and_modal_dismissal(
+    page: Page, admin_base_url: str, tmp_path: Path
+):
     path = tmp_path / "vscode" / "settings.json"
     page.goto(f"{admin_base_url}/admin/integrations")
     card_button = page.locator("#openClaudeIntegration")
@@ -228,7 +232,9 @@ def test_connect_disconnect_and_modal_dismissal(page, admin_base_url, tmp_path):
     assert json.loads(state_path.read_text())["hasCompletedOnboarding"] is True
 
 
-def test_manual_setup_and_revisit_read_the_file(page, admin_base_url, tmp_path):
+def test_manual_setup_and_revisit_read_the_file(
+    page: Page, admin_base_url: str, tmp_path: Path
+):
     path = tmp_path / "vscode" / "settings.json"
     status = page.request.get(f"{admin_base_url}/admin/api/status").json()
     claude_integration.configure(
@@ -253,7 +259,7 @@ def test_manual_setup_and_revisit_read_the_file(page, admin_base_url, tmp_path):
 
 
 def test_invalid_settings_error_can_be_retried_and_does_not_break_admin(
-    page, admin_base_url, tmp_path
+    page: Page, admin_base_url: str, tmp_path: Path
 ):
     path = tmp_path / "vscode" / "settings.json"
     path.parent.mkdir()
@@ -273,12 +279,12 @@ def test_invalid_settings_error_can_be_retried_and_does_not_break_admin(
     expect(page.locator("#openClaudeIntegration")).to_have_text("Connect")
 
 
-def test_save_pending_and_failure_stay_in_modal(page, admin_base_url):
+def test_save_pending_and_failure_stay_in_modal(page: Page, admin_base_url: str):
     page.goto(f"{admin_base_url}/admin/integrations")
     page.locator("#openClaudeIntegration").click()
     requests = []
 
-    def hold_save(route):
+    def hold_save(route: Route):
         requests.append(route)
         page.evaluate("window.integrationSaveIntercepted = true")
 
@@ -300,7 +306,7 @@ def test_save_pending_and_failure_stay_in_modal(page, admin_base_url):
 
 
 def test_codex_existing_setup_revisit_and_invalid_config_retry(
-    page, admin_base_url, tmp_path
+    page: Page, admin_base_url: str, tmp_path: Path
 ):
     path = tmp_path / ".codex" / "config.toml"
     assert page.request.post(
@@ -319,12 +325,14 @@ def test_codex_existing_setup_revisit_and_invalid_config_retry(
     expect(opener).to_have_text("Connect")
 
 
-def test_codex_save_pending_and_failure_stay_in_modal(page, admin_base_url, tmp_path):
+def test_codex_save_pending_and_failure_stay_in_modal(
+    page: Page, admin_base_url: str, tmp_path: Path
+):
     page.goto(f"{admin_base_url}/admin/integrations")
     page.locator("#openCodexIntegration").click()
     action = page.locator("#confirmCodexIntegration")
 
-    def reject_save(route):
+    def reject_save(route: Route):
         expect(action).to_be_disabled()
         expect(action).to_have_text("Saving…")
         expect(page.locator("#openCodexIntegration")).to_be_disabled()
@@ -344,18 +352,18 @@ def test_codex_save_pending_and_failure_stay_in_modal(page, admin_base_url, tmp_
     "integration,prefix", [("claude-vscode", "Claude"), ("codex", "Codex")]
 )
 def test_background_update_spinner_failure_retry_and_completion(
-    page, admin_base_url, integration, prefix
+    page: Page, admin_base_url: str, integration: str, prefix: str
 ):
     progress = {"state": "starting", "changed": False, "message": None}
     retries = []
 
-    def startup(route):
+    def startup(route: Route):
         response = route.fetch()
         payload = response.json()
         payload["startup"]["integrations"][integration] = dict(progress)
         route.fulfill(response=response, json=payload)
 
-    def status(route):
+    def status(route: Route):
         route.fulfill(
             json={
                 "connected": True if progress["state"] == "ready" else None,
@@ -364,7 +372,7 @@ def test_background_update_spinner_failure_retry_and_completion(
             }
         )
 
-    def retry(route):
+    def retry(route: Route):
         retries.append(route.request.method)
         progress.update(state="starting", changed=False, message=None)
         route.fulfill(json={"update": dict(progress)})
@@ -384,7 +392,9 @@ def test_background_update_spinner_failure_retry_and_completion(
     )
     expect(button).to_have_text("Retry")
     expect(button).to_be_enabled()
-    expect(message).to_have_text(progress["message"])
+    failure = progress["message"]
+    assert isinstance(failure, str)
+    expect(message).to_have_text(failure)
     with page.expect_response(
         f"{admin_base_url}/admin/api/integrations/{integration}/refresh"
     ):
@@ -407,7 +417,7 @@ def test_background_update_spinner_failure_retry_and_completion(
 
 
 @pytest.fixture
-def admin_client_files(request, tmp_path):
+def admin_client_files(request: pytest.FixtureRequest, tmp_path: Path):
     if not getattr(request, "param", False):
         return None
     path = tmp_path / "vscode/settings.json"
@@ -433,7 +443,7 @@ def admin_client_files(request, tmp_path):
 
 @pytest.mark.parametrize("admin_client_files", [True], indirect=True)
 def test_startup_updates_before_opening_integrations(
-    admin_client_files, admin_base_url, page, tmp_path
+    admin_client_files: Path, admin_base_url: str, page: Page, tmp_path: Path
 ):
     page.goto(f"{admin_base_url}/admin")
     page.wait_for_function(
@@ -460,7 +470,9 @@ def test_startup_updates_before_opening_integrations(
     expect(page.locator("#claudeIntegrationMessage")).to_be_hidden()
 
 
-def test_independent_onboarding_modal_and_completion(page, admin_base_url, tmp_path):
+def test_independent_onboarding_modal_and_completion(
+    page: Page, admin_base_url: str, tmp_path: Path
+):
     state = tmp_path / ".claude.json"
     settings = tmp_path / "vscode" / "settings.json"
     page.goto(f"{admin_base_url}/admin/integrations")
@@ -498,11 +510,11 @@ def test_independent_onboarding_modal_and_completion(page, admin_base_url, tmp_p
 
 @pytest.mark.parametrize("completed", [False, True])
 def test_onboarding_status_uses_loading_and_completed_button(
-    page, admin_base_url, tmp_path, completed
+    page: Page, admin_base_url: str, tmp_path: Path, completed: bool
 ):
     pending = []
 
-    def hold(route):
+    def hold(route: Route):
         pending.append(route)
         page.evaluate("window.onboardingStatusIntercepted = true")
 
@@ -535,7 +547,9 @@ def test_onboarding_status_uses_loading_and_completed_button(
         expect(button).to_be_enabled()
 
 
-def test_onboarding_errors_retry_independently(page, admin_base_url, tmp_path):
+def test_onboarding_errors_retry_independently(
+    page: Page, admin_base_url: str, tmp_path: Path
+):
     assert page.request.post(
         f"{admin_base_url}/admin/api/integrations/claude-vscode/connect"
     ).ok
@@ -552,7 +566,7 @@ def test_onboarding_errors_retry_independently(page, admin_base_url, tmp_path):
     expect(button).to_have_text("Complete onboarding")
     assert state.read_text() == '{"hasCompletedOnboarding":false}'
 
-    def reject(route):
+    def reject(route: Route):
         route.fulfill(status=503, json={"detail": "Could not access .claude.json."})
 
     endpoint = "**/admin/api/integrations/claude-onboarding/complete"
@@ -571,12 +585,12 @@ def test_onboarding_errors_retry_independently(page, admin_base_url, tmp_path):
 
 
 def test_failed_connect_updates_independent_onboarding_card(
-    page, admin_base_url, tmp_path, monkeypatch
+    page: Page, admin_base_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     settings = tmp_path / "vscode" / "settings.json"
     write = claude_integration.atomic_write_text
 
-    def fail_settings(path, content):
+    def fail_settings(path: Path, content: str):
         if path == settings:
             raise PermissionError("denied")
         write(path, content)
@@ -599,12 +613,12 @@ def test_failed_connect_updates_independent_onboarding_card(
 
 
 def test_late_onboarding_status_cannot_undo_connect_result(
-    page, admin_base_url, tmp_path
+    page: Page, admin_base_url: str, tmp_path: Path
 ):
     pending = []
     checks = 0
 
-    def hold_first(route):
+    def hold_first(route: Route):
         nonlocal checks
         checks += 1
         if checks == 1:
@@ -639,11 +653,11 @@ def test_late_onboarding_status_cannot_undo_connect_result(
 
 @pytest.mark.parametrize("save_failed", [False, True])
 def test_connect_reconciles_after_pending_onboarding_save(
-    page, admin_base_url, tmp_path, save_failed
+    page: Page, admin_base_url: str, tmp_path: Path, save_failed: bool
 ):
     pending = []
 
-    def hold(route):
+    def hold(route: Route):
         pending.append(route)
 
     endpoint = "**/admin/api/integrations/claude-onboarding/complete"

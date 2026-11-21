@@ -9,6 +9,7 @@ import pytest
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import (
     ReasoningCapability,
@@ -21,7 +22,7 @@ from tests.providers.test_anthropic_messages_transport import _events, _sse
 from tests.providers.test_anthropic_provider import provider
 
 
-def metadata(model, adaptive, *, max_tokens=8192):
+def metadata(model: str, adaptive: bool, *, max_tokens: int = 8192) -> JsonObject:
     return {
         "id": model,
         "max_tokens": max_tokens,
@@ -70,11 +71,13 @@ def test_metadata_uses_advertised_types_and_efforts_without_name_inference():
         {"has_more": False},
     ],
 )
-async def test_malformed_refresh_never_publishes_a_partial_catalog(bad_page):
+async def test_malformed_refresh_never_publishes_a_partial_catalog(
+    bad_page: JsonObject,
+):
     refresh = False
     calls = []
 
-    def handle(request):
+    def handle(request: httpx.Request):
         calls.append(request)
         assert request.headers["authorization"] == "Bearer upstream-secret"
         assert request.headers["anthropic-workspace-id"] == "wrkspc_test"
@@ -100,9 +103,10 @@ async def test_malformed_refresh_never_publishes_a_partial_catalog(bad_page):
 
 @pytest.mark.asyncio
 async def test_valid_empty_catalog_is_published_without_fabricated_models():
-    p = provider(
-        lambda request: httpx.Response(200, json={"data": [], "has_more": False})
-    )
+    def callback(request: object):
+        return httpx.Response(200, json={"data": [], "has_more": False})
+
+    p = provider(callback)
     try:
         assert await p.list_model_infos() == frozenset()
     finally:
@@ -113,7 +117,7 @@ async def test_valid_empty_catalog_is_published_without_fabricated_models():
 async def test_concurrent_alias_lookup_is_cached_and_uses_same_credentials():
     calls = []
 
-    async def handle(request):
+    async def handle(request: httpx.Request):
         calls.append(request)
         await asyncio.sleep(0)
         assert request.url.path == "/v1/models/latest-alias"
@@ -137,7 +141,7 @@ async def test_concurrent_alias_lookup_is_cached_and_uses_same_credentials():
 async def test_concurrent_models_use_independent_conversion_capabilities():
     sent = []
 
-    async def handle(request):
+    async def handle(request: httpx.Request):
         if request.method == "GET":
             return httpx.Response(
                 200,
@@ -203,7 +207,7 @@ async def test_refresh_does_not_mutate_an_inflight_model_record():
     refresh = False
     sent = []
 
-    async def handle(request):
+    async def handle(request: httpx.Request):
         if request.method == "GET":
             return httpx.Response(
                 200,
@@ -261,7 +265,7 @@ async def test_refresh_does_not_mutate_an_inflight_model_record():
 async def test_fresh_owner_does_not_trust_stale_generic_capabilities():
     calls = []
 
-    def handle(request):
+    def handle(request: httpx.Request):
         calls.append(request)
         assert request.method == "GET"
         return httpx.Response(404, json={"error": {"type": "not_found_error"}})

@@ -4,7 +4,7 @@ import json
 from typing import cast
 
 import pytest
-from playwright.sync_api import Locator, Page, expect
+from playwright.sync_api import Locator, Page, Route, expect
 
 from e2e.provider_support import close_provider, open_provider
 
@@ -616,7 +616,7 @@ def test_model_suggestions_keep_server_order_after_provider_check_and_late_respo
     page.unroute("**/admin/api/models")
     pending = []
 
-    def hold_catalog(route):
+    def hold_catalog(route: Route):
         pending.append(route)
         page.evaluate("count => { window.heldCatalogLoads = count; }", len(pending))
 
