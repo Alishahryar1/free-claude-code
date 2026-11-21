@@ -1,6 +1,6 @@
 # Branch protection: require these stable checks, not individual shard jobs:
 #   Ban suppressions and legacy annotations
-#   ruff-format, ruff-check, ty (runs Pyrefly)
+#   ruff-format, ruff-check, pyrefly
 #   Version policy
 #   pytest, playwright
 # GitHub may prefix with the workflow name (e.g. "CI / ruff-format"); use the names the branch protection UI offers after a run.
@@ -60,8 +60,7 @@ jobs:
             run: uv run --locked ruff format --check
           - id: ruff-check
             run: uv run --locked ruff check
-          # The main ruleset requires this check name.
-          - id: ty
+          - id: pyrefly
             run: uv run --locked pyrefly check
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
