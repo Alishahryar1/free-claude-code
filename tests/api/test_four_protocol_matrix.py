@@ -299,20 +299,76 @@ def response_value(response: httpx.Response, wire: str, streaming: bool):
     return accumulator.result()
 
 
-@pytest.mark.parametrize("streaming", [False, True])
-@pytest.mark.parametrize("text_controls", ["unsupported", ["unsupported"]])
-def test_gemini_rejects_non_object_responses_text_controls(
-    streaming: bool, text_controls: JsonValue
-):
+@pytest.mark.parametrize(
+    "text_controls",
+    [
+        "unsupported",
+        ["unsupported"],
+        "",
+        [],
+        False,
+        0,
+        {"format": 123},
+        {"format": []},
+        {"format": ""},
+        {"format": False},
+        {"format": {}},
+        {"format": {"type": "json_schema"}},
+        {"format": {"type": "json_schema", "schema": "invalid"}},
+    ],
+)
+def test_gemini_rejects_invalid_responses_text_controls(text_controls: JsonValue):
     def unexpected_request(_: httpx.Request) -> Never:
         raise AssertionError("Invalid text controls must be rejected before inference")
 
     app = matrix_app("gemini", native_reply=unexpected_request)
-    path, body = ingress_request("responses", streaming)
+    path, body = ingress_request("responses", True)
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.post(path, json={**body, "text": text_controls})
     assert response.status_code == 400, response.text
-    assert response.json()["error"]["type"] == "invalid_request_error"
+    assert (
+        object_payload(response_object(response)["error"])["type"]
+        == "invalid_request_error"
+    )
+
+
+@pytest.mark.parametrize(
+    ("text_controls", "expected_config"),
+    [
+        (None, {}),
+        ({}, {}),
+        ({"format": None}, {}),
+        ({"format": {"type": "text"}}, {}),
+        ({"format": {"type": "json_object"}}, {"responseMimeType": "application/json"}),
+        (
+            {"format": {"type": "json_schema", "name": "answer", "schema": SCHEMA}},
+            {"responseMimeType": "application/json", "responseJsonSchema": SCHEMA},
+        ),
+    ],
+)
+def test_gemini_preserves_valid_responses_text_controls(
+    text_controls: JsonValue, expected_config: JsonObject
+):
+    from tests.providers.test_gemini import _sse
+
+    sent: list[JsonObject] = []
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        sent.append(decode_object(request.content))
+        return _sse([{"text": '{"answer":"yes"}'}])
+
+    app = matrix_app("gemini", native_reply=reply)
+    path, body = ingress_request("responses", True)
+    with TestClient(app) as client:
+        response = client.post(path, json={**body, "text": text_controls})
+    assert response.status_code == 200, response.text
+    assert len(sent) == 1
+    config = object_payload(sent[0]["generationConfig"])
+    assert {
+        field: config[field]
+        for field in ("responseMimeType", "responseJsonSchema")
+        if field in config
+    } == expected_config
 
 
 @pytest.mark.parametrize("streaming", [False, True])

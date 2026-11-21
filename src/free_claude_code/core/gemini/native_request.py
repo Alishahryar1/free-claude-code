@@ -158,17 +158,25 @@ def _tool_config(choice: JsonValue, *, responses: bool = False) -> JsonObject:
     raise GeminiConversionError("Unsupported tool_choice")
 
 
-def _format(config: JsonObject, format_: JsonObject) -> None:
+def _format(config: JsonObject, format_: JsonValue) -> None:
+    if not isinstance(format_, dict):
+        raise GeminiConversionError("Structured output format must be an object")
     kind = format_.get("type")
     if kind == "text":
         return
     if kind == "json_object":
         config["responseMimeType"] = "application/json"
     elif kind == "json_schema":
-        schema = json_object(format_.get("json_schema", format_))
+        schema_config = format_.get("json_schema", format_)
+        if not isinstance(schema_config, dict) or not isinstance(
+            schema := schema_config.get("schema"), dict
+        ):
+            raise GeminiConversionError(
+                "Structured output requires a JSON schema object"
+            )
         config.update(
             responseMimeType="application/json",
-            responseJsonSchema=deepcopy(schema["schema"]),
+            responseJsonSchema=deepcopy(schema),
         )
     else:
         raise GeminiConversionError("Unsupported structured output format")
@@ -283,7 +291,7 @@ def chat_to_gemini(
             [body["stop"]] if isinstance(body["stop"], str) else body["stop"]
         )
     if fmt := body.get("response_format"):
-        _format(config, json_object(fmt))
+        _format(config, fmt)
     result: JsonObject = {
         "model": request.model,
         "contents": contents,
@@ -457,7 +465,7 @@ def messages_to_gemini(
     if set(output) - {"effort", "format"}:
         raise GeminiConversionError("Unsupported Messages output_config")
     if fmt := output.get("format"):
-        _format(config, json_object(fmt))
+        _format(config, fmt)
     result: JsonObject = {
         "model": request.model,
         "contents": contents,
@@ -608,13 +616,13 @@ def responses_to_gemini(
     }.items():
         if body.get(source) is not None:
             config[target] = body[source]
-    text = body.get("text") or {}
-    if not isinstance(text, dict) or set(text) - {"format"}:
-        raise GeminiConversionError(
-            "Native Gemini cannot represent Responses text controls"
-        )
-    if fmt := text.get("format"):
-        _format(config, json_object(fmt))
+    if (text := body.get("text")) is not None:
+        if not isinstance(text, dict) or set(text) - {"format"}:
+            raise GeminiConversionError(
+                "Native Gemini cannot represent Responses text controls"
+            )
+        if (fmt := text.get("format")) is not None:
+            _format(config, fmt)
     result: JsonObject = {
         "model": request.model,
         "contents": contents,

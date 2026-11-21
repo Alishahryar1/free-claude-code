@@ -17,7 +17,6 @@ from free_claude_code.core.json_types import (
     JsonObject,
     JsonValue,
     json_array,
-    json_index,
     json_object,
     json_objects,
     optional_string,
@@ -146,8 +145,11 @@ class SourceRecoveryState:
             "content_block_delta",
             "content_block_stop",
         ):
+            index = payload.get("index")
+            if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+                # The Messages parser classifies malformed block events for retries.
+                return
             block = payload.get("content_block")
-            index = json_index(payload.get("index", -1))
             if isinstance(block, dict) and block.get("type") in (
                 "thinking",
                 "redacted_thinking",

@@ -947,6 +947,31 @@ async def test_partial_replay_without_new_output_is_not_success(wire: WireProtoc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("invalid_index", [0.0, "0", None])
+async def test_malformed_messages_block_index_can_retry(
+    wire: WireProtocol, invalid_index: JsonValue
+):
+    def reply(bodies: list[JsonObject]):
+        events = text_events("messages", "recovered")
+        if len(bodies) == 1:
+            block_start = next(
+                event for event in events if event["type"] == "content_block_start"
+            )
+            block_start["index"] = invalid_index
+        return 200, events
+
+    async with _harness("messages", reply, max_attempts=2) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "continue"}]), wire
+        )
+    assert len(bodies) == 2
+    events = parse_sse_text(result)
+    assert_completed(events, wire)
+    assert public_text(events, wire) == "recovered"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_seeded_text_start_participates_in_overlap_filter(wire: WireProtocol):
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
