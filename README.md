@@ -242,6 +242,7 @@ For another API endpoint, open **Providers → Custom providers → Add provider
 | [Mistral Codestral](https://console.mistral.ai/) | `CODESTRAL_API_KEY` | `mistral_codestral/codestral-latest` |
 | [OpenCode Zen](https://opencode.ai/auth) | `OPENCODE_API_KEY` | `opencode_zen/gpt-5.3-codex` |
 | [OpenCode Go](https://opencode.ai/auth) | `OPENCODE_API_KEY` | `opencode_go/minimax-m2.7` |
+| [Command Code](https://commandcode.ai/studio) | `COMMANDCODE_API_KEY` | `commandcode/deepseek/deepseek-v4-flash` |
 | [Vercel AI Gateway](https://vercel.com/docs/ai-gateway/models-and-providers) | `AI_GATEWAY_API_KEY` | `vercel/openai/gpt-5.5` |
 | [Amazon Bedrock](https://console.aws.amazon.com/bedrock/) | `AWS_BEARER_TOKEN_BEDROCK` | `bedrock/openai.gpt-oss-120b` |
 | [Hugging Face Inference Providers](https://huggingface.co/settings/tokens) | `HUGGINGFACE_API_KEY` | `huggingface/Qwen/Qwen3-Coder-480B-A35B-Instruct:fastest` |
@@ -314,6 +315,9 @@ For another API endpoint, open **Providers → Custom providers → Add provider
   [Coding Plan terms](https://www.alibabacloud.com/help/en/model-studio/coding-plan).
 - OpenCode Zen and OpenCode Go share `OPENCODE_API_KEY` but use the explicit
   `opencode_zen/` and `opencode_go/` model prefixes.
+- Command Code uses its [Provider API](https://commandcode.ai/docs/provider) with the
+  key created in Studio. Claude models are sent to `/v1/messages`, every other model to
+  `/v1/chat/completions`, chosen from the live model list. The Go plan has no API access.
 - For Amazon Bedrock, set `BEDROCK_BASE_URL` to the URL for the same region as
   the API key and select one of the listed models.
 - Vertex AI uses Google Application Default Credentials instead of an API key.

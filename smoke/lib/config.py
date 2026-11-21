@@ -65,6 +65,7 @@ PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
     "minimax": "minimax/MiniMax-M3",
     "opencode_zen": "opencode_zen/gpt-5.3-codex",
     "opencode_go": "opencode_go/minimax-m2.7",
+    "commandcode": "commandcode/deepseek/deepseek-v4-flash",
     "vercel": "vercel/openai/gpt-5.5",
     "bedrock": "bedrock/openai.gpt-oss-120b",
     "huggingface": "huggingface/openai/gpt-oss-120b:fastest",

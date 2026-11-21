@@ -53,6 +53,7 @@ from free_claude_code.providers.alibaba_cloud import AlibabaCloudProvider
 from free_claude_code.providers.anthropic import AnthropicProvider
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.cloudflare import CloudflareProvider
+from free_claude_code.providers.commandcode import CommandCodeProvider
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.gemini import GeminiProvider
 from free_claude_code.providers.github_copilot.provider import GitHubCopilotProvider
@@ -112,6 +113,7 @@ def _make_settings(**overrides: object):
     mock.wafer_api_keys = "test_wafer_key"
     mock.minimax_api_keys = "test_minimax_key"
     mock.opencode_api_keys = "test_opencode_key"
+    mock.commandcode_api_keys = "test_commandcode_key"
     mock.vercel_ai_gateway_api_keys = "test_vercel_key"
     mock.bedrock_api_keys = "test_bedrock_key"
     mock.bedrock_base_url = BEDROCK_DEFAULT_BASE
@@ -149,6 +151,7 @@ def _make_settings(**overrides: object):
     mock.minimax_proxy = None
     mock.opencode_zen_proxy = None
     mock.opencode_go_proxy = None
+    mock.commandcode_proxy = None
     mock.vercel_ai_gateway_proxy = None
     mock.bedrock_proxy = None
     mock.huggingface_proxy = None
@@ -1052,6 +1055,32 @@ async def test_opencode_go_provider_config_uses_correct_base_url_and_name():
     assert provider._responses._admission is provider._chat._admission
 
 
+@pytest.mark.asyncio
+async def test_commandcode_provider_config_uses_provider_api_base_and_key():
+    settings = _make_settings()
+    provider = await create_provider(
+        "commandcode",
+        settings,
+        ProviderAdmissionRegistry(ProviderAdmissionLimits.from_settings(settings)),
+    )
+
+    assert isinstance(provider, CommandCodeProvider)
+    assert (
+        str(provider._chat_client.base_url).rstrip("/")
+        == "https://api.commandcode.ai/provider/v1"
+    )
+    assert provider._chat_client.api_key == "test_commandcode_key"
+    await provider.cleanup()
+
+
+def test_commandcode_catalog_uses_commandcode_api_key() -> None:
+    desc = PROVIDER_CATALOG["commandcode"]
+
+    assert desc.credential_env == "COMMANDCODE_API_KEY"
+    assert desc.credential_attr == "commandcode_api_keys"
+    assert desc.proxy_attr == "commandcode_proxy"
+
+
 def test_opencode_go_catalog_uses_opencode_api_key() -> None:
     desc = PROVIDER_CATALOG["opencode_go"]
 
@@ -1214,6 +1243,7 @@ async def test_create_provider_instantiates_each_builtin():
         "atlascloud": OpenAIChatProvider,
         "xkiro": OpenAIChatProvider,
         "opencode_go": OpenCodeProvider,
+        "commandcode": CommandCodeProvider,
         "vercel": OpenAIChatProvider,
         "bedrock": OpenAIChatProvider,
         "huggingface": OpenAIChatProvider,
