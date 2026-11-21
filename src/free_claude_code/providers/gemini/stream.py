@@ -64,7 +64,7 @@ class GeminiStream:
             else 0
         )
         self._started = False
-        self._reason: str | None = None
+        self._reason: str | int | None = None
         self._usage: JsonObject = {}
         self._tool_index = 0
         self.completed = False
@@ -116,8 +116,12 @@ class GeminiStream:
                 raise conversion_failure(
                     "Gemini returned an unexpected candidate index"
                 )
-            if candidate.get("finishReason"):
-                self._reason = json_text(candidate["finishReason"])
+            if reason := candidate.get("finishReason"):
+                if isinstance(reason, float) and reason.is_integer():
+                    reason = int(reason)
+                if not isinstance(reason, str) and type(reason) is not int:
+                    raise conversion_failure("Gemini returned an invalid finish reason")
+                self._reason = reason
             if (
                 self._output is not None or self._continuation_context is not None
             ) and any(

@@ -372,10 +372,14 @@ def test_gemini_preserves_valid_responses_text_controls(
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-def test_gemini_tool_call_survives_whole_valued_candidate_index(streaming: bool):
+@pytest.mark.parametrize("finish_reason", ["STOP", 1, 1.0])
+def test_gemini_tool_call_survives_compatible_candidate_fields(
+    streaming: bool, finish_reason: str | int | float
+):
     events = source_events("gemini")
     candidate = object_array(events[0]["candidates"])[0]
     candidate["index"] = 0.0
+    candidate["finishReason"] = finish_reason
 
     def reply(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -389,7 +393,10 @@ def test_gemini_tool_call_survives_whole_valued_candidate_index(streaming: bool)
         result = object_payload(
             response_value(client.post(path, json=body), "gemini", streaming)
         )
-    content = object_payload(object_array(result["candidates"])[0]["content"])
+    received = object_array(result["candidates"])[0]
+    assert received["finishReason"] == finish_reason
+    assert type(received["finishReason"]) is type(finish_reason)
+    content = object_payload(received["content"])
     assert any(
         part.get("functionCall") == GEMINI_PARTS[1]["functionCall"]
         for part in object_array(content["parts"])
