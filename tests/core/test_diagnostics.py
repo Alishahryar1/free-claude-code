@@ -150,3 +150,32 @@ def test_execution_failure_format_uses_semantic_category_and_request_id() -> Non
     assert '{"error":{"message":"bad field token=<redacted>"}}' in message
     assert "Request ID: req_diagnostic" in message
     assert "invalid_request_error" not in message
+
+
+def test_problem_details_about_blank_type_is_not_shown_as_category() -> None:
+    response = Response(
+        410,
+        json={
+            "type": "about:blank",
+            "title": "Gone",
+            "status": 410,
+            "detail": "The model has reached its end of life.",
+        },
+        request=Request("POST", "https://example.com/v1/chat/completions"),
+    )
+    error = HTTPStatusError("Gone", request=response.request, response=response)
+    failure = ExecutionFailure(
+        kind=FailureKind.UPSTREAM,
+        status_code=410,
+        message="Provider API request failed.",
+        retryable=False,
+    )
+
+    detail = extract_upstream_error_detail(error)
+    message = format_execution_failure_message(failure, detail, upstream_name="NIM")
+
+    assert detail.category_hint is None
+    assert "Category: upstream" in message
+    assert "Category: about:blank" not in message
+    assert '"type":"about:blank"' in message
+    assert "The model has reached its end of life." in message
