@@ -300,6 +300,22 @@ def response_value(response: httpx.Response, wire: str, streaming: bool):
 
 
 @pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("text_controls", ["unsupported", ["unsupported"]])
+def test_gemini_rejects_non_object_responses_text_controls(
+    streaming: bool, text_controls: JsonValue
+):
+    def unexpected_request(_: httpx.Request) -> Never:
+        raise AssertionError("Invalid text controls must be rejected before inference")
+
+    app = matrix_app("gemini", native_reply=unexpected_request)
+    path, body = ingress_request("responses", streaming)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(path, json={**body, "text": text_controls})
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["type"] == "invalid_request_error"
+
+
+@pytest.mark.parametrize("streaming", [False, True])
 def test_gemini_tool_call_survives_whole_valued_candidate_index(streaming: bool):
     events = source_events("gemini")
     candidate = object_array(events[0]["candidates"])[0]

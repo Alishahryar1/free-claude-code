@@ -608,8 +608,8 @@ def responses_to_gemini(
     }.items():
         if body.get(source) is not None:
             config[target] = body[source]
-    text = json_object(body.get("text") or {})
-    if set(text) - {"format"}:
+    text = body.get("text") or {}
+    if not isinstance(text, dict) or set(text) - {"format"}:
         raise GeminiConversionError(
             "Native Gemini cannot represent Responses text controls"
         )
