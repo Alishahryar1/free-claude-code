@@ -138,13 +138,20 @@ function Invoke-SuppressionsCheck {
     Write-Host "+ Get-ChildItem -Recurse -Include *.py,*.pyi (excluding .venv, .git) | Select-String '$pattern'"
 
     if (-not $DryRun) {
-        $matches = Get-ChildItem -Path . -Recurse -Include *.py,*.pyi -File |
+        $scanErrors = @()
+        $matches = Get-ChildItem -Path . -Recurse -Include *.py,*.pyi -File -ErrorAction SilentlyContinue -ErrorVariable +scanErrors |
             Where-Object {
                 $full = $_.FullName
                 $full -notmatch '[\\/]\.venv[\\/]' -and
                     $full -notmatch '[\\/]\.git[\\/]'
             } |
-            Select-String -Pattern $pattern
+            Select-String -Pattern $pattern -ErrorAction SilentlyContinue -ErrorVariable +scanErrors
+
+        if ($scanErrors) {
+            $scanErrors | ForEach-Object {
+                Write-Warning "Suppression scan could not inspect a path: $_"
+            }
+        }
 
         if ($matches) {
             $matches | ForEach-Object { Write-Host $_.Line }
