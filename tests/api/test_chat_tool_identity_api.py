@@ -301,6 +301,43 @@ def completed_arguments(events: list[SSEEvent], wire: str):
     )
 
 
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize(
+    "metadata", [[], "", False, "placeholder", {"google": {"thought_signature": "sig"}}]
+)
+def test_optional_metadata_does_not_prevent_tool_completion(
+    monkeypatch: pytest.MonkeyPatch, wire: str, metadata: JsonValue
+):
+    arguments = '{"path":"out"}'
+    tool = call(arguments=arguments)
+    tool["extra_content"] = metadata
+    response, sent = google_compat_api_response(
+        monkeypatch,
+        [chat_chunk({"tool_calls": [tool]}), chat_chunk({}, "tool_calls")],
+        wire,
+        streaming=True,
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(sent) == 1
+    events = parse_sse_text(response.text)
+    assert events[-1].event == (
+        "message_stop" if wire == "messages" else "response.completed"
+    )
+    assert completed_arguments(events, wire) == arguments
+    if wire == "messages":
+        block = next(
+            object_payload(event.data["content_block"])
+            for event in events
+            if event.event == "content_block_start"
+            and object_payload(event.data["content_block"])["type"] == "tool_use"
+        )
+        if isinstance(metadata, dict):
+            assert block["extra_content"] == metadata
+        else:
+            assert "extra_content" not in block
+
+
 def ambiguous_events(
     stop: str | None, *, incomplete: bool = False, fragment_index: int | None = 0
 ):

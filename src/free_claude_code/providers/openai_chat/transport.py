@@ -370,7 +370,7 @@ class _ChatStreamPresenter:
                         False,
                     )
                 raw_extra = call.body.get("extra_content")
-                extra = json_object(raw_extra) if raw_extra is not None else None
+                extra = raw_extra if isinstance(raw_extra, dict) else None
                 if extra:
                     self._record_extra_content(tool_id, extra)
                 frames = [
