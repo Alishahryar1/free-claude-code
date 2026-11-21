@@ -327,6 +327,8 @@ def atomic_write_managed_config(
     if mask_secrets:
         return rendered
 
+    dotenv_values_from_text(rendered)
+
     target.parent.mkdir(parents=True, exist_ok=True)
     temp_path = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
     try:
@@ -390,7 +392,7 @@ def quote_env_value(value: str) -> str:
     if (
         not value
         or any(char.isspace() for char in value)
-        or any(char in value for char in ('"', "#", "=", "$"))
+        or any(char in value for char in ('"', "#", "=", "$", "'", "\\"))
     ):
         return f'"{escaped}"'
     return value
