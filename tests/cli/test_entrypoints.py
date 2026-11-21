@@ -108,7 +108,7 @@ def test_non_version_entrypoint_delegates_to_server_command() -> None:
     command.assert_called_once_with(console_logging=True)
 
 
-def test_explicit_open_admin_waits_for_owned_http_ready():
+def test_explicit_open_admin_waits_for_owned_http_ready() -> None:
     from free_claude_code.cli.commands import ServerSupervisor
 
     supervisor = ServerSupervisor()

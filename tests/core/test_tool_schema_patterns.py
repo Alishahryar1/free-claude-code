@@ -30,7 +30,7 @@ ARTIFACT_PATTERN = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
 )
 def test_claude_converters_preserve_artifact_rules_in_portable_pattern(
     wire_format: str, pattern: str
-):
+) -> None:
     schema = {
         "type": "object",
         "properties": {"name": {"type": "string", "pattern": pattern}},
@@ -83,7 +83,7 @@ def translated_pattern(pattern: str):
 )
 def test_compiler_limits_preserve_original_schema_in_both_converters(
     wire_format: str, pattern: str
-):
+) -> None:
     schema = {"type": "string", "pattern": pattern}
     request = MessagesRequest.model_validate(
         {
@@ -108,7 +108,7 @@ def test_compiler_limits_preserve_original_schema_in_both_converters(
 
 
 @pytest.mark.parametrize("category", ["Cc", "Cf", "Zl", "Zp"])
-def test_category_expansion_preserves_every_unicode_scalar(category: str):
+def test_category_expansion_preserves_every_unicode_scalar(category: str) -> None:
     regex = re.compile(translated_pattern(r"[^\p{" + category + "}]+"))
     for point in range(0x110000):
         if 0xD800 <= point <= 0xDFFF:
@@ -151,7 +151,7 @@ def test_category_expansion_preserves_every_unicode_scalar(category: str):
         ],
     ],
 )
-def test_artifact_restrictions_survive_translation(name: str, accepted: bool):
+def test_artifact_restrictions_survive_translation(name: str, accepted: bool) -> None:
     assert bool(re.fullmatch(translated_pattern(ARTIFACT_PATTERN), name)) == accepted
 
 
@@ -184,7 +184,7 @@ def test_artifact_restrictions_survive_translation(name: str, accepted: bool):
         r"\[^\p{Cc}]",
     ],
 )
-def test_unsupported_or_literal_patterns_remain_unchanged(pattern: str):
+def test_unsupported_or_literal_patterns_remain_unchanged(pattern: str) -> None:
     schema = {"type": "string", "pattern": pattern}
     assert translate_tool_schema_patterns(schema) is schema
 
@@ -199,7 +199,9 @@ def test_unsupported_or_literal_patterns_remain_unchanged(pattern: str):
         (r"[^\p{Zl}][^\p{Zp}]", "\u2028x", "ab"),
     ],
 )
-def test_class_escaping_is_preserved(pattern: str, excluded: str, accepted: str):
+def test_class_escaping_is_preserved(
+    pattern: str, excluded: str, accepted: str
+) -> None:
     translated = translated_pattern(pattern)
     assert translated != pattern
     regex = re.compile(translated)
@@ -222,7 +224,7 @@ def test_class_escaping_is_preserved(pattern: str, excluded: str, accepted: str)
         "dependencies",
     ],
 )
-def test_schema_maps_visit_values_and_preserve_names(container: str):
+def test_schema_maps_visit_values_and_preserve_names(container: str) -> None:
     child = {"type": "string", "pattern": r"[^\p{Cc}]"}
     schema = {container: {"pattern": child, r"\p{Cc}": True, "required": ["name"]}}
     original = deepcopy(schema)
@@ -253,14 +255,14 @@ def test_schema_maps_visit_values_and_preserve_names(container: str):
         "contentSchema",
     ],
 )
-def test_single_schema_keywords_are_translated(keyword: str):
+def test_single_schema_keywords_are_translated(keyword: str) -> None:
     schema = {keyword: {"pattern": r"[^\p{Cf}]"}}
     converted = object_payload(translate_tool_schema_patterns(schema))
     assert object_payload(converted[keyword])["pattern"] != schema[keyword]["pattern"]
 
 
 @pytest.mark.parametrize("keyword", ["allOf", "anyOf", "oneOf", "prefixItems", "items"])
-def test_schema_arrays_preserve_boolean_and_unchanged_children(keyword: str):
+def test_schema_arrays_preserve_boolean_and_unchanged_children(keyword: str) -> None:
     child = {"type": "string", "pattern": r"[a-z]"}
     schema = {keyword: [child, False, {"pattern": r"[^\p{Cf}]"}]}
     converted = object_payload(translate_tool_schema_patterns(schema))
@@ -271,7 +273,7 @@ def test_schema_arrays_preserve_boolean_and_unchanged_children(keyword: str):
     )
 
 
-def test_instance_data_is_untouched_and_translation_is_idempotent():
+def test_instance_data_is_untouched_and_translation_is_idempotent() -> None:
     literal = {"pattern": r"[^\p{Cc}]"}
     schema = {
         "type": "object",
@@ -294,5 +296,5 @@ def test_instance_data_is_untouched_and_translation_is_idempotent():
 @pytest.mark.parametrize(
     "schema", [True, False, {}, {"pattern": 123}, {"type": "string"}]
 )
-def test_non_patterns_remain_unchanged(schema: JsonValue):
+def test_non_patterns_remain_unchanged(schema: JsonValue) -> None:
     assert translate_tool_schema_patterns(schema) is schema

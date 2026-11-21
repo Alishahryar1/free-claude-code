@@ -30,7 +30,7 @@ from tests.fixture_types import DatabaseFactory
 @pytest.mark.asyncio
 async def test_transactions_reuse_connections_until_database_closes(
     database_factory: DatabaseFactory, tmp_path: Path
-):
+) -> None:
     database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
     await database.start()
     observed: list[sqlite3.Connection] = []
@@ -66,7 +66,7 @@ def _deleted_count(connection: sqlite3.Connection) -> int:
 @pytest.mark.asyncio
 async def test_queued_writers_leave_workers_available_and_drain_on_close(
     database_factory: DatabaseFactory, tmp_path: Path
-):
+) -> None:
     database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
     await database.start()
     entered, release = threading.Event(), threading.Event()
@@ -135,7 +135,7 @@ async def test_queued_writers_leave_workers_available_and_drain_on_close(
 @pytest.mark.asyncio
 async def test_reader_leases_are_bounded_and_can_move_between_threads(
     database_factory: DatabaseFactory, tmp_path: Path
-):
+) -> None:
     database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
     await database.start()
     four_readers, release = threading.Event(), threading.Event()
@@ -199,7 +199,7 @@ async def test_reader_leases_are_bounded_and_can_move_between_threads(
 )
 async def test_failed_transactions_discard_the_connection(
     database_factory: DatabaseFactory, tmp_path: Path, failure: str
-):
+) -> None:
     database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
     await database.start()
     observed: list[sqlite3.Connection] = []
@@ -255,7 +255,7 @@ async def test_failed_transactions_discard_the_connection(
 @pytest.mark.asyncio
 async def test_checkout_timeout_uses_sqlite_error_contract(
     database_factory: DatabaseFactory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
     await database.start()
 
@@ -272,7 +272,7 @@ async def test_checkout_timeout_uses_sqlite_error_contract(
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_startup_failure_disposes_connections_before_releasing_owner(
     tmp_path: Path, cancel: bool, initialized_database: Path
-):
+) -> None:
     shutil.copyfile(initialized_database, tmp_path / "fcc.db")
     entered, release = threading.Event(), threading.Event()
     observed: list[sqlite3.Connection] = []
@@ -326,7 +326,7 @@ def initialized_database(tmp_path_factory: pytest.TempPathFactory):
 
 def test_connection_setup_failure_closes_raw_connection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     connect = sqlite3.connect
     observed: list[sqlite3.Connection] = []
 
@@ -373,7 +373,7 @@ def test_connection_setup_failure_closes_raw_connection(
 @pytest.mark.asyncio
 async def test_partial_pool_creation_cleans_up_writer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     database = sqlite_database.SQLiteDatabase(
         tmp_path / "fcc.db", tmp_path / "fcc.lock"
     )
@@ -409,7 +409,7 @@ async def test_partial_pool_creation_cleans_up_writer(
 @pytest.mark.asyncio
 async def test_disposal_failure_retains_owner_and_can_be_retried(
     database_factory: DatabaseFactory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
     await database.start()
     reader_connections = []
@@ -522,7 +522,7 @@ def snapshot(path: Path) -> dict[str, list[dict[str, object]]]:
 @pytest.mark.parametrize("version", [0, 1, 2, 3])
 def test_historical_database_moves_and_upgrades_without_losing_records(
     tmp_path: Path, version: int
-):
+) -> None:
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, version)
     before = snapshot(old)
@@ -543,7 +543,7 @@ def test_historical_database_moves_and_upgrades_without_losing_records(
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
-def test_fresh_database_uses_only_destination_and_is_repeatable(tmp_path: Path):
+def test_fresh_database_uses_only_destination_and_is_repeatable(tmp_path: Path) -> None:
     target, old = tmp_path / "fcc.db", tmp_path / "code/code.db"
     initialize_database(target, old)
     initialize_database(target, old)
@@ -551,7 +551,7 @@ def test_fresh_database_uses_only_destination_and_is_repeatable(tmp_path: Path):
     assert all(not rows for rows in snapshot(target).values())
 
 
-def test_two_databases_are_preserved_without_choosing_a_winner(tmp_path: Path):
+def test_two_databases_are_preserved_without_choosing_a_winner(tmp_path: Path) -> None:
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, 1)
     historical_database(target, 3)
@@ -565,7 +565,7 @@ def test_two_databases_are_preserved_without_choosing_a_winner(tmp_path: Path):
 @pytest.mark.parametrize("location", ["fcc.db", "code/code.db"])
 def test_orphan_journals_are_not_treated_as_a_fresh_database(
     tmp_path: Path, suffix: str, location: str
-):
+) -> None:
     orphan = tmp_path / (location + suffix)
     orphan.parent.mkdir(parents=True, exist_ok=True)
     orphan.write_bytes(b"preserve")
@@ -576,7 +576,9 @@ def test_orphan_journals_are_not_treated_as_a_fresh_database(
 
 
 @pytest.mark.parametrize("version", [-1, 6])
-def test_unsupported_version_is_not_moved_or_mutated(tmp_path: Path, version: int):
+def test_unsupported_version_is_not_moved_or_mutated(
+    tmp_path: Path, version: int
+) -> None:
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, 3)
     with closing(sqlite3.connect(old)) as connection:
@@ -591,7 +593,9 @@ def test_unsupported_version_is_not_moved_or_mutated(tmp_path: Path, version: in
 @pytest.mark.parametrize(
     "statement", ["CREATE TABLE unrelated(id)", "CREATE TABLE code_sessions(id)"]
 )
-def test_unrecognized_schema_is_not_blessed_or_moved(tmp_path: Path, statement: str):
+def test_unrecognized_schema_is_not_blessed_or_moved(
+    tmp_path: Path, statement: str
+) -> None:
     old, target = tmp_path / "code.db", tmp_path / "fcc.db"
     with closing(sqlite3.connect(old)) as connection:
         connection.execute(statement)
@@ -600,7 +604,7 @@ def test_unrecognized_schema_is_not_blessed_or_moved(tmp_path: Path, statement: 
     assert old.exists() and not target.exists()
 
 
-def test_committed_wal_survives_unclean_exit_and_relocation(tmp_path: Path):
+def test_committed_wal_survives_unclean_exit_and_relocation(tmp_path: Path) -> None:
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, 3)
     subprocess.run(
@@ -628,7 +632,7 @@ os._exit(0)
 
 def test_failed_rename_preserves_source_and_can_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, 3)
     before = snapshot(old)
@@ -649,7 +653,7 @@ def test_failed_rename_preserves_source_and_can_retry(
 @pytest.mark.parametrize("failing_version", [1, 2])
 def test_migration_failure_after_move_rolls_back_and_retries_at_destination(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing_version: int
-):
+) -> None:
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, 0)
     migrations = sqlite_database.MIGRATIONS
@@ -694,7 +698,7 @@ def test_migration_failure_after_move_rolls_back_and_retries_at_destination(
 
 def test_fresh_schema_failure_rolls_back_all_ddl(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     target = tmp_path / "fcc.db"
     original = sqlite_database.MIGRATIONS[0][1]
 
@@ -715,7 +719,7 @@ def test_fresh_schema_failure_rolls_back_all_ddl(
 
 def test_current_schema_does_not_execute_historical_migrations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     target = tmp_path / "fcc.db"
     historical_database(target, 3)
     initialize_database(target)
@@ -733,7 +737,7 @@ def test_current_schema_does_not_execute_historical_migrations(
 
 def test_messaging_schema_failure_rolls_back_without_changing_code_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     target = tmp_path / "fcc.db"
     historical_database(target, 3)
     before = snapshot(target)
@@ -766,7 +770,7 @@ def test_messaging_schema_failure_rolls_back_without_changing_code_history(
 
 def test_busy_wal_is_not_renamed_and_retries_after_reader_closes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, 3)
     connect = sqlite_database._connect
@@ -796,7 +800,7 @@ def test_busy_wal_is_not_renamed_and_retries_after_reader_closes(
 
 
 @pytest.mark.parametrize("redirect", ["directory", "database"])
-def test_redirected_legacy_storage_is_not_moved(tmp_path: Path, redirect: str):
+def test_redirected_legacy_storage_is_not_moved(tmp_path: Path, redirect: str) -> None:
     elsewhere = tmp_path / "elsewhere/code.db"
     historical_database(elsewhere, 3)
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
@@ -818,7 +822,7 @@ def test_redirected_legacy_storage_is_not_moved(tmp_path: Path, redirect: str):
 @pytest.mark.asyncio
 async def test_restart_recovery_runs_after_current_schema_relocation(
     database_factory: DatabaseFactory, tmp_path: Path
-):
+) -> None:
     old, target, lock = (
         tmp_path / "code/code.db",
         tmp_path / "fcc.db",
@@ -847,7 +851,7 @@ async def test_restart_recovery_runs_after_current_schema_relocation(
 @pytest.mark.asyncio
 async def test_old_owner_blocks_move_and_new_owner_uses_same_lock(
     database_factory: DatabaseFactory, tmp_path: Path
-):
+) -> None:
     old, target, lock = (
         tmp_path / "code/code.db",
         tmp_path / "fcc.db",
@@ -875,7 +879,7 @@ async def test_old_owner_blocks_move_and_new_owner_uses_same_lock(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission contract")
-def test_relocated_database_keeps_private_permissions(tmp_path: Path):
+def test_relocated_database_keeps_private_permissions(tmp_path: Path) -> None:
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, 3)
     old.chmod(0o600)
@@ -887,7 +891,7 @@ def test_relocated_database_keeps_private_permissions(tmp_path: Path):
 @pytest.mark.parametrize("fail_migration", [False, True])
 async def test_production_startup_keeps_http_available_and_chat_cleanup_independent(
     monkeypatch: pytest.MonkeyPatch, fail_migration: bool
-):
+) -> None:
     from free_claude_code.config import paths
     from free_claude_code.config.settings import Settings
     from free_claude_code.core.interprocess_lock import InterprocessFileLock

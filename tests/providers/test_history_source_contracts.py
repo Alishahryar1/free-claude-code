@@ -42,7 +42,7 @@ def origin(protocol: HistoryProtocol = "chat"):
 @pytest.mark.parametrize("separate", [False, True])
 def test_messages_normalization_keeps_distinct_thoughts_but_not_aliases(
     wrapped: bool, separate: bool
-):
+) -> None:
     thought = "Stored thought"
     block = {"type": "thinking", "thinking": thought}
     if wrapped:
@@ -82,7 +82,7 @@ def test_messages_normalization_keeps_distinct_thoughts_but_not_aliases(
 @pytest.mark.parametrize("override", [False, True])
 def test_singleton_responses_id_correction_uses_owned_array_source(
     negotiate: bool, override: bool
-):
+) -> None:
     item = {
         "type": "reasoning",
         "id": "rs_bad:id",
@@ -125,7 +125,7 @@ def test_singleton_responses_id_correction_uses_owned_array_source(
     assert body == before
 
 
-def test_unsigned_rejection_never_converts_thinking_into_prose():
+def test_unsigned_rejection_never_converts_thinking_into_prose() -> None:
     body: JsonObject = {
         "input": [
             {
@@ -152,7 +152,7 @@ def test_unsigned_rejection_never_converts_thinking_into_prose():
     assert history_retry_body(error, body, "responses") is None
 
 
-def test_equal_full_and_summary_text_remain_distinct_representations():
+def test_equal_full_and_summary_text_remain_distinct_representations() -> None:
     from free_claude_code.core.history_replay import readable_reasoning
 
     assert readable_reasoning(
@@ -164,7 +164,7 @@ def test_equal_full_and_summary_text_remain_distinct_representations():
 
 
 @pytest.mark.parametrize("separator", ["", "\n", "\n\n"])
-def test_aggregate_scalar_alias_keeps_each_native_part_once(separator: str):
+def test_aggregate_scalar_alias_keeps_each_native_part_once(separator: str) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "model",
@@ -194,7 +194,7 @@ def test_aggregate_scalar_alias_keeps_each_native_part_once(separator: str):
 @pytest.mark.parametrize("carrier", [False, True])
 async def test_sdk_history_override_keeps_scalar_detail_alias_once(
     scalar: str, carrier: bool
-):
+) -> None:
     from free_claude_code.core.reasoning import ReasoningPolicy
     from free_claude_code.providers.deepseek import DeepSeekProvider
     from tests.api.test_delivered_stream_recovery import text_events
@@ -265,7 +265,7 @@ async def test_sdk_history_override_keeps_scalar_detail_alias_once(
 )
 def test_sdk_carrier_aliases_preserve_records_across_history_modes(
     mode: HistoryMode, scalar: str, thoughts: list[str], expected: str
-):
+) -> None:
     assistant = {
         "role": "assistant",
         "content": "Answer",
@@ -310,7 +310,7 @@ def test_sdk_carrier_aliases_preserve_records_across_history_modes(
     assert source == before
 
 
-def test_sdk_summary_carrier_does_not_absorb_independent_full_thinking():
+def test_sdk_summary_carrier_does_not_absorb_independent_full_thinking() -> None:
     detail = {"type": "reasoning.summary", "summary": "Plan"}
     source = {
         "extra_body": {

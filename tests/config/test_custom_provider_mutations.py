@@ -82,7 +82,7 @@ def created():
     return snapshot(result.target_values), result.custom_provider_id
 
 
-def test_mutations_preserve_other_providers_secrets_and_routing_identity():
+def test_mutations_preserve_other_providers_secrets_and_routing_identity() -> None:
     state, first = created()
     second = mutate(
         state,
@@ -106,7 +106,7 @@ def test_mutations_preserve_other_providers_secrets_and_routing_identity():
     assert updated.api_keys == ()
 
 
-def test_deletion_requires_reassignment_and_is_idempotent():
+def test_deletion_requires_reassignment_and_is_idempotent() -> None:
     state, provider_id = created()
     selected = snapshot({**state.managed, "MODEL": f"{provider_id}/one"})
     rejected = mutate(selected, "delete", provider_id)
@@ -126,7 +126,9 @@ def test_deletion_requires_reassignment_and_is_idempotent():
 
 
 @pytest.mark.parametrize("process_owned", [False, True])
-def test_deletion_recognizes_structured_fallback_references(process_owned: bool):
+def test_deletion_recognizes_structured_fallback_references(
+    process_owned: bool,
+) -> None:
     state, provider_id = created()
     entries = [{"model": f"{provider_id}/one", "reasoning": "low"}]
     value = json.dumps(entries)
@@ -144,7 +146,7 @@ def test_deletion_recognizes_structured_fallback_references(process_owned: bool)
         assert not reassigned.settings.custom_providers
 
 
-def test_invalid_duplicate_or_locked_mutation_does_not_expose_keys():
+def test_invalid_duplicate_or_locked_mutation_does_not_expose_keys() -> None:
     state, provider_id = created()
     duplicate = mutate(
         state,

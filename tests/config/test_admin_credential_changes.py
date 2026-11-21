@@ -33,7 +33,9 @@ def prepare(
     )
 
 
-def test_changed_keys_exclude_masks_noops_and_removals(monkeypatch: pytest.MonkeyPatch):
+def test_changed_keys_exclude_masks_noops_and_removals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     store = ManagedConfigStore()
     store.initialize()
@@ -58,7 +60,7 @@ def test_changed_keys_exclude_masks_noops_and_removals(monkeypatch: pytest.Monke
     assert changed.settings.groq_proxy == "http://localhost:8080"
 
 
-def test_process_locked_key_is_not_a_change(monkeypatch: pytest.MonkeyPatch):
+def test_process_locked_key_is_not_a_change(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GROQ_API_KEY", "process-key")
     store = ManagedConfigStore()
     store.initialize()

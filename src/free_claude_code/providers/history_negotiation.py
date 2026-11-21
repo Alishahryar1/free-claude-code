@@ -3,7 +3,7 @@
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import Any, cast
+from typing import cast
 
 from free_claude_code.core.history_replay import (
     HistoryMode,
@@ -48,9 +48,9 @@ class HistoryModeCache:
         self._entries.clear()
 
 
-def resolve_history_overrides(body: Mapping[str, Any]) -> JsonObject:
+def resolve_history_overrides(body: Mapping[str, JsonValue]) -> JsonObject:
     """Apply SDK overrides before identifying the model or projecting history."""
-    result = deepcopy(dict(body))
+    result: JsonObject = deepcopy(dict(body))
     extra = result.get("extra_body")
     if isinstance(extra, dict):
         messages = extra.get("messages")
@@ -59,8 +59,8 @@ def resolve_history_overrides(body: Mapping[str, Any]) -> JsonObject:
         for key in ("model", "messages", "input"):
             if key in extra:
                 result[key] = extra.pop(key)
-        if not extra:
-            result.pop("extra_body", None)
+        if not bool(extra):
+            del result["extra_body"]
     return result
 
 
@@ -86,14 +86,14 @@ def _normalize_chat_override(messages: list[JsonValue]) -> None:
                 text for text, summary in readable_reasoning(native) if not summary
             )
         represented = set(full)
-        if full:
+        if len(full) > 0:
             represented.update(separator.join(full) for separator in ("", "\n", "\n\n"))
         for key in ("reasoning_content", "reasoning"):
             if isinstance(text := message.get(key), str) and text in represented:
-                message.pop(key)
+                del message[key]
 
 
-def effective_body(body: Mapping[str, Any]) -> JsonObject:
+def effective_body(body: Mapping[str, JsonValue]) -> JsonObject:
     result: JsonObject = deepcopy(dict(body))
     extra = result.pop("extra_body", None)
     if isinstance(extra, dict):
@@ -143,7 +143,7 @@ class HistoryNegotiation:
 
     def prepare(
         self,
-        body: Mapping[str, Any],
+        body: Mapping[str, JsonValue],
         origin: ReplayOrigin,
         *,
         reasoning_field: str = "reasoning_content",
@@ -209,7 +209,7 @@ class HistoryNegotiation:
             self._revision = self._cache.update(self._key, self._revision, None)
             self._cached_mode = None
         assert self._render is not None
-        while self._order:
+        while len(self._order) > 0:
             mode = self._order.pop(0)
             effective = effective_body(self._render(mode, {}))
             if effective not in self._seen:
@@ -237,7 +237,7 @@ class RequestHistory:
 
     def prepare(
         self,
-        body: Mapping[str, Any],
+        body: Mapping[str, JsonValue],
         origin: ReplayOrigin,
         cache: HistoryModeCache,
         *,

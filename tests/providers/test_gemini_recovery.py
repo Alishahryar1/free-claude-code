@@ -63,7 +63,7 @@ from tests.wire_payload import (
 @pytest.mark.parametrize("interrupt_again", [False, True])
 async def test_gemini_followup_replays_only_delivered_thinking_after_overlap(
     field: str, closed: bool, suffix: str, interrupt_again: bool
-):
+) -> None:
     reasoning = reasoning_events(field=field, closed=closed)
     first = followed_by_text(reasoning[:-1] if closed else reasoning, "Hello ")
 
@@ -129,7 +129,9 @@ async def test_gemini_followup_replays_only_delivered_thinking_after_overlap(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native_first", [False, True])
-async def test_gemini_open_chat_group_survives_cutoff_and_overlap(native_first: bool):
+async def test_gemini_open_chat_group_survives_cutoff_and_overlap(
+    native_first: bool,
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) > 2:
             return 200, text_events("chat", "Next")
@@ -217,7 +219,7 @@ async def test_gemini_open_chat_group_survives_cutoff_and_overlap(native_first: 
 @pytest.mark.parametrize("invisible_retry", [False, True])
 async def test_public_continuation_uses_delivered_thinking_without_native_copies(
     visible: bool, invisible_retry: bool
-):
+) -> None:
     sent = []
 
     def reply(request: httpx2.Request):
@@ -278,7 +280,7 @@ async def test_public_continuation_uses_delivered_thinking_without_native_copies
 
 
 @pytest.mark.asyncio
-async def test_large_delivered_reasoning_prevents_unsafe_public_continuation():
+async def test_large_delivered_reasoning_prevents_unsafe_public_continuation() -> None:
     sent = []
 
     def reply(request: httpx2.Request):
@@ -328,7 +330,7 @@ async def test_large_delivered_reasoning_prevents_unsafe_public_continuation():
 @pytest.mark.parametrize("visible", [False, True])
 async def test_public_continuation_retains_unencrypted_responses_reasoning(
     visible: bool,
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         first = len(bodies) == 1
         events = text_events(
@@ -384,7 +386,7 @@ async def test_public_continuation_retains_unencrypted_responses_reasoning(
 
 
 @pytest.mark.asyncio
-async def test_messages_success_keeps_completed_reasoning_replay_and_calls():
+async def test_messages_success_keeps_completed_reasoning_replay_and_calls() -> None:
     requests = []
 
     def reply(request: httpx.Request):
@@ -452,7 +454,7 @@ async def test_messages_success_keeps_completed_reasoning_replay_and_calls():
 @pytest.mark.asyncio
 async def test_responses_handoff_keeps_source_order_and_echo_ownership(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     first = {
         "type": "reasoning",
         "id": "rs_first",
@@ -522,7 +524,7 @@ async def test_responses_handoff_keeps_source_order_and_echo_ownership(
 @pytest.mark.parametrize("stage", ["hidden", "portable", "structured", "retention"])
 async def test_gemini_recovery_uses_published_evidence(
     protocol: str, stage: str, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     prefix = (
         "x" * 1_100_000
         if stage == "retention"
@@ -605,7 +607,7 @@ async def test_gemini_recovery_uses_published_evidence(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["prefetch", "text", "call"])
-async def test_gemini_cancel_closes_source_before_releasing_lease(phase: str):
+async def test_gemini_cancel_closes_source_before_releasing_lease(phase: str) -> None:
     entered, closed = asyncio.Event(), asyncio.Event()
     release = AsyncMock()
 

@@ -76,7 +76,7 @@ def _stream(*chunks: bytes) -> httpx.Response:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_client_protocol_headers_reach_upstream(streaming: bool):
+async def test_client_protocol_headers_reach_upstream(streaming: bool) -> None:
     received: list[httpx.Request] = []
 
     def handle(request: httpx.Request):
@@ -105,7 +105,7 @@ async def test_client_protocol_headers_reach_upstream(streaming: bool):
 
 
 @pytest.mark.asyncio
-async def test_context_window_stop_reaches_the_client_as_a_stop():
+async def test_context_window_stop_reaches_the_client_as_a_stop() -> None:
     def callback(request: object):
         return _stream(_sse(*_events(stop="model_context_window_exceeded")))
 
@@ -124,7 +124,9 @@ async def test_context_window_stop_reaches_the_client_as_a_stop():
 
 
 @pytest.mark.asyncio
-async def test_error_event_failure_carries_upstream_evidence(traces: list[JsonObject]):
+async def test_error_event_failure_carries_upstream_evidence(
+    traces: list[JsonObject],
+) -> None:
     error: JsonObject = {
         "type": "error",
         "error": {"type": "invalid_request_error", "message": "native evidence"},

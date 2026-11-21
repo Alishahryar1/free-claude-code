@@ -89,7 +89,7 @@ def _history():
 
 
 @pytest.mark.asyncio
-async def test_startup_removes_retired_history_and_preserves_other_files():
+async def test_startup_removes_retired_history_and_preserves_other_files() -> None:
     runtime = _runtime()
     directory, owned = _history()
     root = paths.config_dir_path()
@@ -115,13 +115,13 @@ async def test_startup_removes_retired_history_and_preserves_other_files():
 
 
 @pytest.mark.asyncio
-async def test_fresh_and_repeated_startup_do_not_create_chat_directory():
+async def test_fresh_and_repeated_startup_do_not_create_chat_directory() -> None:
     await _start_and_close()
     await _start_and_close()
     assert not (paths.config_dir_path() / "chat").exists()
 
 
-def test_startup_removes_history_on_uvloop():
+def test_startup_removes_history_on_uvloop() -> None:
     uvloop: ModuleType = pytest.importorskip("uvloop")
     _, owned = _history()
     new_event_loop: Callable[[], asyncio.AbstractEventLoop] | None = getattr(
@@ -135,7 +135,7 @@ def test_startup_removes_history_on_uvloop():
 @pytest.mark.asyncio
 async def test_busy_history_is_left_intact_and_removed_on_next_startup(
     cleanup_logs: list[str],
-):
+) -> None:
     directory, owned = _history()
     original = {path: path.read_bytes() for path in owned}
     lock = InterprocessFileLock(directory / "chat.lock")
@@ -155,7 +155,7 @@ async def test_busy_history_is_left_intact_and_removed_on_next_startup(
 @pytest.mark.asyncio
 async def test_partial_deletion_releases_lock_and_retries(
     monkeypatch: pytest.MonkeyPatch, cleanup_logs: list[str]
-):
+) -> None:
     directory, owned = _history()
     unlink = Path.unlink
 
@@ -186,7 +186,7 @@ async def test_partial_deletion_releases_lock_and_retries(
 @pytest.mark.parametrize("operation", ["resolve", "lstat", "open"])
 async def test_inaccessible_history_does_not_block_startup(
     monkeypatch: pytest.MonkeyPatch, cleanup_logs: list[str], operation: str
-):
+) -> None:
     directory, owned = _history()
     original: Callable[..., object] = getattr(Path, operation)
     denied = {"resolve": directory, "lstat": owned[0], "open": directory / "chat.lock"}[
@@ -210,7 +210,7 @@ async def test_inaccessible_history_does_not_block_startup(
 @pytest.mark.asyncio
 async def test_redirected_directory_is_left_untouched(
     tmp_path: Path, cleanup_logs: list[str]
-):
+) -> None:
     root = paths.config_dir_path()
     root.mkdir()
     outside = tmp_path / "outside"
@@ -229,7 +229,7 @@ async def test_redirected_directory_is_left_untouched(
     )
 
 
-def test_empty_chat_directory_does_not_create_a_lock():
+def test_empty_chat_directory_does_not_create_a_lock() -> None:
     directory = paths.config_dir_path() / "chat"
     directory.mkdir(parents=True)
     remove_retired_chat_history()
@@ -238,7 +238,7 @@ def test_empty_chat_directory_does_not_create_a_lock():
 
 def test_disappearing_files_are_safe_and_deletion_holds_the_lock(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     directory, owned = _history()
     unlink = Path.unlink
     removed = []
@@ -260,7 +260,7 @@ def test_disappearing_files_are_safe_and_deletion_holds_the_lock(
     assert list(directory.iterdir()) == [directory / "chat.lock"]
 
 
-def test_concurrent_cleanups_leave_no_history():
+def test_concurrent_cleanups_leave_no_history() -> None:
     directory, owned = _history()
     ready = threading.Barrier(4)
 
@@ -277,7 +277,7 @@ def test_concurrent_cleanups_leave_no_history():
 @pytest.mark.asyncio
 async def test_startup_cancellation_waits_for_cleanup_and_lock_release(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     directory, owned = _history()
     runtime = _runtime()
     entered, release = threading.Event(), threading.Event()

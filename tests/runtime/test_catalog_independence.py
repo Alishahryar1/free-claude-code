@@ -88,7 +88,7 @@ async def catalog_runtime():
 @pytest.mark.parametrize("path", ["/v1/models?view=responses", "/muse-code/models"])
 async def test_http_catalog_exposes_ready_models_while_another_provider_waits(
     catalog_runtime: tuple[ApplicationRuntime, asyncio.Event], path: str
-):
+) -> None:
     runtime, release = catalog_runtime
     manager = runtime.provider_manager
     app = create_app(
@@ -114,7 +114,7 @@ async def test_http_catalog_exposes_ready_models_while_another_provider_waits(
 @pytest.mark.asyncio
 async def test_code_preparation_uses_only_its_selected_provider(
     catalog_runtime: tuple[ApplicationRuntime, asyncio.Event],
-):
+) -> None:
     runtime, release = catalog_runtime
     factory = CodexHarnessFactory(runtime.provider_manager, binary="codex")
     selection = await asyncio.wait_for(
@@ -127,7 +127,7 @@ async def test_code_preparation_uses_only_its_selected_provider(
 @pytest.mark.asyncio
 async def test_code_waits_for_its_provider_and_validates_settled_metadata(
     catalog_runtime: tuple[ApplicationRuntime, asyncio.Event],
-):
+) -> None:
     runtime, release = catalog_runtime
     factory = CodexHarnessFactory(runtime.provider_manager, binary="codex")
     waiting = asyncio.create_task(factory.prepare("groq/configured", None, "config"))
@@ -150,7 +150,7 @@ async def test_code_waits_for_its_provider_and_validates_settled_metadata(
 @pytest.mark.parametrize("replace_settings", [False, True])
 async def test_code_waits_for_model_absent_from_partial_catalog(
     catalog_runtime: tuple[ApplicationRuntime, asyncio.Event], replace_settings: bool
-):
+) -> None:
     runtime, release = catalog_runtime
     manager = runtime.provider_manager
     factory = CodexHarnessFactory(manager, binary="codex")
@@ -177,7 +177,7 @@ async def test_code_waits_for_model_absent_from_partial_catalog(
 @pytest.mark.parametrize("model", ["unknown/model", "", "groq", "groq/"])
 async def test_code_rejects_invalid_selection_without_waiting(
     catalog_runtime: tuple[ApplicationRuntime, asyncio.Event], model: str
-):
+) -> None:
     runtime, release = catalog_runtime
     factory = CodexHarnessFactory(runtime.provider_manager, binary="codex")
     with pytest.raises(CodeValidationError, match="model is unavailable"):
@@ -188,7 +188,7 @@ async def test_code_rejects_invalid_selection_without_waiting(
 @pytest.mark.asyncio
 async def test_code_rejects_selection_when_its_provider_is_removed(
     catalog_runtime: tuple[ApplicationRuntime, asyncio.Event],
-):
+) -> None:
     runtime, release = catalog_runtime
     manager = runtime.provider_manager
     factory = CodexHarnessFactory(manager, binary="codex")
@@ -214,7 +214,7 @@ async def test_model_refresh_retries_failed_file_with_unchanged_metadata(
     catalog_runtime: tuple[ApplicationRuntime, asyncio.Event],
     tmp_path: Path,
     repair: bool,
-):
+) -> None:
     runtime, release = catalog_runtime
     manager = runtime.provider_manager
     release.set()
@@ -251,7 +251,7 @@ async def test_unchanged_refresh_does_not_republish_current_file(
     catalog_runtime: tuple[ApplicationRuntime, asyncio.Event],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     runtime, release = catalog_runtime
     manager = runtime.provider_manager
     release.set()
@@ -273,7 +273,7 @@ async def test_unchanged_refresh_does_not_republish_current_file(
 @pytest.mark.asyncio
 async def test_catalog_file_is_available_before_all_discovery(
     catalog_runtime: tuple[ApplicationRuntime, asyncio.Event],
-):
+) -> None:
     runtime, release = catalog_runtime
     manager = runtime.provider_manager
     await asyncio.wait_for(manager.wait_for_catalog_file(InitializationWait()), 1)
@@ -284,7 +284,7 @@ async def test_catalog_file_is_available_before_all_discovery(
 @pytest.mark.asyncio
 async def test_slow_file_publication_does_not_delay_catalog_notifications(
     catalog_runtime: tuple[ApplicationRuntime, asyncio.Event],
-):
+) -> None:
     entered, release = threading.Event(), threading.Event()
     notified = asyncio.Event()
 
@@ -310,7 +310,7 @@ async def test_slow_file_publication_does_not_delay_catalog_notifications(
 @pytest.mark.asyncio
 async def test_file_publication_coalesces_changes_and_tracks_written_version(
     catalog_runtime: tuple[ApplicationRuntime, asyncio.Event],
-):
+) -> None:
     runtime, _ = catalog_runtime
     manager = runtime.provider_manager
     entered, release = threading.Event(), threading.Event()
@@ -348,7 +348,7 @@ async def test_file_publication_coalesces_changes_and_tracks_written_version(
 @pytest.mark.parametrize("fail_next", [False, True])
 async def test_file_waiter_follows_publication_started_after_previous_write(
     catalog_runtime: tuple[ApplicationRuntime, asyncio.Event], fail_next: bool
-):
+) -> None:
     runtime, _ = catalog_runtime
     manager = runtime.provider_manager
     await finish_publication(manager)
@@ -404,7 +404,7 @@ async def test_file_waiter_follows_publication_started_after_previous_write(
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_file_waiter_exit_preserves_owned_publication(
     catalog_runtime: tuple[ApplicationRuntime, asyncio.Event], cancel: bool
-):
+) -> None:
     runtime, _ = catalog_runtime
     manager = runtime.provider_manager
     entered, release = threading.Event(), threading.Event()

@@ -25,7 +25,7 @@ from tests.wire_payload import array_payload, object_array, object_payload
 @pytest.mark.parametrize("initial_text", ["", "First "])
 def test_next_continuation_preserves_corrected_history_and_options(
     protocol: WireProtocol, initial_text: str
-):
+) -> None:
     field = "input" if protocol == "responses" else "messages"
     user_turn = {"role": "user", "content": "Continue"}
     body = {
@@ -73,7 +73,7 @@ def test_next_continuation_preserves_corrected_history_and_options(
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 def test_original_turns_matching_private_instruction_are_preserved(
     protocol: WireProtocol,
-):
+) -> None:
     field = "input" if protocol == "responses" else "messages"
     instruction_body: JsonObject = ContinuationRequest(protocol).build(
         {field: []}, continuation_seed()
@@ -88,7 +88,7 @@ def test_original_turns_matching_private_instruction_are_preserved(
     assert body == original
 
 
-def test_responses_string_input_is_preserved_across_continuations():
+def test_responses_string_input_is_preserved_across_continuations() -> None:
     request = ContinuationRequest("responses")
     first: JsonObject = request.build(
         {"input": "Original prompt"}, continuation_seed(thinking="A thought.")
@@ -105,7 +105,7 @@ def test_responses_string_input_is_preserved_across_continuations():
 @pytest.mark.parametrize("parts", [None, [], [""], ["Half", ""], ["   ", ""]])
 def test_messages_suffix_accepts_summary_only_and_incomplete_text(
     parts: list[str] | None,
-):
+) -> None:
     items: list[JsonObject] = [
         {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Summary"}]}
     ]
@@ -148,7 +148,7 @@ def test_messages_suffix_accepts_summary_only_and_incomplete_text(
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 def test_native_continuation_carriers_project_and_replace_as_one_suffix(
     protocol: WireProtocol,
-):
+) -> None:
     field = "input" if protocol == "responses" else "messages"
     source = ReplayOrigin("source", "chat", "endpoint", "account", "model")
     record = ReplayRecord(source, {"reasoning_content": "retained native thought"})
@@ -185,7 +185,7 @@ def test_native_continuation_carriers_project_and_replace_as_one_suffix(
     assert original == {field: [{"role": "user", "content": "hello"}]}
 
 
-def test_gemini_history_resolves_empty_streamed_tool_arguments_to_start_input():
+def test_gemini_history_resolves_empty_streamed_tool_arguments_to_start_input() -> None:
     seed = ContinuationSeed(
         "messages",
         (

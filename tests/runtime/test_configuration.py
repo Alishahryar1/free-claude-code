@@ -18,7 +18,7 @@ from free_claude_code.core.interprocess_lock import InterprocessFileLock
 from free_claude_code.runtime.configuration import ConfigurationService
 
 
-def test_reads_are_fresh_read_only_snapshots():
+def test_reads_are_fresh_read_only_snapshots() -> None:
     store = ManagedConfigStore()
     store.initialize()
     for port in (8123, 8124):
@@ -34,7 +34,7 @@ def test_reads_are_fresh_read_only_snapshots():
         assert snapshot.managed["PORT"] == str(port)
 
 
-def test_read_does_not_recreate_missing_storage():
+def test_read_does_not_recreate_missing_storage() -> None:
     store = ManagedConfigStore()
     with pytest.raises(ValueError, match="initializ"):
         store.read()
@@ -43,7 +43,7 @@ def test_read_does_not_recreate_missing_storage():
 
 def test_preparation_uses_captured_disk_and_process_state(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     store = ManagedConfigStore()
     store.initialize()
     snapshot = store.read({"PORT": "8123"})
@@ -58,7 +58,7 @@ def test_preparation_uses_captured_disk_and_process_state(
 
 
 @pytest.mark.asyncio
-async def test_read_waits_for_storage_lock_without_blocking_event_loop():
+async def test_read_waits_for_storage_lock_without_blocking_event_loop() -> None:
     store = ManagedConfigStore()
     store.initialize()
     service = ConfigurationService(store)
@@ -72,7 +72,9 @@ async def test_read_waits_for_storage_lock_without_blocking_event_loop():
 
 
 @pytest.mark.parametrize("schema", ["", "999"])
-def test_reads_and_commits_fail_closed_on_uninitialized_or_newer_schema(schema: str):
+def test_reads_and_commits_fail_closed_on_uninitialized_or_newer_schema(
+    schema: str,
+) -> None:
     store = ManagedConfigStore()
     store.initialize()
     text = f"FCC_CONFIG_SCHEMA={schema}\nANTHROPIC_AUTH_TOKEN=preserve\n"
@@ -84,7 +86,7 @@ def test_reads_and_commits_fail_closed_on_uninitialized_or_newer_schema(schema: 
     assert store.path.read_text() == text
 
 
-def test_cooperative_commits_are_serialized_and_leave_complete_files():
+def test_cooperative_commits_are_serialized_and_leave_complete_files() -> None:
     store = ManagedConfigStore()
     store.initialize()
     original = loader.atomic_write_managed_config
@@ -126,7 +128,7 @@ def test_cooperative_commits_are_serialized_and_leave_complete_files():
 
 def test_atomic_commit_waits_for_an_open_snapshot_reader(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     store = ManagedConfigStore()
     store.initialize()
     store.commit({"FCC_CONFIG_SCHEMA": "1", "PORT": "8123"})
@@ -178,7 +180,7 @@ def test_atomic_commit_waits_for_an_open_snapshot_reader(
 @pytest.mark.parametrize(
     "operation", ["initialize", "admin_config", "admin_values", "prepare", "commit"]
 )
-async def test_storage_work_does_not_block_event_loop(operation: str):
+async def test_storage_work_does_not_block_event_loop(operation: str) -> None:
     store = ManagedConfigStore()
     store.initialize()
     service = ConfigurationService(store)

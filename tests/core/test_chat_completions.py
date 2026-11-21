@@ -17,7 +17,7 @@ from free_claude_code.core.json_types import JsonObject
 from tests.wire_payload import object_array
 
 
-def test_chat_preserves_native_fields_and_nulls():
+def test_chat_preserves_native_fields_and_nulls() -> None:
     body = {
         "model": "model",
         "messages": [
@@ -36,7 +36,7 @@ def test_chat_preserves_native_fields_and_nulls():
 @pytest.mark.parametrize("destination", [chat_messages_body, chat_responses_body])
 def test_chat_tool_history_and_thinking_survive_conversion(
     destination: Callable[[ChatRequest], JsonObject],
-):
+) -> None:
     body = {
         "model": "model",
         "messages": [
@@ -77,7 +77,7 @@ def test_chat_tool_history_and_thinking_survive_conversion(
 @pytest.mark.parametrize("destination", [chat_messages_body, chat_responses_body])
 def test_translated_chat_rejects_unrepresentable_options(
     destination: Callable[[ChatRequest], JsonObject],
-):
+) -> None:
     with pytest.raises(ChatConversionError, match="logprobs"):
         destination(
             ChatRequest(
@@ -88,7 +88,7 @@ def test_translated_chat_rejects_unrepresentable_options(
         )
 
 
-def test_rich_tool_output_uses_responses_input_part_types():
+def test_rich_tool_output_uses_responses_input_part_types() -> None:
     request = ChatRequest(
         model="model",
         messages=[
@@ -116,7 +116,7 @@ def test_rich_tool_output_uses_responses_input_part_types():
 @pytest.mark.parametrize("destination", [chat_messages_body, chat_responses_body])
 def test_cross_protocol_stream_options_cannot_be_silently_discarded(
     destination: Callable[[ChatRequest], JsonObject],
-):
+) -> None:
     request = ChatRequest(
         model="model",
         messages=[{"role": "user", "content": "hello"}],
@@ -129,7 +129,7 @@ def test_cross_protocol_stream_options_cannot_be_silently_discarded(
 @pytest.mark.parametrize("destination", [chat_messages_body, chat_responses_body])
 def test_nullable_chat_assistant_fields_are_absent_in_translation(
     destination: Callable[[ChatRequest], JsonObject],
-):
+) -> None:
     request = ChatRequest(
         model="model",
         messages=[
@@ -152,7 +152,7 @@ def test_nullable_chat_assistant_fields_are_absent_in_translation(
 )
 def test_allowed_tools_rejects_unsupported_translation_clearly(
     destination: Callable[[ChatRequest], JsonObject],
-):
+) -> None:
     request = ChatRequest(
         model="model",
         messages=[{"role": "user", "content": "hello"}],
@@ -171,7 +171,7 @@ def test_allowed_tools_rejects_unsupported_translation_clearly(
 @pytest.mark.parametrize("destination", [chat_messages_body, chat_to_gemini])
 def test_refusal_history_keeps_its_text_across_other_protocols(
     destination: Callable[[ChatRequest], JsonObject],
-):
+) -> None:
     request = ChatRequest(
         model="model",
         messages=[

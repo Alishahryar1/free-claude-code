@@ -51,7 +51,7 @@ def cooldown_clock(monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.asyncio
 async def test_cooldown_reports_remaining_time_for_initial_and_later_requests(
     wire: str, protocol: str, cooldown_clock: _Clock
-):
+) -> None:
     calls = []
 
     def rate_limit(request: httpx.Request | httpx2.Request):
@@ -97,7 +97,7 @@ async def test_cooldown_reports_remaining_time_for_initial_and_later_requests(
 @pytest.mark.asyncio
 async def test_continuation_cooldown_uses_terminal_event(
     protocol: str, monkeypatch: pytest.MonkeyPatch, cooldown_clock: _Clock
-):
+) -> None:
     calls = []
     response_type = httpx.Response if protocol == "messages" else httpx2.Response
 
@@ -141,7 +141,7 @@ async def test_continuation_cooldown_uses_terminal_event(
 @pytest.mark.asyncio
 async def test_automatic_websearch_preserves_continuation_cooldown(
     with_backup: bool, cooldown_clock: _Clock
-):
+) -> None:
     partial = "Partial answer" if with_backup else "a" * 66_000
     calls = []
 

@@ -489,7 +489,7 @@ async def test_chat_refusal_is_not_sent_as_ordinary_responses_text() -> None:
 @pytest.mark.parametrize("opaque_only", [False, True])
 async def test_responses_messages_roundtrip_preserves_bound_reasoning(
     opaque_only: bool,
-):
+) -> None:
     native = [
         {
             "type": "reasoning",
@@ -556,7 +556,7 @@ def _carrier(history: list[JsonObject], wire: str) -> str:
 @pytest.mark.parametrize("max_attempts", [2, 5])
 async def test_old_raw_thinking_recovers_named_rejections_within_budget(
     max_attempts: int,
-):
+) -> None:
     history = [
         {
             "role": "assistant",
@@ -621,7 +621,7 @@ async def test_old_raw_thinking_recovers_named_rejections_within_budget(
 @pytest.mark.parametrize("wire", ["responses", "messages"])
 async def test_legacy_provider_a_b_a_preserves_exact_native_history(
     protocol: WireProtocol, wire: WireProtocol
-):
+) -> None:
     async with _harness(protocol) as (send, bodies, provider):
         if protocol == "messages":
             endpoint = Endpoint()
@@ -696,7 +696,9 @@ async def test_legacy_provider_a_b_a_preserves_exact_native_history(
 
 
 @pytest.mark.asyncio
-async def test_legacy_responses_id_then_cipher_rejection_recovers_without_changing_effort():
+async def test_legacy_responses_id_then_cipher_rejection_recovers_without_changing_effort() -> (
+    None
+):
     wire = "responses"
 
     def responder(bodies: list[JsonObject]):
@@ -740,7 +742,7 @@ async def test_legacy_responses_id_then_cipher_rejection_recovers_without_changi
 @pytest.mark.parametrize("protocol", ["responses", "messages", "chat"])
 async def test_explicit_legacy_rejection_corrects_only_history_before_commit(
     protocol: str,
-):
+) -> None:
     def responder(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 400, {
@@ -775,7 +777,7 @@ async def test_explicit_legacy_rejection_corrects_only_history_before_commit(
 @pytest.mark.parametrize("committed", [False, True])
 async def test_stream_history_rejection_respects_the_public_commit_boundary(
     protocol: str, committed: bool
-):
+) -> None:
     visible = "already visible"
     error = {
         "code": "invalid_signature"
@@ -845,7 +847,9 @@ async def test_stream_history_rejection_respects_the_public_commit_boundary(
 
 
 @pytest.mark.asyncio
-async def test_successful_fallback_preserves_raw_state_and_gets_unmodified_input():
+async def test_successful_fallback_preserves_raw_state_and_gets_unmodified_input() -> (
+    None
+):
     class MutatingPrimary(ControlledProvider):
         @override
         async def stream_messages(
@@ -923,7 +927,7 @@ async def test_successful_fallback_preserves_raw_state_and_gets_unmodified_input
 
 
 @pytest.mark.asyncio
-async def test_history_corrections_exhaust_the_shared_attempt_budget():
+async def test_history_corrections_exhaust_the_shared_attempt_budget() -> None:
     history: list[JsonObject] = [
         {
             "type": "reasoning",
@@ -1000,7 +1004,7 @@ async def test_chat_buffered_content_preserves_reasoning_through_next_request(
     suffix: str | None,
     finish: str,
     has_tool: bool,
-):
+) -> None:
     first = {"type": "reasoning.encrypted", "data": "first", "index": 0}
     second = {
         "type": "reasoning.encrypted",
@@ -1114,7 +1118,7 @@ async def test_chat_buffered_content_preserves_reasoning_through_next_request(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_chat_encrypted_only_completion_does_not_add_blank_text(
     wire: WireProtocol,
-):
+) -> None:
     details = [{"type": "reasoning.encrypted", "data": "opaque-only", "index": 0}]
     events = _chat_reasoning_events([{"reasoning_details": details}])
     events[-1]["choices"][0]["delta"] = {}
@@ -1134,7 +1138,7 @@ async def test_chat_encrypted_only_completion_does_not_add_blank_text(
 @pytest.mark.parametrize("committed", [False, True])
 async def test_chat_pending_reasoning_is_discarded_on_failure_or_retry(
     wire: WireProtocol, committed: bool
-):
+) -> None:
     text = "Plan."
     first = {"type": "reasoning.encrypted", "data": "first", "index": 0}
     second = {"type": "reasoning.encrypted", "data": "second", "index": 1}
@@ -1197,7 +1201,7 @@ async def test_chat_pending_reasoning_is_discarded_on_failure_or_retry(
 @pytest.mark.parametrize("incomplete_saved_record", [False, True])
 async def test_chat_plaintext_beside_encrypted_details_survives_switching(
     wire: WireProtocol, destination: str, incomplete_saved_record: bool
-):
+) -> None:
     text = "The crucial visible reasoning."
     details = [{"type": "reasoning.encrypted", "data": "opaque-only", "index": 0}]
     events = _chat_reasoning_events(
@@ -1261,7 +1265,7 @@ async def test_chat_plaintext_beside_encrypted_details_survives_switching(
 @pytest.mark.parametrize("encrypted", [False, True])
 async def test_chat_summary_fragments_remain_readable_in_native_fields(
     wire: WireProtocol, encrypted: bool
-):
+) -> None:
     first = {"type": "reasoning.summary", "summary": "Short ", "index": 0}
     second = {"type": "reasoning.summary", "summary": "summary.", "index": 0}
     opaque = {"type": "reasoning.encrypted", "data": "opaque-only", "index": 1}
@@ -1298,7 +1302,7 @@ async def test_chat_summary_fragments_remain_readable_in_native_fields(
 @pytest.mark.parametrize("independent_signed", [False, True])
 async def test_scalar_first_summary_keeps_text_once_without_capturing_other_records(
     wire: WireProtocol, independent_signed: bool
-):
+) -> None:
     details = [
         {"type": "reasoning.summary", "summary": "Short summary.", "index": 0},
         {
@@ -1337,7 +1341,7 @@ async def test_scalar_first_summary_keeps_text_once_without_capturing_other_reco
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native_first", [False, True])
-async def test_chat_alternate_readable_fields_replay_once(native_first: bool):
+async def test_chat_alternate_readable_fields_replay_once(native_first: bool) -> None:
     native = {"reasoning_content": "One readable thought."}
     typed = {
         "reasoning_details": [
@@ -1365,7 +1369,7 @@ async def test_chat_alternate_readable_fields_replay_once(native_first: bool):
 
 
 @pytest.mark.asyncio
-async def test_chat_reasoning_groups_do_not_inherit_previous_plaintext():
+async def test_chat_reasoning_groups_do_not_inherit_previous_plaintext() -> None:
     events = _chat_reasoning_events(
         [
             {
@@ -1404,7 +1408,7 @@ async def test_chat_reasoning_groups_do_not_inherit_previous_plaintext():
 
 
 @pytest.mark.asyncio
-async def test_chat_plaintext_matching_multiple_detail_parts_is_not_repeated():
+async def test_chat_plaintext_matching_multiple_detail_parts_is_not_repeated() -> None:
     events = _chat_reasoning_events(
         [
             {

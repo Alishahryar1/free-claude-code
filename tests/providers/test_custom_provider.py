@@ -27,7 +27,7 @@ pytestmark = pytest.mark.asyncio
 @pytest.mark.parametrize(
     "api_format", ["openai_chat", "openai_responses", "anthropic_messages"]
 )
-async def test_custom_requests_use_first_key_in_each_protocol(api_format: str):
+async def test_custom_requests_use_first_key_in_each_protocol(api_format: str) -> None:
     requests = []
 
     def reply(request: httpx.Request | httpx2.Request):
@@ -79,7 +79,7 @@ async def test_custom_requests_use_first_key_in_each_protocol(api_format: str):
 )
 async def test_native_default_preserves_controls_without_advertised_support(
     thinking: JsonObject | None,
-):
+) -> None:
     bodies = []
 
     def reply(request: httpx.Request):
@@ -126,7 +126,7 @@ async def test_native_default_preserves_controls_without_advertised_support(
 )
 async def test_messages_egress_obeys_request_model_limit(
     ingress: str, limit: int | None, cap: int | None, expected: int
-):
+) -> None:
     bodies = []
 
     def reply(request: httpx.Request):
@@ -172,7 +172,7 @@ async def test_messages_egress_obeys_request_model_limit(
 @pytest.mark.parametrize("cap", [1024, 4096])
 async def test_manual_preset_respects_cap_before_resolving_budget(
     ingress: str, exact: bool, cap: int
-):
+) -> None:
     bodies = []
 
     def reply(request: httpx.Request):
@@ -241,7 +241,7 @@ async def test_manual_preset_respects_cap_before_resolving_budget(
 )
 async def test_native_default_does_not_invent_or_shrink_exact_budget(
     thinking: JsonObject | None, error: str
-):
+) -> None:
     def unexpected_request(request: httpx.Request) -> Never:
         raise AssertionError("Invalid request reached the provider")
 
@@ -265,7 +265,7 @@ async def test_native_default_does_not_invent_or_shrink_exact_budget(
         await instance.cleanup()
 
 
-async def test_concurrent_models_keep_independent_limits():
+async def test_concurrent_models_keep_independent_limits() -> None:
     bodies = []
     both_started = asyncio.Event()
 
@@ -475,7 +475,7 @@ async def test_six_paths_use_exact_endpoint_and_credentials(
     key: str | None,
     seeded: bool,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated-key")
     monkeypatch.setenv("OPENAI_ORG_ID", "unrelated-org")
     monkeypatch.setenv("OPENAI_PROJECT_ID", "unrelated-project")
@@ -554,7 +554,7 @@ async def test_six_paths_use_exact_endpoint_and_credentials(
 )
 async def test_discovery_is_bound_and_manual_inventory_needs_no_network(
     api_format: str, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "do-not-send")
     requests = []
 
@@ -620,7 +620,7 @@ async def test_discovery_is_bound_and_manual_inventory_needs_no_network(
 )
 async def test_reasoning_presets_encode_controls_on_the_wire(
     api_format: str, mode: str, field: str, expected: JsonValue
-):
+) -> None:
     bodies = []
 
     def reply(request: httpx.Request | httpx2.Request):
@@ -659,7 +659,7 @@ async def test_reasoning_presets_encode_controls_on_the_wire(
 @pytest.mark.parametrize("ingress", ["messages", "responses"])
 async def test_tool_continuation_keeps_tool_results_and_images(
     api_format: str, ingress: str
-):
+) -> None:
     bodies = []
 
     def reply(request: httpx.Request | httpx2.Request):
@@ -762,7 +762,9 @@ async def test_tool_continuation_keeps_tool_results_and_images(
         await instance.cleanup()
 
 
-async def test_messages_discovery_rejects_repeating_cursor_without_partial_results():
+async def test_messages_discovery_rejects_repeating_cursor_without_partial_results() -> (
+    None
+):
     calls = []
 
     def reply(request: httpx.Request):
@@ -784,7 +786,9 @@ async def test_messages_discovery_rejects_repeating_cursor_without_partial_resul
 
 
 @pytest.mark.parametrize("vision", [True, False])
-async def test_messages_discovery_retains_text_and_advertised_limits(vision: bool):
+async def test_messages_discovery_retains_text_and_advertised_limits(
+    vision: bool,
+) -> None:
     instance = provider(
         definition(api_format="anthropic_messages"),
         messages_handler=lambda request: httpx.Response(

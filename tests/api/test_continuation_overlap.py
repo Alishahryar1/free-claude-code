@@ -167,7 +167,7 @@ def assert_completion_text_agrees(events: list[SSEEvent]):
 )
 async def test_split_replay_has_one_answer_across_representations(
     separate_items: bool, representation: str
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
@@ -216,7 +216,7 @@ async def test_split_replay_has_one_answer_across_representations(
 )
 async def test_responses_continuation_preserves_text_with_provider_index_encodings(
     index_case: str, index_value: JsonValue
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
@@ -263,7 +263,7 @@ async def test_responses_continuation_preserves_text_with_provider_index_encodin
 )
 async def test_split_pure_replay_is_not_public_progress(
     representation: str, input_tokens: int | float
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             events = text_events("responses", "Hello ", complete=False)
@@ -290,7 +290,7 @@ async def test_split_pure_replay_is_not_public_progress(
 @pytest.mark.parametrize("seeded", [False, True])
 async def test_messages_replay_across_blocks_uses_the_same_rule(
     wire: WireProtocol, seeded: bool
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("messages", "abcabc", complete=False)
@@ -324,7 +324,7 @@ async def test_messages_replay_across_blocks_uses_the_same_rule(
 @pytest.mark.asyncio
 async def test_overflow_preserves_public_prefix_and_closes_the_source(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     monkeypatch.setattr(
         "free_claude_code.core.continuation_overlap.RECOVERY_RETENTION_BYTES", 1000
     )
@@ -372,7 +372,7 @@ async def test_overflow_preserves_public_prefix_and_closes_the_source(
 
 
 @pytest.mark.asyncio
-async def test_overlap_release_records_each_packet_only_when_returned():
+async def test_overlap_release_records_each_packet_only_when_returned() -> None:
     states = []
     resumed = []
 
@@ -425,7 +425,7 @@ async def test_overlap_release_records_each_packet_only_when_returned():
 
 
 @pytest.mark.asyncio
-async def test_hidden_attempt_replacement_discards_queued_replay():
+async def test_hidden_attempt_replacement_discards_queued_replay() -> None:
     unpublished = []
 
     async def source():
@@ -463,7 +463,7 @@ async def test_hidden_attempt_replacement_discards_queued_replay():
 
 
 @pytest.mark.asyncio
-async def test_cancellation_drops_ambiguous_replay_and_closes_the_source():
+async def test_cancellation_drops_ambiguous_replay_and_closes_the_source() -> None:
     waiting = asyncio.Event()
     closed = []
     states = []
@@ -522,7 +522,7 @@ async def test_cancellation_drops_ambiguous_replay_and_closes_the_source():
 @pytest.mark.parametrize("representation", ["text_done", "part_done", "item_done"])
 async def test_snapshot_text_is_published_once_before_another_interruption(
     representation: str,
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)

@@ -43,13 +43,13 @@ def admin_field(state: ManagedConfigSnapshot, key: str):
     "value",
     ["groq/one", ["groq/one"], [{"model": "groq/one", "reasoning": "high"}]],
 )
-def test_existing_fallback_formats_use_key_one(value: JsonValue):
+def test_existing_fallback_formats_use_key_one(value: JsonValue) -> None:
     settings = Settings.model_validate({"MODEL_FALLBACKS": value})
     assert settings.model_fallbacks is not None
     assert settings.model_fallbacks[0].api_key_number == 1
 
 
-def test_explicit_key_number_and_effort_survive_json_input():
+def test_explicit_key_number_and_effort_survive_json_input() -> None:
     settings = Settings.model_validate(
         {
             "GROQ_API_KEY": KEYS,
@@ -64,7 +64,7 @@ def test_explicit_key_number_and_effort_survive_json_input():
     }
 
 
-def test_same_model_can_use_distinct_keys_without_duplicate_discovery_refs():
+def test_same_model_can_use_distinct_keys_without_duplicate_discovery_refs() -> None:
     settings = Settings(
         MODEL="groq/one",
         GROQ_API_KEY=KEYS,
@@ -81,7 +81,7 @@ def test_same_model_can_use_distinct_keys_without_duplicate_discovery_refs():
     ]
 
 
-def test_different_efforts_do_not_allow_duplicate_model_key_pairs():
+def test_different_efforts_do_not_allow_duplicate_model_key_pairs() -> None:
     with pytest.raises(ValidationError, match="duplicate"):
         Settings(
             GROQ_API_KEY=KEYS,
@@ -93,7 +93,9 @@ def test_different_efforts_do_not_allow_duplicate_model_key_pairs():
 
 
 @pytest.mark.parametrize("number", [0, -1, True, 1.5, "2"])
-def test_key_number_requires_a_positive_integer(number: bool | float | int | str):
+def test_key_number_requires_a_positive_integer(
+    number: bool | float | int | str,
+) -> None:
     with pytest.raises(ValidationError) as rejected:
         Settings(
             GROQ_API_KEY=KEYS,
@@ -104,7 +106,7 @@ def test_key_number_requires_a_positive_integer(number: bool | float | int | str
     assert errors[0]["type"] in {"greater_than_equal", "int_type"}
 
 
-def test_unavailable_key_is_rejected_without_disclosing_keys():
+def test_unavailable_key_is_rejected_without_disclosing_keys() -> None:
     with pytest.raises(ValidationError, match="Key 4") as rejected:
         Settings(
             GROQ_API_KEY=KEYS,
@@ -114,7 +116,7 @@ def test_unavailable_key_is_rejected_without_disclosing_keys():
 
 
 @pytest.mark.parametrize("provider", ["openai", "github_copilot", "vertex", "ollama"])
-def test_other_authentication_has_only_the_default_selection(provider: str):
+def test_other_authentication_has_only_the_default_selection(provider: str) -> None:
     default = Settings(
         MODEL_FALLBACKS=[{"model": f"{provider}/one", "api_key_number": 1}]
     )
@@ -125,7 +127,7 @@ def test_other_authentication_has_only_the_default_selection(provider: str):
 
 
 @pytest.mark.parametrize("provider", ["zai", "zai_api", "opencode_zen", "opencode_go"])
-def test_shared_credential_owners_supply_the_same_numbered_keys(provider: str):
+def test_shared_credential_owners_supply_the_same_numbered_keys(provider: str) -> None:
     settings = Settings(
         ZAI_API_KEY=KEYS,
         OPENCODE_API_KEY=KEYS,
@@ -135,7 +137,7 @@ def test_shared_credential_owners_supply_the_same_numbered_keys(provider: str):
     assert settings.model_fallbacks[0].api_key_number == 3
 
 
-def test_custom_provider_key_selection_and_unauthenticated_default():
+def test_custom_provider_key_selection_and_unauthenticated_default() -> None:
     definition = {
         "provider_id": CUSTOM_ID,
         "display_name": "Gateway",
@@ -161,7 +163,7 @@ def test_custom_provider_key_selection_and_unauthenticated_default():
         )
 
 
-def test_admin_save_reload_preserves_the_selected_number_and_clean_state():
+def test_admin_save_reload_preserves_the_selected_number_and_clean_state() -> None:
     entries = [{"model": "groq/one", "reasoning": "low", "api_key_number": 3}]
     original = snapshot({"GROQ_API_KEY": json.dumps(KEYS)})
     saved = prepare_admin_update(
@@ -187,7 +189,7 @@ def test_admin_save_reload_preserves_the_selected_number_and_clean_state():
     assert unchanged.pending_fields == ()
 
 
-def test_process_fallbacks_select_from_process_owned_keys():
+def test_process_fallbacks_select_from_process_owned_keys() -> None:
     state = snapshot(
         {
             "GROQ_API_KEY": json.dumps(KEYS),
@@ -204,7 +206,7 @@ def test_process_fallbacks_select_from_process_owned_keys():
     assert field["locked"] is True
 
 
-def test_removing_a_selected_key_fails_the_prospective_update():
+def test_removing_a_selected_key_fails_the_prospective_update() -> None:
     original = snapshot(
         {
             "GROQ_API_KEY": json.dumps(KEYS),

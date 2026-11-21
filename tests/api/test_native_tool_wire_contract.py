@@ -77,7 +77,7 @@ def truncated_messages():
 @pytest.mark.parametrize("public", [False, True])
 async def test_filtered_messages_blocks_have_dense_consistent_client_indexes(
     passthrough: bool, public: bool
-):
+) -> None:
     events = truncated_messages()
 
     async def consume(body: AsyncIterator[StreamOutput]):
@@ -159,7 +159,7 @@ def parallel_responses():
 @pytest.mark.parametrize("public", [False, True])
 async def test_native_responses_number_every_emitted_event_in_output_order(
     snapshot_only: bool, public: bool
-):
+) -> None:
     events = parallel_responses()
     if snapshot_only:
         events = [events[0], events[-1]]
@@ -188,7 +188,7 @@ async def test_native_responses_number_every_emitted_event_in_output_order(
 @pytest.mark.parametrize("invalid", [None, "", "   ", "duplicate"])
 async def test_native_chat_never_releases_calls_without_unambiguous_ids(
     invalid: str | None,
-):
+) -> None:
     events = tool_events("chat", "{}")
     first = object_array(
         object_payload(object_array(events[0]["choices"])[0]["delta"])["tool_calls"]
@@ -249,7 +249,7 @@ async def test_native_chat_never_releases_calls_without_unambiguous_ids(
 )
 async def test_native_complete_calls_require_execution_identity(
     protocol: str, field: str
-):
+) -> None:
     events = tool_events(protocol, "{}")
     if protocol == "messages":
         object_payload(events[1]["content_block"]).pop(field)
@@ -299,7 +299,7 @@ async def test_native_complete_calls_require_execution_identity(
 @pytest.mark.parametrize("invalid", ["id", "name", "duplicate"])
 async def test_native_json_messages_validate_the_same_complete_call_identity(
     invalid: str,
-):
+) -> None:
     block: JsonObject = {"type": "tool_use", "id": "call", "name": "read", "input": {}}
     content = [block]
     if invalid == "duplicate":
@@ -331,7 +331,7 @@ async def test_native_json_messages_validate_the_same_complete_call_identity(
 @pytest.mark.parametrize("complete", [False, True])
 async def test_generated_alias_with_arguments_waits_for_remaining_name_and_source_completion(
     wire: str, complete: bool
-):
+) -> None:
     original = "synthetic.invalid/name:" + "long_" * 20
 
     def reply(bodies: list[JsonObject]):
@@ -377,7 +377,7 @@ async def test_generated_alias_with_arguments_waits_for_remaining_name_and_sourc
 @pytest.mark.parametrize("public", [False, True])
 async def test_contradictory_snapshot_never_replaces_a_completed_native_call(
     kind: str, public: bool
-):
+) -> None:
     from free_claude_code.core.failures import ExecutionFailure
 
     events = tool_events("responses", "{}")
@@ -422,7 +422,7 @@ async def test_contradictory_snapshot_never_replaces_a_completed_native_call(
 @pytest.mark.parametrize("placeholder", [None, "", " \t"])
 async def test_chat_fragment_placeholders_preserve_the_resolved_execution_id(
     wire: WireProtocol, public: bool, placeholder: str | None
-):
+) -> None:
     events = tool_events("chat", "{}")
     object_array(
         object_payload(object_array(events[1]["choices"])[0]["delta"])["tool_calls"]

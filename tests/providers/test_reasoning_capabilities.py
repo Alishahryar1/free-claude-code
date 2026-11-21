@@ -21,7 +21,7 @@ from free_claude_code.providers.model_listing import (
 )
 def test_explicit_gateway_reasoning_capability(
     reasoning: JsonObject | None, expected: str
-):
+) -> None:
     infos = extract_tool_capable_model_infos(
         {
             "data": [
@@ -68,7 +68,7 @@ class ReasoningModelOptions(TypedDict, total=False, closed=True):
 )
 def test_intrinsic_capability_is_distinct_from_available_controls(
     payload: JsonObject, options: ReasoningModelOptions, expected: str
-):
+) -> None:
     infos = extract_openai_model_infos(
         {"data": [{"id": "route", **payload}]}, provider_name="TEST", **options
     )

@@ -26,7 +26,7 @@ ORIGIN = ReplayOrigin(
 )
 
 
-def test_native_signature_record_round_trip_keeps_every_part():
+def test_native_signature_record_round_trip_keeps_every_part() -> None:
     native: dict[str, Any] = {
         "role": "model",
         "parts": [
@@ -44,7 +44,7 @@ def test_native_signature_record_round_trip_keeps_every_part():
 
 
 @pytest.mark.parametrize("mode", list(HistoryMode))
-def test_native_signature_parts_survive_history_projection(mode: HistoryMode):
+def test_native_signature_parts_survive_history_projection(mode: HistoryMode) -> None:
     body: JsonObject = {
         "model": "models/model",
         "contents": [
@@ -92,7 +92,7 @@ def test_native_signature_parts_survive_history_projection(mode: HistoryMode):
     )
 
 
-def test_restore_native_content_from_messages_echo_and_reject_edits():
+def test_restore_native_content_from_messages_echo_and_reject_edits() -> None:
     native: dict[str, Any] = {
         "role": "model",
         "parts": [
@@ -118,7 +118,7 @@ def test_restore_native_content_from_messages_echo_and_reject_edits():
         prepare_history(body, ORIGIN)
 
 
-def test_native_record_does_not_cross_credentials():
+def test_native_record_does_not_cross_credentials() -> None:
     carrier = encode_replay(
         ReplayRecord(
             ORIGIN,
@@ -145,7 +145,7 @@ def test_native_record_does_not_cross_credentials():
 @pytest.mark.parametrize("protocol", ["messages", "responses", "chat"])
 def test_native_gemini_protected_state_is_not_degraded_on_foreign_egress(
     protocol: WireProtocol,
-):
+) -> None:
     carrier = encode_replay(
         ReplayRecord(
             ORIGIN,
@@ -184,7 +184,9 @@ def test_native_gemini_protected_state_is_not_degraded_on_foreign_egress(
 
 
 @pytest.mark.parametrize("added", [False, True])
-def test_native_signed_call_accepts_only_declared_default_additions(added: bool):
+def test_native_signed_call_accepts_only_declared_default_additions(
+    added: bool,
+) -> None:
     native: dict[str, Any] = {
         "role": "model",
         "parts": [

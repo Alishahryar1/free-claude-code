@@ -36,7 +36,7 @@ def groq_provider(groq_config: ProviderConfig):
     return GroqProvider(groq_config, admission=immediate_admission())
 
 
-def test_init(groq_config: ProviderConfig):
+def test_init(groq_config: ProviderConfig) -> None:
     """Test provider initialization."""
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
@@ -47,7 +47,7 @@ def test_init(groq_config: ProviderConfig):
         mock_openai.assert_called_once()
 
 
-def test_default_base_url_constant():
+def test_default_base_url_constant() -> None:
     assert GROQ_DEFAULT_BASE == "https://api.groq.com/openai/v1"
 
 
@@ -83,7 +83,7 @@ async def test_model_catalog_extracts_documented_token_limits(
     )
 
 
-def test_build_request_body_basic(groq_provider: GroqProvider):
+def test_build_request_body_basic(groq_provider: GroqProvider) -> None:
     """Basic request body conversion attaches system message from Claude request."""
     req = make_request()
     body = groq_provider._chat._build_request_body(req)
@@ -95,7 +95,7 @@ def test_build_request_body_basic(groq_provider: GroqProvider):
 
 def test_build_request_body_replays_reasoning_in_native_field(
     groq_provider: GroqProvider,
-):
+) -> None:
     request = make_request(
         messages=[
             {"role": "user", "content": "Inspect the file."},
@@ -151,7 +151,7 @@ def test_build_request_body_replays_reasoning_in_native_field(
     )
 
 
-def test_build_request_body_global_disable_blocks_reasoning_mapping():
+def test_build_request_body_global_disable_blocks_reasoning_mapping() -> None:
     provider = GroqProvider(
         make_provider_config(
             api_key="test_groq_key",
@@ -170,7 +170,7 @@ def test_build_request_body_global_disable_blocks_reasoning_mapping():
 
 def test_build_request_body_sanitizes_and_remaps_via_mock_converter(
     groq_provider: GroqProvider,
-):
+) -> None:
     with patch(
         "free_claude_code.providers.openai_chat.request_policy.build_base_request_body"
     ) as mock_convert:
@@ -209,7 +209,7 @@ def test_build_request_body_sanitizes_and_remaps_via_mock_converter(
 
 def test_build_request_body_prefers_existing_max_completion_tokens(
     groq_provider: GroqProvider,
-):
+) -> None:
     with patch(
         "free_claude_code.providers.openai_chat.request_policy.build_base_request_body"
     ) as mock_convert:
@@ -225,7 +225,9 @@ def test_build_request_body_prefers_existing_max_completion_tokens(
     assert "max_tokens" not in body
 
 
-def test_build_request_body_preserves_caller_extra_body(groq_provider: GroqProvider):
+def test_build_request_body_preserves_caller_extra_body(
+    groq_provider: GroqProvider,
+) -> None:
     req = make_request(extra_body={"metadata": {"user": "u1"}})
 
     body = groq_provider._chat._build_request_body(req)
@@ -236,7 +238,7 @@ def test_build_request_body_preserves_caller_extra_body(groq_provider: GroqProvi
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_text(groq_provider: GroqProvider):
+async def test_stream_messages_text(groq_provider: GroqProvider) -> None:
     """Text content deltas are emitted as text blocks."""
     req = make_request()
 
@@ -273,7 +275,7 @@ async def test_stream_messages_text(groq_provider: GroqProvider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_reasoning_content(groq_provider: GroqProvider):
+async def test_stream_messages_reasoning_content(groq_provider: GroqProvider) -> None:
     """reasoning_content deltas are emitted as thinking blocks."""
     req = make_request()
 
@@ -310,7 +312,7 @@ async def test_stream_messages_reasoning_content(groq_provider: GroqProvider):
 
 
 @pytest.mark.asyncio
-async def test_cleanup(groq_provider: GroqProvider):
+async def test_cleanup(groq_provider: GroqProvider) -> None:
     groq_provider._client = AsyncMock()
 
     await groq_provider.cleanup()

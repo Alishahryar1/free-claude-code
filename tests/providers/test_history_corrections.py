@@ -27,7 +27,7 @@ def _error(
     )
 
 
-def test_legacy_invalid_id_then_ciphertext_rejection_keeps_original():
+def test_legacy_invalid_id_then_ciphertext_rejection_keeps_original() -> None:
     body = {
         "model": "synthetic",
         "input": [
@@ -85,14 +85,14 @@ def test_legacy_invalid_id_then_ciphertext_rejection_keeps_original():
         ("Too many tokens", "context_length_exceeded"),
     ],
 )
-def test_unrelated_validation_does_not_drop_history(message: str, code: str):
+def test_unrelated_validation_does_not_drop_history(message: str, code: str) -> None:
     body = {
         "input": [{"type": "reasoning", "id": "rs_a", "encrypted_content": "opaque"}]
     }
     assert history_retry_body(_error(message, code=code), body, "responses") is None
 
 
-def test_unidentified_cipher_failure_with_multiple_records_is_not_guessed():
+def test_unidentified_cipher_failure_with_multiple_records_is_not_guessed() -> None:
     body = {
         "input": [
             {"type": "reasoning", "id": f"rs_{i}", "encrypted_content": f"opaque{i}"}
@@ -112,7 +112,7 @@ def test_unidentified_cipher_failure_with_multiple_records_is_not_guessed():
 
 
 @pytest.mark.parametrize("quote", ["", "'", '"'])
-def test_encrypted_rejection_matches_exact_named_item(quote: str):
+def test_encrypted_rejection_matches_exact_named_item(quote: str) -> None:
     body = {
         "input": [
             {
@@ -153,7 +153,7 @@ def test_encrypted_rejection_matches_exact_named_item(quote: str):
         ),
     ],
 )
-def test_named_rejection_never_guesses(ids: list[str], message: str):
+def test_named_rejection_never_guesses(ids: list[str], message: str) -> None:
     body = {
         "input": [
             {"type": "reasoning", "id": id_, "encrypted_content": "opaque"}
@@ -168,7 +168,7 @@ def test_named_rejection_never_guesses(ids: list[str], message: str):
     )
 
 
-def test_missing_reference_targets_its_item_only():
+def test_missing_reference_targets_its_item_only() -> None:
     body = {
         "input": [
             {"type": "reasoning", "id": f"rs_{i}", "encrypted_content": f"opaque{i}"}
@@ -188,7 +188,7 @@ def test_missing_reference_targets_its_item_only():
 @pytest.mark.parametrize("item_id", ["rs_a:rs_b", "rs_a.part", "rs_a/part"])
 def test_quoted_legacy_id_recovers_without_matching_its_prefix(
     quote: str, item_id: str
-):
+) -> None:
     body = {
         "input": [
             {"type": "reasoning", "id": "rs_a", "encrypted_content": "keep"},
@@ -231,7 +231,9 @@ def test_quoted_legacy_id_recovers_without_matching_its_prefix(
         ),
     ],
 )
-def test_quoted_legacy_id_recovery_remains_unambiguous(ids: list[str], message: str):
+def test_quoted_legacy_id_recovery_remains_unambiguous(
+    ids: list[str], message: str
+) -> None:
     body = {
         "input": [
             {"type": "reasoning", "id": item_id, "encrypted_content": "opaque"}
@@ -246,7 +248,7 @@ def test_quoted_legacy_id_recovery_remains_unambiguous(ids: list[str], message: 
     )
 
 
-def test_messages_signature_path_retains_readable_text_and_other_blocks():
+def test_messages_signature_path_retains_readable_text_and_other_blocks() -> None:
     body = {
         "messages": [
             {
@@ -276,7 +278,9 @@ def test_messages_signature_path_retains_readable_text_and_other_blocks():
     ]
 
 
-def test_origin_does_not_expose_credentials_and_survives_account_token_refresh():
+def test_origin_does_not_expose_credentials_and_survives_account_token_refresh() -> (
+    None
+):
     first = replay_origin(
         "provider",
         "responses",
@@ -313,7 +317,7 @@ def test_origin_does_not_expose_credentials_and_survives_account_token_refresh()
 
 
 @pytest.mark.parametrize("status", [401, 403, 429, 500])
-def test_non_validation_failures_cannot_discard_history(status: int):
+def test_non_validation_failures_cannot_discard_history(status: int) -> None:
     body = {"input": [{"type": "reasoning", "encrypted_content": "opaque"}]}
     assert (
         history_retry_body(

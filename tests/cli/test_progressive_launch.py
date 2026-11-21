@@ -44,7 +44,7 @@ def browser_workers(monkeypatch: pytest.MonkeyPatch):
         assert not worker.is_alive()
 
 
-def test_listeners_remain_exclusive_until_owner_closes():
+def test_listeners_remain_exclusive_until_owner_closes() -> None:
     with ServerSockets.reserve("127.0.0.1", 0) as owner:
         address: tuple[str, int] = owner.sockets[0].getsockname()
         port = address[1]
@@ -56,7 +56,7 @@ def test_listeners_remain_exclusive_until_owner_closes():
 
 def test_partial_address_failure_closes_every_reserved_socket(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     from free_claude_code.cli import server_socket
 
     listeners = [MagicMock(), MagicMock()]
@@ -82,7 +82,7 @@ def test_partial_address_failure_closes_every_reserved_socket(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["lifespan", "quit", "normal"])
-async def test_uvicorn_readiness_and_early_exit_close_runtime(failure: str):
+async def test_uvicorn_readiness_and_early_exit_close_runtime(failure: str) -> None:
     ready, close = MagicMock(), AsyncMock(return_value=True)
     began = asyncio.Event()
 
@@ -131,7 +131,7 @@ def test_existing_server_must_identify_itself_as_fcc(
     valid: bool,
     browser_result: bool | RuntimeError,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     settings = Settings()
     payload = {"unrelated": "server"}
     if valid:
@@ -168,7 +168,7 @@ def test_browser_warning_retains_owning_instance_after_server_exit(
     caplog: pytest.LogCaptureFixture,
     automatic: bool,
     raises: bool,
-):
+) -> None:
     supervisor = commands.ServerSupervisor(console_logging=False)
     settings = Settings()
     entered, release = threading.Event(), threading.Event()
@@ -249,7 +249,7 @@ def test_terminal_serve_explains_busy_port(
     caplog: pytest.LogCaptureFixture,
     occupant: str,
     expected: str,
-):
+) -> None:
     settings = Settings()
     monkeypatch.setattr(commands, "get_settings", lambda: settings)
     monkeypatch.setattr(
@@ -290,7 +290,7 @@ def test_terminal_serve_explains_busy_port(
 
 def test_terminal_serve_reports_other_startup_errors_unchanged(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-):
+) -> None:
     monkeypatch.setattr(
         commands.ServerSupervisor,
         "run",
@@ -310,7 +310,7 @@ def test_terminal_serve_reports_other_startup_errors_unchanged(
 @pytest.mark.parametrize("change", ["none", "stop", "restart", "settings"])
 def test_queued_browser_rechecks_owner_before_handoff(
     monkeypatch: pytest.MonkeyPatch, change: str
-):
+) -> None:
     supervisor = commands.ServerSupervisor()
     settings = Settings()
     supervisor.schedule_run()
@@ -339,7 +339,7 @@ def test_queued_browser_rechecks_owner_before_handoff(
 @pytest.mark.parametrize("reuse", [False, True])
 def test_browser_thread_start_failure_does_not_fail_fcc(
     monkeypatch: pytest.MonkeyPatch, reuse: bool, caplog: pytest.LogCaptureFixture
-):
+) -> None:
     settings = Settings()
     browser = MagicMock()
     monkeypatch.setattr(commands.webbrowser, "open", browser)
@@ -540,7 +540,7 @@ def _run_browser_shutdown_probe(
 @pytest.mark.parametrize("outcome", ["automatic", "tray"])
 def test_owned_fcc_process_exits_with_stalled_browser(
     tmp_path: Path, mode: str, outcome: str
-):
+) -> None:
     _assert_browser_probe_exits(tmp_path, mode, outcome)
 
 
@@ -548,11 +548,11 @@ def test_owned_fcc_process_exits_with_stalled_browser(
 @pytest.mark.parametrize("outcome", ["success", "false", "error", "quit", "timeout"])
 def test_reusing_desktop_process_exits_without_owning_browser(
     tmp_path: Path, mode: str, outcome: str
-):
+) -> None:
     _assert_browser_probe_exits(tmp_path, mode, outcome)
 
 
-def test_browser_shutdown_waits_for_slow_healthy_setup(tmp_path: Path):
+def test_browser_shutdown_waits_for_slow_healthy_setup(tmp_path: Path) -> None:
     _assert_browser_probe_exits(tmp_path, "reuse-terminal", "quit", setup_delay="2.2")
 
 
@@ -586,7 +586,7 @@ def _assert_browser_probe_exits(
 
 def test_external_probe_is_cancelled_before_any_request(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     stop = threading.Event()
     stop.set()
     request = MagicMock()

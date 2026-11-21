@@ -37,7 +37,7 @@ from tests.wire_payload import object_payload, response_object
 @pytest.mark.parametrize("change_port", [False, True])
 def test_harness_waits_through_owner_apply_restart(
     monkeypatch: pytest.MonkeyPatch, change_port: bool, owner_kind: str
-):
+) -> None:
     monkeypatch.setenv("HOST", "127.0.0.1")
     monkeypatch.setenv("FCC_OPEN_BROWSER", "0")
     monkeypatch.delenv("PORT", raising=False)
@@ -236,7 +236,7 @@ def test_harness_waits_through_owner_apply_restart(
 @pytest.mark.parametrize("stop_during_commit", [False, True])
 def test_supervised_http_apply_finishes_and_reconnects(
     monkeypatch: pytest.MonkeyPatch, stop_during_commit: bool
-):
+) -> None:
     monkeypatch.setenv("HOST", "127.0.0.1")
     monkeypatch.delenv("PORT", raising=False)
     monkeypatch.delenv("LOG_LEVEL", raising=False)

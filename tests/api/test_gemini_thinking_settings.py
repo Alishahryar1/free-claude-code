@@ -32,7 +32,7 @@ from tests.wire_payload import decode_object, object_payload
 @pytest.mark.parametrize("visible", [False, True])
 def test_native_root_route_and_fallback_precedence(
     root: str, route: str, fallback: str | None, expected: JsonObject, visible: bool
-):
+) -> None:
     sent = []
 
     def reply(request: httpx.Request):

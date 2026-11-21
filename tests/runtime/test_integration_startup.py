@@ -96,7 +96,7 @@ def old_connections():
 @pytest.mark.asyncio
 async def test_jetbrains_startup_refresh_and_failed_discovery_allow_disconnect(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     install(jb.registry_path(), jb.system_root())
 
     def run_probe(
@@ -161,7 +161,7 @@ async def finish(runtime: ApplicationRuntime):
 @pytest.mark.asyncio
 async def test_startup_refreshes_old_connections_and_status_is_read_only(
     runtime: ApplicationRuntime,
-):
+) -> None:
     claude, codex = old_connections()
     try:
         await runtime.start()
@@ -197,7 +197,7 @@ async def test_startup_refreshes_old_connections_and_status_is_read_only(
 @pytest.mark.parametrize("source", ['{"hasCompletedOnboarding":false}', "{invalid"])
 async def test_startup_preserves_global_onboarding(
     runtime: ApplicationRuntime, source: str
-):
+) -> None:
     old_connections()
     state = claude_onboarding.state_path()
     state.write_text(source)
@@ -213,7 +213,7 @@ async def test_startup_preserves_global_onboarding(
 @pytest.mark.asyncio
 async def test_codex_wait_does_not_delay_http_or_claude(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     old_connections()
     entered, release = asyncio.Event(), asyncio.Event()
     wait_for_catalog = runtime.provider_manager.wait_for_catalog_file
@@ -267,7 +267,7 @@ async def test_codex_wait_does_not_delay_http_or_claude(
 @pytest.mark.asyncio
 async def test_unrecognized_codex_never_waits_for_catalog(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     wait = AsyncMock(side_effect=AssertionError("No connection to refresh"))
     monkeypatch.setattr(runtime.provider_manager, "wait_for_catalog_file", wait)
     try:
@@ -284,7 +284,7 @@ async def test_unrecognized_codex_never_waits_for_catalog(
 @pytest.mark.asyncio
 async def test_update_failure_is_isolated_and_retry_finishes(
     runtime: ApplicationRuntime,
-):
+) -> None:
     claude, _ = old_connections()
     claude.write_text("{secret-invalid-json")
     try:
@@ -315,7 +315,7 @@ async def test_update_failure_is_isolated_and_retry_finishes(
 @pytest.mark.asyncio
 async def test_shutdown_drains_integration_writer(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     entered, release = threading.Event(), threading.Event()
     write = claude_integration.refresh_connected
 
@@ -343,7 +343,7 @@ async def test_shutdown_drains_integration_writer(
 
 
 @pytest.mark.asyncio
-async def test_unbounded_initialization_wait_remains_owned_on_cancel():
+async def test_unbounded_initialization_wait_remains_owned_on_cancel() -> None:
     release = asyncio.Event()
     work = asyncio.create_task(release.wait())
     wait = InitializationWait(None)
@@ -365,7 +365,7 @@ async def test_unbounded_initialization_wait_remains_owned_on_cancel():
 @pytest.mark.asyncio
 async def test_codex_refresh_rechecks_catalog_generation_before_writing(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     old_connections()
     original = runtime.provider_manager.wait_for_catalog_file
     calls = 0
@@ -395,7 +395,7 @@ async def test_codex_refresh_rechecks_catalog_generation_before_writing(
 @pytest.mark.parametrize("integration", ["claude-vscode", "codex"])
 async def test_refresh_endpoint_is_local_only_and_does_not_connect(
     runtime: ApplicationRuntime, integration: str
-):
+) -> None:
     app = create_app(
         ApiServices(
             runtime.provider_manager, runtime, runtime, web_tools=StubWebToolsClient()
@@ -426,7 +426,7 @@ async def test_refresh_endpoint_is_local_only_and_does_not_connect(
 @pytest.mark.asyncio
 async def test_desktop_startup_rotates_selected_profile_and_disconnect_stays_off(
     runtime: ApplicationRuntime,
-):
+) -> None:
     root = desktop.config_root()
     desktop.configure(
         root,
@@ -467,7 +467,7 @@ async def test_desktop_startup_rotates_selected_profile_and_disconnect_stays_off
 @pytest.mark.asyncio
 async def test_desktop_failure_does_not_block_other_startup(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     def fail(*args: object, **kwargs: object):
         raise ValueError("private-invalid-file")
 

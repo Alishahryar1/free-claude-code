@@ -30,7 +30,7 @@ def _ctx() -> RenderCtx:
     )
 
 
-def test_transcript_structure_and_order(handler: object):
+def test_transcript_structure_and_order(handler: object) -> None:
     """Verify ordered transcript rendering (thinking/tool/subagent/text/error/status)."""
     status = "✅ *Complete*"
     t = TranscriptBuffer()
@@ -92,7 +92,7 @@ def test_transcript_structure_and_order(handler: object):
     assert p_errors < p_status, "Errors should come before Status"
 
 
-def test_transcript_simple(handler: object):
+def test_transcript_simple(handler: object) -> None:
     """Verify simple transcript with just text + status."""
     t = TranscriptBuffer()
     t.apply({"type": "text_chunk", "text": "Simple message."})
@@ -104,7 +104,7 @@ def test_transcript_simple(handler: object):
     assert "🛠" not in msg
 
 
-def test_subagents_formatting(handler: object):
+def test_subagents_formatting(handler: object) -> None:
     """Verify subagent formatting (Task tool)."""
     t = TranscriptBuffer()
     t.apply(

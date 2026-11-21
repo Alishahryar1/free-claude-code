@@ -70,7 +70,7 @@ from tests.wire_payload import (
 )
 async def test_tolerant_classifier_corrects_required_reasoning(
     stream_error: bool, error: JsonObject
-):
+) -> None:
     bodies = []
 
     def handler(request: httpx2.Request):
@@ -1609,7 +1609,7 @@ async def test_startup_rejects_fields_responses_cannot_represent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_claude_artifact_pattern_is_portable_on_the_sdk_wire():
+async def test_claude_artifact_pattern_is_portable_on_the_sdk_wire() -> None:
     captured = []
 
     def handler(request: httpx2.Request):

@@ -87,7 +87,7 @@ def _catalog_slugs(path: Path) -> list[str]:
 @pytest.mark.asyncio
 async def test_known_vision_survives_publication_and_browser_preparation(
     tmp_path: Path,
-):
+) -> None:
     runtime = FakeRequestRuntime(
         settings=Settings().model_copy(update={"model": "nvidia_nim/configured"}),
         cached_infos=(
@@ -155,7 +155,9 @@ def test_empty_projection_preserves_existing_catalog(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_code_picker_and_native_selection_use_the_same_advertised_efforts():
+async def test_code_picker_and_native_selection_use_the_same_advertised_efforts() -> (
+    None
+):
     factory = CodexHarnessFactory(_runtime(), binary="codex")
     advertised = factory.catalog()
     assert advertised.default_model == "nvidia_nim/configured"
@@ -177,7 +179,7 @@ async def test_code_picker_and_native_selection_use_the_same_advertised_efforts(
 
 
 @pytest.mark.asyncio
-async def test_non_reasoning_model_off_selection_is_available():
+async def test_non_reasoning_model_off_selection_is_available() -> None:
     runtime = FakeRequestRuntime(
         settings=Settings().model_copy(update={"model": "nvidia_nim/configured"}),
         cached_infos=(
@@ -240,7 +242,7 @@ def test_catalog_writer_cleans_temporary_file_after_replace_failure(
 
 
 @pytest.mark.asyncio
-async def test_catalog_refresh_preserves_selection_and_behavior_fingerprint():
+async def test_catalog_refresh_preserves_selection_and_behavior_fingerprint() -> None:
     runtime = FakeRequestRuntime(
         settings=Settings().model_copy(update={"model": "open_router/Zulu"}),
         cached_infos=(
@@ -271,7 +273,7 @@ async def test_catalog_refresh_preserves_selection_and_behavior_fingerprint():
 )
 def test_non_text_capabilities_retain_the_native_text_fallback(
     modalities: frozenset[ModelInputModality],
-):
+) -> None:
     from free_claude_code.application.model_catalog import read_model_catalog
 
     snapshot = ModelCatalogSnapshot(

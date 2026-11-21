@@ -165,7 +165,7 @@ async def test_documented_probe_acceptance_and_rejection(
     url: str,
     payload: JsonValue,
     rejection: int | None,
-):
+) -> None:
     requests = []
     status = 200
     body = payload
@@ -218,7 +218,7 @@ async def test_ambiguous_errors_warn_without_retry(
     status: int,
     caplog: pytest.LogCaptureFixture,
     provider_id: str,
-):
+) -> None:
     requests = []
 
     def respond(request: httpx.Request):
@@ -239,7 +239,7 @@ async def test_ambiguous_errors_warn_without_retry(
 @pytest.mark.parametrize("provider_id", ["groq", "xkiro", "anthropic"])
 async def test_non_api_responses_do_not_verify_or_reject(
     monkeypatch: pytest.MonkeyPatch, status: int, provider_id: str
-):
+) -> None:
     def callback(request: object):
         return httpx.Response(
             status,
@@ -260,7 +260,7 @@ async def test_non_api_responses_do_not_verify_or_reject(
 @pytest.mark.asyncio
 async def test_unsupported_shared_credentials_never_send_http(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     def unexpected(request: object):
         pytest.fail("Public catalogs must not be used to verify a credential")
 
@@ -291,7 +291,7 @@ async def test_unsupported_shared_credentials_never_send_http(
 @pytest.mark.asyncio
 async def test_probe_timeout_preserves_finished_rejection_and_closes_clients(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     async def respond(request: httpx.Request):
         if request.url.host == "api.groq.com":
             return httpx.Response(401, json={"error": "invalid key"})
@@ -314,7 +314,7 @@ async def test_probe_timeout_preserves_finished_rejection_and_closes_clients(
 @pytest.mark.asyncio
 async def test_external_cancellation_propagates_and_closes_clients(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     started = asyncio.Event()
 
     async def respond(request: object):
@@ -334,7 +334,7 @@ async def test_external_cancellation_propagates_and_closes_clients(
 @pytest.mark.asyncio
 async def test_connection_failure_is_safe_and_does_not_retry(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     calls = 0
 
     def respond(request: httpx.Request):
@@ -360,7 +360,7 @@ async def test_connection_failure_is_safe_and_does_not_retry(
 )
 async def test_recognized_restricted_key_warns_instead_of_rejecting(
     monkeypatch: pytest.MonkeyPatch, provider_id: str, payload: JsonObject
-):
+) -> None:
     def callback(request: object):
         return httpx.Response(200, json=payload)
 
@@ -373,7 +373,9 @@ async def test_recognized_restricted_key_warns_instead_of_rejecting(
 
 
 @pytest.mark.asyncio
-async def test_checks_are_concurrent_but_bounded(monkeypatch: pytest.MonkeyPatch):
+async def test_checks_are_concurrent_but_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     first_wave = asyncio.Event()
     release = asyncio.Event()
     active = 0
@@ -414,7 +416,7 @@ async def test_checks_are_concurrent_but_bounded(monkeypatch: pytest.MonkeyPatch
 @pytest.mark.asyncio
 async def test_programming_errors_do_not_become_permission_to_save(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     def broken(request: object):
         raise RuntimeError("unexpected bug")
 
@@ -436,7 +438,7 @@ async def test_programming_errors_do_not_become_permission_to_save(
 )
 async def test_xkiro_unexpected_usage_remains_unverified(
     monkeypatch: pytest.MonkeyPatch, payload: JsonObject
-):
+) -> None:
     def callback(request: object):
         return httpx.Response(200, json=payload)
 
@@ -448,7 +450,7 @@ async def test_xkiro_unexpected_usage_remains_unverified(
 @pytest.mark.asyncio
 async def test_anthropic_probe_uses_workspace_and_version_without_inference(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     requests = []
 
     def respond(request: httpx.Request):

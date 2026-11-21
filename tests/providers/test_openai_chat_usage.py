@@ -113,7 +113,7 @@ def _chunk(
     )
 
 
-def test_request_stream_usage_adds_stream_options_when_absent():
+def test_request_stream_usage_adds_stream_options_when_absent() -> None:
     body = {"model": "m"}
 
     request_stream_usage(body)
@@ -121,7 +121,7 @@ def test_request_stream_usage_adds_stream_options_when_absent():
     assert body["stream_options"] == {"include_usage": True}
 
 
-def test_request_stream_usage_preserves_existing_stream_options():
+def test_request_stream_usage_preserves_existing_stream_options() -> None:
     stream_options = {"foo": "bar"}
     body = {"model": "m", "stream_options": stream_options}
 
@@ -131,7 +131,7 @@ def test_request_stream_usage_preserves_existing_stream_options():
     assert body["stream_options"] is stream_options
 
 
-def test_clone_without_stream_usage_removes_only_include_usage():
+def test_clone_without_stream_usage_removes_only_include_usage() -> None:
     body = {
         "model": "m",
         "stream_options": {"foo": "bar", "include_usage": True},
@@ -143,7 +143,7 @@ def test_clone_without_stream_usage_removes_only_include_usage():
     assert body["stream_options"] == {"foo": "bar", "include_usage": True}
 
 
-def test_clone_without_stream_usage_drops_empty_stream_options():
+def test_clone_without_stream_usage_drops_empty_stream_options() -> None:
     body = {"model": "m", "stream_options": {"include_usage": True}}
 
     retry_body = clone_without_stream_usage(body)
@@ -151,7 +151,7 @@ def test_clone_without_stream_usage_drops_empty_stream_options():
     assert retry_body == {"model": "m"}
 
 
-def test_usage_int_reads_dict_object_and_model_extra():
+def test_usage_int_reads_dict_object_and_model_extra() -> None:
     assert usage_int({"prompt_tokens": 11}, "prompt_tokens") == 11
     assert usage_int(SimpleNamespace(completion_tokens=7), "completion_tokens") == 7
     assert (
@@ -290,7 +290,7 @@ def test_extracts_standard_chat_cache_write_tokens(
 )
 def test_maps_standard_chat_cache_usage_to_anthropic_fields(
     usage: JsonObject | CompletionUsage | SimpleNamespace | None, expected: JsonObject
-):
+) -> None:
     provider = _UsageTestProvider()
 
     assert provider._behavior.anthropic_usage_fields(usage) == expected
@@ -345,13 +345,13 @@ def test_maps_standard_chat_cache_usage_to_anthropic_fields(
 )
 def test_ignores_incomplete_or_inconsistent_standard_cache_usage(
     usage: JsonObject | CompletionUsage | SimpleNamespace | None,
-):
+) -> None:
     provider = _UsageTestProvider()
 
     assert provider._behavior.anthropic_usage_fields(usage) == {}
 
 
-def test_stream_usage_rejection_matches_usage_option_400():
+def test_stream_usage_rejection_matches_usage_option_400() -> None:
     error = _bad_request(
         "Unrecognized request argument supplied: stream_options",
         {"error": {"message": "stream_options is unsupported"}},
@@ -360,7 +360,7 @@ def test_stream_usage_rejection_matches_usage_option_400():
     assert is_stream_usage_rejection(error)
 
 
-def test_stream_usage_rejection_does_not_match_unrelated_400():
+def test_stream_usage_rejection_does_not_match_unrelated_400() -> None:
     error = _bad_request(
         "messages: invalid role",
         {"error": {"message": "messages contains invalid role"}},
@@ -370,7 +370,9 @@ def test_stream_usage_rejection_does_not_match_unrelated_400():
 
 
 @pytest.mark.asyncio
-async def test_openai_chat_stream_requests_usage_and_uses_provider_prompt_tokens():
+async def test_openai_chat_stream_requests_usage_and_uses_provider_prompt_tokens() -> (
+    None
+):
     provider = _UsageTestProvider()
     request = make_messages_request(model="m")
     usage = CompletionUsage(
@@ -426,7 +428,7 @@ async def test_openai_chat_stream_requests_usage_and_uses_provider_prompt_tokens
 
 
 @pytest.mark.asyncio
-async def test_openai_chat_nonstream_message_uses_final_cache_partition():
+async def test_openai_chat_nonstream_message_uses_final_cache_partition() -> None:
     provider = _UsageTestProvider()
     request = make_messages_request(model="m")
     usage = CompletionUsage(
@@ -467,7 +469,7 @@ async def test_openai_chat_nonstream_message_uses_final_cache_partition():
 
 
 @pytest.mark.asyncio
-async def test_openai_chat_responses_stream_preserves_cache_write_usage():
+async def test_openai_chat_responses_stream_preserves_cache_write_usage() -> None:
     provider = _UsageTestProvider()
     request = OpenAIResponsesRequest.model_validate({"model": "m", "input": "hello"})
     usage = CompletionUsage(
@@ -516,7 +518,9 @@ async def test_openai_chat_responses_stream_preserves_cache_write_usage():
 
 
 @pytest.mark.asyncio
-async def test_openai_chat_stream_keeps_response_model_separate_from_upstream_model():
+async def test_openai_chat_stream_keeps_response_model_separate_from_upstream_model() -> (
+    None
+):
     provider = _UsageTestProvider()
     request = make_messages_request(model="upstream/model")
     create = AsyncMock(
@@ -551,7 +555,9 @@ async def test_openai_chat_stream_keeps_response_model_separate_from_upstream_mo
 
 
 @pytest.mark.asyncio
-async def test_openai_chat_stream_retries_without_usage_when_option_is_rejected():
+async def test_openai_chat_stream_retries_without_usage_when_option_is_rejected() -> (
+    None
+):
     provider = _UsageTestProvider()
     create = AsyncMock(
         side_effect=[

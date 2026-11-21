@@ -34,7 +34,7 @@ from tests.wire_payload import (
 )
 def test_caller_native_signature_is_rejected_before_inference(
     wire: str, streaming: bool
-):
+) -> None:
     sent = []
 
     def reply(request: httpx.Request | httpx2.Request):
@@ -83,7 +83,7 @@ def test_caller_native_signature_is_rejected_before_inference(
 @pytest.mark.parametrize("streaming", [False, True])
 def test_full_http_to_upstream_matrix_keeps_route_controls_and_credentials(
     wire: str, streaming: bool
-):
+) -> None:
     sent = []
 
     def reply(request: httpx.Request | httpx2.Request):
@@ -170,7 +170,7 @@ def test_full_http_to_upstream_matrix_keeps_route_controls_and_credentials(
 )
 def test_gemini_http_fallback_keeps_one_response_across_egresses(
     first_wire: str, streaming: bool, structured: bool, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     sent = []
 
     def response_text(content: bytes) -> str:
@@ -267,7 +267,7 @@ def test_gemini_http_fallback_keeps_one_response_across_egresses(
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-def test_public_fallback_omits_hidden_unsigned_history(streaming: bool):
+def test_public_fallback_omits_hidden_unsigned_history(streaming: bool) -> None:
     sent = []
 
     def reply(request: httpx2.Request):

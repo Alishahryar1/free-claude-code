@@ -655,7 +655,7 @@ def _responses_payload() -> dict[str, object]:
 )
 async def test_real_gemini_disconnect_closes_provider_and_lease(
     streaming: bool, part: JsonObject | None
-):
+) -> None:
     output = GeminiOutput("lifetime", "public", include_thoughts=False)
     provider = _ControlledProvider(tuple(output.part(part)) if part is not None else ())
     suffix = "streamGenerateContent?alt=sse" if streaming else "generateContent"

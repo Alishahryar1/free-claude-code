@@ -16,7 +16,7 @@ from free_claude_code.core.json_types import JsonObject
 from tests.wire_payload import object_payload
 
 
-def test_messages_request_parses_without_model_mapping_side_effects():
+def test_messages_request_parses_without_model_mapping_side_effects() -> None:
     request = MessagesRequest(
         model="claude-3-opus",
         max_tokens=100,
@@ -41,7 +41,9 @@ def test_messages_request_rejects_null_stream() -> None:
 
 @pytest.mark.parametrize("model", [MessagesRequest, TokenCountRequest])
 @pytest.mark.parametrize("position", [0, 1])
-def test_system_role_messages_are_rejected(model: type[BaseModel], position: int):
+def test_system_role_messages_are_rejected(
+    model: type[BaseModel], position: int
+) -> None:
     messages = [{"role": "user", "content": "hello"}]
     messages.insert(position, {"role": "system", "content": "message system"})
 
@@ -51,7 +53,7 @@ def test_system_role_messages_are_rejected(model: type[BaseModel], position: int
         )
 
 
-def test_messages_request_preserves_system_block_metadata():
+def test_messages_request_preserves_system_block_metadata() -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "claude-3-opus",
@@ -72,7 +74,7 @@ def test_messages_request_preserves_system_block_metadata():
     assert request.system[0].model_dump()["cache_control"] == {"type": "ephemeral"}
 
 
-def test_messages_request_ignores_internal_routing_fields_when_supplied():
+def test_messages_request_ignores_internal_routing_fields_when_supplied() -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "target-model",
@@ -88,7 +90,7 @@ def test_messages_request_ignores_internal_routing_fields_when_supplied():
     assert "resolved_provider_model" not in request.model_dump()
 
 
-def test_token_count_request_parses_without_model_mapping_side_effects():
+def test_token_count_request_parses_without_model_mapping_side_effects() -> None:
     request = TokenCountRequest(
         model="claude-3-sonnet", messages=[Message(role="user", content="hello")]
     )
@@ -96,7 +98,7 @@ def test_token_count_request_parses_without_model_mapping_side_effects():
     assert request.model == "claude-3-sonnet"
 
 
-def test_messages_request_preserves_thinking_signature():
+def test_messages_request_preserves_thinking_signature() -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "claude-3-opus",
@@ -121,7 +123,7 @@ def test_messages_request_preserves_thinking_signature():
     assert dumped["messages"][0]["content"][0]["signature"] == "sig_123"
 
 
-def test_messages_request_preserves_native_thinking_budget():
+def test_messages_request_preserves_native_thinking_budget() -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "claude-3-opus",
@@ -137,7 +139,7 @@ def test_messages_request_preserves_native_thinking_budget():
     assert dumped["thinking"]["budget_tokens"] == 4096
 
 
-def test_messages_request_accepts_adaptive_thinking_type():
+def test_messages_request_accepts_adaptive_thinking_type() -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "claude-3-opus",
@@ -152,7 +154,7 @@ def test_messages_request_accepts_adaptive_thinking_type():
     assert dumped["thinking"]["type"] == "adaptive"
 
 
-def test_messages_request_accepts_anthropic_server_tool_without_input_schema():
+def test_messages_request_accepts_anthropic_server_tool_without_input_schema() -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "claude-opus-4-7",
@@ -167,7 +169,7 @@ def test_messages_request_accepts_anthropic_server_tool_without_input_schema():
     assert dumped["tools"] == [{"name": "web_search", "type": "web_search_20250305"}]
 
 
-def test_messages_request_accepts_redacted_thinking_blocks():
+def test_messages_request_accepts_redacted_thinking_blocks() -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "claude-3-opus",

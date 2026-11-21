@@ -43,11 +43,11 @@ def vercel_provider(vercel_config: ProviderConfig):
     )
 
 
-def test_default_base_url_constant():
+def test_default_base_url_constant() -> None:
     assert VERCEL_AI_GATEWAY_DEFAULT_BASE == "https://ai-gateway.vercel.sh/v1"
 
 
-def test_init_uses_default_base_url_and_api_key(vercel_config: ProviderConfig):
+def test_init_uses_default_base_url_and_api_key(vercel_config: ProviderConfig) -> None:
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
@@ -62,7 +62,7 @@ def test_init_uses_default_base_url_and_api_key(vercel_config: ProviderConfig):
     mock_openai.assert_called_once()
 
 
-def test_init_strips_trailing_slash(vercel_config: ProviderConfig):
+def test_init_strips_trailing_slash(vercel_config: ProviderConfig) -> None:
     config = replace(vercel_config, base_url=f"{VERCEL_AI_GATEWAY_DEFAULT_BASE}/")
 
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
@@ -125,7 +125,9 @@ async def test_model_catalog_extracts_modalities_and_exhaustive_reasoning_suppor
     )
 
 
-def test_build_request_body_keeps_max_tokens(vercel_provider: OpenAIChatProvider):
+def test_build_request_body_keeps_max_tokens(
+    vercel_provider: OpenAIChatProvider,
+) -> None:
     with patch(
         "free_claude_code.providers.openai_chat.request_policy.build_base_request_body"
     ) as mock_convert:
@@ -144,7 +146,7 @@ def test_build_request_body_keeps_max_tokens(vercel_provider: OpenAIChatProvider
 
 def test_build_request_body_preserves_caller_extra_body(
     vercel_provider: OpenAIChatProvider,
-):
+) -> None:
     req = make_request(extra_body={"providerOptions": {"openai": {"reasoning": "low"}}})
 
     body = vercel_provider._chat._build_request_body(req)
@@ -153,7 +155,7 @@ def test_build_request_body_preserves_caller_extra_body(
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_text(vercel_provider: OpenAIChatProvider):
+async def test_stream_messages_text(vercel_provider: OpenAIChatProvider) -> None:
     mock_chunk = MagicMock()
     mock_chunk.choices = [
         MagicMock(
@@ -187,7 +189,9 @@ async def test_stream_messages_text(vercel_provider: OpenAIChatProvider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_reasoning_content(vercel_provider: OpenAIChatProvider):
+async def test_stream_messages_reasoning_content(
+    vercel_provider: OpenAIChatProvider,
+) -> None:
     mock_chunk = MagicMock()
     mock_chunk.choices = [
         MagicMock(
@@ -222,7 +226,7 @@ async def test_stream_messages_reasoning_content(vercel_provider: OpenAIChatProv
 
 
 @pytest.mark.asyncio
-async def test_cleanup(vercel_provider: OpenAIChatProvider):
+async def test_cleanup(vercel_provider: OpenAIChatProvider) -> None:
     vercel_provider._client = AsyncMock()
 
     await vercel_provider.cleanup()

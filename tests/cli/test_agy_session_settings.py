@@ -11,7 +11,7 @@ from tests.cli.test_launcher_workflow import launch
 from tests.wire_payload import decode_object, object_payload, string_payload
 
 
-def test_fresh_launch_uses_temporary_settings(launch_capture: LaunchCapture):
+def test_fresh_launch_uses_temporary_settings(launch_capture: LaunchCapture) -> None:
     path = antigravity.config_path()
     path.parent.mkdir(parents=True)
     path.write_text('{"modelProvider":"", "model":"personal"}')
@@ -56,7 +56,7 @@ def test_fresh_launch_uses_temporary_settings(launch_capture: LaunchCapture):
 )
 def test_user_arguments_follow_fcc_defaults_without_interpretation(
     args: list[str], launch_capture: LaunchCapture
-):
+) -> None:
     launch("agy", args)
     command = launch_capture.commands[0]
     assert command[:2] == ["agy", "--settings"]

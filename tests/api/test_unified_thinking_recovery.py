@@ -60,7 +60,7 @@ def assert_modes(bodies: list[JsonObject]):
 
 
 @pytest.mark.asyncio
-async def test_continuation_negotiates_all_modes_then_next_request_uses_cache():
+async def test_continuation_negotiates_all_modes_then_next_request_uses_cache() -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, interrupted()
@@ -86,7 +86,7 @@ async def test_continuation_negotiates_all_modes_then_next_request_uses_cache():
 @pytest.mark.parametrize("target", ["chat", "messages", "responses"])
 async def test_fallback_restarts_modes_from_original_history_and_delivered_prefix(
     target: str,
-):
+) -> None:
     def first_reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, interrupted()
@@ -122,7 +122,7 @@ async def test_fallback_restarts_modes_from_original_history_and_delivered_prefi
 @pytest.mark.parametrize("field", ["content", "summary"])
 async def test_repeated_thinking_alone_does_not_complete_a_continuation(
     wire: WireProtocol, field: str
-):
+) -> None:
     async with _harness(
         "responses",
         lambda bodies: (200, reasoning_events(field=field, closed=len(bodies) > 1)),
@@ -165,7 +165,7 @@ def completed_thinking_and_text(field: str, suffix: str = ""):
 @pytest.mark.parametrize("field", ["content", "summary"])
 async def test_matched_thinking_releases_answer_before_upstream_completes(
     wire: WireProtocol, field: str
-):
+) -> None:
     first = followed_by_text(reasoning_events(field=field, closed=False), "Hello ")
     second = completed_thinking_and_text(field)
     gated = GatedBody(
@@ -217,7 +217,7 @@ async def test_matched_thinking_releases_answer_before_upstream_completes(
 @pytest.mark.parametrize("field", ["content", "summary"])
 async def test_second_cutoff_retains_answer_after_matched_thinking(
     wire: WireProtocol, field: str
-):
+) -> None:
     first = followed_by_text(reasoning_events(field=field, closed=False), "Hello ")
     async with _harness(
         "responses",
@@ -238,7 +238,7 @@ async def test_second_cutoff_retains_answer_after_matched_thinking(
 @pytest.mark.parametrize("second_cutoff", [False, True])
 async def test_interleaved_thinking_continuation_keeps_new_part_and_answer(
     second_cutoff: bool,
-):
+) -> None:
     def upstream(*, continued: bool, complete: bool):
         template = reasoning_events()
         item: JsonObject = {
@@ -349,7 +349,7 @@ async def test_interleaved_thinking_continuation_keeps_new_part_and_answer(
 @pytest.mark.parametrize("suffix", ["", " Act"])
 async def test_followup_does_not_restore_thinking_removed_by_overlap(
     wire: WireProtocol, field: str, suffix: str
-):
+) -> None:
     first = followed_by_text(reasoning_events(field=field, closed=False), "Hello ")
 
     def reply(bodies: list[JsonObject]):
@@ -404,7 +404,7 @@ async def test_followup_does_not_restore_thinking_removed_by_overlap(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_late_summary_alias_replays_only_thinking_delivered_after_overlap(
     wire: WireProtocol,
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) > 2:
             return 200, text_events("chat", "Next")
@@ -460,7 +460,9 @@ async def test_late_summary_alias_replays_only_thinking_delivered_after_overlap(
 
 
 @pytest.mark.asyncio
-async def test_completed_alias_can_resume_as_typed_summary_without_repeating_it():
+async def test_completed_alias_can_resume_as_typed_summary_without_repeating_it() -> (
+    None
+):
     summary = {
         "reasoning_details": [
             {"type": "reasoning.summary", "summary": "Plan", "index": 0}
@@ -506,7 +508,7 @@ async def test_completed_alias_can_resume_as_typed_summary_without_repeating_it(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_equal_late_alias_records_held_by_tool_gate_keep_independent_ranges(
     wire: WireProtocol,
-):
+) -> None:
     scalar = {"reasoning_content": "Plan"}
     typed = {
         "reasoning_details": [
@@ -608,7 +610,7 @@ async def test_equal_late_alias_records_held_by_tool_gate_keep_independent_range
 @pytest.mark.parametrize("fallback", [False, True])
 async def test_signed_sibling_is_rejected_before_late_alias_metadata_is_published(
     wire: WireProtocol, fallback: bool
-):
+) -> None:
     first = _chat_reasoning_events([{"reasoning_content": "Plan"}])[:-1]
     second = _chat_reasoning_events(
         [

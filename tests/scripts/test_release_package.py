@@ -88,7 +88,7 @@ def validate(release: tuple[Path, dict[str, str], dict[str, str]], tmp_path: Pat
 
 def test_complete_release_passes(
     release: tuple[Path, dict[str, str], dict[str, str]], tmp_path: Path
-):
+) -> None:
     result = validate(release, tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -110,7 +110,7 @@ def test_missing_wheel_or_sdist_content_fails(
     tmp_path: Path,
     archive: int,
     suffix: str,
-):
+) -> None:
     if archive == 2:
         suffix = {
             "scripts/fcc-update.cmd": "scripts/update/fcc-update.cmd",
@@ -127,7 +127,7 @@ def test_missing_wheel_or_sdist_content_fails(
 
 def test_wrong_version_or_entrypoint_fails(
     release: tuple[Path, dict[str, str], dict[str, str]], tmp_path: Path
-):
+) -> None:
     release[1]["free_claude_code-1.2.3.dist-info/entry_points.txt"] = (
         "[console_scripts]\nfcc-server=wrong:command\n"
     )
@@ -138,7 +138,7 @@ def test_wrong_version_or_entrypoint_fails(
 
 def test_mismatched_metadata_fails(
     release: tuple[Path, dict[str, str], dict[str, str]], tmp_path: Path
-):
+) -> None:
     release[2]["free_claude_code-1.2.3/PKG-INFO"] = (
         "Name: free-claude-code\nVersion: 0.1.0\n"
     )
@@ -149,7 +149,7 @@ def test_mismatched_metadata_fails(
 
 def test_mismatched_native_templates_fail(
     release: tuple[Path, dict[str, str], dict[str, str]], tmp_path: Path
-):
+) -> None:
     release[1]["free_claude_code/assets/macos/fcc-desktop-arm64"] = "different"
     result = validate(release, tmp_path)
     assert result.returncode != 0
@@ -161,7 +161,7 @@ def test_mismatched_native_templates_fail(
 )
 def test_native_sources_required_in_sdist(
     release: tuple[Path, dict[str, str], dict[str, str]], tmp_path: Path, name: str
-):
+) -> None:
     del release[2][f"free_claude_code-1.2.3/{name}"]
     result = validate(release, tmp_path)
     assert result.returncode != 0

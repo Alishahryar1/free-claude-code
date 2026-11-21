@@ -73,7 +73,7 @@ def _stream_chat(
 )
 async def test_messages_to_chat_completes_with_provider_usage(
     include_usage: bool, input_count: JsonValue, output_count: float
-):
+) -> None:
     events = _events("Hello")
     object_payload(events[0]["message"])["usage"] = {
         "input_tokens": input_count,
@@ -114,7 +114,7 @@ async def test_messages_to_chat_completes_with_provider_usage(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["messages", "responses"])
-async def test_chat_round_trip_preserves_native_reasoning_once(protocol: str):
+async def test_chat_round_trip_preserves_native_reasoning_once(protocol: str) -> None:
     async with _harness(protocol) as (_, bodies, transport):
         request = ChatRequest.model_validate(
             {
@@ -155,7 +155,7 @@ async def test_chat_round_trip_preserves_native_reasoning_once(protocol: str):
 @pytest.mark.parametrize("protocol", ["messages", "responses"])
 async def test_chat_explicit_off_keeps_protected_state_without_readable_echo(
     protocol: str,
-):
+) -> None:
     async with _harness(protocol) as (_, _, transport):
         request = ChatRequest(
             model="test", messages=[{"role": "user", "content": "hello"}]
@@ -174,7 +174,7 @@ async def test_chat_explicit_off_keeps_protected_state_without_readable_echo(
 @pytest.mark.parametrize("arguments", ['{"path":', "[]", "null", "", '{"path":42}'])
 async def test_completed_chat_tool_arguments_remain_opaque(
     protocol: str, arguments: str
-):
+) -> None:
     async with _harness(
         protocol, lambda _: (200, tool_events(protocol, arguments))
     ) as (_, _, transport):
@@ -206,7 +206,7 @@ async def test_completed_chat_tool_arguments_remain_opaque(
 
 
 @pytest.mark.asyncio
-async def test_chat_round_trip_keeps_multiple_summary_parts():
+async def test_chat_round_trip_keeps_multiple_summary_parts() -> None:
     from tests.providers.test_history_transports import _events_for
 
     native = _native("responses")
@@ -245,7 +245,7 @@ async def test_chat_round_trip_keeps_multiple_summary_parts():
 
 
 @pytest.mark.asyncio
-async def test_chat_refusal_round_trip_preserves_responses_refusal_part():
+async def test_chat_refusal_round_trip_preserves_responses_refusal_part() -> None:
     from tests.providers.test_openai_responses_transport import _completed_response
 
     item = {
@@ -312,7 +312,7 @@ async def test_chat_refusal_round_trip_preserves_responses_refusal_part():
 )
 async def test_native_chat_json_reassembles_readable_reasoning_but_keeps_opaque_boundaries(
     kind: str, field: str
-):
+) -> None:
     opaque = [
         {"type": "reasoning.encrypted", "index": 0, "id": "a", "data": "first"},
         {"type": "reasoning.encrypted", "index": 0, "id": "b", "data": "second"},
@@ -394,7 +394,7 @@ def _tool_names(event: SSEEvent):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_fragmented_tool_name_starts_with_complete_name(wire: str):
+async def test_fragmented_tool_name_starts_with_complete_name(wire: str) -> None:
     template = _events_for("chat")[0]
     deltas = [
         {

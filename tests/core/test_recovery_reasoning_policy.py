@@ -84,7 +84,7 @@ def carrier(protocol: WireProtocol, native: JsonObject):
 )
 def test_public_carriers_follow_native_reasoning_semantics(
     surface: str, value: str, eligible: bool
-):
+) -> None:
     delivered = DeliveredResponse("responses" if surface == "responses" else "messages")
     if surface == "responses":
         delivered.observe(

@@ -169,7 +169,7 @@ def test_google_compat_parallel_calls_reach_public_api(
     expected_ids: tuple[str, ...],
     wire: str,
     streaming: bool,
-):
+) -> None:
     events = [chat_chunk({"tool_calls": calls}) for calls in deltas]
     events.append(chat_chunk({}, "tool_calls"))
     response, sent = google_compat_api_response(monkeypatch, events, wire, streaming)
@@ -239,7 +239,7 @@ def test_google_compat_parallel_calls_reach_public_api(
 )
 def test_google_compat_unresolvable_calls_cannot_complete(
     monkeypatch: pytest.MonkeyPatch, anonymous: bool, wire: str, streaming: bool
-):
+) -> None:
     if anonymous:
         events = [
             chat_chunk(
@@ -307,7 +307,7 @@ def completed_arguments(events: list[SSEEvent], wire: str):
 )
 def test_optional_metadata_does_not_prevent_tool_completion(
     monkeypatch: pytest.MonkeyPatch, wire: str, metadata: JsonValue
-):
+) -> None:
     arguments = '{"path":"out"}'
     tool = call(arguments=arguments)
     tool["extra_content"] = metadata
@@ -385,7 +385,7 @@ async def test_public_identity_failure_respects_delivery_stop_and_budget(
     stop: str | None,
     max_attempts: int,
     fragment_index: int | None,
-):
+) -> None:
     first = ambiguous_events(stop, fragment_index=fragment_index)
     if prefix:
         first.insert(
@@ -472,7 +472,7 @@ async def test_private_identity_failure_never_salvages_or_repairs(
     stop: str | None,
     max_attempts: int,
     fragment_index: int | None,
-):
+) -> None:
     first = ambiguous_events(stop, incomplete=incomplete, fragment_index=fragment_index)
     async with _harness("chat", lambda _: (200, first), max_attempts=max_attempts) as (
         send,
@@ -499,7 +499,7 @@ async def test_private_identity_failure_never_salvages_or_repairs(
 )
 async def test_google_compat_metadata_replays_under_each_public_id(
     wire: WireProtocol, indexes: tuple[int | None, int | None], ids: tuple[str, ...]
-):
+) -> None:
     first = [
         chat_chunk(
             {

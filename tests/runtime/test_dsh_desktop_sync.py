@@ -71,7 +71,7 @@ async def connected(runtime: ApplicationRuntime):
 @pytest.mark.asyncio
 async def test_late_catalog_updates_and_disconnect_remains_removed(
     connected: ApplicationRuntime,
-):
+) -> None:
     runtime = connected
     runtime.provider_manager.cache_model_infos(
         "nvidia_nim", (ProviderModelInfo("two"),)
@@ -92,7 +92,7 @@ async def test_late_catalog_updates_and_disconnect_remains_removed(
 @pytest.mark.asyncio
 async def test_disconnect_during_write_wait_cannot_be_reconnected(
     connected: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     runtime = connected
     entered, release = pause_next_write(
         monkeypatch, runtime._integrations._dsh_update.access
@@ -113,7 +113,7 @@ async def test_disconnect_during_write_wait_cannot_be_reconnected(
 @pytest.mark.asyncio
 async def test_status_and_disconnect_do_not_need_catalog(
     connected: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     runtime = connected
     monkeypatch.setattr(
         runtime.provider_manager,
@@ -127,7 +127,7 @@ async def test_status_and_disconnect_do_not_need_catalog(
 @pytest.mark.asyncio
 async def test_new_generation_replaces_old_url_and_credential(
     connected: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     runtime = connected
     entered, release = pause_next_write(
         monkeypatch, runtime._integrations._dsh_update.access
@@ -156,7 +156,7 @@ async def test_new_generation_replaces_old_url_and_credential(
 @pytest.mark.asyncio
 async def test_catalog_change_during_write_is_coalesced_without_loss(
     connected: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     runtime = connected
     entered, release = asyncio.Event(), threading.Event()
     loop = asyncio.get_running_loop()
@@ -191,7 +191,7 @@ async def test_catalog_change_during_write_is_coalesced_without_loss(
 @pytest.mark.asyncio
 async def test_startup_without_connection_does_not_create_native_profile(
     runtime: ApplicationRuntime,
-):
+) -> None:
     try:
         await runtime.start()
         await settle(runtime)
@@ -204,7 +204,7 @@ async def test_startup_without_connection_does_not_create_native_profile(
 @pytest.mark.asyncio
 async def test_first_configure_waiting_for_ownership_is_superseded_by_disconnect(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     install()
     await runtime.start()
     await settle(runtime)

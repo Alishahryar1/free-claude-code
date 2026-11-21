@@ -17,7 +17,7 @@ from tests.providers.test_native_tool_arguments import tool_events
 @pytest.mark.parametrize("limit", ["bytes", "records"])
 async def test_pending_limit_does_not_release_tools_retry_or_fallback(
     monkeypatch: pytest.MonkeyPatch, protocol: str, limit: str
-):
+) -> None:
     budget = partial(
         tool_call_buffer.RetentionBudget,
         **({"max_bytes": 4096} if limit == "bytes" else {"max_records": 3}),

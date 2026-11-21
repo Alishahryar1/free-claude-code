@@ -15,7 +15,9 @@ from tests.api.support import create_test_app
 @pytest.mark.parametrize(
     "path", ["config", "status", "providers/lmstudio/local-status", "config/apply"]
 )
-async def test_admin_storage_wait_allows_health_and_authenticated_requests(path: str):
+async def test_admin_storage_wait_allows_health_and_authenticated_requests(
+    path: str,
+) -> None:
     app = create_test_app()
     entered, release = threading.Event(), threading.Event()
     read = ManagedConfigStore.read

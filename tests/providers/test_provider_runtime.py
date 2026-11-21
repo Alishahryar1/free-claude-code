@@ -237,21 +237,21 @@ def test_importing_runtime_does_not_eager_load_other_adapters() -> None:
     assert proc.returncode == 0, proc.stderr or proc.stdout
 
 
-def test_provider_catalog_covers_advertised_provider_ids():
+def test_provider_catalog_covers_advertised_provider_ids() -> None:
     assert set(PROVIDER_CATALOG) == set(SUPPORTED_PROVIDER_IDS)
     assert set(OPENAI_CHAT_PROFILES) < set(PROVIDER_CATALOG)
     for descriptor in PROVIDER_CATALOG.values():
         assert descriptor.provider_id
 
 
-def test_ollama_descriptor_uses_local_openai_endpoint_semantics():
+def test_ollama_descriptor_uses_local_openai_endpoint_semantics() -> None:
     descriptor = PROVIDER_CATALOG["ollama"]
 
     assert descriptor.default_base_url == "http://localhost:11434"
     assert descriptor.local is True
 
 
-def test_ollama_cloud_descriptor_uses_direct_authenticated_endpoint():
+def test_ollama_cloud_descriptor_uses_direct_authenticated_endpoint() -> None:
     descriptor = PROVIDER_CATALOG["ollama_cloud"]
 
     assert descriptor.default_base_url == OLLAMA_CLOUD_DEFAULT_BASE
@@ -261,7 +261,7 @@ def test_ollama_cloud_descriptor_uses_direct_authenticated_endpoint():
     assert descriptor.local is False
 
 
-def test_ollama_cloud_provider_config_uses_key_and_proxy():
+def test_ollama_cloud_provider_config_uses_key_and_proxy() -> None:
     descriptor = PROVIDER_CATALOG["ollama_cloud"]
     settings = _make_settings(
         ollama_api_keys="ollama-cloud-token",
@@ -919,7 +919,7 @@ async def test_local_provider_factory_resolves_catalog_static_credential(
     assert provider._api_key == expected_api_key
 
 
-def test_zai_coding_descriptor_uses_fixed_cloud_base_url():
+def test_zai_coding_descriptor_uses_fixed_cloud_base_url() -> None:
     descriptor = PROVIDER_CATALOG["zai"]
 
     assert descriptor.display_name == "Z.ai Coding Plan"
@@ -927,7 +927,7 @@ def test_zai_coding_descriptor_uses_fixed_cloud_base_url():
     assert descriptor.base_url_attr is None
 
 
-def test_zai_provider_config_ignores_stale_base_url_setting():
+def test_zai_provider_config_ignores_stale_base_url_setting() -> None:
     descriptor = PROVIDER_CATALOG["zai"]
 
     config = build_provider_config(
@@ -939,7 +939,9 @@ def test_zai_provider_config_ignores_stale_base_url_setting():
 
 
 @pytest.mark.asyncio
-async def test_zai_api_provider_config_uses_shared_key_general_base_and_own_proxy():
+async def test_zai_api_provider_config_uses_shared_key_general_base_and_own_proxy() -> (
+    None
+):
     descriptor = PROVIDER_CATALOG["zai_api"]
     settings = _make_settings(
         zai_api_keys="shared-zai-key",
@@ -967,7 +969,7 @@ async def test_zai_api_provider_config_uses_shared_key_general_base_and_own_prox
     assert provider._provider_name == "ZAI_API"
 
 
-def test_minimax_descriptor_uses_expected_endpoint_and_credential():
+def test_minimax_descriptor_uses_expected_endpoint_and_credential() -> None:
     descriptor = PROVIDER_CATALOG["minimax"]
 
     assert descriptor.default_base_url == MINIMAX_DEFAULT_BASE
@@ -989,7 +991,7 @@ def test_kimi_code_provider_config_uses_subscription_key_and_proxy() -> None:
     assert config.proxy == "http://proxy.test:8080"
 
 
-def test_cloudflare_descriptor_uses_api_root_not_account_url():
+def test_cloudflare_descriptor_uses_api_root_not_account_url() -> None:
     descriptor = PROVIDER_CATALOG["cloudflare"]
 
     assert descriptor.default_base_url == "https://api.cloudflare.com/client/v4"
@@ -997,7 +999,7 @@ def test_cloudflare_descriptor_uses_api_root_not_account_url():
 
 
 @pytest.mark.asyncio
-async def test_create_cloudflare_provider_uses_account_scoped_base_url():
+async def test_create_cloudflare_provider_uses_account_scoped_base_url() -> None:
     settings = _make_settings(
         cloudflare_api_tokens="test_cloudflare_token",
         cloudflare_account_id="test-account",
@@ -1017,7 +1019,7 @@ async def test_create_cloudflare_provider_uses_account_scoped_base_url():
 
 
 @pytest.mark.asyncio
-async def test_opencode_zen_provider_config_uses_explicit_id_and_name():
+async def test_opencode_zen_provider_config_uses_explicit_id_and_name() -> None:
     with patch("httpx.AsyncClient"):
         provider = await create_provider(
             "opencode_zen",
@@ -1035,7 +1037,7 @@ async def test_opencode_zen_provider_config_uses_explicit_id_and_name():
 
 
 @pytest.mark.asyncio
-async def test_opencode_go_provider_config_uses_correct_base_url_and_name():
+async def test_opencode_go_provider_config_uses_correct_base_url_and_name() -> None:
     with patch("httpx.AsyncClient"):
         provider = await create_provider(
             "opencode_go",
@@ -1132,7 +1134,7 @@ def test_build_provider_config_cohere_uses_api_key_and_proxy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_provider_uses_openai_chat_openrouter_by_default():
+async def test_create_provider_uses_openai_chat_openrouter_by_default() -> None:
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
         provider = await create_provider(
             "open_router",
@@ -1146,7 +1148,7 @@ async def test_create_provider_uses_openai_chat_openrouter_by_default():
 
 
 @pytest.mark.asyncio
-async def test_create_provider_instantiates_each_builtin():
+async def test_create_provider_instantiates_each_builtin() -> None:
     settings = _make_settings(
         gemini_api_keys="test_gemini_key",
         vertex_project_id="test-vertex-project",
@@ -1300,7 +1302,7 @@ async def test_create_provider_instantiates_each_builtin():
 
 
 @pytest.mark.asyncio
-async def test_provider_runtime_caches_by_provider_id():
+async def test_provider_runtime_caches_by_provider_id() -> None:
     runtime = ProviderRuntime(
         _make_settings(),
         ProviderAdmissionRegistry(
@@ -1317,7 +1319,7 @@ async def test_provider_runtime_caches_by_provider_id():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancelled", [False, True])
-async def test_provider_creation_retries_after_shared_failure(cancelled: bool):
+async def test_provider_creation_retries_after_shared_failure(cancelled: bool) -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     provider = MagicMock(cleanup=AsyncMock())
     attempts = 0
@@ -1374,7 +1376,7 @@ async def test_provider_creation_retries_after_shared_failure(cancelled: bool):
 
 
 @pytest.mark.asyncio
-async def test_finished_creation_callback_cannot_forget_a_new_retry():
+async def test_finished_creation_callback_cannot_forget_a_new_retry() -> None:
     retry_entered, release = asyncio.Event(), asyncio.Event()
     provider = MagicMock(cleanup=AsyncMock())
     attempts = 0
@@ -1422,7 +1424,9 @@ async def test_finished_creation_callback_cannot_forget_a_new_retry():
 
 
 @pytest.mark.asyncio
-async def test_cancelled_acquisition_keeps_construction_available_to_next_caller():
+async def test_cancelled_acquisition_keeps_construction_available_to_next_caller() -> (
+    None
+):
     entered, release = asyncio.Event(), asyncio.Event()
     provider = MagicMock(cleanup=AsyncMock())
     attempts = 0
@@ -1465,7 +1469,7 @@ async def test_cancelled_acquisition_keeps_construction_available_to_next_caller
 
 
 @pytest.mark.asyncio
-async def test_abandoned_creation_failure_has_no_unretrieved_exception():
+async def test_abandoned_creation_failure_has_no_unretrieved_exception() -> None:
     entered, release, failed = asyncio.Event(), asyncio.Event(), asyncio.Event()
     loop = asyncio.get_running_loop()
     previous_handler = loop.get_exception_handler()
@@ -1511,7 +1515,7 @@ async def test_abandoned_creation_failure_has_no_unretrieved_exception():
 
 
 @pytest.mark.asyncio
-async def test_shutdown_drains_construction_that_finishes_during_cancellation():
+async def test_shutdown_drains_construction_that_finishes_during_cancellation() -> None:
     entered = asyncio.Event()
     provider = MagicMock(cleanup=AsyncMock())
 
@@ -1609,7 +1613,7 @@ async def test_different_providers_have_independent_admission_controllers() -> N
 
 
 @pytest.mark.asyncio
-async def test_unknown_provider_raises_unknown_provider_type_error():
+async def test_unknown_provider_raises_unknown_provider_type_error() -> None:
     with pytest.raises(UnknownProviderError, match="Unknown provider_type"):
         (
             await create_provider(
@@ -1762,7 +1766,7 @@ async def test_xkiro_provider_config_uses_key_base_and_proxy() -> None:
     assert isinstance(provider, OpenAIChatProvider)
 
 
-def test_xkiro_requires_key_despite_public_catalog():
+def test_xkiro_requires_key_despite_public_catalog() -> None:
     with pytest.raises(ApplicationUnavailableError, match="XKIRO_API_KEY is not set"):
         build_provider_config(
             PROVIDER_CATALOG["xkiro"], _make_settings(xkiro_api_keys=None)

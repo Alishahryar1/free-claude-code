@@ -23,7 +23,7 @@ from tests.api.model_fallback_support import (
 @pytest.mark.parametrize("client_effort", [None, "high"])
 def test_from_client_default_reaches_primary_and_inherited_fallback(
     wire_api: str, client_effort: str | None
-):
+) -> None:
     primary = ControlledFallbackProvider(failure=execution_failure("primary failed"))
     fallback = ControlledFallbackProvider(text="fallback worked")
     settings = Settings(
@@ -52,7 +52,7 @@ def test_from_client_default_reaches_primary_and_inherited_fallback(
 @pytest.mark.parametrize("fallback_effort", ["inherit", "client"])
 def test_from_client_bypasses_fcc_policy_while_inherit_keeps_it(
     wire_api: str, root_effort: str, fallback_effort: str
-):
+) -> None:
     primary = ControlledFallbackProvider(failure=execution_failure("primary failed"))
     fallback = ControlledFallbackProvider(text="fallback worked")
     settings = Settings(
@@ -109,7 +109,7 @@ def test_from_client_bypasses_fcc_policy_while_inherit_keeps_it(
 )
 def test_fallback_has_its_own_policy_and_replaces_client_controls(
     wire_api: str, effort: str
-):
+) -> None:
     primary = ControlledFallbackProvider(failure=execution_failure("primary failed"))
     fallback = ControlledFallbackProvider(text="fallback worked")
     settings = Settings(
@@ -185,7 +185,7 @@ def test_fallback_has_its_own_policy_and_replaces_client_controls(
 @pytest.mark.parametrize("wire_api", ["messages", "responses"])
 def test_later_inherit_returns_to_original_policy_after_overridden_fallback(
     wire_api: str,
-):
+) -> None:
     primary = ControlledFallbackProvider(failure=execution_failure("primary failed"))
     low = ControlledFallbackProvider(failure=execution_failure("low failed"))
     inherited = ControlledFallbackProvider(text="original intent restored")

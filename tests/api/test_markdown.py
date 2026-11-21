@@ -1,7 +1,7 @@
 from free_claude_code.api.markdown import render_markdown
 
 
-def test_markdown_escapes_html_and_never_loads_remote_images():
+def test_markdown_escapes_html_and_never_loads_remote_images() -> None:
     rendered = render_markdown(
         '<script>alert("x")</script>\n\n![diagram](https://example.com/image.png)'
     )
@@ -13,7 +13,7 @@ def test_markdown_escapes_html_and_never_loads_remote_images():
     assert 'rel="noopener noreferrer"' in rendered
 
 
-def test_markdown_disables_non_http_links():
+def test_markdown_disables_non_http_links() -> None:
     rendered = render_markdown("[unsafe](javascript:alert(1))")
 
     assert "href=" not in rendered

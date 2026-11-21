@@ -540,7 +540,7 @@ async def test_restart_required_apply_commits_without_hot_publication(
 @pytest.mark.parametrize("status", list(CredentialStatus))
 async def test_credential_checks_gate_both_apply_paths(
     tmp_path: Path, pending: tuple[str, ...], status: CredentialStatus
-):
+) -> None:
     factory = TrackingFactory()
     manager = ProviderRuntimeManager(
         _settings("nvidia_nim/old"), runtime_factory=factory
@@ -598,7 +598,7 @@ async def test_credential_checks_gate_both_apply_paths(
 
 
 @pytest.mark.asyncio
-async def test_cancelled_credential_check_never_commits(tmp_path: Path):
+async def test_cancelled_credential_check_never_commits(tmp_path: Path) -> None:
     manager = ProviderRuntimeManager(_settings("nvidia_nim/old"))
     runtime = ApplicationRuntime(
         manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
@@ -1279,7 +1279,7 @@ async def test_composition_publishes_startup_notice_after_runtime_and_repair() -
 @pytest.mark.asyncio
 async def test_folder_picker_is_stopped_before_http_shutdown_drains(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     import uvicorn
 
     from free_claude_code.cli.uvicorn_server import RuntimeServer

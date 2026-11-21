@@ -39,7 +39,7 @@ async def test_delayed_prompt_is_invalidated_only_by_committed_control(
     mock_cli_manager: MagicMock,
     operation: str,
     write_fails: bool,
-):
+) -> None:
     storage = await messaging_store_factory()
     workflow = MessagingWorkflow(mock_platform, mock_cli_manager, storage)
     release, status_started, status_release = (asyncio.Event() for _ in range(3))
@@ -103,7 +103,7 @@ async def test_failed_clear_preserves_delayed_startup_notice(
     messaging_store_factory: MessagingStoreFactory,
     mock_platform: MagicMock,
     mock_cli_manager: MagicMock,
-):
+) -> None:
     storage = await messaging_store_factory()
     workflow = MessagingWorkflow(
         mock_platform, mock_cli_manager, storage, platform_name="telegram"
@@ -234,7 +234,7 @@ async def test_controls_during_interrupted_cleanup_preserve_ownership_and_feedba
     mock_cli_manager: MagicMock,
     operation: str,
     remaining_feedback: set[str],
-):
+) -> None:
     workflow, storage, release, notifications, cancelled = interrupted_workflow
     manager = workflow.tree_queue
     scope = message("root").scope
@@ -277,7 +277,7 @@ async def test_failed_control_during_cleanup_preserves_other_workers_and_gate(
     ],
     mock_cli_manager: MagicMock,
     operation: str,
-):
+) -> None:
     workflow, storage, _release, _notifications, cancelled = interrupted_workflow
     manager = workflow.tree_queue
     before = await storage.load_conversation_snapshot()
@@ -323,7 +323,7 @@ async def test_committed_barrier_survives_postcommit_failure(
     mock_cli_manager: MagicMock,
     operation: str,
     failure: str,
-):
+) -> None:
     storage = await messaging_store_factory()
     workflow = MessagingWorkflow(mock_platform, mock_cli_manager, storage)
     status_started, status_release, effect_started, effect_release = (
@@ -398,7 +398,7 @@ async def test_successful_empty_control_still_invalidates_delayed_admission(
     mock_platform: MagicMock,
     mock_cli_manager: MagicMock,
     operation: str,
-):
+) -> None:
     storage = await messaging_store_factory()
     workflow = MessagingWorkflow(mock_platform, mock_cli_manager, storage)
     started, release = asyncio.Event(), asyncio.Event()

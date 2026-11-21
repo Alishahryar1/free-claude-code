@@ -29,7 +29,7 @@ def test_incremental_sse_terminators_preserve_unicode_text(
 @pytest.mark.parametrize("width", range(1, 8))
 def test_raw_frames_preserve_comments_fields_delimiters_and_unicode(
     newline: str, width: int
-):
+) -> None:
     payload = json.dumps({"text": "left\u2028middle\u2029right"}, ensure_ascii=False)
     raw = (
         f": keepalive{newline}{newline}"

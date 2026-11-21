@@ -96,7 +96,9 @@ async def mistral_wire(
         "x-fcc-launch-id",
     ],
 )
-async def test_affinity_for_existing_harness_identity(ingress: str, header: str):
+async def test_affinity_for_existing_harness_identity(
+    ingress: str, header: str
+) -> None:
     payload: JsonObject = {"model": "mistral/mistral-large-latest", "stream": True}
     if ingress == "messages":
         payload.update(messages=[{"role": "user", "content": "hello"}], max_tokens=128)
@@ -133,7 +135,7 @@ class InterruptedStream(httpx2.AsyncByteStream):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("session_id", [None, "conversation-a"])
-async def test_nonstream_recovery_keeps_affinity(session_id: str | None):
+async def test_nonstream_recovery_keeps_affinity(session_id: str | None) -> None:
     async def handler(request: object, number: int):
         if number == 1:
             return httpx2.Response(

@@ -88,7 +88,7 @@ def _negotiated(
     )
 
 
-def test_steps_run_in_order_and_the_first_correction_wins():
+def test_steps_run_in_order_and_the_first_correction_wins() -> None:
     calls: list[str] = []
     corrector = RequestCorrector(
         "chat",
@@ -105,7 +105,7 @@ def test_steps_run_in_order_and_the_first_correction_wins():
     assert calls == ["first", "second"]
 
 
-def test_a_once_step_corrects_at_most_once():
+def test_a_once_step_corrects_at_most_once() -> None:
     calls: list[str] = []
     corrector = RequestCorrector("chat", steps=(_step("once", calls, {"fixed": 1}),))
 
@@ -114,7 +114,7 @@ def test_a_once_step_corrects_at_most_once():
     assert calls == ["once"]
 
 
-def test_a_repeatable_step_may_correct_again():
+def test_a_repeatable_step_may_correct_again() -> None:
     calls: list[str] = []
     corrector = RequestCorrector(
         "chat", steps=(_step("again", calls, {"fixed": 1}, once=False),)
@@ -125,7 +125,7 @@ def test_a_repeatable_step_may_correct_again():
     assert calls == ["again", "again"]
 
 
-def test_a_lesson_is_returned_and_never_applied():
+def test_a_lesson_is_returned_and_never_applied() -> None:
     applied: list[str] = []
 
     class Taught:
@@ -148,7 +148,7 @@ def test_a_lesson_is_returned_and_never_applied():
     assert applied == []
 
 
-def test_reasoning_correction_runs_before_transport_steps():
+def test_reasoning_correction_runs_before_transport_steps() -> None:
     calls: list[str] = []
     corrector = RequestCorrector(
         "chat",
@@ -170,7 +170,7 @@ def test_reasoning_correction_runs_before_transport_steps():
     assert calls == []
 
 
-def test_history_record_repair_runs_before_any_step():
+def test_history_record_repair_runs_before_any_step() -> None:
     calls: list[str] = []
     first = {"type": "reasoning.text", "text": "First", "signature": "first-sig"}
     carrier = encode_replay(ReplayRecord(ORIGIN, {"reasoning_details": [first]}))
@@ -203,7 +203,7 @@ def test_history_record_repair_runs_before_any_step():
     assert calls == []
 
 
-def test_history_mode_moves_on_after_an_http_400_no_step_corrects():
+def test_history_mode_moves_on_after_an_http_400_no_step_corrects() -> None:
     calls: list[str] = []
     corrector = RequestCorrector("chat", steps=(_step("step", calls, None),))
     source = _readable_source()
@@ -217,7 +217,7 @@ def test_history_mode_moves_on_after_an_http_400_no_step_corrects():
     assert "Old" not in rendered and "New" in rendered
 
 
-def test_history_mode_stays_without_negotiated_history():
+def test_history_mode_stays_without_negotiated_history() -> None:
     corrector = RequestCorrector("chat")
     error = _http_400({"message": "bad request"})
 
@@ -232,7 +232,7 @@ def test_history_mode_stays_without_negotiated_history():
     ],
     ids=["no-status", "canonical-400-without-response"],
 )
-def test_history_mode_stays_without_an_http_400_response(error: Exception):
+def test_history_mode_stays_without_an_http_400_response(error: Exception) -> None:
     corrector = RequestCorrector("chat")
     _, rejection = _negotiated(error, _readable_source())
 

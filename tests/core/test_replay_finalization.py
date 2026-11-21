@@ -19,7 +19,7 @@ from tests.stream_packets import packets
 from tests.wire_payload import object_array, object_payload, string_payload
 
 
-def test_terminal_snapshot_reuses_sealed_carrier():
+def test_terminal_snapshot_reuses_sealed_carrier() -> None:
     draft = encode_replay(recovered(echo=False))
     delivered = DeliveredResponse("messages")
     delivered.observe(
@@ -57,7 +57,7 @@ def test_terminal_snapshot_reuses_sealed_carrier():
     )
 
 
-def test_carrier_looking_answer_text_is_not_interpreted():
+def test_carrier_looking_answer_text_is_not_interpreted() -> None:
     payload = {
         "type": "content_block_delta",
         "delta": {"type": "text_delta", "text": "fcc:history:v1:not-a-carrier"},
@@ -69,7 +69,7 @@ def test_carrier_looking_answer_text_is_not_interpreted():
     assert not finalize_replay(object_payload(payload), unexpected, {})
 
 
-def test_missing_public_prefix_prevents_draft_publication():
+def test_missing_public_prefix_prevents_draft_publication() -> None:
     payload = {
         "content_block": {
             "type": "redacted_thinking",
@@ -84,7 +84,9 @@ def test_missing_public_prefix_prevents_draft_publication():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("publish_carrier", [False, True])
-async def test_disconnected_public_stream_releases_replay_state(publish_carrier: bool):
+async def test_disconnected_public_stream_releases_replay_state(
+    publish_carrier: bool,
+) -> None:
     import json
 
     closed = []

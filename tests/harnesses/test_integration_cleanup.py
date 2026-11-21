@@ -55,7 +55,7 @@ def paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def test_cleanup_disconnects_native_connections_and_preserves_unrelated_settings(
     paths: IntegrationPaths,
-):
+) -> None:
     paths.antigravity.parent.mkdir()
     paths.antigravity.write_text('{"modelProvider":"", "keep": true}')
     write_previous_connection(paths.antigravity, paths.antigravity_state)
@@ -140,7 +140,7 @@ def test_cleanup_disconnects_native_connections_and_preserves_unrelated_settings
     }
 
 
-def test_missing_native_configurations_create_no_files(tmp_path: Path):
+def test_missing_native_configurations_create_no_files(tmp_path: Path) -> None:
     disconnect_integrations(paths_at(tmp_path))
     assert list(tmp_path.iterdir()) == []
 
@@ -148,7 +148,7 @@ def test_missing_native_configurations_create_no_files(tmp_path: Path):
 @pytest.mark.parametrize("change", ["token", "url"])
 def test_manually_changed_vscode_connection_is_preserved(
     paths: IntegrationPaths, change: str
-):
+) -> None:
     claude_integration.configure(paths.claude_vscode, URL, TOKEN, True)
     before = paths.claude_vscode.read_text().replace(
         TOKEN if change == "token" else URL,
@@ -176,7 +176,7 @@ def test_cleanup_of_connection_from_process_override(
     value: str,
     connected_url: str,
     keep_override: bool,
-):
+) -> None:
     monkeypatch.setenv(key, value)
     claude_integration.configure(paths.claude_vscode, connected_url, TOKEN, True)
     vscode_chat_integration.configure(paths.vscode_chat, connected_url, TOKEN, [])
@@ -207,7 +207,7 @@ def test_cleanup_of_connection_from_process_override(
 )
 def test_unmarked_vscode_settings_are_preserved_without_blocking(
     paths: IntegrationPaths, key: str, value: bool | str | None
-):
+) -> None:
     claude_integration.configure(
         paths.claude_vscode, "https://other.example", "unrelated-token", True
     )
@@ -244,7 +244,7 @@ def test_unmarked_vscode_settings_are_preserved_without_blocking(
 @pytest.mark.parametrize("mismatch", [None, "url", "token"])
 def test_vscode_cleanup_uses_gateway_identity_without_optional_flags(
     paths: IntegrationPaths, change: str, remove: bool, mismatch: str | None
-):
+) -> None:
     claude_integration.configure(paths.claude_vscode, URL, TOKEN, True)
     document = decode_object(paths.claude_vscode.read_text())
     document["editor.fontSize"] = 17
@@ -308,7 +308,7 @@ def test_cleanup_fails_when_path_access_cannot_be_confirmed(
     field: str,
     message: str,
     failure: type[Exception],
-):
+) -> None:
     blocked: Path = getattr(paths, field)
     if field == "desktop":
         claude_desktop_integration.configure(
@@ -359,13 +359,15 @@ def test_cleanup_fails_when_path_access_cannot_be_confirmed(
 )
 def test_equivalent_loopback_connection_is_disconnected(
     paths: IntegrationPaths, connected_url: str
-):
+) -> None:
     claude_integration.configure(paths.claude_vscode, connected_url, TOKEN, True)
     disconnect_integrations(paths)
     assert json.loads(paths.claude_vscode.read_text()) == {}
 
 
-def test_missing_identity_does_not_claim_gateway_settings(paths: IntegrationPaths):
+def test_missing_identity_does_not_claim_gateway_settings(
+    paths: IntegrationPaths,
+) -> None:
     claude_integration.configure(paths.claude_vscode, URL, TOKEN, True)
     paths.env.unlink()
     before = paths.claude_vscode.read_bytes()
@@ -377,7 +379,7 @@ def test_missing_identity_does_not_claim_gateway_settings(paths: IntegrationPath
 @pytest.mark.parametrize("content", ["PORT=invalid", "ANTHROPIC_AUTH_TOKEN="])
 def test_invalid_connection_settings_abort_without_modifying_apps(
     paths: IntegrationPaths, content: str
-):
+) -> None:
     claude_integration.configure(paths.claude_vscode, URL, TOKEN, True)
     paths.env.write_text(content)
     before = paths.claude_vscode.read_bytes()
@@ -387,7 +389,9 @@ def test_invalid_connection_settings_abort_without_modifying_apps(
     assert paths.env.read_text() == content
 
 
-def test_invalid_settings_error_does_not_disclose_source_text(paths: IntegrationPaths):
+def test_invalid_settings_error_does_not_disclose_source_text(
+    paths: IntegrationPaths,
+) -> None:
     paths.claude_vscode.parent.mkdir()
     paths.claude_vscode.write_text('{"secret": "cleanup-secret", invalid}')
     with pytest.raises(IntegrationCleanupError) as error:
@@ -401,7 +405,7 @@ def test_invalid_settings_error_does_not_disclose_source_text(paths: Integration
 )
 def test_desktop_policy_or_access_failure_preserves_recovery_data(
     paths: IntegrationPaths, monkeypatch: pytest.MonkeyPatch, error: type[Exception]
-):
+) -> None:
     paths.desktop.mkdir()
 
     def fail():
@@ -416,7 +420,7 @@ def test_desktop_policy_or_access_failure_preserves_recovery_data(
 
 def test_orphan_dsh_credential_is_removed_without_creating_profile(
     paths: IntegrationPaths,
-):
+) -> None:
     paths.dsh.mkdir()
     credentials = paths.dsh / ".credentials.yaml"
     credentials.write_text(

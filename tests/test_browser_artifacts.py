@@ -32,7 +32,7 @@ def test_artifact_retention(
     screenshot: str,
     zip_count: int,
     png_count: int,
-):
+) -> None:
     options = {
         "--tracing": tracing,
         "--screenshot": screenshot,

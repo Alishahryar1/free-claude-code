@@ -22,7 +22,7 @@ TOKEN = "desktop-test-token"
 
 def test_connect_preserves_pending_windows_migration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     root = tmp_path / "Local/Claude-3p"
     legacy = tmp_path / "Roaming/Claude-3p"
     record = claude_desktop_disconnect_path()
@@ -68,7 +68,7 @@ def test_connect_allowed_without_pending_migration(
     platform: str,
     existing_root: bool,
     existing_legacy: bool,
-):
+) -> None:
     root = tmp_path / "current"
     legacy = tmp_path / "legacy"
     monkeypatch.setattr(desktop.sys, "platform", platform)
@@ -98,7 +98,7 @@ def test_platform_config_root(
     platform: str,
     variable: str | None,
     suffix: str,
-):
+) -> None:
     monkeypatch.setattr(desktop.sys, "platform", platform)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     if variable:
@@ -107,7 +107,7 @@ def test_platform_config_root(
 
 
 @pytest.mark.parametrize("state", ["absent", "empty", "policy", "unreadable"])
-def test_windows_policy_boundary(monkeypatch: pytest.MonkeyPatch, state: str):
+def test_windows_policy_boundary(monkeypatch: pytest.MonkeyPatch, state: str) -> None:
     opened = []
 
     def open_key(hive: int, path: str):
@@ -176,7 +176,9 @@ def seal(root: Path):
     write(profile(root), config)
 
 
-def test_fresh_connection_and_disconnect_preserve_native_library(tmp_path: Path):
+def test_fresh_connection_and_disconnect_preserve_native_library(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "desktop"
     assert (
         desktop.configure(
@@ -245,7 +247,7 @@ def test_fresh_connection_and_disconnect_preserve_native_library(tmp_path: Path)
 )
 def test_connection_defaults_missing_egress_and_preserves_explicit_policy(
     tmp_path: Path, reconnect: bool, egress: JsonObject
-):
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     config = read(profile(tmp_path))
@@ -287,7 +289,7 @@ def test_connection_defaults_missing_egress_and_preserves_explicit_policy(
 )
 def test_model_override_survives_refresh_and_connect(
     tmp_path: Path, reconnect: bool, models: JsonValue
-):
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     config = read(profile(tmp_path))
@@ -316,7 +318,7 @@ def test_model_override_survives_refresh_and_connect(
     assert "inferenceModels" not in read(profile(tmp_path))
 
 
-def test_refresh_rotates_credentials_without_reactivating(tmp_path: Path):
+def test_refresh_rotates_credentials_without_reactivating(tmp_path: Path) -> None:
     desktop.configure(
         tmp_path, URL, TOKEN, True, disconnect_path=claude_desktop_disconnect_path()
     )
@@ -354,7 +356,7 @@ def test_refresh_rotates_credentials_without_reactivating(tmp_path: Path):
 
 def test_refresh_repairs_registered_profile_header_without_changing_selection(
     tmp_path: Path,
-):
+) -> None:
     desktop.configure(
         tmp_path, URL, TOKEN, True, disconnect_path=claude_desktop_disconnect_path()
     )
@@ -384,7 +386,7 @@ def test_refresh_repairs_registered_profile_header_without_changing_selection(
 )
 def test_disconnect_recovers_every_failure_boundary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
-):
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     write(
@@ -456,7 +458,7 @@ def test_disconnect_recovers_every_failure_boundary(
     assert {p: p.read_bytes() for p in tmp_path.rglob("*.json")} == before
 
 
-def test_other_profiles_and_unknown_settings_are_preserved(tmp_path: Path):
+def test_other_profiles_and_unknown_settings_are_preserved(tmp_path: Path) -> None:
     other = "11111111-1111-4111-8111-111111111111"
     other_path = tmp_path / "configLibrary" / f"{other}.json"
     write(other_path, {"inferenceProvider": "gateway", "secret": "other-secret"})
@@ -520,7 +522,7 @@ def test_connect_partial_write_is_retryable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     failed_write: Callable[[Path], Path],
-):
+) -> None:
     atomic = desktop.atomic_write_text
     failed = failed_write(tmp_path)
 
@@ -544,7 +546,7 @@ def test_connect_partial_write_is_retryable(
 @pytest.mark.parametrize("missing_header", [False, True])
 def test_disconnect_recovers_orphan_after_delete_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing_header: bool
-):
+) -> None:
     desktop.configure(
         tmp_path, URL, TOKEN, True, disconnect_path=claude_desktop_disconnect_path()
     )
@@ -577,7 +579,7 @@ def test_disconnect_recovers_orphan_after_delete_failure(
     assert not profile(tmp_path).exists()
 
 
-def test_disconnect_last_entry_creates_default(tmp_path: Path):
+def test_disconnect_last_entry_creates_default(tmp_path: Path) -> None:
     desktop.configure(
         tmp_path, URL, TOKEN, True, disconnect_path=claude_desktop_disconnect_path()
     )
@@ -615,7 +617,9 @@ def test_disconnect_last_entry_creates_default(tmp_path: Path):
         },
     ],
 )
-def test_invalid_metadata_is_never_overwritten(tmp_path: Path, metadata: JsonValue):
+def test_invalid_metadata_is_never_overwritten(
+    tmp_path: Path, metadata: JsonValue
+) -> None:
     write(meta(tmp_path), metadata)
     before = meta(tmp_path).read_bytes()
     with pytest.raises(ValueError):
@@ -626,7 +630,7 @@ def test_invalid_metadata_is_never_overwritten(tmp_path: Path, metadata: JsonVal
     assert not profile(tmp_path).exists()
 
 
-def test_reserved_profile_collision_is_not_overwritten(tmp_path: Path):
+def test_reserved_profile_collision_is_not_overwritten(tmp_path: Path) -> None:
     write(profile(tmp_path), {"inferenceProvider": "bedrock"})
     with pytest.raises(ValueError):
         desktop.configure(
@@ -636,7 +640,7 @@ def test_reserved_profile_collision_is_not_overwritten(tmp_path: Path):
 
 
 @pytest.mark.parametrize("url,token", [("http://192.0.2.1:8000", TOKEN), (URL, "")])
-def test_invalid_gateway_does_not_write(tmp_path: Path, url: str, token: str):
+def test_invalid_gateway_does_not_write(tmp_path: Path, url: str, token: str) -> None:
     with pytest.raises(ValueError):
         desktop.configure(
             tmp_path, url, token, True, disconnect_path=claude_desktop_disconnect_path()
@@ -644,7 +648,9 @@ def test_invalid_gateway_does_not_write(tmp_path: Path, url: str, token: str):
     assert not list(tmp_path.rglob("*.json"))
 
 
-def test_disconnect_selects_empty_profile_not_other_forced_gateway(tmp_path: Path):
+def test_disconnect_selects_empty_profile_not_other_forced_gateway(
+    tmp_path: Path,
+) -> None:
     other = "11111111-1111-4111-8111-111111111111"
     other_path = tmp_path / "configLibrary" / f"{other}.json"
     write(
@@ -670,7 +676,7 @@ def test_disconnect_selects_empty_profile_not_other_forced_gateway(tmp_path: Pat
 
 def test_unlink_failure_remains_retryable_after_status_reload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     desktop.configure(
         tmp_path, URL, TOKEN, True, disconnect_path=claude_desktop_disconnect_path()
     )
@@ -703,7 +709,7 @@ def test_unlink_failure_remains_retryable_after_status_reload(
 @pytest.mark.parametrize("change", ["selection", "hybrid", "default"])
 def test_retry_preserves_a_later_external_choice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
-):
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     atomic = desktop.atomic_write_text
@@ -750,7 +756,9 @@ def test_retry_preserves_a_later_external_choice(
     assert not profile(tmp_path).exists()
 
 
-def test_sealed_key_for_current_token_stays_connected_and_untouched(tmp_path: Path):
+def test_sealed_key_for_current_token_stays_connected_and_untouched(
+    tmp_path: Path,
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     seal(tmp_path)
@@ -761,7 +769,7 @@ def test_sealed_key_for_current_token_stays_connected_and_untouched(tmp_path: Pa
     assert profile(tmp_path).read_bytes() == before
 
 
-def test_sealed_key_for_an_old_token_is_replaced(tmp_path: Path):
+def test_sealed_key_for_an_old_token_is_replaced(tmp_path: Path) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     seal(tmp_path)
@@ -780,7 +788,7 @@ def test_sealed_key_for_an_old_token_is_replaced(tmp_path: Path):
 @pytest.mark.parametrize("fingerprint", [None, "not json", {"sha256": "other"}])
 def test_sealed_key_without_a_matching_fingerprint_is_replaced(
     tmp_path: Path, fingerprint: JsonValue
-):
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     seal(tmp_path)
@@ -802,7 +810,7 @@ def test_sealed_key_without_a_matching_fingerprint_is_replaced(
 
 def test_failed_fingerprint_write_never_vouches_for_a_rotated_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     seal(tmp_path)
@@ -829,7 +837,7 @@ def test_failed_fingerprint_write_never_vouches_for_a_rotated_key(
     assert read(profile(tmp_path))["inferenceGatewayApiKey"] == TOKEN
 
 
-def test_disconnect_removes_token_fingerprint(tmp_path: Path):
+def test_disconnect_removes_token_fingerprint(tmp_path: Path) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     assert token_record().exists()
@@ -854,7 +862,7 @@ def test_disconnect_removes_token_fingerprint(tmp_path: Path):
 )
 def test_invalid_disconnect_record_never_mutates_native_files(
     tmp_path: Path, record_value: JsonValue
-):
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     if isinstance(record_value, dict) and record_value.get("root") == "ROOT":
@@ -869,7 +877,9 @@ def test_invalid_disconnect_record_never_mutates_native_files(
     assert {p: p.read_bytes() for p in tmp_path.rglob("*.json")} == before
 
 
-def test_default_collision_fails_before_record_or_native_mutation(tmp_path: Path):
+def test_default_collision_fails_before_record_or_native_mutation(
+    tmp_path: Path,
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     write(
@@ -882,7 +892,7 @@ def test_default_collision_fails_before_record_or_native_mutation(tmp_path: Path
     assert {p: p.read_bytes() for p in tmp_path.rglob("*.json")} == before
 
 
-def test_unrelated_invalid_profile_is_not_read_on_disconnect(tmp_path: Path):
+def test_unrelated_invalid_profile_is_not_read_on_disconnect(tmp_path: Path) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     other = "11111111-1111-4111-8111-111111111111"
@@ -897,7 +907,7 @@ def test_unrelated_invalid_profile_is_not_read_on_disconnect(tmp_path: Path):
 
 def test_pending_removal_handles_missing_profile_and_later_fcc_selection(
     tmp_path: Path,
-):
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     profile(tmp_path).unlink()

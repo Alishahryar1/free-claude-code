@@ -91,7 +91,7 @@ async def test_authentication_rejection_is_sent_once(
     ],
     response: type[httpx.Response] | type[httpx2.Response],
     status: int,
-):
+) -> None:
     generations = 0
 
     def reply(request: httpx.Request | httpx2.Request):

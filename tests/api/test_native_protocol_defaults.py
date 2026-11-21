@@ -33,7 +33,9 @@ from tests.wire_payload import decode_object, object_array
         },
     ],
 )
-def test_signed_no_argument_call_can_be_echoed(wire: str, native_part: JsonObject):
+def test_signed_no_argument_call_can_be_echoed(
+    wire: str, native_part: JsonObject
+) -> None:
     sent = []
 
     def reply(request: Request):
@@ -91,7 +93,7 @@ def test_signed_no_argument_call_can_be_echoed(wire: str, native_part: JsonObjec
         assert object_array(sent[1]["contents"])[1]["parts"] == [native_part]
 
 
-def test_native_chat_allows_documented_allowed_tools_choice():
+def test_native_chat_allows_documented_allowed_tools_choice() -> None:
     sent = []
 
     def reply(request: httpx2.Request):

@@ -37,7 +37,7 @@ from tests.wire_payload import decode_object, object_payload
 @pytest.mark.asyncio
 async def test_native_fallback_tries_other_model_during_primary_cooldown(
     stream: bool, status: int, retry_after: str, max_attempts: int
-):
+) -> None:
     calls = []
 
     def handle(request: httpx.Request):
@@ -108,7 +108,7 @@ async def test_native_fallback_tries_other_model_during_primary_cooldown(
     assert calls == ["primary", "backup", "backup", "backup"]
 
 
-def test_only_leading_pings_then_all_candidates_fail_returns_json_error():
+def test_only_leading_pings_then_all_candidates_fail_returns_json_error() -> None:
     calls = []
     wires = []
 
@@ -154,7 +154,7 @@ def test_only_leading_pings_then_all_candidates_fail_returns_json_error():
 @pytest.mark.parametrize("disconnect", [False, True])
 async def test_leading_ping_timeout_or_disconnect_releases_all_resources(
     disconnect: bool,
-):
+) -> None:
     entered = asyncio.Event()
     calls = []
 
@@ -258,7 +258,7 @@ async def test_leading_ping_timeout_or_disconnect_releases_all_resources(
         await manager.close()
 
 
-def test_count_generate_and_continue_native_tool_history_with_recovery():
+def test_count_generate_and_continue_native_tool_history_with_recovery() -> None:
     sent = []
     result_block = {
         "type": "future_hosted_result",

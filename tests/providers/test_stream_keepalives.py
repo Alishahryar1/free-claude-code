@@ -222,7 +222,7 @@ async def collect[T](stream: AsyncIterable[T]) -> list[T]:
 )
 async def test_keepalive_only_upstream_times_out_and_releases_capacity(
     egress: str, frame: bytes
-):
+) -> None:
     if egress in {"chat", "responses"} and b"data: {}" in frame:
         pytest.skip("SDK does not retain arbitrary SSE names")
     wire = Heartbeats(frame)
@@ -242,7 +242,7 @@ async def test_keepalive_only_upstream_times_out_and_releases_capacity(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("egress", EGRESSES)
-async def test_keepalive_timeout_uses_existing_attempt_budget(egress: str):
+async def test_keepalive_timeout_uses_existing_attempt_budget(egress: str) -> None:
     wires = []
 
     def body():
@@ -261,7 +261,7 @@ async def test_keepalive_timeout_uses_existing_attempt_budget(egress: str):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("egress", EGRESSES)
-async def test_cancellation_during_heartbeats_closes_and_releases(egress: str):
+async def test_cancellation_during_heartbeats_closes_and_releases(egress: str) -> None:
     wire = Heartbeats(b": keep-alive\n\n")
     async with upstream(egress, lambda: wire, timeout=10) as (stream, admission):
         task = asyncio.create_task(collect(stream()))
@@ -326,7 +326,9 @@ class Frames(httpx.AsyncByteStream, httpx2.AsyncByteStream):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("egress", EGRESSES)
-async def test_pings_are_discarded_before_and_during_valid_responses(egress: str):
+async def test_pings_are_discarded_before_and_during_valid_responses(
+    egress: str,
+) -> None:
     ping = b'event: ping\ndata: {"type":"ping"}\n\n'
     raw = b"".join(ping + frame for frame in successful_frames(egress))
     # Exercise framing across arbitrary network chunk boundaries as well.
@@ -345,7 +347,7 @@ async def test_pings_are_discarded_before_and_during_valid_responses(egress: str
 @pytest.mark.parametrize("egress", EGRESSES)
 async def test_timeout_after_public_output_preserves_prefix_and_reports_failure(
     egress: str,
-):
+) -> None:
     frames = successful_frames(egress)
     prefix = b"".join(frames[:3] if "messages" in egress else frames[:1])
     wire = Heartbeats(b": keep-alive\n\n", prefix=prefix)
@@ -381,7 +383,7 @@ async def test_timeout_after_public_output_preserves_prefix_and_reports_failure(
 
 
 @pytest.mark.asyncio
-async def test_chat_buffered_recovery_read_also_times_out():
+async def test_chat_buffered_recovery_read_also_times_out() -> None:
     prefix = "x" * 70000  # Exceed the private workflow's early holdback.
     first = Frames([_chat_chunk(prefix)])
     recovery = Heartbeats(b": keep-alive\n\n")
@@ -400,7 +402,7 @@ async def test_chat_buffered_recovery_read_also_times_out():
 @pytest.mark.parametrize("done", [False, True])
 async def test_stopped_generation_is_not_retried_when_tail_keeps_sending_pings(
     egress: str, done: bool
-):
+) -> None:
     if egress == "gemini" and done:
         pytest.skip("Gemini has no DONE sentinel")
     frames = successful_frames(egress)

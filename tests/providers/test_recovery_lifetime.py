@@ -40,7 +40,7 @@ async def exhaust(controller: ProviderAdmissionController, model: str):
 
 
 @pytest.mark.asyncio
-async def test_expired_requests_are_collected_without_more_traffic():
+async def test_expired_requests_are_collected_without_more_traffic() -> None:
     controller = _controller(max_attempts=1, base_delay=0.03, max_delay=0.03)
     refs = [await exhaust(controller, str(i)) for i in range(8)]
     gc.collect()
@@ -52,7 +52,7 @@ async def test_expired_requests_are_collected_without_more_traffic():
 
 
 @pytest.mark.asyncio
-async def test_idle_abandonment_preserves_backoff_then_expires():
+async def test_idle_abandonment_preserves_backoff_then_expires() -> None:
     controller = _controller(base_delay=0.03, max_delay=0.03)
     execution = controller.start_execution(model="a")
     attempt = await _open(execution)
@@ -65,7 +65,7 @@ async def test_idle_abandonment_preserves_backoff_then_expires():
 
 
 @pytest.mark.asyncio
-async def test_cancel_between_resolved_attempts_releases_leader():
+async def test_cancel_between_resolved_attempts_releases_leader() -> None:
     controller = _controller()
     entered = asyncio.Event()
 
@@ -103,7 +103,7 @@ async def test_cancel_between_resolved_attempts_releases_leader():
 
 
 @pytest.mark.asyncio
-async def test_terminal_waiter_detaches_before_opening_next_attempt():
+async def test_terminal_waiter_detaches_before_opening_next_attempt() -> None:
     controller = _controller()
     leader = controller.start_execution(model="a")
     follower = controller.start_execution(model="a")
@@ -119,7 +119,7 @@ async def test_terminal_waiter_detaches_before_opening_next_attempt():
 
 
 @pytest.mark.asyncio
-async def test_timer_does_not_capture_request_context():
+async def test_timer_does_not_capture_request_context() -> None:
     controller = _controller(max_attempts=1, base_delay=60, max_delay=60)
     context = ContextVar("request_payload")
     payload = Payload()
@@ -138,7 +138,7 @@ async def test_timer_does_not_capture_request_context():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("custom", [False, True])
-async def test_registry_retirement_releases_scheduled_controller(custom: bool):
+async def test_registry_retirement_releases_scheduled_controller(custom: bool) -> None:
     registry = ProviderAdmissionRegistry(
         ProviderAdmissionLimits(1000, 60, 5, PROVIDER_MAX_ATTEMPTS_DEFAULT)
     )
@@ -159,7 +159,7 @@ async def test_registry_retirement_releases_scheduled_controller(custom: bool):
 
 
 @pytest.mark.asyncio
-async def test_expiry_allows_concurrent_fresh_attempts():
+async def test_expiry_allows_concurrent_fresh_attempts() -> None:
     controller = _controller(max_attempts=1, base_delay=0.03, max_delay=0.03)
     await exhaust(controller, "a")
     await asyncio.sleep(0.06)
@@ -184,7 +184,9 @@ def clock(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
-async def test_live_members_and_reserved_probes_survive_deadlines(clock: list[float]):
+async def test_live_members_and_reserved_probes_survive_deadlines(
+    clock: list[float],
+) -> None:
     controller = _controller(base_delay=1, max_delay=1)
     leader = controller.start_execution(model="a")
     follower = controller.start_execution(model="a")
@@ -224,7 +226,7 @@ async def test_live_members_and_reserved_probes_survive_deadlines(clock: list[fl
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("probe", [False, True])
-async def test_terminal_execution_cannot_open_queued_attempt(probe: bool):
+async def test_terminal_execution_cannot_open_queued_attempt(probe: bool) -> None:
     controller = _controller(max_concurrency=1)
     execution = controller.start_execution(model="a")
     if probe:
@@ -244,7 +246,9 @@ async def test_terminal_execution_cannot_open_queued_attempt(probe: bool):
 
 
 @pytest.mark.asyncio
-async def test_exhausted_waiters_keep_their_failure_after_expiry(clock: list[float]):
+async def test_exhausted_waiters_keep_their_failure_after_expiry(
+    clock: list[float],
+) -> None:
     controller = _controller(max_attempts=2, base_delay=1, max_delay=1)
     leader = controller.start_execution(model="a")
     followers = [controller.start_execution(model="a") for _ in range(3)]
@@ -277,7 +281,7 @@ async def test_exhausted_waiters_keep_their_failure_after_expiry(clock: list[flo
 @pytest.mark.parametrize("expired", [False, True])
 async def test_late_normal_failure_obeys_current_cooldown(
     clock: list[float], expired: bool
-):
+) -> None:
     controller = _controller(max_attempts=2, base_delay=1, max_delay=1)
     leader = controller.start_execution(model="a")
     late = controller.start_execution(model="a")
@@ -311,7 +315,7 @@ async def test_late_normal_failure_obeys_current_cooldown(
 @pytest.mark.asyncio
 async def test_one_timer_tracks_multiple_deadlines_and_current_state(
     clock: list[float],
-):
+) -> None:
     controller = _controller(max_attempts=1, base_delay=1, max_delay=1)
     await exhaust(controller, "a")
     first_timer = controller._expiry_timer
@@ -344,7 +348,7 @@ async def test_one_timer_tracks_multiple_deadlines_and_current_state(
 
 
 @pytest.mark.asyncio
-async def test_zero_delay_expiry_preserves_occupied_capacity_and_rate_history():
+async def test_zero_delay_expiry_preserves_occupied_capacity_and_rate_history() -> None:
     controller = _controller(max_attempts=1, max_concurrency=1)
     attempt = await _open(controller.start_execution(model="a"))
     history = tuple(controller._capacity._admission_times)
@@ -367,7 +371,7 @@ async def test_zero_delay_expiry_preserves_occupied_capacity_and_rate_history():
 @pytest.mark.asyncio
 async def test_old_backoff_cancellation_cannot_detach_replacement_leader(
     clock: list[float],
-):
+) -> None:
     controller = _controller(base_delay=1, max_delay=1)
     leader = controller.start_execution(model="a")
     follower = controller.start_execution(model="a")

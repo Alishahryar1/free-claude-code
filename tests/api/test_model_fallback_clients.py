@@ -33,7 +33,9 @@ from tests.wire_payload import (
 )
 
 
-def test_native_fallback_closes_source_preserves_options_and_filters_candidates():
+def test_native_fallback_closes_source_preserves_options_and_filters_candidates() -> (
+    None
+):
     bodies = []
     wires: list[Wire] = []
 
@@ -95,7 +97,7 @@ def test_native_fallback_closes_source_preserves_options_and_filters_candidates(
 @pytest.mark.parametrize("target", ["chat", "messages", "responses"])
 async def test_responses_sdk_consumes_fallback_and_replays_only_real_tool_history(
     target: str,
-):
+) -> None:
     async with (
         _harness(
             "chat",

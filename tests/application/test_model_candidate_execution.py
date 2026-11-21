@@ -36,7 +36,7 @@ def _candidates(count: int = 1):
 
 
 @pytest.mark.asyncio
-async def test_delivery_and_opening_are_deferred_and_packets_preserved():
+async def test_delivery_and_opening_are_deferred_and_packets_preserved() -> None:
     construction_state = StreamDeliveryState()
     consumption_state = StreamDeliveryState()
     packets = (
@@ -78,7 +78,7 @@ async def test_delivery_and_opening_are_deferred_and_packets_preserved():
 
 
 @pytest.mark.asyncio
-async def test_missing_delivery_never_opens_a_candidate():
+async def test_missing_delivery_never_opens_a_candidate() -> None:
     open_candidate = AsyncMock()
     stream = stream_model_candidates(
         _candidates(),
@@ -108,7 +108,7 @@ def _prefix(text: str):
 
 
 @pytest.mark.asyncio
-async def test_interleaved_sequences_use_their_own_latest_delivered_prefix():
+async def test_interleaved_sequences_use_their_own_latest_delivered_prefix() -> None:
     left_state, right_state = StreamDeliveryState(), StreamDeliveryState()
     left_prefix, right_prefix = _prefix("left"), _prefix("right")
     left_state.bind_prefix(lambda: left_prefix)

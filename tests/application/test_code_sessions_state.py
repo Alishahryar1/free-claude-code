@@ -34,7 +34,7 @@ def running_state():
     return SessionState(session, run, (), (), (run,))
 
 
-def test_admission_installs_only_the_acknowledged_records():
+def test_admission_installs_only_the_acknowledged_records() -> None:
     session = CodeSession(id="session", cwd="project", model="provider/model")
     state = SessionState(session, None, (), (), ())
     candidate, run, item = state.prepare_admission(
@@ -55,7 +55,9 @@ def test_admission_installs_only_the_acknowledged_records():
         state.prepare_admission("another", "next", session.model, None, "config")
 
 
-def test_terminal_bundle_preserves_null_turn_prompt_and_requires_buffer_acknowledgment():
+def test_terminal_bundle_preserves_null_turn_prompt_and_requires_buffer_acknowledgment() -> (
+    None
+):
     state = running_state()
     for request_id, turn_id in ((1, "turn"), ("1", None)):
         progress = state.prepare_prompt(
@@ -92,7 +94,7 @@ def test_terminal_bundle_preserves_null_turn_prompt_and_requires_buffer_acknowle
         state.check_can_send()
 
 
-def test_recovery_updates_historical_run_without_replacing_current_run():
+def test_recovery_updates_historical_run_without_replacing_current_run() -> None:
     session = CodeSession(id="session", cwd="project", model="provider/model")
     old = CodeRun(
         id="old",
@@ -134,7 +136,7 @@ def test_recovery_updates_historical_run_without_replacing_current_run():
     assert state.run == current and state.runs[old.id] == recovered
 
 
-def test_historical_merge_retains_transcript_identity_and_completed_content():
+def test_historical_merge_retains_transcript_identity_and_completed_content() -> None:
     base = running_state()
     assert base.run is not None
     saved = CodeItem(
@@ -169,7 +171,7 @@ def test_historical_merge_retains_transcript_identity_and_completed_content():
     assert state.dirty_characters == 0 and state.pending_items == (merged,)
 
 
-def test_review_liveness_can_change_without_changing_its_item_or_run():
+def test_review_liveness_can_change_without_changing_its_item_or_run() -> None:
     state = running_state()
     update = ItemUpdate(
         "child-turn", "review", "subagent_auto_review", text="Reviewing"
@@ -195,7 +197,7 @@ def test_review_liveness_can_change_without_changing_its_item_or_run():
     assert state.pending_items == (item,)
 
 
-def test_only_new_turn_started_can_bind_an_unacknowledged_submission():
+def test_only_new_turn_started_can_bind_an_unacknowledged_submission() -> None:
     base = running_state()
     assert base.run is not None
     current = CodeRun(

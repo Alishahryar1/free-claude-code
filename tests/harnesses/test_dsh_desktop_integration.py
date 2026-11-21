@@ -64,7 +64,7 @@ def status(home: Path):
     return desktop.status(home, URL, TOKEN, catalog())
 
 
-def test_connect_status_disconnect_and_reconnect(home: Path):
+def test_connect_status_disconnect_and_reconnect(home: Path) -> None:
     assert not status(home)["connected"]
     result = connect(home)
     assert result["connected"]
@@ -112,7 +112,9 @@ def test_connect_status_disconnect_and_reconnect(home: Path):
         "missing-token",
     ],
 )
-def test_status_requires_all_fcc_keys_and_connect_replaces_them(home: Path, field: str):
+def test_status_requires_all_fcc_keys_and_connect_replaces_them(
+    home: Path, field: str
+) -> None:
     connect(home)
     patch = home / "profiles/desktop/cordis.patch.yml"
     credentials = home / ".credentials.yaml"
@@ -138,7 +140,7 @@ def test_status_requires_all_fcc_keys_and_connect_replaces_them(home: Path, fiel
     assert status(home)["connected"]
 
 
-def test_status_compares_current_catalog_url_and_token(home: Path):
+def test_status_compares_current_catalog_url_and_token(home: Path) -> None:
     connect(home)
     for url, token, models in [
         (URL + "-changed", TOKEN, catalog()),
@@ -148,7 +150,9 @@ def test_status_compares_current_catalog_url_and_token(home: Path):
         assert not desktop.status(home, url, token, models)["connected"]
 
 
-def test_other_settings_accounts_comments_tags_and_peer_files_are_preserved(home: Path):
+def test_other_settings_accounts_comments_tags_and_peer_files_are_preserved(
+    home: Path,
+) -> None:
     patch = home / "profiles/desktop/cordis.patch.yml"
     patch.write_text("""# keep native settings
 - id: unrelated
@@ -195,7 +199,9 @@ def test_other_settings_accounts_comments_tags_and_peer_files_are_preserved(home
     assert peer.read_text() == "unreadable unrelated profile, even if it names " + REF
 
 
-def test_disconnect_removes_all_fcc_copies_and_preserves_other_default(home: Path):
+def test_disconnect_removes_all_fcc_copies_and_preserves_other_default(
+    home: Path,
+) -> None:
     connect(home)
     patch = home / "profiles/desktop/cordis.patch.yml"
     rows = object_array(read(patch))
@@ -218,7 +224,7 @@ def test_disconnect_removes_all_fcc_copies_and_preserves_other_default(home: Pat
 @pytest.mark.parametrize("operation", ["connect", "disconnect"])
 def test_partial_write_is_disconnected_and_connect_can_repair(
     home: Path, monkeypatch: pytest.MonkeyPatch, operation: str
-):
+) -> None:
     if operation == "disconnect":
         connect(home)
     original = dsh_files.write_yaml
@@ -239,7 +245,9 @@ def test_partial_write_is_disconnected_and_connect_can_repair(
     assert not desktop.disconnect(home)["connected"]
 
 
-def test_absent_home_status_disconnect_and_refresh_create_nothing(tmp_path: Path):
+def test_absent_home_status_disconnect_and_refresh_create_nothing(
+    tmp_path: Path,
+) -> None:
     home = tmp_path / "absent"
     assert not status(home)["connected"]
     assert not desktop.disconnect(home)["connected"]
@@ -247,7 +255,7 @@ def test_absent_home_status_disconnect_and_refresh_create_nothing(tmp_path: Path
     assert not home.exists()
 
 
-def test_invalid_yaml_does_not_modify_files_or_expose_secrets(home: Path):
+def test_invalid_yaml_does_not_modify_files_or_expose_secrets(home: Path) -> None:
     patch = home / "profiles/desktop/cordis.patch.yml"
     patch.write_text("secret: [private-token")
     before = patch.read_bytes()
@@ -260,7 +268,7 @@ def test_invalid_yaml_does_not_modify_files_or_expose_secrets(home: Path):
 
 def test_connect_honors_native_profile_lock(
     home: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     lock = home / "profiles/desktop/package.json.lock"
     lock.write_text("native writer")
     original = dsh_files.file_lock
@@ -275,7 +283,9 @@ def test_connect_honors_native_profile_lock(
     assert not (home / ".credentials.yaml").exists()
 
 
-def test_refresh_replaces_old_derived_timeout_and_preserves_other_settings(home: Path):
+def test_refresh_replaces_old_derived_timeout_and_preserves_other_settings(
+    home: Path,
+) -> None:
     connect(home)
     patch = home / "profiles/desktop/cordis.patch.yml"
     rows = read(patch)

@@ -438,7 +438,7 @@ def _routed_request(
 @pytest.mark.parametrize("unknown_fallback", [False, True])
 async def test_fallback_receives_its_own_cached_capability_in_stream(
     ingress: str, unknown_fallback: bool
-):
+) -> None:
     seen = []
     resolved = set()
 
@@ -1244,7 +1244,9 @@ async def test_cancelling_progress_wait_remains_cancellation() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
-async def test_fallback_waits_for_provider_cleanup_and_obeys_cancellation(cancel: bool):
+async def test_fallback_waits_for_provider_cleanup_and_obeys_cancellation(
+    cancel: bool,
+) -> None:
     close_wait = WaitStep()
     primary = CloseControlledProvider(
         _execution_failure("primary overloaded"), close_wait=close_wait
@@ -1285,7 +1287,7 @@ async def test_fallback_waits_for_provider_cleanup_and_obeys_cancellation(cancel
 
 
 @pytest.mark.asyncio
-async def test_empty_chunks_allow_caller_cancellation():
+async def test_empty_chunks_allow_caller_cancellation() -> None:
     provider = ControlledProvider([EMPTY_FOREVER])
     stream = _executor_stream(provider, request_id="empty-stream-cancel")
     async with asyncio.timeout(2):

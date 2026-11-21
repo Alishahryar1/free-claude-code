@@ -59,7 +59,7 @@ def _redirect_fcc_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 @pytest.mark.asyncio
 async def test_runtime_startup_logs_admin_url_without_printed_server_banner(
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     settings = _settings(
         messaging_platform="none",
         host="127.0.0.1",
@@ -106,7 +106,7 @@ async def test_runtime_startup_logs_admin_url_without_printed_server_banner(
 @pytest.mark.parametrize(
     "path", ["/v1/chat/completions", "/v1beta/models/test:generateContent"]
 )
-def test_generation_http_errors_convert_structured_details_to_text(path: str):
+def test_generation_http_errors_convert_structured_details_to_text(path: str) -> None:
     app = create_test_app(_settings())
     detail = {"reason": "invalid request"}
 
@@ -120,7 +120,7 @@ def test_generation_http_errors_convert_structured_details_to_text(path: str):
     assert response.json()["error"]["message"] == str(detail)
 
 
-def test_create_app_application_error_handler_returns_anthropic_format():
+def test_create_app_application_error_handler_returns_anthropic_format() -> None:
     app = create_test_app(_settings(log_api_error_tracebacks=False))
 
     @app.get("/raise_application")
@@ -137,7 +137,7 @@ def test_create_app_application_error_handler_returns_anthropic_format():
     assert "x-should-retry" not in response.headers
 
 
-def test_application_error_handler_does_not_log_error_message():
+def test_application_error_handler_does_not_log_error_message() -> None:
     app = create_test_app(_settings(log_api_error_tracebacks=False))
     secret = "provider-upstream-secret-detail"
 
@@ -158,7 +158,7 @@ def test_application_error_handler_does_not_log_error_message():
     log_error.assert_not_called()
 
 
-def test_create_app_general_exception_handler_returns_correlated_500():
+def test_create_app_general_exception_handler_returns_correlated_500() -> None:
     app = create_test_app(_settings(log_api_error_tracebacks=False))
 
     @app.get("/raise_general")
@@ -174,7 +174,7 @@ def test_create_app_general_exception_handler_returns_correlated_500():
     assert body["request_id"] == response.headers["request-id"]
 
 
-def test_general_exception_default_log_excludes_exception_message():
+def test_general_exception_default_log_excludes_exception_message() -> None:
     app = create_test_app(_settings(log_api_error_tracebacks=False))
     secret = "user-provided-secret-token-xyzzy"
 
@@ -196,7 +196,7 @@ def test_general_exception_default_log_excludes_exception_message():
 
 
 @pytest.mark.asyncio
-async def test_runtime_startup_schedules_catalog_without_a_network_barrier():
+async def test_runtime_startup_schedules_catalog_without_a_network_barrier() -> None:
     settings = _settings(messaging_platform="none")
     manager = ProviderRuntimeManager(settings)
     runtime = ApplicationRuntime(
@@ -226,7 +226,7 @@ async def test_runtime_startup_schedules_catalog_without_a_network_barrier():
     assert events == ["background"]
 
 
-def test_startup_failure_message_preserves_existing_concise_contract():
+def test_startup_failure_message_preserves_existing_concise_contract() -> None:
     quiet = _settings(log_api_error_tracebacks=False)
     verbose = _settings(log_api_error_tracebacks=True)
 
@@ -248,7 +248,7 @@ def test_startup_failure_message_preserves_existing_concise_contract():
 @pytest.mark.asyncio
 async def test_runtime_asgi_app_starts_and_closes_owner_once(
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     runtime = MagicMock(spec=ApplicationRuntime, instance_id="lifespan-instance")
     runtime.settings = _settings()
     runtime.start = AsyncMock(side_effect=lambda: logger.info("lifespan starting"))
@@ -292,7 +292,7 @@ async def test_runtime_asgi_app_starts_and_closes_owner_once(
 @pytest.mark.parametrize("failure", [None, RuntimeError, asyncio.CancelledError])
 async def test_asgi_log_context_isolated_across_runtimes_tasks_and_workers(
     caplog: pytest.LogCaptureFixture, failure: type[Exception]
-):
+) -> None:
     release = asyncio.Event()
     jobs = []
 
@@ -374,7 +374,7 @@ async def test_runtime_asgi_app_reports_incomplete_owned_shutdown() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runtime_asgi_app_reports_concise_startup_failure():
+async def test_runtime_asgi_app_reports_concise_startup_failure() -> None:
     runtime = MagicMock(spec=ApplicationRuntime)
     runtime.settings = _settings(log_api_error_tracebacks=False)
     runtime.start = AsyncMock(side_effect=RuntimeError("secret"))
@@ -399,7 +399,9 @@ async def test_runtime_asgi_app_reports_concise_startup_failure():
     runtime.close.assert_not_awaited()
 
 
-def test_bootstrap_configures_default_log_and_publishes_only_services(tmp_path: Path):
+def test_bootstrap_configures_default_log_and_publishes_only_services(
+    tmp_path: Path,
+) -> None:
     log_path = tmp_path / "server.log"
     settings = _settings()
 
@@ -457,7 +459,7 @@ def test_bootstrap_wires_the_codex_catalog_publisher() -> None:
 
 def test_bootstrap_honors_process_log_file_override(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     log_path = tmp_path / "custom.log"
     monkeypatch.setenv("LOG_FILE", str(log_path))
 
@@ -542,7 +544,7 @@ async def test_bootstrap_selects_nvidia_transcriber_without_loading_riva() -> No
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_supplies_only_first_key_to_local_model_downloads():
+async def test_bootstrap_supplies_only_first_key_to_local_model_downloads() -> None:
     settings = _settings(
         voice_note_enabled=True,
         whisper_device="cpu",

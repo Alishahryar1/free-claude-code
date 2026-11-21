@@ -1,7 +1,7 @@
 from free_claude_code.messaging.event_parser import parse_cli_event
 
 
-def test_parse_cli_event_assistant_content():
+def test_parse_cli_event_assistant_content() -> None:
     event = {
         "type": "assistant",
         "message": {
@@ -17,7 +17,7 @@ def test_parse_cli_event_assistant_content():
     assert results[1] == {"type": "text_chunk", "text": "Hello user"}
 
 
-def test_parse_cli_event_assistant_tools():
+def test_parse_cli_event_assistant_tools() -> None:
     event = {
         "type": "assistant",
         "message": {
@@ -31,7 +31,7 @@ def test_parse_cli_event_assistant_tools():
     assert results[0]["input"] == {"path": "."}
 
 
-def test_parse_cli_event_assistant_subagent():
+def test_parse_cli_event_assistant_subagent() -> None:
     event = {
         "type": "assistant",
         "message": {
@@ -51,7 +51,7 @@ def test_parse_cli_event_assistant_subagent():
     assert results[0]["input"] == {"description": "Fix bug"}
 
 
-def test_parse_cli_event_content_block_delta():
+def test_parse_cli_event_content_block_delta() -> None:
     # Text delta
     event_text = {
         "type": "content_block_delta",
@@ -73,7 +73,7 @@ def test_parse_cli_event_content_block_delta():
     ]
 
 
-def test_parse_cli_event_content_block_start():
+def test_parse_cli_event_content_block_start() -> None:
     event = {
         "type": "content_block_start",
         "index": 2,
@@ -95,13 +95,13 @@ def test_parse_cli_event_content_block_start():
     ]
 
 
-def test_parse_cli_event_error():
+def test_parse_cli_event_error() -> None:
     event = {"type": "error", "error": {"message": "something failed"}}
     results = parse_cli_event(event)
     assert results == [{"type": "error", "message": "something failed"}]
 
 
-def test_parse_cli_event_user_tool_result():
+def test_parse_cli_event_user_tool_result() -> None:
     event = {
         "type": "user",
         "message": {
@@ -126,13 +126,13 @@ def test_parse_cli_event_user_tool_result():
     ]
 
 
-def test_parse_cli_event_exit_success():
+def test_parse_cli_event_exit_success() -> None:
     event = {"type": "exit", "code": 0}
     results = parse_cli_event(event)
     assert results == [{"type": "complete", "status": "success"}]
 
 
-def test_parse_cli_event_exit_failure():
+def test_parse_cli_event_exit_failure() -> None:
     event = {"type": "exit", "code": 1, "stderr": "fatal error"}
     results = parse_cli_event(event)
     assert results == [
@@ -145,27 +145,27 @@ def test_parse_cli_event_exit_failure():
     ]
 
 
-def test_parse_cli_event_invalid_input():
+def test_parse_cli_event_invalid_input() -> None:
     assert parse_cli_event(None) == []
     assert parse_cli_event("not a dict") == []
     assert parse_cli_event({"type": "unknown"}) == []
 
 
-def test_parse_cli_event_system_ignored():
+def test_parse_cli_event_system_ignored() -> None:
     assert parse_cli_event({"type": "system", "foo": "bar"}) == []
 
 
-def test_parse_cli_event_result_with_content_directly():
+def test_parse_cli_event_result_with_content_directly() -> None:
     event = {"type": "result", "content": [{"type": "text", "text": "hi"}]}
     assert parse_cli_event(event) == [{"type": "text_chunk", "text": "hi"}]
 
 
-def test_parse_cli_event_result_with_result_content_directly():
+def test_parse_cli_event_result_with_result_content_directly() -> None:
     event = {"type": "result", "result": {"content": [{"type": "text", "text": "hi"}]}}
     assert parse_cli_event(event) == [{"type": "text_chunk", "text": "hi"}]
 
 
-def test_parse_cli_event_content_block_unknown_type_skipped():
+def test_parse_cli_event_content_block_unknown_type_skipped() -> None:
     """Content block with unknown type is skipped; known blocks still parsed."""
     event = {
         "type": "assistant",
@@ -183,14 +183,14 @@ def test_parse_cli_event_content_block_unknown_type_skipped():
     assert results[1] == {"type": "thinking_chunk", "text": "thought"}
 
 
-def test_parse_cli_event_error_non_dict():
+def test_parse_cli_event_error_non_dict() -> None:
     """Error event with error as string (not dict) is handled."""
     event = {"type": "error", "error": "plain string error"}
     results = parse_cli_event(event)
     assert results == [{"type": "error", "message": "plain string error"}]
 
 
-def test_parse_cli_event_exit_code_none():
+def test_parse_cli_event_exit_code_none() -> None:
     """Exit event with no code defaults to success."""
     event = {"type": "exit"}
     results = parse_cli_event(event)

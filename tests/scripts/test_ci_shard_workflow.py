@@ -20,7 +20,7 @@ def workflow() -> Workflow:
 
 
 @pytest.mark.parametrize("suite", ["pytest", "playwright"])
-def test_shard_jobs_use_generated_matrices_and_existing_parallelism(suite: str):
+def test_shard_jobs_use_generated_matrices_and_existing_parallelism(suite: str) -> None:
     config = workflow()
     prepare = config["jobs"]["prepare-shards"]
     assert f"{suite}_matrix" in prepare["outputs"]
@@ -53,7 +53,7 @@ def test_shard_jobs_use_generated_matrices_and_existing_parallelism(suite: str):
     assert "||" not in command
 
 
-def test_workflow_uses_three_shards_except_two_for_macos_pytest():
+def test_workflow_uses_three_shards_except_two_for_macos_pytest() -> None:
     config = workflow()
     assert {
         key: value for key, value in config["env"].items() if key.endswith("_SHARDS")
@@ -70,7 +70,7 @@ def test_workflow_uses_three_shards_except_two_for_macos_pytest():
 @pytest.mark.parametrize("suite", ["pytest", "playwright"])
 def test_external_timing_path_preserves_config_and_collection_scope(
     tmp_path: Path, suite: str
-):
+) -> None:
     checkout = tmp_path / "checkout"
     checkout.mkdir()
     (checkout / "pyproject.toml").write_text(
@@ -116,7 +116,7 @@ def test_external_timing_path_preserves_config_and_collection_scope(
     assert f"test_{target}.py" in result.stdout
 
 
-def test_browser_artifacts_identify_each_shard_and_run_attempt():
+def test_browser_artifacts_identify_each_shard_and_run_attempt() -> None:
     job = workflow()["jobs"]["playwright-shards"]
     upload = next(
         step
@@ -139,7 +139,7 @@ def test_browser_artifacts_identify_each_shard_and_run_attempt():
     assert upload["with"]["retention-days"] == 7
 
 
-def test_timing_preparation_freezes_one_input_and_reuses_it_on_reruns():
+def test_timing_preparation_freezes_one_input_and_reuses_it_on_reruns() -> None:
     prepare = workflow()["jobs"]["prepare-shards"]
     assert prepare["permissions"] == {"contents": "read", "actions": "read"}
     steps = {step.get("id"): step for step in prepare["steps"]}
@@ -164,7 +164,9 @@ def test_timing_preparation_freezes_one_input_and_reuses_it_on_reruns():
 
 
 @pytest.mark.parametrize("suite", ["pytest", "playwright"])
-def test_timing_shards_share_the_frozen_input_and_upload_only_after_success(suite: str):
+def test_timing_shards_share_the_frozen_input_and_upload_only_after_success(
+    suite: str,
+) -> None:
     job = workflow()["jobs"][f"{suite}-shards"]
     assert job["permissions"] == {"contents": "read"}
     assert job["env"]["CI_TIMINGS_SUITE"] == suite
@@ -206,7 +208,7 @@ def test_timing_shards_share_the_frozen_input_and_upload_only_after_success(suit
     assert upload["with"]["if-no-files-found"] == "error"
 
 
-def test_timing_collector_publishes_only_complete_current_attempts():
+def test_timing_collector_publishes_only_complete_current_attempts() -> None:
     job = workflow()["jobs"]["collect-test-timings"]
     assert set(job["needs"]) == {
         "prepare-shards",
@@ -243,7 +245,7 @@ def test_timing_collector_publishes_only_complete_current_attempts():
 )
 def test_summary_only_passes_when_preparation_and_all_shards_succeed(
     suite: str, preparation: str, shards: str
-):
+) -> None:
     job = workflow()["jobs"][f"{suite}-summary"]
     assert job["name"] == suite
     assert set(job["needs"]) == {"prepare-shards", f"{suite}-shards"}

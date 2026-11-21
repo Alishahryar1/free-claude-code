@@ -92,7 +92,7 @@ async def delivered_candidates(
 )
 async def test_messages_fallback_accepts_partial_output_slots(
     wire: WireProtocol, case: str
-):
+) -> None:
     prefix = (
         "Half"
         if case == "text_empty_part"
@@ -146,7 +146,7 @@ async def test_messages_fallback_accepts_partial_output_slots(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_exhausted_model_continues_on_next_candidate(
     source: str, target: str, wire: WireProtocol
-):
+) -> None:
     async with (
         _harness(
             source,
@@ -195,7 +195,7 @@ async def test_exhausted_model_continues_on_next_candidate(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_fallback_preserves_readable_reasoning_without_a_heading(
     target: str, wire: WireProtocol
-):
+) -> None:
     interrupted = followed_by_text(reasoning_events(closed=False), "Hello ")
     async with (
         _harness("responses", lambda _: (200, interrupted), max_attempts=1) as (
@@ -231,7 +231,7 @@ async def test_fallback_preserves_readable_reasoning_without_a_heading(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_normal_completion_never_opens_another_candidate(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     async with (
         _harness(protocol, lambda _: (200, text_events(protocol, "Done."))) as (
             first,
@@ -257,7 +257,7 @@ async def test_normal_completion_never_opens_another_candidate(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_each_model_receives_the_latest_prefix_and_its_own_budget(
     wire: WireProtocol,
-):
+) -> None:
     async with (
         _harness(
             "chat",
@@ -315,7 +315,7 @@ async def test_each_model_receives_the_latest_prefix_and_its_own_budget(
 )
 async def test_permanent_rejection_advances_without_erasing_incoming_prefix(
     wire: WireProtocol, status: int, error: JsonObject
-):
+) -> None:
     async with (
         _harness(
             "chat",
@@ -350,7 +350,7 @@ async def test_permanent_rejection_advances_without_erasing_incoming_prefix(
 @pytest.mark.parametrize("visible", [False, True])
 async def test_abandoned_calls_never_cross_model_boundary(
     protocol: str, wire: WireProtocol, visible: bool
-):
+) -> None:
     failed_events = partial_tool(protocol)
     if visible:
         failed_events = after_text(protocol, failed_events)
@@ -402,7 +402,7 @@ async def test_abandoned_calls_never_cross_model_boundary(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_first_fallback_call_rejects_native_state_without_trying_next_model(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     async with (
         _harness(
             "chat",
@@ -434,7 +434,7 @@ async def test_first_fallback_call_rejects_native_state_without_trying_next_mode
 @pytest.mark.parametrize("text", ["", "Hello "])
 async def test_first_fallback_call_cannot_complete_without_new_output(
     protocol: str, wire: WireProtocol, text: str
-):
+) -> None:
     async with (
         _harness(
             "chat",
@@ -463,7 +463,7 @@ async def test_first_fallback_call_cannot_complete_without_new_output(
 @pytest.mark.parametrize("permanent", [False, True])
 async def test_released_calls_handoff_only_for_retryable_failure(
     protocol: str, wire: WireProtocol, permanent: bool
-):
+) -> None:
     completed = tool_events(protocol, '{"path":"kept"}')
     failed_events = completed[:-2] if protocol == "messages" else completed[:-1]
     if permanent:
@@ -519,7 +519,7 @@ async def test_released_calls_handoff_only_for_retryable_failure(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_source_native_state_prevents_model_fallback(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     async with (
         _harness(
             protocol, lambda _: (200, _events_for(protocol)[:-1]), max_attempts=1
@@ -542,7 +542,7 @@ async def test_source_native_state_prevents_model_fallback(
 @pytest.mark.parametrize("later_failure", [False, True])
 async def test_hidden_hosted_activity_remains_a_model_boundary_after_local_retry(
     wire: WireProtocol, later_failure: bool
-):
+) -> None:
     hidden = [
         *partial_tool("responses"),
         {
@@ -593,7 +593,7 @@ async def test_hidden_hosted_activity_remains_a_model_boundary_after_local_retry
 @pytest.mark.parametrize("partial", [False, True])
 async def test_exhausted_model_allows_another_model_on_same_client(
     protocol: str, wire: WireProtocol, partial: bool
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if bodies[-1]["model"] == "model-1":
             return 200, text_events(protocol, "world.")
@@ -623,7 +623,7 @@ async def test_exhausted_model_allows_another_model_on_same_client(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_shared_cooldown_skips_candidate_with_zero_calls_and_keeps_seed(
     monkeypatch: pytest.MonkeyPatch, wire: WireProtocol
-):
+) -> None:
     shared = ProviderAdmissionController(
         provider_name="shared",
         rate_limit=1000,

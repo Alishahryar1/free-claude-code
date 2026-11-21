@@ -10,7 +10,7 @@ from free_claude_code.runtime import native_folder_dialog as native
 @pytest.mark.parametrize("platform", ["macos", "linux"])
 def test_posix_dialog_replaces_helper_without_spawning_child(
     monkeypatch: pytest.MonkeyPatch, platform: str
-):
+) -> None:
     calls = []
 
     def exec_command(path: str, arguments: list[str], *env: object):
@@ -52,7 +52,7 @@ def test_posix_dialog_replaces_helper_without_spawning_child(
 )
 def test_native_selection_preserves_paths_and_normal_cancel(
     platform: str, status: int, output: str, diagnostic: str, expected: str | None
-):
+) -> None:
     assert (
         native.decode_result(
             output.encode(), diagnostic.encode(), status, platform=platform
@@ -69,14 +69,14 @@ def test_native_selection_preserves_paths_and_normal_cancel(
         "Could not connect to display",
     ],
 )
-def test_linux_display_failure_is_not_user_cancellation(diagnostic: str):
+def test_linux_display_failure_is_not_user_cancellation(diagnostic: str) -> None:
     with pytest.raises(RuntimeError, match=diagnostic):
         native.decode_result(b"", diagnostic.encode(), 1, platform="linux")
 
 
 def test_linux_uses_installed_tool_arguments_and_environment(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     calls: list[tuple[str, list[str], dict[str, str]]] = []
 
     def execve(path: str, command: list[str], env: dict[str, str]) -> None:
@@ -114,7 +114,7 @@ def test_linux_uses_installed_tool_arguments_and_environment(
         native._linux(None)
 
 
-def test_macos_passes_the_hint_as_data(monkeypatch: pytest.MonkeyPatch):
+def test_macos_passes_the_hint_as_data(monkeypatch: pytest.MonkeyPatch) -> None:
     hint = '/tmp/quotes " and spaces'
     calls: list[tuple[str, list[str]]] = []
 
@@ -131,7 +131,7 @@ def test_macos_passes_the_hint_as_data(monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.parametrize("failure", ["missing_tool", "exec_error"])
 def test_helper_setup_failure_cannot_be_mistaken_for_cancel(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], failure: str
-):
+) -> None:
     monkeypatch.setattr(native.sys, "platform", "linux")
 
     def replace_which(_: object):
@@ -159,7 +159,7 @@ def test_helper_setup_failure_cannot_be_mistaken_for_cancel(
 @pytest.mark.parametrize("selection", ["", "C:/Projects/café"])
 def test_windows_destroys_hidden_parent_after_selection(
     monkeypatch: pytest.MonkeyPatch, selection: str
-):
+) -> None:
     calls = []
     monkeypatch.setattr(native, "enable_dpi_awareness", lambda: calls.append("scaling"))
 
@@ -188,7 +188,7 @@ def test_windows_destroys_hidden_parent_after_selection(
     assert calls == ["scaling", "created", "hidden", "destroyed"]
 
 
-def test_folder_hint_is_optional_and_checked_in_helper(tmp_path: Path):
+def test_folder_hint_is_optional_and_checked_in_helper(tmp_path: Path) -> None:
     assert native._initial_directory(str(tmp_path)) == str(tmp_path.resolve())
     assert native._initial_directory(str(tmp_path / "missing")) is None
     assert native._initial_directory("\0") is None

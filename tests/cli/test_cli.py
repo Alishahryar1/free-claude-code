@@ -17,7 +17,7 @@ from tests.wire_payload import object_payload, string_payload
 class TestCLIParser:
     """Test CLI event parsing."""
 
-    def test_parse_text_content(self):
+    def test_parse_text_content(self) -> None:
         """Test parsing text content from assistant message."""
         event = {
             "type": "assistant",
@@ -28,7 +28,7 @@ class TestCLIParser:
         assert result[0]["type"] == "text_chunk"
         assert result[0]["text"] == "Hello, world!"
 
-    def test_parse_thinking_content(self):
+    def test_parse_thinking_content(self) -> None:
         """Test parsing thinking content."""
         event = {
             "type": "assistant",
@@ -44,7 +44,7 @@ class TestCLIParser:
             or result[0]["text"] == "Let me think..."
         )
 
-    def test_parse_multiple_content(self):
+    def test_parse_multiple_content(self) -> None:
         """Test parsing mixed content (thinking + tools)."""
         event: JsonObject = {
             "type": "assistant",
@@ -61,7 +61,7 @@ class TestCLIParser:
         assert result[0]["text"] == "Thinking..."
         assert result[1]["type"] == "tool_use"
 
-    def test_parse_tool_use(self):
+    def test_parse_tool_use(self) -> None:
         """Test parsing tool use content."""
         event = {
             "type": "assistant",
@@ -81,7 +81,7 @@ class TestCLIParser:
         assert result[0]["name"] == "read_file"
         assert result[0]["input"] == {"path": "/test"}
 
-    def test_parse_text_delta(self):
+    def test_parse_text_delta(self) -> None:
         """Test parsing streaming text delta."""
         event = {
             "type": "content_block_delta",
@@ -93,7 +93,7 @@ class TestCLIParser:
         assert result[0]["type"] == "text_delta"
         assert result[0]["text"] == "streaming text"
 
-    def test_parse_thinking_delta(self):
+    def test_parse_thinking_delta(self) -> None:
         """Test parsing streaming thinking delta."""
         event = {
             "type": "content_block_delta",
@@ -105,21 +105,21 @@ class TestCLIParser:
         assert result[0]["type"] == "thinking_delta"
         assert result[0]["text"] == "thinking..."
 
-    def test_parse_error(self):
+    def test_parse_error(self) -> None:
         """Test parsing error event."""
         event = {"type": "error", "error": {"message": "Something went wrong"}}
         result = parse_cli_event(event)
         assert result[0]["type"] == "error"
         assert result[0]["message"] == "Something went wrong"
 
-    def test_parse_exit_success(self):
+    def test_parse_exit_success(self) -> None:
         """Test parsing exit event with success."""
         event = {"type": "exit", "code": 0}
         result = parse_cli_event(event)
         assert result[0]["type"] == "complete"
         assert result[0]["status"] == "success"
 
-    def test_parse_exit_failure(self):
+    def test_parse_exit_failure(self) -> None:
         """Test parsing exit event with failure returns an error only."""
         event = {"type": "exit", "code": 1}
         result = parse_cli_event(event)
@@ -133,12 +133,12 @@ class TestCLIParser:
         message: str = result[0]["message"]
         assert "exit" in message.lower() or "code" in message.lower()
 
-    def test_parse_invalid_event(self):
+    def test_parse_invalid_event(self) -> None:
         """Test parsing returns empty list for unrecognized event."""
         result = parse_cli_event({"type": "unknown"})
         assert result == []
 
-    def test_parse_non_dict(self):
+    def test_parse_non_dict(self) -> None:
         """Test parsing returns empty list for non-dict input."""
         result = parse_cli_event("not a dict")
         assert result == []
@@ -150,7 +150,7 @@ class TestCLIParser:
 class TestManagedClaudeSession:
     """Test ManagedClaudeSession."""
 
-    def test_session_init(self):
+    def test_session_init(self) -> None:
         """Test ManagedClaudeSession initialization."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -164,7 +164,7 @@ class TestManagedClaudeSession:
         assert session.proxy_root_url == "http://localhost:8082"
         assert not session.is_busy
 
-    def test_session_extract_session_id(self):
+    def test_session_extract_session_id(self) -> None:
         """Test session ID extraction from various event formats."""
         from free_claude_code.cli.managed.claude import (
             extract_managed_claude_session_id,
@@ -197,7 +197,7 @@ class TestManagedClaudeSession:
         assert extract_managed_claude_session_id("not a dict") is None
 
     @pytest.mark.asyncio
-    async def test_start_task_basic_flow(self):
+    async def test_start_task_basic_flow(self) -> None:
         """Test start_task running a basic command flow."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -243,7 +243,7 @@ class TestManagedClaudeSession:
             assert session.current_session_id == "sess_1"
 
     @pytest.mark.asyncio
-    async def test_start_task_with_session_resume(self):
+    async def test_start_task_with_session_resume(self) -> None:
         """Test resuming an existing session."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -272,7 +272,7 @@ class TestManagedClaudeSession:
             assert "--fork-session" not in args
 
     @pytest.mark.asyncio
-    async def test_start_task_with_session_resume_and_fork(self):
+    async def test_start_task_with_session_resume_and_fork(self) -> None:
         """Test resuming an existing session and forking."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -301,7 +301,7 @@ class TestManagedClaudeSession:
             assert "--fork-session" in args
 
     @pytest.mark.asyncio
-    async def test_start_task_process_failure_with_stderr(self):
+    async def test_start_task_process_failure_with_stderr(self) -> None:
         """Test process exit with error code and stderr output."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -331,7 +331,7 @@ class TestManagedClaudeSession:
             assert events[1]["stderr"] == "Fatal error"
 
     @pytest.mark.asyncio
-    async def test_start_task_stderr_while_stdout_streams(self):
+    async def test_start_task_stderr_while_stdout_streams(self) -> None:
         """Stderr is drained concurrently so stdout streaming is not blocked."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -364,7 +364,7 @@ class TestManagedClaudeSession:
         assert events[-1]["code"] == 0
 
     @pytest.mark.asyncio
-    async def test_start_task_ignores_benign_claude_connectors_stderr(self):
+    async def test_start_task_ignores_benign_claude_connectors_stderr(self) -> None:
         """Known Claude diagnostics on stderr are not surfaced as task failures."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -394,7 +394,7 @@ class TestManagedClaudeSession:
         assert events[-1] == {"type": "exit", "code": 0, "stderr": None}
 
     @pytest.mark.asyncio
-    async def test_start_task_mixed_stderr_reports_only_fatal_lines(self):
+    async def test_start_task_mixed_stderr_reports_only_fatal_lines(self) -> None:
         """Benign stderr diagnostics are filtered without hiding real failures."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -424,7 +424,7 @@ class TestManagedClaudeSession:
     @pytest.mark.asyncio
     async def test_start_task_nonzero_with_only_benign_stderr_has_no_stderr_error(
         self,
-    ):
+    ) -> None:
         """A benign stderr line is not duplicated as the process failure reason."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -450,7 +450,7 @@ class TestManagedClaudeSession:
         assert events == [{"type": "exit", "code": 1, "stderr": None}]
 
     @pytest.mark.asyncio
-    async def test_drain_stderr_bounded_retains_cap_but_drains_to_eof(self):
+    async def test_drain_stderr_bounded_retains_cap_but_drains_to_eof(self) -> None:
         """Oversized stderr is fully drained so the pipe cannot deadlock; capture is bounded."""
         from free_claude_code.cli.managed.session import (
             _MAX_STDERR_CAPTURE_BYTES,
@@ -480,7 +480,7 @@ class TestManagedClaudeSession:
         assert remaining["n"] == 0
 
     @pytest.mark.asyncio
-    async def test_stop_session(self):
+    async def test_stop_session(self) -> None:
         """Test stopping the session process."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -505,7 +505,7 @@ class TestManagedClaudeSession:
         mock_process.wait.assert_called()
 
     @pytest.mark.asyncio
-    async def test_stop_session_timeout_force_kill(self):
+    async def test_stop_session_timeout_force_kill(self) -> None:
         """Test force kill if terminate times out."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -537,7 +537,7 @@ class TestManagedClaudeSession:
         mock_process.kill.assert_called()
 
     @pytest.mark.asyncio
-    async def test_start_task_split_buffer(self):
+    async def test_start_task_split_buffer(self) -> None:
         """Test handling of JSON split across chunks."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -568,7 +568,7 @@ class TestManagedClaudeSession:
             assert events[0]["content"] == "Split"
 
     @pytest.mark.asyncio
-    async def test_start_task_remnant_buffer(self):
+    async def test_start_task_remnant_buffer(self) -> None:
         """Test handling of buffer remnant at EOF (no newline at end)."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -597,7 +597,7 @@ class TestManagedClaudeSession:
             assert events[0]["content"] == "Remnant"
 
     @pytest.mark.asyncio
-    async def test_start_task_targets_proxy_root(self):
+    async def test_start_task_targets_proxy_root(self) -> None:
         """Test start_task passes the configured proxy root to Claude Code."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -623,7 +623,7 @@ class TestManagedClaudeSession:
             assert env["ANTHROPIC_BASE_URL"] == "http://localhost:8082"
 
     @pytest.mark.asyncio
-    async def test_start_task_sets_proxy_auth_token(self):
+    async def test_start_task_sets_proxy_auth_token(self) -> None:
         """Test start_task forwards configured proxy auth to Claude Code."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -655,7 +655,7 @@ class TestManagedClaudeSession:
             assert "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in env
 
     @pytest.mark.asyncio
-    async def test_start_task_uses_sentinel_when_proxy_auth_blank(self):
+    async def test_start_task_uses_sentinel_when_proxy_auth_blank(self) -> None:
         """Test start_task does not leak inherited Claude auth into proxy calls."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -684,7 +684,7 @@ class TestManagedClaudeSession:
             assert env["ANTHROPIC_AUTH_TOKEN"] == "freecc"
 
     @pytest.mark.asyncio
-    async def test_start_task_allowed_dirs(self):
+    async def test_start_task_allowed_dirs(self) -> None:
         """Test start_task includes allowed dirs in command."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -713,7 +713,7 @@ class TestManagedClaudeSession:
             assert os.path.normpath("/dir2") in cmd
 
     @pytest.mark.asyncio
-    async def test_start_task_json_error(self):
+    async def test_start_task_json_error(self) -> None:
         """Test handling of non-JSON output from free_claude_code.cli."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -737,7 +737,7 @@ class TestManagedClaudeSession:
             assert events[0]["content"] == "Not valid json"
 
     @pytest.mark.asyncio
-    async def test_stop_exception(self):
+    async def test_stop_exception(self) -> None:
         """Test exception handling during stop."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
 
@@ -762,7 +762,7 @@ class TestManagedClaudeSessionManager:
     """Test ManagedClaudeSessionManager."""
 
     @pytest.mark.asyncio
-    async def test_manager_create_session(self):
+    async def test_manager_create_session(self) -> None:
         """Test creating a new session."""
         from free_claude_code.cli.managed.manager import ManagedClaudeSessionManager
 
@@ -778,7 +778,7 @@ class TestManagedClaudeSessionManager:
         assert is_new is True
 
     @pytest.mark.asyncio
-    async def test_manager_reuse_session(self):
+    async def test_manager_reuse_session(self) -> None:
         """Test reusing an existing session."""
         from free_claude_code.cli.managed.manager import ManagedClaudeSessionManager
 
@@ -798,7 +798,7 @@ class TestManagedClaudeSessionManager:
         assert is_new2 is False
 
     @pytest.mark.asyncio
-    async def test_manager_stats(self):
+    async def test_manager_stats(self) -> None:
         """Test manager stats."""
         from free_claude_code.cli.managed.manager import ManagedClaudeSessionManager
 

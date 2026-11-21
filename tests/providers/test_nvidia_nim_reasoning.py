@@ -28,7 +28,7 @@ async def test_named_effort_reaches_nim_without_numeric_budget(
     wire: Literal["messages", "responses"],
     policy: ReasoningPolicy,
     expected: str | None,
-):
+) -> None:
     def responder(bodies: list[JsonObject]):
         body = bodies[-1]
         assert body.get("reasoning_effort") == expected
@@ -73,7 +73,7 @@ async def test_named_effort_reaches_nim_without_numeric_budget(
 )
 async def test_unsupported_named_effort_is_not_silently_remapped(
     wire: Literal["messages", "responses"], policy: ReasoningPolicy
-):
+) -> None:
     def responder(bodies: object):
         return 400, {
             "message": "reasoning_effort must be one of low, medium, high",

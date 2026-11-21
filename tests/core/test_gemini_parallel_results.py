@@ -77,7 +77,7 @@ def parallel_turn(shared_name: bool = False):
 @pytest.mark.parametrize("shared_name", [False, True])
 def test_parallel_results_share_one_turn_before_followup(
     separate_messages: bool, reverse_results: bool, shared_name: bool
-):
+) -> None:
     native, assistant, results = parallel_turn(shared_name)
     ordered = list(reversed(results)) if reverse_results else results
     result_messages = (
@@ -124,7 +124,7 @@ def test_parallel_results_share_one_turn_before_followup(
     assert request.model_dump() == before
 
 
-def test_trailing_prompt_and_image_result_keep_their_own_positions():
+def test_trailing_prompt_and_image_result_keep_their_own_positions() -> None:
     native, assistant, results = parallel_turn()
     results[1] = {
         "type": "tool_result",
@@ -176,7 +176,7 @@ def test_trailing_prompt_and_image_result_keep_their_own_positions():
     assert prepared["contents"][0] == native
 
 
-def test_result_groups_do_not_cross_assistant_turns():
+def test_result_groups_do_not_cross_assistant_turns() -> None:
     _, assistant, results = parallel_turn()
     turn = [assistant, *[{"role": "user", "content": [r]} for r in results]]
     body = cast(
@@ -200,7 +200,7 @@ def test_result_groups_do_not_cross_assistant_turns():
 
 
 @pytest.mark.parametrize("invalid", ["missing", "duplicate", "unknown", "interleaved"])
-def test_invalid_result_batches_are_rejected(invalid: str):
+def test_invalid_result_batches_are_rejected(invalid: str) -> None:
     _, assistant, results = parallel_turn()
     messages = [assistant, {"role": "user", "content": [results[0]]}]
     if invalid == "duplicate":
@@ -220,7 +220,7 @@ def test_invalid_result_batches_are_rejected(invalid: str):
         messages_to_gemini(MessagesRequest(model="models/test", messages=messages))
 
 
-def test_pending_call_projection_retains_partial_results():
+def test_pending_call_projection_retains_partial_results() -> None:
     _, assistant, results = parallel_turn()
     body = cast(
         dict[str, Any],

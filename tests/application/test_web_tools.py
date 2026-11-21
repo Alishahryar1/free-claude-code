@@ -65,7 +65,7 @@ async def _drain(body: AsyncIterator[StreamOutput]) -> str:
     return "".join([frame async for packet in body for frame in packet.frames])
 
 
-def test_ordinary_client_tool_needs_no_web_or_token_work():
+def test_ordinary_client_tool_needs_no_web_or_token_work() -> None:
     settings = Settings()
     service = _service(
         settings,
@@ -78,7 +78,7 @@ def test_ordinary_client_tool_needs_no_web_or_token_work():
     assert service.try_stream_messages(routed, request_id="req_unhandled") is None
 
 
-def test_disabled_tool_fails_during_preparation():
+def test_disabled_tool_fails_during_preparation() -> None:
     settings = Settings().model_copy(update={"enable_web_server_tools": False})
     service = _service(settings, StubWebToolsClient())
     routed = ModelRouter(settings).resolve_messages_request(_request("web_fetch"))
@@ -87,7 +87,7 @@ def test_disabled_tool_fails_during_preparation():
 
 
 @pytest.mark.asyncio
-async def test_concurrent_requests_keep_their_own_egress_policy():
+async def test_concurrent_requests_keep_their_own_egress_policy() -> None:
     entered, release = asyncio.Event(), asyncio.Event()
 
     class Client(StubWebToolsClient):

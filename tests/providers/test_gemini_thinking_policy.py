@@ -28,7 +28,7 @@ from tests.wire_payload import decode_object, object_payload
 @pytest.mark.parametrize("effort", list(ReasoningEffort))
 async def test_fcc_effort_uses_shared_budget_on_every_ingress(
     wire: str, model: str, effort: ReasoningEffort
-):
+) -> None:
     bodies = []
 
     def reply(request: httpx.Request):
@@ -75,7 +75,7 @@ async def test_fcc_effort_uses_shared_budget_on_every_ingress(
 @pytest.mark.parametrize("visible", [False, True])
 def test_native_client_computation_and_visibility_are_preserved(
     model: str, control: JsonObject, visible: bool
-):
+) -> None:
     thinking = {"includeThoughts": visible, **control}
     body: JsonObject = {
         "model": model,
@@ -92,7 +92,7 @@ def test_native_client_computation_and_visibility_are_preserved(
 )
 async def test_discovery_capability_drives_classifier_allowance(
     flag: bool | None, capability: str
-):
+) -> None:
     bodies = []
 
     def reply(request: httpx.Request):

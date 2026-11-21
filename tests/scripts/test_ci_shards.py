@@ -42,7 +42,7 @@ def run_matrix(counts: Sequence[int | str]):
     "counts",
     [(1, 1, 1, 1, 1, 1), (3, 3, 2, 3, 3, 3), (2, 3, 4, 5, 6, 7), (85, 85, 85, 1, 1, 1)],
 )
-def test_matrix_outputs_cover_each_os_and_shard(counts: tuple[int, ...]):
+def test_matrix_outputs_cover_each_os_and_shard(counts: tuple[int, ...]) -> None:
     result = run_matrix(counts)
     assert result.returncode == 0, result.stderr
     outputs = {
@@ -73,7 +73,9 @@ def test_matrix_outputs_cover_each_os_and_shard(counts: tuple[int, ...]):
 
 @pytest.mark.parametrize("invalid", ["0", "-1", "1.5", "five", "86"])
 @pytest.mark.parametrize("position", range(6))
-def test_invalid_count_fails_before_emitting_either_matrix(invalid: str, position: int):
+def test_invalid_count_fails_before_emitting_either_matrix(
+    invalid: str, position: int
+) -> None:
     counts = ["5"] * 6
     counts[position] = invalid
     result = run_matrix(counts)

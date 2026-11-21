@@ -14,7 +14,7 @@ from tests.providers.test_history_transports import _harness
 
 
 @pytest.mark.asyncio
-async def test_allowed_model_override_uses_effective_wire_model_for_recovery():
+async def test_allowed_model_override_uses_effective_wire_model_for_recovery() -> None:
     admission = ProviderAdmissionController(
         provider_name="groq",
         rate_limit=1000,
@@ -63,7 +63,7 @@ async def test_allowed_model_override_uses_effective_wire_model_for_recovery():
 @pytest.mark.parametrize("invalid_model", [None, 1, {"bad": "model"}])
 async def test_invalid_override_keeps_existing_upstream_rejection(
     invalid_model: JsonValue,
-):
+) -> None:
     async with _harness(
         "chat",
         lambda _: (400, {"type": "invalid_request_error", "message": "Invalid model"}),

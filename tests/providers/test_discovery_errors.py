@@ -42,7 +42,7 @@ from free_claude_code.providers.runtime.discovery import _provider_query_failure
 )
 def test_wrapped_discovery_errors_are_specific_and_secret_safe(
     cause: BaseException, expected: str
-):
+) -> None:
     error = openai.APIConnectionError(
         message="secret-canary", request=httpx2.Request("GET", "https://example.test")
     )
@@ -52,7 +52,7 @@ def test_wrapped_discovery_errors_are_specific_and_secret_safe(
     assert "secret-canary" not in message
 
 
-def test_sdk_status_error_preserves_status_without_body():
+def test_sdk_status_error_preserves_status_without_body() -> None:
     response = httpx2.Response(
         401, request=httpx2.Request("GET", "https://example.test")
     )
@@ -71,7 +71,7 @@ def test_sdk_status_error_preserves_status_without_body():
 )
 async def test_sdk_connection_pool_preserves_os_failure_diagnostics(
     monkeypatch: pytest.MonkeyPatch, failure: str, expected: str
-):
+) -> None:
     stream = AsyncMock(spec=anyio.abc.ByteStream)
     connect = AsyncMock(return_value=stream)
     if failure == "dns":
@@ -96,7 +96,9 @@ async def test_sdk_connection_pool_preserves_os_failure_diagnostics(
 
 
 @pytest.mark.parametrize("sdk", [False, True])
-def test_http_status_is_preserved_without_url_body_or_exception_message(sdk: bool):
+def test_http_status_is_preserved_without_url_body_or_exception_message(
+    sdk: bool,
+) -> None:
     url = "https://user:secret-canary@example.test/models"
     error: httpx.HTTPStatusError | httpx2.HTTPStatusError
     if sdk:
@@ -116,7 +118,7 @@ def test_http_status_is_preserved_without_url_body_or_exception_message(sdk: boo
     assert "secret-canary" not in message
 
 
-def test_exception_context_and_cycles_are_safe():
+def test_exception_context_and_cycles_are_safe() -> None:
     error = RuntimeError("secret-canary")
     cause = socket.gaierror(-2, "secret-canary")
     error.__context__ = cause
@@ -134,7 +136,7 @@ def test_exception_context_and_cycles_are_safe():
 )
 async def test_real_admission_cooldown_retains_discovery_failure(
     error: httpx2.ConnectError | httpx2.ReadTimeout,
-):
+) -> None:
     controller = ProviderAdmissionController(
         provider_name="TEST",
         max_attempts=1,
@@ -159,7 +161,7 @@ async def test_real_admission_cooldown_retains_discovery_failure(
     ) == _provider_query_failure_reason(error)
 
 
-def test_recovery_wrapper_cycles_do_not_hang_classification():
+def test_recovery_wrapper_cycles_do_not_hang_classification() -> None:
     error = RuntimeError("unclassified failure")
     wrapper = ProviderRecoveryExhausted(error)
     error.__cause__ = wrapper

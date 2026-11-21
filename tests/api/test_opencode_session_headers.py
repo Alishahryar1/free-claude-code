@@ -139,7 +139,7 @@ def payload(ingress: str, provider_id: str, selector: str):
 )
 async def test_upstream_receives_one_original_client_user_agent(
     provider_id: str, selector: str, ingress: str, header_name: str, user_agent: str
-):
+) -> None:
     async def upstream(request: httpx2.Request):
         if request.headers.get_list("user-agent") != [user_agent]:
             return httpx2.Response(
@@ -178,7 +178,7 @@ async def test_upstream_receives_one_original_client_user_agent(
 @pytest.mark.parametrize("user_agent", [None, b"", b" \t ", b"client/caf\xe9"])
 async def test_unusable_user_agent_keeps_fallback_after_another_client_request(
     provider_id: str, selector: str, user_agent: bytes | None
-):
+) -> None:
     async with wire_client(provider_id) as (client, provider, requests, _catalogs):
         request = payload("responses", provider_id, selector)
         previous = await client.post(
@@ -210,7 +210,7 @@ async def test_unusable_user_agent_keeps_fallback_after_another_client_request(
 @pytest.mark.parametrize("ingress", ["responses", "messages"])
 async def test_existing_session_id_reaches_opencode_without_forwarding_other_headers(
     provider_id: str, selector: str, ingress: str
-):
+) -> None:
     async with wire_client(provider_id) as (client, provider, requests, catalogs):
         defaults = {
             name: value
@@ -256,7 +256,7 @@ async def test_existing_session_id_reaches_opencode_without_forwarding_other_hea
 @pytest.mark.parametrize("selector", ["responses-selector", "chat-selector"])
 async def test_session_header_precedence_and_absence_do_not_invent_or_reuse_identity(
     selector: str,
-):
+) -> None:
     async with wire_client() as (client, _provider, requests, _catalogs):
         request = payload("responses", "opencode_zen", selector)
         response = await client.post(
@@ -290,7 +290,7 @@ async def test_session_header_precedence_and_absence_do_not_invent_or_reuse_iden
 @pytest.mark.parametrize("ingress", ["responses", "messages"])
 async def test_launch_fallback_is_stable_until_a_native_conversation_id_is_available(
     selector: str, ingress: str
-):
+) -> None:
     async with wire_client() as (client, _provider, requests, _catalogs):
         for launch_id, native_id in (
             ("launch-a", ""),
@@ -325,7 +325,7 @@ async def test_launch_fallback_is_stable_until_a_native_conversation_id_is_avail
 )
 async def test_concurrent_conversations_keep_their_session_ids_during_retry(
     selector: str, session_header: str
-):
+) -> None:
     first_arrived = asyncio.Event()
     second_arrived = asyncio.Event()
     attempts = []

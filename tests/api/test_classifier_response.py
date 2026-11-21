@@ -22,7 +22,7 @@ def wire(payloads: Sequence[Mapping[str, JsonValue]]):
 @pytest.mark.parametrize("chunk_size", [1, 17, 10000])
 async def test_projection_preserves_text_extensions_and_sparse_interleaved_blocks(
     chunk_size: int,
-):
+) -> None:
     literal = "<thinking>Classifier explanation</thinking><severity>0</severity>"
     start: JsonObject = {
         "type": "message_start",
@@ -120,7 +120,9 @@ async def test_projection_preserves_text_extensions_and_sparse_interleaved_block
 
 
 @pytest.mark.asyncio
-async def test_reasoning_only_completion_stays_empty_with_original_termination():
+async def test_reasoning_only_completion_stays_empty_with_original_termination() -> (
+    None
+):
     start: JsonObject = {"type": "message_start", "message": {"content": []}}
     end = {
         "type": "message_delta",
@@ -153,7 +155,7 @@ async def test_reasoning_only_completion_stays_empty_with_original_termination()
 
 
 @pytest.mark.asyncio
-async def test_cancellation_during_hidden_reasoning_closes_input():
+async def test_cancellation_during_hidden_reasoning_closes_input() -> None:
     blocked = asyncio.Event()
     closed = asyncio.Event()
 
@@ -190,7 +192,7 @@ async def test_cancellation_during_hidden_reasoning_closes_input():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fails", [False, True])
-async def test_only_normal_exhaustion_flushes_unterminated_event(fails: bool):
+async def test_only_normal_exhaustion_flushes_unterminated_event(fails: bool) -> None:
     failure = RuntimeError("upstream failed")
     raw = "event: error\ndata: " + json.dumps(
         {"type": "error", "error": {"message": "unchanged"}}

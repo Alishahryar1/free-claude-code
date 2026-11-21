@@ -9,7 +9,9 @@ from tests.wire_payload import object_array, object_payload
 
 @pytest.mark.parametrize("summary", [False, True])
 @pytest.mark.parametrize("closed", ["none", "text", "part", "item"])
-def test_readable_reasoning_closes_only_missing_stages(summary: bool, closed: str):
+def test_readable_reasoning_closes_only_missing_stages(
+    summary: bool, closed: str
+) -> None:
     response = DeliveredResponse("responses")
     field = "summary" if summary else "content"
     part = {"type": "summary_text" if summary else "reasoning_text", "text": "Reason."}
@@ -62,7 +64,7 @@ def test_readable_reasoning_closes_only_missing_stages(summary: bool, closed: st
     assert response.closing_events() == []
 
 
-def test_finished_part_does_not_require_another_text_done():
+def test_finished_part_does_not_require_another_text_done() -> None:
     response = DeliveredResponse("responses")
     part = {"type": "output_text", "text": "Done."}
     response.observe(
@@ -85,7 +87,7 @@ def test_finished_part_does_not_require_another_text_done():
     ]
 
 
-def test_empty_blocks_and_usage_updates_do_not_finish_overlap():
+def test_empty_blocks_and_usage_updates_do_not_finish_overlap() -> None:
     response = DeliveredResponse("messages")
     response.observe(
         {
@@ -144,7 +146,7 @@ def test_empty_blocks_and_usage_updates_do_not_finish_overlap():
 
 
 @pytest.mark.parametrize("seed", ["added", "done"])
-def test_refusal_content_without_deltas_counts_as_progress(seed: str):
+def test_refusal_content_without_deltas_counts_as_progress(seed: str) -> None:
     response = DeliveredResponse("responses")
     response.observe(
         {
@@ -169,7 +171,7 @@ def test_refusal_content_without_deltas_counts_as_progress(seed: str):
 
 def test_handoff_fallback_preserves_already_closed_item_status(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     response = DeliveredResponse("responses")
     response.observe(
         {

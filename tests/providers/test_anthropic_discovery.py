@@ -46,7 +46,7 @@ def metadata(model: str, adaptive: bool, *, max_tokens: int = 8192) -> JsonObjec
     }
 
 
-def test_metadata_uses_advertised_types_and_efforts_without_name_inference():
+def test_metadata_uses_advertised_types_and_efforts_without_name_inference() -> None:
     adaptive = model_record(metadata("manual-sounding-name", True))
     manual = model_record(metadata("adaptive-sounding-name", False))
     unknown = model_record({"id": "claude-future"})
@@ -73,7 +73,7 @@ def test_metadata_uses_advertised_types_and_efforts_without_name_inference():
 )
 async def test_malformed_refresh_never_publishes_a_partial_catalog(
     bad_page: JsonObject,
-):
+) -> None:
     refresh = False
     calls = []
 
@@ -102,7 +102,7 @@ async def test_malformed_refresh_never_publishes_a_partial_catalog(
 
 
 @pytest.mark.asyncio
-async def test_valid_empty_catalog_is_published_without_fabricated_models():
+async def test_valid_empty_catalog_is_published_without_fabricated_models() -> None:
     def callback(request: object):
         return httpx.Response(200, json={"data": [], "has_more": False})
 
@@ -114,7 +114,7 @@ async def test_valid_empty_catalog_is_published_without_fabricated_models():
 
 
 @pytest.mark.asyncio
-async def test_concurrent_alias_lookup_is_cached_and_uses_same_credentials():
+async def test_concurrent_alias_lookup_is_cached_and_uses_same_credentials() -> None:
     calls = []
 
     async def handle(request: httpx.Request):
@@ -138,7 +138,7 @@ async def test_concurrent_alias_lookup_is_cached_and_uses_same_credentials():
 
 
 @pytest.mark.asyncio
-async def test_concurrent_models_use_independent_conversion_capabilities():
+async def test_concurrent_models_use_independent_conversion_capabilities() -> None:
     sent = []
 
     async def handle(request: httpx.Request):
@@ -201,7 +201,7 @@ async def test_concurrent_models_use_independent_conversion_capabilities():
 
 
 @pytest.mark.asyncio
-async def test_refresh_does_not_mutate_an_inflight_model_record():
+async def test_refresh_does_not_mutate_an_inflight_model_record() -> None:
     posted = asyncio.Event()
     release = asyncio.Event()
     refresh = False
@@ -262,7 +262,7 @@ async def test_refresh_does_not_mutate_an_inflight_model_record():
 
 
 @pytest.mark.asyncio
-async def test_fresh_owner_does_not_trust_stale_generic_capabilities():
+async def test_fresh_owner_does_not_trust_stale_generic_capabilities() -> None:
     calls = []
 
     def handle(request: httpx.Request):

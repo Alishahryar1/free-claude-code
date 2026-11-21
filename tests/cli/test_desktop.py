@@ -344,7 +344,7 @@ def test_fresh_desktop_launch_uses_console_free_supervisor() -> None:
     instance_lock.release.assert_called_once_with()
 
 
-def test_desktop_lock_failure_closes_tray_without_starting_server():
+def test_desktop_lock_failure_closes_tray_without_starting_server() -> None:
     from free_claude_code.cli import desktop
 
     instance_lock = MagicMock()

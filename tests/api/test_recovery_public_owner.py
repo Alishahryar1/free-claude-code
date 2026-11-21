@@ -30,7 +30,7 @@ from tests.wire_payload import (
 
 
 @pytest.mark.asyncio
-async def test_completion_proof_survives_replay_hold_until_later_text():
+async def test_completion_proof_survives_replay_hold_until_later_text() -> None:
     observed = []
 
     async def source():
@@ -63,7 +63,7 @@ async def test_completion_proof_survives_replay_hold_until_later_text():
 @pytest.mark.parametrize("snapshot_only", [False, True])
 async def test_continuation_preserves_call_completed_by_terminal_snapshot(
     preceding_text: bool, snapshot_only: bool
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
@@ -119,7 +119,9 @@ async def test_continuation_preserves_call_completed_by_terminal_snapshot(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("activity", ["metadata", "withheld_tools", "text"])
-async def test_body_correction_depends_on_current_attempt_publication(activity: str):
+async def test_body_correction_depends_on_current_attempt_publication(
+    activity: str,
+) -> None:
     visible = activity == "text"
 
     def reply(bodies: list[JsonObject]):
@@ -168,7 +170,7 @@ async def test_body_correction_depends_on_current_attempt_publication(activity: 
 
 
 @pytest.mark.asyncio
-async def test_released_tool_packet_is_complete_before_upstream_resumes():
+async def test_released_tool_packet_is_complete_before_upstream_resumes() -> None:
     resumed = []
     states = []
 
@@ -199,7 +201,7 @@ async def test_released_tool_packet_is_complete_before_upstream_resumes():
 @pytest.mark.asyncio
 async def test_public_transform_failure_preserves_returned_packets_and_emits_error(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     original = ContinuationStream.prepare
     closed = []
 
@@ -246,7 +248,9 @@ async def test_public_transform_failure_preserves_returned_packets_and_emits_err
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text", ["Hello world.", "world.", "Hello ", ""])
-async def test_terminal_only_text_uses_the_same_overlap_and_progress_rule(text: str):
+async def test_terminal_only_text_uses_the_same_overlap_and_progress_rule(
+    text: str,
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
@@ -278,7 +282,7 @@ async def test_terminal_only_text_uses_the_same_overlap_and_progress_rule(text: 
 @pytest.mark.parametrize("kind", ["reasoning", "web_search_call", "message"])
 async def test_final_only_native_state_is_checked_before_continuation_publication(
     kind: str,
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
@@ -305,7 +309,7 @@ async def test_final_only_native_state_is_checked_before_continuation_publicatio
 
 
 @pytest.mark.asyncio
-async def test_filtered_snapshot_does_not_change_overlap_target_identity():
+async def test_filtered_snapshot_does_not_change_overlap_target_identity() -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
@@ -335,7 +339,9 @@ async def test_filtered_snapshot_does_not_change_overlap_target_identity():
 
 
 @pytest.mark.asyncio
-async def test_attempt_resets_are_atomic_and_old_closures_do_not_commit_new_attempt():
+async def test_attempt_resets_are_atomic_and_old_closures_do_not_commit_new_attempt() -> (
+    None
+):
     attempts = []
 
     async def source():
@@ -373,7 +379,7 @@ async def test_attempt_resets_are_atomic_and_old_closures_do_not_commit_new_atte
 @pytest.mark.parametrize("visible", [False, True])
 async def test_shared_correction_guard_uses_public_attempt_effects(
     monkeypatch: pytest.MonkeyPatch, protocol: str, wire: WireProtocol, visible: bool
-):
+) -> None:
     marker = "injected request correction"
     proposals = []
 

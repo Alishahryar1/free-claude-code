@@ -66,7 +66,7 @@ def request(record: ReplayRecord):
 @pytest.mark.parametrize("removed_prefix", [False, True])
 def test_roundtrip_restores_exact_context_and_native_parts(
     mode: HistoryMode, removed_prefix: bool
-):
+) -> None:
     record = recovered()
     assert record.continuation is not None
     if removed_prefix:
@@ -92,7 +92,7 @@ def test_roundtrip_restores_exact_context_and_native_parts(
 
 
 @pytest.mark.parametrize("damage", ["text", "origin", "unfinished"])
-def test_invalid_echo_or_origin_never_replays(damage: str):
+def test_invalid_echo_or_origin_never_replays(damage: str) -> None:
     record = recovered(echo=damage != "unfinished")
     body = request(record)
     origin = ORIGIN
@@ -116,7 +116,7 @@ def test_invalid_echo_or_origin_never_replays(damage: str):
         "extra_context",
     ],
 )
-def test_continuation_metadata_is_validated(damage: str):
+def test_continuation_metadata_is_validated(damage: str) -> None:
     record = recovered()
     assert record.continuation is not None and record.continuation.echo is not None
     context: list[JsonObject] = deepcopy(list(record.continuation.context))
@@ -142,7 +142,7 @@ def test_continuation_metadata_is_validated(damage: str):
         encode_replay(record)
 
 
-def test_complete_encoded_record_is_bounded(monkeypatch: pytest.MonkeyPatch):
+def test_complete_encoded_record_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     record = recovered()
     size = len(encode_replay(record))
     monkeypatch.setattr(
@@ -152,7 +152,7 @@ def test_complete_encoded_record_is_bounded(monkeypatch: pytest.MonkeyPatch):
         encode_replay(record)
 
 
-def test_captures_corrected_sent_context():
+def test_captures_corrected_sent_context() -> None:
     owner = ContinuationRequest("gemini")
     assert owner.sent_context({"contents": []}, source={}, source_paths={}) is None
     body: JsonObject = owner.build(
@@ -176,7 +176,7 @@ def test_captures_corrected_sent_context():
 
 
 @pytest.mark.parametrize("remove_prefix", [False, True])
-def test_context_mapping_excludes_expanded_previous_replay(remove_prefix: bool):
+def test_context_mapping_excludes_expanded_previous_replay(remove_prefix: bool) -> None:
     owner = ContinuationRequest("gemini")
     original: JsonObject = {**request(recovered()), "model": ORIGIN.model}
     body: JsonObject = owner.build(
@@ -207,7 +207,7 @@ def test_context_mapping_excludes_expanded_previous_replay(remove_prefix: bool):
 @pytest.mark.parametrize("mode", list(HistoryMode))
 def test_fragmented_model_turn_restores_once_and_maps_original_carrier(
     mode: HistoryMode,
-):
+) -> None:
     record = recovered()
     body = request(record)
     body["contents"][1:2] = [
@@ -234,7 +234,7 @@ def test_fragmented_model_turn_restores_once_and_maps_original_carrier(
 
 
 @pytest.mark.parametrize("damage", ["edited_prefix", "cross_user", "second_carrier"])
-def test_fragmented_replay_cannot_hide_edits_or_cross_turns(damage: str):
+def test_fragmented_replay_cannot_hide_edits_or_cross_turns(damage: str) -> None:
     record = recovered()
     body = request(record)
     carrier = {"thoughtSignature": encode_gemini_replay(record)}
@@ -254,7 +254,7 @@ def test_fragmented_replay_cannot_hide_edits_or_cross_turns(damage: str):
         prepare_history(body, ORIGIN)
 
 
-def test_fragmented_previous_replay_does_not_absorb_injected_model_prefix():
+def test_fragmented_previous_replay_does_not_absorb_injected_model_prefix() -> None:
     record = recovered()
     source = request(record)
     source["contents"][1:] = [
@@ -277,7 +277,7 @@ def test_fragmented_previous_replay_does_not_absorb_injected_model_prefix():
     )
 
 
-def test_replay_works_in_a_fresh_process():
+def test_replay_works_in_a_fresh_process() -> None:
     record = recovered()
     script = """
 import json, sys
@@ -301,7 +301,7 @@ print(json.dumps(prepare_history(body,record.origin)))
     ]
 
 
-def test_recovered_tool_defaults_and_generated_id_preserve_original_call():
+def test_recovered_tool_defaults_and_generated_id_preserve_original_call() -> None:
     record = recovered()
     assert record.continuation is not None
     call = {"name": "read", "args": {}}

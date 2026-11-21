@@ -37,7 +37,7 @@ def mock_http(
 @pytest.mark.asyncio
 async def test_all_rows_use_their_own_credential_and_keep_result_order(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     seen = []
 
     async def respond(request: httpx.Request):
@@ -69,7 +69,7 @@ async def test_all_rows_use_their_own_credential_and_keep_result_order(
 @pytest.mark.asyncio
 async def test_queued_rows_each_get_an_attempt_and_timeout(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     active = peak = 0
     seen = []
 
@@ -103,7 +103,7 @@ async def test_queued_rows_each_get_an_attempt_and_timeout(
 @pytest.mark.asyncio
 async def test_custom_keys_get_individual_unverified_rows_without_public_probe(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     def unexpected(request: object):
         pytest.fail("A custom public model list cannot verify a key")
 
@@ -124,7 +124,7 @@ async def test_custom_keys_get_individual_unverified_rows_without_public_probe(
 @pytest.mark.asyncio
 async def test_cancelled_batch_closes_every_active_probe(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     started = asyncio.Event()
 
     async def respond(request: object):

@@ -60,7 +60,7 @@ async def create_session(
 @pytest.mark.asyncio
 async def test_detail_exposes_child_review_liveness_without_native_source(
     code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
-):
+) -> None:
     client, code, harness, _, _ = code_api
     session = await create_session(code_api)
     path = f"/admin/api/code/sessions/{session['id']}"
@@ -94,7 +94,7 @@ async def test_detail_exposes_child_review_liveness_without_native_source(
 @pytest.mark.asyncio
 async def test_mode_is_saved_but_native_defaults_stay_private(
     code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
-):
+) -> None:
     client, code, harness, _, _ = code_api
     harness.configurations["other/vendor/model"] = "other"
     session = await create_session(code_api)
@@ -145,7 +145,7 @@ async def test_mode_is_saved_but_native_defaults_stay_private(
 @pytest.mark.asyncio
 async def test_code_library_has_one_harness_and_no_native_work_on_open(
     code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
-):
+) -> None:
     client, _, harness, _, _ = code_api
     bootstrap = await client.get("/admin/api/code/bootstrap")
     assert response_object(bootstrap)["harnesses"] == [{"id": "codex", "name": "Codex"}]
@@ -162,7 +162,7 @@ async def test_code_library_has_one_harness_and_no_native_work_on_open(
 @pytest.mark.asyncio
 async def test_context_usage_and_raw_provider_capacity_are_public_session_state(
     code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
-):
+) -> None:
     client, code, harness, _, _ = code_api
     harness.context_windows[harness.model] = 100_000
     harness.configurations["unknown/model"] = "unknown"
@@ -197,7 +197,7 @@ async def test_context_usage_and_raw_provider_capacity_are_public_session_state(
 @pytest.mark.asyncio
 async def test_http_send_competition_and_safe_item_projection(
     code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
-):
+) -> None:
     client, code, harness, _, _ = code_api
     session = await create_session(code_api)
     path = f"/admin/api/code/sessions/{session['id']}"
@@ -232,7 +232,7 @@ async def test_http_send_competition_and_safe_item_projection(
 @pytest.mark.asyncio
 async def test_code_commands_reject_unplanned_fields_and_other_harnesses(
     code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
-):
+) -> None:
     client, code, _, folder, _ = code_api
     response = await client.post(
         "/admin/api/code/sessions",
@@ -260,7 +260,7 @@ async def test_code_commands_reject_unplanned_fields_and_other_harnesses(
 async def test_code_routes_share_admin_access_boundary(
     code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
     headers: dict[str, str],
-):
+) -> None:
     client, _, harness, _, _ = code_api
     for path in (
         "/admin/code",
@@ -279,7 +279,7 @@ async def test_folder_selection_only_returns_to_requesting_form(
     code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
     monkeypatch: pytest.MonkeyPatch,
     cancelled: bool,
-):
+) -> None:
     client, _, harness, folder, app = code_api
     selected = None if cancelled else str(folder)
     hints = []
@@ -306,7 +306,7 @@ async def test_folder_selection_only_returns_to_requesting_form(
 async def test_folder_picker_errors_use_admin_detail(
     code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     client, _, _, _, app = code_api
 
     async def pick(_initial_path):
@@ -322,7 +322,7 @@ async def test_folder_picker_errors_use_admin_detail(
 async def test_folder_picker_only_opens_on_an_authorized_explicit_post(
     code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     client, _, _, _, app = code_api
 
     async def unexpected(_initial_path):

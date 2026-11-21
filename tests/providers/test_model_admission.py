@@ -27,7 +27,7 @@ async def admit(execution: ProviderExecution):
 )
 async def test_recovery_is_scoped_to_model(
     exhausted: bool, failed_model: str | None, healthy_model: str | None
-):
+) -> None:
     controller = _controller(max_attempts=1 if exhausted else 2, max_delay=60)
     failed = await admit(controller.start_execution(model=failed_model))
     await failed.fail(_status_error(503, retry_after="60"))
@@ -55,7 +55,9 @@ async def test_recovery_is_scoped_to_model(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["success", "reject", "exhaust", "cancel"])
-async def test_parallel_model_probes_do_not_resolve_each_others_waiters(outcome: str):
+async def test_parallel_model_probes_do_not_resolve_each_others_waiters(
+    outcome: str,
+) -> None:
     controller = _controller(max_attempts=2, max_delay=60)
     first = controller.start_execution(model="a")
     second = controller.start_execution(model="b")
@@ -95,7 +97,9 @@ async def test_parallel_model_probes_do_not_resolve_each_others_waiters(outcome:
 
 
 @pytest.mark.asyncio
-async def test_another_models_recovery_does_not_invalidate_queued_capacity_permit():
+async def test_another_models_recovery_does_not_invalidate_queued_capacity_permit() -> (
+    None
+):
     controller = _controller(max_concurrency=1, max_delay=60)
     first = await _open(controller.start_execution(model="a"))
     queued = asyncio.create_task(_open(controller.start_execution(model="b")))
