@@ -15,10 +15,10 @@ def discard_passed_artifacts(
     record_context = recorder.on_will_close_browser_context
 
     def close_context(context: BrowserContext | Mock):
-        report = getattr(request.node, "rep_call", None)
+        report: object = getattr(request.node, "rep_call", None)
+        passed: object = getattr(report, "passed", None)
         if (
-            report is not None
-            and report.passed
+            passed is True
             and request.config.getoption("--tracing") != "on"
             and request.config.getoption("--screenshot") != "on"
         ):

@@ -18,6 +18,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import object_payload
 
 
 @pytest.fixture
@@ -90,7 +91,7 @@ def test_build_request_body_preserves_validated_extra_body(
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["custom_param"] == "value"
+    assert object_payload(body["extra_body"])["custom_param"] == "value"
 
 
 def test_build_request_body_rejects_reserved_reasoning_extra_body_keys(
@@ -120,7 +121,7 @@ def test_build_request_body_disables_thinking_when_reasoning_off(
 
     body = novita_provider._chat._build_request_body(request, reasoning=REASONING_OFF)
 
-    assert body["extra_body"]["enable_thinking"] is False
+    assert object_payload(body["extra_body"])["enable_thinking"] is False
 
 
 def test_build_request_body_enables_thinking_when_reasoning_on(
@@ -133,7 +134,7 @@ def test_build_request_body_enables_thinking_when_reasoning_on(
 
     body = novita_provider._chat._build_request_body(request, reasoning=REASONING_ON)
 
-    assert body["extra_body"]["enable_thinking"] is True
+    assert object_payload(body["extra_body"])["enable_thinking"] is True
 
 
 def test_build_request_body_omits_thinking_field_by_default(
@@ -148,7 +149,7 @@ def test_build_request_body_omits_thinking_field_by_default(
         request, reasoning=ReasoningPolicy.provider_default()
     )
 
-    assert "enable_thinking" not in body.get("extra_body", {})
+    assert "enable_thinking" not in object_payload(body.get("extra_body", {}))
 
 
 @pytest.mark.asyncio

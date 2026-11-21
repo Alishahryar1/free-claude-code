@@ -26,7 +26,7 @@ from free_claude_code.application.ports import ModelCatalogSnapshot, RequestRunt
 from free_claude_code.config.paths import launcher_temp_dir_path
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.gateway_model_ids import no_thinking_gateway_model_id
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
 from free_claude_code.runtime.codex_app_server import (
     CodexAppServer,
@@ -35,6 +35,7 @@ from free_claude_code.runtime.codex_app_server import (
 from tests.assertions import require_present
 from tests.code_sessions_support import FakeHarness, close_code_database
 from tests.fixture_types import DatabaseFactory, ProgressChanges
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 
 @dataclass
@@ -71,7 +72,8 @@ def factory_peer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         config = tomllib.loads(
             "\n".join(command[i + 1] for i, arg in enumerate(command) if arg == "-c")
         )
-        path = config.get("model_catalog_json")
+        path: object = config.get("model_catalog_json")
+        assert path is None or isinstance(path, str)
         peer.catalog = Path(path) if path else None
         peer.process = await spawn(
             sys.executable,
@@ -151,14 +153,17 @@ async def test_factory_open_preserves_setup_and_catalog_until_process_exit(
         assert "127.0.0.1" in factory_peer.env["NO_PROXY"].split(",")
         assert env == before
         assert factory_peer.catalog is not None
-        catalog = json.loads(factory_peer.catalog.read_text())
-        assert any(model["slug"] == config["model"] for model in catalog["models"])
+        catalog = decode_object(factory_peer.catalog.read_text())
+        assert any(
+            object_payload(model)["slug"] == config["model"]
+            for model in array_payload(catalog["models"])
+        )
         assert "factory-token" not in factory_peer.catalog.read_text()
         assert native.process.returncode is None
     finally:
         await native.close()
     assert native.process.returncode == 0
-    assert json.loads((tmp_path / "catalog-at-exit.json").read_text()) == catalog
+    assert load_json_value((tmp_path / "catalog-at-exit.json").read_text()) == catalog
     assert not factory_peer.catalog.parent.exists()
 
 
@@ -379,7 +384,7 @@ async def test_complete_mode_overrides_restore_native_defaults(
     for mode in ("ask", "auto_review", "full_access", "config"):
         selection = await harness.prepare(harness.model, "high", mode)
         await native.start_turn("hello", selection, "input", thread.permission_defaults)
-        params = rpc.call_args.args[1]
+        params: dict[str, object] = rpc.call_args.args[1]
         assert {
             key: value
             for key, value in params.items()

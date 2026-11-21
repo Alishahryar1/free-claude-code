@@ -34,6 +34,7 @@ from tests.providers.support import (
     make_provider_config,
     reasoning_for,
 )
+from tests.wire_payload import object_payload
 
 _PROJECT_ID = "my-project"
 _GLOBAL_OPENAI_BASE = (
@@ -254,7 +255,9 @@ def test_vertex_request_uses_google_thinking_budget_without_named_effort() -> No
 
     assert body["model"] == "google/gemini-3.5-flash"
     assert "reasoning_effort" not in body
-    assert body["extra_body"]["extra_body"]["google"]["thinking_config"] == {
+    assert object_payload(
+        object_payload(object_payload(body["extra_body"])["extra_body"])["google"]
+    )["thinking_config"] == {
         "include_thoughts": True,
         "thinking_budget": 2048,
     }
@@ -269,7 +272,9 @@ def test_vertex_request_maps_reasoning_off_to_zero_budget() -> None:
 
     body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
 
-    assert body["extra_body"]["extra_body"]["google"]["thinking_config"] == {
+    assert object_payload(
+        object_payload(object_payload(body["extra_body"])["extra_body"])["google"]
+    )["thinking_config"] == {
         "thinking_budget": 0,
         "include_thoughts": False,
     }

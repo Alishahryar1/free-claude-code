@@ -36,9 +36,16 @@ from tests.api.test_delivered_stream_recovery import (
     text_events,
 )
 from tests.api.test_hidden_stream_retries import delivered
+from tests.application.test_execution import stream_routed_request
 from tests.providers.support import assistant_history_text, immediate_admission
 from tests.providers.test_custom_provider import completion, definition, provider
 from tests.web_tools_support import StubWebToolsClient
+from tests.wire_payload import (
+    decode_object,
+    int_payload,
+    object_payload,
+    string_payload,
+)
 
 
 @pytest.mark.asyncio
@@ -49,7 +56,7 @@ async def test_classifier_fallback_keeps_manual_thinking_compatible(
     captured = []
 
     def reply(request: httpx.Request):
-        captured.append(json.loads(request.content))
+        captured.append(decode_object(request.content))
         return httpx.Response(
             200,
             text=completion("anthropic_messages").replace(
@@ -89,7 +96,7 @@ async def test_classifier_fallback_keeps_manual_thinking_compatible(
         ]
         assert len(captured) == 1
         assert captured[0]["thinking"] == {"type": "disabled"}
-        assert captured[0]["max_tokens"] > 64
+        assert int_payload(captured[0]["max_tokens"]) > 64
     finally:
         await fallback.cleanup()
 
@@ -104,7 +111,7 @@ async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
     captured = []
 
     def reply(request: httpx2.Request):
-        captured.append(json.loads(request.content))
+        captured.append(decode_object(request.content))
         response = completion(egress)
         if egress == "openai_chat":
             delta = {
@@ -171,8 +178,12 @@ async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
     try:
         output = "".join(
             await collect_response(
-                getattr(executor, f"stream_{wire_api}")(
-                    routed, raw_log_payload=dict, request_id="fallback-wire"
+                stream_routed_request(
+                    executor,
+                    wire_api,
+                    routed,
+                    raw_log_payload=dict,
+                    request_id="fallback-wire",
                 ),
                 protocol=wire_api,
             )
@@ -191,10 +202,10 @@ async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
             assert body["reasoning_effort"] == expected
             assert ("Candidate reasoning" in output) is (effort != "off")
         else:
-            assert body["reasoning"]["effort"] == expected
+            assert object_payload(body["reasoning"])["effort"] == expected
             if wire_api == "responses":
-                assert body["reasoning"]["summary"] == "detailed"
-                assert body["reasoning"]["context"] == "all_turns"
+                assert object_payload(body["reasoning"])["summary"] == "detailed"
+                assert object_payload(body["reasoning"])["context"] == "all_turns"
                 assert body["metadata"] == {"keep": True}
     finally:
         await fallback.cleanup()
@@ -209,9 +220,9 @@ async def test_candidate_efforts_survive_retry_and_continuation(
     attempts = {"primary": 0, "low": 0, "inherited": 0}
 
     def reply(request: httpx2.Request):
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         bodies.append(body)
-        model = body["model"]
+        model = string_payload(body["model"])
         attempts[model] += 1
         text = (
             ["Hello ", "there. "][attempts[model] - 1]
@@ -265,13 +276,20 @@ async def test_candidate_efforts_survive_retry_and_continuation(
             )
         )
     try:
-        stream = getattr(executor, f"stream_{wire_api}")(
-            routed, raw_log_payload=dict, request_id="fallback-continuation"
+        stream = stream_routed_request(
+            executor,
+            wire_api,
+            routed,
+            raw_log_payload=dict,
+            request_id="fallback-continuation",
         )
         events = parse_sse_text(await delivered(stream, wire_api))
         assert_completed(events, wire_api)
         assert public_text(events, wire_api) == "Hello there. Low work. Finished."
-        assert [(body["model"], body["reasoning"]["effort"]) for body in bodies] == [
+        assert [
+            (body["model"], object_payload(body["reasoning"])["effort"])
+            for body in bodies
+        ] == [
             ("primary", "high"),
             ("primary", "high"),
             ("low", "low"),

@@ -1,7 +1,6 @@
 """Shareable local diagnostics, without starting or changing FCC."""
 
 import importlib
-import json
 import platform
 import re
 import shutil
@@ -19,7 +18,7 @@ from free_claude_code.config.paths import (
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG, ProviderAuthKind
 from free_claude_code.config.server_urls import local_proxy_root_url
 from free_claude_code.config.settings import Settings
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.core.version import package_version
 from free_claude_code.harnesses import (
     claude_desktop_integration,
@@ -164,7 +163,8 @@ def settings_report(settings: Settings, accounts: dict[str, str]) -> dict[str, A
             ("proxy", descriptor.proxy_attr),
         ):
             if attr:
-                row[key] = _url_summary(getattr(settings, attr))
+                value: object = getattr(settings, attr)
+                row[key] = _url_summary(value if isinstance(value, str) else None)
         if name == "vertex":
             row["location"] = settings.vertex_location
         providers[name] = row
@@ -191,7 +191,7 @@ def settings_report(settings: Settings, accounts: dict[str, str]) -> dict[str, A
     }
 
 
-def integration_report(settings: Settings) -> dict[str, Any]:
+def integration_report(settings: Settings) -> dict[str, JsonObject]:
     url, token = local_proxy_root_url(settings), settings.proxy_auth_token
     readers = {
         "vscode-chat": lambda: vscode_chat_integration.status(
@@ -215,7 +215,7 @@ def integration_report(settings: Settings) -> dict[str, Any]:
             jetbrains_acp_integration.config_path(), url, token
         ),
     }
-    result: dict[str, Any] = {}
+    result: dict[str, JsonObject] = {}
     for name, read in readers.items():
         try:
             status = read()
@@ -252,7 +252,7 @@ def probe_harness(binary: str, args: tuple[str, ...]) -> dict[str, Any]:
             return result
         output = probe.stdout.strip()
         if binary == "grok":
-            payload = json.loads(output)
+            payload = load_json_value(output)
             output = (
                 payload.get("currentVersion", "") if isinstance(payload, dict) else ""
             )
@@ -272,8 +272,13 @@ def probe_harness(binary: str, args: tuple[str, ...]) -> dict[str, Any]:
 
 def harness_report() -> dict[str, Any]:
     result = {}
+    from free_claude_code.cli.launchers.runner import HarnessSpec
+
     for name in HARNESS_NAMES:
-        spec = importlib.import_module(f"free_claude_code.cli.launchers.{name}").SPEC
+        module = importlib.import_module(f"free_claude_code.cli.launchers.{name}")
+        spec: object = getattr(module, "SPEC", None)
+        if not isinstance(spec, HarnessSpec):
+            raise TypeError(f"Invalid harness specification for {name}")
         args = (
             tuple(spec.compatibility_check.args)
             if spec.compatibility_check
@@ -297,7 +302,7 @@ def model_discovery_report(settings: Settings) -> dict[str, Any]:
             follow_redirects=False,
         )
         response.raise_for_status()
-        payload = response.json()
+        payload: JsonValue = response.json()
     except httpx.HTTPError, httpx.InvalidURL, ValueError:
         return unavailable
     if not isinstance(payload, dict) or payload.get("status") != "running":

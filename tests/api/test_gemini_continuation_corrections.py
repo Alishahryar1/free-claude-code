@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from tests.api.support import provider_manager_for_app
 from tests.api.test_four_protocol_matrix import matrix_app, response_value
 from tests.api.test_gemini_continuation_replay import body, native
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 
 @pytest.mark.parametrize("wire", ["messages", "chat", "responses", "gemini"])
@@ -28,18 +29,22 @@ def test_corrected_continuation_and_followup_preserve_actual_context(
 
     def reply(request: httpx.Request):
         nonlocal completed_context, completed_native
-        value = json.loads(request.content)
+        value = decode_object(request.content)
         sent.append(deepcopy(value))
         if completed_context is not None:
-            assert value["contents"][:-2] == completed_context
-            assert value["contents"][-2] == completed_native
+            assert array_payload(value["contents"])[:-2] == completed_context
+            assert array_payload(value["contents"])[-2] == completed_native
             event = native("FOLLOWUP_OK", True)
         elif len(sent) == 1:
             parts = [{"text": "Some thinking.", "thought": True}]
             if not thinking_only:
                 parts.append({"text": "Prefix "})
             event = {"candidates": [{"content": {"role": "model", "parts": parts}}]}
-        elif any(p.get("thought") for c in value["contents"] for p in c["parts"]):
+        elif any(
+            object_payload(p).get("thought")
+            for c in array_payload(value["contents"])
+            for p in array_payload(object_payload(c)["parts"])
+        ):
             return httpx.Response(
                 400,
                 json={
@@ -93,6 +98,6 @@ def test_corrected_continuation_and_followup_preserve_actual_context(
         assert "FOLLOWUP_OK" in followup.text
         assert provider_manager_for_app(app)._current.active_leases == 0
     assert len(corrected) == 1 + interrupt_again
-    assert [row["role"] for row in corrected[0]["contents"]] == (
-        ["user", "user"] if thinking_only else ["user", "model", "user"]
-    )
+    assert [
+        object_payload(row)["role"] for row in array_payload(corrected[0]["contents"])
+    ] == (["user", "user"] if thinking_only else ["user", "model", "user"])

@@ -27,7 +27,7 @@ from free_claude_code.core.anthropic.native import (
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.gemini import GeminiRequest
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.trace import trace_event
 
@@ -57,8 +57,8 @@ from .response_streams import bind_response_lifetime
 router = APIRouter()
 
 
-def _unique_json_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
+def _unique_json_fields(pairs: list[tuple[str, JsonValue]]) -> JsonObject:
+    result: JsonObject = {}
     for key, value in pairs:
         if key in result:
             raise ValueError(f"Duplicate JSON field: {key}")

@@ -25,6 +25,7 @@ from tests.providers.support import (
     reasoning_for,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 class AsyncStream(SDKStreamDouble[ChatCompletionChunk]):
@@ -106,7 +107,12 @@ def test_build_request_body_requests_split_output_and_max_completion_tokens(
     )
 
     assert body["model"] == "MiniMax-M3"
-    assert body["tools"][0]["function"]["name"] == "echo"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "echo"
+    )
     assert body["max_completion_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
     assert "max_tokens" not in body
     assert body["extra_body"] == {"reasoning_split": True}

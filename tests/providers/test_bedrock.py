@@ -14,6 +14,7 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
 )
+from tests.wire_payload import array_payload, object_payload
 
 BEDROCK_MODEL = "openai.gpt-oss-120b"
 
@@ -78,9 +79,17 @@ def test_request_uses_portable_chat_fields_without_invented_reasoning() -> None:
     body = _provider()._chat._build_request_body(request)
 
     assert body["model"] == BEDROCK_MODEL
-    assert body["messages"][0] == {"role": "system", "content": "System prompt"}
+    assert array_payload(body["messages"])[0] == {
+        "role": "system",
+        "content": "System prompt",
+    }
     assert body["max_tokens"] == 100
-    assert body["tools"][0]["function"]["name"] == "read_file"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "read_file"
+    )
     assert "reasoning_effort" not in body
     assert "reasoning" not in body
     assert "thinking" not in body
@@ -118,14 +127,19 @@ def test_reasoning_history_replays_in_native_field() -> None:
 
     body = _provider()._chat._build_request_body(request)
     assistant = next(
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     )
 
-    assert assistant["content"] == "I found the file."
-    assert assistant["reasoning_content"] == "Inspect the repository."
-    assert assistant["tool_calls"][0]["id"] == "call_1"
-    assert assistant["reasoning_content"] == "Inspect the repository."
-    assert "reasoning" not in assistant
+    assert object_payload(assistant)["content"] == "I found the file."
+    assert object_payload(assistant)["reasoning_content"] == "Inspect the repository."
+    assert (
+        object_payload(array_payload(object_payload(assistant)["tool_calls"])[0])["id"]
+        == "call_1"
+    )
+    assert object_payload(assistant)["reasoning_content"] == "Inspect the repository."
+    assert "reasoning" not in object_payload(assistant)
 
 
 @pytest.mark.asyncio

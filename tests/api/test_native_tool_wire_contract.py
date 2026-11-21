@@ -122,7 +122,7 @@ async def test_filtered_messages_blocks_have_dense_consistent_client_indexes(
         ("content_block_stop", 0),
     ]
     assert "call_probe" not in "".join(frames)
-    assert output[-2]["delta"]["stop_reason"] == "max_tokens"
+    assert object_payload(output[-2]["delta"])["stop_reason"] == "max_tokens"
 
 
 def parallel_responses():
@@ -230,9 +230,9 @@ async def test_native_chat_never_releases_calls_without_unambiguous_ids(
     output = [event.data for event in parse_sse_text("".join(frames))]
     assert any("error" in event for event in output)
     assert not any(
-        (choice.get("delta") or {}).get("tool_calls")
+        (object_payload(object_payload(choice).get("delta") or {})).get("tool_calls")
         for event in output
-        for choice in event.get("choices", [])
+        for choice in array_payload(event.get("choices", []))
     )
     assert len(bodies) == 1
 
@@ -289,8 +289,8 @@ async def test_native_complete_calls_require_execution_identity(
     output = [event.data for event in parse_sse_text("".join(frames))]
     assert output[-1]["type"] in {"error", "response.failed"}
     assert not any(
-        event.get("content_block", {}).get("type") == "tool_use"
-        or event.get("item", {}).get("type") == "function_call"
+        object_payload(event.get("content_block", {})).get("type") == "tool_use"
+        or object_payload(event.get("item", {})).get("type") == "function_call"
         for event in output
     )
 
@@ -362,7 +362,7 @@ async def test_generated_alias_with_arguments_waits_for_remaining_name_and_sourc
         )
     output = [event.data for event in parse_sse_text("".join(frames))]
     names = [
-        event.get("content_block", event.get("item", {})).get("name")
+        object_payload(event.get("content_block", event.get("item", {}))).get("name")
         for event in output
         if event["type"] in {"content_block_start", "response.output_item.added"}
     ]
@@ -404,7 +404,11 @@ async def test_contradictory_snapshot_never_replaces_a_completed_native_call(
             frames = await public_frames(body, "responses")
             output = [event.data for event in parse_sse_text("".join(frames))]
             assert output[-1]["type"] == "response.failed"
-            assert "already completed" in output[-1]["response"]["error"]["message"]
+            assert "already completed" in string_payload(
+                object_payload(object_payload(output[-1]["response"])["error"])[
+                    "message"
+                ]
+            )
             assert "delete" not in "".join(frames)
         else:
             with pytest.raises(ExecutionFailure, match="already completed"):
@@ -451,19 +455,24 @@ async def test_chat_fragment_placeholders_preserve_the_resolved_execution_id(
             identities = [
                 call["id"]
                 for value in output
-                for choice in value.get("choices", [])
-                for call in choice.get("delta", {}).get("tool_calls", [])
-                if "id" in call
+                for choice in array_payload(value.get("choices", []))
+                for call in object_array(
+                    object_payload(object_payload(choice).get("delta", {})).get(
+                        "tool_calls", []
+                    )
+                )
+                if "id" in object_payload(call)
             ]
         elif wire == "messages":
             identities = [
-                value["content_block"]["id"]
+                object_payload(value["content_block"])["id"]
                 for value in output
-                if value.get("content_block", {}).get("type") == "tool_use"
+                if object_payload(value.get("content_block", {})).get("type")
+                == "tool_use"
             ]
         else:
             identities = [
-                value["item"]["call_id"]
+                object_payload(value["item"])["call_id"]
                 for value in output
                 if value.get("type") == "response.output_item.done"
             ]

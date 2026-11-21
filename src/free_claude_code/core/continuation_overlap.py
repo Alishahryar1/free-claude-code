@@ -1,13 +1,22 @@
 """Remove one logical replay prefix while preserving source parts and events."""
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 import simplejson
 
 from .failures import ExecutionFailure, FailureKind
 from .gemini.response import gemini_finished, gemini_parts
+from .json_types import (
+    DecimalJsonObject,
+    DecimalJsonValue,
+    json_index,
+    json_object,
+    json_objects,
+    json_text,
+)
 from .recovery_limits import RECOVERY_RETENTION_BYTES
 
 type PartKey = tuple[int | str, int]
@@ -27,7 +36,7 @@ class _Part:
 class _Text:
     key: PartKey
     order: tuple[int, ...]
-    value: dict[str, Any]
+    value: DecimalJsonObject
     field: str
     delta: bool = False
     part: _Part | None = None
@@ -36,7 +45,7 @@ class _Text:
 
 @dataclass(slots=True)
 class _Frame:
-    data: dict[str, Any]
+    data: DecimalJsonObject
     texts: list[_Text]
 
 
@@ -55,30 +64,27 @@ class ContinuationOverlap:
         self._frame_bytes = 0
         self._frontier: tuple[int, ...] | None = None
 
-    def feed(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        data = deepcopy(payload)
-        block = data.get("content_block", {})
-        field = "thinking" if self._channel == "thinking" else "text"
-        if (
-            data.get("type") == "content_block_start"
-            and block.get("type") == field
-            and block.get(field)
-        ):
-            text, block[field] = block[field], ""
-            return [
-                *self._feed(data),
-                *self._feed(
-                    {
-                        "type": "content_block_delta",
-                        "index": data["index"],
-                        "delta": {"type": f"{field}_delta", field: text},
-                    }
-                ),
-            ]
+    def feed(self, payload: Mapping[str, DecimalJsonValue]) -> list[DecimalJsonObject]:
+        data = deepcopy(dict(payload))
+        if data.get("type") == "content_block_start":
+            block = json_object(data.get("content_block", {}))
+            field = "thinking" if self._channel == "thinking" else "text"
+            if block.get("type") == field and block.get(field):
+                text, block[field] = block[field], ""
+                return [
+                    *self._feed(data),
+                    *self._feed(
+                        {
+                            "type": "content_block_delta",
+                            "index": data["index"],
+                            "delta": {"type": f"{field}_delta", field: text},
+                        }
+                    ),
+                ]
         return self._feed(data)
 
-    def _feed(self, data: dict[str, Any]) -> list[dict[str, Any]]:
-        kind = data.get("type", "")
+    def _feed(self, data: DecimalJsonObject) -> list[DecimalJsonObject]:
+        kind = json_text(data.get("type", ""))
         if kind in {"error", "response.error", "response.failed"} or "error" in data:
             self._frames.clear()
             self._frame_bytes = 0
@@ -91,7 +97,7 @@ class ContinuationOverlap:
             gemini_finished(data)
             or any(
                 choice.get("finish_reason") is not None
-                for choice in data.get("choices", [])
+                for choice in json_objects(data.get("choices", []))
             )
             or kind
             in {
@@ -101,7 +107,7 @@ class ContinuationOverlap:
             }
             or (
                 kind == "message_delta"
-                and data.get("delta", {}).get("stop_reason") is not None
+                and json_object(data.get("delta", {})).get("stop_reason") is not None
             )
         )
         if not self._pending:
@@ -122,7 +128,7 @@ class ContinuationOverlap:
             part = self._parts.setdefault(text.key, _Part(text.order))
             part.order = text.order
             text.part = part
-            value = text.value.get(text.field, "")
+            value = json_text(text.value.get(text.field, ""))
             text.offset = part.seen if text.delta else 0
             if text.delta:
                 part.text = (part.text + value)[: len(self._expected) + 1]
@@ -161,18 +167,20 @@ class ContinuationOverlap:
         self._check_size()
         return self._render(frame)
 
-    def _identity(self, data: dict[str, Any], item: dict[str, Any]) -> int | str:
-        index = data.get("output_index", 0)
+    def _identity(self, data: DecimalJsonObject, item: DecimalJsonObject) -> int | str:
+        index = json_index(data.get("output_index", 0))
         identity = item.get("id") or data.get("item_id") or self._ids.get(index, index)
         if self._pending and isinstance(identity, str) and "output_index" in data:
             self._ids[index] = identity
-        return identity
+        if isinstance(identity, (str, int)):
+            return identity
+        raise TypeError("Invalid continuation item identity")
 
-    def _texts(self, data: dict[str, Any]) -> list[_Text]:
+    def _texts(self, data: DecimalJsonObject) -> list[_Text]:
         if "choices" in data:
             texts = []
-            for choice in data["choices"]:
-                delta = choice.get("delta") or {}
+            for choice in json_objects(data["choices"]):
+                delta = json_object(choice.get("delta") or {})
                 fields = (
                     ("content",)
                     if self._channel == "text"
@@ -184,7 +192,7 @@ class ContinuationOverlap:
                     if isinstance(delta.get(field), str)
                 )
                 if self._channel == "thinking":
-                    for detail in delta.get("reasoning_details", []):
+                    for detail in json_objects(delta.get("reasoning_details", [])):
                         field = (
                             "summary"
                             if detail.get("type") == "reasoning.summary"
@@ -202,18 +210,19 @@ class ContinuationOverlap:
                 if "text" in part
                 and bool(part.get("thought")) == (self._channel == "thinking")
             ]
-        kind = data.get("type", "")
-        index = data.get("index", 0)
+        kind = json_text(data.get("type", ""))
         field = "thinking" if self._channel == "thinking" else "text"
         if kind == "content_block_start":
-            block = data.get("content_block", {})
+            index = json_index(data.get("index", 0))
+            block = json_object(data.get("content_block", {}))
             return (
                 [_Text((index, 0), (index, 0), block, field)]
                 if block.get("type") == field
                 else []
             )
         if kind == "content_block_delta":
-            delta = data.get("delta", {})
+            index = json_index(data.get("index", 0))
+            delta = json_object(data.get("delta", {}))
             return (
                 [_Text((index, 0), (index, 0), delta, field, delta=True)]
                 if delta.get("type") == f"{field}_delta"
@@ -221,17 +230,23 @@ class ContinuationOverlap:
             )
         if kind in {"response.completed", "response.incomplete"}:
             texts = []
-            for position, item in enumerate(data.get("response", {}).get("output", [])):
-                texts.extend(self._item_texts(item, item.get("id", position), position))
+            response = json_object(data.get("response", {}))
+            for position, item in enumerate(json_objects(response.get("output", []))):
+                identity = item.get("id", position)
+                if not isinstance(identity, (str, int)):
+                    raise TypeError("Invalid continuation item identity")
+                texts.extend(self._item_texts(item, identity, position))
             return texts
-        item = data.get("item", {})
         if kind in {"response.output_item.added", "response.output_item.done"}:
+            item = json_object(data.get("item", {}))
             if item.get("type") != (
                 "message" if self._channel == "text" else "reasoning"
             ):
                 return []
             identity = self._identity(data, item)
-            return self._item_texts(item, identity, data.get("output_index", 0))
+            return self._item_texts(
+                item, identity, json_index(data.get("output_index", 0))
+            )
         summary = kind.startswith("response.reasoning_summary_")
         text_event = (
             "response.output_text"
@@ -252,13 +267,15 @@ class ContinuationOverlap:
             f"{part_event}.done",
         }:
             return []
-        position = data.get("summary_index" if summary else "content_index", 0)
+        position = json_index(
+            data.get("summary_index" if summary else "content_index", 0)
+        )
         key = (self._identity(data, {}), position * 2 + int(summary))
-        order = (data.get("output_index", 0), int(summary), position)
+        order = (json_index(data.get("output_index", 0)), int(summary), position)
         if kind in {f"{text_event}.delta", f"{text_event}.done"}:
             delta = kind.endswith(".delta")
             return [_Text(key, order, data, "delta" if delta else "text", delta=delta)]
-        part = data.get("part", {})
+        part = json_object(data.get("part", {}))
         expected = (
             "output_text"
             if self._channel == "text"
@@ -269,7 +286,7 @@ class ContinuationOverlap:
         return [_Text(key, order, part, "text")] if part.get("type") == expected else []
 
     def _item_texts(
-        self, item: dict[str, Any], identity: int | str, index: int
+        self, item: DecimalJsonObject, identity: int | str, index: int
     ) -> list[_Text]:
         if item.get("type") != ("message" if self._channel == "text" else "reasoning"):
             return []
@@ -283,16 +300,16 @@ class ContinuationOverlap:
                 (identity, position * 2 + rank), (index, rank, position), part, "text"
             )
             for rank, (field, kind) in enumerate(fields)
-            for position, part in enumerate(item.get(field) or [])
+            for position, part in enumerate(json_objects(item.get(field) or []))
             if part.get("type") == kind
         ]
 
-    def _close_parts(self, data: dict[str, Any], *, terminal: bool) -> None:
+    def _close_parts(self, data: DecimalJsonObject, *, terminal: bool) -> None:
         kind = data.get("type")
         identity = (
-            self._identity(data, data.get("item", {}))
+            self._identity(data, json_object(data.get("item", {})))
             if kind == "response.output_item.done"
-            and data.get("item", {}).get("type")
+            and json_object(data.get("item", {})).get("type")
             == ("message" if self._channel == "text" else "reasoning")
             else data.get("index")
             if kind == "content_block_stop"
@@ -331,7 +348,7 @@ class ContinuationOverlap:
         return 0
 
     def _settled_text(self, text: _Text) -> None:
-        value = text.value.get(text.field, "")
+        value = json_text(text.value.get(text.field, ""))
         part = self._parts.get(text.key)
         if part is None:
             if value and self._precedes_prefix(text):
@@ -394,7 +411,7 @@ class ContinuationOverlap:
                 )
 
     @staticmethod
-    def _render(frame: _Frame) -> list[dict[str, Any]]:
+    def _render(frame: _Frame) -> list[DecimalJsonObject]:
         for text in frame.texts:
             if text.part is not None:
                 removed = (
@@ -402,15 +419,17 @@ class ContinuationOverlap:
                     if text.delta
                     else text.part.removed
                 )
-                text.value[text.field] = text.value.get(text.field, "")[removed:]
+                text.value[text.field] = json_text(text.value.get(text.field, ""))[
+                    removed:
+                ]
         if (
             frame.texts
             and all(text.delta for text in frame.texts)
             and not any(text.value.get(text.field) for text in frame.texts)
         ):
             if "choices" in frame.data:
-                for choice in frame.data["choices"]:
-                    delta = choice.get("delta") or {}
+                for choice in json_objects(frame.data["choices"]):
+                    delta = json_object(choice.get("delta") or {})
                     if choice.get("finish_reason") is not None or any(
                         value
                         for key, value in delta.items()
@@ -426,11 +445,11 @@ class ContinuationOverlap:
                         return [frame.data]
                 return []
             if "candidates" in frame.data:
-                for candidate in frame.data["candidates"]:
-                    content = candidate.get("content", {})
+                for candidate in json_objects(frame.data["candidates"]):
+                    content = json_object(candidate.get("content", {}))
                     content["parts"] = [
                         part
-                        for part in content.get("parts", [])
+                        for part in json_objects(content.get("parts", []))
                         if part.get("text")
                         or any(key not in {"text", "thought"} for key in part)
                     ]

@@ -5,7 +5,15 @@ import uuid
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any
+
+from free_claude_code.core.json_types import (
+    JsonObject,
+    JsonValue,
+    json_index,
+    json_object,
+    json_objects,
+    load_json_value,
+)
 
 from ..failures import ExecutionFailure, FailureKind
 from ..openai_tool_names import OpenAIToolNameCodec
@@ -99,27 +107,27 @@ class ToolCallIdentityResolver:
 class CompletedChatCall:
     choice: int
     index: int
-    body: dict[str, Any]
-    envelope: dict[str, Any]
-    extensions: tuple[dict[str, Any], ...] = ()
+    body: JsonObject
+    envelope: JsonObject
+    extensions: tuple[JsonObject, ...] = ()
 
 
 @dataclass(slots=True)
 class _PendingCall:
     choice: int
     index: int
-    envelope: dict[str, Any]
-    body: dict[str, Any] = field(default_factory=dict)
+    envelope: JsonObject
+    body: JsonObject = field(default_factory=dict)
     names: list[str] = field(default_factory=list)
     arguments: list[str] = field(default_factory=list)
-    extensions: list[dict[str, Any]] = field(default_factory=list)
+    extensions: list[JsonObject] = field(default_factory=list)
     kind: str = "function"
     completed: CompletedChatCall | None = None
 
-    def add(self, fragment: Mapping[str, Any], *, tool_id: str | None) -> None:
+    def add(self, fragment: Mapping[str, JsonValue], *, tool_id: str | None) -> None:
         if isinstance(fragment.get("custom"), Mapping):
             self.kind = "custom"
-        function = fragment.get(self.kind) or {}
+        function = json_object(fragment.get(self.kind) or {})
         if name := function.get("name"):
             if not isinstance(name, str):
                 raise chat_failure("Tool name fragment must be a string")
@@ -133,7 +141,7 @@ class _PendingCall:
             self.body["id"] = tool_id
         if fragment.get("type") is not None:
             self.body["type"] = fragment["type"]
-        extra = {
+        extra: JsonObject = {
             key: deepcopy(value)
             for key, value in fragment.items()
             if key not in {"index", "id", "type", "function", "custom"}
@@ -153,22 +161,19 @@ class _PendingCall:
         name = "".join(self.names)
         if not name.strip():
             raise chat_failure("Completed tool call has no name")
-        body = {
+        text_key = "input" if self.kind == "custom" else "arguments"
+        function: JsonObject = {"name": name, text_key: "".join(self.arguments)}
+        body: JsonObject = {
             **self.body,
             "type": self.body.get("type", self.kind),
-            self.kind: {
-                "name": name,
-                "input" if self.kind == "custom" else "arguments": "".join(
-                    self.arguments
-                ),
-            },
+            self.kind: function,
         }
         # Keep the ordinary single metadata snapshot readily available to presenters.
         # Distinct fragment-associated snapshots also remain available to native output.
         for extra in self.extensions:
             for key, value in extra.items():
                 if key == self.kind:
-                    body[self.kind].update(value)
+                    function.update(json_object(value))
                 else:
                     body[key] = value
         self.completed = CompletedChatCall(
@@ -176,37 +181,37 @@ class _PendingCall:
         )
 
 
-type ChatSourceOutput = dict[str, Any] | CompletedChatCall
+type ChatSourceOutput = JsonObject | CompletedChatCall
 
 
 @dataclass(slots=True)
 class _NativeGroup:
-    frames: list[dict[str, Any]] = field(default_factory=list)
+    frames: list[JsonObject] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
 class CompletedChatBatch:
-    frames: tuple[dict[str, Any], ...]
+    frames: tuple[JsonObject, ...]
 
 
 class ChatToolCallBuffer:
     def __init__(
         self, *, budget: RetentionBudget | None = None, native: bool = False
     ) -> None:
-        self._buffer = OrderedToolCallBuffer[
-            dict[str, Any] | _PendingCall | _NativeGroup
-        ](budget)
+        self._buffer = OrderedToolCallBuffer[JsonObject | _PendingCall | _NativeGroup](
+            budget
+        )
         self._identities: dict[int, ToolCallIdentityResolver] = {}
         self._calls: dict[tuple[int, int], _PendingCall] = {}
-        self._finished: dict[int, tuple[Any, Any]] = {}
+        self._finished: dict[int, tuple[JsonValue, JsonValue]] = {}
         self._refused_choices: set[int] = set()
         self._native = native
         self._native_group: _NativeGroup | None = None
 
     def feed(
-        self, payload: Mapping[str, Any]
+        self, payload: Mapping[str, JsonValue]
     ) -> list[ChatSourceOutput | CompletedChatBatch]:
-        choices = payload.get("choices") or []
+        choices = list(json_objects(payload.get("choices") or []))
         active = []
         seen = set()
         for choice in choices:
@@ -233,22 +238,22 @@ class ChatToolCallBuffer:
                 for part in _native_parts(payload)
                 for output in self._feed_native(part)
             ]
-        envelope = {
+        envelope: JsonObject = {
             key: deepcopy(value) for key, value in payload.items() if key != "choices"
         }
-        choices = payload.get("choices") or []
+        choices = active
         if not choices:
             self._append(dict(payload))
         for position, choice in enumerate(choices):
-            choice_index = choice.get("index", 0)
+            choice_index = json_index(choice.get("index", 0))
             if choice_index in self._finished:
                 raise chat_failure("Chat choice changed after completion")
-            delta = dict(choice.get("delta") or {})
-            calls = delta.pop("tool_calls", None) or []
+            delta = dict(json_object(choice.get("delta") or {}))
+            calls: JsonValue = delta.pop("tool_calls", None) or []
             if delta.get("refusal"):
                 self._refused_choices.add(choice_index)
             if choice_index in self._refused_choices:
-                calls = ()
+                calls = []
             finish = choice.get("finish_reason")
             ordinary = {**choice, "delta": delta, "finish_reason": None}
             if delta or any(
@@ -273,7 +278,7 @@ class ChatToolCallBuffer:
                 )
             ):
                 self._append({**envelope, "choices": []})
-            for fragment in calls:
+            for fragment in json_objects(calls):
                 resolver = self._identities.setdefault(
                     choice_index, ToolCallIdentityResolver(self._buffer.budget)
                 )
@@ -311,15 +316,15 @@ class ChatToolCallBuffer:
         return self._drain()
 
     def _feed_native(
-        self, payload: Mapping[str, Any]
+        self, payload: Mapping[str, JsonValue]
     ) -> list[ChatSourceOutput | CompletedChatBatch]:
         data = deepcopy(dict(payload))
         has_calls = any(
-            (choice.get("delta") or {}).get("tool_calls")
-            for choice in data.get("choices", [])
+            json_object(choice.get("delta") or {}).get("tool_calls")
+            for choice in json_objects(data.get("choices", []))
         )
         if self._native_group is None and not has_calls:
-            for choice in data.get("choices", []):
+            for choice in json_objects(data.get("choices", [])):
                 if choice.get("finish_reason") is not None:
                     self._remember_finish(choice)
             return [data]
@@ -328,11 +333,13 @@ class ChatToolCallBuffer:
             self._buffer.reserve("native", self._native_group)
         self._buffer.grow("native", _size(data))
         self._native_group.frames.append(data)
-        for choice in data.get("choices", []):
-            choice_index = choice.get("index", 0)
+        for choice in json_objects(data.get("choices", [])):
+            choice_index = json_index(choice.get("index", 0))
             if choice_index in self._finished:
                 raise chat_failure("Chat choice changed after completion")
-            for fragment in (choice.get("delta") or {}).get("tool_calls") or []:
+            for fragment in json_objects(
+                json_object(choice.get("delta") or {}).get("tool_calls") or []
+            ):
                 resolver = self._identities.setdefault(
                     choice_index, ToolCallIdentityResolver(self._buffer.budget)
                 )
@@ -347,7 +354,7 @@ class ChatToolCallBuffer:
                 fragment["index"] = slot
             reason = choice.get("finish_reason")
             if reason is not None:
-                if reason in {"stop", "tool_calls"}:
+                if reason in ("stop", "tool_calls"):
                     for (owner, _), call in self._calls.items():
                         if owner == choice_index:
                             call.seal()
@@ -377,14 +384,16 @@ class ChatToolCallBuffer:
             identities.add(key)
         seen: set[tuple[int, int]] = set()
         for data in group.frames:
-            for choice in data.get("choices", []):
-                delta = choice.get("delta") or {}
-                fragments = delta.get("tool_calls")
-                if fragments is None:
+            for choice in json_objects(data.get("choices", [])):
+                delta = json_object(choice.get("delta") or {})
+                raw_fragments = delta.get("tool_calls")
+                if raw_fragments is None:
                     continue
-                retained = []
+                fragments = list(json_objects(raw_fragments))
+                choice_index = json_index(choice.get("index", 0))
+                retained: list[JsonObject] = []
                 dropped = any(
-                    self._calls[(choice.get("index", 0), fragment["index"])].completed
+                    self._calls[(choice_index, json_index(fragment["index"]))].completed
                     is None
                     for fragment in fragments
                 )
@@ -424,16 +433,18 @@ class ChatToolCallBuffer:
                         "Cannot separate unfinished calls from an opaque native Chat envelope"
                     )
                 for fragment in fragments:
-                    key = (choice.get("index", 0), fragment["index"])
+                    key = (choice_index, json_index(fragment["index"]))
                     call = self._calls[key]
                     if call.completed is None:
                         continue
                     function = fragment.get(call.kind)
                     if key not in seen:
                         if not isinstance(function, dict):
-                            function: dict[str, object] = {}
+                            function = {}
                             fragment[call.kind] = function
-                        function["name"] = call.completed.body[call.kind]["name"]
+                        function["name"] = json_object(call.completed.body[call.kind])[
+                            "name"
+                        ]
                         if call.completed.body.get("id"):
                             fragment["id"] = call.completed.body["id"]
                         seen.add(key)
@@ -450,14 +461,14 @@ class ChatToolCallBuffer:
         self._native_group = None
         self._calls.clear()
 
-    def _append(self, value: dict[str, Any]) -> None:
+    def _append(self, value: JsonObject) -> None:
         self._buffer.append(deepcopy(value), size=_size(value))
 
-    def _finish_choice(self, choice: Mapping[str, Any]) -> None:
-        index = choice.get("index", 0)
+    def _finish_choice(self, choice: Mapping[str, JsonValue]) -> None:
+        index = json_index(choice.get("index", 0))
         keys = [key for key in self._calls if key[0] == index]
         reason = choice.get("finish_reason")
-        if reason in {"stop", "tool_calls"} and index not in self._refused_choices:
+        if reason in ("stop", "tool_calls") and index not in self._refused_choices:
             for key in keys:
                 self._calls[key].seal()
             for key in keys:
@@ -469,10 +480,10 @@ class ChatToolCallBuffer:
         self._refused_choices.discard(index)
         self._remember_finish(choice)
 
-    def _remember_finish(self, choice: Mapping[str, Any]) -> None:
+    def _remember_finish(self, choice: Mapping[str, JsonValue]) -> None:
         markers = (choice.get("finish_reason"), choice.get("native_finish_reason"))
         self._buffer.budget.add(32 + _size(markers))
-        self._finished[choice.get("index", 0)] = deepcopy(markers)
+        self._finished[json_index(choice.get("index", 0))] = deepcopy(markers)
 
     def _drain(self) -> list[ChatSourceOutput | CompletedChatBatch]:
         result: list[ChatSourceOutput | CompletedChatBatch] = []
@@ -497,7 +508,9 @@ class ChatToolCallBuffer:
         return result
 
 
-def _accounting_choice(choice: Mapping[str, Any], finished: tuple[Any, Any]) -> bool:
+def _accounting_choice(
+    choice: Mapping[str, JsonValue], finished: tuple[JsonValue, JsonValue]
+) -> bool:
     """Only discard fields that repeat completion or carry no choice content."""
     if (
         choice.get("finish_reason") != finished[0]
@@ -526,11 +539,13 @@ def _accounting_choice(choice: Mapping[str, Any], finished: tuple[Any, Any]) -> 
     return True
 
 
-def _native_parts(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _native_parts(payload: Mapping[str, JsonValue]) -> list[JsonObject]:
     """Separate standard content from calls without guessing opaque associations."""
     data = dict(payload)
-    choices = data.get("choices") or []
-    if not any((choice.get("delta") or {}).get("tool_calls") for choice in choices):
+    choices = list(json_objects(data.get("choices") or []))
+    if not any(
+        json_object(choice.get("delta") or {}).get("tool_calls") for choice in choices
+    ):
         return [data]
     if any(
         key
@@ -560,7 +575,7 @@ def _native_parts(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "refusal",
                 "tool_calls",
             }
-            for key in (choice.get("delta") or {})
+            for key in json_object(choice.get("delta") or {})
         )
         for choice in choices
     ):
@@ -571,9 +586,9 @@ def _native_parts(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
         for key, value in envelope.items()
         if key in {"id", "object", "created", "model"}
     }
-    result: list[dict[str, Any]] = []
+    result: list[JsonObject] = []
     for choice in choices:
-        delta = dict(choice.get("delta") or {})
+        delta = dict(json_object(choice.get("delta") or {}))
         calls = delta.pop("tool_calls", None)
         if not calls:
             result.append({**(base if result else envelope), "choices": [choice]})
@@ -603,11 +618,17 @@ def finalize_chat_call(
         )
     body = deepcopy(call.body)
     kind = "custom" if "custom" in body else "function"
-    function = body[kind]
-    name = codec.decode(function["name"])
+    function = json_object(body[kind])
+    encoded_name = function["name"]
+    if not isinstance(encoded_name, str):
+        raise chat_failure("Completed tool call has an invalid name")
+    name = codec.decode(encoded_name)
     function["name"] = name
     if kind == "function" and (mapping := aliases.get(name)):
-        restored = restore_tool_argument_aliases(function["arguments"], mapping)
+        arguments = function["arguments"]
+        if not isinstance(arguments, str):
+            raise chat_failure("Completed tool call has invalid arguments")
+        restored = restore_tool_argument_aliases(arguments, mapping)
         if restored is not None:
             function["arguments"] = restored
     tool_id = body.get("id")
@@ -626,13 +647,13 @@ def restore_tool_argument_aliases(
     argument_json: str, aliases: Mapping[str, str]
 ) -> str | None:
     try:
-        parsed = json.loads(argument_json)
+        parsed = load_json_value(argument_json)
     except json.JSONDecodeError:
         return None
     if not isinstance(parsed, dict):
         return argument_json
 
-    def restore(value: Any) -> Any:
+    def restore(value: JsonValue) -> JsonValue:
         if isinstance(value, dict):
             return {aliases.get(key, key): restore(item) for key, item in value.items()}
         if isinstance(value, list):

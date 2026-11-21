@@ -7,12 +7,22 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 
+from free_claude_code.api.dependencies import app_services
 from free_claude_code.application.code_sessions import CodeService
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
-from tests.api.support import create_test_app
+from tests.api.support import create_test_app, runtime_for_app
 from tests.code_sessions_support import CodexPackets, FakeHarness, close_code_database
 from tests.fixture_types import DatabaseFactory
+from tests.wire_payload import (
+    array_payload,
+    int_payload,
+    object_array,
+    object_payload,
+    response_object,
+    response_payload,
+    string_payload,
+)
 
 
 @pytest_asyncio.fixture
@@ -32,7 +42,7 @@ async def code_api(database_factory: DatabaseFactory, tmp_path: Path):
     finally:
         await code.close()
         await close_code_database(code)
-        await app.state.services.admin.close()
+        await runtime_for_app(app).close()
 
 
 async def create_session(
@@ -44,7 +54,7 @@ async def create_session(
         json={"session_id": str(uuid.uuid4()), "cwd": str(folder), "harness": "codex"},
     )
     assert response.status_code == 201
-    return response.json()
+    return response_payload(response)
 
 
 @pytest.mark.asyncio
@@ -67,13 +77,16 @@ async def test_detail_exposes_child_review_liveness_without_native_source(
     await packets.spawn()
     await packets.review()
     await connection.finish("turn-1")
-    detail = (await client.get(path)).json()
-    review = detail["items"][-1]
-    assert detail.get("active_review_ids") == [review["id"]]
-    assert review["kind"] == "subagent_auto_review"
-    assert not {"raw", "native_turn_id", "native_item_id", "generation"} & review.keys()
+    detail = response_object(await client.get(path))
+    review = array_payload(detail["items"])[-1]
+    assert detail.get("active_review_ids") == [object_payload(review)["id"]]
+    assert object_payload(review)["kind"] == "subagent_auto_review"
+    assert (
+        not {"raw", "native_turn_id", "native_item_id", "generation"}
+        & object_payload(review).keys()
+    )
     await connection.close()
-    closed = (await client.get(path)).json()
+    closed = response_object(await client.get(path))
     assert closed["active_review_ids"] == []
     assert closed["items"] == detail["items"]
 
@@ -95,30 +108,34 @@ async def test_mode_is_saved_but_native_defaults_stay_private(
         },
     )
     assert changed.status_code == 200
-    assert changed.json()["mode"] == "auto_review"
-    assert changed.json()["provider_id"] == "other"
-    assert changed.json()["model_name"] == "vendor/model"
+    assert response_object(changed)["mode"] == "auto_review"
+    assert response_object(changed)["provider_id"] == "other"
+    assert response_object(changed)["model_name"] == "vendor/model"
     for mode in (None, "plan", "never"):
         rejected = await client.patch(
-            path, json={"expected_revision": changed.json()["revision"], "mode": mode}
+            path,
+            json={
+                "expected_revision": response_object(changed)["revision"],
+                "mode": mode,
+            },
         )
         assert rejected.status_code == 422
     await code.send(
         session["id"],
         str(uuid.uuid4()),
-        changed.json()["revision"],
+        int_payload(response_object(changed)["revision"]),
         "hello",
         expected_epoch=code.epoch,
     )
     await asyncio.wait_for(harness.started.wait(), 3)
-    detail = (await client.get(path)).json()
-    assert detail["run"]["mode"] == "auto_review"
-    assert "native_permission_defaults" not in detail["session"]
+    detail = response_object(await client.get(path))
+    assert object_payload(detail["run"])["mode"] == "auto_review"
+    assert "native_permission_defaults" not in object_payload(detail["session"])
     assert (await code.get_detail(session["id"])).session.native_permission_defaults
     rejected = await client.patch(
         path,
         json={
-            "expected_revision": detail["session"]["revision"],
+            "expected_revision": object_payload(detail["session"])["revision"],
             "native_permission_defaults": {},
         },
     )
@@ -131,12 +148,12 @@ async def test_code_library_has_one_harness_and_no_native_work_on_open(
 ):
     client, _, harness, _, _ = code_api
     bootstrap = await client.get("/admin/api/code/bootstrap")
-    assert bootstrap.json()["harnesses"] == [{"id": "codex", "name": "Codex"}]
+    assert response_object(bootstrap)["harnesses"] == [{"id": "codex", "name": "Codex"}]
     session = await create_session(code_api)
     detail = await client.get(f"/admin/api/code/sessions/{session['id']}")
     assert detail.status_code == 200
     assert detail.headers["cache-control"] == "no-store"
-    assert detail.json()["items"] == []
+    assert response_object(detail)["items"] == []
     assert harness.connections == []
     page = await client.get(f"/admin/code/{session['id']}")
     assert page.status_code == 200
@@ -149,10 +166,13 @@ async def test_context_usage_and_raw_provider_capacity_are_public_session_state(
     client, code, harness, _, _ = code_api
     harness.context_windows[harness.model] = 100_000
     harness.configurations["unknown/model"] = "unknown"
-    bootstrap = (await client.get("/admin/api/code/bootstrap")).json()
-    models = {model["id"]: model for model in bootstrap["models"]}
-    assert models[harness.model]["context_window_tokens"] == 100_000
-    assert models["unknown/model"]["context_window_tokens"] is None
+    bootstrap = response_object(await client.get("/admin/api/code/bootstrap"))
+    models = {
+        object_payload(model)["id"]: model
+        for model in array_payload(bootstrap["models"])
+    }
+    assert object_payload(models[harness.model])["context_window_tokens"] == 100_000
+    assert object_payload(models["unknown/model"])["context_window_tokens"] is None
 
     session = await create_session(code_api)
     assert session["context_used_tokens"] is None
@@ -166,10 +186,12 @@ async def test_context_usage_and_raw_provider_capacity_are_public_session_state(
     await harness.started.wait()
     await harness.connections[0].context_usage("turn-1", 12_438)
 
-    detail = (await client.get(f"/admin/api/code/sessions/{session['id']}")).json()
-    assert detail["session"]["context_used_tokens"] == 12_438
-    library = (await client.get("/admin/api/code/sessions")).json()
-    assert library["sessions"][0]["context_used_tokens"] == 12_438
+    detail = response_object(
+        await client.get(f"/admin/api/code/sessions/{session['id']}")
+    )
+    assert object_payload(detail["session"])["context_used_tokens"] == 12_438
+    library = response_object(await client.get("/admin/api/code/sessions"))
+    assert object_array(library["sessions"])[0]["context_used_tokens"] == 12_438
 
 
 @pytest.mark.asyncio
@@ -199,12 +221,12 @@ async def test_http_send_competition_and_safe_item_projection(
         "turn-1", "answer", "**safe** <script>bad()</script>", complete=True
     )
     await harness.connections[0].finish("turn-1")
-    detail = (await client.get(path)).json()
-    item = detail["items"][-1]
-    assert "<strong>safe</strong>" in item["html"]
-    assert "<script>" not in item["html"]
-    assert "raw" not in item
-    assert detail["run"]["status"] == "completed"
+    detail = response_object(await client.get(path))
+    item = array_payload(detail["items"])[-1]
+    assert "<strong>safe</strong>" in string_payload(object_payload(item)["html"])
+    assert "<script>" not in string_payload(object_payload(item)["html"])
+    assert "raw" not in object_payload(item)
+    assert object_payload(detail["run"])["status"] == "completed"
 
 
 @pytest.mark.asyncio
@@ -266,15 +288,17 @@ async def test_folder_selection_only_returns_to_requesting_form(
         hints.append(initial_path)
         return selected
 
-    monkeypatch.setattr(app.state.services.admin, "pick_folder", pick)
+    monkeypatch.setattr(app_services(app).admin, "pick_folder", pick)
     response = await client.post(
         "/admin/api/code/folder-picker", json={"initial_path": str(folder)}
     )
     assert response.status_code == 200
-    assert response.json() == {"path": selected}
+    assert response_payload(response) == {"path": selected}
     assert response.headers["cache-control"] == "no-store"
     assert hints == [str(folder)]
-    assert (await client.get("/admin/api/code/sessions")).json()["sessions"] == []
+    assert (
+        response_object(await client.get("/admin/api/code/sessions"))["sessions"] == []
+    )
     assert harness.connections == []
 
 
@@ -288,10 +312,10 @@ async def test_folder_picker_errors_use_admin_detail(
     async def pick(_initial_path):
         raise ApplicationUnavailableError("A folder picker is already open")
 
-    monkeypatch.setattr(app.state.services.admin, "pick_folder", pick)
+    monkeypatch.setattr(app_services(app).admin, "pick_folder", pick)
     response = await client.post("/admin/api/code/folder-picker", json={})
     assert response.status_code == 503
-    assert response.json() == {"detail": "A folder picker is already open"}
+    assert response_payload(response) == {"detail": "A folder picker is already open"}
 
 
 @pytest.mark.asyncio
@@ -304,7 +328,7 @@ async def test_folder_picker_only_opens_on_an_authorized_explicit_post(
     async def unexpected(_initial_path):
         pytest.fail("Unauthorized or passive request opened a dialog")
 
-    monkeypatch.setattr(app.state.services.admin, "pick_folder", unexpected)
+    monkeypatch.setattr(app_services(app).admin, "pick_folder", unexpected)
     for headers in (
         {"host": "remote.example"},
         {"origin": "https://remote.example"},

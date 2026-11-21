@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import aclosing
 from functools import partial
-from typing import Any, override
+from typing import override
 from urllib.parse import quote
 
 import httpx
@@ -14,7 +14,7 @@ from free_claude_code.core.anthropic.stream_contracts import SSEEvent
 from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
 from free_claude_code.core.continuation_request import ContinuationRequest
 from free_claude_code.core.history_replay import HistoryReplayError
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, normalize_empty_array_field
 from free_claude_code.core.stream_output import StreamOutput, completed_output
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
@@ -47,7 +47,7 @@ from .stream import GeminiStream
 
 async def _events(
     response: httpx.Response, *, read_timeout: float
-) -> AsyncIterator[dict[str, Any]]:
+) -> AsyncIterator[JsonObject]:
     async with aclosing(_decoded_events(response)) as source:
         while True:
             try:
@@ -60,7 +60,14 @@ async def _events(
                 )
             except StopAsyncIteration:
                 return
-            yield event.data
+            payload = event.data
+            if isinstance(candidates := payload.get("candidates"), list):
+                for candidate in candidates:
+                    if isinstance(candidate, dict) and isinstance(
+                        content := candidate.get("content"), dict
+                    ):
+                        normalize_empty_array_field(content, "parts")
+            yield payload
 
 
 async def _decoded_events(response: httpx.Response) -> AsyncGenerator[SSEEvent]:
@@ -245,7 +252,8 @@ class _GeminiAttempt(TransportAttempt):
         if not response.is_success:
             await response.aread()
             response.raise_for_status()
-        if "text/event-stream" not in response.headers.get("content-type", "").lower():
+        content_type: str = response.headers.get("content-type", "")
+        if "text/event-stream" not in content_type.lower():
             raise RetryableProviderProtocolError(
                 "Gemini upstream did not return an SSE stream"
             )

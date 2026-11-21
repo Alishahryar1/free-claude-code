@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Literal, NotRequired, TypedDict, overload
+from typing import Literal, NotRequired, Protocol, TypedDict, cast, overload
 
 from .check_version_policy import (
     VERSION,
@@ -81,7 +81,7 @@ class Publisher:
         )
 
     def releases(self) -> dict[str, _Release]:
-        pages = json.loads(
+        pages: list[list[_Release]] = json.loads(
             command(
                 [
                     "gh",
@@ -255,17 +255,27 @@ class Publisher:
         self.validate(source, dist, version)
 
 
+class _TextProcessFailure(Protocol):
+    stderr: str | None
+
+
+class _Arguments(argparse.Namespace):
+    repository: str
+    commit: str
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--commit", required=True)
-    args = parser.parse_args()
+    args = _Arguments()
+    parser.parse_args(namespace=args)
     try:
         Publisher(args.repository).publish(args.commit)
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as error:
         print(f"Release failed: {error}", file=sys.stderr)
         if isinstance(error, subprocess.CalledProcessError):
-            print(error.stderr, file=sys.stderr)
+            print(cast(_TextProcessFailure, error).stderr, file=sys.stderr)
         return 1
     return 0
 

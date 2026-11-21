@@ -18,7 +18,12 @@ from free_claude_code.application.code_sessions.models import (
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.runtime.codex_protocol import CodexProtocol
 from tests.code_sessions_support import CodexPackets
-from tests.wire_payload import object_payload
+from tests.wire_payload import (
+    array_payload,
+    object_payload,
+    response_object,
+    response_payload,
+)
 
 
 def test_model_picker_uses_application_order_and_keeps_configured_selection(
@@ -632,7 +637,7 @@ def test_child_review_liveness_ignores_an_older_detail_snapshot(
     if change == "close":
         code_control.run(packets.review())
     path = f"{admin_base_url}/admin/api/code/sessions/{url.rsplit('/', 1)[1]}"
-    previous = page.request.get(path).json()
+    previous = response_payload(page.request.get(path))
     code_control.run(packets.review() if change == "start" else connection.close())
     title = "Sub-agent Auto-review: " + (
         "Reviewing" if change == "start" else "Result unavailable"
@@ -701,10 +706,12 @@ def test_settings_apply_preserves_open_creation_and_picker(
     )
     form.get_by_role("button", name="Create session", exact=True).click()
     expect(page).to_have_url(re.compile(r"/admin/code/[0-9a-f-]+$"))
-    sessions = page.request.get(f"{admin_base_url}/admin/api/code/sessions").json()[
-        "sessions"
+    sessions = response_object(
+        page.request.get(f"{admin_base_url}/admin/api/code/sessions")
+    )["sessions"]
+    assert [object_payload(session)["cwd"] for session in array_payload(sessions)] == [
+        str(tmp_path.resolve())
     ]
-    assert [session["cwd"] for session in sessions] == [str(tmp_path.resolve())]
 
 
 @pytest.mark.parametrize(
@@ -775,10 +782,10 @@ def test_replacing_line_break_selection_uses_the_new_path(
     folder.fill(str(replacement_folder))
     form.get_by_role("button", name="Create session", exact=True).click()
     expect(page).to_have_url(re.compile(r"/admin/code/[0-9a-f-]+$"))
-    sessions = page.request.get(f"{admin_base_url}/admin/api/code/sessions").json()[
-        "sessions"
-    ]
-    assert [session["cwd"] for session in sessions] == [
+    sessions = response_object(
+        page.request.get(f"{admin_base_url}/admin/api/code/sessions")
+    )["sessions"]
+    assert [object_payload(session)["cwd"] for session in array_payload(sessions)] == [
         str(replacement_folder.resolve())
     ]
 
@@ -796,10 +803,12 @@ def test_picker_creates_in_selected_folder_not_its_line_break_free_neighbor(
     code_control.run(code_control.folder_picker.finish(call, str(selected)))
     form.get_by_role("button", name="Create session", exact=True).click()
     expect(page).to_have_url(re.compile(r"/admin/code/[0-9a-f-]+$"))
-    sessions = page.request.get(f"{admin_base_url}/admin/api/code/sessions").json()[
-        "sessions"
+    sessions = response_object(
+        page.request.get(f"{admin_base_url}/admin/api/code/sessions")
+    )["sessions"]
+    assert [object_payload(session)["cwd"] for session in array_payload(sessions)] == [
+        str(selected.resolve())
     ]
-    assert [session["cwd"] for session in sessions] == [str(selected.resolve())]
 
 
 def test_browse_fills_only_its_tab_and_waits_for_create(
@@ -838,9 +847,9 @@ def test_browse_fills_only_its_tab_and_waits_for_create(
         )
         expect(page).to_have_url(f"{admin_base_url}/admin/code")
         assert (
-            page.request.get(f"{admin_base_url}/admin/api/code/sessions").json()[
-                "sessions"
-            ]
+            response_object(
+                page.request.get(f"{admin_base_url}/admin/api/code/sessions")
+            )["sessions"]
             == []
         )
         other.get_by_role("button", name="Cancel", exact=True).click()
@@ -849,10 +858,12 @@ def test_browse_fills_only_its_tab_and_waits_for_create(
         expect(
             second.get_by_role("button", name=re.compile("project café"))
         ).to_be_visible()
-        sessions = page.request.get(f"{admin_base_url}/admin/api/code/sessions").json()[
-            "sessions"
-        ]
-        assert [session["cwd"] for session in sessions] == [str(selected.resolve())]
+        sessions = response_object(
+            page.request.get(f"{admin_base_url}/admin/api/code/sessions")
+        )["sessions"]
+        assert [
+            object_payload(session)["cwd"] for session in array_payload(sessions)
+        ] == [str(selected.resolve())]
     finally:
         second.close()
 
@@ -1655,7 +1666,7 @@ def test_hidden_code_removal_preserves_providers_and_deleted_history(
     field = api_key_input(page, "MISTRAL_API_KEY")
     field.fill("Keep this provider edit")
     field.evaluate("input => input.setSelectionRange(2, 7)")
-    history_length = page.evaluate("history.length")
+    history_length: int = page.evaluate("history.length")
     if source == "event":
         delete_from_other_client(code_control, session_id)
         page.wait_for_function("id => window.lastCodeDeleted === id", arg=session_id)
@@ -1706,7 +1717,7 @@ def test_visible_code_removal_replaces_history(
         page.go_back()
         expect(page).to_have_url(url)
         expect(page.locator("#view-code")).to_be_visible()
-    history_length = page.evaluate("history.length")
+    history_length: int = page.evaluate("history.length")
     if source == "event":
         delete_from_other_client(code_control, session_id)
         page.wait_for_function("id => window.lastCodeDeleted === id", arg=session_id)
@@ -1752,7 +1763,7 @@ def test_code_removal_does_not_redirect_another_code_session(
     composer = page.locator("#codeComposer")
     composer.fill("Keep B's draft")
     composer.evaluate("input => input.setSelectionRange(2, 7)")
-    history_length = page.evaluate("history.length")
+    history_length: int = page.evaluate("history.length")
     if source == "event":
         delete_from_other_client(code_control, session_id)
         page.wait_for_function("id => window.lastCodeDeleted === id", arg=session_id)
@@ -1823,18 +1834,18 @@ def hold_code_reads(page: Page, endpoint: str | None = None):
 
 def send_from_other_client(page: Page, url: str, text: str):
     endpoint = url.replace("/admin/code/", "/admin/api/code/sessions/")
-    detail = page.request.get(endpoint).json()
+    detail = response_object(page.request.get(endpoint))
     response = page.request.post(
         f"{endpoint}/turns",
         data={
             "operation_id": str(uuid.uuid4()),
-            "expected_revision": detail["session"]["revision"],
+            "expected_revision": object_payload(detail["session"])["revision"],
             "expected_epoch": detail["epoch"],
             "text": text,
         },
     )
     assert response.ok, response.text()
-    return response.json()["id"]
+    return response_object(response)["id"]
 
 
 @pytest.mark.parametrize("choice", ["off", "low", "medium", "high", "xhigh", "max"])

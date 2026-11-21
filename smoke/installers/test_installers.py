@@ -14,11 +14,17 @@ from pathlib import Path
 
 import pytest
 
-PROJECT = tomllib.loads(
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import object_payload, string_payload
+
+PROJECT: JsonObject = tomllib.loads(
     (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text(encoding="utf-8")
 )
-PYTHON_VERSION = PROJECT["project"]["requires-python"].removeprefix("==")
-UV_MINIMUM = PROJECT["tool"]["uv"]["required-version"].removeprefix(">=")
+PYTHON_VERSION = string_payload(
+    object_payload(PROJECT["project"])["requires-python"]
+).removeprefix("==")
+UV_TABLE = object_payload(object_payload(PROJECT["tool"])["uv"])
+UV_MINIMUM = string_payload(UV_TABLE["required-version"]).removeprefix(">=")
 UV_NEWER = ".".join(
     [*UV_MINIMUM.split(".")[:2], str(int(UV_MINIMUM.split(".")[2]) + 1)]
 )
@@ -2752,17 +2758,23 @@ exit /b 76
         return self.log.read_text(encoding="utf-8").splitlines()
 
 
+def _powershell_id(path: str | None) -> str:
+    return Path(path).name if path is not None else "unavailable"
+
+
 @pytest.fixture(
     params=_powershells() or (None,),
-    ids=lambda path: Path(path).name if path is not None else "unavailable",
+    ids=_powershell_id,
 )
 def powershell_harness(
     tmp_path: Path,
     request: pytest.FixtureRequest,
     powershell_module_paths: dict[str, str],
 ) -> PowerShellHarness:
-    powershell = request.param
-    if powershell is None or os.name != "nt":
+    powershell: object = getattr(request, "param", None)
+    if not isinstance(powershell, str):
+        pytest.skip("PowerShell is unavailable")
+    if os.name != "nt":
         pytest.skip("PowerShell installer scenarios run on Windows hosts")
 
     bin_dir = tmp_path / "bin"
@@ -6317,7 +6329,9 @@ def _assert_installer_shows_selected_plan_and_next_steps(
     assert "Claude Code" in plan
     assert "Codex" not in plan
     assert "RTK" not in plan
-    stages = re.findall(r"\[(\d+)/(\d+)\]", result.stdout)
+    stages = [
+        match.groups() for match in re.finditer(r"\[(\d+)/(\d+)\]", result.stdout)
+    ]
     assert stages
     assert [int(number) for number, _ in stages] == list(range(1, len(stages) + 1))
     assert {int(total) for _, total in stages} == {len(stages)}

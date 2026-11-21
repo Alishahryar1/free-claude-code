@@ -38,7 +38,12 @@ from tests.assertions import require_present
 from tests.harnesses.test_integration_refresh import OLD_CLAUDE, OLD_CODEX, TOKEN
 from tests.harnesses.test_jetbrains_acp_integration import install, write
 from tests.web_tools_support import StubWebToolsClient
-from tests.wire_payload import object_payload, string_payload
+from tests.wire_payload import (
+    decode_object,
+    object_payload,
+    response_object,
+    string_payload,
+)
 
 
 @pytest.fixture
@@ -119,11 +124,17 @@ async def test_jetbrains_startup_refresh_and_failed_discovery_allow_disconnect(
         status = await runtime.jetbrains_acp_status()
         assert status["connected"] is True
         assert object_payload(status["update"])["changed"] is True
-        entry = json.loads(jb.config_path().read_text())["agent_servers"][
-            "Claude Code (FCC)"
-        ]
-        assert entry["env"]["ANTHROPIC_AUTH_TOKEN"] == TOKEN
-        assert entry["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8000"
+        entry = object_payload(
+            decode_object(jb.config_path().read_text())["agent_servers"]
+        )["Claude Code (FCC)"]
+        assert (
+            object_payload(object_payload(entry)["env"])["ANTHROPIC_AUTH_TOKEN"]
+            == TOKEN
+        )
+        assert (
+            object_payload(object_payload(entry)["env"])["ANTHROPIC_BASE_URL"]
+            == "http://127.0.0.1:8000"
+        )
         jb.registry_path().unlink()
         await runtime.refresh_jetbrains_acp()
         await asyncio.wait_for(
@@ -229,13 +240,22 @@ async def test_codex_wait_does_not_delay_http_or_claude(
             transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             assert (await client.get("/health")).status_code == 200
-            status = (await client.get("/admin/api/integrations/codex")).json()
+            status = response_object(await client.get("/admin/api/integrations/codex"))
             assert status["connected"] is None
-            assert status["update"]["state"] == "starting"
+            assert object_payload(status["update"])["state"] == "starting"
             assert (await runtime.claude_vscode_status())["connected"] is True
-            assert (await client.get("/admin/api/status")).json()["startup"][
-                "integrations"
-            ]["codex"]["state"] == "starting"
+            assert (
+                object_payload(
+                    object_payload(
+                        object_payload(
+                            response_object(await client.get("/admin/api/status"))[
+                                "startup"
+                            ]
+                        )["integrations"]
+                    )["codex"]
+                )["state"]
+                == "starting"
+            )
         release.set()
         await finish(runtime)
         assert (await runtime.codex_integration_status())["connected"] is True
@@ -416,7 +436,7 @@ async def test_desktop_startup_rotates_selected_profile_and_disconnect_stays_off
         disconnect_path=claude_desktop_disconnect_path(),
     )
     profile = root / "configLibrary" / f"{desktop.FCC_ID}.json"
-    config = json.loads(profile.read_text())
+    config = decode_object(profile.read_text())
     models = [
         {"name": desktop_model_id("nvidia_nim/one"), "labelOverride": "Pinned model"},
         {"name": desktop_model_id("nvidia_nim/two"), "maxEffort": "high"},
@@ -426,7 +446,7 @@ async def test_desktop_startup_rotates_selected_profile_and_disconnect_stays_off
     try:
         await runtime.start()
         await require_present(runtime._integrations._desktop_update.task)
-        refreshed = json.loads(profile.read_text())
+        refreshed = decode_object(profile.read_text())
         assert refreshed["inferenceModels"] == models
         assert refreshed["inferenceGatewayApiKey"] == TOKEN
         assert refreshed["inferenceGatewayBaseUrl"] == "http://127.0.0.1:8000"

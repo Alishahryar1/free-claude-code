@@ -9,11 +9,16 @@ from free_claude_code.core.anthropic import (
     build_base_request_body,
 )
 from free_claude_code.core.anthropic.models import MessagesRequest
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.core.openai_chat import (
     is_synthetic_chat_tool_turn_boundary,
 )
-from tests.wire_payload import array_payload, object_array, object_payload
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 # --- Mock Classes ---
 
@@ -616,11 +621,14 @@ def test_convert_assistant_message_tool_use():
     assert msg["role"] == "assistant"
     assert "I will call the tool." in msg["content"]
     assert "tool_calls" in msg
-    assert len(msg["tool_calls"]) == 1
-    tc = msg["tool_calls"][0]
+    tool_calls: list[JsonObject] = msg["tool_calls"]
+    assert len(tool_calls) == 1
+    tc = tool_calls[0]
     assert tc["id"] == "call_1"
-    assert tc["function"]["name"] == "search"
-    assert json.loads(tc["function"]["arguments"]) == {"query": "python"}
+    assert object_payload(tc["function"])["name"] == "search"
+    assert load_json_value(
+        string_payload(object_payload(tc["function"])["arguments"])
+    ) == {"query": "python"}
 
 
 def test_convert_assistant_tool_use_preserves_extra_content():
@@ -676,7 +684,8 @@ def test_convert_assistant_message_tool_use_no_text():
     assert (
         result[0]["content"] == ""
     )  # Should be empty string, not space, because tools exist
-    assert len(result[0]["tool_calls"]) == 1
+    tool_calls: list[JsonObject] = result[0]["tool_calls"]
+    assert len(tool_calls) == 1
 
 
 def test_convert_mixed_blocks_and_types_and_roles():
@@ -832,7 +841,8 @@ def test_convert_assistant_interleaved_order_preserved():
     msg = result[0]
     assert msg["content"] == "Here is the answer."
     assert msg["reasoning_content"] == "First thought.\nSecond thought."
-    assert len(msg["tool_calls"]) == 1
+    tool_calls: list[JsonObject] = msg["tool_calls"]
+    assert len(tool_calls) == 1
 
 
 def test_convert_user_message_text_before_tool_result_order():

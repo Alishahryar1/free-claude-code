@@ -10,6 +10,7 @@ from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from tests.providers.support import without_empty_reasoning
 from tests.providers.test_anthropic_native_transport import collect
 from tests.providers.test_anthropic_provider import native_body, provider
+from tests.wire_payload import decode_object, object_payload
 
 
 def model_metadata(
@@ -73,7 +74,7 @@ async def test_native_override_replaces_controls_and_preserves_extensions(
     }
     body["extra_body"] = {"new_option": {"keep": True}}
     body["betas"] = ["request-beta"]
-    original = json.loads(json.dumps(body))
+    original = decode_object(json.dumps(body))
     reasoning = (
         ReasoningPolicy.off()
         if effort == "off"
@@ -87,7 +88,7 @@ async def test_native_override_replaces_controls_and_preserves_extensions(
             request_headers={"anthropic-beta": "header-beta"},
         )
         assert lookups == ["/v1/models/claude-test"]
-        sent, retried = [json.loads(request.content) for request in received]
+        sent, retried = [decode_object(request.content) for request in received]
         assert sent == retried and body == original
         assert sent["max_tokens"] == 10000
         assert (
@@ -96,30 +97,38 @@ async def test_native_override_replaces_controls_and_preserves_extensions(
         )
         assert sent["future_option"] == original["future_option"]
         assert sent["new_option"] == {"keep": True} and "extra_body" not in sent
-        assert sent["output_config"]["format"] == original["output_config"]["format"]
-        assert sent["output_config"]["future"] is True
+        assert (
+            object_payload(sent["output_config"])["format"]
+            == object_payload(original["output_config"])["format"]
+        )
+        assert object_payload(sent["output_config"])["future"] is True
         assert all(
             request.headers["anthropic-beta"] == "header-beta,request-beta"
             for request in received
         )
         thinking = sent["thinking"]
-        assert thinking["future"] == "keep"
+        assert object_payload(thinking)["future"] == "keep"
         if effort == "off":
             assert thinking == {"type": "disabled", "future": "keep"}
-            assert "effort" not in sent["output_config"]
+            assert "effort" not in object_payload(sent["output_config"])
         elif adaptive:
             assert thinking == {
                 "type": "adaptive",
                 "display": "omitted",
                 "future": "keep",
             }
-            assert sent["output_config"]["effort"] == effort
+            assert object_payload(sent["output_config"])["effort"] == effort
         else:
-            assert thinking["type"] == "enabled" and thinking["display"] == "omitted"
+            assert (
+                object_payload(thinking)["type"] == "enabled"
+                and object_payload(thinking)["display"] == "omitted"
+            )
             budget = reasoning.numeric_budget_tokens
             assert budget is not None
-            assert thinking["budget_tokens"] == min(max(1024, budget), 9999)
-            assert "effort" not in sent["output_config"]
+            assert object_payload(thinking)["budget_tokens"] == min(
+                max(1024, budget), 9999
+            )
+            assert "effort" not in object_payload(sent["output_config"])
     finally:
         await p.cleanup()
 
@@ -164,7 +173,7 @@ async def test_native_inherit_preserves_unknown_controls_without_metadata():
 
     def handle(request: httpx.Request):
         assert request.method == "POST"
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         return httpx.Response(
             200, json={"type": "message", "content": [], "stop_reason": "end_turn"}
         )

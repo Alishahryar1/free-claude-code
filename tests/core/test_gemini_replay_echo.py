@@ -30,6 +30,12 @@ from free_claude_code.core.history_replay import (
 )
 from free_claude_code.core.json_types import JsonObject
 from tests.core.test_gemini_requests import build, request
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_payload,
+    string_payload,
+)
 
 ORIGIN = ReplayOrigin("provider", "chat", "https://source.invalid", "account", "model")
 
@@ -158,7 +164,7 @@ def test_bundle_rejects_invalid_echo_digest(digest: int | str | None):
 
     value = base64.b64decode(encode_bundle(ReplayBundle("response")))
     prefix, payload = value.split(b":v1:", 1)
-    data = json.loads(payload)
+    data = decode_object(payload)
     data["thought_echo_sha256"] = digest
     invalid = base64.b64encode(prefix + b":v1:" + json.dumps(data).encode()).decode()
     with pytest.raises(GeminiConversionError):
@@ -199,8 +205,16 @@ def test_echo_digest_requires_replay_coverage_of_all_thought_text(native: bool):
     aggregate = GeminiResponseAccumulator()
     for event in parse_sse_text("".join(frames)):
         aggregate.feed(event.data)
-    content = aggregate.result()["candidates"][0]["content"]
-    bundle = decode_bundle(content["parts"][-1]["thoughtSignature"])
+    content = object_payload(array_payload(aggregate.result()["candidates"])[0])[
+        "content"
+    ]
+    bundle = decode_bundle(
+        string_payload(
+            object_payload(array_payload(object_payload(content)["parts"])[-1])[
+                "thoughtSignature"
+            ]
+        )
+    )
     assert bundle is not None and bundle.thought_echo_sha256 is None
     value = request(
         contents=[

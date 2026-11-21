@@ -4,7 +4,7 @@ import asyncio
 import random
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Generator
+from collections.abc import Awaitable, Callable, Generator, Mapping
 from contextlib import contextmanager
 from contextvars import Context, ContextVar
 from dataclasses import dataclass, field
@@ -1153,5 +1153,5 @@ class ProviderAdmissionController:
 
 def _retry_after_header(error: Exception) -> object:
     response = getattr(error, "response", None)
-    headers = getattr(response, "headers", None)
-    return None if headers is None else headers.get("retry-after")
+    headers: object = getattr(response, "headers", None)
+    return headers.get("retry-after") if isinstance(headers, Mapping) else None

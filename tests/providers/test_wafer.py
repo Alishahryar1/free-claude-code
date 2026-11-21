@@ -19,6 +19,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 @pytest.fixture
@@ -72,8 +73,13 @@ def test_build_request_body_openai_shape_and_defaults(
     )
 
     assert body["model"] == "DeepSeek-V4-Pro"
-    assert body["messages"][0] == {"role": "user", "content": "Hello"}
-    assert body["tools"][0]["function"]["name"] == "echo"
+    assert array_payload(body["messages"])[0] == {"role": "user", "content": "Hello"}
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "echo"
+    )
     assert body["reasoning_effort"] == "high"
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 

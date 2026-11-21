@@ -34,6 +34,8 @@ from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.api.support import create_test_app
 from tests.assertions import record_extra
+from tests.mock_calls import positional_arguments
+from tests.wire_payload import object_payload, response_object
 
 
 def _settings(**updates: object) -> Settings:
@@ -128,9 +130,9 @@ def test_create_app_application_error_handler_returns_anthropic_format():
     response = TestClient(app).get("/raise_application")
 
     assert response.status_code == 400
-    body = response.json()
+    body = response_object(response)
     assert body["type"] == "error"
-    assert body["error"]["type"] == "invalid_request_error"
+    assert object_payload(body["error"])["type"] == "invalid_request_error"
     assert body["request_id"] == response.headers["request-id"]
     assert "x-should-retry" not in response.headers
 
@@ -148,7 +150,9 @@ def test_application_error_handler_does_not_log_error_message():
 
     assert response.status_code == 400
     blob = " ".join(
-        str(value) for call in log_error.call_args_list for value in call.args
+        str(value)
+        for call in log_error.call_args_list
+        for value in positional_arguments(call)
     )
     assert secret not in blob
     log_error.assert_not_called()
@@ -164,9 +168,9 @@ def test_create_app_general_exception_handler_returns_correlated_500():
     response = TestClient(app, raise_server_exceptions=False).get("/raise_general")
 
     assert response.status_code == 500
-    body = response.json()
+    body = response_object(response)
     assert body["type"] == "error"
-    assert body["error"]["type"] == "api_error"
+    assert object_payload(body["error"])["type"] == "api_error"
     assert body["request_id"] == response.headers["request-id"]
 
 
@@ -183,7 +187,9 @@ def test_general_exception_default_log_excludes_exception_message():
 
     assert response.status_code == 500
     blob = " ".join(
-        str(value) for call in log_error.call_args_list for value in call.args
+        str(value)
+        for call in log_error.call_args_list
+        for value in positional_arguments(call)
     )
     assert secret not in blob
     assert "ValueError" in blob
@@ -295,7 +301,7 @@ async def test_asgi_log_context_isolated_across_runtimes_tasks_and_workers(
         logger.info("background {}", path)
 
     async def app(scope: Scope, receive: object, send: object):
-        path = scope["path"]
+        path: str = scope["path"]
         logger.info("request {}", path)
         jobs.append(asyncio.create_task(background(path)))
         await run_sync_owned(lambda: logger.info("worker {}", path))

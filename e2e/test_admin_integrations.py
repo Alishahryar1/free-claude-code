@@ -8,6 +8,12 @@ from playwright.sync_api import Page, Route, expect
 
 from e2e.layout import visible_bounds
 from free_claude_code.harnesses import claude_integration, claude_onboarding
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_payload,
+    response_object,
+)
 
 
 @pytest.mark.parametrize(
@@ -236,7 +242,7 @@ def test_manual_setup_and_revisit_read_the_file(
     page: Page, admin_base_url: str, tmp_path: Path
 ):
     path = tmp_path / "vscode" / "settings.json"
-    status = page.request.get(f"{admin_base_url}/admin/api/status").json()
+    status = response_object(page.request.get(f"{admin_base_url}/admin/api/status"))
     claude_integration.configure(
         path,
         f"http://localhost:{status['port']}/",
@@ -359,8 +365,10 @@ def test_background_update_spinner_failure_retry_and_completion(
 
     def startup(route: Route):
         response = route.fetch()
-        payload = response.json()
-        payload["startup"]["integrations"][integration] = dict(progress)
+        payload = response_object(response)
+        object_payload(object_payload(payload["startup"])["integrations"])[
+            integration
+        ] = dict(progress)
         route.fulfill(response=response, json=payload)
 
     def status(route: Route):
@@ -453,11 +461,11 @@ def test_startup_updates_before_opening_integrations(
     button = page.locator("#openClaudeIntegration")
     expect(button).to_have_text("Disconnect")
     expect(page.locator("#claudeIntegrationMessage")).to_be_hidden()
-    saved = json.loads(admin_client_files.read_text())
+    saved = decode_object(admin_client_files.read_text())
     assert saved["editor.fontSize"] == 15
     assert any(
         entry == {"name": "CLAUDE_CODE_DISABLE_ADVISOR_TOOL", "value": "1"}
-        for entry in saved["claudeCode.environmentVariables"]
+        for entry in array_payload(saved["claudeCode.environmentVariables"])
     )
     assert not (tmp_path / ".claude.json").exists()
     expect(page.locator("#openClaudeOnboarding")).to_have_text("Complete onboarding")

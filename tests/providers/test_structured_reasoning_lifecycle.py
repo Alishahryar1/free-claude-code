@@ -31,7 +31,13 @@ from tests.providers.test_history_transports import (
     _harness,
     _saved_reply,
 )
-from tests.wire_payload import array_payload, object_array, object_payload
+from tests.wire_payload import (
+    array_payload,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 @pytest.mark.asyncio
@@ -118,13 +124,13 @@ async def test_late_metadata_uses_open_indices_and_closes_final_text_last():
         parsed = parse_sse_text("".join(stream))
         _assert_indexed(parsed)
         text_index = max(
-            event.data["index"]
+            int_payload(event.data["index"])
             for event in parsed
             if event.event == "content_block_start"
-            and event.data["content_block"]["type"] == "text"
+            and object_payload(event.data["content_block"])["type"] == "text"
         )
         assert [
-            event.data["index"]
+            int_payload(event.data["index"])
             for event in parsed
             if event.event == "content_block_stop"
         ][-1] == text_index
@@ -208,7 +214,8 @@ def test_native_thinking_streams_before_late_structured_alias():
     early = list(reasoning.events({}, output, native_reasoning="Plan."))
     parsed = parse_sse_text("".join(early))
     assert any(
-        event.data.get("delta", {}).get("thinking") == "Plan." for event in parsed
+        object_payload(event.data.get("delta", {})).get("thinking") == "Plan."
+        for event in parsed
     )
     late = list(
         reasoning.events(
@@ -224,7 +231,12 @@ def test_native_thinking_streams_before_late_structured_alias():
     late.extend(reasoning.finish(output))
     parsed = parse_sse_text("".join([*early, *late]))
     assert (
-        "".join(event.data.get("delta", {}).get("thinking", "") for event in parsed)
+        "".join(
+            string_payload(
+                object_payload(event.data.get("delta", {})).get("thinking", "")
+            )
+            for event in parsed
+        )
         == "Plan."
     )
 
@@ -273,7 +285,9 @@ def test_immediate_text_and_late_replay_survive_every_exit(terminal: str):
     frames.append(output.emit_text_delta("Answer."))
     # Text has already been emitted, while upstream metadata and termination are pending.
     early = parse_sse_text("".join(frames))
-    assert any(e.data.get("delta", {}).get("text") == "Answer." for e in early)
+    assert any(
+        object_payload(e.data.get("delta", {})).get("text") == "Answer." for e in early
+    )
     assert not any(e.event == "message_stop" for e in early)
     if terminal == "tool":
         frames += output.close_content_blocks()
@@ -315,9 +329,9 @@ def test_immediate_text_and_late_replay_survive_every_exit(terminal: str):
     events = parse_sse_text("".join(frames))
     _assert_indexed(events)
     signatures = [
-        e.data["delta"]["signature"]
+        object_payload(e.data["delta"])["signature"]
         for e in events
-        if e.data.get("delta", {}).get("type") == "signature_delta"
+        if object_payload(e.data.get("delta", {})).get("type") == "signature_delta"
     ]
     assert signatures == ([] if terminal == "failure" else ["firstsecond"])
     assert "fcc:history" not in "".join(frames)

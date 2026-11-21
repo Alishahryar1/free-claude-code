@@ -272,7 +272,7 @@ class ModelRouter:
 
         route = self._matched_route(claude_model_name)
         if route is not None:
-            model = getattr(self._settings, route[1])
+            model: object = getattr(self._settings, route[1])
             if isinstance(model, str):
                 return model
         return self._settings.model
@@ -284,7 +284,7 @@ class ModelRouter:
 
         route = self._matched_route(claude_model_name)
         if route is not None:
-            preference = getattr(self._settings, route[2])
+            preference: ReasoningPreference = getattr(self._settings, route[2])
             if preference is not ReasoningPreference.INHERIT:
                 return preference
         return self._settings.reasoning_policy

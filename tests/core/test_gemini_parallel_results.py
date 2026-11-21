@@ -15,6 +15,8 @@ from free_claude_code.core.history_replay import (
     encode_replay,
     prepare_history,
 )
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import object_array, object_payload
 
 ORIGIN = ReplayOrigin(
     "gemini", "gemini", "https://google.invalid/v1beta", "test-key", "models/test"
@@ -155,14 +157,18 @@ def test_trailing_prompt_and_image_result_keep_their_own_positions():
             )
         ),
     )
-    response_turn = body["contents"][1]
-    assert [part["functionResponse"]["id"] for part in response_turn["parts"]] == [
+    contents: list[JsonObject] = body["contents"]
+    response_turn = contents[1]
+    assert [
+        object_payload(part["functionResponse"])["id"]
+        for part in object_array(response_turn["parts"])
+    ] == [
         "a",
         "b",
     ]
-    assert response_turn["parts"][1]["functionResponse"]["parts"] == [
-        {"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}
-    ]
+    assert object_payload(object_array(response_turn["parts"])[1]["functionResponse"])[
+        "parts"
+    ] == [{"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}]
     assert body["contents"][2] == {"role": "user", "parts": [{"text": "Summarize"}]}
     prepared = cast(
         dict[str, Any], prepare_history(body, ORIGIN, scope=HistoryMode.ALL)
@@ -179,7 +185,8 @@ def test_result_groups_do_not_cross_assistant_turns():
             MessagesRequest(model="models/test", messages=[*turn, *deepcopy(turn)])
         ),
     )
-    assert [content["role"] for content in body["contents"]] == [
+    contents: list[JsonObject] = body["contents"]
+    assert [content["role"] for content in contents] == [
         "model",
         "user",
         "model",
@@ -187,7 +194,8 @@ def test_result_groups_do_not_cross_assistant_turns():
     ]
     for index in (1, 3):
         assert [
-            part["functionResponse"]["id"] for part in body["contents"][index]["parts"]
+            object_payload(part["functionResponse"])["id"]
+            for part in object_array(contents[index]["parts"])
         ] == ["a", "b"]
 
 

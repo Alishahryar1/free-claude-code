@@ -6,6 +6,8 @@ import pytest
 
 from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.gemini.native_request import chat_to_gemini
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import object_array, object_payload
 
 
 def test_chat_to_gemini_keeps_thoughts_typed_and_tool_ids():
@@ -28,14 +30,21 @@ def test_chat_to_gemini_keeps_thoughts_typed_and_tool_ids():
             {"role": "tool", "tool_call_id": "call_1", "content": "file"},
         ],
     )
-    body = cast(dict[str, Any], chat_to_gemini(request))
-    parts = body["contents"][1]["parts"]
+    body: JsonObject = chat_to_gemini(request)
+    parts = object_array(object_array(body["contents"])[1]["parts"])
     assert parts[:2] == [
         {"text": "actual thought", "thought": True},
         {"text": "<thought>literal answer</thought>"},
     ]
     assert parts[2]["functionCall"] == {"id": "call_1", "name": "read", "args": {}}
-    assert body["contents"][2]["parts"][0]["functionResponse"]["id"] == "call_1"
+    assert (
+        object_payload(
+            object_array(object_array(body["contents"])[2]["parts"])[0][
+                "functionResponse"
+            ]
+        )["id"]
+        == "call_1"
+    )
 
 
 def test_messages_auto_choice_without_tools_has_no_function_config():
@@ -112,7 +121,8 @@ def test_messages_tool_result_and_followup_remain_distinct_turns():
             {"role": "user", "content": "Reply exactly OK without calling tools."},
         ],
     )
-    contents = cast(dict[str, Any], messages_to_gemini(request))["contents"]
+    body: JsonObject = messages_to_gemini(request)
+    contents = object_array(body["contents"])
     assert contents[-2:] == [
         {
             "role": "user",

@@ -3,7 +3,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import override
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -15,15 +15,23 @@ from openai import AsyncOpenAI
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.execution import ProviderExecutor
+from free_claude_code.application.routing import ProviderModelTarget
 from free_claude_code.config.provider_catalog import LMSTUDIO_DEFAULT_BASE
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.gemini import GeminiRequest
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
 )
-from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from free_claude_code.core.reasoning import (
+    DEFAULT_REASONING_POLICY,
+    ReasoningEffort,
+    ReasoningPolicy,
+)
+from free_claude_code.core.stream_output import StreamOutput
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.lmstudio import LMStudioProvider
@@ -44,7 +52,7 @@ from tests.providers.support import (
     make_provider_config,
     sdk_chat_chunk,
 )
-from tests.wire_payload import object_payload
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 def make_request(**overrides: object):
@@ -149,9 +157,44 @@ def input_request(wire: str):
     )
 
 
-def stream_request(provider: LMStudioProvider, wire: str):
-    request = input_request(wire)
-    return getattr(provider, f"stream_{wire}")(request)
+def stream_request(
+    provider: LMStudioProvider,
+    wire: str,
+    *,
+    request: MessagesRequest | OpenAIResponsesRequest | GeminiRequest | None = None,
+    reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+    continuation: ContinuationSeed | None = None,
+) -> AsyncIterator[StreamOutput]:
+    if request is None:
+        request = input_request(wire)
+    if isinstance(request, MessagesRequest):
+        return provider.stream_messages(
+            request, reasoning=reasoning, continuation=continuation
+        )
+    if isinstance(request, GeminiRequest):
+        return provider.stream_gemini(
+            request, reasoning=reasoning, continuation=continuation
+        )
+    return provider.stream_responses(
+        request, reasoning=reasoning, continuation=continuation
+    )
+
+
+def execute_stream(
+    executor: ProviderExecutor,
+    wire: str,
+    request_id: str,
+    *fallbacks: ProviderModelTarget,
+) -> AsyncIterator[StreamOutput]:
+    if wire == "messages":
+        return executor.stream_messages(
+            _routed_request(*fallbacks), raw_log_payload=dict, request_id=request_id
+        )
+    return executor.stream_responses(
+        _routed_responses_request(*fallbacks),
+        raw_log_payload=dict,
+        request_id=request_id,
+    )
 
 
 def completion_chunk(*, finish_reason: str | None = "stop", content: str = "hello"):
@@ -224,11 +267,12 @@ async def test_context_metadata_wait_keeps_event_loop_responsive(
     ):
         try:
             with pytest.raises(ExecutionFailure) as error:
-                stream = getattr(lmstudio_provider, f"stream_{wire}")(request)
+                stream = stream_request(lmstudio_provider, wire, request=request)
                 await anext(stream)
             assert error.value.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED
         finally:
             if stream is not None:
+                assert isinstance(stream, AsyncCloseable)
                 await stream.aclose()
             await asyncio.sleep(0)
     assert events == ["peer ran", "metadata returned"]
@@ -239,7 +283,7 @@ def test_build_request_body_basic(lmstudio_provider: LMStudioProvider):
     body = lmstudio_provider._chat._build_request_body(req)
 
     assert body["model"] == "lmstudio-community/qwen2.5-7b-instruct"
-    assert body["messages"][0]["role"] == "system"
+    assert object_payload(array_payload(body["messages"])[0])["role"] == "system"
 
 
 def test_adaptive_client_reasoning_uses_documented_named_effort(
@@ -249,7 +293,7 @@ def test_adaptive_client_reasoning_uses_documented_named_effort(
 
     body = lmstudio_provider._chat._build_request_body(req, reasoning=REASONING_ON)
 
-    assert body["extra_body"]["reasoning_effort"] == "high"
+    assert object_payload(body["extra_body"])["reasoning_effort"] == "high"
     assert "reasoning_effort" not in body
 
 
@@ -266,7 +310,7 @@ def test_exact_client_budget_is_not_derived_from_output_tokens(
         ),
     )
 
-    assert body["extra_body"]["reasoning_tokens"] == 1024
+    assert object_payload(body["extra_body"])["reasoning_tokens"] == 1024
     assert "reasoning_tokens" not in body
     assert body["max_tokens"] == 8192
 
@@ -292,7 +336,8 @@ def test_build_request_body_never_replays_prior_thinking(
     )
     body = lmstudio_provider._chat._build_request_body(req)
 
-    roles = [m.get("role") for m in body.get("messages", [])]
+    messages: JsonValue = body.get("messages", [])
+    roles = [m.get("role") for m in object_array(messages)]
     assert "assistant_reasoning_content" not in roles
     assert "[Earlier reasoning]" not in str(body)
     assert "prior reasoning" in str(body)
@@ -308,7 +353,8 @@ async def test_startup_builds_before_context_budget_and_preserves_policy(
     name = (
         "_build_request_body" if wire == "messages" else "_build_responses_request_body"
     )
-    original = getattr(lmstudio_provider._chat, name)
+    messages_builder = lmstudio_provider._chat._build_request_body
+    responses_builder = lmstudio_provider._chat._build_responses_request_body
 
     def build(
         request_arg: MessagesRequest | OpenAIResponsesRequest,
@@ -317,7 +363,9 @@ async def test_startup_builds_before_context_budget_and_preserves_policy(
     ):
         assert request_arg is request
         calls.append(("build", reasoning))
-        return original(request_arg, reasoning=reasoning)
+        if isinstance(request_arg, MessagesRequest):
+            return messages_builder(request_arg, reasoning=reasoning)
+        return responses_builder(request_arg, reasoning=reasoning)
 
     async def check_context(body: JsonObject):
         calls.append(("context", body))
@@ -338,8 +386,8 @@ async def test_startup_builds_before_context_budget_and_preserves_policy(
             wraps=lmstudio_provider._chat._admission.start_execution,
         ) as admission,
     ):
-        stream = getattr(lmstudio_provider, f"stream_{wire}")(
-            request, reasoning=REASONING_OFF
+        stream = stream_request(
+            lmstudio_provider, wire, request=request, reasoning=REASONING_OFF
         )
         assert calls == [("build", REASONING_OFF)]
         with pytest.raises(ExecutionFailure, match="stop before generation"):
@@ -372,7 +420,7 @@ def test_startup_conversion_failure_skips_context_budget(
         patch.object(lmstudio_provider._chat, "_validate_prepared_body") as context,
         pytest.raises(InvalidRequestError, match="invalid request conversion"),
     ):
-        getattr(lmstudio_provider, f"stream_{wire}")(request, reasoning=REASONING_ON)
+        stream_request(lmstudio_provider, wire, request=request, reasoning=REASONING_ON)
 
     context.assert_not_called()
 
@@ -397,7 +445,7 @@ async def test_context_rejection_releases_admission_without_generation(
         ) as generation,
         pytest.raises(ExecutionFailure) as error,
     ):
-        await anext(getattr(lmstudio_provider, f"stream_{wire}")(request))
+        await anext(stream_request(lmstudio_provider, wire, request=request))
     assert error.value.kind is FailureKind.CONTEXT_WINDOW_EXCEEDED
     admission.assert_called_once()
     assert lmstudio_provider._chat._admission._capacity._active_attempts == 0
@@ -428,8 +476,10 @@ async def test_continuation_prefix_counts_before_generation(
         pytest.raises(ExecutionFailure) as error,
     ):
         await anext(
-            getattr(lmstudio_provider, f"stream_{wire}")(
-                request,
+            stream_request(
+                lmstudio_provider,
+                wire,
+                request=request,
                 continuation=continuation_seed("large " * 10000, "consider this"),
             )
         )
@@ -466,10 +516,8 @@ async def test_cancelling_primary_context_validation_closes_lookup(
         executor = ProviderExecutor(
             AsyncMock(side_effect=resolve_provider),
         )
-        route = _routed_request if wire == "messages" else _routed_responses_request
-        routed = route(_target("fallback", "fallback-model"))
-        stream = getattr(executor, f"stream_{wire}")(
-            routed, raw_log_payload=dict, request_id="context-cancel"
+        stream = execute_stream(
+            executor, wire, "context-cancel", _target("fallback", "fallback-model")
         )
         async with asyncio.timeout(2):
             task = asyncio.ensure_future(anext(stream))
@@ -896,12 +944,7 @@ async def test_request_cancellation_while_waiting_for_cache_leaves_refresh_runni
         owner = group.create_task(provider._loaded_context_length())
         await asyncio.wait_for(body.started.wait(), 2)
         executor = ProviderExecutor(AsyncMock(return_value=provider))
-        routed = (
-            _routed_request() if wire == "messages" else _routed_responses_request()
-        )
-        stream = getattr(executor, f"stream_{wire}")(
-            routed, raw_log_payload=dict, request_id="cache-wait-cancel"
-        )
+        stream = execute_stream(executor, wire, "cache-wait-cancel")
         async with asyncio.timeout(2):
             task = asyncio.ensure_future(anext(stream))
             await asyncio.sleep(0)
@@ -950,6 +993,7 @@ async def test_closing_validated_stream_closes_upstream_and_releases_admission(
                 else "response.created" in first
             )
         finally:
+            assert isinstance(stream, AsyncCloseable)
             await stream.aclose()
         assert body.close_count == 1
         assert not provider._client.is_closed()
@@ -984,11 +1028,8 @@ async def test_context_rejection_before_first_event_allows_fallback(wire: str):
         executor = ProviderExecutor(
             AsyncMock(side_effect=resolve_provider),
         )
-        route = _routed_request if wire == "messages" else _routed_responses_request
-        stream = getattr(executor, f"stream_{wire}")(
-            route(_target("fallback", "fallback-model")),
-            raw_log_payload=dict,
-            request_id="context-fallback",
+        stream = execute_stream(
+            executor, wire, "context-fallback", _target("fallback", "fallback-model")
         )
         output = [frame async for event in stream for frame in event.frames]
         assert output == [

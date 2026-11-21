@@ -28,6 +28,7 @@ from free_claude_code.providers.openai_chat import (
 )
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 from tests.providers.support import immediate_admission, make_provider_config
+from tests.wire_payload import decode_object
 
 
 class Context:
@@ -367,7 +368,7 @@ async def test_stream_authentication_precedes_overlapping_request_correction(
     bodies = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         if len(bodies) > 1:
             return _response(request)
         failure = {

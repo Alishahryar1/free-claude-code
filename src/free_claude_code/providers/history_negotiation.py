@@ -94,7 +94,7 @@ def _normalize_chat_override(messages: list[JsonValue]) -> None:
 
 
 def effective_body(body: Mapping[str, Any]) -> JsonObject:
-    result = deepcopy(dict(body))
+    result: JsonObject = deepcopy(dict(body))
     extra = result.pop("extra_body", None)
     if isinstance(extra, dict):
 

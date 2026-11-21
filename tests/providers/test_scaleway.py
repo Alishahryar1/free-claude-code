@@ -22,6 +22,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload
 
 _MODEL = "deepseek/deepseek-v4-flash"
 
@@ -97,7 +98,7 @@ def test_replays_thinking_in_reasoning_content_field(
         reasoning=reasoning_for(request),
     )
 
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "assistant",
         "content": "The answer is 42.",
         "reasoning_content": "Work through it.",

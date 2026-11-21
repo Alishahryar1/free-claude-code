@@ -28,7 +28,7 @@ from smoke.lib.skips import (
     skip_if_upstream_unavailable_events,
     skip_if_upstream_unavailable_exception,
 )
-from tests.wire_payload import object_array
+from tests.wire_payload import object_array, object_payload, response_object
 
 pytestmark = [pytest.mark.live, pytest.mark.smoke_target("providers")]
 
@@ -240,10 +240,10 @@ def test_provider_error_e2e(smoke_config: SmokeConfig) -> None:
     assert response.status_code >= 400
     assert response.headers["content-type"].startswith("application/json")
     assert response.headers["x-should-retry"] == "false"
-    payload = response.json()
+    payload = response_object(response)
     assert payload["type"] == "error"
-    assert payload["error"]["type"]
-    assert payload["error"]["message"]
+    assert object_payload(payload["error"])["type"]
+    assert object_payload(payload["error"])["message"]
     assert payload["request_id"] == response.headers["request-id"]
 
 

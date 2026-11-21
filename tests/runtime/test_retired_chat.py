@@ -1,9 +1,11 @@
 import asyncio
 import sqlite3
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from loguru import logger
@@ -120,9 +122,13 @@ async def test_fresh_and_repeated_startup_do_not_create_chat_directory():
 
 
 def test_startup_removes_history_on_uvloop():
-    uvloop = pytest.importorskip("uvloop")
+    uvloop: ModuleType = pytest.importorskip("uvloop")
     _, owned = _history()
-    asyncio.run(_start_and_close(), loop_factory=uvloop.new_event_loop)
+    new_event_loop: Callable[[], asyncio.AbstractEventLoop] | None = getattr(
+        uvloop, "new_event_loop", None
+    )
+    assert new_event_loop is not None
+    asyncio.run(_start_and_close(), loop_factory=new_event_loop)
     assert not [path for path in owned if path.exists()]
 
 
@@ -182,7 +188,7 @@ async def test_inaccessible_history_does_not_block_startup(
     monkeypatch: pytest.MonkeyPatch, cleanup_logs: list[str], operation: str
 ):
     directory, owned = _history()
-    original = getattr(Path, operation)
+    original: Callable[..., object] = getattr(Path, operation)
     denied = {"resolve": directory, "lstat": owned[0], "open": directory / "chat.lock"}[
         operation
     ]

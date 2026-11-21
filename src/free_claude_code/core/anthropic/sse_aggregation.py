@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.core.json_types import JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 
 from .content import streamed_tool_arguments
 from .stream_contracts import SSEEvent
@@ -33,7 +33,7 @@ async def aggregate_anthropic_sse_to_message(
     """
     decoder = AnthropicSSEDecoder()
     message: dict[str, Any] = {}
-    blocks: dict[int, dict[str, Any]] = {}
+    blocks: dict[int, JsonObject] = {}
     parts: dict[int, list[str]] = {}
     error: dict[str, Any] | None = None
     complete = False
@@ -126,7 +126,7 @@ async def aggregate_anthropic_sse_to_message(
             block.setdefault("signature", "")
         elif btype == "tool_use" and error is None:
             try:
-                value = json.loads(
+                value = load_json_value(
                     streamed_tool_arguments(accumulated, block.get("input"))
                 )
                 if not isinstance(value, dict):

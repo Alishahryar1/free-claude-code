@@ -8,6 +8,7 @@ from openai import BadRequestError
 
 from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.history_replay import history_retry_body, replay_origin
+from tests.wire_payload import array_payload, object_payload, string_payload
 
 
 def _error(
@@ -52,8 +53,13 @@ def test_legacy_invalid_id_then_ciphertext_rejection_keeps_original():
         "responses",
     )
     assert fixed is not None
-    assert ":" not in fixed["input"][1]["id"]
-    assert fixed["input"][1]["encrypted_content"] == "opaque-a"
+    assert ":" not in string_payload(
+        object_payload(array_payload(fixed["input"])[1])["id"]
+    )
+    assert (
+        object_payload(array_payload(fixed["input"])[1])["encrypted_content"]
+        == "opaque-a"
+    )
     cleaned = history_retry_body(
         _error(
             "The encrypted content could not be verified.",
@@ -63,11 +69,11 @@ def test_legacy_invalid_id_then_ciphertext_rejection_keeps_original():
         "responses",
     )
     assert cleaned is not None
-    assert cleaned["input"][1] == {
+    assert array_payload(cleaned["input"])[1] == {
         "role": "assistant",
         "content": "look up 17",
     }
-    assert cleaned["input"][2:] == original["input"][2:]
+    assert array_payload(cleaned["input"])[2:] == original["input"][2:]
     assert body == original
 
 
@@ -264,7 +270,7 @@ def test_messages_signature_path_retains_readable_text_and_other_blocks():
         "messages",
     )
     assert result is not None
-    assert result["messages"][0]["content"] == [
+    assert object_payload(array_payload(result["messages"])[0])["content"] == [
         {"type": "text", "text": "read the file"},
         body["messages"][0]["content"][1],
     ]

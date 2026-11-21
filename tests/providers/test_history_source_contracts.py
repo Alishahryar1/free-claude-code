@@ -26,7 +26,12 @@ from free_claude_code.providers.history_replay import (
     history_retry_body,
     normalize_messages_history,
 )
-from tests.wire_payload import object_array
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 def origin(protocol: HistoryProtocol = "chat"):
@@ -65,7 +70,8 @@ def test_messages_normalization_keeps_distinct_thoughts_but_not_aliases(
         normalized.messages, structured_reasoning_details=True
     )
     wire = cast(dict[str, Any], prepare_history({"messages": converted}, origin()))
-    assert wire["messages"][0]["reasoning_content"].count(thought) == 1
+    messages: list[JsonObject] = wire["messages"]
+    assert string_payload(messages[0]["reasoning_content"]).count(thought) == 1
     assert (
         "Independent thought" in wire["messages"][0]["reasoning_content"]
     ) is separate
@@ -110,8 +116,12 @@ def test_singleton_responses_id_correction_uses_owned_array_source(
         source_paths=state.paths if negotiate else None,
     )
     assert result is not None
-    assert result["input"][0]["id"].startswith("rs_")
-    assert ":" not in result["input"][0]["id"]
+    assert string_payload(
+        object_payload(array_payload(result["input"])[0])["id"]
+    ).startswith("rs_")
+    assert ":" not in string_payload(
+        object_payload(array_payload(result["input"])[0])["id"]
+    )
     assert body == before
 
 
@@ -284,9 +294,11 @@ def test_sdk_carrier_aliases_preserve_records_across_history_modes(
     }
     before = deepcopy(source)
     resolved = cast(dict[str, Any], resolve_history_overrides(source))
-    wire = cast(dict[str, Any], prepare_history(resolved, origin(), scope=mode))
+    wire = prepare_history(resolved, origin(), scope=mode)
     assert [
-        m.get("reasoning_content") for m in wire["messages"] if m["role"] == "assistant"
+        m.get("reasoning_content")
+        for m in object_array(wire["messages"])
+        if m["role"] == "assistant"
     ] == [
         expected if mode is HistoryMode.ALL else None,
         expected if mode is not HistoryMode.NONE else None,

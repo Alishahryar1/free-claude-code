@@ -46,7 +46,8 @@ def is_media_rejection(error: Exception) -> bool:
     """Whether an upstream rejected the request because it carried media."""
     if not isinstance(error, openai.APIError):
         return False
-    if getattr(error, "status_code", None) not in (None, 400):
+    status: object = getattr(error, "status_code", None)
+    if status not in (None, 400):
         return False
     return any(
         phrase in text for text in _error_texts(error) for phrase in _REJECTION_PHRASES

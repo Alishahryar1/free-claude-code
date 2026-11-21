@@ -17,7 +17,7 @@ class ProviderAdmissionLimits:
 
     def __post_init__(self) -> None:
         for name in ("rate_limit", "max_concurrency", "max_attempts"):
-            value = getattr(self, name)
+            value: object = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
         if not math.isfinite(self.rate_window) or self.rate_window <= 0:

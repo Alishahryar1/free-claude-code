@@ -34,6 +34,7 @@ from tests.providers.support import (
     reasoning_for,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 def image_routing_error_body():
@@ -247,7 +248,7 @@ def test_build_request_body_disables_reasoning_when_client_disables_it(
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["reasoning"] == {"enabled": False}
+    assert object_payload(body["extra_body"])["reasoning"] == {"enabled": False}
 
 
 def test_build_request_body_maps_thinking_budget_to_reasoning_max_tokens(
@@ -258,7 +259,7 @@ def test_build_request_body_maps_thinking_budget_to_reasoning_max_tokens(
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["reasoning"] == {"max_tokens": 4096}
+    assert object_payload(body["extra_body"])["reasoning"] == {"max_tokens": 4096}
 
 
 def test_build_request_body_replays_openrouter_reasoning_details(
@@ -288,8 +289,12 @@ def test_build_request_body_replays_openrouter_reasoning_details(
         request, reasoning=reasoning_for(request)
     )
 
-    assistant = next(msg for msg in body["messages"] if msg["role"] == "assistant")
-    assert assistant["reasoning_details"] == [detail]
+    assistant = next(
+        msg
+        for msg in array_payload(body["messages"])
+        if object_payload(msg)["role"] == "assistant"
+    )
+    assert object_payload(assistant)["reasoning_details"] == [detail]
 
 
 def test_reasoning_details_skip_neutral_tool_turn_boundary(
@@ -346,11 +351,13 @@ def test_reasoning_details_skip_neutral_tool_turn_boundary(
     )
 
     assistants = [
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     ]
-    assert assistants[0]["reasoning_details"] == [first_detail]
+    assert object_payload(assistants[0])["reasoning_details"] == [first_detail]
     assert assistants[1] == {"role": "assistant", "content": " "}
-    assert assistants[2]["reasoning_details"] == [second_detail]
+    assert object_payload(assistants[2])["reasoning_details"] == [second_detail]
 
 
 def test_reasoning_details_preserve_redacted_only_assistant_after_tool(
@@ -407,15 +414,17 @@ def test_reasoning_details_preserve_redacted_only_assistant_after_tool(
     )
 
     assistants = [
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     ]
-    assert assistants[0]["reasoning_details"] == [first_detail]
+    assert object_payload(assistants[0])["reasoning_details"] == [first_detail]
     assert assistants[1] == {
         "role": "assistant",
         "content": " ",
         "reasoning_details": [second_detail],
     }
-    assert "reasoning_details" not in assistants[2]
+    assert "reasoning_details" not in object_payload(assistants[2])
 
 
 @pytest.mark.asyncio
@@ -447,10 +456,10 @@ async def test_stream_maps_reasoning_content_and_details(
     parsed = parse_sse_text(event_text)
     assert thinking_content(parsed) == "plan "
     carriers = [
-        event.data["content_block"]["data"]
+        object_payload(event.data["content_block"])["data"]
         for event in parsed
         if event.event == "content_block_start"
-        and event.data["content_block"]["type"] == "redacted_thinking"
+        and object_payload(event.data["content_block"])["type"] == "redacted_thinking"
     ]
     assert carriers == [redacted["data"]]
     assert text_content(parsed) == "done"

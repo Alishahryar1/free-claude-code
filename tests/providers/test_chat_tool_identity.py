@@ -12,6 +12,7 @@ from free_claude_code.core.chat_completions.tool_calls import (
 )
 from free_claude_code.core.json_types import JsonObject
 from tests.core.test_chat_tool_buffer import event
+from tests.wire_payload import object_payload
 
 
 def call(
@@ -45,8 +46,8 @@ def call_consumer():
         return [
             {
                 "id": item.body.get("id"),
-                "name": item.body["function"]["name"],
-                "arguments": item.body["function"]["arguments"],
+                "name": object_payload(item.body["function"])["name"],
+                "arguments": object_payload(item.body["function"])["arguments"],
                 "metadata": item.body.get("extra_content"),
             }
             for item in output

@@ -86,7 +86,7 @@ class ClientRequestLifetimeMiddleware:
 
 
 def _owns_client_lifetime(scope: Scope) -> bool:
-    path = scope.get("path", "")
+    path: str = scope.get("path", "")
     return scope["type"] == "http" and (
         (
             scope.get("method") == "POST"

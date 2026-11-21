@@ -107,7 +107,8 @@ async def test_correlation_context_and_headers_span_the_complete_stream() -> Non
 
         assert context_exits == []
         assert app_request_id is not None
-        headers = Headers(raw=sent[0]["headers"])
+        raw_headers: list[tuple[bytes, bytes]] = sent[0]["headers"]
+        headers = Headers(raw=raw_headers)
         assert headers["request-id"] == app_request_id
         assert headers["x-request-id"] == app_request_id
         assert context_entries == [

@@ -18,7 +18,9 @@ from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.admission_capacity import ProviderCapacityLimiter
 from tests.api.support import create_test_app
 from tests.api.test_delivered_stream_recovery import text_events
+from tests.fixture_parameters import fixture_parameter
 from tests.providers.test_anthropic_messages_transport import _sse
+from tests.wire_payload import decode_object
 
 KEYS = ["synthetic-first", "synthetic-second", "synthetic-third"]
 CUSTOM_ID = "custom_" + "d" * 32
@@ -42,7 +44,7 @@ def upstream(
 ):
     monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "missing-ca.pem"))
     calls = []
-    failure_status = request.param
+    failure_status: int = fixture_parameter(request, int)
     build = ProviderAdmissionController.__init__
 
     def fast_backoff(
@@ -78,7 +80,7 @@ def upstream(
         token = request.headers.get("x-api-key") or request.headers.get(
             "authorization", ""
         ).removeprefix("Bearer ")
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         calls.append((token, body))
         if token != "synthetic-third":
             return failure_status, {

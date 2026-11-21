@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from free_claude_code.core.json_types import JsonObject, JsonValue
+
 
 class _AnthropicBlockBase(BaseModel):
     """Pass through protocol extensions such as ``cache_control``."""
@@ -64,13 +66,13 @@ class ContentBlockServerToolUse(_AnthropicBlockBase):
 class ContentBlockWebSearchToolResult(_AnthropicBlockBase):
     type: Literal["web_search_tool_result"]
     tool_use_id: str
-    content: Any
+    content: JsonValue
 
 
 class ContentBlockWebFetchToolResult(_AnthropicBlockBase):
     type: Literal["web_fetch_tool_result"]
     tool_use_id: str
-    content: Any
+    content: JsonValue
 
 
 class SystemContent(_AnthropicBlockBase):
@@ -130,7 +132,7 @@ class MessagesRequest(BaseModel):
     top_k: int | None = None
     metadata: dict[str, Any] | None = None
     tools: list[Tool] | None = None
-    tool_choice: dict[str, Any] | None = None
+    tool_choice: JsonObject | None = None
     thinking: ThinkingConfig | None = None
     context_management: dict[str, Any] | None = None
     output_config: dict[str, Any] | None = None
@@ -156,7 +158,7 @@ class TokenCountRequest(BaseModel):
     system: str | list[SystemContent] | None = None
     tools: list[Tool] | None = None
     thinking: ThinkingConfig | None = None
-    tool_choice: dict[str, Any] | None = None
+    tool_choice: JsonObject | None = None
     context_management: dict[str, Any] | None = None
     output_config: dict[str, Any] | None = None
     mcp_servers: list[dict[str, Any]] | None = None

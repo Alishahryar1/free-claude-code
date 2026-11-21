@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from free_claude_code.application.errors import InvalidRequestError
+from free_claude_code.core.json_types import JsonValue
 from free_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningControl,
@@ -96,10 +97,10 @@ def _thinking_config(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _object(container: dict[str, Any], key: str) -> dict[str, Any]:
-    value = container.setdefault(key, {})
+    value: JsonValue = container.setdefault(key, {})
     if not isinstance(value, dict):
         raise TypeError(f"{key} must be an object.")
-    return cast(dict[str, Any], value)
+    return value
 
 
 def _optional_object(
@@ -107,7 +108,7 @@ def _optional_object(
 ) -> dict[str, Any] | None:
     if key not in container:
         return None
-    value = container[key]
+    value: JsonValue = container[key]
     if not isinstance(value, dict):
         raise ValueError(f"{path} must be an object.")
-    return cast(dict[str, Any], value)
+    return value

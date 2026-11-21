@@ -10,6 +10,7 @@ import pytest
 from playwright.sync_api import Page, expect
 from ruamel.yaml import YAML
 
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.runtime.integration_service import IntegrationService
 
 
@@ -61,7 +62,7 @@ def test_connect_disconnect_preserves_native_settings(
     dialog.get_by_role("button", name="Disconnect", exact=True).click()
     expect(opener).to_have_text("Connect")
     assert "free-claude-code" not in patch.read_text()
-    rows = YAML().load(patch.read_text())
+    rows: list[JsonObject] = YAML().load(patch.read_text())
     assert rows[0] == {"id": "unrelated", "config": {"keep": "unchanged"}}
     expect(page.locator("#dirtyState")).to_have_text("No changes")
 

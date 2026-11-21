@@ -8,6 +8,13 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.harnesses import claude_integration, claude_onboarding
 from free_claude_code.runtime.application import ApplicationRuntime
 from tests.api.support import create_test_app, runtime_for_app
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_payload,
+    response_object,
+    response_payload,
+)
 
 ROOT = "/admin/api/integrations/claude-vscode"
 
@@ -32,29 +39,29 @@ def test_routes_read_actual_file_connect_and_disconnect(
     integration: tuple[TestClient, Path, ApplicationRuntime],
 ):
     client, path, _ = integration
-    assert client.get(ROOT).json()["connected"] is False
+    assert response_object(client.get(ROOT))["connected"] is False
     response = client.post(f"{ROOT}/connect")
     assert response.status_code == 200
-    assert response.json() == {"connected": True}
+    assert response_payload(response) == {"connected": True}
     assert response.headers["cache-control"] == "no-store"
-    data = json.loads(path.read_text())
+    data = decode_object(path.read_text())
     environment = {
-        entry["name"]: entry["value"]
-        for entry in data["claudeCode.environmentVariables"]
+        object_payload(entry)["name"]: object_payload(entry)["value"]
+        for entry in array_payload(data["claudeCode.environmentVariables"])
     }
     assert environment["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:4321"
     assert environment["ANTHROPIC_AUTH_TOKEN"] == "integration-secret"
     assert "integration-secret" not in response.text
-    assert client.get(ROOT).json()["connected"] is True
+    assert response_object(client.get(ROOT))["connected"] is True
     state_path = path.parent / ".claude.json"
-    assert json.loads(state_path.read_text())["hasCompletedOnboarding"] is True
+    assert decode_object(state_path.read_text())["hasCompletedOnboarding"] is True
     state_path.write_text('{"hasCompletedOnboarding":false}')
-    assert client.get(ROOT).json()["connected"] is True
-    assert client.post(f"{ROOT}/connect").json() == {"connected": True}
+    assert response_object(client.get(ROOT))["connected"] is True
+    assert response_payload(client.post(f"{ROOT}/connect")) == {"connected": True}
     path.write_text("{}")
-    assert client.get(ROOT).json()["connected"] is False
-    assert client.post(f"{ROOT}/disconnect").json() == {"connected": False}
-    assert json.loads(state_path.read_text())["hasCompletedOnboarding"] is True
+    assert response_object(client.get(ROOT))["connected"] is False
+    assert response_payload(client.post(f"{ROOT}/disconnect")) == {"connected": False}
+    assert decode_object(state_path.read_text())["hasCompletedOnboarding"] is True
 
 
 @pytest.mark.parametrize(

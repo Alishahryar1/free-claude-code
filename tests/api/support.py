@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from free_claude_code.api.app import create_app
+from free_claude_code.api.dependencies import app_services
 from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.code_sessions import CodeApplicationPort
 from free_claude_code.application.connected_accounts import ConnectedAccountPort
@@ -26,7 +27,7 @@ from free_claude_code.runtime.provider_manager import (
 )
 from tests.config.credential_support import credential_edit
 from tests.web_tools_support import StubWebToolsClient
-from tests.wire_payload import object_payload
+from tests.wire_payload import array_payload, object_payload, response_object
 
 
 def post_config(client: TestClient, path: str, *, json: Mapping[str, JsonValue]):
@@ -35,10 +36,15 @@ def post_config(client: TestClient, path: str, *, json: Mapping[str, JsonValue])
         d.credential_env for d in PROVIDER_CATALOG.values() if d.credential_env
     }
     if credential_keys.intersection(values):
-        config = client.get("/admin/api/config").json()
-        fields = {field["key"]: field for field in config["fields"]}
+        config = response_object(client.get("/admin/api/config"))
+        fields = {
+            object_payload(field)["key"]: field
+            for field in array_payload(config["fields"])
+        }
         values = {
-            key: credential_edit(fields[key]["value"], value)
+            key: credential_edit(
+                object_payload(object_payload(fields[key])["value"]), value
+            )
             if key in credential_keys
             else value
             for key, value in values.items()
@@ -133,7 +139,7 @@ def create_test_app(
 
 def runtime_for_app(app: FastAPI) -> ApplicationRuntime:
     """Return the runtime supplied by :func:`create_test_app`."""
-    runtime = app.state.services.admin
+    runtime = app_services(app).admin
     if not isinstance(runtime, ApplicationRuntime):
         raise TypeError("Test app does not use ApplicationRuntime")
     return runtime
@@ -141,7 +147,7 @@ def runtime_for_app(app: FastAPI) -> ApplicationRuntime:
 
 def provider_manager_for_app(app: FastAPI) -> ProviderRuntimeManager:
     """Return the provider manager supplied by :func:`create_test_app`."""
-    manager = app.state.services.requests
+    manager = app_services(app).requests
     if not isinstance(manager, ProviderRuntimeManager):
         raise TypeError("Test app does not use ProviderRuntimeManager")
     return manager

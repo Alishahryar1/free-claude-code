@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from free_claude_code.core.json_types import load_json_value
 from free_claude_code.harnesses import (
     claude_desktop_integration,
     claude_integration,
@@ -19,6 +20,7 @@ from free_claude_code.harnesses.integration_cleanup import (
     disconnect_integrations,
 )
 from tests.harnesses.antigravity_support import write_previous_connection
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 URL = "http://127.0.0.1:8082"
 TOKEN = "cleanup-test-token"
@@ -209,7 +211,7 @@ def test_unmarked_vscode_settings_are_preserved_without_blocking(
     claude_integration.configure(
         paths.claude_vscode, "https://other.example", "unrelated-token", True
     )
-    document = json.loads(paths.claude_vscode.read_text())
+    document = decode_object(paths.claude_vscode.read_text())
     if key == "claudeCode.disableLoginPrompt":
         if value is None:
             document.pop(key)
@@ -219,10 +221,18 @@ def test_unmarked_vscode_settings_are_preserved_without_blocking(
         entries = document["claudeCode.environmentVariables"]
         if value is None:
             document["claudeCode.environmentVariables"] = [
-                entry for entry in entries if entry["name"] != key
+                entry
+                for entry in array_payload(entries)
+                if object_payload(entry)["name"] != key
             ]
         else:
-            next(entry for entry in entries if entry["name"] == key)["value"] = value
+            object_payload(
+                next(
+                    entry
+                    for entry in array_payload(entries)
+                    if object_payload(entry)["name"] == key
+                )
+            )["value"] = value
     paths.claude_vscode.write_text(json.dumps(document))
     before = paths.claude_vscode.read_bytes()
     disconnect_integrations(paths)
@@ -236,7 +246,7 @@ def test_vscode_cleanup_uses_gateway_identity_without_optional_flags(
     paths: IntegrationPaths, change: str, remove: bool, mismatch: str | None
 ):
     claude_integration.configure(paths.claude_vscode, URL, TOKEN, True)
-    document = json.loads(paths.claude_vscode.read_text())
+    document = decode_object(paths.claude_vscode.read_text())
     document["editor.fontSize"] = 17
     if change in {"login", "both"}:
         if remove:
@@ -247,26 +257,35 @@ def test_vscode_cleanup_uses_gateway_identity_without_optional_flags(
     if change in {"discovery", "both"}:
         discovery = next(
             entry
-            for entry in entries
-            if entry["name"] == "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
+            for entry in array_payload(entries)
+            if object_payload(entry)["name"]
+            == "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
         )
         if remove:
-            entries.remove(discovery)
+            array_payload(entries).remove(discovery)
         else:
-            discovery["value"] = "0"
+            object_payload(discovery)["value"] = "0"
     if mismatch is not None:
         name, value = (
             ("ANTHROPIC_BASE_URL", "https://other.example")
             if mismatch == "url"
             else ("ANTHROPIC_AUTH_TOKEN", "changed-token")
         )
-        next(entry for entry in entries if entry["name"] == name)["value"] = value
+        object_payload(
+            next(
+                entry
+                for entry in array_payload(entries)
+                if object_payload(entry)["name"] == name
+            )
+        )["value"] = value
     paths.claude_vscode.write_text(json.dumps(document))
     before = paths.claude_vscode.read_bytes()
 
     if mismatch is None:
         disconnect_integrations(paths)
-        assert json.loads(paths.claude_vscode.read_text()) == {"editor.fontSize": 17}
+        assert load_json_value(paths.claude_vscode.read_text()) == {
+            "editor.fontSize": 17
+        }
     else:
         with pytest.raises(IntegrationCleanupError, match="Claude Code in VS Code"):
             disconnect_integrations(paths)
@@ -290,7 +309,7 @@ def test_cleanup_fails_when_path_access_cannot_be_confirmed(
     message: str,
     failure: type[Exception],
 ):
-    blocked = getattr(paths, field)
+    blocked: Path = getattr(paths, field)
     if field == "desktop":
         claude_desktop_integration.configure(
             paths.desktop, URL, TOKEN, True, disconnect_path=paths.desktop_disconnect

@@ -8,10 +8,11 @@ from threading import Barrier
 import pytest
 
 from free_claude_code.application.model_catalog import CatalogModel, ModelCatalog
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.harnesses import antigravity
 from tests.harnesses.antigravity_support import write_previous_connection
+from tests.wire_payload import decode_object, object_payload
 
 
 @pytest.fixture
@@ -86,7 +87,7 @@ def test_cleanup_restores_only_previous_connection_and_preserves_history(
     native_files: tuple[Path, Path], previous: JsonObject
 ):
     path, state = native_files
-    document = json.loads(path.read_text())
+    document = decode_object(path.read_text())
     document.pop("modelProvider")
     document.update(previous)
     path.write_text(json.dumps(document))
@@ -94,7 +95,7 @@ def test_cleanup_restores_only_previous_connection_and_preserves_history(
     history = path.with_name("history.db")
     history.write_bytes(b"existing native history")
     assert antigravity.cleanup_previous_connection(path, state)
-    assert json.loads(path.read_text()) == original
+    assert load_json_value(path.read_text()) == original
     assert history.read_bytes() == b"existing native history"
     assert not state.exists()
     assert not antigravity.cleanup_previous_connection(path, state)
@@ -108,12 +109,16 @@ def test_cleanup_preserves_external_provider_and_modified_model(
 ):
     path, state = native_files
     write_previous_connection(path, state)
-    changed = json.loads(path.read_text())
+    changed = decode_object(path.read_text())
     changed["modelProvider"] = "personal"
-    changed["customModelsConfig"]["customModels"]["provider/model"][field] = value
+    object_payload(
+        object_payload(object_payload(changed["customModelsConfig"])["customModels"])[
+            "provider/model"
+        ]
+    )[field] = value
     path.write_text(json.dumps(changed))
     antigravity.cleanup_previous_connection(path, state)
-    assert json.loads(path.read_text()) == changed
+    assert load_json_value(path.read_text()) == changed
     assert not state.exists()
 
 
@@ -133,7 +138,7 @@ def test_invalid_record_is_preserved_without_native_mutation(
 def test_record_for_another_path_is_not_used(native_files: tuple[Path, Path]):
     path, state = native_files
     write_previous_connection(path, state)
-    record = json.loads(state.read_text())
+    record = decode_object(state.read_text())
     record["settings_path"] = str(path.with_name("other.json"))
     state.write_text(json.dumps(record))
     before = path.read_bytes(), state.read_bytes()

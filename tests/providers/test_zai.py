@@ -12,12 +12,14 @@ from free_claude_code.config.provider_catalog import (
 )
 from free_claude_code.core.anthropic.models import Message, MessagesRequest
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
+from tests.fixture_parameters import fixture_parameter
 from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload, object_payload
 
 _ZAI_BASES = {
     "zai": ZAI_CODING_DEFAULT_BASE,
@@ -27,7 +29,7 @@ _ZAI_BASES = {
 
 @pytest.fixture(params=tuple(_ZAI_BASES))
 def zai_provider(request: pytest.FixtureRequest):
-    provider_id = request.param
+    provider_id: str = fixture_parameter(request, str)
     return profiled_provider(
         provider_id,
         make_provider_config(
@@ -67,7 +69,7 @@ def test_build_request_body_openai_chat(zai_provider: OpenAIChatProvider):
     assert body["model"] == "glm-5.2"
     assert body["max_tokens"] == 100
     assert body["messages"] == [{"role": "user", "content": "Hello"}]
-    assert body["extra_body"]["thinking"] == {
+    assert object_payload(body["extra_body"])["thinking"] == {
         "type": "enabled",
         "clear_thinking": False,
     }
@@ -114,7 +116,7 @@ def test_build_request_body_disables_zai_thinking(zai_provider: OpenAIChatProvid
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["thinking"] == {"type": "disabled"}
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "disabled"}
 
 
 def test_build_request_body_replays_prior_reasoning_content(
@@ -137,7 +139,10 @@ def test_build_request_body_replays_prior_reasoning_content(
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["messages"][0]["reasoning_content"] == "prior"
+    assert (
+        object_payload(array_payload(body["messages"])[0])["reasoning_content"]
+        == "prior"
+    )
     assert "extra_body" not in body
 
 

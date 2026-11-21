@@ -36,7 +36,12 @@ from tests.providers.support import (
     reasoning_for,
     sdk_chat_chunk,
 )
-from tests.wire_payload import array_payload, object_array, object_payload
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 @pytest.fixture
@@ -270,9 +275,9 @@ def test_build_request_body_openai_chat_shape(deepseek_provider: DeepSeekProvide
     )
     assert body["model"] == "deepseek-v4-pro"
     assert "stream" not in body
-    assert body["messages"][0] == {"role": "system", "content": "S"}
-    assert body["messages"][1]["role"] == "user"
-    assert body["messages"][1] == {"role": "user", "content": "Hello"}
+    assert array_payload(body["messages"])[0] == {"role": "system", "content": "S"}
+    assert object_payload(array_payload(body["messages"])[1])["role"] == "user"
+    assert array_payload(body["messages"])[1] == {"role": "user", "content": "Hello"}
     assert body["max_tokens"] == 100
     assert "stream_options" not in body
 
@@ -299,7 +304,7 @@ def test_build_request_body_thinking_enabled(deepseek_provider: DeepSeekProvider
     body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
-    assert body["extra_body"]["thinking"] == {"type": "enabled"}
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "enabled"}
 
 
 def test_build_request_body_tool_list_keeps_thinking(
@@ -324,8 +329,13 @@ def test_build_request_body_tool_list_keeps_thinking(
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["thinking"] == {"type": "enabled"}
-    assert body["tools"][0]["function"]["name"] == "Read"
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "enabled"}
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "Read"
+    )
 
 
 def test_build_request_body_tool_choice_keeps_thinking(
@@ -345,7 +355,7 @@ def test_build_request_body_tool_choice_keeps_thinking(
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["thinking"] == {"type": "enabled"}
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "enabled"}
     assert body["tool_choice"] == "auto"
 
 
@@ -372,7 +382,7 @@ def test_build_request_body_forced_tool_choice_downgrades_to_auto(
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["thinking"] == {"type": "enabled"}
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "enabled"}
     assert body["tool_choice"] == "auto"
 
 
@@ -392,7 +402,7 @@ def test_build_request_body_encodes_reasoning_off():
         }
     )
     body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
-    assert body["extra_body"]["thinking"] == {"type": "disabled"}
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "disabled"}
     assert "stream_options" not in body
 
 
@@ -418,7 +428,7 @@ def test_non_tool_thinking_survives_conversion(deepseek_provider: DeepSeekProvid
     body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
-    assert body["messages"][0] == {
+    assert array_payload(body["messages"])[0] == {
         "role": "assistant",
         "content": "out",
         "reasoning_content": "plain",
@@ -445,7 +455,7 @@ def test_redacted_thinking_is_kept_until_destination_preparation(
     body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
-    assert body["messages"][0]["reasoning_details"] == [
+    assert object_payload(array_payload(body["messages"])[0])["reasoning_details"] == [
         {"type": "reasoning.encrypted", "data": "opaque"}
     ]
     assert request.model_dump()["messages"][0]["content"][0]["data"] == "opaque"
@@ -501,12 +511,26 @@ def test_tool_history_with_replayable_thinking_preserves_thinking(
     assert body["reasoning_effort"] == "high"
     assert "context_management" not in body
     assert "output_config" not in body
-    assistant = body["messages"][0]
-    assert assistant["content"] == ""
-    assert assistant["reasoning_content"] == "hidden"
-    assert assistant["tool_calls"][0]["function"]["name"] == "Read"
-    assert assistant["tool_calls"][0]["function"]["arguments"] == '{"file_path": "x"}'
-    assert body["messages"][1] == {
+    assistant = array_payload(body["messages"])[0]
+    assert object_payload(assistant)["content"] == ""
+    assert object_payload(assistant)["reasoning_content"] == "hidden"
+    assert (
+        object_payload(
+            object_payload(array_payload(object_payload(assistant)["tool_calls"])[0])[
+                "function"
+            ]
+        )["name"]
+        == "Read"
+    )
+    assert (
+        object_payload(
+            object_payload(array_payload(object_payload(assistant)["tool_calls"])[0])[
+                "function"
+            ]
+        )["arguments"]
+        == '{"file_path": "x"}'
+    )
+    assert array_payload(body["messages"])[1] == {
         "role": "tool",
         "tool_call_id": "t1",
         "content": "ok",
@@ -551,8 +575,11 @@ def test_tool_history_with_unsigned_thinking_preserves_thinking(
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["thinking"] == {"type": "enabled"}
-    assert body["messages"][0]["reasoning_content"] == "plain"
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "enabled"}
+    assert (
+        object_payload(array_payload(body["messages"])[0])["reasoning_content"]
+        == "plain"
+    )
 
 
 def test_tool_history_without_thinking_keeps_selected_effort(
@@ -609,14 +636,28 @@ def test_tool_history_without_thinking_keeps_selected_effort(
     )
 
     assert body["reasoning_effort"] == "high"
-    assert body["extra_body"].get("thinking") != {"type": "disabled"}
-    assert body["messages"][0]["reasoning_content"] == ""
+    assert object_payload(body["extra_body"]).get("thinking") != {"type": "disabled"}
+    assert object_payload(array_payload(body["messages"])[0])["reasoning_content"] == ""
     assert "context_management" not in body
     assert "output_config" not in body
-    assert body["tools"][0]["function"]["name"] == "Read"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "Read"
+    )
     assert body["tool_choice"] == "auto"
-    assert body["messages"][0]["tool_calls"][0]["function"]["name"] == "Read"
-    assert body["messages"][1]["role"] == "tool"
+    assert (
+        object_payload(
+            object_payload(
+                array_payload(
+                    object_payload(array_payload(body["messages"])[0])["tool_calls"]
+                )[0]
+            )["function"]
+        )["name"]
+        == "Read"
+    )
+    assert object_payload(array_payload(body["messages"])[1])["role"] == "tool"
 
 
 def test_tool_history_with_empty_thinking_preserves_reasoning_state(
@@ -657,9 +698,18 @@ def test_tool_history_with_empty_thinking_preserves_reasoning_state(
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["thinking"] == {"type": "enabled"}
-    assert body["messages"][0]["reasoning_content"] == ""
-    assert body["messages"][0]["tool_calls"][0]["function"]["name"] == "Read"
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "enabled"}
+    assert object_payload(array_payload(body["messages"])[0])["reasoning_content"] == ""
+    assert (
+        object_payload(
+            object_payload(
+                array_payload(
+                    object_payload(array_payload(body["messages"])[0])["tool_calls"]
+                )[0]
+            )["function"]
+        )["name"]
+        == "Read"
+    )
 
 
 def test_tool_history_with_empty_top_level_reasoning_preserves_reasoning_state(
@@ -700,9 +750,18 @@ def test_tool_history_with_empty_top_level_reasoning_preserves_reasoning_state(
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["thinking"] == {"type": "enabled"}
-    assert body["messages"][0]["reasoning_content"] == ""
-    assert body["messages"][0]["tool_calls"][0]["function"]["name"] == "Read"
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "enabled"}
+    assert object_payload(array_payload(body["messages"])[0])["reasoning_content"] == ""
+    assert (
+        object_payload(
+            object_payload(
+                array_payload(
+                    object_payload(array_payload(body["messages"])[0])["tool_calls"]
+                )[0]
+            )["function"]
+        )["name"]
+        == "Read"
+    )
 
 
 def test_thinking_off_preserves_historical_reasoning():
@@ -728,8 +787,10 @@ def test_thinking_off_preserves_historical_reasoning():
         }
     )
     body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
-    assert body["extra_body"]["thinking"] == {"type": "disabled"}
-    assert body["messages"][0]["reasoning_content"] == "sec"
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "disabled"}
+    assert (
+        object_payload(array_payload(body["messages"])[0])["reasoning_content"] == "sec"
+    )
 
 
 def test_thinking_off_still_replays_required_tool_reasoning():
@@ -772,8 +833,11 @@ def test_thinking_off_still_replays_required_tool_reasoning():
 
     body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
 
-    assert body["extra_body"]["thinking"] == {"type": "disabled"}
-    assert body["messages"][0]["reasoning_content"] == "required"
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "disabled"}
+    assert (
+        object_payload(array_payload(body["messages"])[0])["reasoning_content"]
+        == "required"
+    )
 
 
 def test_passthrough_tool_use_and_result(deepseek_provider: DeepSeekProvider):
@@ -808,8 +872,17 @@ def test_passthrough_tool_use_and_result(deepseek_provider: DeepSeekProvider):
     body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
-    assert body["messages"][0]["tool_calls"][0]["function"]["name"] == "n"
-    assert body["messages"][1]["role"] == "tool"
+    assert (
+        object_payload(
+            object_payload(
+                array_payload(
+                    object_payload(array_payload(body["messages"])[0])["tool_calls"]
+                )[0]
+            )["function"]
+        )["name"]
+        == "n"
+    )
+    assert object_payload(array_payload(body["messages"])[1])["role"] == "tool"
 
 
 @pytest.mark.parametrize(
@@ -891,20 +964,20 @@ def test_vision_model_strips_user_document():
     )
     provider.stream_messages(request, reasoning=REASONING_ON)
     body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
-    content = body["messages"][0]["content"]
+    content = object_payload(array_payload(body["messages"])[0])["content"]
     assert content
     if isinstance(content, str):
         lowered = content.lower()
     else:
         texts = [
             part.get("text", "")
-            for part in content
+            for part in array_payload(content)
             if isinstance(part, dict) and part.get("type") == "text"
         ]
-        lowered = "\n".join(texts).lower()
+        lowered = "\n".join(map(string_payload, texts)).lower()
         assert not any(
             isinstance(part, dict) and part.get("type") == "image_url"
-            for part in content
+            for part in array_payload(content)
         )
     assert "attachment omitted" in lowered
     assert "document inputs" in lowered
@@ -978,7 +1051,9 @@ def test_startup_preserves_completed_server_tool_history():
     )
     provider.stream_messages(request)
     body = provider._chat._build_request_body(request)
-    assert "[Earlier tool record]" in body["messages"][0]["content"]
+    assert "[Earlier tool record]" in string_payload(
+        object_array(body["messages"])[0]["content"]
+    )
 
 
 def test_non_tool_top_level_reasoning_survives_conversion(
@@ -997,7 +1072,7 @@ def test_non_tool_top_level_reasoning_survives_conversion(
     body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
-    assert body["messages"][0] == {
+    assert array_payload(body["messages"])[0] == {
         "role": "assistant",
         "content": "hi",
         "reasoning_content": "r",
@@ -1039,7 +1114,10 @@ def test_tool_call_top_level_reasoning_is_replayed(deepseek_provider: DeepSeekPr
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["messages"][0]["reasoning_content"] == "required"
+    assert (
+        object_payload(array_payload(body["messages"])[0])["reasoning_content"]
+        == "required"
+    )
 
 
 @pytest.mark.asyncio
@@ -1210,7 +1288,7 @@ async def test_stream_uses_chat_completions_and_maps_cache_usage(
     usage = next(
         event.data["usage"] for event in parsed if event.event == "message_delta"
     )
-    assert "cache_creation_input_tokens" not in usage
+    assert "cache_creation_input_tokens" not in object_payload(usage)
     assert usage == {
         "input_tokens": 20,
         "output_tokens": 3,
@@ -1281,7 +1359,7 @@ async def test_responses_stream_maps_deepseek_cache_usage(
         for event in parsed
         if event.event == "response.completed"
     )
-    assert completed["usage"] == {
+    assert object_payload(completed)["usage"] == {
         "input_tokens": 30,
         "input_tokens_details": {"cached_tokens": 10},
         "output_tokens": 3,
@@ -1344,11 +1422,11 @@ def test_normalizes_tool_result_content_array_to_string(
         request, reasoning=reasoning_for(request)
     )
 
-    tool_result = body["messages"][1]
-    assert tool_result["role"] == "tool"
-    assert isinstance(tool_result["content"], str)
-    assert "file1.txt" in tool_result["content"]
-    assert "file2.txt" in tool_result["content"]
+    tool_result = array_payload(body["messages"])[1]
+    assert object_payload(tool_result)["role"] == "tool"
+    assert isinstance(object_payload(tool_result)["content"], str)
+    assert "file1.txt" in string_payload(object_payload(tool_result)["content"])
+    assert "file2.txt" in string_payload(object_payload(tool_result)["content"])
 
 
 def test_strips_document_blocks_for_deepseek(deepseek_provider: DeepSeekProvider):
@@ -1380,7 +1458,7 @@ def test_strips_document_blocks_for_deepseek(deepseek_provider: DeepSeekProvider
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["messages"][0] == {
+    assert array_payload(body["messages"])[0] == {
         "role": "tool",
         "tool_call_id": "t1",
         "content": "PDF text extracted",
@@ -1467,11 +1545,11 @@ def test_normalizes_tool_result_content_dict_to_string(
         request, reasoning=reasoning_for(request)
     )
 
-    tool_result = body["messages"][1]
-    assert tool_result["role"] == "tool"
-    assert isinstance(tool_result["content"], str)
-    assert "status" in tool_result["content"]
-    assert "success" in tool_result["content"]
+    tool_result = array_payload(body["messages"])[1]
+    assert object_payload(tool_result)["role"] == "tool"
+    assert isinstance(object_payload(tool_result)["content"], str)
+    assert "status" in string_payload(object_payload(tool_result)["content"])
+    assert "success" in string_payload(object_payload(tool_result)["content"])
 
 
 @pytest.mark.parametrize("model", ["deepseek-flash", "deepseek-v4-flash-vision-exp"])
@@ -1522,19 +1600,21 @@ def test_preserves_image_and_text_inside_tool_result(
         request, reasoning=reasoning_for(request)
     )
 
-    assert [message["role"] for message in body["messages"]] == [
+    assert [
+        object_payload(message)["role"] for message in array_payload(body["messages"])
+    ] == [
         "assistant",
         "tool",
         "assistant",
         "user",
     ]
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "tool",
         "tool_call_id": "t1",
         "content": "[Image-bearing tool output follows in user content.]",
     }
-    assert is_synthetic_chat_tool_turn_boundary(body["messages"][2])
-    assert body["messages"][3]["content"] == [
+    assert is_synthetic_chat_tool_turn_boundary(array_payload(body["messages"])[2])
+    assert object_payload(array_payload(body["messages"])[3])["content"] == [
         {"type": "text", "text": 'Image-bearing output for tool call "t1":'},
         {"type": "text", "text": "screenshot saved"},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,YQ=="}},
@@ -1586,19 +1666,21 @@ def test_image_only_tool_result_reaches_user_content(
         request, reasoning=reasoning_for(request)
     )
 
-    assert [message["role"] for message in body["messages"]] == [
+    assert [
+        object_payload(message)["role"] for message in array_payload(body["messages"])
+    ] == [
         "assistant",
         "tool",
         "assistant",
         "user",
     ]
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "tool",
         "tool_call_id": "t1",
         "content": "[Image-bearing tool output follows in user content.]",
     }
-    assert is_synthetic_chat_tool_turn_boundary(body["messages"][2])
-    assert body["messages"][3]["content"] == [
+    assert is_synthetic_chat_tool_turn_boundary(array_payload(body["messages"])[2])
+    assert object_payload(array_payload(body["messages"])[3])["content"] == [
         {"type": "text", "text": 'Image-bearing output for tool call "t1":'},
         {
             "type": "image_url",
@@ -1652,12 +1734,21 @@ def test_document_or_empty_tool_result_keeps_placeholder(
         request, reasoning=reasoning_for(request)
     )
 
-    tool_result = body["messages"][1]
-    assert tool_result["role"] == "tool"
-    assert isinstance(tool_result["content"], str)
-    assert "attachment omitted" in tool_result["content"].lower()
-    assert "document inputs" in tool_result["content"].lower()
-    assert "image omitted" not in tool_result["content"].lower()
+    tool_result = array_payload(body["messages"])[1]
+    assert object_payload(tool_result)["role"] == "tool"
+    assert isinstance(object_payload(tool_result)["content"], str)
+    assert (
+        "attachment omitted"
+        in string_payload(object_payload(tool_result)["content"]).lower()
+    )
+    assert (
+        "document inputs"
+        in string_payload(object_payload(tool_result)["content"]).lower()
+    )
+    assert (
+        "image omitted"
+        not in string_payload(object_payload(tool_result)["content"]).lower()
+    )
 
 
 def test_document_only_message_replaced_with_placeholder(
@@ -1685,9 +1776,9 @@ def test_document_only_message_replaced_with_placeholder(
         request, reasoning=reasoning_for(request)
     )
 
-    content = body["messages"][0]["content"]
-    assert "attachment omitted" in content.lower()
-    assert "document inputs" in content.lower()
+    content = object_payload(array_payload(body["messages"])[0])["content"]
+    assert "attachment omitted" in string_payload(content).lower()
+    assert "document inputs" in string_payload(content).lower()
 
 
 def test_warns_when_stripping_document_blocks(
@@ -1837,21 +1928,25 @@ def test_parallel_tool_results_close_before_image_content(
     body = deepseek_provider._chat._build_request_body(request, reasoning=REASONING_ON)
 
     messages = body["messages"]
-    assert [message["role"] for message in messages] == [
+    assert [object_payload(message)["role"] for message in array_payload(messages)] == [
         "assistant",
         "tool",
         "tool",
         "assistant",
         "user",
     ]
-    assert [message["tool_call_id"] for message in messages[1:3]] == ["t1", "t2"]
+    assert [
+        object_payload(message)["tool_call_id"]
+        for message in array_payload(messages)[1:3]
+    ] == ["t1", "t2"]
     assert (
-        messages[1]["content"] == "[Image-bearing tool output follows in user content.]"
+        object_payload(array_payload(messages)[1])["content"]
+        == "[Image-bearing tool output follows in user content.]"
     )
-    assert messages[2]["content"] == "text result"
-    assert is_synthetic_chat_tool_turn_boundary(messages[3])
-    assert messages[3]["reasoning_content"] == ""
-    assert messages[4]["content"] == [
+    assert object_payload(array_payload(messages)[2])["content"] == "text result"
+    assert is_synthetic_chat_tool_turn_boundary(array_payload(messages)[3])
+    assert object_payload(array_payload(messages)[3])["reasoning_content"] == ""
+    assert object_payload(array_payload(messages)[4])["content"] == [
         {"type": "text", "text": 'Image-bearing output for tool call "t1":'},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,YQ=="}},
     ]
@@ -1893,10 +1988,10 @@ def test_mixed_attachment_content_omits_only_document(
 
     images = [
         part
-        for message in body["messages"]
-        if isinstance(message.get("content"), list)
-        for part in message["content"]
-        if part.get("type") == "image_url"
+        for message in array_payload(body["messages"])
+        if isinstance(object_payload(message).get("content"), list)
+        for part in array_payload(object_payload(message)["content"])
+        if object_payload(part).get("type") == "image_url"
     ]
     assert images == [
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,YQ=="}}

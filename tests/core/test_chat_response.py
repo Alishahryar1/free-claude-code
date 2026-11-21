@@ -1,12 +1,11 @@
-import json
-
 import pytest
 
 from free_claude_code.core.chat_completions.response import (
     ChatResponseAccumulator,
     NativeChatRelay,
 )
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
+from tests.wire_payload import array_payload, object_payload
 
 
 def test_native_chat_preserves_choices_unknown_fields_and_literal_thought_tags():
@@ -31,7 +30,7 @@ def test_native_chat_preserves_choices_unknown_fields_and_literal_thought_tags()
         ],
     }
     relay = NativeChatRelay("public", choices=2)
-    result = json.loads(relay.feed(payload).removeprefix("data: "))
+    result = load_json_value(relay.feed(object_payload(payload)).removeprefix("data: "))
     assert result == {**payload, "model": "public"}
     assert payload["model"] == "upstream"
     assert relay.finish() == ["data: [DONE]\n\n"]
@@ -54,7 +53,10 @@ def test_chat_json_keeps_late_usage_and_both_choices():
     accumulator.finish()
     response = accumulator.result()
     assert response["usage"] == {"total_tokens": 12}
-    assert [choice["message"]["content"] for choice in response["choices"]] == [
+    assert [
+        object_payload(object_payload(choice)["message"])["content"]
+        for choice in array_payload(response["choices"])
+    ] == [
         "hello",
         "world",
     ]
@@ -104,7 +106,9 @@ def test_chat_logprobs_accumulate_after_null_and_survive_trailing_null():
             }
         )
     accumulator.finish()
-    assert accumulator.result()["choices"][0]["logprobs"]["content"] == [token]
+    assert object_payload(
+        object_payload(array_payload(accumulator.result()["choices"])[0])["logprobs"]
+    )["content"] == [token]
 
 
 def test_native_legacy_function_arguments_accumulate_without_replacement():
@@ -125,7 +129,9 @@ def test_native_legacy_function_arguments_accumulate_without_replacement():
         {"choices": [{"index": 0, "delta": {}, "finish_reason": "function_call"}]}
     )
     accumulator.finish()
-    assert accumulator.result()["choices"][0]["message"]["function_call"] == {
+    assert object_payload(
+        object_payload(array_payload(accumulator.result()["choices"])[0])["message"]
+    )["function_call"] == {
         "name": "read",
         "arguments": '{"path":"kept"}',
     }
@@ -176,4 +182,9 @@ def test_distinct_native_reasoning_records_keep_their_boundaries(
         )
     accumulator.feed({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]})
     accumulator.finish()
-    assert accumulator.result()["choices"][0]["message"]["reasoning_details"] == details
+    assert (
+        object_payload(
+            object_payload(array_payload(accumulator.result()["choices"])[0])["message"]
+        )["reasoning_details"]
+        == details
+    )

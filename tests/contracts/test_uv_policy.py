@@ -5,13 +5,13 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
-import yaml
+from pydantic import TypeAdapter
 
-from free_claude_code.core.json_types import JsonObject
 from scripts.ci_shards import matrix
-from tests.wire_payload import object_payload, string_payload
+from tests.workflow_payload import Workflow, read_action, read_workflow
 
 CI_SETUP = Path(".github/actions/ci-environment/action.yml")
 UV_WORKFLOWS = (
@@ -24,6 +24,24 @@ REQUIRED_TEST_RUNNERS = {
     "Windows": "windows-latest",
     "macOS": "macos-latest",
 }
+
+
+_Project = TypedDict("_Project", {"requires-python": str})
+_Uv = TypedDict("_Uv", {"required-version": str})
+
+
+class _Tool(TypedDict):
+    uv: _Uv
+
+
+class _ProjectSettings(TypedDict):
+    project: _Project
+    tool: _Tool
+
+
+def _project_settings() -> _ProjectSettings:
+    data: object = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    return TypeAdapter(_ProjectSettings).validate_python(data, strict=True)
 
 
 @pytest.mark.parametrize(
@@ -43,7 +61,7 @@ def test_ci_python_identity_parses_toml(
     python_version: str | None,
     uv_version: str | None,
 ) -> None:
-    setup = yaml.safe_load(CI_SETUP.read_text(encoding="utf-8"))
+    setup = read_action(CI_SETUP)
     step = next(step for step in setup["runs"]["steps"] if step.get("id") == "identity")
     (tmp_path / "pyproject.toml").write_text(
         f"[project]\nrequires-python = {requirement}\n"
@@ -86,33 +104,27 @@ def test_ci_python_identity_parses_toml(
 
 
 def test_python_lock_matches_package_requirement() -> None:
-    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    project = _project_settings()
     requirement = project["project"]["requires-python"]
     match = re.fullmatch(r"==([0-9]+\.[0-9]+\.[0-9]+)", requirement)
     assert match is not None
-    lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
+    lock: dict[str, object] = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
     assert lock["requires-python"] == requirement
 
 
-def _shard_counts(workflow: JsonObject, suite: str) -> dict[str, int]:
+def _shard_counts(workflow: Workflow, suite: str) -> dict[str, int]:
     return {
-        os_name: int(
-            string_payload(
-                object_payload(workflow["env"])[
-                    f"CI_{suite.upper()}_{os_name.upper()}_SHARDS"
-                ]
-            )
-        )
+        os_name: int(workflow["env"][f"CI_{suite.upper()}_{os_name.upper()}_SHARDS"])
         for os_name in REQUIRED_TEST_RUNNERS
     }
 
 
 def _assert_required_test_matrix(
-    workflow: JsonObject, suite: str, entries: list[dict[str, str | int]]
+    workflow: Workflow, suite: str, entries: list[dict[str, str | int]]
 ) -> None:
-    job = object_payload(object_payload(workflow["jobs"])[f"{suite}-shards"])
+    job = workflow["jobs"][f"{suite}-shards"]
     assert job["runs-on"] == "${{ matrix.runner }}"
-    assert object_payload(job["strategy"])["matrix"] == (
+    assert job["strategy"]["matrix"] == (
         "${{ fromJSON(needs.prepare-shards.outputs." + suite + "_matrix) }}"
     )
     assert len(entries) == sum(_shard_counts(workflow, suite).values())
@@ -123,7 +135,7 @@ def _assert_required_test_matrix(
 
 @pytest.mark.parametrize("suite", ("pytest", "playwright"))
 def test_required_test_matrix_covers_supported_platforms(suite: str) -> None:
-    workflow = yaml.safe_load(UV_WORKFLOWS[0].read_text(encoding="utf-8"))
+    workflow = read_workflow(UV_WORKFLOWS[0])
     counts = _shard_counts(workflow, suite)
     _assert_required_test_matrix(workflow, suite, matrix(counts)["include"])
 
@@ -133,7 +145,7 @@ def test_required_test_matrix_covers_supported_platforms(suite: str) -> None:
 def test_required_test_matrix_rejects_missing_platform(
     suite: str, os_name: str
 ) -> None:
-    workflow = yaml.safe_load(UV_WORKFLOWS[0].read_text(encoding="utf-8"))
+    workflow = read_workflow(UV_WORKFLOWS[0])
     counts = _shard_counts(workflow, suite)
     entries = matrix(counts)["include"]
     entries[:] = [entry for entry in entries if entry["os"] != os_name]
@@ -142,18 +154,18 @@ def test_required_test_matrix_rejects_missing_platform(
 
 
 def test_ci_uses_project_uv_minimum() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    pyproject = _project_settings()
     assert re.fullmatch(
         r">=[0-9]+\.[0-9]+\.[0-9]+", pyproject["tool"]["uv"]["required-version"]
     )
     for workflow_path in UV_WORKFLOWS:
         workflow = workflow_path.read_text(encoding="utf-8")
         assert "CI_UV_VERSION" not in workflow
-        for job in yaml.safe_load(workflow)["jobs"].values():
+        for job in read_workflow(workflow_path)["jobs"].values():
             for step in job["steps"]:
                 if step.get("uses") == "./.github/actions/ci-environment":
                     assert "uv-version" not in step.get("with", {})
-    setup = yaml.safe_load(CI_SETUP.read_text(encoding="utf-8"))
+    setup = read_action(CI_SETUP)
     uv_setup = next(
         step for step in setup["runs"]["steps"] if step.get("name") == "Install uv"
     )
@@ -195,7 +207,7 @@ def test_uv_workflows_share_managed_python_cache_policy() -> None:
 
 
 def test_shared_setup_installs_dependencies_for_jobs_running_project_code() -> None:
-    setup = yaml.safe_load(CI_SETUP.read_text(encoding="utf-8"))
+    setup = read_action(CI_SETUP)
     assert setup["inputs"]["sync-dependencies"]["default"] == "true"
     sync = next(
         step
@@ -205,7 +217,7 @@ def test_shared_setup_installs_dependencies_for_jobs_running_project_code() -> N
     assert sync["run"] == "uv sync --locked --group dev"
     assert sync["if"] == "inputs.sync-dependencies == 'true'"
     for path in UV_WORKFLOWS:
-        jobs = yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"]
+        jobs = read_workflow(path)["jobs"]
         for job in jobs.values():
             for step in job["steps"]:
                 if step.get("uses") == "./.github/actions/ci-environment":

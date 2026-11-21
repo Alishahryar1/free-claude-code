@@ -21,6 +21,7 @@ from tests.providers.test_anthropic_provider import native_body
 from tests.providers.test_anthropic_provider import provider as anthropic_provider
 from tests.providers.test_custom_provider import definition
 from tests.providers.test_custom_provider import provider as custom_provider
+from tests.wire_payload import object_payload, response_object, string_payload
 
 
 class DelayedResponseClose(httpx.AsyncByteStream):
@@ -42,12 +43,12 @@ class DelayedResponseClose(httpx.AsyncByteStream):
 def assert_cooldown(response: httpx.Response, detail: str, seconds: int = 3600) -> None:
     assert response.status_code == 429, response.text
     assert response.headers["x-should-retry"] == "false"
-    error = response.json()["error"]
-    assert error["type"] == "rate_limit_error"
-    assert f"{seconds} seconds" in error["message"], error["message"].split(
-        "Upstream error:"
-    )[0]
-    assert detail in error["message"]
+    error = response_object(response)["error"]
+    assert object_payload(error)["type"] == "rate_limit_error"
+    assert f"{seconds} seconds" in string_payload(object_payload(error)["message"]), (
+        string_payload(object_payload(error)["message"]).split("Upstream error:")[0]
+    )
+    assert detail in string_payload(object_payload(error)["message"])
 
 
 @pytest.mark.asyncio

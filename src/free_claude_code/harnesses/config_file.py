@@ -5,7 +5,6 @@ import os
 import stat
 import tempfile
 from pathlib import Path
-from typing import cast
 
 import json5
 
@@ -28,13 +27,13 @@ def _reject_constant(value: str) -> JsonValue:
 def decode_json(source: str) -> JsonValue:
     """Decode native JSON/JSON5 without duplicate or nonfinite values."""
     try:
-        document = json.loads(
+        document: JsonValue = json.loads(
             source, object_pairs_hook=_unique_object, parse_constant=_reject_constant
         )
     except json.JSONDecodeError:
         document = json5.loads(source, allow_duplicate_keys=False)
     json.dumps(document, allow_nan=False)
-    return cast(JsonValue, document)
+    return document
 
 
 def ensure_private_permissions(path: Path) -> None:

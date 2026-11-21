@@ -1,6 +1,7 @@
 """Live policy changes preserve capacity and wake the correct waiting calls."""
 
 import asyncio
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
@@ -27,6 +28,11 @@ async def completed(controller: ProviderAdmissionController):
     attempt = await admit(controller)
     await attempt.accept()
     await attempt.aclose()
+
+
+@dataclass
+class _Clock:
+    now: float
 
 
 @pytest.mark.asyncio
@@ -57,7 +63,7 @@ async def test_limit_changes_preserve_occupied_slots_and_wake_waiters():
 async def test_waiting_for_concurrency_does_not_spend_rate_capacity(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    clock = SimpleNamespace(now=0.0)
+    clock = _Clock(0.0)
     monkeypatch.setattr(
         capacity_module, "time", SimpleNamespace(monotonic=lambda: clock.now)
     )
@@ -98,7 +104,7 @@ async def test_rate_count_increase_wakes_waiter_without_clearing_history():
 async def test_longer_window_waits_only_until_discarded_history_expires(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    clock = SimpleNamespace(now=0.0)
+    clock = _Clock(0.0)
     monkeypatch.setattr(
         capacity_module, "time", SimpleNamespace(monotonic=lambda: clock.now)
     )
@@ -131,7 +137,7 @@ async def test_longer_window_waits_only_until_discarded_history_expires(
 async def test_shorter_window_wakes_waiter_and_longer_window_uses_retained_history(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    clock = SimpleNamespace(now=0.0)
+    clock = _Clock(0.0)
     monkeypatch.setattr(
         capacity_module, "time", SimpleNamespace(monotonic=lambda: clock.now)
     )

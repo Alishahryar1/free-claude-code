@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from free_claude_code.config.settings import Settings
 from free_claude_code.harnesses import dsh_desktop_integration as desktop
 from tests.api.support import create_test_app
+from tests.wire_payload import response_object, string_payload
 
 ROOT = "/admin/api/integrations/dsh-desktop"
 
@@ -78,5 +79,5 @@ def test_missing_native_app_returns_setup_guidance(client: TestClient):
     (desktop.config_home() / "profiles/desktop/package.json").unlink()
     response = client.post(ROOT + "/connect")
     assert response.status_code == 400
-    assert "open" in response.json()["detail"].lower()
+    assert "open" in string_payload(response_object(response)["detail"]).lower()
     assert not (desktop.config_home() / ".credentials.yaml").exists()

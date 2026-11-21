@@ -1,12 +1,13 @@
 """Google Vertex AI provider using the OpenAI-compatible Chat Completions API."""
 
 from dataclasses import replace
-from typing import Any, override
+from typing import override
 
 import httpx
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic import ReasoningReplayMode
+from free_claude_code.core.json_types import JsonValue
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
@@ -111,7 +112,7 @@ class VertexProvider(GoogleOpenAIProvider):
             )
         return model_infos_from_ids(model_ids)
 
-    async def _list_model_page(self, page_token: str | None) -> Any:
+    async def _list_model_page(self, page_token: str | None) -> JsonValue:
         async def request() -> httpx.Response:
             token = await self._access_token_provider()
             response = await self._model_list_client.get(

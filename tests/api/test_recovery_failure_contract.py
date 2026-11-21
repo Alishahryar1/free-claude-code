@@ -25,7 +25,13 @@ from tests.api.test_delivered_stream_recovery import (
 )
 from tests.api.test_hidden_stream_retries import delivered
 from tests.providers.test_history_transports import _harness
-from tests.wire_payload import object_payload
+from tests.wire_payload import (
+    array_payload,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 def assert_unavailable_snapshot(events: list[SSEEvent]):
@@ -34,12 +40,20 @@ def assert_unavailable_snapshot(events: list[SSEEvent]):
     assert sum(event.event == "response.failed" for event in events) == 1
     assert not any(event.event == "response.completed" for event in events)
     response = events[-1].data["response"]
-    assert response["status"] == "failed"
-    assert response["output"] == []
-    assert response["usage"] is None
-    assert "snapshot" in response["error"]["message"].lower()
-    assert response["id"] == events[0].data["response"]["id"]
-    numbers = [event.data["sequence_number"] for event in events]
+    assert object_payload(response)["status"] == "failed"
+    assert object_payload(response)["output"] == []
+    assert object_payload(response)["usage"] is None
+    assert (
+        "snapshot"
+        in string_payload(
+            object_payload(object_payload(response)["error"])["message"]
+        ).lower()
+    )
+    assert (
+        object_payload(response)["id"]
+        == object_payload(events[0].data["response"])["id"]
+    )
+    numbers = [int_payload(event.data["sequence_number"]) for event in events]
     assert all(left < right for left, right in pairwise(numbers))
 
 
@@ -117,10 +131,12 @@ async def test_failed_frame_keeps_error_category_and_finishes_execution(
     assert len(bodies) == 2
     assert executions[-1].state is ProviderExecutionState.FAILED
     failure = events[-1].data["response"]
-    assert failure["error"]["type"] == error["type"]
-    assert failure["error"]["code"] == code
-    assert failure["error"]["param"] == "input"
-    assert failure["error"]["message"].startswith(error["message"])
+    assert object_payload(object_payload(failure)["error"])["type"] == error["type"]
+    assert object_payload(object_payload(failure)["error"])["code"] == code
+    assert object_payload(object_payload(failure)["error"])["param"] == "input"
+    assert string_payload(
+        object_payload(object_payload(failure)["error"])["message"]
+    ).startswith(error["message"])
     outcome = RequestOutcome()
     token = current_request_outcome.set(outcome)
     try:
@@ -133,13 +149,13 @@ async def test_failed_frame_keeps_error_category_and_finishes_execution(
     else:
         assert (
             "".join(
-                part.get("text", "")
-                for item in failure["output"]
-                for part in item.get("content", [])
+                string_payload(object_payload(part).get("text", ""))
+                for item in array_payload(object_payload(failure)["output"])
+                for part in object_array(object_payload(item).get("content", []))
             )
             == "First " + "x" * 2000
         )
-        assert failure["error"] == error
+        assert object_payload(failure)["error"] == error
 
 
 @pytest.mark.asyncio
@@ -206,7 +222,7 @@ async def test_cap_failure_formatting_does_not_reenter_a_failed_mapper(
     def prepare(self: ContinuationStream, payload: JsonObject):
         if payload["type"] == "response.output_text.done":
             raise ValueError("public processing failed")
-        return original(self, payload)
+        return original(self, object_payload(payload))
 
     monkeypatch.setattr(ContinuationStream, "prepare", prepare)
     async with _harness(
@@ -228,7 +244,9 @@ async def test_cap_failure_formatting_does_not_reenter_a_failed_mapper(
     assert len(bodies) == 2
     assert public_text(events, "responses") == "First " + "x" * 2000
     assert_unavailable_snapshot(events)
-    assert "public processing failed" in events[-1].data["response"]["error"]["message"]
+    assert "public processing failed" in string_payload(
+        object_payload(object_payload(events[-1].data["response"])["error"])["message"]
+    )
 
 
 ANNOTATION = {
@@ -268,7 +286,8 @@ async def test_annotated_part_blocks_continuation_before_its_item_snapshot(
     assert "Tail." not in public_text(events, wire)
     if continuing:
         assert not any(
-            event.data.get("part", {}).get("annotations") for event in events
+            object_payload(event.data.get("part", {})).get("annotations")
+            for event in events
         )
 
 
@@ -287,6 +306,8 @@ async def test_healthy_original_response_preserves_annotations(annotated: bool):
     assert len(bodies) == 1
     assert_completed(events, "responses")
     assert public_text(events, "responses") == "Cited "
-    assert events[-1].data["response"]["output"][0]["content"][0]["annotations"] == (
-        [ANNOTATION] if annotated else []
-    )
+    assert object_array(
+        object_array(object_payload(events[-1].data["response"])["output"])[0][
+            "content"
+        ]
+    )[0]["annotations"] == ([ANNOTATION] if annotated else [])

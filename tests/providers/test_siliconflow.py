@@ -24,6 +24,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload, object_payload
 
 _MODEL = "Qwen/Qwen3-32B"
 _CATALOG_URL = "https://api.siliconflow.com/v1/models?sub_type=chat"
@@ -98,15 +99,23 @@ def test_build_request_body_preserves_common_chat_tools_and_images(
 
     assert body["model"] == _MODEL
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
-    assert body["messages"][0] == {"role": "system", "content": "Be concise."}
-    assert body["messages"][1]["content"] == [
+    assert array_payload(body["messages"])[0] == {
+        "role": "system",
+        "content": "Be concise.",
+    }
+    assert object_payload(array_payload(body["messages"])[1])["content"] == [
         {"type": "text", "text": "Inspect this image."},
         {
             "type": "image_url",
             "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
         },
     ]
-    assert body["tools"][0]["function"]["name"] == "inspect_image"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "inspect_image"
+    )
     assert "extra_body" not in body
 
 
@@ -179,7 +188,7 @@ def test_build_request_body_replays_reasoning_content_verbatim(
         reasoning=reasoning_for(request),
     )
 
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "assistant",
         "content": "Calling it.",
         "reasoning_content": "Need the tool.",

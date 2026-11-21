@@ -5,6 +5,7 @@ import pytest
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses.tool_calls import ResponsesToolCallBuffer
+from tests.wire_payload import object_payload
 
 
 def item(index: int, status: str = "completed", arguments: str = "{}"):
@@ -45,7 +46,7 @@ def test_argument_done_does_not_release_call_and_incomplete_item_is_discarded():
         "response.incomplete",
         {"response": {"output": [item(0, "incomplete")], "status": "incomplete"}},
     )
-    assert output[-1][-1][1]["response"]["output"] == []
+    assert object_payload(output[-1][-1][1]["response"])["output"] == []
 
 
 def test_completed_call_survives_another_unfinished_call_on_failure():
@@ -106,7 +107,7 @@ def test_fragment_metadata_keeps_its_event_and_does_not_overwrite_other_fragment
     ]
     output = []
     for kind, data in events:
-        output.extend(buffer.feed(kind, data))
+        output.extend(buffer.feed(kind, object_payload(data)))
     assert [
         (kind, data["extension"])
         for group in output
@@ -122,12 +123,12 @@ def test_failed_snapshot_keeps_only_explicit_completed_calls():
         {"response": {"status": "failed", "output": [item(0, "incomplete"), item(1)]}},
     )
     assert [
-        data["item"]["id"]
+        object_payload(data["item"])["id"]
         for group in groups
         for kind, data in group
         if kind == "response.output_item.done"
     ] == ["fc_1"]
-    assert groups[-1][-1][1]["response"]["output"] == [item(1)]
+    assert object_payload(groups[-1][-1][1]["response"])["output"] == [item(1)]
 
 
 @pytest.mark.parametrize("completed", [False, True])
@@ -148,7 +149,7 @@ def test_explicit_index_cannot_change_for_known_item(completed: bool, kind: str)
         else {"output_index": 1, "item_id": "fc_0", "delta": "{}"}
     )
     with pytest.raises(ExecutionFailure):
-        buffer.feed(kind, payload)
+        buffer.feed(kind, object_payload(payload))
 
 
 @pytest.mark.parametrize(
@@ -209,7 +210,7 @@ def test_server_tools_are_not_gated_as_client_calls(tool: JsonObject):
         "output_index": 0,
         "item": {"id": "server", "status": "in_progress", **tool},
     }
-    assert buffer.feed("response.output_item.added", payload)
+    assert buffer.feed("response.output_item.added", object_payload(payload))
 
 
 @pytest.mark.parametrize(
@@ -286,12 +287,12 @@ def test_every_snapshot_preserves_accepted_call_execution_fields(
 def test_unchanged_accepted_call_is_not_reemitted_by_a_snapshot(kind: str, status: str):
     buffer = ResponsesToolCallBuffer()
     buffer.feed("response.output_item.done", {"output_index": 0, "item": item(0)})
-    snapshot = {
+    snapshot: JsonObject = {
         "response": {"status": kind.split(".")[-1], "output": [item(0, status)]}
     }
     groups = buffer.feed(kind, snapshot)
     assert [event for group in groups for event, _ in group] == [kind]
-    assert groups[0][0][1]["response"]["output"] == [item(0, status)]
+    assert object_payload(groups[0][0][1]["response"])["output"] == [item(0, status)]
 
 
 def test_repeated_item_done_cannot_change_a_call_into_a_non_call():

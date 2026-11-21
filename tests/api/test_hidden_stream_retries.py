@@ -18,7 +18,7 @@ from free_claude_code.application.routing import ProviderModelCandidate
 from free_claude_code.core.anthropic import aggregate_anthropic_sse_to_message
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
@@ -37,6 +37,8 @@ from tests.providers.test_history_transports import _events_for, _harness, _nati
 from tests.providers.test_native_tool_arguments import tool_events
 from tests.wire_payload import (
     array_payload,
+    decode_object,
+    int_payload,
     object_array,
     object_payload,
     string_payload,
@@ -58,7 +60,7 @@ def partial_tool(protocol: str):
         object_payload(events[2]["delta"])["partial_json"] = '{"path":"abandoned'
     else:
         events[2]["delta"] = '{"path":"abandoned'
-    return json.loads(
+    return load_json_value(
         json.dumps(events)
         .replace("call_probe", "call_abandoned")
         .replace("resp_probe", "resp_abandoned")
@@ -93,22 +95,25 @@ def assert_winning_tool(result: str, wire: WireProtocol):
         assert events[-1].event == "message_stop"
         assert (
             "".join(
-                event.data["delta"]["partial_json"]
+                string_payload(object_payload(event.data["delta"])["partial_json"])
                 for event in events
-                if event.data.get("delta", {}).get("type") == "input_json_delta"
+                if object_payload(event.data.get("delta", {})).get("type")
+                == "input_json_delta"
             )
             == '{"path":"winning"}'
         )
     else:
         assert sum(event.event == "response.created" for event in events) == 1
         assert events[-1].event == "response.completed"
-        call = events[-1].data["response"]["output"][0]
-        assert call["call_id"] == "call_probe"
-        assert call["arguments"] == '{"path":"winning"}'
-        numbers = [event.data["sequence_number"] for event in events]
+        call = array_payload(object_payload(events[-1].data["response"])["output"])[0]
+        assert object_payload(call)["call_id"] == "call_probe"
+        assert object_payload(call)["arguments"] == '{"path":"winning"}'
+        numbers = [int_payload(event.data["sequence_number"]) for event in events]
         assert all(right > left for left, right in pairwise(numbers))
         ids = {
-            event.data["response"]["id"] for event in events if "response" in event.data
+            object_payload(event.data["response"])["id"]
+            for event in events
+            if "response" in event.data
         }
         assert len(ids) == 1
 
@@ -143,7 +148,7 @@ async def test_raw_native_messages_hidden_cutoff_retries_and_closes_first():
     second = Wire([_sse(*tool_events("messages", '{"path":"winning"}'))])
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         if len(bodies) == 2:
             assert first.closed
         return httpx.Response(
@@ -178,7 +183,7 @@ async def test_raw_native_unicode_metadata_keeps_hidden_retry_eligible(separator
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         if len(bodies) == 2:
             assert first.closed
         return httpx.Response(
@@ -196,9 +201,9 @@ async def test_raw_native_unicode_metadata_keeps_hidden_retry_eligible(separator
         assert len(bodies) == 2 and bodies[0] == bodies[1]
         assert first.closed and second.closed
         assert_winning_tool(result, "messages")
-        assert parse_sse_text(result)[0].data["message"]["extension"] == (
-            "winner" + separator + "b"
-        )
+        assert object_payload(parse_sse_text(result)[0].data["message"])[
+            "extension"
+        ] == ("winner" + separator + "b")
     finally:
         await p.cleanup()
 
@@ -408,29 +413,40 @@ async def test_raw_stop_survives_normalization_and_later_null_and_empty_choices(
 
 
 def overlapping_tools(protocol: str):
-    complete = json.loads(
+    complete = load_json_value(
         json.dumps(tool_events(protocol, '{"path":"oldA"}'))
         .replace("call_probe", "call_oldA")
         .replace("fc_probe", "fc_oldA")
     )
-    partial = json.loads(
+    partial = load_json_value(
         json.dumps(partial_tool(protocol))
         .replace("call_abandoned", "call_oldB")
         .replace("fc_abandoned", "fc_oldB")
     )
     if protocol == "chat":
-        for event in partial:
-            event["choices"][0]["delta"]["tool_calls"][0]["index"] = 1
-        return [complete[0], partial[0], *complete[1:-1], *partial[1:]]
+        for event in array_payload(partial):
+            object_array(
+                object_payload(
+                    object_array(object_payload(event)["choices"])[0]["delta"]
+                )["tool_calls"]
+            )[0]["index"] = 1
+        return [
+            array_payload(complete)[0],
+            array_payload(partial)[0],
+            *array_payload(array_payload(complete)[1:-1]),
+            *array_payload(array_payload(partial)[1:]),
+        ]
     index_field = "index" if protocol == "messages" else "output_index"
-    for event in partial[1:]:
-        event[index_field] = 1
+    for event in array_payload(partial)[1:]:
+        object_payload(event)[index_field] = 1
     return [
-        complete[0],
-        complete[1],
-        partial[1],
-        *partial[2:],
-        *complete[2 : (-2 if protocol == "messages" else -1)],
+        array_payload(complete)[0],
+        array_payload(complete)[1],
+        array_payload(partial)[1],
+        *array_payload(array_payload(partial)[2:]),
+        *array_payload(
+            array_payload(complete)[2 : (-2 if protocol == "messages" else -1)]
+        ),
     ]
 
 
@@ -504,8 +520,11 @@ async def test_replacement_rejection_before_frames_uses_public_empty_envelope(
     events = parse_sse_text(result)
     assert events[-1].event == ("error" if wire == "messages" else "response.failed")
     if wire == "responses":
-        assert events[-1].data["response"]["id"] == events[0].data["response"]["id"]
-        assert events[-1].data["response"]["output"] == []
+        assert (
+            object_payload(events[-1].data["response"])["id"]
+            == object_payload(events[0].data["response"])["id"]
+        )
+        assert object_payload(events[-1].data["response"])["output"] == []
 
 
 @pytest.mark.asyncio
@@ -707,7 +726,7 @@ async def test_raw_native_published_activity_prevents_clean_retry(kind: str):
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -766,7 +785,7 @@ async def test_raw_native_retry_uses_winning_initial_usage_and_final_overrides(
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -781,9 +800,9 @@ async def test_raw_native_retry_uses_winning_initial_usage_and_final_overrides(
         )
         assert len(bodies) == 3 and bodies[0] == bodies[1] == bodies[2]
         events = parse_sse_text(result)
-        assert events[0].data["message"]["id"] == "msg_winning"
+        assert object_payload(events[0].data["message"])["id"] == "msg_winning"
         assert (
-            events[0].data["message"]["usage"]
+            object_payload(events[0].data["message"])["usage"]
             == object_payload(winner[0]["message"])["usage"]
         )
         assert events[-2].data["usage"] == winner[-2]["usage"]

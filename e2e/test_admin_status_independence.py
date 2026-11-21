@@ -5,6 +5,7 @@ from playwright.sync_api import Page, Route, expect
 
 from e2e.provider_support import api_key_input, open_provider
 from e2e.test_code_sessions import create_session
+from tests.wire_payload import object_payload, response_object
 
 
 def test_code_bootstrap_cannot_stall_other_pages_status(
@@ -14,10 +15,10 @@ def test_code_bootstrap_cannot_stall_other_pages_status(
     starting = True
 
     def status(route: Route):
-        payload = route.fetch().json()
-        payload["startup"]["providers"]["open_router"] = (
-            "starting" if starting else "ready"
-        )
+        payload = response_object(route.fetch())
+        object_payload(object_payload(payload["startup"])["providers"])[
+            "open_router"
+        ] = "starting" if starting else "ready"
         route.fulfill(json=payload)
 
     def hold(route: Route):
@@ -46,9 +47,9 @@ def test_partial_catalog_keeps_code_selection_and_send_usable(
     page: Page, admin_base_url: str, tmp_path: Path
 ):
     def bootstrap(route: Route):
-        payload = route.fetch().json()
+        payload = response_object(route.fetch())
         assert payload["models"]
-        payload["startup"]["catalog"] = "starting"
+        object_payload(payload["startup"])["catalog"] = "starting"
         route.fulfill(json=payload)
 
     page.route("**/admin/api/code/bootstrap", bootstrap)

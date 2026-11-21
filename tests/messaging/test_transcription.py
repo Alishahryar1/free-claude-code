@@ -3,6 +3,8 @@
 import asyncio
 import threading
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -20,11 +22,30 @@ def _service(*, api_key: str = "") -> TranscriptionService:
     )
 
 
+@dataclass
+class _Cuda:
+    is_available: Callable[[], bool]
+
+
+@dataclass
+class _Torch:
+    cuda: _Cuda
+    float16: object
+    float32: object
+
+
+@dataclass
+class _Transformers:
+    AutoModelForSpeechSeq2Seq: MagicMock
+    AutoProcessor: MagicMock
+    pipeline: MagicMock
+
+
 def _fake_optional_modules(
     pipeline: MagicMock,
-) -> tuple[SimpleNamespace, SimpleNamespace, MagicMock, MagicMock]:
-    torch = SimpleNamespace(
-        cuda=SimpleNamespace(is_available=lambda: False),
+) -> tuple[_Torch, _Transformers, MagicMock, MagicMock]:
+    torch = _Torch(
+        cuda=_Cuda(is_available=lambda: False),
         float16=object(),
         float32=object(),
     )
@@ -37,7 +58,7 @@ def _fake_optional_modules(
     processor_loader = MagicMock()
     processor_loader.from_pretrained.return_value = processor
 
-    transformers = SimpleNamespace(
+    transformers = _Transformers(
         AutoModelForSpeechSeq2Seq=model_loader,
         AutoProcessor=processor_loader,
         pipeline=MagicMock(return_value=pipeline),
@@ -185,7 +206,7 @@ async def test_cancelled_transcription_keeps_ownership_until_thread_exits(
     audio_path.write_bytes(b"voice")
     started = threading.Event()
     release = threading.Event()
-    pipeline = object()
+    pipeline = MagicMock()
 
     def blocking_transcribe(_path: Path) -> str:
         started.set()

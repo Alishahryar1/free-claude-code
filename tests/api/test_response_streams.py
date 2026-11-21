@@ -1,7 +1,6 @@
 """Tests for public SSE response start gating."""
 
 import asyncio
-import json
 from collections.abc import AsyncGenerator
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -27,6 +26,7 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from tests.assertions import record_extra, require_exception_info
 from tests.stream_packets import packets
+from tests.wire_payload import decode_object, object_payload
 
 
 async def _body_chunks(chunks: list[str]) -> AsyncGenerator[str]:
@@ -151,9 +151,9 @@ async def test_anthropic_pre_start_provider_error_returns_non_200_json() -> None
     assert isinstance(response, JSONResponse)
     assert response.status_code == 429
     assert response.headers["x-should-retry"] == "false"
-    body = json.loads(bytes(response.body))
-    assert body["error"]["type"] == "rate_limit_error"
-    assert body["error"]["message"] == "provider says slow down"
+    body = decode_object(bytes(response.body))
+    assert object_payload(body["error"])["type"] == "rate_limit_error"
+    assert object_payload(body["error"])["message"] == "provider says slow down"
 
 
 @pytest.mark.asyncio
@@ -196,7 +196,7 @@ async def test_terminal_execution_error_response_disables_client_retry() -> None
     assert isinstance(response, JSONResponse)
     assert response.status_code == 429
     assert response.headers["x-should-retry"] == "false"
-    body = json.loads(bytes(response.body))
+    body = decode_object(bytes(response.body))
     assert body["error"] == {
         "type": "rate_limit_error",
         "message": "provider says slow down",
@@ -220,7 +220,7 @@ async def test_anthropic_post_start_exception_emits_terminal_error_frame() -> No
     text = await _drain(response)
     events = parse_sse_text(text)
     assert [event.event for event in events] == ["message_start", "error"]
-    assert events[-1].data["error"]["message"] == "socket cut"
+    assert object_payload(events[-1].data["error"])["message"] == "socket cut"
 
 
 @pytest.mark.asyncio

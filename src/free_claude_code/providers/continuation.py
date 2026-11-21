@@ -1,5 +1,6 @@
 """Same-provider continuation using evidence from the public delivery boundary."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -12,7 +13,14 @@ from free_claude_code.core.delivered_response import (
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.history_replay import protected_reasoning
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import (
+    JsonObject,
+    JsonValue,
+    json_array,
+    json_object,
+    json_objects,
+    optional_string,
+)
 from free_claude_code.core.openai_responses import is_client_call
 from free_claude_code.core.stream_recovery import (
     RecoveryAction,
@@ -68,16 +76,16 @@ class SourceRecoveryState:
     def observe(
         self,
         protocol: UpstreamProtocol,
-        payload: dict[str, Any],
+        payload: Mapping[str, JsonValue],
         *,
         continuing: bool = False,
     ) -> None:
         kind = str(payload.get("type", ""))
         usage = payload.get("usage")
         if protocol == "messages" and kind == "message_start":
-            usage = payload.get("message", {}).get("usage")
+            usage = json_object(payload.get("message", {})).get("usage")
         elif protocol == "responses":
-            usage = payload.get("response", {}).get("usage")
+            usage = json_object(payload.get("response", {})).get("usage")
         if isinstance(usage, dict) and usage:
             trace_event(
                 stage="provider",
@@ -92,8 +100,10 @@ class SourceRecoveryState:
             # The final native replay carrier is published only after the source
             # completes. A call alone cannot prove its late signature is complete.
             self._handoff_blocked = True
-            for candidate in payload.get("candidates", []):
-                for part in candidate.get("content", {}).get("parts", []):
+            for candidate in json_objects(payload.get("candidates", [])):
+                for part in json_objects(
+                    json_object(candidate.get("content", {})).get("parts", [])
+                ):
                     if part.get("thoughtSignature") and self.unsafe_reason is None:
                         self.unsafe_reason = "signed_thinking"
                     if any(
@@ -103,14 +113,15 @@ class SourceRecoveryState:
                     ):
                         self.unsafe_reason = "native_content"
         elif protocol == "chat":
-            if len(payload.get("choices", [])) > 1 or any(
+            choices = list(json_objects(payload.get("choices", [])))
+            if len(choices) > 1 or any(
                 choice.get("index", 0) != 0 or choice.get("logprobs")
-                for choice in payload.get("choices", [])
+                for choice in choices
             ):
                 self.unsafe_reason = "native_content"
                 self._handoff_blocked = True
-            for choice in payload.get("choices", []):
-                delta = choice.get("delta") or {}
+            for choice in choices:
+                delta = json_object(choice.get("delta") or {})
                 if protected_reasoning({"extra_content": delta.get("extra_content")}):
                     self.unsafe_reason = "native_content"
                 details = delta.get("reasoning_details")
@@ -121,7 +132,7 @@ class SourceRecoveryState:
                         or any(
                             not isinstance(detail, dict)
                             or detail.get("type")
-                            not in {"reasoning.text", "reasoning.summary"}
+                            not in ("reasoning.text", "reasoning.summary")
                             or protected_reasoning(detail)
                             for detail in details
                         )
@@ -129,44 +140,51 @@ class SourceRecoveryState:
                 ):
                     self.unsafe_reason = "native_content"
                     self._handoff_blocked = True
-        elif protocol == "messages":
+        elif protocol == "messages" and kind in (
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+        ):
+            index = payload.get("index")
+            if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+                # The Messages parser classifies malformed block events for retries.
+                return
             block = payload.get("content_block")
-            index = payload.get("index", -1)
-            if isinstance(block, dict) and block.get("type") in {
+            if isinstance(block, dict) and block.get("type") in (
                 "thinking",
                 "redacted_thinking",
-            }:
+            ):
                 self.unsafe_reason = "signed_thinking"
                 self._pending_reasoning.add(index)
                 if block.get("signature") or block.get("data"):
                     self._signed.add(index)
-            if isinstance(block, dict) and block.get("type") not in {
+            if isinstance(block, dict) and block.get("type") not in (
                 "text",
                 "tool_use",
                 "thinking",
                 "redacted_thinking",
-            }:
+            ):
                 self.unsafe_reason = "native_content"
                 self._handoff_blocked = True
-            delta = payload.get("delta") or {}
+            delta = json_object(payload.get("delta") or {})
             if (isinstance(block, dict) and block.get("citations")) or delta.get(
                 "type"
             ) == "citations_delta":
                 self.unsafe_reason = "native_content"
                 self._handoff_blocked = True
-            if delta.get("type") in {"thinking_delta", "signature_delta"}:
+            if delta.get("type") in ("thinking_delta", "signature_delta"):
                 self.unsafe_reason = "signed_thinking"
                 if delta.get("signature"):
                     self._signed.add(index)
             if kind == "content_block_stop" and index in self._signed:
                 self._pending_reasoning.discard(index)
-        else:
+        elif protocol == "responses":
             item = payload.get("item")
             if isinstance(item, dict):
                 self._response_item(item, completed=kind == "response.output_item.done")
             response = payload.get("response")
             if isinstance(response, dict):
-                for item in response.get("output", []):
+                for item in json_array(response.get("output", [])):
                     if isinstance(item, dict):
                         self._response_item(
                             item, completed=item.get("status") == "completed"
@@ -205,23 +223,25 @@ class SourceRecoveryState:
                 retryable=False,
             )
 
-    def _response_item(self, item: dict[str, Any], *, completed: bool) -> None:
-        if item.get("type") not in {"message", "reasoning"} and not is_client_call(
+    def _response_item(self, item: JsonObject, *, completed: bool) -> None:
+        if item.get("type") not in ("message", "reasoning") and not is_client_call(
             item
         ):
             self.unsafe_reason = "hosted_or_native_content"
             self._handoff_blocked = True
+        identity = optional_string(item.get("id")) or ""
         if item.get("encrypted_content"):
             self.unsafe_reason = "opaque_reasoning"
             if not completed:
-                self._pending_reasoning.add(item.get("id", ""))
+                self._pending_reasoning.add(identity)
         if completed:
-            self._pending_reasoning.discard(item.get("id", ""))
+            self._pending_reasoning.discard(identity)
         if any(
             part.get("annotations")
             or part.get("type")
-            not in {"output_text", "refusal", "reasoning_text", "summary_text"}
-            for part in [*(item.get("content") or []), *(item.get("summary") or [])]
+            not in ("output_text", "refusal", "reasoning_text", "summary_text")
+            for field in ("content", "summary")
+            for part in json_objects(item.get(field) or [])
         ):
             self.unsafe_reason = "native_content"
             self._handoff_blocked = True
@@ -261,10 +281,13 @@ def public_stream_failure(
     )
 
 
-def _structured_output(body: dict[str, Any], protocol: UpstreamProtocol) -> bool:
+def _structured_output(
+    body: Mapping[str, JsonValue], protocol: UpstreamProtocol
+) -> bool:
     if protocol == "gemini":
-        config = body.get("generationConfig") or {}
-        text = (config.get("responseFormat") or {}).get("text") or {}
+        config = json_object(body.get("generationConfig") or {})
+        format_ = json_object(config.get("responseFormat") or {})
+        text = json_object(format_.get("text") or {})
         return (
             config.get("responseMimeType") == "application/json"
             or text.get("mimeType") == "APPLICATION_JSON"
@@ -275,10 +298,12 @@ def _structured_output(body: dict[str, Any], protocol: UpstreamProtocol) -> bool
             )
         )
     if protocol == "chat":
-        extra = body.get("extra_body") or {}
+        extra = json_object(body.get("extra_body") or {})
         value = extra.get("response_format", body.get("response_format"))
     else:
-        options = body.get("text" if protocol == "responses" else "output_config") or {}
+        options = json_object(
+            body.get("text" if protocol == "responses" else "output_config") or {}
+        )
         value = options.get("format")
     return is_structured_text_format(value)
 

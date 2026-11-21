@@ -193,7 +193,9 @@ class TestMessagingRateLimiter:
             async def _do() -> float:
                 return time.monotonic()
 
-            return await limiter.enqueue(_do, dedup_key=f"strict:{i}")
+            result = await limiter.enqueue(_do, dedup_key=f"strict:{i}")
+            assert isinstance(result, float)
+            return result
 
         acquired = await asyncio.gather(*(acquire(i) for i in range(5)))
         acquired.sort()

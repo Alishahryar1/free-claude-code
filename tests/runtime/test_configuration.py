@@ -1,7 +1,7 @@
 import asyncio
 import io
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
@@ -190,7 +190,7 @@ async def test_storage_work_does_not_block_event_loop(operation: str):
     method = {"admin_config": "read", "admin_values": "read", "prepare": "read"}.get(
         operation, operation
     )
-    original = getattr(store, method)
+    original: Callable[..., object] = getattr(store, method)
 
     def blocked(*args: object, **kwargs: object):
         entered.set()

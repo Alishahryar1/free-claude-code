@@ -19,7 +19,7 @@ class AdminNoStoreMiddleware:
         receive: Receive,
         send: Send,
     ) -> None:
-        path = scope.get("path", "")
+        path: str = scope.get("path", "")
         if scope["type"] != "http" or not _is_admin_path(path):
             await self._app(scope, receive, send)
             return
@@ -27,7 +27,8 @@ class AdminNoStoreMiddleware:
         async def send_without_cache(message: Message) -> None:
             if message["type"] == "http.response.start":
                 message = dict(message)
-                raw_headers = list(message.get("headers", ()))
+                headers: list[tuple[bytes, bytes]] = message.get("headers", [])
+                raw_headers = list(headers)
                 _set_no_store(MutableHeaders(raw=raw_headers))
                 message["headers"] = raw_headers
             await send(message)

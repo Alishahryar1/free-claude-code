@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.gemini.response import GeminiResponseAccumulator
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.custom import CustomProvider
 from free_claude_code.providers.runtime.config import build_custom_provider_config
@@ -20,6 +20,12 @@ from tests.api.test_delivered_stream_recovery import text_events
 from tests.providers.support import immediate_admission
 from tests.providers.test_custom_provider import completion, definition, provider
 from tests.providers.test_gemini_transport import chat_response
+from tests.wire_payload import (
+    decode_object,
+    object_array,
+    object_payload,
+    response_object,
+)
 
 
 @pytest.mark.parametrize("streaming", [False, True])
@@ -81,7 +87,7 @@ def test_full_http_to_upstream_matrix_keeps_route_controls_and_credentials(
     sent = []
 
     def reply(request: httpx.Request | httpx2.Request):
-        sent.append((json.loads(request.content), dict(request.headers)))
+        sent.append((decode_object(request.content), dict(request.headers)))
         response = httpx.Response if wire == "anthropic_messages" else httpx2.Response
         return response(
             200, text=completion(wire), headers={"content-type": "text/event-stream"}
@@ -111,16 +117,25 @@ def test_full_http_to_upstream_matrix_keeps_route_controls_and_credentials(
         assert response.status_code == 200, response.text
         if streaming:
             values = [
-                json.loads(line[6:])
+                load_json_value(line[6:])
                 for line in response.text.splitlines()
                 if line.startswith("data: ")
             ]
-            assert values[-1]["candidates"][0]["finishReason"] == "STOP"
-            assert all(item["modelVersion"] == public_model for item in values)
+            assert (
+                object_array(object_payload(values[-1])["candidates"])[0][
+                    "finishReason"
+                ]
+                == "STOP"
+            )
+            assert all(
+                object_payload(item)["modelVersion"] == public_model for item in values
+            )
         else:
-            value = response.json()
+            value = response_object(response)
             assert value["modelVersion"] == public_model
-            assert value["candidates"][0]["content"]["parts"] == [{"text": "Hello"}]
+            assert object_payload(object_array(value["candidates"])[0]["content"])[
+                "parts"
+            ] == [{"text": "Hello"}]
         assert provider_manager_for_app(app)._current.active_leases == 0
         # An auxiliary/unknown model uses the same configured default route.
         assert (
@@ -159,7 +174,7 @@ def test_gemini_http_fallback_keeps_one_response_across_egresses(
     sent = []
 
     def response_text(content: bytes) -> str:
-        body = json.loads(content)
+        body = decode_object(content)
         sent.append(body)
         if body["model"] == "second":
             return completion("openai_responses")
@@ -241,13 +256,13 @@ def test_gemini_http_fallback_keeps_one_response_across_egresses(
             aggregate = GeminiResponseAccumulator()
             for line in response.text.splitlines():
                 if line.startswith("data: "):
-                    aggregate.feed(json.loads(line[6:]))
+                    aggregate.feed(decode_object(line[6:]))
             value = aggregate.result()
         else:
-            value = response.json()
-        assert value["candidates"][0]["content"]["parts"] == [
-            {"text": "Before Hello" if streaming else "Hello"}
-        ]
+            value = response_object(response)
+        assert object_payload(object_array(value["candidates"])[0]["content"])[
+            "parts"
+        ] == [{"text": "Before Hello" if streaming else "Hello"}]
         assert value["modelVersion"] == "public"
 
 
@@ -256,7 +271,7 @@ def test_public_fallback_omits_hidden_unsigned_history(streaming: bool):
     sent = []
 
     def reply(request: httpx2.Request):
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         sent.append(body)
         if body["model"] == "first":
             return chat_response(
@@ -310,13 +325,15 @@ def test_public_fallback_omits_hidden_unsigned_history(streaming: bool):
         aggregate = GeminiResponseAccumulator()
         for line in response.text.splitlines():
             if line.startswith("data: "):
-                aggregate.feed(json.loads(line[6:]))
+                aggregate.feed(decode_object(line[6:]))
         value = aggregate.result()
     else:
-        value = response.json()
+        value = response_object(response)
     signatures = [
         part["thoughtSignature"]
-        for part in value["candidates"][0]["content"]["parts"]
+        for part in object_array(
+            object_payload(object_array(value["candidates"])[0]["content"])["parts"]
+        )
         if "thoughtSignature" in part
     ]
     assert not signatures

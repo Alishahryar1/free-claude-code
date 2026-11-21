@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
-from typing import Any, TypeIs
+from typing import TypeIs
 
 from free_claude_code.application.model_metadata import (
     ProviderModelInfo as _ProviderModelInfo,
@@ -38,7 +38,7 @@ def model_infos_from_ids(
 
 
 def extract_openai_model_infos(
-    payload: Any,
+    payload: object,
     *,
     provider_name: str,
     collection_field: str | None = "data",
@@ -220,7 +220,7 @@ def extract_openai_model_infos(
 
 
 def extract_tool_capable_model_infos(
-    payload: Any, *, provider_name: str
+    payload: object, *, provider_name: str
 ) -> frozenset[_ProviderModelInfo]:
     """Extract tool-capable models with ``supported_parameters`` metadata."""
     data = model_list_items(payload, provider_name=provider_name)
@@ -285,11 +285,11 @@ def reasoning_capability_from_options(options: object) -> ReasoningCapability:
 
 
 def model_list_items(
-    payload: Any,
+    payload: object,
     *,
     provider_name: str,
     collection_field: str | None = "data",
-) -> tuple[Any, ...]:
+) -> tuple[object, ...]:
     """Return a validated OpenAI-shaped model-list data array."""
     data = payload if collection_field is None else _field(payload, collection_field)
     if not _is_sequence(data):
@@ -306,7 +306,7 @@ def model_list_items(
 
 
 def validate_model_list_page(
-    payload: Any,
+    payload: object,
     *,
     provider_name: str,
     expected_page: int,
@@ -348,13 +348,13 @@ def validate_model_list_page(
 
 
 def merge_model_list_pages(
-    payloads: Iterable[Any],
+    payloads: Iterable[object],
     *,
     provider_name: str,
     collection_field: str | None,
-) -> tuple[Any, ...] | dict[str, tuple[Any, ...]]:
+) -> tuple[object, ...] | dict[str, tuple[object, ...]]:
     """Combine complete model-list pages before strict record parsing."""
-    merged: list[Any] = []
+    merged: list[object] = []
     for payload in payloads:
         merged.extend(
             model_list_items(
@@ -370,13 +370,13 @@ def merge_model_list_pages(
     return {collection_field: items}
 
 
-def _field(item: Any, name: str) -> Any:
+def _field(item: object, name: str) -> object:
     if isinstance(item, Mapping):
         return item.get(name)
     return getattr(item, name, None)
 
 
-def _has_field(item: Any, name: str) -> bool:
+def _has_field(item: object, name: str) -> bool:
     if isinstance(item, Mapping):
         return name in item
     return hasattr(item, name)
@@ -385,7 +385,7 @@ def _has_field(item: Any, name: str) -> bool:
 _MISSING = object()
 
 
-def _path(item: Any, path: tuple[str, ...]) -> Any:
+def _path(item: object, path: tuple[str, ...]) -> object:
     current = item
     for name in path:
         if not _has_field(current, name):

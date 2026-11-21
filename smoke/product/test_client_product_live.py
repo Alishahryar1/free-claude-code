@@ -34,6 +34,7 @@ from smoke.lib.e2e import (
     assert_product_stream,
 )
 from smoke.lib.server import find_free_port
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 pytestmark = [pytest.mark.live]
 
@@ -1173,14 +1174,16 @@ def test_muse_cli_headless_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> Non
     )
     assert catalog_files, "Muse did not persist its parsed provider catalog"
     visible_models = {
-        row["model_id"]: row
+        object_payload(row)["model_id"]: row
         for catalog_file in catalog_files
-        for row in json.loads(catalog_file.read_text(encoding="utf-8"))["rows"]
-        if row["visibility"] == "visible"
+        for row in array_payload(
+            decode_object(catalog_file.read_text(encoding="utf-8"))["rows"]
+        )
+        if object_payload(row)["visibility"] == "visible"
     }
     assert full_model in visible_models, "Muse hides the configured FCC model"
-    assert visible_models[full_model]["context_limit"] == 200000
-    assert visible_models[full_model]["output_limit"] == 81920
+    assert object_payload(visible_models[full_model])["context_limit"] == 200000
+    assert object_payload(visible_models[full_model])["output_limit"] == 81920
     responses_count = _access_request_count(server_log, "POST", "/v1/responses")
     assert responses_count >= 1
     assert responses_count == len(provider_requests)

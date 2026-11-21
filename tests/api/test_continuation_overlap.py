@@ -8,7 +8,7 @@ import pytest
 
 from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.stream_contracts import SSEEvent, parse_sse_text
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.core.stream_output import completed_output
 from tests.api.test_delivered_stream_recovery import public_text, text_events
@@ -16,7 +16,13 @@ from tests.api.test_hidden_stream_retries import delivered
 from tests.api.test_tool_call_buffer import _frames, _response
 from tests.providers.support import assistant_history_text
 from tests.providers.test_history_transports import _harness
-from tests.wire_payload import object_payload
+from tests.wire_payload import (
+    array_payload,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 def responses_parts(
@@ -111,29 +117,36 @@ def responses_parts(
 
 def response_text(event: SSEEvent):
     return "".join(
-        part.get("text", "")
-        for item in event.data["response"]["output"]
-        for part in item.get("content", [])
+        string_payload(object_payload(part).get("text", ""))
+        for item in array_payload(object_payload(event.data["response"])["output"])
+        for part in object_array(object_payload(item).get("content", []))
     )
 
 
 def assert_completion_text_agrees(events: list[SSEEvent]):
     final = {
-        item["id"]: item
-        for item in events[-1].data["response"]["output"]
-        if item["type"] == "message"
+        object_payload(item)["id"]: item
+        for item in array_payload(object_payload(events[-1].data["response"])["output"])
+        if object_payload(item)["type"] == "message"
     }
     for event in events:
         data = event.data
         if event.event == "response.output_text.done":
-            part = final[data["item_id"]]["content"][data["content_index"]]
-            assert data["text"] == part["text"]
+            part = array_payload(object_payload(final[data["item_id"]])["content"])[
+                int_payload(object_payload(data)["content_index"])
+            ]
+            assert data["text"] == object_payload(part)["text"]
         elif event.event == "response.content_part.done":
-            part = final[data["item_id"]]["content"][data["content_index"]]
+            part = array_payload(object_payload(final[data["item_id"]])["content"])[
+                int_payload(object_payload(data)["content_index"])
+            ]
             assert data["part"] == part
         elif event.event == "response.output_item.done":
-            assert data["item"]["content"] == final[data["item"]["id"]]["content"]
-    numbers = [event.data["sequence_number"] for event in events]
+            assert (
+                object_payload(data["item"])["content"]
+                == object_payload(final[object_payload(data["item"])["id"]])["content"]
+            )
+    numbers = [int_payload(event.data["sequence_number"]) for event in events]
     assert all(before < after for before, after in pairwise(numbers)), numbers
 
 
@@ -173,20 +186,90 @@ async def test_split_replay_has_one_answer_across_representations(
     assert events[-1].event == "response.completed"
     assert response_text(events[-1]) == "Hello world."
     retained = [
-        part["text"]
-        for item in events[-1].data["response"]["output"][1:]
-        for part in item["content"]
+        object_payload(part)["text"]
+        for item in array_payload(
+            object_payload(events[-1].data["response"])["output"]
+        )[1:]
+        for part in array_payload(object_payload(item)["content"])
     ]
     assert retained == ["", "world."]
     assert_completion_text_agrees(events)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("representation", ["terminal", "text_done", "mixed"])
-async def test_split_pure_replay_is_not_public_progress(representation: str):
+@pytest.mark.filterwarnings(
+    "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
+)
+@pytest.mark.parametrize(
+    ("index_case", "index_value"),
+    [
+        ("output_index", 0.0),
+        ("content_index", 0.0),
+        ("output_index", "0"),
+        ("output_index", "0.0"),
+        ("content_index", "0"),
+        ("output_index", None),
+        ("content_index", None),
+        ("terminal_extensions", None),
+        ("unused_item", None),
+    ],
+)
+async def test_responses_continuation_preserves_text_with_provider_index_encodings(
+    index_case: str, index_value: JsonValue
+):
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
+        events = text_events("responses", "Hello world.")
+        if index_case == "terminal_extensions":
+            events[-1].update(index=None, content_block=None)
+        else:
+            delta = next(
+                event
+                for event in events
+                if event["type"] == "response.output_text.delta"
+            )
+            if index_case == "unused_item":
+                delta["item"] = None
+            else:
+                delta[index_case] = index_value
+        return 200, events
+
+    async with _harness("responses", reply, max_attempts=2) as (send, bodies, _):
+        raw = await delivered(
+            send("responses", [{"role": "user", "content": "greet"}]), "responses"
+        )
+    events = parse_sse_text(raw)
+    assert len(bodies) == 2
+    assert events[-1].event == "response.completed"
+    assert public_text(events, "responses") == "Hello world."
+    assert response_text(events[-1]) == "Hello world."
+    assert_completion_text_agrees(events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("representation", ["terminal", "text_done", "mixed"])
+@pytest.mark.parametrize(
+    "input_tokens",
+    [
+        12,
+        pytest.param(
+            12.0,
+            marks=pytest.mark.filterwarnings(
+                "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
+            ),
+        ),
+    ],
+)
+async def test_split_pure_replay_is_not_public_progress(
+    representation: str, input_tokens: int | float
+):
+    def reply(bodies: list[JsonObject]):
+        if len(bodies) == 1:
+            events = text_events("responses", "Hello ", complete=False)
+            usage = object_payload(object_payload(events[0]["response"])["usage"])
+            usage["input_tokens"] = input_tokens
+            return 200, events
         return 200, responses_parts(["He", "llo "], representation=representation)
 
     async with _harness("responses", reply, max_attempts=3) as (send, bodies, _):
@@ -197,6 +280,9 @@ async def test_split_pure_replay_is_not_public_progress(representation: str):
     assert len(bodies) == 2
     assert events[-1].event == "response.failed"
     assert response_text(events[-1]) == "Hello "
+    usage = object_payload(object_payload(events[-1].data["response"])["usage"])
+    assert usage["input_tokens"] == 12
+    assert usage["total_tokens"] == 12 + int_payload(usage["output_tokens"])
 
 
 @pytest.mark.asyncio

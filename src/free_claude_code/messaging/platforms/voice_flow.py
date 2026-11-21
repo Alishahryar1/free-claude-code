@@ -6,7 +6,6 @@ import tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from loguru import logger
 
@@ -41,7 +40,7 @@ class VoiceNoteRequest:
     chat_id: str
     user_id: str
     message_id: str
-    raw_event: Any
+    raw_event: object
     content_type: str
     temp_suffix: str
     status_text: str

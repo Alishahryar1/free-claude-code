@@ -13,7 +13,8 @@ from free_claude_code.core.history_replay import (
     encode_replay,
     prepare_history,
 )
-from free_claude_code.core.json_types import JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue
+from tests.wire_payload import object_array
 
 
 def origin(protocol: HistoryProtocol = "chat"):
@@ -42,8 +43,10 @@ def history():
 def test_default_all_retains_old_reasoning_and_adds_empty_assistant_fields():
     body = history()
     original = deepcopy(body)
-    result = cast(dict[str, Any], prepare_history(body, origin()))
-    assistants = [m for m in result["messages"] if m["role"] == "assistant"]
+    result: JsonObject = prepare_history(body, origin())
+    assistants = [
+        m for m in object_array(result["messages"]) if m["role"] == "assistant"
+    ]
     assert [m.get("reasoning_content") for m in assistants] == ["Old", "", "New", ""]
     assert [m["content"] for m in assistants] == [
         "First answer",
@@ -158,12 +161,10 @@ def test_three_scope_definitions_preserve_source(mode: str, expected: JsonValue)
 
     body = history()
     original = deepcopy(body)
-    result = cast(
-        dict[str, Any], prepare_history(body, origin(), scope=HistoryMode(mode))
-    )
+    result: JsonObject = prepare_history(body, origin(), scope=HistoryMode(mode))
     assert [
         m.get("reasoning_content")
-        for m in result["messages"]
+        for m in object_array(result["messages"])
         if m["role"] == "assistant"
     ] == expected
     assert body == original

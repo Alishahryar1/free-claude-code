@@ -17,6 +17,7 @@ from free_claude_code.core.gemini.models import GeminiRequest
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_output import StreamOutput
 from tests.api.support import create_test_app, provider_manager_for_app
+from tests.wire_payload import object_array, object_payload, response_object
 
 # Google documents /v1beta; Gemini SDKs given a custom base URL call /v1.
 PREFIXES = ("/v1beta/models", "/v1/models")
@@ -115,9 +116,11 @@ def test_generation_routes_use_the_selected_backend_and_release_lease(
         ]
         assert events[-1]["candidates"][0]["finishReason"] == "STOP"
     else:
-        value = response.json()
-        assert value["candidates"][0]["content"]["parts"] == [{"text": "Hello world"}]
-        assert value["usageMetadata"]["totalTokenCount"] == 5
+        value = response_object(response)
+        assert object_payload(object_array(value["candidates"])[0]["content"])[
+            "parts"
+        ] == [{"text": "Hello world"}]
+        assert object_payload(value["usageMetadata"])["totalTokenCount"] == 5
     assert len(calls) == 1
     assert calls[0][0].model == "backend"
     assert calls[0][1]["response_model"] == "public-model"
@@ -183,8 +186,14 @@ def test_invalid_auth_is_a_google_error_before_inference(
             f"{prefix}/model:generateContent" + query, headers=headers, json=body()
         )
     assert response.status_code in {400, 401}, response.text
-    assert response.json()["error"]["code"] == response.status_code
-    assert response.json()["error"]["status"] in {"UNAUTHENTICATED", "INVALID_ARGUMENT"}
+    assert (
+        object_payload(response_object(response)["error"])["code"]
+        == response.status_code
+    )
+    assert object_payload(response_object(response)["error"])["status"] in {
+        "UNAUTHENTICATED",
+        "INVALID_ARGUMENT",
+    }
     assert not calls
 
 

@@ -10,7 +10,13 @@ from free_claude_code.core.delivered_response import DeliveredResponse
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.json_types import JsonObject
 from tests.api.test_continuation_overlap import responses_parts
-from tests.wire_payload import array_payload, object_array, object_payload
+from tests.wire_payload import (
+    array_payload,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
@@ -115,32 +121,45 @@ def test_text_representation_preserves_each_source_part(
     overlap = ContinuationOverlap(prefix)
     events = [ready for event in source for ready in overlap.feed(event)]
     expected = retained_parts(prefix, parts)
-    output = events[-1]["response"]["output"]
-    assert [part["text"] for item in output for part in item["content"]] == expected
+    output = object_payload(events[-1]["response"])["output"]
+    assert [
+        part["text"]
+        for item in object_array(output)
+        for part in object_array(item["content"])
+    ] == expected
     assert source == original
-    finals = {item["id"]: item for item in output}
+    finals = {item["id"]: item for item in object_array(output)}
     deltas = {}
     for event in events:
         kind = event["type"]
         if kind == "response.output_text.delta":
             key = (event["item_id"], event["content_index"])
-            deltas[key] = deltas.get(key, "") + event["delta"]
+            deltas[key] = deltas.get(key, "") + string_payload(event["delta"])
         elif kind == "response.output_text.done":
             assert (
                 event["text"]
-                == finals[event["item_id"]]["content"][event["content_index"]]["text"]
+                == object_payload(
+                    array_payload(finals[event["item_id"]]["content"])[
+                        int_payload(object_payload(event)["content_index"])
+                    ]
+                )["text"]
             )
         elif kind == "response.content_part.done":
             assert (
                 event["part"]
-                == finals[event["item_id"]]["content"][event["content_index"]]
+                == array_payload(finals[event["item_id"]]["content"])[
+                    int_payload(object_payload(event)["content_index"])
+                ]
             )
         elif kind == "response.output_item.done":
-            assert event["item"] == finals[event["item"]["id"]]
+            assert event["item"] == finals[object_payload(event["item"])["id"]]
     if representation == "deltas":
-        for item in output:
-            for position, part in enumerate(item["content"]):
-                assert deltas.get((item["id"], position), "") == part["text"]
+        for item in object_array(output):
+            for position, part in enumerate(array_payload(item["content"])):
+                assert (
+                    deltas.get((item["id"], position), "")
+                    == object_payload(part)["text"]
+                )
 
 
 def test_pending_snapshots_are_idempotent_and_lifecycle_frames_keep_order():
@@ -156,7 +175,12 @@ def test_pending_snapshots_are_idempotent_and_lifecycle_frames_keep_order():
         released.extend(ready)
     assert [event["type"] for event in released] == [event["type"] for event in source]
     assert [
-        part["text"] for part in released[-1]["response"]["output"][0]["content"]
+        part["text"]
+        for part in object_array(
+            object_payload(
+                array_payload(object_payload(released[-1]["response"])["output"])[0]
+            )["content"]
+        )
     ] == ["", "world."]
 
 
@@ -173,7 +197,9 @@ def test_interleaved_parts_wait_for_the_earlier_open_part():
         released.extend(ready)
     for event in [*earlier_done, *source[8:]]:
         released.extend(overlap.feed(event))
-    assert released[-1]["response"]["output"][0]["content"] == [
+    assert object_payload(
+        array_payload(object_payload(released[-1]["response"])["output"])[0]
+    )["content"] == [
         {"type": "output_text", "text": "", "annotations": []},
         {"type": "output_text", "text": "world.", "annotations": []},
     ]
@@ -242,7 +268,16 @@ def test_large_immediately_resolvable_snapshot_does_not_fill_the_pending_buffer(
     overlap = ContinuationOverlap("Hello ")
     source = responses_parts(["Hello " + "x" * 10000], representation="terminal")
     events = [ready for event in source for ready in overlap.feed(event)]
-    assert events[-1]["response"]["output"][0]["content"][0]["text"] == "x" * 10000
+    assert (
+        object_payload(
+            array_payload(
+                object_payload(
+                    array_payload(object_payload(events[-1]["response"])["output"])[0]
+                )["content"]
+            )[0]
+        )["text"]
+        == "x" * 10000
+    )
 
 
 def test_resolved_overlap_does_not_retain_unaffected_later_items(

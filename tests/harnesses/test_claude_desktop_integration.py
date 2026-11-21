@@ -8,12 +8,13 @@ import pytest
 
 from free_claude_code.config.paths import claude_desktop_disconnect_path
 from free_claude_code.core.gateway_model_ids import desktop_model_id
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.harnesses import claude_desktop_integration as desktop
 from free_claude_code.harnesses.claude_desktop_integration import (
     check_unmanaged,
     config_root,
 )
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 URL = "http://127.0.0.1:8000"
 TOKEN = "desktop-test-token"
@@ -144,7 +145,7 @@ def test_windows_policy_boundary(monkeypatch: pytest.MonkeyPatch, state: str):
 
 
 def read(path: Path):
-    return json.loads(path.read_text())
+    return load_json_value(path.read_text())
 
 
 def write(path: Path, value: JsonValue):
@@ -398,7 +399,7 @@ def test_disconnect_recovers_every_failure_boundary(
     atomic, unlink = desktop.atomic_write_text, Path.unlink
 
     def fail_write(path: Path, content: str):
-        value = json.loads(content)
+        value = decode_object(content)
         step = (
             "intent"
             if path == record
@@ -407,7 +408,10 @@ def test_disconnect_recovers_every_failure_boundary(
             else "mode"
             if path == mode(tmp_path)
             else "selection"
-            if any(e["id"] == desktop.FCC_ID for e in value.get("entries", []))
+            if any(
+                object_payload(e)["id"] == desktop.FCC_ID
+                for e in array_payload(value.get("entries", []))
+            )
             else "metadata"
         )
         if step == failure:

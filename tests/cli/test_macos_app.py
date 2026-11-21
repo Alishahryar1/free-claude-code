@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from free_claude_code.cli import macos_app
+from free_claude_code.core.json_types import JsonObject
 
 
 @pytest.fixture
@@ -131,7 +132,7 @@ def test_complete_bundle_is_signed_before_publication(
     assert app == home / "Applications/Free Claude Code.app"
     contents = app / "Contents"
     with (contents / "Info.plist").open("rb") as stream:
-        info = plistlib.load(stream)
+        info: JsonObject = plistlib.load(stream)
     assert info["CFBundleIdentifier"] == macos_app.BUNDLE_ID
     assert info["CFBundleExecutable"] == "fcc-desktop"
     assert info["LSUIElement"] and info["LSMultipleInstancesProhibited"]

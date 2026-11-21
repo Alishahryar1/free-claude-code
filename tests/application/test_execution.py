@@ -1,7 +1,7 @@
 """Application-owned provider execution contracts."""
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import override
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,6 +14,8 @@ from free_claude_code.application.routing import (
     ProviderModelCandidate,
     ProviderModelTarget,
     ResolvedModelRoute,
+    RoutedChatRequest,
+    RoutedGeminiRequest,
     RoutedMessagesRequest,
     RoutedResponsesRequest,
 )
@@ -380,6 +382,38 @@ def _target(provider_id: str, provider_model: str) -> ProviderModelTarget:
     )
 
 
+def stream_routed_request(
+    executor: ProviderExecutor,
+    wire: str,
+    request: RoutedChatRequest
+    | RoutedGeminiRequest
+    | RoutedMessagesRequest
+    | RoutedResponsesRequest,
+    *,
+    raw_log_payload: Callable[[], object],
+    request_id: str,
+) -> AsyncIterator[StreamOutput]:
+    if wire == "messages":
+        assert isinstance(request, RoutedMessagesRequest)
+        return executor.stream_messages(
+            request, raw_log_payload=raw_log_payload, request_id=request_id
+        )
+    if wire == "responses":
+        assert isinstance(request, RoutedResponsesRequest)
+        return executor.stream_responses(
+            request, raw_log_payload=raw_log_payload, request_id=request_id
+        )
+    if wire == "gemini":
+        assert isinstance(request, RoutedGeminiRequest)
+        return executor.stream_gemini(
+            request, raw_log_payload=raw_log_payload, request_id=request_id
+        )
+    assert wire == "chat" and isinstance(request, RoutedChatRequest)
+    return executor.stream_chat(
+        request, raw_log_payload=raw_log_payload, request_id=request_id
+    )
+
+
 def _routed_request(
     *fallbacks: ProviderModelTarget,
 ) -> RoutedMessagesRequest:
@@ -471,7 +505,9 @@ async def test_fallback_receives_its_own_cached_capability_in_stream(
     route = _routed_request if ingress == "messages" else _routed_responses_request
     output = [
         event
-        async for event in getattr(executor, f"stream_{ingress}")(
+        async for event in stream_routed_request(
+            executor,
+            ingress,
             route(_target("fallback", "fallback-model")),
             raw_log_payload=dict,
             request_id="capability-fallback",

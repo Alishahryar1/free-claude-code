@@ -5,6 +5,7 @@ from free_claude_code.config.loader import compose_settings_snapshot
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.providers.runtime.config import build_provider_config
 from tests.api.support import create_test_app
+from tests.wire_payload import array_payload, object_payload, response_object
 
 
 @pytest.mark.parametrize(
@@ -40,7 +41,10 @@ def test_admin_exposes_only_resource_region_and_local_base_urls():
     ) as client:
         response = client.get("/admin/api/config")
     assert response.status_code == 200
-    keys = {field["key"] for field in response.json()["fields"]}
+    keys = {
+        object_payload(field)["key"]
+        for field in array_payload(response_object(response)["fields"])
+    }
     assert not keys.intersection(
         {
             "TOKENROUTER_BASE_URL",

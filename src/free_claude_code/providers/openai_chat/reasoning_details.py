@@ -3,7 +3,7 @@
 from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TypeGuard
 
 from free_claude_code.core.history_replay import (
     ReplayRecord,
@@ -11,7 +11,7 @@ from free_claude_code.core.history_replay import (
     protected_reasoning,
     readable_reasoning,
 )
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, wire_field
 
 from .stream_output import ChatStreamOutput
 
@@ -19,7 +19,7 @@ from .stream_output import ChatStreamOutput
 @dataclass(slots=True)
 class _ReasoningGroup:
     replay_owner: int
-    details: list[dict[str, Any]] = field(default_factory=list)
+    details: list[JsonObject] = field(default_factory=list)
     slots: dict[tuple[object, object], int] = field(default_factory=dict)
     native_parts: list[str] = field(default_factory=list)
     native_fields: dict[str, list[str]] = field(default_factory=dict)
@@ -56,7 +56,7 @@ class StructuredReasoningStream:
 
     def events(
         self,
-        delta: Any,
+        delta: object,
         output: ChatStreamOutput,
         *,
         native_reasoning: str | None,
@@ -89,7 +89,7 @@ class StructuredReasoningStream:
             return
         if group.native_primary is None:
             if any(
-                _field(detail, "type") == "reasoning.text"
+                wire_field(detail, "type") == "reasoning.text"
                 and _reasoning_detail_text(detail)
                 for detail in details
             ):
@@ -115,7 +115,7 @@ class StructuredReasoningStream:
         visible_parts: list[tuple[tuple[str, int], str, bool]] = []
         for detail in details:
             if isinstance(detail, Mapping):
-                value = deepcopy(dict(detail))
+                value: JsonObject = deepcopy(dict(detail))
                 identity = value.get("index", value.get("id"))
                 key = (identity, value.get("type"))
                 if isinstance(identity, str | int) and key in group.slots:
@@ -133,9 +133,9 @@ class StructuredReasoningStream:
                                 "signature",
                             }
                             and isinstance(part, str)
-                            and isinstance(current.get(name), str)
+                            and isinstance(previous := current.get(name), str)
                         ):
-                            current[name] += part
+                            current[name] = previous + part
                         else:
                             current[name] = part
                 else:
@@ -153,7 +153,7 @@ class StructuredReasoningStream:
                         (
                             ("detail", slot),
                             text,
-                            _field(detail, "type") == "reasoning.summary",
+                            wire_field(detail, "type") == "reasoning.summary",
                         )
                     )
         for key, text, summary in visible_parts:
@@ -352,16 +352,16 @@ def _native_record(group: _ReasoningGroup) -> JsonObject:
     return native
 
 
-def _reasoning_details(delta: Any) -> Sequence[Any]:
-    details = _field(delta, "reasoning_details")
+def _reasoning_details(delta: object) -> Sequence[object]:
+    details = wire_field(delta, "reasoning_details")
     if details is None:
-        extra = _field(delta, "model_extra")
+        extra = wire_field(delta, "model_extra")
         if isinstance(extra, Mapping):
             details = extra.get("reasoning_details")
     return details if _is_sequence(details) else ()
 
 
-def _reasoning_detail_text(detail: Any) -> str | None:
+def _reasoning_detail_text(detail: object) -> str | None:
     if isinstance(detail, Mapping) and detail.get("type") == "reasoning.summary":
         return (
             "".join(
@@ -370,18 +370,18 @@ def _reasoning_detail_text(detail: Any) -> str | None:
             )
             or None
         )
-    kind = str(_field(detail, "type") or "").lower()
+    kind = str(wire_field(detail, "type") or "").lower()
     if "encrypted" in kind or "redacted" in kind:
         return None
     for key in ("text", "content", "reasoning"):
-        value = _field(detail, key)
+        value = wire_field(detail, key)
         if isinstance(value, str) and value:
             return value
     return None
 
 
-def _reasoning_detail_opaque(detail: Any) -> list[str]:
-    kind = str(_field(detail, "type") or "").lower()
+def _reasoning_detail_opaque(detail: object) -> list[str]:
+    kind = str(wire_field(detail, "type") or "").lower()
     keys = (
         ("data", "signature")
         if "encrypted" in kind or "redacted" in kind
@@ -390,17 +390,13 @@ def _reasoning_detail_opaque(detail: Any) -> list[str]:
         else ()
     )
     return [
-        value for key in keys if isinstance(value := _field(detail, key), str) and value
+        value
+        for key in keys
+        if isinstance(value := wire_field(detail, key), str) and value
     ]
 
 
-def _field(item: Any, name: str) -> Any:
-    if isinstance(item, Mapping):
-        return item.get(name)
-    return getattr(item, name, None)
-
-
-def _is_sequence(value: Any) -> bool:
+def _is_sequence(value: object) -> TypeGuard[Sequence[object]]:
     return isinstance(value, Sequence) and not isinstance(
         value, str | bytes | bytearray
     )

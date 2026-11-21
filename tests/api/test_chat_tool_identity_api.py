@@ -15,7 +15,7 @@ from free_claude_code.application.response_collection import (
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.stream_contracts import SSEEvent, parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.providers.google_openai import GoogleOpenAIProvider
 from free_claude_code.providers.vertex.client import _PROFILE as GOOGLE_PROFILE
 from tests.api.support import create_test_app
@@ -25,7 +25,14 @@ from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_chat_tool_identity import call
 from tests.providers.test_history_transports import _harness, _saved_reply
 from tests.providers.test_native_tool_arguments import tool_events
-from tests.wire_payload import object_array
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+    response_object,
+    string_payload,
+)
 
 
 def chat_chunk(delta: JsonObject, finish: str | None = None):
@@ -53,7 +60,7 @@ def google_compat_api_response(
     )
 
     def reply(request: httpx2.Request):
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         return httpx2.Response(
             200, headers={"content-type": "text/event-stream"}, content=upstream
         )
@@ -171,9 +178,13 @@ def test_google_compat_parallel_calls_reach_public_api(
 
     if not streaming:
         values = [
-            (item["id"], item["name"], item["input"])
-            for item in response.json()["content"]
-            if item["type"] == "tool_use"
+            (
+                object_payload(item)["id"],
+                object_payload(item)["name"],
+                object_payload(item)["input"],
+            )
+            for item in array_payload(response_object(response)["content"])
+            if object_payload(item)["type"] == "tool_use"
         ]
     elif wire == "messages":
         calls = {}
@@ -182,25 +193,33 @@ def test_google_compat_parallel_calls_reach_public_api(
         for event in events:
             data = event.data
             block = data.get("content_block", {})
-            if block.get("type") == "tool_use":
+            if object_payload(block).get("type") == "tool_use":
                 calls[data["index"]] = {
-                    "id": block["id"],
-                    "name": block["name"],
+                    "id": object_payload(block)["id"],
+                    "name": object_payload(block)["name"],
                     "arguments": "",
                 }
-            if data.get("delta", {}).get("type") == "input_json_delta":
-                calls[data["index"]]["arguments"] += data["delta"]["partial_json"]
+            if object_payload(data.get("delta", {})).get("type") == "input_json_delta":
+                calls[data["index"]]["arguments"] += string_payload(
+                    object_payload(data["delta"])["partial_json"]
+                )
         values = [
-            (item["id"], item["name"], json.loads(item["arguments"]))
+            (item["id"], item["name"], load_json_value(item["arguments"]))
             for item in calls.values()
         ]
     else:
         events = parse_sse_text(response.text)
         assert events[-1].event == "response.completed"
         values = [
-            (item["call_id"], item["name"], json.loads(item["arguments"]))
-            for item in events[-1].data["response"]["output"]
-            if item["type"] == "function_call"
+            (
+                object_payload(item)["call_id"],
+                object_payload(item)["name"],
+                load_json_value(string_payload(object_payload(item)["arguments"])),
+            )
+            for item in array_payload(
+                object_payload(events[-1].data["response"])["output"]
+            )
+            if object_payload(item)["type"] == "function_call"
         ]
     assert [(name, arguments) for _, name, arguments in values] == [
         ("read", {"path": "a"}),
@@ -209,7 +228,7 @@ def test_google_compat_parallel_calls_reach_public_api(
     assert len({tool_id for tool_id, _, _ in values}) == 2
     for (tool_id, _, _), expected_id in zip(values, expected_ids, strict=True):
         if expected_id is None:
-            assert tool_id.startswith("tool_")
+            assert string_payload(tool_id).startswith("tool_")
         else:
             assert tool_id == expected_id
 
@@ -263,22 +282,60 @@ def test_google_compat_unresolvable_calls_cannot_complete(
         assert "call_a" not in response.text and "call_b" not in response.text
     else:
         assert response.status_code == 502
-        assert isinstance(response.json().get("error"), dict)
+        assert isinstance(response_object(response).get("error"), dict)
 
 
 def completed_arguments(events: list[SSEEvent], wire: str):
     if wire == "messages":
         return "".join(
-            event.data["delta"]["partial_json"]
+            string_payload(object_payload(event.data["delta"])["partial_json"])
             for event in events
-            if event.data.get("delta", {}).get("type") == "input_json_delta"
+            if object_payload(event.data.get("delta", {})).get("type")
+            == "input_json_delta"
         )
     return "".join(
-        event.data["item"]["arguments"]
+        string_payload(object_payload(event.data["item"])["arguments"])
         for event in events
         if event.event == "response.output_item.done"
-        and event.data["item"]["type"] == "function_call"
+        and object_payload(event.data["item"])["type"] == "function_call"
     )
+
+
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize(
+    "metadata", [[], "", False, "placeholder", {"google": {"thought_signature": "sig"}}]
+)
+def test_optional_metadata_does_not_prevent_tool_completion(
+    monkeypatch: pytest.MonkeyPatch, wire: str, metadata: JsonValue
+):
+    arguments = '{"path":"out"}'
+    tool = call(arguments=arguments)
+    tool["extra_content"] = metadata
+    response, sent = google_compat_api_response(
+        monkeypatch,
+        [chat_chunk({"tool_calls": [tool]}), chat_chunk({}, "tool_calls")],
+        wire,
+        streaming=True,
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(sent) == 1
+    events = parse_sse_text(response.text)
+    assert events[-1].event == (
+        "message_stop" if wire == "messages" else "response.completed"
+    )
+    assert completed_arguments(events, wire) == arguments
+    if wire == "messages":
+        block = next(
+            object_payload(event.data["content_block"])
+            for event in events
+            if event.event == "content_block_start"
+            and object_payload(event.data["content_block"])["type"] == "tool_use"
+        )
+        if isinstance(metadata, dict):
+            assert block["extra_content"] == metadata
+        else:
+            assert "extra_content" not in block
 
 
 def ambiguous_events(
@@ -386,7 +443,7 @@ async def test_public_identity_failure_respects_delivery_stop_and_budget(
             in {"response.function_call_arguments.done", "response.output_item.done"}
             and (
                 event.event != "response.output_item.done"
-                or event.data["item"]["type"] == "function_call"
+                or object_payload(event.data["item"])["type"] == "function_call"
             )
             for event in events
         ) == (stop == "before" and wire == "responses")

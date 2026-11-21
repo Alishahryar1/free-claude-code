@@ -11,7 +11,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Iter
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import httpx
 import pytest
@@ -25,7 +25,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     parse_sse_lines,
     text_content,
 )
-from free_claude_code.core.json_types import JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.harnesses.claude import build_claude_proxy_env
 from free_claude_code.messaging.models import IncomingMessage, MessageScope
 from free_claude_code.messaging.voice import VoiceCancellationResult
@@ -309,13 +309,22 @@ class ClientProtocolDriver:
         )
 
 
+class _SentMessage(TypedDict):
+    chat_id: str
+    message_id: str
+    text: str
+    reply_to: str | None
+    parse_mode: str | None
+    message_thread_id: str | None
+
+
 class FakePlatform:
     """In-memory platform that exercises the real message handler."""
 
     def __init__(self, name: str) -> None:
         self.name = name
         self.handler: Callable[[IncomingMessage], Awaitable[None]] | None = None
-        self.sent: list[dict[str, Any]] = []
+        self.sent: list[_SentMessage] = []
         self.edits: list[dict[str, Any]] = []
         self.deletes: list[dict[str, Any]] = []
         self._counter = 0
@@ -650,7 +659,8 @@ class FakePlatformDriver:
         snapshot = await self.workflow.tree_queue.snapshot()
         for tree in snapshot.trees.values():
             for node in tree.nodes.values():
-                if node.get("state") in {"pending", "in_progress"}:
+                state: object = node.get("state")
+                if state in ("pending", "in_progress"):
                     return False
         return True
 
@@ -687,7 +697,7 @@ def echo_tool_schema() -> dict[str, Any]:
 
 
 def assistant_content_from_events(events: list[SSEEvent]) -> list[dict[str, Any]]:
-    blocks: dict[int, dict[str, Any]] = {}
+    blocks: dict[int, JsonObject] = {}
     block_order: list[int] = []
     for event in events:
         if event.event == "content_block_start":
@@ -722,7 +732,7 @@ def assistant_content_from_events(events: list[SSEEvent]) -> list[dict[str, Any]
             partial = str(block.pop("_partial_json", ""))
             if partial:
                 try:
-                    block["input"] = json.loads(partial)
+                    block["input"] = load_json_value(partial)
                 except json.JSONDecodeError:
                     block["input"] = dict[str, JsonValue]()
         content.append(block)

@@ -4,6 +4,7 @@ import pytest
 
 from free_claude_code.core.continuation_stream import ContinuationStream
 from free_claude_code.core.delivered_response import DeliveredResponse
+from tests.wire_payload import object_array, object_payload
 
 
 @pytest.mark.parametrize("summary", [False, True])
@@ -139,7 +140,7 @@ def test_empty_blocks_and_usage_updates_do_not_finish_overlap():
             "delta": {"type": "text_delta", "text": "o world."},
         }
     )
-    assert events[0]["delta"]["text"] == "world."
+    assert object_payload(events[0]["delta"])["text"] == "world."
 
 
 @pytest.mark.parametrize("seed", ["added", "done"])
@@ -204,4 +205,6 @@ def test_handoff_fallback_preserves_already_closed_item_status(
     result = continuation.finalize(
         continuation.prepare(response.handoff_events()[0])[0]
     )["response"]
-    assert [item["status"] for item in result["output"]] == ["incomplete", "completed"]
+    assert [
+        item["status"] for item in object_array(object_payload(result)["output"])
+    ] == ["incomplete", "completed"]

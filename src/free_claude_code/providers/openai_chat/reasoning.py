@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from free_claude_code.core.json_types import JsonValue
 from free_claude_code.core.reasoning import (
     ReasoningControl,
     ReasoningEffort,
@@ -159,14 +160,14 @@ class SplitReasoningOutput:
 
 
 def _extra_body(body: dict[str, Any]) -> dict[str, Any]:
-    value = body.setdefault("extra_body", {})
+    value: JsonValue = body.setdefault("extra_body", {})
     if not isinstance(value, dict):
         raise TypeError("OpenAI extra_body must be an object.")
     return value
 
 
 def _nested_dict(container: dict[str, Any], key: str) -> dict[str, Any]:
-    value = container.setdefault(key, {})
+    value: JsonValue = container.setdefault(key, {})
     if not isinstance(value, dict):
         raise TypeError(f"{key} must be an object.")
     return value

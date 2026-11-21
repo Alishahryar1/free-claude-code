@@ -184,8 +184,8 @@ class TestCreateMessagingComponents:
         assert second is not None
         assert first.startup_notice is None
         assert second.startup_notice is None
-        first_limiter = runtime_cls.call_args_list[0].kwargs["limiter"]
-        second_limiter = runtime_cls.call_args_list[1].kwargs["limiter"]
+        first_limiter: object = runtime_cls.call_args_list[0].kwargs["limiter"]
+        second_limiter: object = runtime_cls.call_args_list[1].kwargs["limiter"]
         assert first_limiter is not second_limiter
         assert runtime_cls.call_args_list[0].kwargs["transcriber"] is None
         assert runtime_cls.call_args_list[1].kwargs["transcriber"] is None

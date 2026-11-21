@@ -17,6 +17,7 @@ from free_claude_code.providers.mistral import MistralProvider
 from tests.api.support import create_test_app, provider_manager_for_app
 from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_opencode import _chat_event_stream
+from tests.wire_payload import response_object
 
 
 @asynccontextmanager
@@ -159,7 +160,7 @@ async def test_nonstream_recovery_keeps_affinity(session_id: str | None):
         )
         assert response.status_code == 200
         assert len(requests) == 2
-        assert "recovered" in str(response.json()["content"])
+        assert "recovered" in str(response_object(response)["content"])
         assert [request.headers.get("x-affinity") for request in requests] == [
             session_id,
             session_id,

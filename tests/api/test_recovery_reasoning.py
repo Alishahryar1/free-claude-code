@@ -89,8 +89,10 @@ async def test_nullable_reasoning_content_preserves_healthy_response(
     assert len(bodies) == 1
     assert_completed(parse_sse_text(raw), wire)
     if wire == "responses":
-        item = parse_sse_text(raw)[-1].data["response"]["output"][0]
-        assert item["content"] is None
+        item = array_payload(
+            object_payload(parse_sse_text(raw)[-1].data["response"])["output"]
+        )[0]
+        assert object_payload(item)["content"] is None
         assert item == object_array(object_payload(events[-1]["response"])["output"])[0]
 
 
@@ -209,7 +211,14 @@ async def test_nullable_reasoning_in_terminal_only_continuation_is_output():
     assert len(bodies) == 2
     events = parse_sse_text(raw)
     assert_completed(events, "responses")
-    assert events[-1].data["response"]["output"][-1]["summary"][0]["text"] == "Find 17."
+    assert (
+        object_array(
+            object_array(object_payload(events[-1].data["response"])["output"])[-1][
+                "summary"
+            ]
+        )[0]["text"]
+        == "Find 17."
+    )
 
 
 @pytest.mark.asyncio
@@ -233,16 +242,22 @@ async def test_synthetic_reasoning_closure_preserves_followup_history(
         )
         events = parse_sse_text(raw)
         assert_completed(events, "responses")
-        output = events[-1].data["response"]["output"]
-        history = [*deepcopy(output), {"role": "user", "content": "Next question."}]
+        output = object_payload(events[-1].data["response"])["output"]
+        history = [
+            *deepcopy(array_payload(output)),
+            {"role": "user", "content": "Next question."},
+        ]
         await delivered(send("responses", history), "responses")
     assert len(bodies) == 3
-    native = output[0]
-    assert native["type"] == "reasoning"
-    assert native["id"] == object_payload(first[1]["item"])["id"]
-    assert native["status"] == "completed"
-    assert native[field][0]["text"] == seeded + "Find 17."
-    assert native["extension"] == object_payload(first[1]["item"])["extension"]
+    native = array_payload(output)[0]
+    assert object_payload(native)["type"] == "reasoning"
+    assert object_payload(native)["id"] == object_payload(first[1]["item"])["id"]
+    assert object_payload(native)["status"] == "completed"
+    assert object_array(object_payload(native)[field])[0]["text"] == seeded + "Find 17."
+    assert (
+        object_payload(native)["extension"]
+        == object_payload(first[1]["item"])["extension"]
+    )
     assert str(bodies[2]).count(seeded + "Find 17.") == 1
     assert "previous provider stream" not in str(bodies[2])
     assert history[:-1] == output
@@ -269,7 +284,7 @@ async def test_readable_reasoning_survives_repeated_continuation_and_followup(
         assert public_text(events, wire) == "First middle last."
         assert "Find 17." in str(bodies[2]["input"])
         if wire == "responses":
-            output = events[-1].data["response"]["output"]
+            output = object_payload(events[-1].data["response"])["output"]
         else:
 
             async def chunks():
@@ -279,7 +294,11 @@ async def test_readable_reasoning_survives_repeated_continuation_and_followup(
             assert error is None and stopped
             output = [{"role": "assistant", "content": message["content"]}]
         await delivered(
-            send(wire, [*output, {"role": "user", "content": "Next question."}]), wire
+            send(
+                wire,
+                [*array_payload(output), {"role": "user", "content": "Next question."}],
+            ),
+            wire,
         )
     assert len(bodies) == 4
     assert str(bodies[3]).count("Find 17.") == 1
@@ -354,12 +373,14 @@ async def test_native_failure_snapshot_preserves_error_and_blocks_recovery(
     result = (
         events[-1].data["error"]
         if wire == "messages"
-        else events[-1].data["response"]["error"]
+        else object_payload(events[-1].data["response"])["error"]
     )
-    assert result["type"] == error["type"]
+    assert object_payload(result)["type"] == error["type"]
     if failure == "failed_server":
-        assert error["message"] in result["message"]
+        assert string_payload(error["message"]) in string_payload(
+            object_payload(result)["message"]
+        )
     if wire == "responses":
-        assert result["code"] == error["code"]
+        assert object_payload(result)["code"] == error["code"]
         if failure != "incomplete_context":
             assert result == error

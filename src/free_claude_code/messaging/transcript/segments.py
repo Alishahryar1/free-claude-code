@@ -3,12 +3,11 @@
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
 
 from .context import RenderCtx
 
 
-def safe_json_dumps(obj: Any) -> str:
+def safe_json_dumps(obj: object) -> str:
     try:
         return json.dumps(obj, indent=2, ensure_ascii=False, sort_keys=True)
     except Exception:
@@ -96,7 +95,7 @@ class ToolResultSegment(Segment):
     def __init__(
         self,
         tool_use_id: str,
-        content: Any,
+        content: object,
         *,
         name: str | None = None,
         is_error: bool = False,

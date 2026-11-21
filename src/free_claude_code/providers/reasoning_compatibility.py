@@ -1,6 +1,5 @@
 """Prepare tolerant computation intent without guessing backend identity."""
 
-import json
 import re
 from collections.abc import Callable, Iterator, Mapping
 from copy import deepcopy
@@ -10,6 +9,7 @@ from typing import Any
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.diagnostics import extract_upstream_error_detail
+from free_claude_code.core.json_types import JsonObject, json_object, load_json_value
 from free_claude_code.core.reasoning import (
     ReasoningCapability,
     ReasoningControl,
@@ -97,13 +97,13 @@ class ReasoningCorrection:
             or (self.provider_rejection is not None and self.provider_rejection(error))
         ):
             return None
-        result = deepcopy(body)
+        result: JsonObject = deepcopy(body)
         for path in present:
             parents = []
             current = result
             for key in path[:-1]:
                 parents.append((current, key))
-                current = current[key]
+                current = json_object(current[key])
             del current[path[-1]]
             for parent, key in reversed(parents):
                 if not parent[key]:
@@ -115,7 +115,7 @@ class ReasoningCorrection:
         )
         limit_body = result
         for key in limit_path[:-1]:
-            limit_body = limit_body.setdefault(key, {})
+            limit_body = json_object(limit_body.setdefault(key, {}))
         limit_field = limit_path[-1]
         if self.normal_max_tokens is None:
             limit_body.pop(limit_field, None)
@@ -136,7 +136,7 @@ def _disable_rejected(error: Exception, field: tuple[str, ...]) -> bool:
         return False
     text = detail.body_text or detail.exception_text or ""
     try:
-        payload = json.loads(text)
+        payload = load_json_value(text)
     except ValueError:
         payload = {"message": text}
     return reasoning_control_rejected(payload, field)
@@ -178,8 +178,10 @@ def _record_rejects_control(
     param = record.get("param", record.get("loc"))
     rejected = r"(?:not supported|unsupported|unknown parameter|unrecognized|extra inputs are not permitted|must be one of|not allowed|invalid value)"
     if param is not None:
-        parts = re.findall(r"[a-z_][a-z_0-9]*", str(param).lower())
-        while parts and parts[0] in {"body", "request", "extra_body"}:
+        parts = [
+            match[0] for match in re.finditer(r"[a-z_][a-z_0-9]*", str(param).lower())
+        ]
+        while parts and parts[0] in ("body", "request", "extra_body"):
             parts.pop(0)
         expected = [part.lower() for part in field if part != "extra_body"]
         matches = parts[: len(expected)] == expected or parts == [field[-1].lower()]

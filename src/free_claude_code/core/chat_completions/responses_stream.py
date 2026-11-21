@@ -1,7 +1,6 @@
 """Project Responses events directly to Chat, preserving typed reasoning."""
 
 from copy import deepcopy
-from typing import Any
 from uuid import uuid4
 
 from ..failures import ExecutionFailure
@@ -11,7 +10,8 @@ from ..history_replay import (
     encode_replay,
     protected_reasoning,
 )
-from ..json_types import JsonObject
+from ..json_types import JsonObject, JsonValue, json_object, json_objects
+from ..openai_responses import responses_event_index
 from .response import ChatOutput, chat_failure
 
 
@@ -31,10 +31,10 @@ class ChatResponsesStream:
         self._origin = origin
         self._reserved = set(reserved_tool_ids)
         self._include_thoughts = include_thoughts
-        self._items: dict[int, dict[str, Any]] = {}
+        self._items: dict[int, JsonObject] = {}
         self._text: dict[tuple[int, str, int], str] = {}
         self._arguments: dict[int, str] = {}
-        self._completed: dict[int, dict[str, Any]] = {}
+        self._completed: dict[int, JsonObject] = {}
         self._calls = 0
         self._emitted_parts: set[tuple[int, str, int]] = set()
 
@@ -46,16 +46,43 @@ class ChatResponsesStream:
         return self._output.start()
 
     def feed(self, event_type: str, payload: JsonObject) -> list[str]:
-        data: dict[str, Any] = dict(payload)
+        data = payload
         if self.completed:
             raise chat_failure("Responses event arrived after completion")
-        index = data.get("output_index", 0)
         if event_type in {
             "response.created",
             "response.in_progress",
             "response.queued",
         }:
             return []
+        if event_type in {"response.completed", "response.incomplete"}:
+            response = json_object(data.get("response", {}))
+            events: list[str] = []
+            for position, item in enumerate(json_objects(response.get("output", []))):
+                index = next(
+                    (
+                        i
+                        for i, known in self._items.items()
+                        if item.get("id") and known.get("id") == item["id"]
+                    ),
+                    position,
+                )
+                events.extend(self._item(index, item, complete=True))
+            reason = "tool_calls" if self._calls else "stop"
+            if event_type == "response.incomplete":
+                incomplete = json_object(response.get("incomplete_details") or {}).get(
+                    "reason"
+                )
+                if incomplete not in ("max_output_tokens", "content_filter"):
+                    raise chat_failure(
+                        f"Chat cannot represent Responses incomplete reason {incomplete}"
+                    )
+                reason = (
+                    "length" if incomplete == "max_output_tokens" else "content_filter"
+                )
+            events.extend(self._output.finish(reason, _usage(response.get("usage"))))
+            return events
+        index = responses_event_index(data.get("output_index", 0))
         if event_type in {"response.output_item.added", "response.output_item.done"}:
             item = data.get("item")
             if not isinstance(item, dict):
@@ -68,8 +95,8 @@ class ChatResponsesStream:
             "response.reasoning_summary_text.delta",
         }:
             field = self._text_field(event_type)
-            position = data.get(
-                "summary_index" if field == "summary" else "content_index", 0
+            position = responses_event_index(
+                data.get("summary_index" if field == "summary" else "content_index", 0)
             )
             value = data.get("delta")
             if not isinstance(value, str):
@@ -102,7 +129,11 @@ class ChatResponsesStream:
             return self._snapshot_text(
                 index,
                 field,
-                data.get("summary_index" if field == "summary" else "content_index", 0),
+                responses_event_index(
+                    data.get(
+                        "summary_index" if field == "summary" else "content_index", 0
+                    )
+                ),
                 data.get("refusal" if field == "refusal" else "text", ""),
             )
         if event_type in {
@@ -111,36 +142,16 @@ class ChatResponsesStream:
             "response.reasoning_summary_part.added",
             "response.reasoning_summary_part.done",
         }:
+            field = self._text_field(event_type)
             return self._part(
                 index,
-                data.get("summary_index", data.get("content_index", 0)),
-                data.get("part", {}),
-            )
-        if event_type in {"response.completed", "response.incomplete"}:
-            response = data.get("response", {})
-            events: list[str] = []
-            for position, item in enumerate(response.get("output", [])):
-                index = next(
-                    (
-                        i
-                        for i, known in self._items.items()
-                        if item.get("id") and known.get("id") == item["id"]
-                    ),
-                    position,
-                )
-                events.extend(self._item(index, item, complete=True))
-            reason = "tool_calls" if self._calls else "stop"
-            if event_type == "response.incomplete":
-                incomplete = (response.get("incomplete_details") or {}).get("reason")
-                if incomplete not in {"max_output_tokens", "content_filter"}:
-                    raise chat_failure(
-                        f"Chat cannot represent Responses incomplete reason {incomplete}"
+                responses_event_index(
+                    data.get(
+                        "summary_index" if field == "summary" else "content_index", 0
                     )
-                reason = (
-                    "length" if incomplete == "max_output_tokens" else "content_filter"
-                )
-            events.extend(self._output.finish(reason, _usage(response.get("usage"))))
-            return events
+                ),
+                json_object(data.get("part", {})),
+            )
         raise chat_failure(
             f"Chat cannot represent upstream Responses event {event_type}"
         )
@@ -177,7 +188,7 @@ class ChatResponsesStream:
         )
 
     def _snapshot_text(
-        self, index: int, field: str, position: int, text: str
+        self, index: int, field: str, position: int, text: object
     ) -> list[str]:
         if not isinstance(text, str):
             raise chat_failure("Responses snapshot text must be a string")
@@ -192,9 +203,14 @@ class ChatResponsesStream:
             else []
         )
 
-    def _part(self, index: int, position: int, part: dict[str, Any]) -> list[str]:
+    def _part(self, index: int, position: int, part: JsonObject) -> list[str]:
         kind = part.get("type")
-        if kind not in {"output_text", "refusal", "summary_text", "reasoning_text"}:
+        if not isinstance(kind, str) or kind not in {
+            "output_text",
+            "refusal",
+            "summary_text",
+            "reasoning_text",
+        }:
             raise chat_failure(f"Chat cannot represent Responses content {kind}")
         if part.get("annotations"):
             raise chat_failure("Chat cannot represent native Responses annotations")
@@ -205,7 +221,7 @@ class ChatResponsesStream:
             part.get("refusal" if kind == "refusal" else "text", ""),
         )
 
-    def _item(self, index: int, item: dict[str, Any], *, complete: bool) -> list[str]:
+    def _item(self, index: int, item: JsonObject, *, complete: bool) -> list[str]:
         if index in self._completed:
             if self._completed[index] != item:
                 raise chat_failure("Responses changed a completed output item")
@@ -215,9 +231,9 @@ class ChatResponsesStream:
         if complete:
             self._completed[index] = deepcopy(item)
         events: list[str] = []
-        if kind in {"message", "reasoning"}:
+        if kind in ("message", "reasoning"):
             for field in ("summary", "content"):
-                for position, part in enumerate(item.get(field) or []):
+                for position, part in enumerate(json_objects(item.get(field) or [])):
                     events.extend(self._part(index, position, part))
             if complete and kind == "reasoning" and protected_reasoning(item):
                 events.extend(
@@ -229,11 +245,11 @@ class ChatResponsesStream:
             return events
         if kind != "function_call":
             raise chat_failure(f"Chat cannot represent Responses output {kind}")
-        if not complete or item.get("status") in {
+        if not complete or item.get("status") in (
             "in_progress",
             "incomplete",
             "failed",
-        }:
+        ):
             return []
         name = item.get("name", "")
         if not isinstance(name, str) or not name:
@@ -260,7 +276,7 @@ class ChatResponsesStream:
         return None
 
 
-def _usage(value: object) -> dict[str, Any]:
+def _usage(value: JsonValue) -> JsonObject:
     if not isinstance(value, dict):
         return {}
     return {

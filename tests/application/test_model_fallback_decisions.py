@@ -149,7 +149,8 @@ async def _run(
                 (payload["recovery_action"], payload["recovery_reason"])
             )
         elif payload["event"] == "free_claude_code.model_fallback.selected":
-            outcome.selected.append(payload["candidate_index"])
+            index: int = payload["candidate_index"]
+            outcome.selected.append(index)
 
     sink_id = logger.add(sink, level="DEBUG")
     try:

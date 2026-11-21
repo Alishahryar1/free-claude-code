@@ -2,9 +2,10 @@ import pytest
 
 from free_claude_code.core.anthropic.tool_calls import MessagesToolCallBuffer
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject, JsonValue
 
 
-def event(kind: str, **data: object):
+def event(kind: str, **data: JsonValue) -> tuple[str, JsonObject]:
     return kind, {"type": kind, **data}
 
 

@@ -12,6 +12,7 @@ from .events import (
     OPENAI_RESPONSES_SSE_HEADERS,
     committed_response_failure_frame,
     format_response_sse_event,
+    responses_event_index,
 )
 from .ids import (
     new_call_id,
@@ -96,6 +97,7 @@ __all__ = [
     "openai_error_type_for_failure",
     "openai_failure_payload",
     "reasoning_output_item",
+    "responses_event_index",
     "responses_reasoning_config",
     "responses_reasoning_policy",
     "responses_stream_failure_from_event",

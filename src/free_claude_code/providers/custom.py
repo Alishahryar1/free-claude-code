@@ -13,6 +13,7 @@ from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.core.anthropic import MessagesRequest, ReasoningReplayMode
 from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.gemini import GeminiRequest
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     responses_reasoning_policy,
@@ -234,12 +235,13 @@ class CustomProvider(BaseProvider):
             self._definition.reasoning_format == "provider_default"
             and self._messages is None
         ):
+            output_config: JsonObject = request.output_config or {}
             request = request.model_copy(
                 update={
                     "thinking": None,
                     "output_config": {
                         key: value
-                        for key, value in (request.output_config or {}).items()
+                        for key, value in output_config.items()
                         if key != "effort"
                     },
                 }

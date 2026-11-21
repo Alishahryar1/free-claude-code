@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from free_claude_code.messaging.models import IncomingMessage
 from free_claude_code.messaging.platforms.discord import (
     DISCORD_AVAILABLE,
     DiscordRuntime,
@@ -107,14 +108,19 @@ async def test_telegram_voice_success_invokes_handler(
         await platform._on_telegram_voice(mock_update, mock_context)
 
     mock_queue_send.assert_called_once()
-    call_args, call_kw = mock_queue_send.call_args
+    call_args, call_kw = (
+        mock_queue_send.call_args.args,
+        mock_queue_send.call_args.kwargs,
+    )
     assert "Transcribing voice note" in call_args[1]
     assert call_kw["reply_to"] == "42"
     assert call_kw["fire_and_forget"] is False
     transcriber.transcribe.assert_awaited_once()
 
     handler.assert_called_once()
-    incoming = handler.call_args[0][0]
+    assert handler.call_args is not None
+    incoming: object = handler.call_args.args[0]
+    assert isinstance(incoming, IncomingMessage)
     assert incoming.text == "Hello from voice"
     assert incoming.chat_id == "6789"
     assert incoming.platform == "telegram"

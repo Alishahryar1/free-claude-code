@@ -14,7 +14,12 @@ from free_claude_code.core.openai_responses.streaming.event_builders import (
     ResponseEventBuilder,
 )
 from tests.providers.test_history_transports import _events_for, _harness
-from tests.wire_payload import array_payload, object_payload
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 ARGUMENTS = [
     '{"path":"ok"}',
@@ -155,12 +160,14 @@ async def test_completed_native_arguments_are_transparent(
             # A Messages zero-argument call streams one empty delta after input {}.
             expected = "{}" if protocol == "messages" and not arguments else arguments
             assert events[-1].event == "response.completed"
-            call = events[-1].data["response"]["output"][0]
-            assert call["arguments"] == expected
-            assert call["call_id"] == "call_probe"
+            call = array_payload(object_payload(events[-1].data["response"])["output"])[
+                0
+            ]
+            assert object_payload(call)["arguments"] == expected
+            assert object_payload(call)["call_id"] == "call_probe"
             assert (
                 "".join(
-                    e.data["delta"]
+                    string_payload(e.data["delta"])
                     for e in events
                     if e.event == "response.function_call_arguments.delta"
                 )
@@ -171,9 +178,10 @@ async def test_completed_native_arguments_are_transparent(
             assert not any(e.event == "error" for e in events)
             assert (
                 "".join(
-                    e.data["delta"]["partial_json"]
+                    string_payload(object_payload(e.data["delta"])["partial_json"])
                     for e in events
-                    if e.data.get("delta", {}).get("type") == "input_json_delta"
+                    if object_payload(e.data.get("delta", {})).get("type")
+                    == "input_json_delta"
                 )
                 == arguments
             )
@@ -198,12 +206,12 @@ async def test_harness_tool_error_is_kept_in_next_request(
                 ]
             )
         )
-        call = first[-1].data["response"]["output"][0]
+        call = array_payload(object_payload(first[-1].data["response"])["output"])[0]
         history += [
             call,
             {
                 "type": "function_call_output",
-                "call_id": call["call_id"],
+                "call_id": object_payload(call)["call_id"],
                 "output": "Invalid arguments. Supply a path string.",
             },
         ]
@@ -226,11 +234,11 @@ async def test_harness_tool_error_is_kept_in_next_request(
             )
             assert (
                 object_payload(array_payload(sent)[-1])["tool_call_id"]
-                == call["call_id"]
+                == object_payload(call)["call_id"]
             )
             assert (
                 object_payload(array_payload(sent)[-1])["content"]
-                == history[-1]["output"]
+                == object_payload(history[-1])["output"]
             )
         else:
             assert array_payload(bodies[-1]["input"])[-2:] == history[-2:]
@@ -322,23 +330,37 @@ async def test_tool_looking_text_stays_literal_across_chunk_boundaries(
                 )
             )
         if wire == "responses":
-            items = output[-1].data["response"]["output"]
-            assert all(item["type"] == "message" for item in items)
+            items = object_payload(output[-1].data["response"])["output"]
+            assert all(
+                object_payload(item)["type"] == "message"
+                for item in array_payload(items)
+            )
             assert (
-                "".join(part["text"] for item in items for part in item["content"])
+                "".join(
+                    string_payload(part["text"])
+                    for item in array_payload(items)
+                    for part in object_array(object_payload(item)["content"])
+                )
                 == text
             )
         else:
             assert not any(
-                e.data.get("content_block", {}).get("type") == "tool_use"
+                object_payload(e.data.get("content_block", {})).get("type")
+                == "tool_use"
                 for e in output
             )
             assert (
-                "".join(e.data.get("delta", {}).get("text", "") for e in output) == text
+                "".join(
+                    string_payload(
+                        object_payload(e.data.get("delta", {})).get("text", "")
+                    )
+                    for e in output
+                )
+                == text
             )
             assert (
                 next(
-                    e.data["delta"]["stop_reason"]
+                    object_payload(e.data["delta"])["stop_reason"]
                     for e in output
                     if e.event == "message_delta"
                 )

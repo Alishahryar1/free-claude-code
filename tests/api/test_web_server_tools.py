@@ -58,6 +58,7 @@ from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.gemini.native_request import messages_to_gemini
 from free_claude_code.core.history_replay import ReplayOrigin, prepare_history
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.openai_responses.errors import ResponsesConversionError
 from free_claude_code.core.openai_responses.provider_input import (
@@ -80,7 +81,14 @@ from free_claude_code.runtime.web_tools.client import (
     _read_response_body_capped,
 )
 from free_claude_code.runtime.web_tools.egress import enforce_web_fetch_egress
+from tests.mock_calls import positional_arguments
 from tests.web_tools_support import StubWebToolsClient
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 _STRICT_EGRESS = WebFetchEgressPolicy(
     allow_private_network_targets=False,
@@ -821,20 +829,24 @@ async def test_automatic_web_search_uses_model_query_and_filters_domains(
     assert sum(event.event == "message_start" for event in events) == 1
     assert sum(event.event == "message_stop" for event in events) == 1
     starts = [event for event in events if event.event == "content_block_start"]
-    assert [start.data["content_block"]["type"] for start in starts] == [
+    assert [
+        object_payload(start.data["content_block"])["type"] for start in starts
+    ] == [
         "server_tool_use",
         "web_search_tool_result",
         "text",
     ]
-    assert starts[0].data["content_block"]["input"] == {"query": "model selected query"}
+    assert object_payload(starts[0].data["content_block"])["input"] == {
+        "query": "model selected query"
+    }
     assert (
-        starts[1].data["content_block"]["tool_use_id"]
-        == starts[0].data["content_block"]["id"]
+        object_payload(starts[1].data["content_block"])["tool_use_id"]
+        == object_payload(starts[0].data["content_block"])["id"]
     )
     message_start = next(
         event.data["message"] for event in events if event.event == "message_start"
     )
-    assert message_start["model"] == "claude-haiku-4-5-20251001"
+    assert object_payload(message_start)["model"] == "claude-haiku-4-5-20251001"
     final_usage = next(
         event.data["usage"] for event in events if event.event == "message_delta"
     )
@@ -898,25 +910,32 @@ async def test_automatic_web_search_keeps_client_tool_and_its_result(
         body = _json_body(response)
     assert body["stop_reason"] == "tool_use"
     call_id = "call_1" if selection == "search-first" else "call_0"
-    assert [block for block in body["content"] if block["type"] == "tool_use"] == [
+    assert [
+        block
+        for block in array_payload(body["content"])
+        if object_payload(block)["type"] == "tool_use"
+    ] == [
         {"type": "tool_use", "id": call_id, "name": retrieve.name, "input": arguments}
     ]
     assert HIDDEN_WEB_SEARCH_NAME not in json.dumps(body)
     assert provider.requests[0].tools is not None
     assert provider.requests[0].tools[1] == retrieve
     assert provider.requests[0].tool_choice == {"type": "any"}
-    wire = build_responses_provider_request(
+    wire: JsonObject = build_responses_provider_request(
         provider.requests[0], reasoning=ReasoningPolicy.off()
     )
-    assert [tool["name"] for tool in wire["tools"]] == [
+    tools = object_array(wire["tools"])
+    assert [tool["name"] for tool in tools] == [
         HIDDEN_WEB_SEARCH_NAME,
         retrieve.name,
     ]
-    assert wire["tools"][1]["parameters"] == retrieve.input_schema
+    assert tools[1]["parameters"] == retrieve.input_schema
     assert wire["tool_choice"] == "required"
     if selection != "client":
         search.assert_awaited_once_with("selected")
-        assert body["usage"]["server_tool_use"] == {"web_search_requests": 1}
+        assert object_payload(body["usage"])["server_tool_use"] == {
+            "web_search_requests": 1
+        }
     else:
         search.assert_not_awaited()
 
@@ -991,9 +1010,9 @@ async def test_automatic_web_search_uses_distinct_name_from_client_tool(
     search.assert_awaited_once_with("selected")
     body = _json_body(response)
     assert [
-        (block["name"], block["input"])
-        for block in body["content"]
-        if block["type"] == "tool_use"
+        (object_payload(block)["name"], object_payload(block)["input"])
+        for block in array_payload(body["content"])
+        if object_payload(block)["type"] == "tool_use"
     ] == [(HIDDEN_WEB_SEARCH_NAME, {"ref": "client-owned"})]
     assert private_name not in json.dumps(body)
 
@@ -1017,13 +1036,13 @@ async def test_automatic_web_search_restores_signed_gemini_turn(
         tool_defaults={},
         include_thoughts=True,
     )
-    search_call: dict[str, object] = {
+    search_call: JsonObject = {
         "name": HIDDEN_WEB_SEARCH_NAME,
         "args": {"query": " local hours "},
     }
     if search_id is not None:
         search_call["id"] = search_id
-    calls: list[dict[str, object]] = [
+    calls: list[JsonObject] = [
         {"functionCall": search_call},
         {
             "functionCall": {
@@ -1036,7 +1055,7 @@ async def test_automatic_web_search_restores_signed_gemini_turn(
     if not search_first:
         calls.reverse()
     calls[0]["thoughtSignature"] = "native-thought-signature"
-    native_parts = [{"text": "I'll look that up"}, *calls]
+    native_parts: list[JsonObject] = [{"text": "I'll look that up"}, *calls]
     provider = ScriptedSelectionProvider(
         presenter.feed(
             {
@@ -1069,7 +1088,9 @@ async def test_automatic_web_search_restores_signed_gemini_turn(
     body = _json_body(response)
     assert body["stop_reason"] == "tool_use"
     assert [
-        block["name"] for block in body["content"] if block["type"] == "tool_use"
+        object_payload(block)["name"]
+        for block in array_payload(body["content"])
+        if object_payload(block)["type"] == "tool_use"
     ] == ["retrieve"]
     request.messages.extend(
         [
@@ -1090,19 +1111,22 @@ async def test_automatic_web_search_restores_signed_gemini_turn(
     )
     plan = plan_automatic_web_search(request, web_tools_enabled=True)
     assert plan is not None
-    wire: Any = prepare_history(messages_to_gemini(plan.request), origin)
-    model_turn, result_turn = wire["contents"][-2:]
-    assert model_turn["parts"] == native_parts
-    responses = [part["functionResponse"] for part in result_turn["parts"]]
+    wire = prepare_history(messages_to_gemini(plan.request), origin)
+    model_turn, result_turn = array_payload(wire["contents"])[-2:]
+    assert object_payload(model_turn)["parts"] == native_parts
+    responses = [
+        object_payload(part)["functionResponse"]
+        for part in array_payload(object_payload(result_turn)["parts"])
+    ]
     names = [HIDDEN_WEB_SEARCH_NAME, "retrieve"]
-    assert [result["name"] for result in responses] == (
+    assert [object_payload(result)["name"] for result in responses] == (
         names if search_first else names[::-1]
     )
     search_response, client_response = responses if search_first else responses[::-1]
-    assert search_response.get("id") == search_id
+    assert object_payload(search_response).get("id") == search_id
     assert "https://example.com/found" in json.dumps(search_response)
-    assert client_response["id"] == "client_id"
-    assert client_response["response"] == {"output": "retrieved body"}
+    assert object_payload(client_response)["id"] == "client_id"
+    assert object_payload(client_response)["response"] == {"output": "retrieved body"}
 
 
 @pytest.mark.asyncio
@@ -1266,13 +1290,24 @@ async def test_automatic_web_search_aggregates_when_stream_false(
 
     assert isinstance(response, JSONResponse)
     body = _json_body(response)
-    assert [block["type"] for block in body["content"]] == [
+    assert [
+        object_payload(block)["type"] for block in array_payload(body["content"])
+    ] == [
         "server_tool_use",
         "web_search_tool_result",
         "text",
     ]
-    assert body["content"][1]["content"][0]["url"] == "https://example.com/json"
-    assert body["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    assert (
+        object_payload(
+            array_payload(object_payload(array_payload(body["content"])[1])["content"])[
+                0
+            ]
+        )["url"]
+        == "https://example.com/json"
+    )
+    assert object_payload(body["usage"])["server_tool_use"] == {
+        "web_search_requests": 1
+    }
     assert len(provider.requests) == 1
 
 
@@ -1301,24 +1336,41 @@ async def test_automatic_web_search_runs_multiple_calls_in_one_message(
 
     assert isinstance(response, JSONResponse)
     body = _json_body(response)
-    assert [block["type"] for block in body["content"]] == [
+    assert [
+        object_payload(block)["type"] for block in array_payload(body["content"])
+    ] == [
         "server_tool_use",
         "web_search_tool_result",
         "server_tool_use",
         "web_search_tool_result",
         "text",
     ]
-    first_use, first_result, second_use, second_result, _ = body["content"]
-    assert [first_use["input"]["query"], second_use["input"]["query"]] == [
+    first_use, first_result, second_use, second_result, _ = object_array(
+        body["content"]
+    )
+    assert [
+        object_payload(object_payload(first_use)["input"])["query"],
+        object_payload(object_payload(second_use)["input"])["query"],
+    ] == [
         "selected",
         "extra-0",
     ]
-    assert first_use["id"] != second_use["id"]
-    assert first_result["tool_use_id"] == first_use["id"]
-    assert second_result["tool_use_id"] == second_use["id"]
-    assert len(first_result["content"]) == len(second_result["content"]) == 2
+    assert object_payload(first_use)["id"] != object_payload(second_use)["id"]
+    assert (
+        object_payload(first_result)["tool_use_id"] == object_payload(first_use)["id"]
+    )
+    assert (
+        object_payload(second_result)["tool_use_id"] == object_payload(second_use)["id"]
+    )
+    assert (
+        len(array_payload(object_payload(first_result)["content"]))
+        == len(array_payload(object_payload(second_result)["content"]))
+        == 2
+    )
     assert set(seen_queries) == {"selected", "extra-0"}
-    assert body["usage"]["server_tool_use"] == {"web_search_requests": 2}
+    assert object_payload(body["usage"])["server_tool_use"] == {
+        "web_search_requests": 2
+    }
 
 
 @pytest.mark.asyncio
@@ -1344,7 +1396,9 @@ async def test_automatic_web_search_streams_ordered_multiple_calls(
     assert_anthropic_stream_contract(events)
     starts = [event for event in events if event.event == "content_block_start"]
     assert [event.data["index"] for event in starts] == list(range(5))
-    assert [event.data["content_block"]["type"] for event in starts] == [
+    assert [
+        object_payload(event.data["content_block"])["type"] for event in starts
+    ] == [
         "server_tool_use",
         "web_search_tool_result",
         "server_tool_use",
@@ -1354,7 +1408,7 @@ async def test_automatic_web_search_streams_ordered_multiple_calls(
     assert sum(event.event == "message_start" for event in events) == 1
     assert sum(event.event == "message_stop" for event in events) == 1
     assert next(
-        event.data["usage"]["server_tool_use"]
+        object_payload(event.data["usage"])["server_tool_use"]
         for event in events
         if event.event == "message_delta"
     ) == {"web_search_requests": 2}
@@ -1378,13 +1432,22 @@ async def test_automatic_web_search_max_uses_limits_current_request(
 
     assert isinstance(response, JSONResponse)
     body = _json_body(response)
-    assert body["content"][1]["content"][0]["title"] == "found"
-    assert body["content"][3]["content"] == {
+    assert (
+        object_payload(
+            array_payload(object_payload(array_payload(body["content"])[1])["content"])[
+                0
+            ]
+        )["title"]
+        == "found"
+    )
+    assert object_payload(array_payload(body["content"])[3])["content"] == {
         "type": "web_search_tool_result_error",
         "error_code": "max_uses_exceeded",
     }
     search.assert_awaited_once_with("selected")
-    assert body["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    assert object_payload(body["usage"])["server_tool_use"] == {
+        "web_search_requests": 1
+    }
 
 
 @pytest.mark.asyncio
@@ -1408,7 +1471,9 @@ async def test_automatic_web_search_keeps_limit_across_client_tool_results(
     first = await api.create(request)
     assert isinstance(first, JSONResponse)
     initial = _json_body(first)
-    assert initial["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    assert object_payload(initial["usage"])["server_tool_use"] == {
+        "web_search_requests": 1
+    }
     result_blocks = [
         {"type": "tool_result", "tool_use_id": "call_1", "content": "retrieved"}
     ]
@@ -1426,8 +1491,15 @@ async def test_automatic_web_search_keeps_limit_across_client_tool_results(
     second = await api.create(request)
     assert isinstance(second, JSONResponse)
     continued = _json_body(second)
-    assert continued["usage"]["server_tool_use"] == {"web_search_requests": 0}
-    assert continued["content"][1]["content"]["error_code"] == "max_uses_exceeded"
+    assert object_payload(continued["usage"])["server_tool_use"] == {
+        "web_search_requests": 0
+    }
+    assert (
+        object_payload(
+            object_payload(array_payload(continued["content"])[1])["content"]
+        )["error_code"]
+        == "max_uses_exceeded"
+    )
     search.assert_awaited_once_with("selected")
 
     request.messages.extend(
@@ -1440,7 +1512,9 @@ async def test_automatic_web_search_keeps_limit_across_client_tool_results(
     )
     third = await api.create(request)
     assert isinstance(third, JSONResponse)
-    assert _json_body(third)["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    assert object_payload(_json_body(third)["usage"])["server_tool_use"] == {
+        "web_search_requests": 1
+    }
     assert search.await_count == 2
 
 
@@ -1466,12 +1540,21 @@ async def test_automatic_web_search_keeps_other_results_when_one_search_fails(
 
     assert isinstance(response, JSONResponse)
     body = _json_body(response)
-    assert body["content"][1]["content"][0]["title"] == "found"
-    assert body["content"][3]["content"] == {
+    assert (
+        object_payload(
+            array_payload(object_payload(array_payload(body["content"])[1])["content"])[
+                0
+            ]
+        )["title"]
+        == "found"
+    )
+    assert object_payload(array_payload(body["content"])[3])["content"] == {
         "type": "web_search_tool_result_error",
         "error_code": "unavailable",
     }
-    assert body["usage"]["server_tool_use"] == {"web_search_requests": 2}
+    assert object_payload(body["usage"])["server_tool_use"] == {
+        "web_search_requests": 2
+    }
 
 
 @pytest.mark.asyncio
@@ -1534,7 +1617,7 @@ async def test_automatic_web_search_bounds_parallel_local_searches(
         release.set()
         response = await asyncio.wait_for(pending, 1)
         assert isinstance(response, JSONResponse)
-        assert _json_body(response)["usage"]["server_tool_use"] == {
+        assert object_payload(_json_body(response)["usage"])["server_tool_use"] == {
             "web_search_requests": 5
         }
         assert len(started) == 5
@@ -1618,12 +1701,22 @@ async def test_automatic_web_search_can_search_again_after_completed_history(
 
     assert isinstance(second, JSONResponse)
     assert second.status_code == 200
-    assert _json_body(second)["content"][1]["content"][0]["title"] == "second"
+    assert (
+        object_payload(
+            array_payload(
+                object_payload(array_payload(_json_body(second)["content"])[1])[
+                    "content"
+                ]
+            )[0]
+        )["title"]
+        == "second"
+    )
     assert len(provider.requests) == 2
+    forwarded = provider.requests[1].messages[1].content
+    assert isinstance(forwarded, list)
     assert all(
-        getattr(block, "type", None)
-        not in {"server_tool_use", "web_search_tool_result"}
-        for block in provider.requests[1].messages[1].content
+        block.type not in {"server_tool_use", "web_search_tool_result"}
+        for block in forwarded
     )
     assert "https://example.com/first" in str(provider.requests[1].messages[1].content)
     assert getattr(second_request.messages[1].content[0], "type", None) == (
@@ -1795,7 +1888,7 @@ async def test_automatic_web_search_preserves_provider_failure_before_public_com
     assert isinstance(response, JSONResponse)
     assert response.status_code == 429
     assert response.headers["x-should-retry"] == "false"
-    assert _json_body(response)["error"]["type"] == "rate_limit_error"
+    assert object_payload(_json_body(response)["error"])["type"] == "rate_limit_error"
     search.assert_not_awaited()
     assert provider.close_count == 1
 
@@ -1827,7 +1920,7 @@ async def test_automatic_web_search_converts_internal_post_start_failure_to_json
     assert response.headers["x-should-retry"] == "false"
     assert response.headers["content-type"].startswith("application/json")
     body = _json_body(response)
-    assert body["error"]["type"] == "overloaded_error"
+    assert object_payload(body["error"])["type"] == "overloaded_error"
     assert body["request_id"] == "req_selection_post_start_failure"
     search.assert_not_awaited()
     assert provider.close_count == 1
@@ -1900,8 +1993,8 @@ def _stream_cm(response: httpx.Response) -> MagicMock:
     return cm
 
 
-def _json_body(response: JSONResponse) -> dict[str, Any]:
-    payload = json.loads(bytes(response.body).decode("utf-8"))
+def _json_body(response: JSONResponse) -> JsonObject:
+    payload = load_json_value(bytes(response.body).decode("utf-8"))
     assert isinstance(payload, dict)
     return payload
 
@@ -2155,32 +2248,36 @@ async def test_streams_web_search_server_tool_result(monkeypatch: pytest.MonkeyP
     events = parse_sse_text(raw)
     assert_anthropic_stream_contract(events)
     starts = [e for e in events if e.event == "content_block_start"]
-    assert starts[0].data["content_block"]["type"] == "server_tool_use"
-    assert starts[0].data["content_block"]["name"] == "web_search"
-    tool_use_id = starts[0].data["content_block"]["id"]
-    assert starts[1].data["content_block"]["type"] == "web_search_tool_result"
-    assert starts[1].data["content_block"]["tool_use_id"] == tool_use_id
-    assert starts[1].data["content_block"]["content"][0]["url"] == (
-        "https://example.com/v4"
+    assert object_payload(starts[0].data["content_block"])["type"] == "server_tool_use"
+    assert object_payload(starts[0].data["content_block"])["name"] == "web_search"
+    tool_use_id = object_payload(starts[0].data["content_block"])["id"]
+    assert (
+        object_payload(starts[1].data["content_block"])["type"]
+        == "web_search_tool_result"
     )
+    assert object_payload(starts[1].data["content_block"])["tool_use_id"] == tool_use_id
+    assert object_array(object_payload(starts[1].data["content_block"])["content"])[0][
+        "url"
+    ] == ("https://example.com/v4")
     text_deltas = [
         e
         for e in events
         if e.event == "content_block_delta"
-        and e.data.get("delta", {}).get("type") == "text_delta"
+        and object_payload(e.data.get("delta", {})).get("type") == "text_delta"
     ]
     assert text_deltas, "summary must be streamed as text_delta"
     assert "example.com" in text_content(events)
     cli_text: list[str] = []
     for ev in events:
+        parts: list[JsonObject] = parse_cli_event(ev.data)
         cli_text.extend(
-            str(p.get("text", ""))
-            for p in parse_cli_event(ev.data)
-            if p.get("type") == "text_delta"
+            str(p.get("text", "")) for p in parts if p.get("type") == "text_delta"
         )
     assert "example.com" in "".join(cli_text)
     deltas = [e for e in events if e.event == "message_delta"]
-    assert deltas[-1].data["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    assert object_payload(deltas[-1].data["usage"])["server_tool_use"] == {
+        "web_search_requests": 1
+    }
 
 
 @pytest.mark.asyncio
@@ -2230,7 +2327,7 @@ async def test_service_streams_forced_web_search_by_default(
         for event in parse_sse_text(raw)
         if event.event == "message_start"
     )
-    assert message_start["model"] == request.model
+    assert object_payload(message_start)["model"] == request.model
     provider_resolver.assert_not_called()
 
 
@@ -2270,14 +2367,27 @@ async def test_service_aggregates_forced_web_search_when_stream_false(
     assert isinstance(response, JSONResponse)
     assert response.headers["content-type"].startswith("application/json")
     body = _json_body(response)
-    assert [block["type"] for block in body["content"]] == [
+    assert [
+        object_payload(block)["type"] for block in array_payload(body["content"])
+    ] == [
         "server_tool_use",
         "web_search_tool_result",
         "text",
     ]
-    assert body["content"][1]["content"][0]["url"] == "https://example.com/v4"
-    assert "DeepSeek V4 Released" in body["content"][2]["text"]
-    assert body["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    assert (
+        object_payload(
+            array_payload(object_payload(array_payload(body["content"])[1])["content"])[
+                0
+            ]
+        )["url"]
+        == "https://example.com/v4"
+    )
+    assert "DeepSeek V4 Released" in string_payload(
+        object_payload(array_payload(body["content"])[2])["text"]
+    )
+    assert object_payload(body["usage"])["server_tool_use"] == {
+        "web_search_requests": 1
+    }
     provider_resolver.assert_not_called()
 
 
@@ -2361,14 +2471,23 @@ async def test_service_aggregates_forced_web_fetch_when_stream_false(
     assert isinstance(response, JSONResponse)
     assert response.headers["content-type"].startswith("application/json")
     body = _json_body(response)
-    assert [block["type"] for block in body["content"]] == [
+    assert [
+        object_payload(block)["type"] for block in array_payload(body["content"])
+    ] == [
         "server_tool_use",
         "web_fetch_tool_result",
         "text",
     ]
-    assert body["content"][1]["content"]["content"]["title"] == "Example Article"
-    assert body["content"][2]["text"] == "Article body"
-    assert body["usage"]["server_tool_use"] == {"web_fetch_requests": 1}
+    assert (
+        object_payload(
+            object_payload(
+                object_payload(array_payload(body["content"])[1])["content"]
+            )["content"]
+        )["title"]
+        == "Example Article"
+    )
+    assert object_payload(array_payload(body["content"])[2])["text"] == "Article body"
+    assert object_payload(body["usage"])["server_tool_use"] == {"web_fetch_requests": 1}
     provider_resolver.assert_not_called()
 
 
@@ -2407,29 +2526,35 @@ async def test_streams_web_fetch_server_tool_result(monkeypatch: pytest.MonkeyPa
     events = parse_sse_text(raw)
     assert_anthropic_stream_contract(events)
     starts = [e for e in events if e.event == "content_block_start"]
-    assert starts[0].data["content_block"]["type"] == "server_tool_use"
-    tool_use_id = starts[0].data["content_block"]["id"]
-    assert starts[1].data["content_block"]["type"] == "web_fetch_tool_result"
-    assert starts[1].data["content_block"]["tool_use_id"] == tool_use_id
-    assert starts[1].data["content_block"]["content"]["content"]["title"] == (
-        "Example Article"
+    assert object_payload(starts[0].data["content_block"])["type"] == "server_tool_use"
+    tool_use_id = object_payload(starts[0].data["content_block"])["id"]
+    assert (
+        object_payload(starts[1].data["content_block"])["type"]
+        == "web_fetch_tool_result"
     )
+    assert object_payload(starts[1].data["content_block"])["tool_use_id"] == tool_use_id
+    assert object_payload(
+        object_payload(object_payload(starts[1].data["content_block"])["content"])[
+            "content"
+        ]
+    )["title"] == ("Example Article")
     assert any(
         e.event == "content_block_delta"
-        and e.data.get("delta", {}).get("type") == "text_delta"
+        and object_payload(e.data.get("delta", {})).get("type") == "text_delta"
         for e in events
     )
     assert "Article body" in text_content(events)
     cli_text: list[str] = []
     for ev in events:
+        parts: list[JsonObject] = parse_cli_event(ev.data)
         cli_text.extend(
-            str(p.get("text", ""))
-            for p in parse_cli_event(ev.data)
-            if p.get("type") == "text_delta"
+            str(p.get("text", "")) for p in parts if p.get("type") == "text_delta"
         )
     assert "Article body" in "".join(cli_text)
     deltas = [e for e in events if e.event == "message_delta"]
-    assert deltas[-1].data["usage"]["server_tool_use"] == {"web_fetch_requests": 1}
+    assert object_payload(deltas[-1].data["usage"])["server_tool_use"] == {
+        "web_fetch_requests": 1
+    }
 
 
 @pytest.mark.asyncio
@@ -2479,18 +2604,19 @@ async def test_streams_web_fetch_error_summary_generic_by_default(
     assert_anthropic_stream_contract(err_events)
     assert any(
         e.event == "content_block_delta"
-        and e.data.get("delta", {}).get("type") == "text_delta"
+        and object_payload(e.data.get("delta", {})).get("type") == "text_delta"
         for e in err_events
     )
     cli_err_text: list[str] = []
     for ev in err_events:
+        parts: list[JsonObject] = parse_cli_event(ev.data)
         cli_err_text.extend(
-            str(p.get("text", ""))
-            for p in parse_cli_event(ev.data)
-            if p.get("type") == "text_delta"
+            str(p.get("text", "")) for p in parts if p.get("type") == "text_delta"
         )
     assert "Web tool request failed." in "".join(cli_err_text)
-    log_blob = " ".join(str(a) for c in log_warn.call_args_list for a in c.args)
+    log_blob = " ".join(
+        str(a) for c in log_warn.call_args_list for a in positional_arguments(c)
+    )
     assert secret not in log_blob
     assert "example.com" in log_blob
     assert "/sensitive-path" not in log_blob
@@ -2715,16 +2841,19 @@ async def test_local_failures_remain_completed_tool_results(
         assert isinstance(response, JSONResponse)
         assert response.status_code == 200
         message = _json_body(response)
-        result, usage = message["content"][1], message["usage"]
+        result, usage = array_payload(message["content"])[1], message["usage"]
         assert message["stop_reason"] == "end_turn"
-    assert result["type"] == f"{tool_name}_tool_result"
+    assert object_payload(result)["type"] == f"{tool_name}_tool_result"
     expected_error = (
         "web_search_tool_result_error"
         if tool_name == "web_search"
         else "web_fetch_tool_error"
     )
-    assert result["content"] == {"type": expected_error, "error_code": "unavailable"}
-    assert usage["server_tool_use"] == {f"{tool_name}_requests": 1}
+    assert object_payload(result)["content"] == {
+        "type": expected_error,
+        "error_code": "unavailable",
+    }
+    assert object_payload(usage)["server_tool_use"] == {f"{tool_name}_requests": 1}
     assert len(provider.requests) == int(automatic)
 
 

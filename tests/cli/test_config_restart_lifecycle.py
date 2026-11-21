@@ -30,6 +30,7 @@ from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from free_claude_code.runtime.sqlite_database import SQLiteDatabase
 from tests.code_sessions_support import FakeHarness
 from tests.web_tools_support import StubWebToolsClient
+from tests.wire_payload import object_payload, response_object
 
 
 @pytest.mark.parametrize("owner_kind", ["desktop", "terminal"])
@@ -44,8 +45,10 @@ def test_harness_waits_through_owner_apply_restart(
     with socket.socket() as first, socket.socket() as second:
         first.bind(("127.0.0.1", 0))
         second.bind(("127.0.0.1", 0))
-        port = first.getsockname()[1]
-        next_port = second.getsockname()[1] if change_port else port
+        first_address: tuple[str, int] = first.getsockname()
+        second_address: tuple[str, int] = second.getsockname()
+        port = first_address[1]
+        next_port = second_address[1] if change_port else port
     store = ManagedConfigStore()
     store.initialize()
     store.commit(dict(store.read().managed) | {"PORT": str(port)})
@@ -199,7 +202,7 @@ def test_harness_waits_through_owner_apply_restart(
                 },
             )
             assert response.status_code == 200
-            assert response.json()["restart"]["automatic"]
+            assert object_payload(response_object(response)["restart"])["automatic"]
             assert restart_entered.wait(5)
             with pytest.raises(OSError, match="already owns"):
                 commands.ServerSupervisor().run(open_admin_browser=False)
@@ -207,8 +210,10 @@ def test_harness_waits_through_owner_apply_restart(
                 common.ensure_proxy_available(f"http://127.0.0.1:{next_port}", env={})
                 is None
             )
-            after = client.get(f"http://127.0.0.1:{next_port}/admin/api/status").json()
-            assert after["instance_id"] != before.json()["instance_id"]
+            after = response_object(
+                client.get(f"http://127.0.0.1:{next_port}/admin/api/status")
+            )
+            assert after["instance_id"] != response_object(before)["instance_id"]
             assert after["port"] == next_port
             assert owner.is_alive()
             code_ready(next_port)
@@ -237,7 +242,8 @@ def test_supervised_http_apply_finishes_and_reconnects(
     monkeypatch.delenv("LOG_LEVEL", raising=False)
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
+        address: tuple[str, int] = listener.getsockname()
+        port = address[1]
     store = ManagedConfigStore()
     store.initialize()
     store.commit(dict(store.read().managed) | {"PORT": str(port)})
@@ -307,7 +313,7 @@ def test_supervised_http_apply_finishes_and_reconnects(
             try:
                 response = client.get("/admin/api/status")
                 if response.status_code == 200:
-                    status = response.json()
+                    status = response_object(response)
                     if (
                         status["status"] == "running"
                         and status["instance_id"] != old_id
@@ -338,11 +344,17 @@ def test_supervised_http_apply_finishes_and_reconnects(
                     release.set()
                 response = apply.result(timeout=10)
             assert response.status_code == 200
-            result = response.json()
+            result = response_object(response)
             assert result["applied"]
-            assert result["restart"]["automatic"]
-            assert result["restart"]["instance_id"] == before["instance_id"]
-            assert result["restart"]["admin_url"] == f"http://127.0.0.1:{port}/admin"
+            assert object_payload(result["restart"])["automatic"]
+            assert (
+                object_payload(result["restart"])["instance_id"]
+                == before["instance_id"]
+            )
+            assert (
+                object_payload(result["restart"])["admin_url"]
+                == f"http://127.0.0.1:{port}/admin"
+            )
             if not stop_during_commit:
                 after = wait_status(client, before["instance_id"])
                 assert after["pending_fields"] == []

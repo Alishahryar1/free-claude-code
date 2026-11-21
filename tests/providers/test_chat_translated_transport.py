@@ -9,6 +9,7 @@ import pytest
 from free_claude_code.core.anthropic.stream_contracts import SSEEvent, parse_sse_text
 from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.chat_completions.response import ChatResponseAccumulator
+from free_claude_code.core.json_types import JsonValue
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.anthropic_messages.transport import (
@@ -18,7 +19,7 @@ from free_claude_code.providers.openai_chat.provider import OpenAIChatProvider
 from free_claude_code.providers.openai_responses.transport import (
     OpenAIResponsesTransport,
 )
-from tests.providers.test_anthropic_messages_transport import Endpoint
+from tests.providers.test_anthropic_messages_transport import Endpoint, _events
 from tests.providers.test_history_transports import _events_for, _harness, _native
 from tests.providers.test_native_tool_arguments import tool_events
 from tests.wire_payload import array_payload, object_array, object_payload
@@ -58,6 +59,57 @@ def _stream_chat(
         response_model="public",
         reasoning=reasoning,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("include_usage", "input_count", "output_count"),
+    [
+        (True, 4.0, 7.0),
+        (True, 4.0, 7.25),
+        (False, 4.0, 7.0),
+        (False, "unavailable", 7.0),
+    ],
+)
+async def test_messages_to_chat_completes_with_provider_usage(
+    include_usage: bool, input_count: JsonValue, output_count: float
+):
+    events = _events("Hello")
+    object_payload(events[0]["message"])["usage"] = {
+        "input_tokens": input_count,
+        "cache_read_input_tokens": 5.0,
+        "cache_creation_input_tokens": 6.0,
+        "output_tokens": 0,
+    }
+    events[-2]["usage"] = {"output_tokens": output_count}
+    request = ChatRequest.model_validate(
+        {
+            "model": "test",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+            "stream_options": {"include_usage": include_usage},
+        }
+    )
+    async with _harness("messages", lambda _: (200, events)) as (_, _, transport):
+        result = await collect(_stream_chat(transport, request, ReasoningPolicy()))
+
+    message = object_payload(object_array(result["choices"])[0]["message"])
+    assert message["content"] == "Hello"
+    if include_usage:
+        usage = object_payload(result["usage"])
+        assert usage == {
+            "prompt_tokens": 15,
+            "completion_tokens": output_count,
+            "total_tokens": 15 + output_count,
+            "prompt_tokens_details": {"cached_tokens": 5},
+        }
+        if output_count.is_integer():
+            assert type(usage["completion_tokens"]) is int
+        assert (
+            type(object_payload(usage["prompt_tokens_details"])["cached_tokens"]) is int
+        )
+    else:
+        assert "usage" not in result
 
 
 @pytest.mark.asyncio
@@ -332,7 +384,7 @@ def _tool_names(event: SSEEvent):
     items = [data.get("item")]
     response = data.get("response")
     if isinstance(response, dict):
-        items += response.get("output") or []
+        items += array_payload(response.get("output") or [])
     return [
         item["name"]
         for item in items

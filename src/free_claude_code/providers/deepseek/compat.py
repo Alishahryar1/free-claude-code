@@ -1,7 +1,6 @@
 """DeepSeek Anthropic-to-OpenAI chat request policy."""
 
 from collections.abc import Mapping
-from typing import Any
 
 from loguru import logger
 
@@ -12,6 +11,12 @@ from free_claude_code.core.anthropic import (
     dump_messages_request,
 )
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.json_types import (
+    JsonObject,
+    JsonValue,
+    json_array,
+    json_objects,
+)
 from free_claude_code.core.reasoning import (
     ReasoningControl,
     ReasoningEffort,
@@ -36,7 +41,7 @@ _OMITTED_DOCUMENT_BLOCK = {"type": "text", "text": _OMITTED_DOCUMENT_TEXT}
 
 def build_deepseek_request_body(
     request_data: MessagesRequest, *, reasoning: ReasoningPolicy
-) -> dict[str, Any]:
+) -> JsonObject:
     """Build a DeepSeek Chat Completions body from an Anthropic request."""
     logger.debug(
         "DEEPSEEK_REQUEST: chat build model={} msgs={}",
@@ -64,18 +69,16 @@ def build_deepseek_request_body(
     logger.debug(
         "DEEPSEEK_REQUEST: build done model={} msgs={} tools={}",
         body.get("model"),
-        len(body.get("messages", [])),
-        len(body.get("tools", [])),
+        len(json_array(body.get("messages", []))),
+        len(json_array(body.get("tools", []))),
     )
     return body
 
 
-def finalize_deepseek_chat_body(
-    body: dict[str, Any], reasoning: ReasoningPolicy
-) -> None:
+def finalize_deepseek_chat_body(body: JsonObject, reasoning: ReasoningPolicy) -> None:
     """Apply source-independent DeepSeek policy to one Chat body."""
     if body.get("tools") and reasoning.control is not ReasoningControl.OFF:
-        for message in body.get("messages", []):
+        for message in json_objects(body.get("messages", [])):
             if (
                 message.get("role") == "assistant"
                 and message.get("reasoning_content") is None
@@ -88,7 +91,7 @@ def finalize_deepseek_chat_body(
         body["max_tokens"] = ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 
 
-def _downgrade_chat_forced_tool_choice(body: dict[str, Any]) -> None:
+def _downgrade_chat_forced_tool_choice(body: JsonObject) -> None:
     tool_choice = body.get("tool_choice")
     if not isinstance(tool_choice, dict) or tool_choice.get("type") != "function":
         return
@@ -103,11 +106,11 @@ def _downgrade_chat_forced_tool_choice(body: dict[str, Any]) -> None:
     body["tool_choice"] = "auto"
 
 
-def _strip_document_blocks(messages: Any) -> Any:
+def _strip_document_blocks(messages: JsonValue) -> JsonValue:
     if not isinstance(messages, list):
         return messages
 
-    stripped: list[Any] = []
+    stripped: list[JsonValue] = []
     top_level_dropped: dict[str, int] = {}
     nested_dropped: dict[str, int] = {}
     placeholder_replacements = 0
@@ -121,7 +124,7 @@ def _strip_document_blocks(messages: Any) -> Any:
             stripped.append(message)
             continue
 
-        new_content: list[Any] = []
+        new_content: list[JsonValue] = []
         message_dropped_document = False
         for block in content:
             if isinstance(block, dict):
@@ -133,10 +136,10 @@ def _strip_document_blocks(messages: Any) -> Any:
                 if btype == "tool_result":
                     inner = block.get("content")
                     if isinstance(inner, list):
-                        filtered_inner: list[Any] = []
+                        filtered_inner: list[JsonValue] = []
                         for sub in inner:
                             if isinstance(sub, dict) and sub.get("type") == "document":
-                                sub_type = sub["type"]
+                                sub_type = "document"
                                 nested_dropped[sub_type] = (
                                     nested_dropped.get(sub_type, 0) + 1
                                 )
@@ -169,9 +172,9 @@ def _strip_document_blocks(messages: Any) -> Any:
     return stripped
 
 
-def _is_server_listed_tool(tool: Mapping[str, Any]) -> bool:
-    name = (tool.get("name") or "").strip()
-    if name in ("web_search", "web_fetch"):
+def _is_server_listed_tool(tool: Mapping[str, JsonValue]) -> bool:
+    name = tool.get("name")
+    if isinstance(name, str) and name.strip() in ("web_search", "web_fetch"):
         return True
     typ = tool.get("type")
     if isinstance(typ, str):
@@ -179,7 +182,7 @@ def _is_server_listed_tool(tool: Mapping[str, Any]) -> bool:
     return False
 
 
-def _walk_block_list_for_unsupported(blocks: Any, *, where: str) -> None:
+def _walk_block_list_for_unsupported(blocks: JsonValue, *, where: str) -> None:
     if not isinstance(blocks, list):
         return
     for block in blocks:
@@ -197,12 +200,13 @@ def _walk_block_list_for_unsupported(blocks: Any, *, where: str) -> None:
             )
 
 
-def _validate_deepseek_request_dict(data: dict[str, Any]) -> None:
+def _validate_deepseek_request_dict(data: JsonObject) -> None:
     mcp = data.get("mcp_servers")
     if mcp:
         raise InvalidRequestError("DeepSeek does not support mcp_servers on requests.")
 
-    for tool in data.get("tools") or ():
+    tools = data.get("tools")
+    for tool in tools if isinstance(tools, list) else ():
         if not isinstance(tool, dict):
             continue
         if _is_server_listed_tool(tool):
@@ -211,7 +215,8 @@ def _validate_deepseek_request_dict(data: dict[str, Any]) -> None:
                 "(web_search / web_fetch). Remove them or use a different provider."
             )
 
-    for i, message in enumerate(data.get("messages") or ()):
+    messages = data.get("messages")
+    for i, message in enumerate(messages if isinstance(messages, list) else ()):
         if not isinstance(message, dict):
             continue
         content = message.get("content")
@@ -226,7 +231,7 @@ def _validate_deepseek_request_dict(data: dict[str, Any]) -> None:
         _walk_block_list_for_unsupported(system, where="system")
 
 
-def _apply_deepseek_chat_extras(body: dict[str, Any], policy: ReasoningPolicy) -> None:
+def _apply_deepseek_chat_extras(body: JsonObject, policy: ReasoningPolicy) -> None:
     extra_body = body.setdefault("extra_body", {})
     if not isinstance(extra_body, dict):
         return

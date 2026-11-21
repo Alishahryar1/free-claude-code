@@ -2,8 +2,9 @@ import asyncio
 import contextlib
 import os
 from collections.abc import AsyncIterator
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Unpack
+from typing import Unpack
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -246,38 +247,25 @@ def mock_session_store():
 
 @pytest.fixture
 def incoming_message_factory() -> IncomingMessageFactory:
-    _valid_keys = frozenset(
-        {
-            "text",
-            "chat_id",
-            "user_id",
-            "message_id",
-            "platform",
-            "reply_to_message_id",
-            "message_thread_id",
-            "username",
-            "timestamp",
-            "raw_event",
-            "status_message_id",
-        }
-    )
-
     def _create(**kwargs: Unpack[IncomingMessageOverrides]) -> IncomingMessage:
-
-        defaults: dict[str, Any] = {
-            "text": "hello",
-            "chat_id": "chat_1",
-            "user_id": "user_1",
-            "message_id": "msg_1",
-            "platform": "telegram",
-        }
-        defaults.update(kwargs)
-        if "timestamp" in defaults and isinstance(defaults["timestamp"], str):
-            from datetime import datetime
-
-            defaults["timestamp"] = datetime.fromisoformat(defaults["timestamp"])
-        filtered = {k: v for k, v in defaults.items() if k in _valid_keys}
-        return IncomingMessage(**filtered)
+        message = IncomingMessage(
+            text=kwargs.get("text", "hello"),
+            chat_id=kwargs.get("chat_id", "chat_1"),
+            user_id=kwargs.get("user_id", "user_1"),
+            message_id=kwargs.get("message_id", "msg_1"),
+            platform=kwargs.get("platform", "telegram"),
+            reply_to_message_id=kwargs.get("reply_to_message_id"),
+            message_thread_id=kwargs.get("message_thread_id"),
+            username=kwargs.get("username"),
+            raw_event=kwargs.get("raw_event"),
+            status_message_id=kwargs.get("status_message_id"),
+        )
+        timestamp = kwargs.get("timestamp")
+        if isinstance(timestamp, str):
+            message.timestamp = datetime.fromisoformat(timestamp)
+        elif timestamp is not None:
+            message.timestamp = timestamp
+        return message
 
     return _create
 

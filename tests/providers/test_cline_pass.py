@@ -33,6 +33,7 @@ from tests.providers.support import (
     profiled_provider,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload, string_payload
 
 
 @pytest.fixture
@@ -186,15 +187,18 @@ def test_build_request_body_preserves_nested_model_images_tools_and_results(
     assert body["model"] == "cline-pass/kimi-k3"
     assert body["max_tokens"] == 321
     assert "max_completion_tokens" not in body
-    assert body["messages"][0] == {"role": "system", "content": "Be concise."}
-    assert body["messages"][1]["content"] == [
+    assert array_payload(body["messages"])[0] == {
+        "role": "system",
+        "content": "Be concise.",
+    }
+    assert object_payload(array_payload(body["messages"])[1])["content"] == [
         {"type": "text", "text": "Inspect this image."},
         {
             "type": "image_url",
             "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
         },
     ]
-    assert body["messages"][2]["tool_calls"] == [
+    assert object_payload(array_payload(body["messages"])[2])["tool_calls"] == [
         {
             "id": "call_inspect",
             "type": "function",
@@ -204,12 +208,17 @@ def test_build_request_body_preserves_nested_model_images_tools_and_results(
             },
         }
     ]
-    assert body["messages"][3] == {
+    assert array_payload(body["messages"])[3] == {
         "role": "tool",
         "tool_call_id": "call_inspect",
         "content": "image contents",
     }
-    assert body["tools"][0]["function"]["name"] == "inspect_image"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "inspect_image"
+    )
     assert body["tool_choice"] == {
         "type": "function",
         "function": {"name": "inspect_image"},
@@ -273,13 +282,15 @@ def test_build_request_body_preserves_readable_and_native_reasoning(
         reasoning=ReasoningPolicy.on(),
     )
     assistant = next(
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     )
 
-    assert assistant["content"] == "I will inspect it."
-    assert assistant["reasoning_details"] == [detail]
-    assert assistant["reasoning"] == "Need a tool."
-    assert "reasoning_content" not in assistant
+    assert object_payload(assistant)["content"] == "I will inspect it."
+    assert object_payload(assistant)["reasoning_details"] == [detail]
+    assert object_payload(assistant)["reasoning"] == "Need a tool."
+    assert "reasoning_content" not in object_payload(assistant)
     assert (
         cline_pass_provider._profile.reasoning_delta(
             SimpleNamespace(reasoning="next thought", reasoning_content="ignored")
@@ -330,11 +341,11 @@ async def test_stream_uses_upstream_sse_and_preserves_reasoning_details(
     assert thinking_content(events) == "plan "
     assert text_content(events) == "done"
     records = [
-        event.data["delta"]["signature"]
+        object_payload(event.data["delta"])["signature"]
         for event in events
-        if event.data.get("delta", {}).get("type") == "signature_delta"
+        if object_payload(event.data.get("delta", {})).get("type") == "signature_delta"
     ]
-    assert [decode_replay(record).native for record in records] == [
+    assert [decode_replay(string_payload(record)).native for record in records] == [
         {"reasoning_details": [detail]}
     ]
     assert stream.closed

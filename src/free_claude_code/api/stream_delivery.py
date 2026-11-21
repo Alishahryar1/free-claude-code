@@ -3,7 +3,7 @@
 import re
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterator
 from copy import deepcopy
-from typing import Any, Literal
+from typing import Literal
 
 import simplejson
 
@@ -17,7 +17,13 @@ from free_claude_code.core.failures import (
     find_execution_failure,
 )
 from free_claude_code.core.gemini.response import gemini_finished, gemini_parts
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import (
+    DecimalJsonObject,
+    DecimalJsonValue,
+    json_object,
+    json_objects,
+    optional_string,
+)
 from free_claude_code.core.replay_finalization import finalize_replay
 from free_claude_code.core.stream_delivery import (
     StreamDeliveryState,
@@ -80,7 +86,7 @@ class PublicResponseStream(AsyncIterator[str]):
         self._seen_starts: set[str] = set()
         self._replacement = False
         self._public_id: str | None = None
-        self._created_at: object = None
+        self._created_at: DecimalJsonValue = None
         self._sequence = -1
         self._pending_starts: list[str] = []
         self._replay_carriers: dict[str, str] = {}
@@ -132,8 +138,9 @@ class PublicResponseStream(AsyncIterator[str]):
             "_terminal_frame",
             "_terminal_failure_observer",
         }
+        state: dict[str, object] = self.__dict__
         saved = deepcopy(
-            {key: value for key, value in self.__dict__.items() if key not in excluded}
+            {key: value for key, value in state.items() if key not in excluded}
         )
         try:
             self._pending_call_proofs.update(
@@ -187,7 +194,7 @@ class PublicResponseStream(AsyncIterator[str]):
             # Failure snapshots may be based on the provider's empty start frame.
             # Use only retained public evidence, independently of a failed mapper.
             if self._delivered.retention_exhausted:
-                output: list[JsonObject] = []
+                output: list[DecimalJsonObject] = []
                 response["output"] = output
                 response["usage"] = None
                 error = response.get("error")
@@ -279,7 +286,7 @@ class PublicResponseStream(AsyncIterator[str]):
             )
 
     @staticmethod
-    def _format(payload: dict[str, Any]) -> str:
+    def _format(payload: DecimalJsonObject) -> str:
         if "type" not in payload:
             return f"data: {simplejson.dumps(payload, use_decimal=True)}\n\n"
         return f"event: {payload['type']}\ndata: {simplejson.dumps(payload, use_decimal=True)}\n\n"
@@ -385,7 +392,7 @@ class PublicResponseStream(AsyncIterator[str]):
                     "message" if self._wire_api == "messages" else "response"
                 )
                 if isinstance(value, dict):
-                    self._public_id = value.get("id")
+                    self._public_id = optional_string(value.get("id"))
                     self._created_at = value.get("created_at")
 
         changed = False
@@ -422,15 +429,15 @@ class PublicResponseStream(AsyncIterator[str]):
             return frame
         return self._release_content(frame, synthetic=synthetic)
 
-    def _metadata(self, kind: str, payload: dict[str, Any]) -> bool:
+    def _metadata(self, kind: str, payload: DecimalJsonObject) -> bool:
         if self._wire_api == "chat":
             return "error" not in payload and all(
                 choice.get("finish_reason") is None
                 and all(
                     key == "role" or value in (None, "", [], {})
-                    for key, value in (choice.get("delta") or {}).items()
+                    for key, value in json_object(choice.get("delta") or {}).items()
                 )
-                for choice in payload.get("choices", [])
+                for choice in json_objects(payload.get("choices", []))
             )
         if self._wire_api == "gemini":
             return (

@@ -102,8 +102,11 @@ def test_sanitize_masks_nested_api_key_strings() -> None:
     out = sanitize_trace_value(
         {"outer": {"api_key": "secret", "text": "visible"}},
     )
-    assert out["outer"]["api_key"] == "<redacted>"
-    assert out["outer"]["text"] == "visible"
+    assert isinstance(out, dict)
+    nested = out["outer"]
+    assert isinstance(nested, dict)
+    assert nested["api_key"] == "<redacted>"
+    assert nested["text"] == "visible"
 
 
 def test_trace_redacts_credential_lists_and_all_catalog_aliases():
@@ -136,7 +139,12 @@ def test_trace_redacts_credential_lists_and_all_catalog_aliases():
         "custom-trace-sentinel",
     ):
         assert secret not in encoded
-    assert public["custom_provider"]["values"]["display_name"] == "Visible"
+    assert isinstance(public, dict)
+    provider = public["custom_provider"]
+    assert isinstance(provider, dict)
+    values = provider["values"]
+    assert isinstance(values, dict)
+    assert values["display_name"] == "Visible"
 
 
 @pytest.mark.parametrize(

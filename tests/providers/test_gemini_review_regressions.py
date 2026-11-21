@@ -26,6 +26,7 @@ from tests.providers.test_lmstudio import (
     metadata_response,
     provider_with_http,
 )
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 
 def transport(
@@ -66,7 +67,7 @@ async def test_plain_reasoning_survives_gemini_round_trip(
     sent = []
 
     def reply(request: httpx2.Request):
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         return chat_response(
             [
                 {field: "original "},
@@ -118,9 +119,17 @@ async def test_plain_reasoning_survives_gemini_round_trip(
                 )
             )
         )
-    assistant = next(m for m in sent[1]["messages"] if m["role"] == "assistant")
-    assert assistant["reasoning_content"] == ("original thought" if visible else "")
-    assert "original thought" not in json.dumps(assistant.get("content"))
+    assistant = next(
+        m
+        for m in array_payload(sent[1]["messages"])
+        if object_payload(m)["role"] == "assistant"
+    )
+    assert object_payload(assistant)["reasoning_content"] == (
+        "original thought" if visible else ""
+    )
+    assert "original thought" not in json.dumps(
+        object_payload(assistant).get("content")
+    )
 
 
 @pytest.mark.asyncio
@@ -132,7 +141,7 @@ async def test_google_signature_cache_does_not_cross_credentials():
     }
 
     def reply(request: httpx2.Request):
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         return chat_response([{"tool_calls": [call]}], finish="tool_calls")
 
     async with AsyncOpenAI(
@@ -178,7 +187,7 @@ async def test_lmstudio_counts_projected_replay_and_images(kind: str):
     def reply(request: httpx2.Request):
         if request.method == "GET":
             return metadata_response(100 if kind == "image" else 1024)
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         return completion_response()
 
     record = ReplayRecord(

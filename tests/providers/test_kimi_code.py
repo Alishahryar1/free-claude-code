@@ -17,6 +17,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 def _request(**overrides: JsonValue) -> MessagesRequest:
@@ -144,10 +145,10 @@ def test_reasoning_history_uses_reasoning_content(
     body = kimi_code_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
-    assistant = body["messages"][0]
+    assistant = array_payload(body["messages"])[0]
 
-    assert assistant["reasoning_content"] == "Inspect the repository."
-    assert assistant["content"] == "I found the relevant file."
+    assert object_payload(assistant)["reasoning_content"] == "Inspect the repository."
+    assert object_payload(assistant)["content"] == "I found the relevant file."
 
 
 def test_caller_extra_body_is_rejected(kimi_code_provider: OpenAIChatProvider):

@@ -4,10 +4,12 @@ import shutil
 import subprocess
 import textwrap
 from pathlib import Path
-from typing import Any
 
 import pytest
 import yaml
+
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
+from tests.wire_payload import object_array, object_payload, string_payload
 
 BUG_FORM = Path(".github/ISSUE_TEMPLATE/bug-report.yml")
 WORKFLOW = Path(".github/workflows/validate-bug-report-version.yml")
@@ -17,7 +19,7 @@ def _workflow_pattern(name: str) -> str:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     match = re.search(rf'const {name} = ("(?:\\.|[^"\\])*");', workflow)
     assert match is not None
-    return json.loads(match.group(1))
+    return string_payload(load_json_value(match.group(1)))
 
 
 def _reported_version(value: str) -> str | None:
@@ -44,7 +46,7 @@ def _workflow_script() -> str:
     return textwrap.dedent(script)
 
 
-def _run_javascript(script: str) -> Any:
+def _run_javascript(script: str) -> JsonValue:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node.js is required to execute the GitHub workflow contract")
@@ -54,22 +56,28 @@ def _run_javascript(script: str) -> Any:
         capture_output=True,
         text=True,
     )
-    return json.loads(completed.stdout)
+    return load_json_value(completed.stdout)
 
 
 def test_bug_forms_require_description_and_post_install_diagnostics() -> None:
-    post = yaml.safe_load(BUG_FORM.read_text(encoding="utf-8"))
-    pre = yaml.safe_load(
+    post: JsonObject = yaml.safe_load(BUG_FORM.read_text(encoding="utf-8"))
+    pre: JsonObject = yaml.safe_load(
         BUG_FORM.with_name("installation-problem.yml").read_text(encoding="utf-8")
     )
-    assert len(post["body"]) == 2
-    assert all(field["validations"]["required"] for field in post["body"])
-    assert all(field["type"] == "textarea" for field in post["body"])
-    assert post["body"][1]["attributes"]["render"] == "json"
-    assert "fcc-doctor" in post["body"][1]["attributes"]["description"]
-    assert len(pre["body"]) == 1
-    assert pre["body"][0]["validations"]["required"]
-    assert "render" not in pre["body"][0]["attributes"]
+    post_fields = object_array(post["body"])
+    pre_fields = object_array(pre["body"])
+    assert len(post_fields) == 2
+    assert all(
+        object_payload(field["validations"])["required"] for field in post_fields
+    )
+    assert all(field["type"] == "textarea" for field in post_fields)
+    assert object_payload(post_fields[1]["attributes"])["render"] == "json"
+    assert "fcc-doctor" in string_payload(
+        object_payload(post_fields[1]["attributes"])["description"]
+    )
+    assert len(pre_fields) == 1
+    assert object_payload(pre_fields[0]["validations"])["required"]
+    assert "render" not in object_payload(pre_fields[0]["attributes"])
 
 
 @pytest.mark.parametrize(
@@ -123,7 +131,7 @@ def test_report_parser_uses_the_correct_form_section(
     assert result.get("reportedVersion") == version
 
 
-def _parse_report(body: str):
+def _parse_report(body: str) -> JsonObject:
     patterns = "\n".join(
         f"const {name} = {json.dumps(_workflow_pattern(name))};"
         for name in ("fieldPattern", "versionPattern")
@@ -132,7 +140,7 @@ def _parse_report(body: str):
     script += (
         f"\nprocess.stdout.write(JSON.stringify(parseReport({json.dumps(body)})));"
     )
-    return _run_javascript(script)
+    return object_payload(_run_javascript(script))
 
 
 def test_plain_doctor_report_can_be_collapsed_without_changing_its_data(
@@ -145,16 +153,19 @@ def test_plain_doctor_report_can_be_collapsed_without_changing_its_data(
     monkeypatch.setattr(doctor, "collect_report", lambda: report)
     monkeypatch.setattr(doctor, "copy_text", copied.append)
     doctor.main([])
-    assert json.loads(capsys.readouterr().out) == report
-    assert json.loads(copied[0]) == report
+    assert load_json_value(capsys.readouterr().out) == report
+    assert load_json_value(copied[0]) == report
     body = "### FCC doctor output\n\n" + copied[0]
     collapsed = _collapse_report(body)
     assert collapsed.startswith("### FCC doctor output\n\n<details>\n")
-    assert json.loads(collapsed.split("```json\n", 1)[1].rsplit("```", 1)[0]) == report
+    assert (
+        load_json_value(collapsed.split("```json\n", 1)[1].rsplit("```", 1)[0])
+        == report
+    )
     assert _parse_report(collapsed) == {"valid": True, "reportedVersion": "1.2.3"}
 
 
-def _collapse_report(body: str):
+def _collapse_report(body: str) -> str:
     patterns = "\n".join(
         f"const {name} = {json.dumps(_workflow_pattern(name))};"
         for name in ("fieldPattern", "versionPattern")
@@ -167,7 +178,7 @@ def _collapse_report(body: str):
         + _javascript_function("collapseDoctorReport")
     )
     script += f"\nprocess.stdout.write(JSON.stringify(collapseDoctorReport({json.dumps(body)})));"
-    return _run_javascript(script)
+    return string_payload(_run_javascript(script))
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
@@ -420,7 +431,8 @@ process.stdout.write(JSON.stringify({ calls, comments }));
             ),
         )
     )
-    calls = result["calls"]
+    result = object_payload(result)
+    calls = object_array(result["calls"])
     names = [call["name"] for call in calls]
 
     assert names.count("createComment") == 2
@@ -434,21 +446,26 @@ process.stdout.write(JSON.stringify({ calls, comments }));
     assert names.count("removeLabel") == 2
     assert "createLabel" not in names
     assert "`17.23.454`" in next(
-        call["args"]["body"]
+        string_payload(object_payload(call["args"])["body"])
         for call in calls
         if call["name"] == "createComment"
-        and "fcc-version-outdated" in call["args"]["body"]
+        and "fcc-version-outdated"
+        in string_payload(object_payload(call["args"])["body"])
     )
     assert "`17.23.455`" in next(
-        call["args"]["body"] for call in calls if call["name"] == "updateComment"
+        string_payload(object_payload(call["args"])["body"])
+        for call in calls
+        if call["name"] == "updateComment"
     )
     assert f"`{latest}`" in next(
-        call["args"]["body"] for call in calls if call["name"] == "updateComment"
+        string_payload(object_payload(call["args"])["body"])
+        for call in calls
+        if call["name"] == "updateComment"
     )
     assert result["comments"] == []
     assert "cancel-in-progress: false" in workflow
     assert all(
-        set(call["args"]) == {"owner", "repo", "issue_number", "body"}
+        set(object_payload(call["args"])) == {"owner", "repo", "issue_number", "body"}
         for call in calls
         if call["name"] == "updateIssue"
     )
@@ -483,6 +500,7 @@ process.stdout.write(JSON.stringify({failed, deleted}));
             "__STATUS__", str(status)
         )
     )
+    result = object_payload(result)
     assert result["failed"] is should_fail
     assert result["deleted"] == ([] if should_fail else [42])
 

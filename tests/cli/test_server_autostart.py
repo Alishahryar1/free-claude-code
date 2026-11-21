@@ -7,6 +7,7 @@ import sys
 import threading
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from http.client import RemoteDisconnected
 from pathlib import Path
 from types import SimpleNamespace
@@ -64,9 +65,14 @@ def _fast_polling(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(common, "_desktop_owner_running", lambda: False)
 
 
+@dataclass
+class Clock:
+    now: float = 0.0
+
+
 @pytest.fixture
-def clock(monkeypatch: pytest.MonkeyPatch):
-    clock = SimpleNamespace(now=0.0)
+def clock(monkeypatch: pytest.MonkeyPatch) -> Clock:
+    clock = Clock()
 
     def sleep(seconds: float):
         clock.now += seconds
@@ -165,7 +171,7 @@ def test_server_exit_before_ready_is_reported(monkeypatch: pytest.MonkeyPatch) -
 def test_startup_wait_is_bounded(
     monkeypatch: pytest.MonkeyPatch,
     spawned: list[tuple[list[str], dict[str, str]]],
-    clock: SimpleNamespace,
+    clock: Clock,
 ) -> None:
     monkeypatch.setattr(common, "open_local_request", MagicMock(side_effect=_refused()))
     message = common.ensure_proxy_available(URL, env={})
@@ -176,7 +182,7 @@ def test_startup_wait_is_bounded(
 
 
 def test_timed_out_start_preserves_running_desktop(
-    monkeypatch: pytest.MonkeyPatch, clock: SimpleNamespace
+    monkeypatch: pytest.MonkeyPatch, clock: Clock
 ) -> None:
     monkeypatch.setattr(common, "open_local_request", MagicMock(side_effect=_refused()))
     child = FakeServer()
@@ -256,7 +262,7 @@ def test_short_lived_duplicate_desktop_yields_to_manual_owner(
 def test_other_port_desktop_owner_waits_without_spawning(
     monkeypatch: pytest.MonkeyPatch,
     spawned: list[tuple[list[str], dict[str, str]]],
-    clock: SimpleNamespace,
+    clock: Clock,
 ) -> None:
     monkeypatch.setattr(common, "_desktop_owner_running", lambda: True)
     monkeypatch.setattr(common, "open_local_request", MagicMock(side_effect=_refused()))
@@ -272,7 +278,7 @@ def test_other_port_desktop_owner_waits_without_spawning(
 def test_terminal_owner_at_other_port_waits_without_spawning(
     monkeypatch: pytest.MonkeyPatch,
     spawned: list[tuple[list[str], dict[str, str]]],
-    clock: SimpleNamespace,
+    clock: Clock,
 ) -> None:
     owner = InterprocessFileLock(server_owner_lock_path())
     assert owner.acquire()
@@ -417,7 +423,7 @@ def test_unowned_listener_winning_bind_race_does_not_hide_child_failure(
 
 
 def test_probe_caps_both_connections_to_remaining_time(
-    monkeypatch: pytest.MonkeyPatch, clock: SimpleNamespace
+    monkeypatch: pytest.MonkeyPatch, clock: Clock
 ) -> None:
     def http(_request, *, timeout: float):
         assert timeout == 1.0
@@ -434,7 +440,7 @@ def test_probe_caps_both_connections_to_remaining_time(
 
 
 def test_expired_probe_does_not_start_any_connection(
-    monkeypatch: pytest.MonkeyPatch, clock: SimpleNamespace
+    monkeypatch: pytest.MonkeyPatch, clock: Clock
 ) -> None:
     http = MagicMock()
     tcp = MagicMock()
@@ -446,7 +452,7 @@ def test_expired_probe_does_not_start_any_connection(
 
 
 def test_http_timeout_at_deadline_does_not_start_tcp_probe(
-    monkeypatch: pytest.MonkeyPatch, clock: SimpleNamespace
+    monkeypatch: pytest.MonkeyPatch, clock: Clock
 ) -> None:
     def http(_request, *, timeout: object):
         clock.now = 1.0
@@ -462,7 +468,7 @@ def test_http_timeout_at_deadline_does_not_start_tcp_probe(
 def test_exhausted_recheck_budget_does_not_spawn(
     monkeypatch: pytest.MonkeyPatch,
     spawned: list[tuple[list[str], dict[str, str]]],
-    clock: SimpleNamespace,
+    clock: Clock,
 ) -> None:
     calls = 0
 
@@ -530,7 +536,7 @@ def test_early_startup_error_is_retained_and_reported(
 def test_startup_log_failure_does_not_block_or_reuse_stale_output(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    clock: SimpleNamespace,
+    clock: Clock,
     failure: str,
     outcome: str,
 ) -> None:
@@ -607,7 +613,7 @@ def test_startup_log_failure_does_not_block_or_reuse_stale_output(
 def test_existing_unresponsive_listener_is_not_replaced(
     monkeypatch: pytest.MonkeyPatch,
     spawned: list[tuple[list[str], dict[str, str]]],
-    clock: SimpleNamespace,
+    clock: Clock,
 ) -> None:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -722,7 +728,7 @@ def test_two_launchers_share_one_start_attempt(monkeypatch: pytest.MonkeyPatch) 
 def test_startup_budget_starts_after_the_lock_is_acquired(
     monkeypatch: pytest.MonkeyPatch,
     spawned: list[tuple[list[str], dict[str, str]]],
-    clock: SimpleNamespace,
+    clock: Clock,
 ) -> None:
     lock = MagicMock(spec=InterprocessFileLock)
 

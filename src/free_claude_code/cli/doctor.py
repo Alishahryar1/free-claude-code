@@ -10,6 +10,10 @@ from free_claude_code.runtime.diagnostics import collect_report
 from .clipboard import ClipboardUnavailable, copy_text
 
 
+class _Arguments(argparse.Namespace):
+    disconnect_integrations: bool
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="fcc-doctor",
@@ -20,7 +24,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         action="store_true",
         help="Disconnect recognized FCC editor/app integrations before uninstalling.",
     )
-    args = parser.parse_args(argv)
+    args = _Arguments()
+    parser.parse_args(argv, namespace=args)
     if args.disconnect_integrations:
         from free_claude_code.harnesses.integration_cleanup import (
             IntegrationCleanupError,

@@ -10,10 +10,12 @@ from playwright.sync_api import Locator, Page, expect
 from e2e.provider_support import close_provider, open_provider
 from free_claude_code.config.admin.credentials import CredentialSubmission
 from free_claude_code.config.env_files import dotenv_values_from_file
+from free_claude_code.core.json_types import load_json_value
 from free_claude_code.providers.credential_validation import (
     CredentialCheck,
     CredentialStatus,
 )
+from tests.wire_payload import array_payload, object_array, response_object
 
 
 def add_key(dialog: Locator, value: str):
@@ -47,7 +49,7 @@ def test_keyboard_reorder_replace_remove_and_reopen_preserve_saved_keys(
     dialog.get_by_role("button", name="Remove Key 3", exact=True).click()
     dialog.get_by_role("button", name="Save", exact=True).click()
     expect(dialog).not_to_be_visible()
-    keys = json.loads(
+    keys = load_json_value(
         dotenv_values_from_file(tmp_path / ".fcc/.env")["NVIDIA_NIM_API_KEY"]
     )
     assert keys == ["third-secret", "replacement-secret"]
@@ -276,8 +278,12 @@ def test_long_list_scrolls_and_escape_cancels_only_the_keyboard_move(
     expect(dialog).not_to_be_visible()
     assert (
         len(
-            json.loads(
-                dotenv_values_from_file(tmp_path / ".fcc/.env")["NVIDIA_NIM_API_KEY"]
+            array_payload(
+                load_json_value(
+                    dotenv_values_from_file(tmp_path / ".fcc/.env")[
+                        "NVIDIA_NIM_API_KEY"
+                    ]
+                )
             )
         )
         == 33
@@ -329,15 +335,15 @@ def test_custom_warning_save_and_rename_retain_masked_rows(
     dialog.get_by_label("Name", exact=True).fill("Renamed gateway")
     with page.expect_response("**/admin/api/config/apply") as saved:
         dialog.get_by_role("button", name="Save", exact=True).click()
-    assert saved.value.json()["applied"] is True
+    assert response_object(saved.value)["applied"] is True
     expect(dialog.locator("#providerMessage")).to_contain_text("Saved")
     expect(page.locator("#saveProvider")).to_be_disabled()
     expect(dialog).to_have_attribute("open", "")
-    definitions = json.loads(
+    definitions = load_json_value(
         dotenv_values_from_file(tmp_path / ".fcc/.env")["FCC_CUSTOM_PROVIDERS"]
     )
-    assert definitions[0]["display_name"] == "Renamed gateway"
-    assert definitions[0]["api_keys"] == ["custom-first", "custom-second"]
+    assert object_array(definitions)[0]["display_name"] == "Renamed gateway"
+    assert object_array(definitions)[0]["api_keys"] == ["custom-first", "custom-second"]
 
 
 def test_saved_warning_followed_by_reload_failure_requires_fresh_masks(

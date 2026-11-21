@@ -9,7 +9,9 @@ import time
 from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager, suppress
 from pathlib import Path
-from typing import Any
+
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import decode_object, int_payload
 
 
 def pid_alive(pid: int):
@@ -29,21 +31,21 @@ def wait_exit(pid: int):
 
 def wait_report(
     output: Path,
-    predicate: Callable[[dict[str, Any]], object],
+    predicate: Callable[[JsonObject], object],
     process: subprocess.Popen[str] | subprocess.Popen[bytes],
     timeout: float = 30,
-) -> dict[str, Any]:
+) -> JsonObject:
     deadline = time.monotonic() + timeout
-    report: dict[str, Any] = {}
+    report: JsonObject = {}
     while time.monotonic() < deadline:
         if output.exists():
-            report = json.loads(output.read_text())
+            report = decode_object(output.read_text())
             assert "error" not in report, report.get("error")
             if predicate(report):
                 return report
         # Launch Services can stop tracking the old shell wrapper after exec.
         assert process.poll() is None or (
-            report.get("pid") and pid_alive(report["pid"])
+            report.get("pid") and pid_alive(int_payload(report["pid"]))
         ), f"Launcher exited before observation: {report}"
         time.sleep(0.1)
     raise AssertionError(f"Native observation timed out: {report}")
@@ -117,11 +119,14 @@ def launched(
             if wait or process.poll() is None:
                 owned = bundle_pids(app)
                 if output.exists():
-                    report = json.loads(output.read_text())
+                    report = decode_object(output.read_text())
                     pid = report.get("pid")
-                    executable = process_paths().get(pid)
+                    executable = (
+                        process_paths().get(pid) if isinstance(pid, int) else None
+                    )
                     if (
-                        executable == report.get("process_executable")
+                        isinstance(pid, int)
+                        and executable == report.get("process_executable")
                         and executable
                         and Path(executable).is_relative_to(Path(env["HOME"]).parent)
                     ):

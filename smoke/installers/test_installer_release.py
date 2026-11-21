@@ -90,13 +90,15 @@ def installer_entry(
     tmp_path: Path,
     powershell_module_paths: dict[str, str],
 ) -> InstallerEntry:
-    shell_name = request.param
+    shell_name: object = getattr(request, "param", None)
+    assert isinstance(shell_name, str)
     windows = shell_name != "sh"
     if windows != (os.name == "nt"):
         pytest.skip("installer_entry is tested on its native platform")
-    shell = shutil.which(shell_name)
-    if shell is None:
+    shell_path = shutil.which(shell_name)
+    if shell_path is None:
         pytest.skip(f"{shell_name} is unavailable")
+    shell: str = shell_path
     suffix = "ps1" if windows else "sh"
     script = tmp_path / f"install.{suffix}"
     env = os.environ | {

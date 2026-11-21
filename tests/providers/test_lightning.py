@@ -24,6 +24,7 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
 )
+from tests.wire_payload import array_payload, object_payload
 
 _MODEL = "lightning-ai/Qwen3.8-27B"
 
@@ -103,7 +104,12 @@ def test_encodes_documented_reasoning_effort_and_standard_request_fields(
 
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
     assert body["model"] == _MODEL
-    assert body["tools"][0]["function"]["name"] == "read_file"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "read_file"
+    )
     if expected_reasoning_effort is None:
         assert "reasoning_effort" not in body
     else:

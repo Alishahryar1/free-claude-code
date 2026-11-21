@@ -18,7 +18,11 @@ from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from free_claude_code.application.code_sessions.models import CodeUnavailableError
 from free_claude_code.runtime import sqlite_database
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
-from free_claude_code.runtime.sqlite_database import initialize_database
+from free_claude_code.runtime.sqlite_database import (
+    initialize_database,
+    query_rows,
+    required_column,
+)
 from tests.assertions import require_present
 from tests.fixture_types import DatabaseFactory
 
@@ -29,7 +33,7 @@ async def test_transactions_reuse_connections_until_database_closes(
 ):
     database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
     await database.start()
-    observed = []
+    observed: list[sqlite3.Connection] = []
 
     def observe(connection: sqlite3.Connection):
         observed.append(connection)
@@ -38,7 +42,9 @@ async def test_transactions_reuse_connections_until_database_closes(
         assert connection.execute("PRAGMA synchronous").fetchone()[0] == 2
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
-        return connection.execute("SELECT 1 AS value").fetchone()["value"]
+        row = query_rows(connection, "SELECT 1 AS value").fetchone()
+        assert row is not None
+        return required_column(row, "value", int)
 
     for write in (True, True, False, False):
         assert await database.run(observe, write=write) == 1
@@ -49,6 +55,12 @@ async def test_transactions_reuse_connections_until_database_closes(
     for connection in observed:
         with pytest.raises(sqlite3.ProgrammingError, match="closed"):
             connection.execute("SELECT 1")
+
+
+def _deleted_count(connection: sqlite3.Connection) -> int:
+    row = query_rows(connection, "SELECT count(*) FROM code_deleted").fetchone()
+    assert row is not None
+    return required_column(row, 0, int)
 
 
 @pytest.mark.asyncio
@@ -85,9 +97,7 @@ async def test_queued_writers_leave_workers_available_and_drain_on_close(
         readers = [
             asyncio.create_task(
                 database.run(
-                    lambda c: c.execute("SELECT count(*) FROM code_deleted").fetchone()[
-                        0
-                    ],
+                    _deleted_count,
                     write=False,
                 )
             ),
@@ -115,7 +125,7 @@ async def test_queued_writers_leave_workers_available_and_drain_on_close(
     await reopened.start()
     assert (
         await reopened.run(
-            lambda c: c.execute("SELECT count(*) FROM code_deleted").fetchone()[0],
+            _deleted_count,
             write=False,
         )
         == 12
@@ -129,7 +139,7 @@ async def test_reader_leases_are_bounded_and_can_move_between_threads(
     database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
     await database.start()
     four_readers, release = threading.Event(), threading.Event()
-    observed = []
+    observed: list[sqlite3.Connection] = []
     guard = threading.Lock()
 
     def read(connection: sqlite3.Connection):
@@ -138,7 +148,9 @@ async def test_reader_leases_are_bounded_and_can_move_between_threads(
             if len(observed) == 4:
                 four_readers.set()
         assert release.wait(10)
-        return connection.execute("SELECT 1").fetchone()[0]
+        row = query_rows(connection, "SELECT 1").fetchone()
+        assert row is not None
+        return required_column(row, 0, int)
 
     tasks = [asyncio.create_task(database.run(read, write=False)) for _ in range(10)]
     try:
@@ -190,7 +202,7 @@ async def test_failed_transactions_discard_the_connection(
 ):
     database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
     await database.start()
-    observed = []
+    observed: list[sqlite3.Connection] = []
 
     def authorize(
         action: int, arg1: str | None, arg2: object, name: object, trigger: object
@@ -263,7 +275,7 @@ async def test_startup_failure_disposes_connections_before_releasing_owner(
 ):
     shutil.copyfile(initialized_database, tmp_path / "fcc.db")
     entered, release = threading.Event(), threading.Event()
-    observed = []
+    observed: list[sqlite3.Connection] = []
 
     class GatedDatabase(sqlite_database.SQLiteDatabase):
         @override
@@ -316,7 +328,7 @@ def test_connection_setup_failure_closes_raw_connection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     connect = sqlite3.connect
-    observed = []
+    observed: list[sqlite3.Connection] = []
 
     class ParameterSequence(Protocol):
         def __len__(self) -> int: ...
@@ -366,14 +378,16 @@ async def test_partial_pool_creation_cleans_up_writer(
         tmp_path / "fcc.db", tmp_path / "fcc.lock"
     )
     create_pool = database._pool
-    observed = []
+    observed: list[sqlite3.Connection] = []
 
     def partial(size: int):
         if size == 4:
             raise RuntimeError("reader pool creation failed")
         pool = create_pool(size)
         with closing(pool.connect()) as lease:
-            observed.append(lease.driver_connection)
+            connection = lease.driver_connection
+            assert isinstance(connection, sqlite3.Connection)
+            observed.append(connection)
         return pool
 
     monkeypatch.setattr(database, "_pool", partial)
@@ -492,7 +506,9 @@ def snapshot(path: Path) -> dict[str, list[dict[str, object]]]:
     with closing(sqlite3.connect(path)) as connection:
         connection.row_factory = sqlite3.Row
         return {
-            table: [dict(row) for row in connection.execute(f"SELECT * FROM {table}")]
+            table: [
+                dict(row) for row in query_rows(connection, f"SELECT * FROM {table}")
+            ]
             for table in (
                 "code_sessions",
                 "code_runs",
@@ -663,9 +679,10 @@ def test_migration_failure_after_move_rolls_back_and_retries_at_destination(
         assert not connection.execute(
             "SELECT name FROM sqlite_schema WHERE name='must_rollback'"
         ).fetchall()
-        columns = {
-            row[1] for row in connection.execute("PRAGMA table_info(code_sessions)")
-        }
+        table_info: list[tuple[int, str, str, int, str | None, int]] = (
+            connection.execute("PRAGMA table_info(code_sessions)").fetchall()
+        )
+        columns = {row[1] for row in table_info}
         assert "mode" not in columns
         assert (
             connection.execute("SELECT count(*) FROM code_items").fetchone()[0]

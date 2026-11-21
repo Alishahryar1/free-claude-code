@@ -8,10 +8,11 @@ import os
 import re
 import subprocess
 import zipfile
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
+from typing import TypedDict, cast
 
 from .ci_shards import MAX_SHARDS, RUNNERS
 
@@ -30,6 +31,14 @@ class _Artifact(TypedDict):
     expired: bool
 
 
+class _RunPage(TypedDict):
+    workflow_runs: list[_WorkflowRun]
+
+
+class _ArtifactPage(TypedDict):
+    artifacts: list[_Artifact]
+
+
 SUITES = ("pytest", "playwright")
 MAP_NAMES = tuple(f"{suite}-{system}.json" for suite in SUITES for system in RUNNERS)
 INPUT_NAME = "ci-timings-input-v1"
@@ -46,7 +55,7 @@ def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return result
 
 
-def load_json(raw: str | bytes):
+def load_json(raw: str | bytes) -> object:
     return json.loads(raw, object_pairs_hook=unique_object)
 
 
@@ -184,6 +193,7 @@ def read_archive(raw: bytes) -> tuple[dict[str, object], dict[str, dict[str, flo
     except (zipfile.BadZipFile, UnicodeError, RuntimeError) as error:
         raise ValueError("Invalid timing archive") from error
     manifest_run(manifest)
+    assert isinstance(manifest, dict)
     return manifest, maps
 
 
@@ -192,6 +202,7 @@ def read_bundle(
 ) -> tuple[dict[str, object], dict[str, dict[str, float]]]:
     manifest = load_json((directory / "manifest.json").read_bytes())
     manifest_run(manifest)
+    assert isinstance(manifest, dict)
     return manifest, {
         name: durations(load_json((directory / name).read_bytes()))
         for name in MAP_NAMES
@@ -229,15 +240,24 @@ class GitHub:
         ).stdout
 
     def successful_runs(self) -> list[_WorkflowRun]:
-        return load_json(
-            self.api(
-                "workflows/tests.yml/runs?status=success&event=pull_request&per_page=20"
-            )
-        )["workflow_runs"]
+        page = cast(
+            _RunPage,
+            load_json(
+                self.api(
+                    "workflows/tests.yml/runs?status=success&event=pull_request&per_page=20"
+                )
+            ),
+        )
+        return page["workflow_runs"]
 
     def artifacts(self, run_id: int) -> list[_Artifact]:
-        pages = load_json(
-            self.api(f"runs/{run_id}/artifacts?per_page=100", "--paginate", "--slurp")
+        pages = cast(
+            list[_ArtifactPage],
+            load_json(
+                self.api(
+                    f"runs/{run_id}/artifacts?per_page=100", "--paginate", "--slurp"
+                )
+            ),
         )
         return [artifact for page in pages for artifact in page["artifacts"]]
 
@@ -340,14 +360,17 @@ def prepare(run: Run, directory: Path, github: GitHub) -> int | None:
 
 
 def merge(
-    run: Run, input_id: int, records: list[dict[str, object]]
+    run: Run, input_id: int, records: Sequence[object]
 ) -> dict[str, dict[str, float]] | None:
     expected = expected_shards(run.matrices)
     seen = set()
     maps: dict[str, dict[str, float]] = {name: {} for name in MAP_NAMES}
     for record in records:
         identity = manifest_run(record, "shard")
-        if not {"suite", "os", "shard", "shards"} <= record.keys():
+        if (
+            not isinstance(record, dict)
+            or not {"suite", "os", "shard", "shards"} <= record.keys()
+        ):
             raise ValueError("Missing timing shard identity")
         suite, system, shard = record["suite"], record["os"], record["shard"]
         if (
@@ -385,10 +408,15 @@ def output(name: str, value: str | int) -> None:
         file.write(f"{name}={value}\n")
 
 
+class _Arguments(argparse.Namespace):
+    command: str
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("prepare", "start", "record", "merge"))
-    args = parser.parse_args()
+    args = _Arguments()
+    parser.parse_args(namespace=args)
     run = Run(
         int(os.environ["GITHUB_RUN_ID"]),
         int(os.environ["GITHUB_RUN_ATTEMPT"]),

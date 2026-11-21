@@ -22,6 +22,13 @@ from free_claude_code.runtime.codex_catalog import (
     write_codex_model_catalog,
 )
 from tests.harnesses.test_codex_model_catalog import _models_payload
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 class FakeRequestRuntime(RequestRuntimePort):
@@ -73,8 +80,8 @@ def _runtime() -> FakeRequestRuntime:
 
 
 def _catalog_slugs(path: Path) -> list[str]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    return [model["slug"] for model in payload["models"]]
+    payload = decode_object(path.read_text(encoding="utf-8"))
+    return [string_payload(model["slug"]) for model in object_array(payload["models"])]
 
 
 @pytest.mark.asyncio
@@ -95,14 +102,24 @@ async def test_known_vision_survives_publication_and_browser_preparation(
     )
     path = tmp_path / "catalog.json"
     CodexModelCatalogPublisher(path).publish(runtime)
-    entries = {row["slug"]: row for row in json.loads(path.read_text())["models"]}
-    assert entries["open_router/vision"]["input_modalities"] == ["text", "image"]
+    entries = {
+        object_payload(row)["slug"]: row
+        for row in array_payload(decode_object(path.read_text())["models"])
+    }
+    assert object_payload(entries["open_router/vision"])["input_modalities"] == [
+        "text",
+        "image",
+    ]
     selected = await CodexHarnessFactory(runtime, binary="codex").prepare(
         "open_router/vision", None, "config"
     )
-    prepared = json.loads(json.dumps(build_codex_model_catalog(selected.models)))
-    assert next(
-        row for row in prepared["models"] if row["slug"] == "open_router/vision"
+    prepared = decode_object(json.dumps(build_codex_model_catalog(selected.models)))
+    assert object_payload(
+        next(
+            row
+            for row in array_payload(prepared["models"])
+            if object_payload(row)["slug"] == "open_router/vision"
+        )
     )["input_modalities"] == ["text", "image"]
 
 
@@ -263,5 +280,5 @@ def test_non_text_capabilities_retain_the_native_text_fallback(
     )
     catalog = read_model_catalog(snapshot)
     assert catalog.models[0].input_modalities == modalities
-    payload = json.loads(json.dumps(build_codex_model_catalog(catalog.models)))
-    assert payload["models"][0]["input_modalities"] == ["text"]
+    payload = decode_object(json.dumps(build_codex_model_catalog(catalog.models)))
+    assert object_array(payload["models"])[0]["input_modalities"] == ["text"]

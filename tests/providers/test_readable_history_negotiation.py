@@ -36,7 +36,12 @@ from tests.providers.test_anthropic_messages_transport import (
     _transport,
 )
 from tests.providers.test_history_transports import _events_for, _harness, _saved_reply
-from tests.wire_payload import array_payload, object_array, object_payload
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+)
 
 
 def readable_history():
@@ -363,7 +368,7 @@ async def test_auth_refresh_uses_new_endpoint_mode_with_same_attempt_budget(
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append((request.url.host, json.loads(request.content)))
+        bodies.append((request.url.host, decode_object(request.content)))
         if request.url.host == "old.test":
             return httpx.Response(
                 401,
@@ -514,7 +519,7 @@ async def test_native_messages_negotiates_stream_and_json_and_reuses_cache(
     cache = HistoryModeCache()
 
     def respond(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         if len(bodies) < 3:
             return httpx.Response(
                 400,

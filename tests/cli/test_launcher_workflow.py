@@ -1,9 +1,8 @@
 """Regression tests for shared startup and native command ownership."""
 
 import importlib
-import json
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from urllib.error import URLError
 
@@ -12,7 +11,14 @@ import pytest
 from free_claude_code.application.model_catalog import CatalogModel
 from free_claude_code.cli.launchers.aider_config import build_aider_config
 from free_claude_code.config.paths import codex_model_catalog_path
+from free_claude_code.core.json_types import load_json_value
 from tests.cli.conftest import LaunchCapture
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+)
 
 HARNESSES = (
     "claude",
@@ -29,10 +35,16 @@ HARNESSES = (
 )
 
 
-def launch(name: str, args: list[str], exit_code: int = 23) -> None:
+def launcher(name: str) -> Callable[[list[str]], None]:
     module = importlib.import_module(f"free_claude_code.cli.launchers.{name}")
+    entrypoint: object = getattr(module, "launch", None)
+    assert callable(entrypoint)
+    return entrypoint
+
+
+def launch(name: str, args: list[str], exit_code: int = 23) -> None:
     with pytest.raises(SystemExit) as exc:
-        module.launch(args)
+        launcher(name)(args)
     assert exc.value.code == exit_code
 
 
@@ -71,35 +83,61 @@ def test_launch_default_is_server_selection_not_first_row_or_local_settings(
             ):
                 assert env[f"GROK_{key}_MODEL"] == selected
         elif name == "hermes":
-            config = json.loads(
+            config = decode_object(
                 (Path(env["HERMES_MANAGED_DIR"]) / "config.yaml").read_text()
             )
             assert (
-                config["model"]["default"] == env["HERMES_INFERENCE_MODEL"] == selected
+                object_payload(config["model"])["default"]
+                == env["HERMES_INFERENCE_MODEL"]
+                == selected
             )
-            assert next(iter(config["providers"].values()))["default_model"] == selected
+            assert (
+                object_payload(
+                    next(iter(object_payload(config["providers"]).values()))
+                )["default_model"]
+                == selected
+            )
         elif name == "opencode":
-            config = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+            config = decode_object(env["OPENCODE_CONFIG_CONTENT"])
             assert (
                 config["model"]
-                == config["agents"]["title"]["model"]
+                == object_payload(object_payload(config["agents"])["title"])["model"]
                 == f"free-claude-code/{selected}"
             )
         elif name == "cline":
             path = Path(env["CLINE_PROVIDER_SETTINGS_PATH"])
-            config = json.loads(path.read_text())
-            assert config["providers"]["openai-native"]["settings"]["model"] == selected
-            registry = json.loads(path.with_name("models.json").read_text())
+            config = decode_object(path.read_text())
             assert (
-                registry["providers"]["openai-native"]["provider"]["defaultModelId"]
+                object_payload(
+                    object_payload(
+                        object_payload(config["providers"])["openai-native"]
+                    )["settings"]
+                )["model"]
+                == selected
+            )
+            registry = decode_object(path.with_name("models.json").read_text())
+            assert (
+                object_payload(
+                    object_payload(
+                        object_payload(registry["providers"])["openai-native"]
+                    )["provider"]
+                )["defaultModelId"]
                 == selected
             )
         else:
-            rows = json.loads(Path(command[command.index("--patch") + 1]).read_text())
+            rows = load_json_value(
+                Path(command[command.index("--patch") + 1]).read_text()
+            )
             assert (
-                next(row for row in rows if row["id"] == "agent-default-model")[
-                    "config"
-                ]["model"]
+                object_payload(
+                    object_payload(
+                        next(
+                            row
+                            for row in array_payload(rows)
+                            if object_payload(row)["id"] == "agent-default-model"
+                        )
+                    )["config"]
+                )["model"]
                 == selected
             )
 
@@ -184,10 +222,11 @@ def test_codex_cli_catalog_is_private_and_does_not_replace_external_catalog(
                 command[index + 1] for index, arg in enumerate(command) if arg == "-c"
             )
         )
-        path = Path(settings["model_catalog_json"])
+        catalog_path: str = settings["model_catalog_json"]
+        path = Path(catalog_path)
         assert path != stable
         assert (
-            json.loads(path.read_text())["models"][0]["slug"]
+            object_array(decode_object(path.read_text())["models"])[0]["slug"]
             == "nvidia_nim/catalog-model:variant"
         )
         assert stable.read_text() == '{"external":"unchanged"}'

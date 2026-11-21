@@ -31,7 +31,7 @@ from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.gemini import GeminiConversionError, GeminiRequest
 from free_claude_code.core.gemini.request import build_gemini_responses_request
 from free_claude_code.core.gemini.responses_stream import GeminiResponsesStream
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, normalize_empty_array_field
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesConversionError,
@@ -608,6 +608,8 @@ class _ResponsesAttempt(TransportAttempt):
                 if self._start_events:
                     yield StreamOutput(self._start_events)
             payload = cast(JsonObject, upstream_event.to_dict(mode="json"))
+            if isinstance(response := payload.get("response"), dict):
+                normalize_empty_array_field(response, "output")
             failed = upstream_event.type in {
                 "response.failed",
                 "error",

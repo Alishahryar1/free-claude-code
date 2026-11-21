@@ -1,11 +1,36 @@
 """Provider organization and isolated modal editing through the real UI."""
 
+from typing import TypedDict
+
 import pytest
 from playwright.sync_api import Page, Route, expect
 
 from e2e.provider_support import api_key_input, close_provider, open_provider
 from free_claude_code.core.json_types import JsonObject
 from tests.wire_payload import object_payload
+
+
+class _ProviderLogo(TypedDict):
+    alt: str | None
+    complete: bool
+    naturalWidth: int
+
+
+class _ProviderLink(TypedDict):
+    href: str | None
+    target: str | None
+    rel: str | None
+    logos: list[_ProviderLogo]
+
+
+class _ProviderCard(TypedDict):
+    provider: str
+    links: list[_ProviderLink]
+
+
+class _CardPosition(TypedDict):
+    row: int
+    bottom: float
 
 
 def test_provider_titles_link_to_websites_and_every_logo_loads(
@@ -20,7 +45,7 @@ def test_provider_titles_link_to_websites_and_every_logo_loads(
     )).every(image => image.complete)""")
     # Read the rendered DOM together instead of tracing a browser round trip
     # for each attribute of every provider. Keep card identity in failures.
-    snapshots = cards.evaluate_all("""cards => cards.map(card => ({
+    snapshots: list[_ProviderCard] = cards.evaluate_all("""cards => cards.map(card => ({
         provider: card.dataset.provider,
         links: Array.from(card.querySelectorAll('.provider-title a'), link => ({
             href: link.getAttribute('href'),
@@ -78,7 +103,7 @@ def test_provider_card_buttons_align_at_the_bottom_of_each_desktop_row(
     page.set_viewport_size({"width": 1440, "height": 1000})
     page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
-    positions = page.locator(
+    positions: list[_CardPosition] = page.locator(
         '[data-provider-group="cloud"] .provider-card'
     ).evaluate_all(
         """cards => cards.map(card => ({

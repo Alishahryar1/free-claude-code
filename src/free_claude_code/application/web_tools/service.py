@@ -223,8 +223,9 @@ class WebToolService:
                 yield packet
             return
         provider_usage = _provider_usage(message)
-        preserve_signed_turn = bool(client_calls) and (
-            signed_gemini_turn(message["content"]) is not None
+        message_content: list[JsonObject] = message["content"]
+        preserve_signed_turn = (
+            bool(client_calls) and signed_gemini_turn(message_content) is not None
         )
         input_tokens = _integer_field(provider_usage, "input_tokens")
         if input_tokens is None:
@@ -462,7 +463,9 @@ def _without_tool_candidates(chunks: Iterable[str]) -> Iterator[StreamOutput]:
                 block = data.get("content_block", {})
                 # This carrier describes a native Gemini turn that still has
                 # the discarded function calls in it.
-                if block.get("type") == "tool_use" or signed_gemini_turn((block,)):
+                if isinstance(block, dict) and (
+                    block.get("type") == "tool_use" or signed_gemini_turn((block,))
+                ):
                     continue
                 kept_indices[index] = len(kept_indices)
             if index not in kept_indices:

@@ -1,8 +1,8 @@
 """Project native Google Parts directly to the requested client protocol."""
 
 import json
+from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any
 from uuid import uuid4
 
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
@@ -15,13 +15,26 @@ from free_claude_code.core.history_replay import (
     encode_gemini_replay,
     encode_replay,
 )
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import (
+    JsonObject,
+    JsonValue,
+    json_array,
+    json_object,
+    json_objects,
+    json_text,
+)
 from free_claude_code.core.recovery_limits import RECOVERY_RETENTION_BYTES
 from free_claude_code.providers.openai_chat import (
     ChatStreamOutput,
     ChatStreamUsage,
     CompletedToolCall,
 )
+
+
+def _usage_count(value: JsonValue) -> int:
+    if not isinstance(value, (int, float, str)):
+        raise TypeError("Expected a number or numeric string for a Gemini token count")
+    return int(value)
 
 
 class GeminiStream:
@@ -32,7 +45,7 @@ class GeminiStream:
         origin: ReplayOrigin,
         output: ChatStreamOutput | None,
         tool_names: frozenset[str],
-        tool_defaults: dict[str, Any],
+        tool_defaults: Mapping[str, JsonValue],
         include_thoughts: bool,
         continuation_context: tuple[JsonObject, ...] | None = None,
     ) -> None:
@@ -43,16 +56,16 @@ class GeminiStream:
         self._tool_defaults = tool_defaults
         self._include_thoughts = include_thoughts
         self._continuation_context = deepcopy(continuation_context)
-        self._terminal: dict[str, Any] | None = None
-        self._parts: list[dict[str, Any]] = []
+        self._terminal: JsonObject | None = None
+        self._parts: list[JsonObject] = []
         self._retained_bytes = (
             len(json.dumps(continuation_context, ensure_ascii=False).encode("utf-8"))
             if continuation_context is not None
             else 0
         )
         self._started = False
-        self._reason: str | None = None
-        self._usage: dict[str, Any] = {}
+        self._reason: str | int | None = None
+        self._usage: JsonObject = {}
         self._tool_index = 0
         self.completed = False
         if output is not None:
@@ -62,7 +75,7 @@ class GeminiStream:
     def normal_stop_seen(self) -> bool:
         return self._reason is not None
 
-    def feed(self, payload: dict[str, Any]) -> list[str]:
+    def feed(self, payload: JsonObject) -> list[str]:
         if self.completed:
             raise conversion_failure("Gemini emitted content after completion")
         if payload.get("error"):
@@ -98,13 +111,17 @@ class GeminiStream:
         self._started = True
         if isinstance(payload.get("usageMetadata"), dict):
             self._usage.update(payload["usageMetadata"])
-        for candidate in candidates:
+        for candidate in json_objects(candidates):
             if candidate.get("index", 0) != 0:
                 raise conversion_failure(
                     "Gemini returned an unexpected candidate index"
                 )
-            if candidate.get("finishReason"):
-                self._reason = candidate["finishReason"]
+            if reason := candidate.get("finishReason"):
+                if isinstance(reason, float) and reason.is_integer():
+                    reason = int(reason)
+                if not isinstance(reason, str) and type(reason) is not int:
+                    raise conversion_failure("Gemini returned an invalid finish reason")
+                self._reason = reason
             if (
                 self._output is not None or self._continuation_context is not None
             ) and any(
@@ -113,7 +130,9 @@ class GeminiStream:
                 raise conversion_failure(
                     "This client protocol cannot represent Gemini grounding or citations"
                 )
-            for raw in candidate.get("content", {}).get("parts", []):
+            for raw in json_objects(
+                json_object(candidate.get("content", {})).get("parts", [])
+            ):
                 if self._output is None and self._continuation_context is None:
                     if "functionCall" in raw:
                         try:
@@ -146,7 +165,9 @@ class GeminiStream:
                     and bool(saved.get("thought"))
                     == bool(self._parts[-1].get("thought"))
                 ):
-                    self._parts[-1]["text"] += saved["text"]
+                    self._parts[-1]["text"] = json_text(
+                        self._parts[-1]["text"]
+                    ) + json_text(saved["text"])
                 else:
                     self._parts.append(saved)
                 if self._output is None:
@@ -186,21 +207,25 @@ class GeminiStream:
                     self._tool_index += 1
                 elif part.inline_data is not None or part.function_response is not None:
                     raise conversion_failure("Gemini returned unsupported model output")
-        if not candidates and payload.get("promptFeedback", {}).get("blockReason"):
+        if not candidates and json_object(payload.get("promptFeedback", {})).get(
+            "blockReason"
+        ):
             raise conversion_failure("Gemini blocked the input prompt")
         if self._output is None:
             result = deepcopy(payload)
             result["modelVersion"] = self._model
             if self._continuation_context is not None:
-                for candidate in result.get("candidates", []):
-                    for part in candidate.get("content", {}).get("parts", []):
+                for candidate in json_objects(result.get("candidates", [])):
+                    for part in json_objects(
+                        json_object(candidate.get("content", {})).get("parts", [])
+                    ):
                         part.pop("thoughtSignature", None)
                     content = candidate.get("content")
-                    if content is not None:
+                    if isinstance(content, dict):
                         content.setdefault("role", "model")
                         content["parts"] = [
                             part
-                            for part in content.get("parts", [])
+                            for part in json_objects(content.get("parts", []))
                             if any(
                                 key in part
                                 for key in (
@@ -219,11 +244,14 @@ class GeminiStream:
                             part.get("thoughtSignature") for part in self._parts
                         ):
                             return []
-                        self._terminal["candidates"][0].pop("content", None)
+                        terminal_candidate = json_object(
+                            json_array(self._terminal["candidates"])[0]
+                        )
+                        terminal_candidate.pop("content", None)
                         candidate.pop("finishReason")
                 if not any(
-                    candidate.get("content", {}).get("parts")
-                    for candidate in result.get("candidates", [])
+                    json_object(candidate.get("content", {})).get("parts")
+                    for candidate in json_objects(result.get("candidates", []))
                 ):
                     return []
             return [gemini_frame(result)]
@@ -254,8 +282,13 @@ class GeminiStream:
                     tool_defaults={
                         name: self._tool_defaults[name]
                         for part in self._parts
-                        if (name := part.get("functionCall", {}).get("name"))
-                        in self._tool_defaults
+                        if isinstance(
+                            name := json_object(part.get("functionCall", {})).get(
+                                "name"
+                            ),
+                            str,
+                        )
+                        and name in self._tool_defaults
                         and self._tool_defaults[name]
                     }
                     or None,
@@ -266,7 +299,10 @@ class GeminiStream:
             )
             if self._output is None:
                 assert self._terminal is not None
-                self._terminal["candidates"][0]["content"] = {
+                terminal_candidate = json_object(
+                    json_array(self._terminal["candidates"])[0]
+                )
+                terminal_candidate["content"] = {
                     "role": "model",
                     "parts": [{"thoughtSignature": carrier}],
                 }
@@ -278,9 +314,13 @@ class GeminiStream:
             return [*events, gemini_frame(self._terminal)]
         events.extend(self._output.close_content_blocks())
         usage = self._usage
-        input_tokens = int(usage.get("promptTokenCount", self._output.input_tokens))
-        reasoning_tokens = int(usage.get("thoughtsTokenCount", 0))
-        output_tokens = int(usage.get("candidatesTokenCount", 0)) + reasoning_tokens
+        input_tokens = _usage_count(
+            usage.get("promptTokenCount", self._output.input_tokens)
+        )
+        reasoning_tokens = _usage_count(usage.get("thoughtsTokenCount", 0))
+        output_tokens = (
+            _usage_count(usage.get("candidatesTokenCount", 0)) + reasoning_tokens
+        )
         reason = (
             "max_tokens"
             if self._reason == "MAX_TOKENS"
@@ -296,13 +336,13 @@ class GeminiStream:
                 usage=ChatStreamUsage(
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
-                    cached_tokens=int(usage.get("cachedContentTokenCount", 0)),
+                    cached_tokens=_usage_count(usage.get("cachedContentTokenCount", 0)),
                     reasoning_tokens=reasoning_tokens,
                     reported={
                         "prompt_tokens": input_tokens,
                         "completion_tokens": output_tokens,
                         "reasoning_tokens": reasoning_tokens,
-                        "total_tokens": int(
+                        "total_tokens": _usage_count(
                             usage.get("totalTokenCount", input_tokens + output_tokens)
                         ),
                     },

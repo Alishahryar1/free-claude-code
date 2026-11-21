@@ -14,7 +14,7 @@ from free_claude_code.api.response_streams import anthropic_sse_streaming_respon
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import DecimalJsonObject, JsonObject
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.core.stream_output import StreamOutput, completed_output
@@ -27,6 +27,7 @@ from tests.api.test_web_server_tools import (
     _automatic_search_service,
     _provider_text_events,
 )
+from tests.wire_payload import object_payload
 
 
 async def drained(body: AsyncIterator[StreamOutput], wire: str):
@@ -121,9 +122,9 @@ async def test_unicode_metadata_preserves_bytes_and_retry_eligibility(
     assert released == [False]
     assert result.startswith(raw)
     payload = parse_sse_text(result)[0].data
-    assert payload["message" if wire == "messages" else "response"]["extension"] == (
-        "before" + separator + "after"
-    )
+    assert object_payload(payload["message" if wire == "messages" else "response"])[
+        "extension"
+    ] == ("before" + separator + "after")
 
 
 @pytest.mark.asyncio
@@ -223,10 +224,16 @@ async def test_public_sequence_preserves_decimal_extensions_and_call_ids(
         )
 
     output = await drained(source(), "responses")
-    payload = simplejson.loads(output.split("data: ")[-1], use_decimal=True)
+    payload: DecimalJsonObject = simplejson.loads(
+        output.split("data: ")[-1], use_decimal=True
+    )
     assert payload["sequence_number"] == 1
-    assert payload["response_id"] == payload["response"]["id"] == "resp_old"
-    assert payload["response"]["created_at"] == 7
+    assert (
+        payload["response_id"]
+        == object_payload(payload["response"])["id"]
+        == "resp_old"
+    )
+    assert object_payload(payload["response"])["created_at"] == 7
     assert payload["call_id"] == "resp_new"
     assert payload["native"] == Decimal("1.234567890123456789")
     assert payload["extension"] == "a" + separator + "b"

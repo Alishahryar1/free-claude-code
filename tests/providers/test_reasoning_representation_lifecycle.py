@@ -153,7 +153,7 @@ async def test_completed_only_reasoning_keeps_final_answer_open(field: str):
         ]
     events = parse_sse_text("".join(frames))
     starts = {
-        event.data["index"]: event.data["content_block"]["type"]
+        event.data["index"]: object_payload(event.data["content_block"])["type"]
         for event in events
         if event.event == "content_block_start"
     }
@@ -582,11 +582,14 @@ def test_first_readable_representation_streams_without_waiting(typed: bool):
     )
     events = parse_sse_text("".join(early + answer + complete))
     assert (
-        sum(event.data.get("delta", {}).get("thinking") == "Plan." for event in events)
+        sum(
+            object_payload(event.data.get("delta", {})).get("thinking") == "Plan."
+            for event in events
+        )
         == 1
     )
     starts = {
-        event.data["index"]: event.data["content_block"]["type"]
+        event.data["index"]: object_payload(event.data["content_block"])["type"]
         for event in events
         if event.event == "content_block_start"
     }

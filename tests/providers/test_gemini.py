@@ -1,7 +1,7 @@
 """All client protocols exercise native Gemini over HTTP, including replay."""
 
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
@@ -22,10 +22,22 @@ from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.gemini import GeminiProvider
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    stream_provider_request,
+)
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+)
 
 
-def _sse(parts: Sequence[Mapping[str, JsonValue]]):
+def _sse(
+    parts: Sequence[Mapping[str, JsonValue]], *, usage: JsonObject | None = None
+) -> httpx.Response:
     events: list[dict[str, Any]] = [
         {"candidates": [{"index": 0, "content": {"role": "model", "parts": [part]}}]}
         for part in parts
@@ -34,7 +46,9 @@ def _sse(parts: Sequence[Mapping[str, JsonValue]]):
         {
             "modelVersion": "actual",
             "candidates": [{"index": 0, "finishReason": "STOP"}],
-            "usageMetadata": {
+            "usageMetadata": usage
+            if usage is not None
+            else {
                 "promptTokenCount": 12,
                 "candidatesTokenCount": 3,
                 "thoughtsTokenCount": 4,
@@ -101,6 +115,53 @@ async def _collect(wire: str, stream: AsyncIterator[StreamOutput]):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize(
+    "encode_count", [int, str, float], ids=["integer", "quoted", "zero-fraction"]
+)
+async def test_translated_gemini_stream_accepts_compatible_token_counts(
+    wire: str, encode_count: Callable[[int], int | str | float]
+) -> None:
+    counts = {
+        "promptTokenCount": 12,
+        "candidatesTokenCount": 3,
+        "thoughtsTokenCount": 4,
+        "cachedContentTokenCount": 2,
+        "totalTokenCount": 19,
+    }
+    usage: JsonObject = {key: encode_count(value) for key, value in counts.items()}
+    provider = GeminiProvider(
+        make_provider_config(api_key="test-key", base_url=GEMINI_DEFAULT_BASE),
+        admission=immediate_admission(max_attempts=1),
+        transport=httpx.MockTransport(
+            lambda request: _sse([{"text": "answer"}], usage=usage)
+        ),
+    )
+    try:
+        stream = stream_provider_request(provider, wire, _request(wire))
+        frames = [frame async for chunk in stream for frame in chunk.frames]
+    finally:
+        await provider.cleanup()
+
+    events = parse_sse_text("".join(frames))
+    if wire == "messages":
+        assert events[-1].event == "message_stop"
+        reported = next(
+            object_payload(event.data["usage"])
+            for event in events
+            if event.event == "message_delta"
+        )
+    else:
+        assert events[-1].event == "response.completed"
+        reported = object_payload(object_payload(events[-1].data["response"])["usage"])
+        assert reported["input_tokens_details"] == {"cached_tokens": 2}
+        assert reported["output_tokens_details"] == {"reasoning_tokens": 4}
+        assert reported["total_tokens"] == 19
+    assert reported["input_tokens"] == 12
+    assert reported["output_tokens"] == 7
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses", "chat", "gemini"])
 @pytest.mark.parametrize("interleaved", [False, True])
 async def test_all_ingresses_use_native_gemini_and_replay_signed_parts(
@@ -124,7 +185,7 @@ async def test_all_ingresses_use_native_gemini_and_replay_signed_parts(
         assert request.url.path == "/v1beta/models/test-model:streamGenerateContent"
         assert request.url.params["alt"] == "sse"
         assert request.headers["x-goog-api-key"] == "test-key"
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _sse(parts)
 
     provider = GeminiProvider(
@@ -135,8 +196,8 @@ async def test_all_ingresses_use_native_gemini_and_replay_signed_parts(
     try:
         first = await _collect(
             wire,
-            getattr(provider, f"stream_{wire}")(
-                _request(wire), response_model="public"
+            stream_provider_request(
+                provider, wire, _request(wire), response_model="public"
             ),
         )
         history: list[JsonObject]
@@ -166,10 +227,13 @@ async def test_all_ingresses_use_native_gemini_and_replay_signed_parts(
             ]
         original = deepcopy(history)
         await _collect(
-            wire, getattr(provider, f"stream_{wire}")(_request(wire, history))
+            wire, stream_provider_request(provider, wire, _request(wire, history))
         )
         assert history == original
-        assert bodies[1]["contents"][1] == {"role": "model", "parts": parts}
+        assert array_payload(bodies[1]["contents"])[1] == {
+            "role": "model",
+            "parts": parts,
+        }
         assert "model" not in bodies[0]
         assert "literal answer" in str(first)
     finally:
@@ -197,7 +261,7 @@ async def test_native_signed_tool_round_trip_keeps_original_parts_and_ids(
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _sse(parts if len(bodies) == 1 else [{"text": "complete"}])
 
     schema = {
@@ -225,7 +289,7 @@ async def test_native_signed_tool_round_trip_keeps_original_parts_and_ids(
         transport=httpx.MockTransport(reply),
     )
     try:
-        first = await _collect(wire, getattr(provider, f"stream_{wire}")(request))
+        first = await _collect(wire, stream_provider_request(provider, wire, request))
         if wire == "messages":
             call = next(
                 block for block in first["content"] if block["type"] == "tool_use"
@@ -271,11 +335,16 @@ async def test_native_signed_tool_round_trip_keeps_original_parts_and_ids(
                 "input" if wire == "responses" else "messages": history,
             }
         )
-        await _collect(wire, getattr(provider, f"stream_{wire}")(next_request))
-        assert bodies[-1]["contents"][1] == {"role": "model", "parts": parts}
-        result = bodies[-1]["contents"][2]["parts"][0]["functionResponse"]
-        assert result.get("id") == native_id
-        assert result["name"] == "lookup"
+        await _collect(wire, stream_provider_request(provider, wire, next_request))
+        assert array_payload(bodies[-1]["contents"])[1] == {
+            "role": "model",
+            "parts": parts,
+        }
+        result = object_array(object_array(bodies[-1]["contents"])[2]["parts"])[0][
+            "functionResponse"
+        ]
+        assert object_payload(result).get("id") == native_id
+        assert object_payload(result)["name"] == "lookup"
     finally:
         await provider.cleanup()
 
@@ -290,7 +359,7 @@ async def test_prefer_off_uses_normal_allowance_without_unavailable_disable_cont
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _sse([{"text": "verdict"}])
 
     provider = GeminiProvider(
@@ -312,8 +381,10 @@ async def test_prefer_off_uses_normal_allowance_without_unavailable_disable_cont
         )
         assert len(bodies) == 1
         config = bodies[0]["generationConfig"]
-        assert "maxOutputTokens" not in config
-        assert "thinkingBudget" not in config["thinkingConfig"]
+        assert "maxOutputTokens" not in object_payload(config)
+        assert "thinkingBudget" not in object_payload(
+            object_payload(config)["thinkingConfig"]
+        )
     finally:
         await provider.cleanup()
 
@@ -336,8 +407,8 @@ async def test_explicit_off_hides_native_thoughts_but_keeps_signed_replay(wire: 
     try:
         result = await _collect(
             wire,
-            getattr(provider, f"stream_{wire}")(
-                _request(wire), reasoning=ReasoningPolicy.off()
+            stream_provider_request(
+                provider, wire, _request(wire), reasoning=ReasoningPolicy.off()
             ),
         )
         assert "hidden thought" not in json.dumps(result)
@@ -353,7 +424,7 @@ async def test_explicit_off_rejection_does_not_relax_caller_control():
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return httpx.Response(
             400, json={"error": {"message": "Thinking cannot be disabled"}}
         )
@@ -372,13 +443,33 @@ async def test_explicit_off_rejection_does_not_relax_caller_control():
                 ),
             )
         assert len(bodies) == 1
-        assert bodies[0]["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 0
+        assert (
+            object_payload(
+                object_payload(bodies[0]["generationConfig"])["thinkingConfig"]
+            )["thinkingBudget"]
+            == 0
+        )
     finally:
         await provider.cleanup()
 
 
 @pytest.mark.asyncio
-async def test_native_model_discovery_follows_pages_and_keeps_native_names():
+@pytest.mark.parametrize(
+    ("input_limit", "output_limit", "expected_input", "expected_output"),
+    [
+        (1000, 100, 1000, 100),
+        (1048576.0, 32768.0, 1048576, 32768),
+        ("1.048576e6", "32768", 1048576, 32768),
+        (1000.5, "100.00000000000000001", None, None),
+        (True, "1e100", None, None),
+    ],
+)
+async def test_native_model_discovery_follows_pages_and_keeps_native_names(
+    input_limit: JsonValue,
+    output_limit: JsonValue,
+    expected_input: int | None,
+    expected_output: int | None,
+):
     urls = []
 
     def reply(request: httpx.Request):
@@ -404,8 +495,8 @@ async def test_native_model_discovery_follows_pages_and_keeps_native_names():
                         "name": "models/first",
                         "supportedGenerationMethods": ["generateContent"],
                         "thinking": True,
-                        "inputTokenLimit": 1000,
-                        "outputTokenLimit": 100,
+                        "inputTokenLimit": input_limit,
+                        "outputTokenLimit": output_limit,
                     },
                     {
                         "name": "models/embedding",
@@ -424,8 +515,10 @@ async def test_native_model_discovery_follows_pages_and_keeps_native_names():
     try:
         models = {model.model_id: model for model in await provider.list_model_infos()}
         assert set(models) == {"models/first", "models/second"}
-        assert models["models/first"].context_window_tokens == 1000
-        assert models["models/first"].max_output_tokens == 100
+        assert models["models/first"].context_window_tokens == expected_input
+        assert models["models/first"].max_output_tokens == expected_output
+        assert models["models/second"].context_window_tokens is None
+        assert models["models/second"].max_output_tokens is None
         assert len(urls) == 2
     finally:
         await provider.cleanup()
@@ -452,7 +545,7 @@ async def test_native_reasoning_uses_one_computation_control(
     bodies: list[dict[str, Any]] = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _sse([{"text": "answer"}])
 
     provider = GeminiProvider(
@@ -497,7 +590,7 @@ async def test_native_empty_signed_part_does_not_emit_empty_text_block():
         event.data
         for event in events
         if event.data.get("type") == "content_block_start"
-        and event.data.get("content_block", {}).get("type") == "text"
+        and object_payload(event.data.get("content_block", {})).get("type") == "text"
     ]
     assert len(text_starts) == 1
     stops = [
@@ -518,7 +611,7 @@ async def test_native_inband_error_preserves_retry_semantics_without_history_pro
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -561,7 +654,7 @@ async def test_native_history_modes_share_attempt_budget_and_restore_source():
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         if len(bodies) < 3:
             return httpx.Response(
                 400, json={"error": {"code": 400, "message": "Unsupported history"}}
@@ -595,10 +688,10 @@ async def test_native_history_modes_share_attempt_budget_and_restore_source():
     assert history == original
     thoughts = [
         [
-            part["text"]
-            for content in body["contents"]
-            for part in content["parts"]
-            if part.get("thought")
+            object_payload(part)["text"]
+            for content in array_payload(body["contents"])
+            for part in array_payload(object_payload(content)["parts"])
+            if object_payload(part).get("thought")
         ]
         for body in bodies
     ]

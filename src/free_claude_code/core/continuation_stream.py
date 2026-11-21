@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4, uuid5
 
 from .continuation_overlap import ContinuationOverlap
@@ -12,6 +12,7 @@ from .delivered_response import (
 )
 from .failures import ExecutionFailure, FailureKind
 from .gemini.response import gemini_finished, gemini_parts
+from .json_types import DecimalJsonObject, json_index, json_object, json_objects
 from .openai_responses import is_client_call
 
 if TYPE_CHECKING:
@@ -27,11 +28,11 @@ class ContinuationStream:
         self.handoff = False
         self._offset = 0
         self._namespace = uuid4()
-        self._boundary: list[dict[str, Any]] = []
+        self._boundary: list[DecimalJsonObject] = []
         self._expected: dict[Literal["text", "thinking"], str] = {}
         self._overlaps: list[ContinuationOverlap] = []
         self._initial_progress = 0
-        self._prefix_items: list[dict[str, Any]] = []
+        self._prefix_items: list[DecimalJsonObject] = []
 
     @property
     def made_progress(self) -> bool:
@@ -51,7 +52,9 @@ class ContinuationStream:
         finalized = deepcopy(self.delivered.items)
         for event in self._boundary:
             if event["type"] == "response.output_item.done":
-                finalized[event["output_index"]] = deepcopy(event["item"])
+                finalized[json_index(event["output_index"])] = deepcopy(
+                    json_object(event["item"])
+                )
         self._prefix_items = [item for _, item in sorted(finalized.items())]
 
     def restart_attempt(self) -> None:
@@ -63,7 +66,7 @@ class ContinuationStream:
         ]
         self._initial_progress = self.delivered.progress
 
-    def boundary(self) -> list[dict[str, Any]]:
+    def boundary(self) -> list[DecimalJsonObject]:
         events = self._boundary
         self._boundary = []
         return events
@@ -80,13 +83,13 @@ class ContinuationStream:
             item_id=self._item_id(call.item_id) if call.item_id is not None else None,
         )
 
-    def prepare(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    def prepare(self, payload: DecimalJsonObject) -> list[DecimalJsonObject]:
         if not self.active:
             return [payload]
         if (
             self.delivered.wire_api == "responses"
             and payload.get("type")
-            not in {"response.failed", "response.error", "error"}
+            not in ("response.failed", "response.error", "error")
             and responses_text_constraint(payload)
         ):
             raise ExecutionFailure(
@@ -95,15 +98,15 @@ class ContinuationStream:
                 message="The continuation returned text with a native output contract that cannot be reconstructed.",
                 retryable=False,
             )
-        if payload.get("type") in {
+        if payload.get("type") in (
             "message_start",
             "response.created",
             "response.in_progress",
-        }:
+        ):
             return []
         if self.delivered.wire_api == "chat":
-            for choice in payload.get("choices", []):
-                delta = choice.get("delta") or {}
+            for choice in json_objects(payload.get("choices", [])):
+                delta = json_object(choice.get("delta") or {})
                 if (
                     choice.get("logprobs") is not None
                     or choice.get("index") != 0
@@ -133,13 +136,14 @@ class ContinuationStream:
                 events = [ready for event in events for ready in overlap.feed(event)]
         return [self._map(event) for event in events]
 
-    def _map(self, data: dict[str, Any]) -> dict[str, Any]:
+    def _map(self, data: DecimalJsonObject) -> DecimalJsonObject:
         if self.delivered.wire_api == "chat":
             for key in ("id", "model", "created"):
                 if key in self.delivered.header and key in data:
                     data[key] = self.delivered.header[key]
-            for choice in data.get("choices", []):
-                for detail in (choice.get("delta") or {}).get("reasoning_details", []):
+            for choice in json_objects(data.get("choices", [])):
+                delta = json_object(choice.get("delta") or {})
+                for detail in json_objects(delta.get("reasoning_details", [])):
                     if isinstance(detail.get("id"), str):
                         detail["id"] = self._item_id(detail["id"])
             return data
@@ -149,10 +153,9 @@ class ContinuationStream:
                     data[key] = self.delivered.header[key]
             return data
         if not self.handoff:
-            if isinstance(data.get("index"), int):
-                data["index"] += self._offset
-            if isinstance(data.get("output_index"), int):
-                data["output_index"] += self._offset
+            for key in ("index", "output_index"):
+                if isinstance(index := data.get(key), int):
+                    data[key] = index + self._offset
             if isinstance(data.get("item_id"), str):
                 data["item_id"] = self._item_id(data["item_id"])
             item = data.get("item")
@@ -166,12 +169,12 @@ class ContinuationStream:
             if "created_at" in self.delivered.header:
                 response["created_at"] = self.delivered.header["created_at"]
             if not self.handoff:
-                for item in response.get("output", []):
+                for item in json_objects(response.get("output", [])):
                     if isinstance(item.get("id"), str):
                         item["id"] = self._item_id(item["id"])
         return data
 
-    def finalize(self, data: dict[str, Any]) -> dict[str, Any]:
+    def finalize(self, data: DecimalJsonObject) -> DecimalJsonObject:
         """Finish the response only after preceding frames have been published."""
         if not self.active:
             return data
@@ -179,13 +182,13 @@ class ContinuationStream:
             if (
                 any(
                     choice.get("finish_reason") is not None
-                    for choice in data.get("choices", [])
+                    for choice in json_objects(data.get("choices", []))
                 )
                 and not self.handoff
                 and not self.made_progress
                 and not any(
                     any(
-                        (choice.get("delta") or {}).get(key)
+                        json_object(choice.get("delta") or {}).get(key)
                         for key in (
                             "content",
                             "reasoning",
@@ -194,7 +197,7 @@ class ContinuationStream:
                             "tool_calls",
                         )
                     )
-                    for choice in data.get("choices", [])
+                    for choice in json_objects(data.get("choices", []))
                 )
             ):
                 raise ExecutionFailure(
@@ -223,21 +226,24 @@ class ContinuationStream:
                 )
             # After overlap removal, keep an empty terminal valid for SDK chat
             # history. This adds no output and cannot satisfy the progress check.
-            for candidate in data.get("candidates", []):
-                if candidate.get("finishReason") and not candidate.get(
-                    "content", {}
-                ).get("parts"):
+            for candidate in json_objects(data.get("candidates", [])):
+                content = json_object(candidate.get("content", {}))
+                if candidate.get("finishReason") and not content.get("parts"):
                     candidate["content"] = {"role": "model", "parts": [{"text": ""}]}
             # Per-attempt usage cannot describe a synthesized multi-attempt answer.
             data.pop("usageMetadata", None)
             return data
         kind = data.get("type")
         response = data.get("response")
-        output = response.get("output", []) if isinstance(response, dict) else []
-        terminal = kind in {"response.completed", "response.incomplete", "message_stop"}
+        output = (
+            list(json_objects(response.get("output", [])))
+            if isinstance(response, dict)
+            else []
+        )
+        terminal = kind in ("response.completed", "response.incomplete", "message_stop")
         terminal |= (
             kind == "message_delta"
-            and data.get("delta", {}).get("stop_reason") is not None
+            and json_object(data.get("delta", {})).get("stop_reason") is not None
         )
         if (
             terminal
@@ -261,12 +267,13 @@ class ContinuationStream:
         return data
 
     @staticmethod
-    def _has_output(items: list[dict[str, Any]]) -> bool:
+    def _has_output(items: list[DecimalJsonObject]) -> bool:
         return any(
             is_client_call(item)
             or any(
                 part.get("text") or part.get("refusal")
-                for part in [*(item.get("content") or []), *(item.get("summary") or [])]
+                for field in ("content", "summary")
+                for part in json_objects(item.get(field) or [])
             )
             for item in items
         )

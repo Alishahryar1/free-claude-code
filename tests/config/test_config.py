@@ -324,8 +324,9 @@ def test_settings_defaults_are_valid_and_nonempty() -> None:
     assert settings.enable_web_server_tools is True
     assert settings.proxy_auth_enabled is False
     assert settings.proxy_auth_token == "freecc"
+    fields: list[tuple[str, object]] = list(settings)
     assert [
-        name for name, value in settings if isinstance(value, str) and not value
+        name for name, value in fields if isinstance(value, str) and not value
     ] == []
     assert [
         name
@@ -760,6 +761,7 @@ def test_settings_validated_replacement_preserves_original() -> None:
 
 
 def test_settings_defaults_do_not_contain_empty_enum_strings() -> None:
-    for _name, value in Settings():
+    fields: list[tuple[str, object]] = list(Settings())
+    for _name, value in fields:
         if isinstance(value, Enum):
             assert value.value

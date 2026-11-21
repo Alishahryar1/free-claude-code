@@ -6,6 +6,7 @@ import pytest
 from smoke.lib.config import SmokeConfig
 from smoke.lib.http import post_json
 from smoke.lib.server import RunningServer
+from tests.wire_payload import object_payload, response_object
 
 pytestmark = [pytest.mark.live, pytest.mark.smoke_target("api")]
 
@@ -105,9 +106,9 @@ def test_invalid_messages_returns_anthropic_error(
         headers=smoke_headers,
     )
     assert response.status_code == 400
-    payload = response.json()
+    payload = response_object(response)
     assert payload["type"] == "error"
-    assert payload["error"]["type"] == "invalid_request_error"
+    assert object_payload(payload["error"])["type"] == "invalid_request_error"
 
 
 def test_stop_endpoint_reports_no_messaging(

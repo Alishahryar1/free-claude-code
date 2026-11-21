@@ -11,6 +11,7 @@ from free_claude_code.providers.openai_chat.request_policy import (
     build_openai_chat_request_body,
 )
 from tests.wire_payload import (
+    array_payload,
     object_array,
     object_payload,
     string_payload,
@@ -93,24 +94,24 @@ def test_chat_request_uses_one_alias_in_definition_choice_and_history() -> None:
 
     body = _body(request)
 
-    tools = body["tools"]
+    tools: list[JsonObject] = body["tools"]
     assert isinstance(tools, list)
-    alias = tools[0]["function"]["name"]
+    alias = string_payload(object_payload(tools[0]["function"])["name"])
     assert alias != original
     assert len(alias) <= 64
-    assert tools[1]["function"]["name"] == "safe_tool"
+    assert object_payload(tools[1]["function"])["name"] == "safe_tool"
     assert body["tool_choice"] == {
         "type": "function",
         "function": {"name": alias},
     }
-    messages = body["messages"]
+    messages: list[JsonObject] = body["messages"]
     assert isinstance(messages, list)
     assistant = next(message for message in messages if message["role"] == "assistant")
-    assert assistant["tool_calls"][0]["function"] == {
+    assert object_array(assistant["tool_calls"])[0]["function"] == {
         "name": alias,
         "arguments": '{"value": "x"}',
     }
-    assert assistant["tool_calls"][0]["id"] == "call_1"
+    assert object_array(assistant["tool_calls"])[0]["id"] == "call_1"
     assert request.model_dump() == snapshot
 
 
@@ -140,7 +141,7 @@ def test_chat_aliases_remain_stable_for_append_only_requests() -> None:
 
     assert continued_body["tools"] == prefix_body["tools"]
     assert continued_body["tool_choice"] == prefix_body["tool_choice"]
-    prefix_messages = prefix_body["messages"]
+    prefix_messages: list[JsonObject] = prefix_body["messages"]
     assert continued_body["messages"][: len(prefix_messages)] == prefix_messages
 
 
@@ -162,4 +163,9 @@ def test_chat_encoding_does_not_rewrite_unrelated_name_fields() -> None:
     )
 
     assert body["extra_body"] == snapshot
-    assert body["tools"][0]["function"]["name"] != original
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        != original
+    )

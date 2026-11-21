@@ -1,13 +1,20 @@
-import json
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import load_json_value
 from free_claude_code.harnesses import vscode_chat_integration as vscode
 from free_claude_code.runtime.application import ApplicationRuntime
 from tests.api.support import create_test_app, runtime_for_app
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    response_object,
+    string_payload,
+)
 
 ROOT = "/admin/api/integrations/vscode-chat"
 
@@ -30,26 +37,34 @@ def test_connect_disconnect_and_doctor_status(
 
     client, path, runtime = integration
     result = client.get(ROOT)
-    assert result.json()["paths"]["vscode_models"] == str(path.resolve())
+    assert object_payload(response_object(result)["paths"])["vscode_models"] == str(
+        path.resolve()
+    )
     assert not path.exists()
     result = client.post(ROOT + "/connect")
     assert result.status_code == 200
-    assert result.json()["connected"]
+    assert response_object(result)["connected"]
     assert result.headers["cache-control"] == "no-store"
     assert "integration-secret" not in result.text
-    group = json.loads(path.read_text())[0]
+    group = array_payload(load_json_value(path.read_text()))[0]
     # VS Code resolves group apiKey through its secret store, even for plain text.
     # Explicit model headers reach the Messages endpoint without that lookup.
-    assert "apiKey" not in group
-    headers = group["models"][0]["requestHeaders"]
+    assert "apiKey" not in object_payload(group)
+    headers = object_array(object_payload(group)["models"])[0]["requestHeaders"]
     assert headers == {"x-api-key": "integration-secret"}
-    assert client.head("/v1/messages", headers=headers).status_code == 204
-    assert group["models"][0]["url"] == "http://127.0.0.1:4321/v1/messages"
+    request_headers = {
+        name: string_payload(value) for name, value in object_payload(headers).items()
+    }
+    assert client.head("/v1/messages", headers=request_headers).status_code == 204
+    assert (
+        object_array(object_payload(group)["models"])[0]["url"]
+        == "http://127.0.0.1:4321/v1/messages"
+    )
     assert integration_report(runtime.settings)["vscode-chat"] == {
         "status": "available",
         "connected": True,
     }
-    assert not client.post(ROOT + "/disconnect").json()["connected"]
+    assert not response_object(client.post(ROOT + "/disconnect"))["connected"]
 
 
 @pytest.mark.parametrize("action", ["", "/connect", "/disconnect", "/refresh"])

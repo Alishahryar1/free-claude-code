@@ -7,7 +7,6 @@ reads a clock.
 import json
 from collections.abc import Mapping
 from contextlib import suppress
-from typing import Any
 
 import httpx
 import httpx2
@@ -18,6 +17,7 @@ from free_claude_code.core.diagnostics import (
     attached_upstream_error_body,
     reported_http_status,
 )
+from free_claude_code.core.json_types import load_json_value
 from free_claude_code.providers.canonical_failures import is_context_window_error_code
 
 _RATE_LIMIT_MARKERS = frozenset({"rate_limit", "rate limit", "too many requests"})
@@ -123,11 +123,14 @@ def reports_context_window_exceeded(exc: Exception) -> bool:
     if is_context_window_error_code(getattr(exc, "code", None)):
         return True
 
-    bodies = [attached_upstream_error_body(exc), getattr(exc, "body", None)]
-    response = getattr(exc, "response", None)
+    bodies: list[object] = [
+        attached_upstream_error_body(exc),
+        getattr(exc, "body", None),
+    ]
+    response: object = getattr(exc, "response", None)
     if response is not None:
         with suppress(Exception):
-            bodies.append(response.content)
+            bodies.append(getattr(response, "content", None))
     return any(
         isinstance(item, Mapping)
         and any(is_context_window_error_code(item.get(key)) for key in ("code", "type"))
@@ -139,17 +142,19 @@ def reports_context_window_exceeded(exc: Exception) -> bool:
 def error_text(exc: Exception) -> str:
     """Combine exception, body, and response text for marker matching."""
     parts = [str(exc)]
-    body = getattr(exc, "body", None)
+    body: object = getattr(exc, "body", None)
     if body is not None:
         parts.append(_body_to_text(body))
-    response = getattr(exc, "response", None)
+    response: object = getattr(exc, "response", None)
     if response is not None:
         with suppress(Exception):
-            parts.append(response.text)
+            text: object = getattr(response, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
     return " ".join(part for part in parts if part).lower()
 
 
-def _status_from_body(body: Any) -> int | None:
+def _status_from_body(body: object) -> int | None:
     for item in _body_candidates(body):
         if not isinstance(item, Mapping):
             continue
@@ -163,10 +168,10 @@ def _status_from_body(body: Any) -> int | None:
     return None
 
 
-def _body_candidates(body: Any) -> tuple[Any, ...]:
+def _body_candidates(body: object) -> tuple[object, ...]:
     if isinstance(body, str):
         try:
-            return _body_candidates(json.loads(body))
+            return _body_candidates(load_json_value(body))
         except ValueError:
             return (body,)
     if isinstance(body, bytes):
@@ -177,7 +182,7 @@ def _body_candidates(body: Any) -> tuple[Any, ...]:
     return (body,)
 
 
-def _coerce_status(value: Any) -> int | None:
+def _coerce_status(value: object) -> int | None:
     if isinstance(value, int):
         return value
     if isinstance(value, str) and value.isdigit():
@@ -185,7 +190,7 @@ def _coerce_status(value: Any) -> int | None:
     return None
 
 
-def _status_from_type_fields(item: Mapping[str, Any]) -> int | None:
+def _status_from_type_fields(item: Mapping[str, object]) -> int | None:
     text = " ".join(
         value.lower()
         for key in ("type", "code")
@@ -200,7 +205,7 @@ def _status_from_type_fields(item: Mapping[str, Any]) -> int | None:
     return None
 
 
-def _body_to_text(body: Any) -> str:
+def _body_to_text(body: object) -> str:
     if isinstance(body, bytes):
         return body.decode("utf-8", errors="replace")
     if isinstance(body, str):

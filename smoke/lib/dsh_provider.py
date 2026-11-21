@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Literal, override
 
 from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 
 @dataclass
@@ -92,7 +93,7 @@ def dsh_provider(scenario: DshProvider) -> Generator[str]:
                 self.json_response(404, {"error": "not found"})
 
         def do_POST(self) -> None:
-            body = json.loads(
+            body = decode_object(
                 self.rfile.read(int(self.headers.get("content-length", "0")))
             )
             purpose = scenario.purpose(body)
@@ -142,7 +143,8 @@ def dsh_provider(scenario: DshProvider) -> Generator[str]:
                     )
                     self.chunk({}, "stop")
                 elif (scenario.read_path or scenario.tool_call) and not any(
-                    message.get("role") == "tool" for message in body["messages"]
+                    object_payload(message).get("role") == "tool"
+                    for message in array_payload(body["messages"])
                 ):
                     self.chunk(
                         {

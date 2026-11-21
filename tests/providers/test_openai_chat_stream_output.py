@@ -6,6 +6,7 @@ import pytest
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import build_responses_chat_request
 from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
 from free_claude_code.providers.openai_chat.stream_output import (
@@ -21,7 +22,7 @@ def _parse_frame(frame: str) -> tuple[str, dict[str, object]]:
     return lines[0].removeprefix("event: "), json.loads(lines[1].removeprefix("data: "))
 
 
-def _parse_frames(frames: list[str]) -> list[tuple[str, dict[str, object]]]:
+def _parse_frames(frames: list[str]) -> list[tuple[str, JsonObject]]:
     return [(event.event, event.data) for event in parse_sse_text("".join(frames))]
 
 

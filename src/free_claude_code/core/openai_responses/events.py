@@ -1,6 +1,7 @@
 """OpenAI Responses SSE event formatting."""
 
 import json
+import re
 from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any, cast
@@ -9,7 +10,7 @@ import simplejson
 
 from free_claude_code.core.diagnostics import safe_exception_message
 from free_claude_code.core.failures import find_execution_failure
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue, json_index
 
 from .errors import openai_error_from_failure, openai_error_payload
 
@@ -18,6 +19,25 @@ OPENAI_RESPONSES_SSE_HEADERS: dict[str, str] = {
     "Cache-Control": "no-cache",
     "Connection": "keep-alive",
 }
+
+
+def _canonical_position(value: JsonValue) -> int | None:
+    if value is None:
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, str) and (
+        match := re.fullmatch(r"([+-]?[0-9]+)(?:\.0+)?", value)
+    ):
+        return int(match[1])
+    return None
+
+
+def responses_event_index(value: JsonValue) -> int:
+    """Read a Responses position, treating null like an omitted index."""
+    return json_index(_canonical_position(value))
 
 
 def format_response_sse_event(event_type: str, data: Mapping[str, Any]) -> str:
@@ -53,7 +73,7 @@ def committed_response_failure_frame(
     if failure is not None:
         error = openai_error_from_failure(failure)
     else:
-        error = openai_error_payload(
+        error: JsonObject = openai_error_payload(
             message=safe_exception_message(exc),
             error_type="api_error",
         )["error"]

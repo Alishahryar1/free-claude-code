@@ -1,4 +1,3 @@
-import json
 import subprocess
 from pathlib import Path
 from typing import cast
@@ -17,6 +16,7 @@ from smoke.lib.claude_cli_matrix import (
 )
 from smoke.lib.config import DEFAULT_TARGETS, SmokeConfig
 from smoke.lib.server import RunningServer
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 
 def _smoke_config(tmp_path: Path) -> SmokeConfig:
@@ -66,19 +66,30 @@ def test_nvidia_nim_cli_matrix_report_shape_and_redaction(
         target="nvidia_nim_cli",
         filename_prefix="nvidia-nim-cli",
     )
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = decode_object(path.read_text(encoding="utf-8"))
 
     assert path.name.startswith("nvidia-nim-cli-matrix-test-worker-")
     assert payload["target"] == "nvidia_nim_cli"
     assert payload["models"] == ["nvidia_nim/z-ai/glm-5.2"]
-    saved = payload["outcomes"][0]
-    assert saved["feature"] == "basic_text"
-    assert saved["classification"] == "passed"
-    assert saved["request_count"] == 1
-    assert saved["token_evidence"]["marker_present"] is True
-    assert saved["token_evidence"]["agent_catalog_present"] is False
-    assert saved["token_evidence"]["agent_tool_count"] == 0
-    assert saved["token_evidence"]["agent_result_count"] == 0
+    saved = array_payload(payload["outcomes"])[0]
+    assert object_payload(saved)["feature"] == "basic_text"
+    assert object_payload(saved)["classification"] == "passed"
+    assert object_payload(saved)["request_count"] == 1
+    assert (
+        object_payload(object_payload(saved)["token_evidence"])["marker_present"]
+        is True
+    )
+    assert (
+        object_payload(object_payload(saved)["token_evidence"])["agent_catalog_present"]
+        is False
+    )
+    assert (
+        object_payload(object_payload(saved)["token_evidence"])["agent_tool_count"] == 0
+    )
+    assert (
+        object_payload(object_payload(saved)["token_evidence"])["agent_result_count"]
+        == 0
+    )
     assert "secret-nim-key" not in path.read_text(encoding="utf-8")
 
 
@@ -160,19 +171,30 @@ def test_openrouter_free_cli_matrix_report_shape_and_redaction(
         target="openrouter_free_cli",
         filename_prefix="openrouter-free-cli",
     )
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = decode_object(path.read_text(encoding="utf-8"))
 
     assert path.name.startswith("openrouter-free-cli-matrix-test-worker-")
     assert payload["target"] == "openrouter_free_cli"
     assert payload["models"] == ["open_router/nvidia/nemotron-3-super-120b-a12b:free"]
-    saved = payload["outcomes"][0]
-    assert saved["feature"] == "basic_text"
-    assert saved["classification"] == "passed"
-    assert saved["request_count"] == 1
-    assert saved["token_evidence"]["marker_present"] is True
-    assert saved["token_evidence"]["agent_catalog_present"] is False
-    assert saved["token_evidence"]["agent_tool_count"] == 0
-    assert saved["token_evidence"]["agent_result_count"] == 0
+    saved = array_payload(payload["outcomes"])[0]
+    assert object_payload(saved)["feature"] == "basic_text"
+    assert object_payload(saved)["classification"] == "passed"
+    assert object_payload(saved)["request_count"] == 1
+    assert (
+        object_payload(object_payload(saved)["token_evidence"])["marker_present"]
+        is True
+    )
+    assert (
+        object_payload(object_payload(saved)["token_evidence"])["agent_catalog_present"]
+        is False
+    )
+    assert (
+        object_payload(object_payload(saved)["token_evidence"])["agent_tool_count"] == 0
+    )
+    assert (
+        object_payload(object_payload(saved)["token_evidence"])["agent_result_count"]
+        == 0
+    )
     assert "secret-openrouter-key" not in path.read_text(encoding="utf-8")
 
 

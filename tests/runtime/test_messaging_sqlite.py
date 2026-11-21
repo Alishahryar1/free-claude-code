@@ -20,7 +20,11 @@ from free_claude_code.messaging.workflow import MessagingWorkflow
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
 from free_claude_code.runtime.messaging_import import import_legacy
 from free_claude_code.runtime.messaging_sqlite import SQLiteMessagingStore
-from free_claude_code.runtime.sqlite_database import SQLiteDatabase
+from free_claude_code.runtime.sqlite_database import (
+    SQLiteDatabase,
+    query_rows,
+    required_column,
+)
 from tests.assertions import require_present
 
 pytestmark = pytest.mark.asyncio
@@ -260,9 +264,7 @@ async def test_failed_import_transaction_keeps_source_and_allows_retry(
     assert (await storage.load_conversation_snapshot()).is_empty
     assert (
         await storage.database.run(
-            lambda connection: connection.execute(
-                "SELECT count(*) FROM messaging_legacy_import"
-            ).fetchone()[0],
+            _receipt_count,
             write=False,
         )
         == 0
@@ -277,13 +279,21 @@ def incoming(node: str, *, text: str = "prompt"):
     )
 
 
+def _receipt_count(connection: sqlite3.Connection) -> int:
+    row = query_rows(
+        connection, "SELECT count(*) FROM messaging_legacy_import"
+    ).fetchone()
+    assert row is not None
+    return required_column(row, 0, int)
+
+
 async def import_receipt(database: SQLiteDatabase):
-    return await database.run(
-        lambda connection: dict(
-            connection.execute("SELECT * FROM messaging_legacy_import").fetchone()
-        ),
-        write=False,
-    )
+    def read(connection: sqlite3.Connection) -> dict[str, object]:
+        row = query_rows(connection, "SELECT * FROM messaging_legacy_import").fetchone()
+        assert row is not None
+        return dict(row)
+
+    return await database.run(read, write=False)
 
 
 @pytest.mark.parametrize(
@@ -305,7 +315,7 @@ async def test_import_rejects_storage_invalid_tree_without_reserving_references(
 ):
     before, after = tree(root="before"), tree(root="after")
     invalid = tree(root=value if field == "root_id" else "bad").to_json()
-    root = invalid["root_id"]
+    root: str = invalid["root_id"]
     child = value if field == "node_id" else "child"
     invalid["nodes"][child] = {
         "node_id": child,
@@ -378,8 +388,9 @@ async def test_import_message_storage_validation_and_successful_duplicate_owners
     rows = await storage.database.run(
         lambda connection: [
             tuple(row)
-            for row in connection.execute(
-                "SELECT platform,chat_id,message_id,ts,direction,kind FROM messaging_managed_messages ORDER BY sequence"
+            for row in query_rows(
+                connection,
+                "SELECT platform,chat_id,message_id,ts,direction,kind FROM messaging_managed_messages ORDER BY sequence",
             )
         ],
         write=False,
@@ -526,9 +537,7 @@ async def test_import_outer_failure_rolls_back_released_units(
     assert not await storage.get_tracked_message_ids_for_chat("telegram", "chat")
     assert (
         await storage.database.run(
-            lambda connection: connection.execute(
-                "SELECT count(*) FROM messaging_legacy_import"
-            ).fetchone()[0],
+            _receipt_count,
             write=False,
         )
         == 0

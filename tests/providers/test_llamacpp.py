@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from httpx2 import Timeout
 
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
@@ -17,6 +18,7 @@ from tests.providers.support import (
     reasoning_for,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload
 
 LLAMACPP_MODEL = "llamacpp-community/qwen2.5-7b-instruct"
 
@@ -71,7 +73,8 @@ def test_init_uses_openai_chat_client() -> None:
     assert provider._provider_name == "LLAMACPP"
     assert provider._base_url == "http://localhost:8080/v1"
     assert provider._api_key == "llamacpp"
-    timeout = openai_client.call_args.kwargs["timeout"]
+    timeout: object = openai_client.call_args.kwargs["timeout"]
+    assert isinstance(timeout, Timeout)
     assert (timeout.read, timeout.write, timeout.connect) == (600.0, 15.0, 5.0)
 
 
@@ -84,7 +87,7 @@ def test_build_request_body_uses_openai_chat_shape(
 
     assert body["model"] == LLAMACPP_MODEL
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
-    assert body["messages"][0]["role"] == "system"
+    assert object_payload(array_payload(body["messages"])[0])["role"] == "system"
     assert "thinking" not in body
 
 
@@ -108,9 +111,12 @@ def test_replay_is_independent_of_current_turn_reasoning_control(
 
     body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
 
-    assert body["messages"][1]["content"] == "visible"
-    assert body["messages"][1]["reasoning_content"] == "private"
-    assert body["extra_body"]["thinking_budget_tokens"] == 0
+    assert object_payload(array_payload(body["messages"])[1])["content"] == "visible"
+    assert (
+        object_payload(array_payload(body["messages"])[1])["reasoning_content"]
+        == "private"
+    )
+    assert object_payload(body["extra_body"])["thinking_budget_tokens"] == 0
 
 
 @pytest.mark.asyncio

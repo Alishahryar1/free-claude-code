@@ -16,6 +16,7 @@ from tests.providers.support import (
     make_provider_config,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 def make_request(**overrides: object):
@@ -88,7 +89,7 @@ def test_build_request_body_basic(groq_provider: GroqProvider):
     body = groq_provider._chat._build_request_body(req)
 
     assert body["model"] == "llama-3.3-70b-versatile"
-    assert body["messages"][0]["role"] == "system"
+    assert object_payload(array_payload(body["messages"])[0])["role"] == "system"
     assert "max_completion_tokens" in body
 
 
@@ -127,21 +128,26 @@ def test_build_request_body_replays_reasoning_in_native_field(
     body = groq_provider._chat._build_request_body(request)
 
     assistant = next(
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     )
-    assert assistant["content"] == "I will inspect the file."
-    assert assistant["reasoning_content"] == "I need to read it first."
-    assert assistant["tool_calls"][0]["id"] == "toolu_1"
-    assert body["messages"][-1] == {
+    assert object_payload(assistant)["content"] == "I will inspect the file."
+    assert object_payload(assistant)["reasoning_content"] == "I need to read it first."
+    assert (
+        object_payload(array_payload(object_payload(assistant)["tool_calls"])[0])["id"]
+        == "toolu_1"
+    )
+    assert array_payload(body["messages"])[-1] == {
         "role": "tool",
         "tool_call_id": "toolu_1",
         "content": "print('hello')",
     }
-    assert assistant["reasoning_content"] == "I need to read it first."
+    assert object_payload(assistant)["reasoning_content"] == "I need to read it first."
     assert all(
-        "reasoning_content" not in message
-        for message in body["messages"]
-        if message["role"] != "assistant"
+        "reasoning_content" not in object_payload(message)
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] != "assistant"
     )
 
 
@@ -156,7 +162,9 @@ def test_build_request_body_global_disable_blocks_reasoning_mapping():
     req = make_request()
     body = provider._chat._build_request_body(req)
 
-    roles = [m.get("role") for m in body.get("messages", [])]
+    roles = [
+        object_payload(m).get("role") for m in array_payload(body.get("messages", []))
+    ]
     assert "assistant_reasoning_content" not in roles
 
 
@@ -188,7 +196,10 @@ def test_build_request_body_sanitizes_and_remaps_via_mock_converter(
         body = groq_provider._chat._build_request_body(req)
 
     msgs = body["messages"]
-    assert msgs[0].get("name") is None and msgs[1].get("name") is None
+    assert (
+        object_payload(array_payload(msgs)[0]).get("name") is None
+        and object_payload(array_payload(msgs)[1]).get("name") is None
+    )
     for key in ("logprobs", "logit_bias", "top_logprobs"):
         assert key not in body
     assert body.get("max_tokens") is None

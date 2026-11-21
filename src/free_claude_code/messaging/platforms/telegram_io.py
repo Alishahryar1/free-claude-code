@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from loguru import logger
 
@@ -58,7 +58,16 @@ except ImportError:
     TelegramRetryAfter = TimeoutError
     TelegramBaseError = Exception
 
-ApplicationGetter = Callable[[], Any | None]
+if TYPE_CHECKING:
+    from telegram import Bot
+
+
+class _TelegramApplication(Protocol):
+    @property
+    def bot(self) -> Bot: ...
+
+
+ApplicationGetter = Callable[[], _TelegramApplication | None]
 
 _GONE_MESSAGE_ERRORS = (
     "message to edit not found",
@@ -128,13 +137,13 @@ class TelegramMessenger:
             delete_many=self.delete_messages,
         )
 
-    async def _with_retry(
+    async def _with_retry[T](
         self,
-        func: Callable[..., Awaitable[Any]],
-        *args: Any,
+        func: Callable[[str | None], Awaitable[T]],
+        *,
+        parse_mode: str | None = None,
         suppress_known_message_errors: bool = True,
-        **kwargs: Any,
-    ) -> Any:
+    ) -> T | None:
         """Execute a Telegram API call with the platform retry policy.
 
         Network errors and rate limits share one budget of three calls; a
@@ -143,12 +152,12 @@ class TelegramMessenger:
         attempts = 1
         while True:
             try:
-                return await func(*args, **kwargs)
+                return await func(parse_mode)
             except (TimeoutError, TelegramBaseError) as e:
                 failure = _failure(e)
                 state = CallState(
                     attempts=attempts,
-                    formatted=bool(kwargs.get("parse_mode")),
+                    formatted=bool(parse_mode),
                     suppress_known=suppress_known_message_errors,
                 )
                 match decide(failure, state):
@@ -156,7 +165,7 @@ class TelegramMessenger:
                         return None
                     case RetryPlain():
                         logger.warning("Markdown failed, retrying without parse_mode")
-                        kwargs["parse_mode"] = None
+                        parse_mode = None
                     case Retry(delay=delay):
                         _log_retry(failure, attempts, e, delay)
                         attempts += 1
@@ -179,22 +188,29 @@ class TelegramMessenger:
         reply_to: str | None = None,
         parse_mode: str | None = "MarkdownV2",
         message_thread_id: str | None = None,
-    ) -> str:
+    ) -> str | None:
         """Send a Telegram message immediately."""
         app = self._get_application()
         if not app or not app.bot:
             raise RuntimeError("Telegram application or bot not initialized")
 
-        async def _do_send(parse_mode: str | None = parse_mode) -> str:
-            kwargs: dict[str, Any] = {
-                "chat_id": chat_id,
-                "text": text,
-                "reply_to_message_id": int(reply_to) if reply_to else None,
-                "parse_mode": parse_mode,
-            }
-            if message_thread_id is not None:
-                kwargs["message_thread_id"] = int(message_thread_id)
-            msg = await app.bot.send_message(**kwargs)
+        async def _do_send(parse_mode: str | None) -> str:
+            reply_id = int(reply_to) if reply_to else None
+            if message_thread_id is None:
+                msg = await app.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_to_message_id=reply_id,
+                    parse_mode=parse_mode,
+                )
+            else:
+                msg = await app.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_to_message_id=reply_id,
+                    parse_mode=parse_mode,
+                    message_thread_id=int(message_thread_id),
+                )
             return str(msg.message_id)
 
         return await self._with_retry(_do_send, parse_mode=parse_mode)
@@ -211,7 +227,7 @@ class TelegramMessenger:
         if not app or not app.bot:
             raise RuntimeError("Telegram application or bot not initialized")
 
-        async def _do_edit(parse_mode: str | None = parse_mode) -> None:
+        async def _do_edit(parse_mode: str | None) -> None:
             await app.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=int(message_id),
@@ -227,7 +243,7 @@ class TelegramMessenger:
         if not app or not app.bot:
             raise RuntimeError("Telegram application or bot not initialized")
 
-        async def _do_delete() -> None:
+        async def _do_delete(_parse_mode: str | None) -> None:
             await app.bot.delete_message(chat_id=chat_id, message_id=int(message_id))
 
         await self._with_retry(_do_delete)
@@ -255,7 +271,9 @@ class TelegramMessenger:
                 chunk = mids[start : start + TELEGRAM_DELETE_MESSAGES_BATCH_SIZE]
                 chunk_snapshot = tuple(chunk)
 
-                async def _do_bulk(ids: tuple[int, ...] = chunk_snapshot) -> None:
+                async def _do_bulk(
+                    _parse_mode: str | None, ids: tuple[int, ...] = chunk_snapshot
+                ) -> None:
                     await bot.delete_messages(chat_id=chat_id, message_ids=list(ids))
 
                 try:

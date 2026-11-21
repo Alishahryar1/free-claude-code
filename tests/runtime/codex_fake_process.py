@@ -5,7 +5,7 @@ import sys
 import time
 from pathlib import Path
 
-from free_claude_code.core.json_types import JsonValue
+from free_claude_code.core.json_types import JsonValue, json_object, load_json_value
 
 
 def emit(value: JsonValue):
@@ -26,8 +26,10 @@ defaults = {
 creation_id = None
 turn = "turn-1"
 for line in sys.stdin.buffer:
-    request = json.loads(line)
+    request = json_object(load_json_value(line))
+    assert request is not None
     method = request.get("method")
+    assert method is None or isinstance(method, str)
     request_id = request.get("id")
     if method == "initialize":
         if mode == "factory-wait":
@@ -60,7 +62,11 @@ for line in sys.stdin.buffer:
         emit({"id": request_id, "result": {}})
     elif method == "turn/start":
         if mode == "child-warning-on-close":
-            turn = request["params"]["clientUserMessageId"]
+            params = json_object(request["params"])
+            assert params is not None
+            supplied_turn = params["clientUserMessageId"]
+            assert isinstance(supplied_turn, str)
+            turn = supplied_turn
         emit(
             {
                 "method": "turn/started",
@@ -177,7 +183,7 @@ for line in sys.stdin.buffer:
                     "item": {
                         "id": "answer",
                         "type": "agentMessage",
-                        "text": request["result"]["decision"],
+                        "text": json_object(request["result"])["decision"],
                     },
                 },
             }

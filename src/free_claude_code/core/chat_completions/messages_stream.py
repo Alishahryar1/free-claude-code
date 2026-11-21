@@ -1,13 +1,20 @@
 """Project validated native Messages events directly to Chat completions."""
 
 from collections.abc import Mapping
-from typing import Any
 from uuid import uuid4
 
 from ..anthropic.native_stream import NativeMessagesStreamState
 from ..history_replay import ReplayOrigin, ReplayRecord, encode_replay
-from ..json_types import JsonValue
+from ..json_types import JsonObject, JsonValue, json_object, json_text
 from .response import ChatOutput, chat_failure
+
+
+def _token_count(value: JsonValue) -> int | float:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else value
+    raise chat_failure("Messages usage token count must be a number")
 
 
 class ChatMessagesStream:
@@ -25,7 +32,7 @@ class ChatMessagesStream:
         self._origin = origin
         self._reserved = set(reserved_tool_ids)
         self._include_thoughts = include_thoughts
-        self._usage: dict[str, int] = {}
+        self._usage: JsonObject = {}
         self._tool_index = 0
 
     @property
@@ -34,15 +41,18 @@ class ChatMessagesStream:
 
     def feed(self, event_type: str, payload: Mapping[str, JsonValue]) -> list[str]:
         block = self._state.accept(event_type, payload)
-        data: dict[str, Any] = dict(payload)
+        data = payload
         if event_type == "message_start":
-            self._usage.update(data["message"].get("usage") or {})
+            if self._output.include_usage:
+                message = json_object(data["message"])
+                self._usage.update(json_object(message.get("usage") or {}))
             return self._output.start()
         if event_type == "message_delta":
-            self._usage.update(data.get("usage") or {})
+            if self._output.include_usage:
+                self._usage.update(json_object(data.get("usage") or {}))
         elif event_type == "content_block_start":
-            content = data["content_block"]
-            kind = content["type"]
+            content = json_object(data["content_block"])
+            kind = json_text(content["type"])
             if kind not in {"text", "thinking", "redacted_thinking", "tool_use"}:
                 raise chat_failure(f"Chat cannot represent Messages block {kind}")
             if kind == "text":
@@ -50,18 +60,26 @@ class ChatMessagesStream:
                     raise chat_failure(
                         "Chat cannot represent native Messages citations"
                     )
-                return self._output.text(content["text"]) if content["text"] else []
-            if kind == "thinking" and self._include_thoughts and content["thinking"]:
+                return (
+                    self._output.text(json_text(content["text"]))
+                    if json_text(content["text"])
+                    else []
+                )
+            if (
+                kind == "thinking"
+                and self._include_thoughts
+                and json_text(content["thinking"])
+            ):
                 return self._output.thought(
-                    content["thinking"], source=f"rs_{data['index']}"
+                    json_text(content["thinking"]), source=f"rs_{data['index']}"
                 )
         elif event_type == "content_block_delta":
-            delta = data["delta"]
+            delta = json_object(data["delta"])
             if delta["type"] == "text_delta":
-                return self._output.text(delta["text"])
+                return self._output.text(json_text(delta["text"]))
             if delta["type"] == "thinking_delta" and self._include_thoughts:
                 return self._output.thought(
-                    delta["thinking"], source=f"rs_{data['index']}"
+                    json_text(delta["thinking"]), source=f"rs_{data['index']}"
                 )
             if delta["type"] == "citations_delta":
                 raise chat_failure("Chat cannot represent native Messages citations")
@@ -95,24 +113,22 @@ class ChatMessagesStream:
                 raise chat_failure(
                     f"Chat cannot represent Messages stop reason {self._state.stop_reason}"
                 )
-            prompt = sum(
-                self._usage.get(key, 0)
-                for key in (
-                    "input_tokens",
-                    "cache_read_input_tokens",
-                    "cache_creation_input_tokens",
-                )
+            if not self._output.include_usage:
+                return self._output.finish(reason)
+            cached = _token_count(self._usage.get("cache_read_input_tokens", 0))
+            prompt = (
+                _token_count(self._usage.get("input_tokens", 0))
+                + cached
+                + _token_count(self._usage.get("cache_creation_input_tokens", 0))
             )
-            output = self._usage.get("output_tokens", 0)
+            output = _token_count(self._usage.get("output_tokens", 0))
             return self._output.finish(
                 reason,
                 {
                     "prompt_tokens": prompt,
                     "completion_tokens": output,
                     "total_tokens": prompt + output,
-                    "prompt_tokens_details": {
-                        "cached_tokens": self._usage.get("cache_read_input_tokens", 0)
-                    },
+                    "prompt_tokens_details": {"cached_tokens": cached},
                 },
             )
         return []

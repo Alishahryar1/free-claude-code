@@ -90,9 +90,11 @@ def _probe_proxy(proxy_root_url: str, *, deadline: float) -> ProxyProbe:
             except OSError as exc:
                 return ProxyProbe(ProxyState.NETWORK_ERROR, str(exc))
             return ProxyProbe(ProxyState.STARTING, str(reason))
-        if isinstance(reason, ConnectionRefusedError) or getattr(
-            reason, "errno", None
-        ) in {errno.ECONNREFUSED, 10061}:
+        error_number: object = getattr(reason, "errno", None)
+        if isinstance(reason, ConnectionRefusedError) or error_number in (
+            errno.ECONNREFUSED,
+            10061,
+        ):
             return ProxyProbe(ProxyState.UNREACHABLE, str(reason))
         if isinstance(reason, ConnectionError):
             return ProxyProbe(ProxyState.CONNECTION_CLOSED, str(reason))

@@ -24,6 +24,7 @@ from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.providers.gemini import GeminiProvider
 from free_claude_code.providers.open_router import OpenRouterProvider
 from tests.api.support import create_test_app, provider_manager_for_app
+from tests.api.test_delivered_stream_recovery import text_events
 from tests.providers.support import (
     MockHandler,
     immediate_admission,
@@ -35,9 +36,12 @@ from tests.providers.test_history_transports import _native
 from tests.providers.test_native_tool_arguments import tool_events
 from tests.wire_payload import (
     array_payload,
+    decode_object,
     int_payload,
     object_array,
     object_payload,
+    response_object,
+    response_payload,
     string_payload,
 )
 
@@ -60,7 +64,7 @@ def test_messages_custom_tool_type_is_translated_to_native_gemini(
     bodies = []
 
     def reply(request: httpx.Request | httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _sse([{"text": "hello"}])
 
     tool = {"name": "read", "description": "Read a file", "input_schema": SCHEMA}
@@ -268,7 +272,7 @@ def ingress_request(
 def response_value(response: httpx.Response, wire: str, streaming: bool):
     assert response.status_code == 200, response.text
     if not streaming:
-        return response.json()
+        return response_payload(response)
     events = parse_sse_text(response.text)
     if wire == "responses":
         assert events[-1].event == "response.completed", response.text
@@ -293,6 +297,305 @@ def response_value(response: httpx.Response, wire: str, streaming: bool):
         assert isinstance(accumulator, ChatResponseAccumulator)
         accumulator.finish()
     return accumulator.result()
+
+
+@pytest.mark.parametrize(
+    "text_controls",
+    [
+        "unsupported",
+        ["unsupported"],
+        "",
+        [],
+        False,
+        0,
+        {"format": 123},
+        {"format": []},
+        {"format": ""},
+        {"format": False},
+        {"format": {}},
+        {"format": {"type": "json_schema"}},
+        {"format": {"type": "json_schema", "schema": "invalid"}},
+    ],
+)
+def test_gemini_rejects_invalid_responses_text_controls(text_controls: JsonValue):
+    def unexpected_request(_: httpx.Request) -> Never:
+        raise AssertionError("Invalid text controls must be rejected before inference")
+
+    app = matrix_app("gemini", native_reply=unexpected_request)
+    path, body = ingress_request("responses", True)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(path, json={**body, "text": text_controls})
+    assert response.status_code == 400, response.text
+    assert (
+        object_payload(response_object(response)["error"])["type"]
+        == "invalid_request_error"
+    )
+
+
+@pytest.mark.parametrize(
+    ("text_controls", "expected_config"),
+    [
+        (None, {}),
+        ({}, {}),
+        ({"format": None}, {}),
+        ({"format": {"type": "text"}}, {}),
+        ({"format": {"type": "json_object"}}, {"responseMimeType": "application/json"}),
+        (
+            {"format": {"type": "json_schema", "name": "answer", "schema": SCHEMA}},
+            {"responseMimeType": "application/json", "responseJsonSchema": SCHEMA},
+        ),
+    ],
+)
+def test_gemini_preserves_valid_responses_text_controls(
+    text_controls: JsonValue, expected_config: JsonObject
+):
+    from tests.providers.test_gemini import _sse
+
+    sent: list[JsonObject] = []
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        sent.append(decode_object(request.content))
+        return _sse([{"text": '{"answer":"yes"}'}])
+
+    app = matrix_app("gemini", native_reply=reply)
+    path, body = ingress_request("responses", True)
+    with TestClient(app) as client:
+        response = client.post(path, json={**body, "text": text_controls})
+    assert response.status_code == 200, response.text
+    assert len(sent) == 1
+    config = object_payload(sent[0]["generationConfig"])
+    assert {
+        field: config[field]
+        for field in ("responseMimeType", "responseJsonSchema")
+        if field in config
+    } == expected_config
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("finish_reason", ["STOP", 1, 1.0])
+def test_gemini_tool_call_survives_compatible_candidate_fields(
+    streaming: bool, finish_reason: str | int | float
+):
+    events = source_events("gemini")
+    candidate = object_array(events[0]["candidates"])[0]
+    candidate["index"] = 0.0
+    candidate["finishReason"] = finish_reason
+
+    def reply(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=f"data: {json.dumps(events[0])}\n\n",
+        )
+
+    with TestClient(matrix_app("gemini", native_reply=reply)) as client:
+        path, body = ingress_request("gemini", streaming)
+        result = object_payload(
+            response_value(client.post(path, json=body), "gemini", streaming)
+        )
+    received = object_array(result["candidates"])[0]
+    assert received["finishReason"] == finish_reason
+    assert type(received["finishReason"]) is type(finish_reason)
+    content = object_payload(received["content"])
+    assert any(
+        part.get("functionCall") == GEMINI_PARTS[1]["functionCall"]
+        for part in object_array(content["parts"])
+    )
+
+
+def test_gemini_backed_chat_rejects_nonstring_tool_result_id():
+    def unexpected_request(_: httpx.Request) -> Never:
+        raise AssertionError("Invalid tool history reached the upstream provider")
+
+    history = [
+        {"role": "user", "content": "read"},
+        {"role": "tool", "tool_call_id": 1, "content": "tool result"},
+    ]
+    with TestClient(matrix_app("gemini", native_reply=unexpected_request)) as client:
+        path, body = ingress_request("chat", False, history)
+        response = client.post(path, json=body)
+    assert response.status_code == 400, response.text
+    assert (
+        object_payload(response_object(response)["error"])["type"]
+        == "invalid_request_error"
+    )
+
+
+@pytest.mark.filterwarnings(
+    "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
+)
+@pytest.mark.parametrize("wire", ["chat", "gemini"])
+@pytest.mark.parametrize(
+    ("index_case", "index_value"),
+    [
+        ("output_index", 0.0),
+        ("content_index", 0.0),
+        ("output_index", "0"),
+        ("content_index", "0"),
+        ("output_index", "+0"),
+        ("content_index", "0.0"),
+        ("output_index", None),
+        ("content_index", None),
+        ("unused", None),
+        ("unused_summary_index", None),
+    ],
+)
+def test_responses_text_translation_preserves_provider_index_encodings(
+    wire: str, index_case: str, index_value: JsonValue
+):
+    events = text_events("responses", "Hello")
+    if index_case == "unused":
+        events[0]["output_index"] = None
+        events[-1]["output_index"] = None
+    elif index_case == "unused_summary_index":
+        for event in events:
+            if event["type"] in {
+                "response.content_part.added",
+                "response.content_part.done",
+            }:
+                event["summary_index"] = None
+    else:
+        for event in events:
+            if index_case in event:
+                event[index_case] = index_value
+
+    def reply(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+        )
+
+    with TestClient(matrix_app("responses", sdk_reply=reply)) as client:
+        path, body = ingress_request(wire, False)
+        result = object_payload(
+            response_value(client.post(path, json=body), wire, False)
+        )
+
+    if wire == "chat":
+        choice = object_array(result["choices"])[0]
+        assert object_payload(choice["message"])["content"] == "Hello"
+        assert object_payload(result["usage"])["total_tokens"] == 10
+    else:
+        candidate = object_array(result["candidates"])[0]
+        parts = object_array(object_payload(candidate["content"])["parts"])
+        assert (
+            "".join(string_payload(part.get("text", "")) for part in parts) == "Hello"
+        )
+        assert object_payload(result["usageMetadata"])["totalTokenCount"] == 10
+
+
+@pytest.mark.filterwarnings(
+    "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
+)
+@pytest.mark.parametrize(
+    "snapshot", ["response.created", "response.completed", "response.failed"]
+)
+@pytest.mark.parametrize("empty_output", [{}, ""])
+def test_native_responses_preserves_lifecycle_with_empty_output(
+    snapshot: str, empty_output: JsonValue
+):
+    events = text_events("responses", "Hello")
+    if snapshot == "response.failed":
+        events[-1]["type"] = snapshot
+        failure = object_payload(events[-1]["response"])
+        failure.update(
+            status="failed",
+            error={"code": "server_error", "message": "Upstream ended the request"},
+        )
+    event = next(event for event in events if event["type"] == snapshot)
+    object_payload(event["response"])["output"] = empty_output
+
+    def reply(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+        )
+
+    with TestClient(matrix_app("responses", sdk_reply=reply)) as client:
+        path, body = ingress_request("responses", True)
+        response = client.post(path, json=body)
+
+    assert response.status_code == 200, response.text
+    streamed = parse_sse_text(response.text)
+    assert streamed[0].event == "response.created"
+    assert object_payload(streamed[0].data["response"])["output"] == []
+    assert [
+        frame.data["delta"]
+        for frame in streamed
+        if frame.event == "response.output_text.delta"
+    ] == ["Hello"]
+    final = streamed[-1]
+    if snapshot == "response.failed":
+        assert final.event == snapshot
+        error = object_payload(object_payload(final.data["response"])["error"])
+        assert "Upstream ended the request" in string_payload(error["message"])
+    else:
+        assert final.event == "response.completed"
+
+
+@pytest.mark.parametrize("wire", ["chat", "gemini", "messages", "responses"])
+@pytest.mark.parametrize("empty_parts", [{}, ""])
+def test_gemini_finishes_with_empty_provider_parts(wire: str, empty_parts: JsonValue):
+    events = [
+        {
+            "candidates": [
+                {"index": 0, "content": {"role": "model", "parts": [{"text": "Hello"}]}}
+            ]
+        },
+        {
+            "candidates": [
+                {
+                    "index": 0,
+                    "content": {"role": "model", "parts": empty_parts},
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 8,
+                "candidatesTokenCount": 2,
+                "totalTokenCount": 10,
+            },
+        },
+    ]
+
+    def reply(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+        )
+
+    with TestClient(matrix_app("gemini", native_reply=reply)) as client:
+        path, body = ingress_request(wire, True)
+        result = response_value(client.post(path, json=body), wire, True)
+    assert "Hello" in json.dumps(result)
+
+
+@pytest.mark.parametrize("wire", ["chat", "gemini", "messages", "responses"])
+@pytest.mark.parametrize(
+    "event_type", ["message_start", "message_delta", "message_stop"]
+)
+def test_messages_lifecycle_ignores_unused_block_index(wire: str, event_type: str):
+    events = text_events("messages", "Hello")
+    event = next(event for event in events if event["type"] == event_type)
+    event["index"] = None
+
+    def reply(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(
+                f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+                for event in events
+            ),
+        )
+
+    with TestClient(matrix_app("messages", native_reply=reply)) as client:
+        path, body = ingress_request(wire, True)
+        result = response_value(client.post(path, json=body), wire, True)
+    assert "Hello" in json.dumps(result)
 
 
 def reply_history(value: JsonObject, wire: str):
@@ -394,7 +697,7 @@ def test_all_sixteen_paths_replay_native_state_and_tool_results(
     bodies = []
 
     def reply(request: httpx.Request | httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         events = source_events(protocol)
         raw = "".join(
             (f"event: {event['type']}\n" if protocol == "messages" else "")
@@ -417,12 +720,17 @@ def test_all_sixteen_paths_replay_native_state_and_tool_results(
     assert len(bodies) == 2
     assert "tool-value" in json.dumps(bodies[1])
     if protocol == "gemini":
-        assert bodies[1]["contents"][1] == {"role": "model", "parts": GEMINI_PARTS}
+        assert array_payload(bodies[1]["contents"])[1] == {
+            "role": "model",
+            "parts": GEMINI_PARTS,
+        }
     elif protocol == "messages":
         replayed = next(
             block
-            for block in bodies[1]["messages"][1]["content"]
-            if block.get("type") == "thinking"
+            for block in array_payload(
+                object_array(bodies[1]["messages"])[1]["content"]
+            )
+            if object_payload(block).get("type") == "thinking"
         )
         expected = _native(protocol)
         # The existing Messages -> Responses codec retains signed fields, but
@@ -431,22 +739,25 @@ def test_all_sixteen_paths_replay_native_state_and_tool_results(
             expected.pop("extension")
         assert replayed == expected
     elif protocol == "responses":
-        assert _native(protocol) in bodies[1]["input"]
+        assert _native(protocol) in array_payload(bodies[1]["input"])
     else:
         assistant = next(
             message
-            for message in bodies[1]["messages"]
-            if message["role"] == "assistant"
+            for message in array_payload(bodies[1]["messages"])
+            if object_payload(message)["role"] == "assistant"
         )
         if wire in {"chat", "gemini"}:
             assert (
-                assistant["reasoning_details"] == _native(protocol)["reasoning_details"]
+                object_payload(assistant)["reasoning_details"]
+                == _native(protocol)["reasoning_details"]
             )
         else:
             # Existing Messages/Responses presentations expose Chat's opaque
             # bytes separately from its readable scalar representation.
             assert any(
-                detail.get("data") == "opaque-original"
-                for detail in assistant["reasoning_details"]
+                object_payload(detail).get("data") == "opaque-original"
+                for detail in array_payload(
+                    object_payload(assistant)["reasoning_details"]
+                )
             )
             assert json.dumps(assistant).count("Find 17.") == 1

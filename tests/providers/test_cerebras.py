@@ -17,6 +17,7 @@ from tests.providers.support import (
     reasoning_for,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 def make_request(model: str = "llama3.1-8b", **overrides: object):
@@ -95,7 +96,7 @@ def test_build_request_body_basic(cerebras_provider: OpenAIChatProvider):
     )
 
     assert body["model"] == "llama3.1-8b"
-    assert body["messages"][0]["role"] == "system"
+    assert object_payload(array_payload(body["messages"])[0])["role"] == "system"
     assert "max_completion_tokens" in body
 
 
@@ -107,20 +108,25 @@ def test_build_request_body_replays_reasoning_in_native_field(
     )
 
     assistant = next(
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     )
-    assert assistant["content"] == "I will inspect the file."
-    assert assistant["reasoning"] == "I need to read it first."
-    assert assistant["tool_calls"][0]["id"] == "toolu_1"
-    assert body["messages"][-1] == {
+    assert object_payload(assistant)["content"] == "I will inspect the file."
+    assert object_payload(assistant)["reasoning"] == "I need to read it first."
+    assert (
+        object_payload(array_payload(object_payload(assistant)["tool_calls"])[0])["id"]
+        == "toolu_1"
+    )
+    assert array_payload(body["messages"])[-1] == {
         "role": "tool",
         "tool_call_id": "toolu_1",
         "content": "print('hello')",
     }
     assert all(
-        "reasoning" not in message
-        for message in body["messages"]
-        if message["role"] != "assistant"
+        "reasoning" not in object_payload(message)
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] != "assistant"
     )
 
 
@@ -138,11 +144,16 @@ def test_replay_is_independent_of_current_turn_reasoning_control():
     )
 
     assistant = next(
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     )
-    assert assistant["content"] == "I will inspect the file."
-    assert assistant["reasoning"] == "I need to read it first."
-    assert assistant["tool_calls"][0]["id"] == "toolu_1"
+    assert object_payload(assistant)["content"] == "I will inspect the file."
+    assert object_payload(assistant)["reasoning"] == "I need to read it first."
+    assert (
+        object_payload(array_payload(object_payload(assistant)["tool_calls"])[0])["id"]
+        == "toolu_1"
+    )
     assert body["reasoning_effort"] == "none"
 
 
@@ -163,7 +174,7 @@ def test_build_request_body_remaps_max_tokens_preserves_message_name(
             req, reasoning=reasoning_for(req)
         )
 
-    assert body["messages"][0].get("name") == "alice"
+    assert object_payload(array_payload(body["messages"])[0]).get("name") == "alice"
     assert body.get("max_tokens") is None
     assert body["max_completion_tokens"] == 42
 

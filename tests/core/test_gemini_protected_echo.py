@@ -2,7 +2,6 @@
 
 from dataclasses import replace
 from hashlib import sha256
-from typing import Any, cast
 
 import pytest
 
@@ -28,6 +27,12 @@ from free_claude_code.core.history_replay import (
 )
 from free_claude_code.core.json_types import JsonObject
 from tests.core.test_gemini_requests import build, request
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 ORIGIN = ReplayOrigin("provider", "chat", "https://source.invalid", "account", "model")
 
@@ -56,24 +61,25 @@ def test_mixed_equal_thoughts_keep_only_protected_echo_exemption(
     aggregate = GeminiResponseAccumulator()
     for event in parse_sse_text("".join(frames)):
         aggregate.feed(event.data)
-    parts = aggregate.result()["candidates"][0]["content"]["parts"]
-    bundle = decode_bundle(parts[-1]["thoughtSignature"])
+    parts = object_payload(
+        object_payload(array_payload(aggregate.result()["candidates"])[0])["content"]
+    )["parts"]
+    bundle = decode_bundle(
+        string_payload(object_payload(array_payload(parts)[-1])["thoughtSignature"])
+    )
     assert bundle is not None and [record.native for record in bundle.records] == [
         native
     ]
     if visible and edited:
-        parts[0]["text"] = "Edited"
+        object_payload(array_payload(parts)[0])["text"] = "Edited"
     incoming = request(
         contents=[{"role": "model", "parts": parts}, {"parts": [{"text": "next"}]}]
     )
-    prepared = cast(
-        dict[str, Any],
-        prepare_history(
-            build(incoming, protocol).body, replace(ORIGIN, protocol=protocol)
-        ),
+    prepared = prepare_history(
+        build(incoming, protocol).body, replace(ORIGIN, protocol=protocol)
     )
     if protocol == "chat":
-        assistant = prepared["messages"][0]
+        assistant = object_array(prepared["messages"])[0]
         assert assistant["reasoning_details"] == native["reasoning_details"]
         assert (
             assistant.get("reasoning_content", "") == ("Edited" if edited else thought)
@@ -85,15 +91,15 @@ def test_mixed_equal_thoughts_keep_only_protected_echo_exemption(
     if protocol == "responses":
         ordinary = [
             text
-            for item in prepared["input"]
+            for item in object_array(prepared["input"])
             if item.get("type") == "reasoning"
             for text, _ in readable_reasoning(item)
         ]
     elif protocol == "messages":
         ordinary = [
-            block["thinking"]
-            for message in prepared["messages"]
-            for block in message.get("content", [])
+            string_payload(block["thinking"])
+            for message in object_array(prepared["messages"])
+            for block in object_array(message.get("content", []))
             if isinstance(block, dict) and block.get("type") == "thinking"
         ]
     if protocol != "chat":
@@ -208,7 +214,13 @@ def test_signature_only_record_does_not_claim_independent_readable_text():
     )
     event = parse_sse_text("".join(output.finish("STOP")))[0]
     bundle = decode_bundle(
-        event.data["candidates"][0]["content"]["parts"][0]["thoughtSignature"]
+        string_payload(
+            object_array(
+                object_payload(object_array(event.data["candidates"])[0]["content"])[
+                    "parts"
+                ]
+            )[0]["thoughtSignature"]
+        )
     )
     assert bundle is not None
     assert len(bundle.records) == 1

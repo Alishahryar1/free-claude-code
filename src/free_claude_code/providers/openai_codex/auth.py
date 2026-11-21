@@ -21,6 +21,7 @@ from free_claude_code.application.connected_accounts import (
 )
 from free_claude_code.config.paths import openai_auth_lock_path, openai_auth_path
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
+from free_claude_code.core.json_types import JsonValue, load_json_value
 
 from .login import (
     OPENAI_CODEX_ORIGINATOR,
@@ -137,7 +138,7 @@ def _read_saved_credentials(path: Path) -> _Credentials | None:
     if not path.is_file():
         return None
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = load_json_value(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict) or payload.get("version") != 1:
             raise ValueError("credential document has an unsupported schema")
         return _Credentials.from_json(payload.get("credentials"))
@@ -454,7 +455,7 @@ class OpenAIAuthManager:
             },
         )
         response.raise_for_status()
-        payload = response.json()
+        payload: JsonValue = response.json()
         return _credentials_from_token_response(payload)
 
     async def _refresh_locked(self, current: _Credentials) -> _Credentials:
@@ -489,7 +490,7 @@ class OpenAIAuthManager:
                 )
                 raise OpenAIReconnectRequired(self._last_error)
             response.raise_for_status()
-            payload = response.json()
+            payload: JsonValue = response.json()
             refreshed = _credentials_from_token_response(payload, previous=current)
             await asyncio.to_thread(self._write_credentials_unlocked, refreshed)
             self._credentials = refreshed
@@ -580,7 +581,7 @@ class OpenAIAuthManager:
 
 
 def _credentials_from_token_response(
-    payload: Any,
+    payload: JsonValue,
     *,
     previous: _Credentials | None = None,
 ) -> _Credentials:
@@ -613,7 +614,7 @@ def _jwt_claims(token: str) -> dict[str, Any]:
     try:
         encoded = token.split(".")[1]
         encoded += "=" * (-len(encoded) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(encoded))
+        payload = load_json_value(base64.urlsafe_b64decode(encoded))
     except (IndexError, ValueError) as exc:
         raise OpenAILoginError("OpenAI returned an invalid identity token.") from exc
     if not isinstance(payload, dict):

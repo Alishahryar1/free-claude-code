@@ -111,6 +111,10 @@ def test_ci_rejects_pyrefly_suppressions(
             "from typing import cast\nx: str\ny = cast(str, x)\n",
             "redundant-cast",
         ),
+        (
+            "from typing import Any\npayload: Any\nvalue = payload.get('name')\n",
+            "explicit-any-use",
+        ),
         ("x: int = 'invalid'  # type:ignore\n", "bad-assignment"),
         ("x: int = 'invalid'  # pyrefly:\u0085ignore\n", "bad-assignment"),
         (f"# {'pyrefly: ignore-errors'}\nx: int = 'invalid'\n", "bad-assignment"),

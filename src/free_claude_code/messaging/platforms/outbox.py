@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import Any
 
 from loguru import logger
 
@@ -11,7 +11,7 @@ from ..limiter import MessagingRateLimiter
 
 SendOperation = Callable[
     [str, str, str | None, str | None, str | None],
-    Awaitable[str],
+    Awaitable[str | None],
 ]
 EditOperation = Callable[[str, str, str, str | None], Awaitable[None]]
 DeleteManyOperation = Callable[[str, list[str]], Awaitable[None]]
@@ -47,7 +47,7 @@ class PlatformOutbox:
         """Queue or immediately send a platform message."""
         self._require_open()
 
-        async def _send() -> str:
+        async def _send() -> str | None:
             return await self._send(
                 chat_id,
                 text,
@@ -59,7 +59,10 @@ class PlatformOutbox:
         if fire_and_forget:
             self._limiter.fire_and_forget(_send)
             return None
-        return cast(str | None, await self._limiter.enqueue(_send))
+        message_id = await self._limiter.enqueue(_send)
+        if message_id is not None and not isinstance(message_id, str):
+            raise TypeError("Message delivery returned an invalid ID.")
+        return message_id
 
     async def queue_edit_message(
         self,

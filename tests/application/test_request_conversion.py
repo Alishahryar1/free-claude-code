@@ -8,6 +8,10 @@ import pytest
 from openai import AsyncOpenAI
 
 from free_claude_code.application.execution import ProviderExecutor
+from free_claude_code.application.routing import (
+    RoutedMessagesRequest,
+    RoutedResponsesRequest,
+)
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -28,6 +32,20 @@ from tests.providers.test_opencode import (
     _catalog_payload,
     _provider_with_wire_transports,
 )
+
+
+def _stream(
+    executor: ProviderExecutor,
+    routed: RoutedMessagesRequest | RoutedResponsesRequest,
+    request_id: str,
+):
+    if isinstance(routed, RoutedMessagesRequest):
+        return executor.stream_messages(
+            routed, raw_log_payload=dict, request_id=request_id
+        )
+    return executor.stream_responses(
+        routed, raw_log_payload=dict, request_id=request_id
+    )
 
 
 @pytest.mark.asyncio
@@ -72,11 +90,13 @@ async def test_executor_converts_chat_request_once(wire: str):
             _routed_request() if wire == "messages" else _routed_responses_request()
         )
         with patch.object(
-            provider._chat, builder_name, wraps=getattr(provider._chat, builder_name)
+            provider._chat,
+            builder_name,
+            wraps=provider._chat._build_request_body
+            if wire == "messages"
+            else provider._chat._build_responses_request_body,
         ) as build:
-            stream = getattr(executor, f"stream_{wire}")(
-                routed, raw_log_payload=dict, request_id="conversion-once"
-            )
+            stream = _stream(executor, routed, "conversion-once")
             output = "".join(
                 [frame async for event in stream for frame in event.frames]
             )
@@ -101,6 +121,12 @@ async def test_executor_converts_selected_opencode_route_once(
         ("responses", "responses"): "_build_native_body",
     }
     name = builders[egress, wire]
+    implementations = {
+        ("chat", "messages"): provider._chat._build_request_body,
+        ("chat", "responses"): provider._chat._build_responses_request_body,
+        ("responses", "messages"): provider._responses._build_messages_body,
+        ("responses", "responses"): provider._responses._build_native_body,
+    }
     update = {"model": f"{egress}-selector"}
     if wire == "messages":
         messages_route = _routed_request()
@@ -115,7 +141,9 @@ async def test_executor_converts_selected_opencode_route_once(
     try:
         if warm:
             await provider.list_model_infos()
-        with patch.object(transport, name, wraps=getattr(transport, name)) as build:
+        with patch.object(
+            transport, name, wraps=implementations[egress, wire]
+        ) as build:
 
             def resolve_provider(_: str, _api_key_number: int):
                 return provider
@@ -123,9 +151,7 @@ async def test_executor_converts_selected_opencode_route_once(
             executor = ProviderExecutor(
                 AsyncMock(side_effect=resolve_provider),
             )
-            stream = getattr(executor, f"stream_{wire}")(
-                routed, raw_log_payload=dict, request_id="opencode-conversion-once"
-            )
+            stream = _stream(executor, routed, "opencode-conversion-once")
             assert f"{egress}-ok" in "".join(
                 [frame async for event in stream for frame in event.frames]
             )
@@ -159,7 +185,11 @@ async def test_executor_converts_subscription_request_once(wire: str):
     routed = _routed_request() if wire == "messages" else _routed_responses_request()
     try:
         with patch.object(
-            provider._responses, name, wraps=getattr(provider._responses, name)
+            provider._responses,
+            name,
+            wraps=provider._responses._build_messages_body
+            if wire == "messages"
+            else provider._responses._build_native_body,
         ) as build:
 
             def resolve_provider(_: str, _api_key_number: int):
@@ -168,9 +198,7 @@ async def test_executor_converts_subscription_request_once(wire: str):
             executor = ProviderExecutor(
                 AsyncMock(side_effect=resolve_provider),
             )
-            stream = getattr(executor, f"stream_{wire}")(
-                routed, raw_log_payload=dict, request_id="subscription-conversion-once"
-            )
+            stream = _stream(executor, routed, "subscription-conversion-once")
             assert auth.access_calls == 0
             assert "hello" in "".join(
                 [frame async for event in stream for frame in event.frames]

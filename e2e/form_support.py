@@ -4,7 +4,7 @@ from playwright.sync_api import Page
 
 
 def assert_autofill_opt_out(page: Page):
-    failures = page.locator(
+    failures: list[dict[str, str | None]] = page.locator(
         'form, textarea, input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])'
     ).evaluate_all("""nodes => nodes.flatMap(node => {
       const valid = node.autocomplete === 'off' && node.hasAttribute('data-1p-ignore') &&

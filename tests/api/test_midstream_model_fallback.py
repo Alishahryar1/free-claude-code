@@ -170,7 +170,9 @@ async def test_exhausted_model_continues_on_next_candidate(
     assert_completed(events, wire)
     assert public_text(events, wire) == "Hello there. Done."
     body = second_bodies[0]
-    history = without_empty_reasoning(body.get("messages", body.get("input")))
+    history = object_array(
+        without_empty_reasoning(body.get("messages", body.get("input")))
+    )
     assert history[0]["role"] == "user" and "greet" in str(history[0]["content"])
     assert assistant_history_text(history) == "Hello there. "
     assert sum(row.get("role") == "user" for row in history) == 2
@@ -178,9 +180,11 @@ async def test_exhausted_model_continues_on_next_candidate(
     if wire == "responses":
         assert (
             "".join(
-                part.get("text", "")
-                for item in events[-1].data["response"]["output"]
-                for part in item.get("content", [])
+                string_payload(object_payload(part).get("text", ""))
+                for item in array_payload(
+                    object_payload(events[-1].data["response"])["output"]
+                )
+                for part in object_array(object_payload(item).get("content", []))
             )
             == "Hello there. Done."
         )
@@ -283,7 +287,9 @@ async def test_each_model_receives_the_latest_prefix_and_its_own_budget(
         (second_bodies[1], "One two "),
         (third_bodies[0], "One two three "),
     ]:
-        history = without_empty_reasoning(body.get("messages", body.get("input")))
+        history = object_array(
+            without_empty_reasoning(body.get("messages", body.get("input")))
+        )
         assert sum(row.get("role") == "user" for row in history) == 2
         assert assistant_history_text(history) == expected
     events = parse_sse_text(raw)
@@ -370,17 +376,25 @@ async def test_abandoned_calls_never_cross_model_boundary(
     if wire == "messages":
         assert (
             "".join(
-                event.data.get("delta", {}).get("partial_json", "") for event in events
+                string_payload(
+                    object_payload(event.data.get("delta", {})).get("partial_json", "")
+                )
+                for event in events
             )
             == '{"path":"winning"}'
         )
     else:
         calls = [
             item
-            for item in events[-1].data["response"]["output"]
-            if item["type"] == "function_call"
+            for item in array_payload(
+                object_payload(events[-1].data["response"])["output"]
+            )
+            if object_payload(item)["type"] == "function_call"
         ]
-        assert len(calls) == 1 and calls[0]["arguments"] == '{"path":"winning"}'
+        assert (
+            len(calls) == 1
+            and object_payload(calls[0])["arguments"] == '{"path":"winning"}'
+        )
 
 
 @pytest.mark.asyncio

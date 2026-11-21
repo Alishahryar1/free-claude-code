@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from free_claude_code.harnesses import claude_integration, codex_integration
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 URL = "http://127.0.0.1:8000"
 TOKEN = "test-integration-token"
@@ -50,10 +51,10 @@ def test_refresh_upgrades_original_claude_directly_and_only_once(tmp_path: Path)
     state.write_text('{"theme":"dark"}')
     assert claude_integration.configure(settings, URL, TOKEN)["connected"] is True
     assert claude_integration.refresh_connected(settings, URL, TOKEN) is True
-    saved = json.loads(settings.read_text())
+    saved = decode_object(settings.read_text())
     env = {
-        entry["name"]: entry["value"]
-        for entry in saved["claudeCode.environmentVariables"]
+        object_payload(entry)["name"]: object_payload(entry)["value"]
+        for entry in array_payload(saved["claudeCode.environmentVariables"])
     }
     assert env["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] == "1"
     assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0"
@@ -69,13 +70,15 @@ def test_refresh_upgrades_original_claude_directly_and_only_once(tmp_path: Path)
 @pytest.mark.parametrize("change", ["missing", "disconnected", "url", "token"])
 def test_refresh_does_not_claim_unrecognized_claude(tmp_path: Path, change: str):
     settings, state = tmp_path / "settings.json", tmp_path / ".claude.json"
-    document = json.loads(json.dumps(OLD_CLAUDE))
+    document = decode_object(json.dumps(OLD_CLAUDE))
     if change == "disconnected":
         document.pop("claudeCode.disableLoginPrompt")
     elif change in {"url", "token"}:
-        document["claudeCode.environmentVariables"][0 if change == "url" else 1][
-            "value"
-        ] = "other"
+        object_payload(
+            array_payload(document["claudeCode.environmentVariables"])[
+                0 if change == "url" else 1
+            ]
+        )["value"] = "other"
     if change != "missing":
         settings.write_text(json.dumps(document))
     before = settings.read_bytes() if settings.exists() else None
