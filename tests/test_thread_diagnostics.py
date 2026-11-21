@@ -4,6 +4,8 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from types import FrameType
+from typing import TextIO, override
 
 import pytest
 
@@ -11,7 +13,7 @@ from e2e.thread_diagnostics import dump_threads_after
 
 
 @pytest.mark.parametrize("workers", ["0", "2"])
-def test_diagnostic_reaches_stderr_with_pytest_capture(tmp_path, workers):
+def test_diagnostic_reaches_stderr_with_pytest_capture(tmp_path: Path, workers: str):
     plugin = Path(__file__).resolve().parents[1] / "e2e/thread_diagnostics.py"
     (tmp_path / "thread_diagnostics.py").write_text(
         plugin.read_text(encoding="utf-8"), encoding="utf-8"
@@ -55,6 +57,7 @@ class DiagnosticOutput(io.StringIO):
         super().__init__()
         self.flushed = threading.Event()
 
+    @override
     def flush(self):
         self.flushed.set()
 
@@ -65,14 +68,18 @@ def _diagnostic_probe():
 
     current_frames = sys._current_frames
     print_stack = thread_diagnostics.traceback.print_stack
+    # Snapshot only once the test body runs: a frame caught mid-setup can be
+    # printed after its generator suspends, which cuts the stack short.
+    in_body = threading.Event()
 
     def traced_frames():
+        assert in_body.wait(5)
         print("diagnostic: acquiring frames", flush=True)
         frames = current_frames()
         print("diagnostic: acquired frames", flush=True)
         return frames
 
-    def traced_stack(frame, *, file):
+    def traced_stack(frame: FrameType, *, file: TextIO):
         print("diagnostic: formatting stack", flush=True)
         print_stack(frame, file=file)
         print("diagnostic: formatted stack", flush=True)
@@ -82,6 +89,7 @@ def _diagnostic_probe():
         patcher.setattr(thread_diagnostics.traceback, "print_stack", traced_stack)
         output = DiagnosticOutput()
         with dump_threads_after(0.001, output, "slow-test"):
+            in_body.set()
             assert output.flushed.wait(5)
             print("diagnostic: flushed", flush=True)
             assert "slow-test" in output.getvalue()
@@ -104,7 +112,7 @@ def test_slow_test_reports_stacks_without_interrupting_execution():
 
 
 @pytest.mark.parametrize("fails", [False, True])
-def test_completion_cancels_and_joins_pending_diagnostic(fails):
+def test_completion_cancels_and_joins_pending_diagnostic(fails: bool):
     output = DiagnosticOutput()
     existing_threads = set(threading.enumerate())
     try:

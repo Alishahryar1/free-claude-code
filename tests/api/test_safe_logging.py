@@ -12,11 +12,14 @@ from free_claude_code.api.handlers import MessagesHandler, TokenCountHandler
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import AnthropicStreamLedger
 from free_claude_code.core.anthropic.models import Message, MessagesRequest
+from tests.mock_calls import positional_arguments
 from tests.web_tools_support import StubWebToolsClient
 
 
 @pytest.mark.asyncio
-async def test_create_message_skips_full_payload_debug_log_by_default(caplog):
+async def test_create_message_skips_full_payload_debug_log_by_default(
+    caplog: pytest.LogCaptureFixture,
+):
     settings = Settings()
     assert settings.log_raw_api_payloads is False
     mock_provider = MagicMock()
@@ -25,11 +28,13 @@ async def test_create_message_skips_full_payload_debug_log_by_default(caplog):
         yield "event: ping\ndata: {}\n\n"
 
     mock_provider.stream_messages = fake_stream
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return mock_provider
+
     service = MessagesHandler(
         settings,
-        provider_resolver=AsyncMock(
-            side_effect=lambda _, _api_key_number: mock_provider
-        ),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         web_tools=StubWebToolsClient(),
     )
 
@@ -48,7 +53,9 @@ async def test_create_message_skips_full_payload_debug_log_by_default(caplog):
 
 
 @pytest.mark.asyncio
-async def test_create_message_logs_full_payload_when_opt_in(caplog):
+async def test_create_message_logs_full_payload_when_opt_in(
+    caplog: pytest.LogCaptureFixture,
+):
     settings = Settings(log_raw_api_payloads=True)
     mock_provider = MagicMock()
 
@@ -56,11 +63,13 @@ async def test_create_message_logs_full_payload_when_opt_in(caplog):
         yield "event: ping\ndata: {}\n\n"
 
     mock_provider.stream_messages = fake_stream
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return mock_provider
+
     service = MessagesHandler(
         settings,
-        provider_resolver=AsyncMock(
-            side_effect=lambda _, _api_key_number: mock_provider
-        ),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
@@ -104,10 +113,10 @@ def test_stream_ledger_raw_logging_includes_event_body_when_enabled():
     assert "role" in message
 
 
-def _flatten_log_calls(mock_log) -> str:
+def _flatten_log_calls(mock_log: MagicMock) -> str:
     parts: list[str] = []
     for call in mock_log.call_args_list:
-        parts.extend(str(arg) for arg in call.args)
+        parts.extend(str(arg) for arg in positional_arguments(call))
         parts.append(repr(call.kwargs))
     return " ".join(parts)
 
@@ -124,11 +133,13 @@ async def test_create_message_unexpected_error_default_logs_exclude_exception_te
         raise RuntimeError(secret)
 
     mock_provider.stream_messages = stream_boom
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return mock_provider
+
     service = MessagesHandler(
         settings,
-        provider_resolver=AsyncMock(
-            side_effect=lambda _, _api_key_number: mock_provider
-        ),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
@@ -163,11 +174,13 @@ async def test_create_message_unexpected_error_terminal_json_ignores_status_code
         raise WeirdError("no")
 
     mock_provider.stream_messages = stream_boom
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return mock_provider
+
     service = MessagesHandler(
         settings,
-        provider_resolver=AsyncMock(
-            side_effect=lambda _, _api_key_number: mock_provider
-        ),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(

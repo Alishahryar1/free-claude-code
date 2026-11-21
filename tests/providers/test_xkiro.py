@@ -1,6 +1,7 @@
 """Tests for the xKiro OpenAI-chat gateway profile and catalog."""
 
 import json
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -14,7 +15,7 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.config.provider_catalog import XKIRO_DEFAULT_BASE
 from free_claude_code.core.anthropic.models import MessagesRequest
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
@@ -31,6 +32,12 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
     reasoning_for,
+)
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
 )
 
 _MODEL = "qwen/qwen3.7-flash:free"
@@ -50,7 +57,7 @@ async def xkiro_provider():
 
 
 @asynccontextmanager
-async def _wire_provider(handler):
+async def _wire_provider(handler: Callable[[httpx2.Request], httpx2.Response]):
     async with AsyncOpenAI(
         api_key="wire-xkiro-key",
         base_url=XKIRO_DEFAULT_BASE,
@@ -122,7 +129,12 @@ def test_encodes_only_documented_reasoning_efforts(
     assert body.get("reasoning_effort") == expected
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
     assert body["model"] == _MODEL
-    assert body["tools"][0]["function"]["name"] == "read_file"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "read_file"
+    )
     assert "thinking" not in body
     assert "extra_body" not in body
 
@@ -164,7 +176,7 @@ def test_replays_reasoning_content_with_tool_history(
         reasoning=reasoning_for(request),
     )
 
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "assistant",
         "content": "I will inspect it.",
         "reasoning_content": "Read it first.",
@@ -179,7 +191,7 @@ def test_replays_reasoning_content_with_tool_history(
             }
         ],
     }
-    assert body["messages"][2] == {
+    assert array_payload(body["messages"])[2] == {
         "role": "tool",
         "tool_call_id": "toolu_1",
         "content": "print('hello')",
@@ -194,18 +206,18 @@ def test_replays_reasoning_content_with_tool_history(
 
 @pytest.mark.asyncio
 async def test_model_catalog_extracts_bare_model_ids(
+    monkeypatch: pytest.MonkeyPatch,
     xkiro_provider: OpenAIChatProvider,
 ) -> None:
-    xkiro_provider._client.get = AsyncMock(
-        return_value={"data": [{"id": _MODEL}, {"id": "xkiro/free"}]}
-    )
+    mock_get = AsyncMock(return_value={"data": [{"id": _MODEL}, {"id": "xkiro/free"}]})
+    monkeypatch.setattr(xkiro_provider._client, "get", mock_get)
 
     model_infos = await xkiro_provider.list_model_infos()
 
     assert model_infos == frozenset(
         {ProviderModelInfo(_MODEL), ProviderModelInfo("xkiro/free")}
     )
-    xkiro_provider._client.get.assert_awaited_once_with(
+    mock_get.assert_awaited_once_with(
         "/models",
         cast_to=object,
     )
@@ -221,11 +233,12 @@ async def test_model_catalog_extracts_bare_model_ids(
     ],
 )
 async def test_rejects_malformed_or_empty_catalog_atomically(
+    monkeypatch: pytest.MonkeyPatch,
     xkiro_provider: OpenAIChatProvider,
     payload: object,
     message: str,
 ) -> None:
-    xkiro_provider._client.get = AsyncMock(return_value=payload)
+    monkeypatch.setattr(xkiro_provider._client, "get", AsyncMock(return_value=payload))
 
     with pytest.raises(ModelListResponseError, match=message):
         await xkiro_provider.list_model_infos()
@@ -249,30 +262,41 @@ async def test_model_catalog_uses_documented_url_and_bearer_auth() -> None:
 
 
 @pytest.mark.asyncio
-async def test_full_catalog_retains_tiers_and_maps_capabilities(xkiro_provider):
-    xkiro_provider._client.get = AsyncMock(
-        return_value={
-            "data": [
-                {
-                    "id": _MODEL,
-                    "access_tier": "free",
-                    "capabilities": {"reasoning": True, "vision": True, "tools": True},
-                    "context_length": 128000,
-                    "max_output_tokens": 8192,
-                },
-                {
-                    "id": "paid/model:free",
-                    "access_tier": "paid",
-                    "capabilities": {
-                        "reasoning": False,
-                        "vision": False,
-                        "tools": False,
+async def test_full_catalog_retains_tiers_and_maps_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+    xkiro_provider: OpenAIChatProvider,
+):
+    monkeypatch.setattr(
+        xkiro_provider._client,
+        "get",
+        AsyncMock(
+            return_value={
+                "data": [
+                    {
+                        "id": _MODEL,
+                        "access_tier": "free",
+                        "capabilities": {
+                            "reasoning": True,
+                            "vision": True,
+                            "tools": True,
+                        },
+                        "context_length": 128000,
+                        "max_output_tokens": 8192,
                     },
-                },
-                {"id": "premium/model", "access_tier": "premium"},
-                {"id": _MODEL},
-            ]
-        }
+                    {
+                        "id": "paid/model:free",
+                        "access_tier": "paid",
+                        "capabilities": {
+                            "reasoning": False,
+                            "vision": False,
+                            "tools": False,
+                        },
+                    },
+                    {"id": "premium/model", "access_tier": "premium"},
+                    {"id": _MODEL},
+                ]
+            }
+        ),
     )
     infos = {info.model_id: info for info in await xkiro_provider.list_model_infos()}
     assert set(infos) == {_MODEL, "paid/model:free", "premium/model"}
@@ -292,7 +316,9 @@ async def test_full_catalog_retains_tiers_and_maps_capabilities(xkiro_provider):
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-def test_image_and_named_effort_translation(xkiro_provider, wire):
+def test_image_and_named_effort_translation(
+    xkiro_provider: OpenAIChatProvider, wire: str
+):
     image = "https://example.test/image.png"
     if wire == "messages":
         request = _request(
@@ -327,7 +353,9 @@ def test_image_and_named_effort_translation(xkiro_provider, wire):
         ).body
     assert body["reasoning_effort"] == "xhigh"
     assert body["model"] == _MODEL
-    assert body["messages"][0]["content"][0] == {
+    messages = body["messages"]
+    assert isinstance(messages, list)
+    assert array_payload(object_payload(messages[0])["content"])[0] == {
         "type": "image_url",
         "image_url": {"url": image},
     }
@@ -335,9 +363,9 @@ def test_image_and_named_effort_translation(xkiro_provider, wire):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_chat_stream_preserves_reasoning_tools_and_usage(wire):
+async def test_chat_stream_preserves_reasoning_tools_and_usage(wire: str):
     requests = []
-    chunks = [
+    chunks: list[JsonObject] = [
         {"choices": [{"index": 0, "delta": {"reasoning_content": "Inspecting."}}]},
         {
             "choices": [
@@ -378,7 +406,7 @@ async def test_chat_stream_preserves_reasoning_tools_and_usage(wire):
         },
     ]
 
-    def handler(request):
+    def handler(request: httpx2.Request):
         requests.append(request)
         frames = [
             {
@@ -420,33 +448,55 @@ async def test_chat_stream_preserves_reasoning_tools_and_usage(wire):
                 )
             )
         )
-        output = "".join([event async for event in stream])
+        output = "".join([frame async for event in stream for frame in event.frames])
 
     assert len(requests) == 1
     assert requests[0].url.path == "/v1/chat/completions"
     assert requests[0].headers["authorization"] == "Bearer wire-xkiro-key"
-    body = json.loads(requests[0].content)
+    body = decode_object(requests[0].content)
     assert body["model"] == _MODEL
     assert body["stream"] is True
     assert body["stream_options"] == {"include_usage": True}
     assert body["max_tokens"] == 2048
-    assert body["tools"][0]["function"]["parameters"] == schema
+    assert (
+        object_payload(object_array(body["tools"])[0]["function"])["parameters"]
+        == schema
+    )
     assert "reasoning_effort" not in body
     assert "Inspecting." in output
     assert "inspect" in output
     assert "README.md" in output
     events = [
-        json.loads(line[6:])
+        load_json_value(line[6:])
         for line in output.splitlines()
         if line.startswith("data: {")
     ]
     if wire == "messages":
-        terminal = next(event for event in events if event["type"] == "message_delta")
-        assert terminal["delta"]["stop_reason"] == "tool_use"
-        assert terminal["usage"]["output_tokens"] == 10
+        terminal = next(
+            event
+            for event in events
+            if object_payload(event)["type"] == "message_delta"
+        )
+        assert (
+            object_payload(object_payload(terminal)["delta"])["stop_reason"]
+            == "tool_use"
+        )
+        assert object_payload(object_payload(terminal)["usage"])["output_tokens"] == 10
     else:
         terminal = next(
-            event for event in events if event["type"] == "response.completed"
+            event
+            for event in events
+            if object_payload(event)["type"] == "response.completed"
         )
-        assert terminal["response"]["usage"]["input_tokens"] == 25
-        assert terminal["response"]["usage"]["output_tokens"] == 10
+        assert (
+            object_payload(
+                object_payload(object_payload(terminal)["response"])["usage"]
+            )["input_tokens"]
+            == 25
+        )
+        assert (
+            object_payload(
+                object_payload(object_payload(terminal)["response"])["usage"]
+            )["output_tokens"]
+            == 10
+        )

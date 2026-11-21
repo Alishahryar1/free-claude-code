@@ -12,6 +12,7 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.config.provider_catalog import TOGETHER_DEFAULT_BASE
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.support import (
@@ -22,6 +23,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 @pytest.fixture
@@ -87,21 +89,29 @@ def test_build_request_body_preserves_common_chat_tools_and_images(
 
     assert body["model"] == "zai-org/GLM-5.2"
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
-    assert body["messages"][0] == {"role": "system", "content": "Be concise."}
-    assert body["messages"][1]["content"] == [
+    assert array_payload(body["messages"])[0] == {
+        "role": "system",
+        "content": "Be concise.",
+    }
+    assert object_payload(array_payload(body["messages"])[1])["content"] == [
         {"type": "text", "text": "Inspect this image."},
         {
             "type": "image_url",
             "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
         },
     ]
-    assert body["tools"][0]["function"]["name"] == "inspect_image"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "inspect_image"
+    )
 
 
 @pytest.mark.parametrize("reasoning", [REASONING_OFF, REASONING_ON])
 def test_build_request_body_does_not_invent_catalog_wide_reasoning_control(
     together_provider: OpenAIChatProvider,
-    reasoning,
+    reasoning: ReasoningPolicy,
 ) -> None:
     request = MessagesRequest.model_validate(
         {
@@ -115,7 +125,7 @@ def test_build_request_body_does_not_invent_catalog_wide_reasoning_control(
 
     for field in ("reasoning", "reasoning_effort", "chat_template_kwargs"):
         assert field not in body
-        assert field not in extra_body
+        assert field not in object_payload(extra_body)
 
 
 def test_build_request_body_replays_documented_reasoning_field(
@@ -143,7 +153,7 @@ def test_build_request_body_replays_documented_reasoning_field(
         reasoning=reasoning_for(request),
     )
 
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "assistant",
         "content": "The answer is 42.",
         "reasoning": "Work through it.",
@@ -158,9 +168,10 @@ def test_build_request_body_replays_documented_reasoning_field(
 
 @pytest.mark.asyncio
 async def test_lists_only_documented_chat_models(
+    monkeypatch: pytest.MonkeyPatch,
     together_provider: OpenAIChatProvider,
 ) -> None:
-    together_provider._client.get = AsyncMock(
+    mock_get = AsyncMock(
         return_value=[
             {"id": "zai-org/GLM-5.2", "type": "chat"},
             {"id": "openai/gpt-oss-120b", "type": "chat"},
@@ -171,7 +182,9 @@ async def test_lists_only_documented_chat_models(
             {"id": "mixedbread-ai/Mxbai-Rerank-Large-V2", "type": "rerank"},
         ]
     )
-    together_provider._client.models.list = AsyncMock()
+    monkeypatch.setattr(together_provider._client, "get", mock_get)
+    mock_list = AsyncMock()
+    monkeypatch.setattr(together_provider._client.models, "list", mock_list)
 
     model_infos = await together_provider.list_model_infos()
 
@@ -181,11 +194,11 @@ async def test_lists_only_documented_chat_models(
             ProviderModelInfo("openai/gpt-oss-120b"),
         }
     )
-    together_provider._client.get.assert_awaited_once_with(
+    mock_get.assert_awaited_once_with(
         "/models",
         cast_to=object,
     )
-    together_provider._client.models.list.assert_not_awaited()
+    mock_list.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -242,11 +255,14 @@ async def test_model_catalog_uses_configured_base_url_and_auth(
 )
 @pytest.mark.asyncio
 async def test_rejects_malformed_or_unusable_catalog_atomically(
+    monkeypatch: pytest.MonkeyPatch,
     together_provider: OpenAIChatProvider,
     payload: object,
     message: str,
 ) -> None:
-    together_provider._client.get = AsyncMock(return_value=payload)
+    monkeypatch.setattr(
+        together_provider._client, "get", AsyncMock(return_value=payload)
+    )
 
     with pytest.raises(ModelListResponseError, match=message):
         await together_provider.list_model_infos()
@@ -254,6 +270,7 @@ async def test_rejects_malformed_or_unusable_catalog_atomically(
 
 @pytest.mark.asyncio
 async def test_model_catalog_uses_shared_retry_admission(
+    monkeypatch: pytest.MonkeyPatch,
     together_provider: OpenAIChatProvider,
 ) -> None:
     request = httpx.Request("GET", "https://api.together.ai/v1/models")
@@ -263,14 +280,15 @@ async def test_model_catalog_uses_shared_retry_admission(
         request=request,
         response=response,
     )
-    together_provider._client.get = AsyncMock(
+    mock_get_next = AsyncMock(
         side_effect=[
             rate_limit_error,
             [{"id": "zai-org/GLM-5.2", "type": "chat"}],
         ]
     )
+    monkeypatch.setattr(together_provider._client, "get", mock_get_next)
 
     model_infos = await together_provider.list_model_infos()
 
     assert model_infos == frozenset({ProviderModelInfo("zai-org/GLM-5.2")})
-    assert together_provider._client.get.await_count == 2
+    assert mock_get_next.await_count == 2

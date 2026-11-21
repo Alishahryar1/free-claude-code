@@ -23,7 +23,7 @@ from free_claude_code.application.code_sessions.models import CodeMode
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.application.session_events import EventOverflowError
 from free_claude_code.config.model_refs import split_provider_model_ref
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 
 from .admin_routes import admin_page_response
 from .admin_security import require_loopback_admin
@@ -359,7 +359,7 @@ def _decode_cursor(cursor: str | None) -> tuple[int, str] | None:
     if cursor is None:
         return None
     try:
-        value = json.loads(base64.urlsafe_b64decode(cursor).decode())
+        value = load_json_value(base64.urlsafe_b64decode(cursor).decode())
         if (
             not isinstance(value, list)
             or len(value) != 2
@@ -368,19 +368,18 @@ def _decode_cursor(cursor: str | None) -> tuple[int, str] | None:
         ):
             raise ValueError
         return value[0], value[1]
-    except ValueError, UnicodeError:
+    except ValueError:
         raise CodeValidationError("Invalid session page cursor.") from None
 
 
 def _decode_item_cursor(cursor: str) -> tuple[int, int]:
     try:
-        value = json.loads(base64.urlsafe_b64decode(cursor).decode())
-        if (
-            not isinstance(value, list)
-            or len(value) != 2
-            or any(type(part) is not int or part < 1 for part in value)
-        ):
+        value = load_json_value(base64.urlsafe_b64decode(cursor).decode())
+        if not isinstance(value, list) or len(value) != 2:
             raise ValueError
-        return value[0], value[1]
-    except ValueError, UnicodeError:
+        start, end = value
+        if type(start) is not int or type(end) is not int or start < 1 or end < 1:
+            raise ValueError
+        return start, end
+    except ValueError:
         raise CodeValidationError("Invalid transcript page cursor.") from None

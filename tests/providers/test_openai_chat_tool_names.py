@@ -3,20 +3,28 @@ from typing import Any
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.openai_chat.request_policy import (
+    OpenAIChatPostprocessor,
     OpenAIChatRequestPolicy,
     build_openai_chat_request_body,
+)
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
 )
 
 _POLICY = OpenAIChatRequestPolicy(
     provider_name="TEST",
-    reasoning_replay=ReasoningReplayMode.THINK_TAGS,
+    reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
 )
 
 
 def _request(name: str, *, continued: bool = False) -> MessagesRequest:
-    messages: list[dict] = [
+    messages: list[JsonObject] = [
         {"role": "user", "content": "Use the tool"},
         {
             "role": "assistant",
@@ -66,7 +74,11 @@ def _request(name: str, *, continued: bool = False) -> MessagesRequest:
     )
 
 
-def _body(request: MessagesRequest, *, postprocessors=()) -> dict[str, Any]:
+def _body(
+    request: MessagesRequest,
+    *,
+    postprocessors: tuple[OpenAIChatPostprocessor, ...] = (),
+) -> dict[str, Any]:
     return build_openai_chat_request_body(
         request,
         reasoning=ReasoningPolicy.provider_default(),
@@ -82,24 +94,24 @@ def test_chat_request_uses_one_alias_in_definition_choice_and_history() -> None:
 
     body = _body(request)
 
-    tools = body["tools"]
+    tools: list[JsonObject] = body["tools"]
     assert isinstance(tools, list)
-    alias = tools[0]["function"]["name"]
+    alias = string_payload(object_payload(tools[0]["function"])["name"])
     assert alias != original
     assert len(alias) <= 64
-    assert tools[1]["function"]["name"] == "safe_tool"
+    assert object_payload(tools[1]["function"])["name"] == "safe_tool"
     assert body["tool_choice"] == {
         "type": "function",
         "function": {"name": alias},
     }
-    messages = body["messages"]
+    messages: list[JsonObject] = body["messages"]
     assert isinstance(messages, list)
     assistant = next(message for message in messages if message["role"] == "assistant")
-    assert assistant["tool_calls"][0]["function"] == {
+    assert object_array(assistant["tool_calls"])[0]["function"] == {
         "name": alias,
         "arguments": '{"value": "x"}',
     }
-    assert assistant["tool_calls"][0]["id"] == "call_1"
+    assert object_array(assistant["tool_calls"])[0]["id"] == "call_1"
     assert request.model_dump() == snapshot
 
 
@@ -108,8 +120,12 @@ def test_chat_name_encoding_runs_after_provider_postprocessors() -> None:
     request = _request(original)
     observed: list[str] = []
 
-    def observe_names(body, _request, _reasoning) -> None:
-        observed.append(body["tools"][0]["function"]["name"])
+    def observe_names(body: JsonObject, _request, _reasoning) -> None:
+        observed.append(
+            string_payload(
+                object_payload(object_array(body["tools"])[0]["function"])["name"]
+            )
+        )
 
     body = _body(request, postprocessors=(observe_names,))
 
@@ -125,7 +141,7 @@ def test_chat_aliases_remain_stable_for_append_only_requests() -> None:
 
     assert continued_body["tools"] == prefix_body["tools"]
     assert continued_body["tool_choice"] == prefix_body["tool_choice"]
-    prefix_messages = prefix_body["messages"]
+    prefix_messages: list[JsonObject] = prefix_body["messages"]
     assert continued_body["messages"][: len(prefix_messages)] == prefix_messages
 
 
@@ -135,7 +151,7 @@ def test_chat_encoding_does_not_rewrite_unrelated_name_fields() -> None:
     request.extra_body = {"metadata": {"name": original}}
     policy = OpenAIChatRequestPolicy(
         provider_name="TEST",
-        reasoning_replay=ReasoningReplayMode.THINK_TAGS,
+        reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
         include_extra_body=True,
     )
     snapshot = deepcopy(request.extra_body)
@@ -147,4 +163,9 @@ def test_chat_encoding_does_not_rewrite_unrelated_name_fields() -> None:
     )
 
     assert body["extra_body"] == snapshot
-    assert body["tools"][0]["function"]["name"] != original
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        != original
+    )

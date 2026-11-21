@@ -634,7 +634,7 @@ class MessagingWorkflow:
             await self.session_store.record_message_id(
                 platform,
                 chat_id,
-                str(msg_id),
+                msg_id,
                 "out",
                 kind,
             )
@@ -663,7 +663,7 @@ class MessagingWorkflow:
             await self.session_store.record_message_id(
                 incoming.platform,
                 incoming.chat_id,
-                str(incoming.message_id),
+                incoming.message_id,
                 "in",
                 kind,
             )

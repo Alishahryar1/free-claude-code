@@ -14,7 +14,7 @@ from free_claude_code.config.loader import compose_settings_snapshot
     ],
 )
 @pytest.mark.parametrize("source", ["managed", "process", "both"])
-def test_retired_request_setting_is_ignored(key, source):
+def test_retired_request_setting_is_ignored(key: str, source: str):
     managed = {key: "true"} if source in {"managed", "both"} else {}
     process = {key: "obsolete-invalid-boolean"} if source in {"process", "both"} else {}
 

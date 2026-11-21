@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.messaging.event_parser import parse_cli_event
+from tests.wire_payload import object_payload, string_payload
 
 # --- Existing Parser Tests ---
 
@@ -44,7 +46,7 @@ class TestCLIParser:
 
     def test_parse_multiple_content(self):
         """Test parsing mixed content (thinking + tools)."""
-        event = {
+        event: JsonObject = {
             "type": "assistant",
             "message": {
                 "content": [
@@ -128,10 +130,8 @@ class TestCLIParser:
             "source": "exit",
             "exit_code": 1,
         }
-        assert (
-            "exit" in result[0]["message"].lower()
-            or "code" in result[0]["message"].lower()
-        )
+        message: str = result[0]["message"]
+        assert "exit" in message.lower() or "code" in message.lower()
 
     def test_parse_invalid_event(self):
         """Test parsing returns empty list for unrecognized event."""
@@ -225,7 +225,7 @@ class TestManagedClaudeSession:
 
             # Verify command construction
             # Arg 1 is subprocess command
-            args = mock_exec.call_args[0]
+            args = mock_exec.call_args.args
             assert args[0] == "claude"
             assert "-p" in args
             assert "Hello" in args
@@ -266,7 +266,7 @@ class TestManagedClaudeSession:
             async for _ in session.start_task("Hello", session_id="sess_abc"):
                 pass
 
-            args = mock_exec.call_args[0]
+            args = mock_exec.call_args.args
             assert "--resume" in args
             assert "sess_abc" in args
             assert "--fork-session" not in args
@@ -295,7 +295,7 @@ class TestManagedClaudeSession:
             ):
                 pass
 
-            args = mock_exec.call_args[0]
+            args = mock_exec.call_args.args
             assert "--resume" in args
             assert "sess_abc" in args
             assert "--fork-session" in args
@@ -324,7 +324,7 @@ class TestManagedClaudeSession:
             # Should have error event from stderr, then exit event
             assert len(events) == 2
             assert events[0]["type"] == "error"
-            assert events[0]["error"]["message"] == "Fatal error"
+            assert object_payload(events[0]["error"])["message"] == "Fatal error"
 
             assert events[1]["type"] == "exit"
             assert events[1]["code"] == 1
@@ -357,7 +357,9 @@ class TestManagedClaudeSession:
         assert mock_process.stderr.read.await_count >= 2
         err_events = [e for e in events if e.get("type") == "error"]
         assert len(err_events) == 1
-        assert "warning on stderr" in err_events[0]["error"]["message"]
+        assert "warning on stderr" in string_payload(
+            object_payload(err_events[0]["error"])["message"]
+        )
         assert events[-1]["type"] == "exit"
         assert events[-1]["code"] == 0
 
@@ -616,8 +618,8 @@ class TestManagedClaudeSession:
                 pass
 
             # Check env var
-            kwargs = mock_exec.call_args[1]
-            env = kwargs["env"]
+            kwargs = mock_exec.call_args.kwargs
+            env: dict[str, str] = kwargs["env"]
             assert env["ANTHROPIC_BASE_URL"] == "http://localhost:8082"
 
     @pytest.mark.asyncio
@@ -644,7 +646,7 @@ class TestManagedClaudeSession:
             async for _ in session.start_task("test"):
                 pass
 
-            env = mock_exec.call_args.kwargs["env"]
+            env: dict[str, str] = mock_exec.call_args.kwargs["env"]
             assert env["ANTHROPIC_AUTH_TOKEN"] == "proxy-token"
             assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
             assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "190000"
@@ -678,7 +680,7 @@ class TestManagedClaudeSession:
             async for _ in session.start_task("test"):
                 pass
 
-            env = mock_exec.call_args.kwargs["env"]
+            env: dict[str, str] = mock_exec.call_args.kwargs["env"]
             assert env["ANTHROPIC_AUTH_TOKEN"] == "freecc"
 
     @pytest.mark.asyncio
@@ -705,7 +707,7 @@ class TestManagedClaudeSession:
             async for _ in session.start_task("test"):
                 pass
 
-            cmd = mock_exec.call_args[0]
+            cmd = mock_exec.call_args.args
             assert "--add-dir" in cmd
             assert os.path.normpath("/dir1") in cmd
             assert os.path.normpath("/dir2") in cmd

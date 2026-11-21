@@ -5,13 +5,13 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import override
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _PACKAGE_ROOT = _REPO_ROOT / "src" / "free_claude_code"
 _PACKAGE_NAME = "free_claude_code"
 
 ALLOWED_PACKAGE_DEPENDENCIES: dict[str, set[str]] = {
-    "updater": set(),
     "config": {"core"},
     "core": set(),
     "application": {"config", "core"},
@@ -50,9 +50,16 @@ IMPORT_EXCEPTIONS: dict[tuple[str, str], str] = {
 }
 
 FACADE_ONLY_BOUNDARIES = {
+    "free_claude_code.application.model_fallback",
     "free_claude_code.core.openai_responses",
+    "free_claude_code.messaging.delivery_failures",
     "free_claude_code.messaging.trees",
+    "free_claude_code.providers.attempt_loop",
+    "free_claude_code.providers.failure_classification",
     "free_claude_code.providers.openai_chat",
+    "free_claude_code.providers.recovery_policy",
+    "free_claude_code.providers.request_correction",
+    "free_claude_code.providers.stream_failure_resolution",
 }
 
 DEFERRED_IMPORT_OWNERS = {
@@ -91,10 +98,12 @@ class _ImportVisitor(ast.NodeVisitor):
         self._function_depth = 0
         self.records: list[ImportRecord] = []
 
+    @override
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             self._record(alias.name, node.lineno)
 
+    @override
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         base = _resolve_import_from_base(
             importer=self._importer,
@@ -109,9 +118,11 @@ class _ImportVisitor(ast.NodeVisitor):
             imported = candidate if candidate in self._modules else base
             self._record(imported, node.lineno)
 
+    @override
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._visit_function(node)
 
+    @override
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._visit_function(node)
 
@@ -149,11 +160,8 @@ def test_api_configuration_access_goes_through_runtime() -> None:
     )
 
 
-def test_request_recovery_policy_has_no_client_or_transport_binding() -> None:
-    owners = {
-        f"{_PACKAGE_NAME}.providers.request_recovery",
-        f"{_PACKAGE_NAME}.providers.endpoint",
-    }
+def test_request_endpoint_has_no_client_or_transport_binding() -> None:
+    owners = {f"{_PACKAGE_NAME}.providers.endpoint"}
     forbidden = (
         "openai",
         "httpx",
@@ -172,8 +180,141 @@ def test_request_recovery_policy_has_no_client_or_transport_binding() -> None:
             for prefix in forbidden
         )
     ]
+    assert not offenders, "Request endpoint depends on an adapter:\n" + "\n".join(
+        offenders
+    )
+
+
+def test_failure_classification_is_pure() -> None:
+    owner = f"{_PACKAGE_NAME}.providers.failure_classification"
+    forbidden = (
+        "asyncio",
+        "datetime",
+        "logging",
+        "loguru",
+        "random",
+        "time",
+        f"{_PACKAGE_NAME}.core.trace",
+        f"{_PACKAGE_NAME}.providers.admission",
+        f"{_PACKAGE_NAME}.providers.failure_reporting",
+        f"{_PACKAGE_NAME}.providers.http",
+    )
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if (record.importer == owner or record.importer.startswith(f"{owner}."))
+        and any(
+            record.imported == prefix or record.imported.startswith(f"{prefix}.")
+            for prefix in forbidden
+        )
+    ]
     assert not offenders, (
-        "Request recovery policy depends on an adapter:\n" + "\n".join(offenders)
+        "Failure classification must not log, sleep, read clocks, or own recovery:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_stream_failure_resolution_is_pure() -> None:
+    owner = f"{_PACKAGE_NAME}.providers.stream_failure_resolution"
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if (record.importer == owner or record.importer.startswith(f"{owner}."))
+        and record.imported.split(".")[0] != "enum"
+        and not record.imported.startswith(f"{owner}.")
+    ]
+    assert not offenders, (
+        "Stream failure resolution must depend on nothing but its inputs:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_request_correction_decides_without_effects() -> None:
+    owner = f"{_PACKAGE_NAME}.providers.request_correction"
+    forbidden = (
+        "logging",
+        "loguru",
+        f"{_PACKAGE_NAME}.core.trace",
+        f"{_PACKAGE_NAME}.providers.admission",
+        f"{_PACKAGE_NAME}.providers.history_negotiation",
+        f"{_PACKAGE_NAME}.providers.http",
+    )
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if (record.importer == owner or record.importer.startswith(f"{owner}."))
+        and any(
+            record.imported == prefix or record.imported.startswith(f"{prefix}.")
+            for prefix in forbidden
+        )
+    ]
+    assert not offenders, (
+        "Request correction must return lessons, not log or teach memories:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_model_fallback_decision_is_pure() -> None:
+    owner = f"{_PACKAGE_NAME}.application.model_fallback.decision"
+    allowed = {"collections", "dataclasses", f"{_PACKAGE_NAME}.core.stream_recovery"}
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if record.importer == owner
+        and not any(
+            record.imported == prefix or record.imported.startswith(f"{prefix}.")
+            for prefix in allowed
+        )
+    ]
+    assert not offenders, (
+        "Model fallback decisions must depend on nothing but recovery evidence:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_recovery_policy_is_pure() -> None:
+    owner = f"{_PACKAGE_NAME}.providers.recovery_policy"
+    # datetime and email.utils parse HTTP-date hints; the caller passes "now".
+    allowed = {"dataclasses", "datetime", "email.utils", "math", owner}
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if (record.importer == owner or record.importer.startswith(f"{owner}."))
+        and not any(
+            record.imported == prefix or record.imported.startswith(f"{prefix}.")
+            for prefix in allowed
+        )
+    ]
+    clock_reads = {"now", "today", "utcnow"}
+    for path in (_PACKAGE_ROOT / "providers" / "recovery_policy").glob("*.py"):
+        offenders.extend(
+            f"{path.name}:{node.lineno}: reads the clock"
+            for node in ast.walk(ast.parse(path.read_text()))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in clock_reads
+        )
+    assert not offenders, (
+        "Recovery policy must take its clock and jitter as arguments:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_delivery_failures_is_pure() -> None:
+    owner = f"{_PACKAGE_NAME}.messaging.delivery_failures"
+    allowed = {"dataclasses", "enum", owner}
+    offenders = [
+        record.describe()
+        for record in _scan_imports(_PACKAGE_ROOT)
+        if (record.importer == owner or record.importer.startswith(f"{owner}."))
+        and not any(
+            record.imported == prefix or record.imported.startswith(f"{prefix}.")
+            for prefix in allowed
+        )
+    ]
+    assert not offenders, (
+        "Delivery failure rules must not reach a platform, the loop or a clock:\n"
+        + "\n".join(offenders)
     )
 
 

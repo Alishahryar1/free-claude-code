@@ -2,15 +2,17 @@
 
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.delivered_response import DeliveredResponse
 from free_claude_code.core.history_replay import (
     ReplayOrigin,
     ReplayRecord,
     encode_replay,
 )
+from free_claude_code.core.json_types import JsonObject
 
 
-def carrier(protocol, native):
+def carrier(protocol: WireProtocol, native: JsonObject):
     return encode_replay(
         ReplayRecord(ReplayOrigin("test", protocol, "", "", "model"), native)
     )
@@ -62,7 +64,7 @@ def carrier(protocol, native):
                     ]
                 },
             ),
-            False,
+            True,
         ),
         ("native-ciphertext", False),
         ("fcc:history:v1:malformed", False),
@@ -80,7 +82,9 @@ def carrier(protocol, native):
         "unknown-version",
     ],
 )
-def test_public_carriers_follow_native_reasoning_semantics(surface, value, eligible):
+def test_public_carriers_follow_native_reasoning_semantics(
+    surface: str, value: str, eligible: bool
+):
     delivered = DeliveredResponse("responses" if surface == "responses" else "messages")
     if surface == "responses":
         delivered.observe(

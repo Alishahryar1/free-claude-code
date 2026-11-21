@@ -3,10 +3,9 @@
 import json
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, override
 
 import openai
-from loguru import logger
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import NVIDIA_NIM_DEFAULT_BASE
@@ -15,16 +14,18 @@ from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
-from free_claude_code.providers.failure_policy import (
+from free_claude_code.providers.canonical_failures import (
     context_window_exceeded_provider_failure,
     overloaded_provider_failure,
 )
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
     OpenAIChatBehavior,
     OpenAIChatProfile,
     OpenAIChatProvider,
 )
+from free_claude_code.providers.request_correction import Proposal
 
 from .models import HOSTED_MODEL_EXCLUSIONS
 from .request_options import (
@@ -34,7 +35,6 @@ from .request_options import (
 )
 from .retry import (
     clone_body_without_chat_template,
-    clone_body_without_reasoning_content,
 )
 from .tool_schema import (
     body_without_nim_tool_argument_aliases,
@@ -59,21 +59,24 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         super().__init__(_PROFILE)
 
     @property
+    @override
     def reasoning_off_fields(self) -> tuple[tuple[str, ...], ...]:
         return (("reasoning_effort",),)
 
+    @override
     def build_messages_body(
         self,
         request: MessagesRequest,
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Internal helper for tests and shared building."""
         return build_nim_request_body(
             request,
             reasoning=reasoning,
         )
 
+    @override
     def finalize_chat_body(
         self,
         body: dict[str, Any],
@@ -84,15 +87,20 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         apply_nim_request_options(body, reasoning)
         return body
 
+    @override
     def prepare_create_body(self, body: dict[str, Any]) -> dict[str, Any]:
         """Strip private request metadata before calling NVIDIA NIM."""
         return body_without_nim_tool_argument_aliases(body)
 
+    @override
     def tool_argument_aliases(self, body: dict[str, Any]) -> dict[str, dict[str, str]]:
         """Return NIM tool argument aliases captured while building this request."""
         return nim_tool_argument_aliases_from_body(body)
 
-    def retry_request_body(self, error: Exception, body: dict) -> dict | None:
+    @override
+    def retry_request_body(
+        self, error: Exception, body: dict[str, Any]
+    ) -> Proposal | None:
         """Retry once with a downgraded body when NIM rejects a known field."""
         status_code = getattr(error, "status_code", None)
         bad_request_like = isinstance(error, openai.BadRequestError) or (
@@ -100,7 +108,7 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         )
 
         error_text = str(error)
-        error_body = getattr(error, "body", None)
+        error_body: object = getattr(error, "body", None)
         if error_body is not None:
             error_text = f"{error_text} {json.dumps(error_body, default=str)}"
         error_text = error_text.lower()
@@ -112,26 +120,16 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
             retry_body = clone_body_without_chat_template(body)
             if retry_body is None:
                 return None
-            logger.warning("NIM_STREAM: retrying without chat_template after 400 error")
-            return retry_body
-
-        if "reasoning_content" in error_text:
-            retry_body = clone_body_without_reasoning_content(body)
-            if retry_body is None:
-                return None
-            logger.warning(
-                "NIM_STREAM: retrying without reasoning_content after 400 error"
-            )
-            return retry_body
+            return Proposal(retry_body, "dropped chat_template")
 
         return None
 
+    @override
     def failure_override(self, error: Exception) -> ExecutionFailure | None:
         """Classify NVIDIA-specific 400/500 responses by their actual semantics."""
         if not isinstance(error, openai.BadRequestError | openai.InternalServerError):
             return None
-        status = getattr(error, "status_code", None)
-        if status not in (400, 500):
+        if error.status_code not in (400, 500):
             return None
         bodies = _nim_error_bodies(error)
         if any(_is_context_window_exhaustion(body) for body in bodies):
@@ -151,13 +149,16 @@ class NvidiaNimProvider(OpenAIChatProvider):
         config: ProviderConfig,
         *,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
     ):
         super().__init__(
             config,
             behavior=NvidiaNimChatBehavior(),
             admission=admission,
+            history_cache=history_cache,
         )
 
+    @override
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
         """Filter known unavailable and non-chat models from hosted discovery."""
         infos = await super().list_model_infos()

@@ -3,10 +3,11 @@
 import os
 import pty
 import sys
+from collections.abc import Callable
 
 
 def main() -> int:
-    spawn = vars(pty)["spawn"]
+    spawn: Callable[[list[str]], int] = vars(pty)["spawn"]
     status = spawn(sys.argv[1:])
     return os.waitstatus_to_exitcode(status)
 

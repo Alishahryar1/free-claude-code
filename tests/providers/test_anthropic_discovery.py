@@ -1,7 +1,6 @@
 """Discovery snapshots remain authoritative for each compatibility request."""
 
 import asyncio
-import json
 
 import httpx
 import pytest
@@ -9,6 +8,7 @@ import pytest
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import (
     ReasoningCapability,
@@ -19,9 +19,10 @@ from free_claude_code.providers.anthropic.models import model_record
 from free_claude_code.providers.model_listing import ModelListResponseError
 from tests.providers.test_anthropic_messages_transport import _events, _sse
 from tests.providers.test_anthropic_provider import provider
+from tests.wire_payload import decode_object, object_payload
 
 
-def metadata(model, adaptive, *, max_tokens=8192):
+def metadata(model: str, adaptive: bool, *, max_tokens: int = 8192) -> JsonObject:
     return {
         "id": model,
         "max_tokens": max_tokens,
@@ -70,11 +71,13 @@ def test_metadata_uses_advertised_types_and_efforts_without_name_inference():
         {"has_more": False},
     ],
 )
-async def test_malformed_refresh_never_publishes_a_partial_catalog(bad_page):
+async def test_malformed_refresh_never_publishes_a_partial_catalog(
+    bad_page: JsonObject,
+):
     refresh = False
     calls = []
 
-    def handle(request):
+    def handle(request: httpx.Request):
         calls.append(request)
         assert request.headers["authorization"] == "Bearer upstream-secret"
         assert request.headers["anthropic-workspace-id"] == "wrkspc_test"
@@ -100,9 +103,10 @@ async def test_malformed_refresh_never_publishes_a_partial_catalog(bad_page):
 
 @pytest.mark.asyncio
 async def test_valid_empty_catalog_is_published_without_fabricated_models():
-    p = provider(
-        lambda request: httpx.Response(200, json={"data": [], "has_more": False})
-    )
+    def callback(request: object):
+        return httpx.Response(200, json={"data": [], "has_more": False})
+
+    p = provider(callback)
     try:
         assert await p.list_model_infos() == frozenset()
     finally:
@@ -113,7 +117,7 @@ async def test_valid_empty_catalog_is_published_without_fabricated_models():
 async def test_concurrent_alias_lookup_is_cached_and_uses_same_credentials():
     calls = []
 
-    async def handle(request):
+    async def handle(request: httpx.Request):
         calls.append(request)
         await asyncio.sleep(0)
         assert request.url.path == "/v1/models/latest-alias"
@@ -137,7 +141,7 @@ async def test_concurrent_alias_lookup_is_cached_and_uses_same_credentials():
 async def test_concurrent_models_use_independent_conversion_capabilities():
     sent = []
 
-    async def handle(request):
+    async def handle(request: httpx.Request):
         if request.method == "GET":
             return httpx.Response(
                 200,
@@ -146,7 +150,7 @@ async def test_concurrent_models_use_independent_conversion_capabilities():
                     "has_more": False,
                 },
             )
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         await asyncio.sleep(0)
         return httpx.Response(
             200, headers={"content-type": "text/event-stream"}, content=_sse(*_events())
@@ -158,7 +162,7 @@ async def test_concurrent_models_use_independent_conversion_capabilities():
 
         async def messages():
             return [
-                event
+                frame
                 async for event in p.stream_messages(
                     MessagesRequest(
                         model="manual",
@@ -167,15 +171,17 @@ async def test_concurrent_models_use_independent_conversion_capabilities():
                     ),
                     reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
                 )
+                for frame in event.frames
             ]
 
         async def responses():
             return [
-                event
+                frame
                 async for event in p.stream_responses(
                     OpenAIResponsesRequest(model="adaptive", input="hello"),
                     reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
                 )
+                for frame in event.frames
             ]
 
         message_output, response_output = await asyncio.gather(messages(), responses())
@@ -201,7 +207,7 @@ async def test_refresh_does_not_mutate_an_inflight_model_record():
     refresh = False
     sent = []
 
-    async def handle(request):
+    async def handle(request: httpx.Request):
         if request.method == "GET":
             return httpx.Response(
                 200,
@@ -212,7 +218,7 @@ async def test_refresh_does_not_mutate_an_inflight_model_record():
                     "has_more": False,
                 },
             )
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         posted.set()
         await release.wait()
         return httpx.Response(
@@ -223,13 +229,14 @@ async def test_refresh_does_not_mutate_an_inflight_model_record():
 
     async def run():
         return [
-            event
+            frame
             async for event in p.stream_messages(
                 MessagesRequest(
                     model="same", messages=[{"role": "user", "content": "hi"}]
                 ),
                 reasoning=ReasoningPolicy.on(),
             )
+            for frame in event.frames
         ]
 
     try:
@@ -245,9 +252,9 @@ async def test_refresh_does_not_mutate_an_inflight_model_record():
         release.set()
         await task
         await run()
-        assert sent[0]["thinking"]["type"] == "enabled"
+        assert object_payload(sent[0]["thinking"])["type"] == "enabled"
         assert sent[0]["max_tokens"] == 8192
-        assert sent[1]["thinking"]["type"] == "adaptive"
+        assert object_payload(sent[1]["thinking"])["type"] == "adaptive"
         assert sent[1]["max_tokens"] == 4096
     finally:
         release.set()
@@ -258,7 +265,7 @@ async def test_refresh_does_not_mutate_an_inflight_model_record():
 async def test_fresh_owner_does_not_trust_stale_generic_capabilities():
     calls = []
 
-    def handle(request):
+    def handle(request: httpx.Request):
         calls.append(request)
         assert request.method == "GET"
         return httpx.Response(404, json={"error": {"type": "not_found_error"}})
@@ -267,7 +274,7 @@ async def test_fresh_owner_does_not_trust_stale_generic_capabilities():
     try:
         with pytest.raises(InvalidRequestError, match="thinking mode"):
             _ = [
-                event
+                frame
                 async for event in p.stream_messages(
                     MessagesRequest(
                         model="alias", messages=[{"role": "user", "content": "hi"}]
@@ -277,6 +284,7 @@ async def test_fresh_owner_does_not_trust_stale_generic_capabilities():
                     ),
                     reasoning=ReasoningPolicy.on(),
                 )
+                for frame in event.frames
             ]
         assert len(calls) == 1
     finally:

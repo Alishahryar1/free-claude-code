@@ -1,17 +1,21 @@
 """Provider-specific Chat adaptation, independent of HTTP resource ownership."""
 
-from collections.abc import Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Any
+
+from openai.types.chat import ChatCompletionChunk
 
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.usage import anthropic_input_usage_fields
 from free_claude_code.core.failures import ExecutionFailure
-from free_claude_code.core.history_replay import HistoryScope, ReplayOrigin
+from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningPolicy,
 )
+from free_claude_code.providers.request_correction import Proposal
 
+from .media_support import is_media_rejection
 from .profiles import OpenAIChatProfile
 from .request_policy import (
     build_openai_chat_request_body,
@@ -65,9 +69,6 @@ class OpenAIChatBehavior:
         """Apply provider behavior that is independent of client protocol."""
         return body
 
-    def history_scope(self, body: Mapping[str, Any]) -> HistoryScope:
-        return self.profile.history_scope
-
     def prepare_history_body(
         self, body: dict[str, Any], origin: ReplayOrigin
     ) -> dict[str, Any]:
@@ -75,14 +76,20 @@ class OpenAIChatBehavior:
         return body
 
     def extra_reasoning_events(
-        self, delta: Any, output: ChatStreamOutput, *, output_reasoning: bool
+        self, delta: object, output: ChatStreamOutput, *, output_reasoning: bool
     ) -> Iterator[str]:
         """Hook for provider-specific reasoning."""
         return iter(())
 
-    def retry_request_body(self, error: Exception, body: dict) -> dict | None:
-        """Return a modified request body for one retry, or None."""
+    def retry_request_body(
+        self, error: Exception, body: dict[str, Any]
+    ) -> Proposal | None:
+        """Return a corrected request for one retry, or None."""
         return None
+
+    def media_rejected(self, error: Exception) -> bool:
+        """Whether the upstream rejected the request because it carried media."""
+        return is_media_rejection(error)
 
     def reasoning_disable_rejected(self, error: Exception) -> bool:
         """Recognize provider-owned OFF rejection formats without learning state."""
@@ -96,9 +103,17 @@ class OpenAIChatBehavior:
         """Return the body passed to the upstream OpenAI-compatible client."""
         return body
 
-    def normalize_stream(self, stream: Any, _body: Mapping[str, Any]) -> Any:
+    def normalize_stream(
+        self,
+        stream: AsyncIterator[ChatCompletionChunk],
+        _body: Mapping[str, object],
+    ) -> AsyncIterator[ChatCompletionChunk]:
         """Return the provider-specific stream view consumed by the base runner."""
         return stream
+
+    def normalize_chunk(self, chunk: ChatCompletionChunk) -> ChatCompletionChunk:
+        """Normalize provider wire quirks before observation or presentation."""
+        return chunk
 
     def record_tool_call_extra_content(
         self, tool_call_id: str, extra_content: dict[str, Any], *, origin: ReplayOrigin
@@ -125,7 +140,7 @@ class OpenAIChatBehavior:
             "cache_write_tokens",
         )
 
-    def anthropic_usage_fields(self, usage_info: Any) -> dict[str, int]:
+    def anthropic_usage_fields(self, usage_info: object) -> dict[str, int]:
         """Split standard prompt cache counts for final Anthropic usage."""
         return anthropic_input_usage_fields(
             usage_int(usage_info, "prompt_tokens"),
@@ -134,7 +149,7 @@ class OpenAIChatBehavior:
         )
 
     def retry_after_standard_corrections(
-        self, error: Exception, body: dict[str, Any], used_retry_kinds: set[str]
-    ) -> dict[str, Any] | None:
-        """Offer a provider correction after the standard correction sequence."""
+        self, error: Exception, body: dict[str, Any]
+    ) -> Proposal | None:
+        """Offer one provider correction after the standard correction sequence."""
         return None

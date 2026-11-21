@@ -5,6 +5,7 @@ from dataclasses import replace
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import (
@@ -51,7 +52,7 @@ def chat_profile(model: CopilotModel) -> OpenAIChatProfile:
 
 
 def non_messages_reasoning(
-    request: MessagesRequest | OpenAIResponsesRequest | GeminiRequest,
+    request: MessagesRequest | OpenAIResponsesRequest | GeminiRequest | ChatRequest,
     policy: ReasoningPolicy,
     model: CopilotModel,
 ) -> ReasoningPolicy:
@@ -69,7 +70,9 @@ def non_messages_reasoning(
         non_messages_reasoning(prepared, wire_policy, model)
         return policy
     raw_effort = (
-        None
+        request.reasoning_effort
+        if isinstance(request, ChatRequest)
+        else None
         if isinstance(request, GeminiRequest)
         else (request.output_config.get("effort") if request.output_config else None)
         if isinstance(request, MessagesRequest)

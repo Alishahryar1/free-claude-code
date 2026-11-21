@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from collections.abc import Callable
 from copy import deepcopy
 from unittest.mock import patch
 
@@ -9,13 +10,22 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from free_claude_code.application.routing import ModelRouter
 from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import get_token_count
+from free_claude_code.core.anthropic.tokens import CountMessages
+from free_claude_code.core.json_types import JsonObject
 from tests.api.support import create_test_app, provider_manager_for_app
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    response_object,
+)
 
 
-def count_body():
+def count_body() -> JsonObject:
     return {
         "model": "claude-sonnet-client-alias",
         "messages": [
@@ -44,15 +54,17 @@ def count_body():
 
 
 @pytest.mark.parametrize("field", ["messages", "system", "tools"])
-def test_native_count_accepts_and_estimates_opaque_payload_without_provider(field):
+def test_native_count_accepts_and_estimates_opaque_payload_without_provider(field: str):
     app = create_test_app(Settings(MODEL="anthropic/selected"))
     body = count_body()
     expanded = deepcopy(body)
     extra = "a substantially longer native payload " * 100
     if field == "messages":
-        expanded[field][0]["content"][1]["opaque"]["extra"] = extra
+        message = object_array(expanded[field])[0]
+        opaque = object_array(message["content"])[1]["opaque"]
+        object_payload(opaque)["extra"] = extra
     else:
-        expanded[field][0]["extra"] = extra
+        object_array(expanded[field])[0]["extra"] = extra
     original = deepcopy(body)
     with (
         patch(
@@ -80,7 +92,8 @@ def test_compatibility_primary_keeps_count_validation_with_native_fallback():
         response = client.post("/v1/messages/count_tokens", json=count_body())
     assert response.status_code == 422
     assert any(
-        error["loc"][:2] == ["body", "messages"] for error in response.json()["detail"]
+        array_payload(object_payload(error)["loc"])[:2] == ["body", "messages"]
+        for error in object_array(response_object(response)["detail"])
     )
 
 
@@ -96,7 +109,9 @@ def test_compatibility_primary_keeps_count_validation_with_native_fallback():
         ({"model": " "}, 400),
     ],
 )
-def test_native_count_rejects_bad_shapes_and_releases_lease(update, status):
+def test_native_count_rejects_bad_shapes_and_releases_lease(
+    update: JsonObject, status: int
+):
     app = create_test_app(Settings(MODEL="anthropic/selected"))
     manager = provider_manager_for_app(app)
     with TestClient(app) as client:
@@ -108,7 +123,7 @@ def test_native_count_rejects_bad_shapes_and_releases_lease(update, status):
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), "\ud800"])
-def test_native_count_rejects_non_finite_or_non_utf8_json(value):
+def test_native_count_rejects_non_finite_or_non_utf8_json(value: float | str):
     app = create_test_app(Settings(MODEL="anthropic/selected"))
     with TestClient(app) as client:
         response = client.post(
@@ -159,17 +174,19 @@ def test_native_count_estimator_receives_payload_without_mutation_and_traces_ali
     from free_claude_code.application.routing import ModelRouter
 
     body = count_body()
-    body["tools"][0]["api_key"] = "private-tool-option"
+    object_array(body["tools"])[0]["api_key"] = "private-tool-option"
     original = deepcopy(body)
     captured = []
     resolutions = []
     resolve = ModelRouter.resolve
 
-    def record_resolve(router, model):
+    def record_resolve(router: ModelRouter, model: str):
         resolutions.append(model)
         return resolve(router, model)
 
-    def count(messages, system, tools):
+    def count(
+        messages: CountMessages, system: list[JsonObject], tools: list[JsonObject]
+    ):
         captured.append(
             (
                 [message.model_dump() for message in messages],
@@ -201,21 +218,22 @@ def test_native_count_estimator_receives_payload_without_mutation_and_traces_ali
     )
     assert route["provider_model_ref"] == "anthropic/selected"
     assert route["gateway_model"] == body["model"]
-    snapshot = next(call.args[0]() for call in trace.call_args_list if call.args)[
-        "snapshot"
-    ]
-    assert snapshot["tools"][0]["api_key"] == "<redacted>"
+    render: Callable[[], JsonObject] = next(
+        call.args[0] for call in trace.call_args_list if call.args
+    )
+    snapshot = object_payload(render()["snapshot"])
+    assert object_array(snapshot["tools"])[0]["api_key"] == "<redacted>"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
-async def test_native_count_retains_generation_while_waiting_for_encoder(cancel):
+async def test_native_count_retains_generation_while_waiting_for_encoder(cancel: bool):
     from free_claude_code.runtime.provider_manager import ProviderGenerationLease
 
     entered = asyncio.Event()
     proceed = asyncio.Event()
 
-    async def wait(lease):
+    async def wait(lease: object):
         entered.set()
         await proceed.wait()
 

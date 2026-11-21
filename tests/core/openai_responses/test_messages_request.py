@@ -95,6 +95,32 @@ def _build(
     )
 
 
+@pytest.mark.parametrize(
+    "items",
+    [
+        [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": ""}],
+            }
+        ],
+        [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "   "}],
+            }
+        ],
+    ],
+)
+def test_complete_request_still_requires_conversational_content(
+    items: list[JsonObject],
+):
+    with pytest.raises(ResponsesConversionError):
+        _build({"input": items})
+
+
 def test_text_controls_and_stateless_history_policy() -> None:
     built = _build(
         {

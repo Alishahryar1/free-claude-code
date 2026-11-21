@@ -51,6 +51,7 @@ from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
 from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.alibaba_cloud import AlibabaCloudProvider
 from free_claude_code.providers.anthropic import AnthropicProvider
+from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.cloudflare import CloudflareProvider
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.gemini import GeminiProvider
@@ -76,7 +77,7 @@ from free_claude_code.providers.runtime import (
 from free_claude_code.providers.vertex import VertexProvider
 
 
-def _make_settings(**overrides):
+def _make_settings(**overrides: object):
     mock = MagicMock()
     mock.model = "nvidia_nim/meta/llama3"
     mock.model_fable = None
@@ -205,6 +206,7 @@ def _make_settings(**overrides):
     mock.provider_rate_limit = 40
     mock.provider_rate_window = 60
     mock.provider_max_concurrency = 5
+    mock.provider_max_attempts = 5
     mock.http_read_timeout = 300.0
     mock.http_write_timeout = 10.0
     mock.http_connect_timeout = 10.0
@@ -1164,6 +1166,7 @@ async def test_create_provider_instantiates_each_builtin():
         provider_rate_limit=7,
         provider_rate_window=11,
         provider_max_concurrency=3,
+        provider_max_attempts=4,
         sambanova_api_keys="test_sambanova_key",
     )
     cases = {
@@ -1231,17 +1234,26 @@ async def test_create_provider_instantiates_each_builtin():
     }
     sentinel_admission = MagicMock(spec=ProviderAdmissionController)
     auth = MagicMock()
+
+    def callback(
+        config: ProviderConfig,
+        _settings: object,
+        admission: MagicMock,
+        history_cache: object = None,
+    ):
+        return OpenAICodexProvider(config, auth=auth, admission=admission)
+
+    def callback_2(
+        config: ProviderConfig,
+        _settings: object,
+        admission: MagicMock,
+        history_cache: object = None,
+    ):
+        return GitHubCopilotProvider(config, auth=auth, admission=admission)
+
     injected_factories = {
-        "openai": lambda config, _settings, admission: OpenAICodexProvider(
-            config,
-            auth=auth,
-            admission=admission,
-        ),
-        "github_copilot": lambda config, _settings, admission: GitHubCopilotProvider(
-            config,
-            auth=auth,
-            admission=admission,
-        ),
+        "openai": callback,
+        "github_copilot": callback_2,
     }
 
     with (
@@ -1279,6 +1291,7 @@ async def test_create_provider_instantiates_each_builtin():
                 rate_limit=7,
                 rate_window=11,
                 max_concurrency=3,
+                max_attempts=4,
                 capacity=ANY,
             )
             admission_factory.reset_mock()
@@ -1304,12 +1317,14 @@ async def test_provider_runtime_caches_by_provider_id():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancelled", [False, True])
-async def test_provider_creation_retries_after_shared_failure(cancelled):
+async def test_provider_creation_retries_after_shared_failure(cancelled: bool):
     entered, release = asyncio.Event(), asyncio.Event()
     provider = MagicMock(cleanup=AsyncMock())
     attempts = 0
 
-    async def construct(_id, _settings, _admission_registry, _api_key_number):
+    async def construct(
+        _id, _settings, _admission_registry, _api_key_number, _history_cache=None
+    ):
         nonlocal attempts
         attempts += 1
         attempt = attempts
@@ -1328,7 +1343,7 @@ async def test_provider_creation_retries_after_shared_failure(cancelled):
         ),
         provider_constructor=construct,
     )
-    waiting = []
+    waiting: list[asyncio.Task[BaseProvider]] = []
     try:
         for attempt in (1, 2):
             entered.clear()
@@ -1365,7 +1380,9 @@ async def test_finished_creation_callback_cannot_forget_a_new_retry():
     attempts = 0
     retry = None
 
-    async def construct(_id, _settings, _admission_registry, _api_key_number):
+    async def construct(
+        _id, _settings, _admission_registry, _api_key_number, _history_cache=None
+    ):
         nonlocal attempts, retry
         attempts += 1
         if attempts == 1:
@@ -1410,7 +1427,9 @@ async def test_cancelled_acquisition_keeps_construction_available_to_next_caller
     provider = MagicMock(cleanup=AsyncMock())
     attempts = 0
 
-    async def construct(_id, _settings, _admission_registry, _api_key_number):
+    async def construct(
+        _id, _settings, _admission_registry, _api_key_number, _history_cache=None
+    ):
         nonlocal attempts
         attempts += 1
         entered.set()
@@ -1452,7 +1471,9 @@ async def test_abandoned_creation_failure_has_no_unretrieved_exception():
     previous_handler = loop.get_exception_handler()
     errors = []
 
-    async def construct(_id, _settings, _admission_registry, _api_key_number):
+    async def construct(
+        _id, _settings, _admission_registry, _api_key_number, _history_cache=None
+    ):
         entered.set()
         await release.wait()
         failed.set()
@@ -1494,12 +1515,15 @@ async def test_shutdown_drains_construction_that_finishes_during_cancellation():
     entered = asyncio.Event()
     provider = MagicMock(cleanup=AsyncMock())
 
-    async def construct(_id, _settings, _admission_registry, _api_key_number):
+    async def construct(
+        _id, _settings, _admission_registry, _api_key_number, _history_cache=None
+    ):
         entered.set()
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
             return provider
+        raise AssertionError("Construction finished without cancellation")
 
     runtime = ProviderRuntime(
         _make_settings(),
@@ -1610,6 +1634,7 @@ async def test_provider_runtime_cleanup_runs_all_even_if_one_fails() -> None:
         ProviderAdmissionRegistry(
             ProviderAdmissionLimits.from_settings(_make_settings())
         ),
+        None,
         {("a", 1): p1, ("b", 1): p2},
     )
 
@@ -1651,6 +1676,7 @@ async def test_cancelled_cleanup_retains_current_and_unvisited_providers() -> No
         ProviderAdmissionRegistry(
             ProviderAdmissionLimits.from_settings(_make_settings())
         ),
+        None,
         {("first", 1): first, ("second", 1): second, ("third", 1): third},
     )
     cleanup_task = asyncio.create_task(runtime.cleanup())
@@ -1687,6 +1713,7 @@ async def test_provider_runtime_cleanup_exceptiongroup_on_multiple_failures() ->
         ProviderAdmissionRegistry(
             ProviderAdmissionLimits.from_settings(_make_settings())
         ),
+        None,
         {("x", 1): p1, ("y", 1): p2},
     )
 

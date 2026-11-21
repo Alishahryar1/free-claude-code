@@ -3,11 +3,13 @@ import json
 import pytest
 
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses.errors import ResponsesConversionError
 from free_claude_code.core.openai_responses.provider_input import (
     build_responses_provider_request,
 )
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from tests.wire_payload import object_array, string_payload
 
 _KEEP_ALL_THINKING_EDIT = {
     "type": "clear_thinking_20251015",
@@ -35,8 +37,10 @@ def test_raw_signed_thinking_keeps_readable_context_outside_opaque_item():
         }
     )
     original = request.model_dump()
-    body = build_responses_provider_request(request, reasoning=ReasoningPolicy.on())
-    opaque, context = body["input"][:2]
+    body: JsonObject = build_responses_provider_request(
+        request, reasoning=ReasoningPolicy.on()
+    )
+    opaque, context = object_array(body["input"])[:2]
     assert opaque["encrypted_content"] == "old-cipher"
     assert opaque["summary"] == []
     assert "content" not in opaque
@@ -101,7 +105,7 @@ def test_build_responses_provider_request_preserves_multiturn_protocol() -> None
         }
     )
 
-    body = build_responses_provider_request(
+    body: JsonObject = build_responses_provider_request(
         request,
         reasoning=ReasoningPolicy.on(effort=ReasoningEffort.XHIGH),
     )
@@ -114,23 +118,23 @@ def test_build_responses_provider_request_preserves_multiturn_protocol() -> None
     assert body["include"] == ["reasoning.encrypted_content"]
     assert body["reasoning"] == {"effort": "xhigh", "summary": "auto"}
     assert body["tool_choice"] == {"type": "function", "name": "lookup"}
-    assert body["input"][0]["id"].startswith("rs_")
-    assert body["input"][1]["id"].startswith("rs_")
-    assert body["input"][0]["id"] != body["input"][1]["id"]
-    assert body["input"][0] == {
-        "id": body["input"][0]["id"],
+    assert string_payload(object_array(body["input"])[0]["id"]).startswith("rs_")
+    assert string_payload(object_array(body["input"])[1]["id"]).startswith("rs_")
+    assert object_array(body["input"])[0]["id"] != object_array(body["input"])[1]["id"]
+    assert object_array(body["input"])[0] == {
+        "id": object_array(body["input"])[0]["id"],
         "type": "reasoning",
         "summary": [],
         "content": [{"type": "reasoning_text", "text": "summary"}],
     }
-    assert body["input"][1] == {
-        "id": body["input"][1]["id"],
+    assert object_array(body["input"])[1] == {
+        "id": object_array(body["input"])[1]["id"],
         "type": "reasoning",
         "summary": [],
         "encrypted_content": "opaque",
     }
-    assert body["input"][2]["role"] == "assistant"
-    assert body["input"][3] == {
+    assert object_array(body["input"])[2]["role"] == "assistant"
+    assert object_array(body["input"])[3] == {
         "type": "function_call",
         "call_id": "call_1",
         "name": "lookup",
@@ -138,12 +142,12 @@ def test_build_responses_provider_request_preserves_multiturn_protocol() -> None
             {"q": "value"}, ensure_ascii=False, separators=(",", ":")
         ),
     }
-    assert body["input"][4] == {
+    assert object_array(body["input"])[4] == {
         "type": "function_call_output",
         "call_id": "call_1",
         "output": '{"answer": 42}',
     }
-    assert body["input"][5]["content"][1] == {
+    assert object_array(object_array(body["input"])[5]["content"])[1] == {
         "type": "input_image",
         "image_url": "data:image/png;base64,aGVsbG8=",
     }
@@ -171,7 +175,7 @@ def test_responses_provider_request_canonicalizes_direct_anthropic_image() -> No
         }
     )
 
-    body = build_responses_provider_request(
+    body: JsonObject = build_responses_provider_request(
         request,
         reasoning=ReasoningPolicy.provider_default(),
     )
@@ -220,7 +224,7 @@ def test_responses_provider_request_preserves_rich_tool_output_order() -> None:
         }
     )
 
-    body = build_responses_provider_request(
+    body: JsonObject = build_responses_provider_request(
         request,
         reasoning=ReasoningPolicy.provider_default(),
     )
@@ -252,7 +256,9 @@ def test_responses_provider_request_preserves_rich_tool_output_order() -> None:
         {"type": "file", "file_id": "file_1"},
     ),
 )
-def test_responses_provider_request_rejects_unportable_tool_image(source) -> None:
+def test_responses_provider_request_rejects_unportable_tool_image(
+    source: JsonObject,
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "gpt-test",
@@ -292,7 +298,7 @@ def test_build_responses_provider_request_accepts_claude_client_controls() -> No
     )
     snapshot = request.model_dump()
 
-    body = build_responses_provider_request(
+    body: JsonObject = build_responses_provider_request(
         request,
         reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
     )
@@ -322,7 +328,7 @@ def test_build_responses_provider_request_materializes_auto_tool_choice() -> Non
         }
     )
 
-    body = build_responses_provider_request(
+    body: JsonObject = build_responses_provider_request(
         request,
         reasoning=ReasoningPolicy.off(),
     )
@@ -338,7 +344,7 @@ def test_build_responses_provider_request_omits_choice_without_tools() -> None:
         }
     )
 
-    body = build_responses_provider_request(
+    body: JsonObject = build_responses_provider_request(
         request,
         reasoning=ReasoningPolicy.off(),
     )
@@ -361,7 +367,7 @@ def test_build_responses_provider_request_omits_explicit_choice_without_tools(
         }
     )
 
-    body = build_responses_provider_request(
+    body: JsonObject = build_responses_provider_request(
         request,
         reasoning=ReasoningPolicy.off(),
     )
@@ -379,7 +385,7 @@ def test_build_responses_provider_request_uses_resolved_reasoning_policy() -> No
         }
     )
 
-    body = build_responses_provider_request(
+    body: JsonObject = build_responses_provider_request(
         request,
         reasoning=ReasoningPolicy.on(effort=ReasoningEffort.MAX),
     )
@@ -408,7 +414,7 @@ def test_build_responses_provider_request_accepts_noop_context_management(
         }
     )
 
-    body = build_responses_provider_request(
+    body: JsonObject = build_responses_provider_request(
         request,
         reasoning=ReasoningPolicy.provider_default(),
     )
@@ -487,7 +493,7 @@ def test_build_responses_provider_request_accepts_application_owned_effort(
         }
     )
 
-    body = build_responses_provider_request(request, reasoning=reasoning)
+    body: JsonObject = build_responses_provider_request(request, reasoning=reasoning)
 
     assert body.get("reasoning") == expected
     assert "output_config" not in body
@@ -564,18 +570,18 @@ def test_responses_provider_request_uses_one_portable_tool_alias() -> None:
     )
     snapshot = request.model_dump()
 
-    body = build_responses_provider_request(
+    body: JsonObject = build_responses_provider_request(
         request,
         reasoning=ReasoningPolicy.provider_default(),
     )
 
-    alias = body["tools"][0]["name"]
+    alias = string_payload(object_array(body["tools"])[0]["name"])
     assert alias != original
     assert len(alias) <= 64
-    assert body["tools"][1]["name"] == "safe_tool"
+    assert object_array(body["tools"])[1]["name"] == "safe_tool"
     assert body["tool_choice"] == {"type": "function", "name": alias}
     function_call = next(
-        item for item in body["input"] if item["type"] == "function_call"
+        item for item in object_array(body["input"]) if item["type"] == "function_call"
     )
     assert function_call["name"] == alias
     assert function_call["call_id"] == "call_1"

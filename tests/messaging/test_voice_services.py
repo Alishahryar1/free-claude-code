@@ -8,6 +8,7 @@ from free_claude_code.messaging.voice import (
     PendingVoiceRegistry,
     VoiceCancellationResult,
     VoiceHandoffOutcome,
+    _PendingVoice,
 )
 
 TELEGRAM_CHAT = MessageScope(platform="telegram", chat_id="chat")
@@ -58,7 +59,7 @@ async def test_cancel_before_status_binding_rejects_late_flow() -> None:
     assert cancellation.delete_message_ids == frozenset({"voice-1"})
     assert await registry.bind_status(claim, "status-1") is False
     assert await registry.handoff(claim, callback) is VoiceHandoffOutcome.REJECTED
-    assert callback_called is False
+    assert not callback_called
 
 
 @pytest.mark.asyncio
@@ -323,7 +324,7 @@ async def test_handoff_finalization_survives_repeated_caller_cancellation(
     release_finalization = asyncio.Event()
     complete_if_owned = registry._complete_if_owned
 
-    async def gated_completion(entry) -> bool:
+    async def gated_completion(entry: _PendingVoice) -> bool:
         finalization_started.set()
         await release_finalization.wait()
         return await complete_if_owned(entry)

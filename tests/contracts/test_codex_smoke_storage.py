@@ -2,6 +2,7 @@
 
 import sqlite3
 from contextlib import closing, nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -13,7 +14,7 @@ from smoke.product import test_codex_modes_product_live as smoke
 
 @pytest.mark.parametrize("database_exists", [False, True])
 def test_child_review_smoke_reads_canonical_database_without_creating_files(
-    tmp_path, monkeypatch, database_exists
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, database_exists: bool
 ):
     home = tmp_path / "home/.fcc"
     home.mkdir(parents=True)
@@ -30,18 +31,30 @@ def test_child_review_smoke_reads_canonical_database_without_creating_files(
             )
     (tmp_path / "codex-home").mkdir()
     (tmp_path / "child-marker.txt").write_text("smoke")
-    monkeypatch.setattr(smoke, "_environment", lambda *_: ({}, set()))
+
+    def replace_environment(*_: object) -> tuple[dict[str, str], set[str]]:
+        return ({}, set())
+
+    monkeypatch.setattr(smoke, "_environment", replace_environment)
+
+    def replace_canned_provider(*_: object):
+        return nullcontext(("http://provider.invalid", {"reviews": 1}))
+
     monkeypatch.setattr(
         smoke,
         "_canned_provider",
-        lambda *_: nullcontext(("http://provider.invalid", {"reviews": 1})),
+        replace_canned_provider,
     )
+
+    def replace_SmokeServerDriver(*args: object, **kwargs: object):
+        return SimpleNamespace(
+            run=lambda: nullcontext(SimpleNamespace(base_url="http://server.invalid"))
+        )
+
     monkeypatch.setattr(
         smoke,
         "SmokeServerDriver",
-        lambda *args, **kwargs: SimpleNamespace(
-            run=lambda: nullcontext(SimpleNamespace(base_url="http://server.invalid"))
-        ),
+        replace_SmokeServerDriver,
     )
 
     async def completed_review(*_):

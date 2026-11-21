@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from free_claude_code.messaging.models import IncomingMessage
 from free_claude_code.messaging.platforms.discord import (
     DISCORD_AVAILABLE,
     DiscordRuntime,
@@ -54,7 +55,9 @@ async def test_telegram_voice_disabled_sends_reply():
 
 
 @pytest.mark.asyncio
-async def test_telegram_voice_unauthorized_ignored(telegram_platform):
+async def test_telegram_voice_unauthorized_ignored(
+    telegram_platform: tuple[TelegramRuntime, MagicMock],
+):
     """Voice from unauthorized user is ignored (no reply)."""
     platform, transcriber = telegram_platform
     mock_update = MagicMock()
@@ -69,7 +72,9 @@ async def test_telegram_voice_unauthorized_ignored(telegram_platform):
 
 
 @pytest.mark.asyncio
-async def test_telegram_voice_success_invokes_handler(telegram_platform):
+async def test_telegram_voice_success_invokes_handler(
+    telegram_platform: tuple[TelegramRuntime, MagicMock],
+):
     """Successful transcription invokes message handler with transcribed text."""
     platform, transcriber = telegram_platform
     handler = AsyncMock()
@@ -88,7 +93,7 @@ async def test_telegram_voice_success_invokes_handler(telegram_platform):
     mock_context = MagicMock()
     mock_context.bot.get_file = AsyncMock(return_value=mock_file)
 
-    async def fake_download(custom_path=None):
+    async def fake_download(custom_path: str | None = None):
         if custom_path:
             Path(custom_path).write_bytes(b"fake ogg")
 
@@ -103,14 +108,19 @@ async def test_telegram_voice_success_invokes_handler(telegram_platform):
         await platform._on_telegram_voice(mock_update, mock_context)
 
     mock_queue_send.assert_called_once()
-    call_args, call_kw = mock_queue_send.call_args
+    call_args, call_kw = (
+        mock_queue_send.call_args.args,
+        mock_queue_send.call_args.kwargs,
+    )
     assert "Transcribing voice note" in call_args[1]
     assert call_kw["reply_to"] == "42"
     assert call_kw["fire_and_forget"] is False
     transcriber.transcribe.assert_awaited_once()
 
     handler.assert_called_once()
-    incoming = handler.call_args[0][0]
+    assert handler.call_args is not None
+    incoming: object = handler.call_args.args[0]
+    assert isinstance(incoming, IncomingMessage)
     assert incoming.text == "Hello from voice"
     assert incoming.chat_id == "6789"
     assert incoming.platform == "telegram"
@@ -118,13 +128,17 @@ async def test_telegram_voice_success_invokes_handler(telegram_platform):
 
 
 @pytest.mark.asyncio
-async def test_telegram_bulk_voice_cancellation_delegates(telegram_platform) -> None:
+async def test_telegram_bulk_voice_cancellation_delegates(
+    monkeypatch: pytest.MonkeyPatch,
+    telegram_platform: tuple[TelegramRuntime, MagicMock],
+) -> None:
     platform, _transcriber = telegram_platform
-    platform._voice_flow.cancel_all_pending_voices = AsyncMock(return_value=())
+    cancel = AsyncMock(return_value=())
+    monkeypatch.setattr(platform._voice_flow, "cancel_all_pending_voices", cancel)
 
     assert await platform.cancel_all_pending_voices() == ()
 
-    platform._voice_flow.cancel_all_pending_voices.assert_awaited_once()
+    cancel.assert_awaited_once()
 
 
 @pytest.mark.skipif(not DISCORD_AVAILABLE, reason="discord.py not installed")
@@ -132,8 +146,10 @@ class TestDiscordGetAudioAttachment:
     """Tests for _get_audio_attachment helper."""
 
     def test_returns_none_when_no_attachments(self):
+        from discord import Attachment
+
         msg = MagicMock()
-        msg.attachments = []
+        msg.attachments = list[Attachment]()
         assert get_audio_attachment(msg) is None
 
     def test_returns_none_when_no_audio_attachments(self):
@@ -191,15 +207,22 @@ async def test_discord_voice_disabled_sends_reply():
 
 @pytest.mark.skipif(not DISCORD_AVAILABLE, reason="discord.py not installed")
 @pytest.mark.asyncio
-async def test_discord_bulk_voice_cancellation_delegates() -> None:
+async def test_discord_bulk_voice_cancellation_delegates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     platform = DiscordRuntime(
         bot_token="token",
         allowed_channel_ids="123",
         limiter=MagicMock(),
         transcriber=None,
     )
-    platform._voice_flow.cancel_all_pending_voices = AsyncMock(return_value=())
+    mock_cancel_all_pending_voices = AsyncMock(return_value=())
+    monkeypatch.setattr(
+        platform._voice_flow,
+        "cancel_all_pending_voices",
+        mock_cancel_all_pending_voices,
+    )
 
     assert await platform.cancel_all_pending_voices() == ()
 
-    platform._voice_flow.cancel_all_pending_voices.assert_awaited_once()
+    mock_cancel_all_pending_voices.assert_awaited_once()

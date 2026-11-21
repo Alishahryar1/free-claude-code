@@ -1,7 +1,6 @@
 """Cached Google metadata is scoped to the credential used by each attempt."""
 
 import asyncio
-import json
 from dataclasses import replace
 from typing import Any
 
@@ -10,6 +9,7 @@ import pytest
 from openai import AsyncOpenAI
 
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.gemini.replay import decode_bundle
 from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -19,6 +19,7 @@ from free_claude_code.providers.google_openai.thought_signatures import (
     GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR,
 )
 from free_claude_code.providers.history_replay import replay_origin
+from free_claude_code.providers.openai_chat.transport import OpenAIChatTransport
 from tests.providers.test_gemini_review_regressions import (
     CALL,
     GOOGLE_PROFILE,
@@ -26,9 +27,10 @@ from tests.providers.test_gemini_review_regressions import (
     transport,
 )
 from tests.providers.test_gemini_transport import chat_response, collect, gemini_request
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 
-def history_request(wire, *, model="model", replay=False):
+def history_request(wire: str, *, model: str = "model", replay: bool = False):
     if wire == "gemini":
         contents: list[dict[str, Any]] = [
             {"role": "user", "parts": [{"text": "hello"}]}
@@ -111,13 +113,18 @@ def history_request(wire, *, model="model", replay=False):
     )
 
 
-async def consume(adapter, wire, **kwargs):
-    return [
-        event
-        async for event in getattr(adapter, f"stream_{wire}")(
-            history_request(wire, **kwargs)
-        )
-    ]
+async def consume(
+    adapter: OpenAIChatTransport, wire: str, model: str = "model", replay: bool = False
+):
+    request = history_request(wire, model=model, replay=replay)
+    if isinstance(request, MessagesRequest):
+        stream = adapter.stream_messages(request)
+    elif isinstance(request, GeminiRequest):
+        stream = adapter.stream_gemini(request)
+    else:
+        assert isinstance(request, OpenAIResponsesRequest)
+        stream = adapter.stream_responses(request)
+    return [event async for event in stream]
 
 
 @pytest.mark.asyncio
@@ -125,11 +132,13 @@ async def consume(adapter, wire, **kwargs):
 @pytest.mark.parametrize(
     "change", ["none", "model", "credential", "endpoint", "client"]
 )
-async def test_cache_restoration_uses_actual_connection_for_every_ingress(wire, change):
+async def test_cache_restoration_uses_actual_connection_for_every_ingress(
+    wire: str, change: str
+):
     sent = []
 
-    def reply(request):
-        sent.append(json.loads(request.content))
+    def reply(request: httpx2.Request):
+        sent.append(decode_object(request.content))
         return chat_response(
             [
                 {
@@ -167,13 +176,26 @@ async def test_cache_restoration_uses_actual_connection_for_every_ingress(wire, 
             replay=True,
             model="changed" if change == "model" else "model",
         )
-    call = next(m for m in sent[1]["messages"] if m.get("tool_calls"))["tool_calls"][0]
+    call = array_payload(
+        object_payload(
+            next(
+                m
+                for m in array_payload(sent[1]["messages"])
+                if object_payload(m).get("tool_calls")
+            )
+        )["tool_calls"]
+    )[0]
     expected = (
         GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR
         if change in {"credential", "endpoint"}
         else "source-signature"
     )
-    assert call["extra_content"]["google"]["thought_signature"] == expected
+    assert (
+        object_payload(object_payload(object_payload(call)["extra_content"])["google"])[
+            "thought_signature"
+        ]
+        == expected
+    )
 
 
 @pytest.mark.asyncio
@@ -186,7 +208,7 @@ async def test_renewable_callback_is_resolved_once_per_attempt_and_pins_provenan
         resolutions += 1
         return f"synthetic-{resolutions}"
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         sent.append(request.headers["authorization"])
         return chat_response(
             [
@@ -220,7 +242,7 @@ async def test_renewable_callback_is_resolved_once_per_attempt_and_pins_provenan
             )
             assert bundle is not None
             expected = replay_origin(
-                "GEMINI",
+                GOOGLE_PROFILE.provider_name,
                 "chat",
                 "model",
                 client=client.with_options(api_key=f"synthetic-{index}"),
@@ -234,7 +256,7 @@ async def test_renewable_callback_is_resolved_once_per_attempt_and_pins_provenan
 @pytest.mark.asyncio
 async def test_endpoint_snapshot_precedes_renewable_callback():
     class Endpoint:
-        async def endpoint(self, *, force_refresh=False):
+        async def endpoint(self, *, force_refresh: object = False):
             return HttpEndpoint(
                 "https://endpoint.invalid/v1", {}, "endpoint-key", "stable-account"
             )
@@ -244,7 +266,7 @@ async def test_endpoint_snapshot_precedes_renewable_callback():
 
     requests = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         requests.append(request)
         return chat_response([{"content": "answer"}])
 
@@ -270,7 +292,9 @@ async def test_endpoint_snapshot_precedes_renewable_callback():
 
 def test_global_cache_bound_and_native_metadata_precedence():
     behavior = GoogleChatBehavior(GOOGLE_PROFILE)
-    source = ReplayOrigin("GEMINI", "chat", "endpoint", "account", "model")
+    source = ReplayOrigin(
+        GOOGLE_PROFILE.provider_name, "chat", "endpoint", "account", "model"
+    )
     for index in range(4097):
         behavior.record_tool_call_extra_content(
             str(index),
@@ -294,7 +318,7 @@ async def test_concurrent_attempts_record_their_own_origin():
     barrier = asyncio.Event()
     arrivals = 0
 
-    async def reply(request):
+    async def reply(request: httpx2.Request):
         nonlocal arrivals
         arrivals += 1
         if arrivals == 2:
@@ -330,7 +354,9 @@ async def test_concurrent_attempts_record_their_own_origin():
             consume(transport(other, behavior), "gemini"),
         )
         for selected, identity in ((client, "one"), (other, "two")):
-            origin = replay_origin("GEMINI", "chat", "model", client=selected)
+            origin = replay_origin(
+                GOOGLE_PROFILE.provider_name, "chat", "model", client=selected
+            )
             body: dict[str, Any] = {
                 "messages": [{"role": "assistant", "tool_calls": [{"id": "call_a"}]}]
             }
@@ -353,7 +379,7 @@ async def test_buffered_recovery_metadata_uses_replacement_credentials():
         resolutions += 1
         return f"key-{resolutions}"
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         requests.append(request.headers["authorization"])
         if len(requests) == 1:
             return chat_response(
@@ -394,16 +420,19 @@ async def test_buffered_recovery_metadata_uses_replacement_credentials():
         )
         assert bundle is not None
         source = replay_origin(
-            "GEMINI", "chat", "model", client=client.with_options(api_key="key-1")
+            GOOGLE_PROFILE.provider_name,
+            "chat",
+            "model",
+            client=client.with_options(api_key="key-1"),
         )
         replacement = replay_origin(
-            "GEMINI", "chat", "model", client=client.with_options(api_key="key-2")
+            GOOGLE_PROFILE.provider_name,
+            "chat",
+            "model",
+            client=client.with_options(api_key="key-2"),
         )
         assert requests == ["Bearer key-1", "Bearer key-2"]
-        assert bundle.records[0].origin == source
-        assert bundle.records[0].native == {"reasoning_content": "original thought"}
-        assert bundle.records[1].origin == replacement
-        assert bundle.records[1].native == {"reasoning_content": "replacement thought"}
+        assert bundle.records == ()
         assert bundle.calls[0].origin == replacement
         assert (
             replacement,

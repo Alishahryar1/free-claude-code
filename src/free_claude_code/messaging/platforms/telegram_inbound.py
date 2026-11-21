@@ -1,5 +1,7 @@
 """Telegram inbound event normalization."""
 
+from pathlib import Path
+
 from loguru import logger
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -26,7 +28,7 @@ def telegram_text_message_from_update(
 
     user_id = str(update.effective_user.id)
     chat_id = str(update.effective_chat.id)
-    if allowed_user_id and user_id != str(allowed_user_id).strip():
+    if allowed_user_id and user_id != allowed_user_id.strip():
         logger.warning("Unauthorized access attempt from {}", user_id)
         return None
 
@@ -92,7 +94,7 @@ def telegram_voice_request_from_update(
         return None
 
     user_id = str(effective_user.id)
-    if allowed_user_id and user_id != str(allowed_user_id).strip():
+    if allowed_user_id and user_id != allowed_user_id.strip():
         logger.warning("Unauthorized voice access attempt from {}", user_id)
         return None
 
@@ -108,7 +110,7 @@ def telegram_voice_request_from_update(
         str(message.reply_to_message.message_id) if message.reply_to_message else None
     )
 
-    async def _download_to(tmp_path) -> None:
+    async def _download_to(tmp_path: Path) -> None:
         tg_file = await context.bot.get_file(voice.file_id)
         await tg_file.download_to_drive(custom_path=str(tmp_path))
 

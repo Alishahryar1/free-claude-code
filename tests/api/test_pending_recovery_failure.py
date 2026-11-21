@@ -3,22 +3,31 @@
 import asyncio
 import json
 from itertools import pairwise
+from typing import override
 
 import httpx
 import httpx2
 import pytest
 from openai import AsyncOpenAI
 
-from free_claude_code.application.execution import ProviderExecutor
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_delivery import current_stream_delivery
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
+from free_claude_code.core.stream_output import completed_output
 from tests.api.test_delivered_stream_recovery import public_text, text_events
 from tests.api.test_hidden_stream_retries import delivered
 from tests.api.test_stream_delivery import drained
 from tests.api.test_tool_call_buffer import _response
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import (
+    array_payload,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 @pytest.mark.asyncio
@@ -26,55 +35,35 @@ from tests.providers.test_native_tool_arguments import tool_events
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("metadata_first", [False, True])
 async def test_continuation_timeout_retains_delivered_output(
-    monkeypatch, protocol, wire, metadata_first
+    monkeypatch: pytest.MonkeyPatch,
+    protocol: str,
+    wire: WireProtocol,
+    metadata_first: bool,
 ):
     module = httpx if protocol == "messages" else httpx2
-    native_transport = module.MockTransport
     closed = []
 
-    class WaitingStream(httpx.AsyncByteStream, httpx2.AsyncByteStream):
+    class TimedOutStream(httpx.AsyncByteStream, httpx2.AsyncByteStream):
+        @override
         async def __aiter__(self):
             if metadata_first:
                 start = text_events(protocol, "")[0]
                 yield ("data: " + json.dumps(start) + "\n\n").encode()
-            await asyncio.Event().wait()
-            yield b""
+            raise module.ReadTimeout("Continuation read timed out")
 
+        @override
         async def aclose(self):
             closed.append(True)
 
-    def transport(handler):
-        calls = 0
+    def reply(bodies: list[JsonObject]):
+        if len(bodies) == 1:
+            return 200, text_events(protocol, "Hello ", complete=False)
+        return 200, TimedOutStream()
 
-        async def handle(request):
-            nonlocal calls
-            response = handler(request)
-            calls += 1
-            if calls > 1:
-                await response.aclose()
-                return module.Response(
-                    200,
-                    headers={"content-type": "text/event-stream"},
-                    stream=WaitingStream(),
-                )
-            return response
-
-        return native_transport(handle)
-
-    def executor(*args, **kwargs):
-        kwargs["progress_timeout_seconds"] = 0.2
-        return ProviderExecutor(*args, **kwargs)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(module, "MockTransport", transport)
-        patch.setattr("tests.api.test_hidden_stream_retries.ProviderExecutor", executor)
-        patch.setattr(
-            "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-            lambda: RecoveryHoldbackBuffer(max_bytes=1),
-        )
+    with monkeypatch.context():
         async with _harness(
             protocol,
-            lambda _: (200, text_events(protocol, "Hello ", complete=False)),
+            reply,
             max_attempts=3,
         ) as (send, bodies, _):
             raw = await delivered(
@@ -82,7 +71,7 @@ async def test_continuation_timeout_retains_delivered_output(
             )
 
     events = parse_sse_text(raw)
-    assert len(bodies) == 2 and closed == [True]
+    assert len(bodies) == 3 and closed == [True, True]
     assert public_text(events, wire) == "Hello "
     failure_type = "error" if wire == "messages" else "response.failed"
     assert events[-1].event == failure_type
@@ -91,22 +80,32 @@ async def test_continuation_timeout_retains_delivered_output(
         event.event in {"message_stop", "response.completed"} for event in events
     )
     failure = events[-1].data if wire == "messages" else events[-1].data["response"]
-    assert failure["error"]["type"] == "timeout_error"
+    assert object_payload(object_payload(failure)["error"])["type"] == "api_error"
+    assert "Continuation read timed out" in string_payload(
+        object_payload(object_payload(failure)["error"])["message"]
+    )
     if wire == "messages":
         return
 
-    assert failure["id"] == events[0].data["response"]["id"]
-    assert failure["status"] == "failed"
-    assert failure["usage"]["output_tokens"] > 0
+    assert (
+        object_payload(failure)["id"]
+        == object_payload(events[0].data["response"])["id"]
+    )
+    assert object_payload(failure)["status"] == "failed"
+    assert (
+        int_payload(object_payload(object_payload(failure)["usage"])["output_tokens"])
+        > 0
+    )
     assert all(
-        left.data["sequence_number"] < right.data["sequence_number"]
+        int_payload(left.data["sequence_number"])
+        < int_payload(right.data["sequence_number"])
         for left, right in pairwise(events)
     )
     assert (
         "".join(
-            part.get("text", "")
-            for item in failure["output"]
-            for part in item.get("content") or []
+            string_payload(object_payload(part).get("text", ""))
+            for item in array_payload(object_payload(failure)["output"])
+            for part in object_array(object_payload(item).get("content") or [])
         )
         == "Hello "
     )
@@ -134,7 +133,9 @@ async def test_continuation_timeout_retains_delivered_output(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("handoff", [False, True])
-async def test_pending_recovery_failure_does_not_require_successful_closures(handoff):
+async def test_pending_recovery_failure_does_not_require_successful_closures(
+    handoff: bool,
+):
     prefix = (
         tool_events("responses", '{"path":"x"}')[:-1]
         if handoff
@@ -143,7 +144,9 @@ async def test_pending_recovery_failure_does_not_require_successful_closures(han
 
     async def source():
         for payload in prefix:
-            yield f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n"
+            yield completed_output(
+                (f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n",)
+            )
         state = current_stream_delivery()
         assert state is not None
         state.begin_continuation(handoff=handoff)
@@ -152,14 +155,24 @@ async def test_pending_recovery_failure_does_not_require_successful_closures(han
     events = parse_sse_text(await drained(source(), "responses"))
     failure = events[-1].data["response"]
     assert events[-1].event == "response.failed"
-    assert "recovery boundary failed" in failure["error"]["message"]
+    assert "recovery boundary failed" in string_payload(
+        object_payload(object_payload(failure)["error"])["message"]
+    )
     assert len(events) == len(prefix) + 1
-    assert len(failure["output"]) == 1
+    assert len(array_payload(object_payload(failure)["output"])) == 1
     if handoff:
-        assert failure["output"][0] == prefix[-1]["item"]
+        assert array_payload(object_payload(failure)["output"])[0] == prefix[-1]["item"]
     else:
-        assert failure["output"][0]["status"] == "in_progress"
-        assert failure["output"][0]["content"][0]["text"] == "Hello "
+        assert (
+            object_array(object_payload(failure)["output"])[0]["status"]
+            == "in_progress"
+        )
+        assert (
+            object_array(object_array(object_payload(failure)["output"])[0]["content"])[
+                0
+            ]["text"]
+            == "Hello "
+        )
 
 
 @pytest.mark.asyncio
@@ -170,7 +183,9 @@ async def test_cancellation_during_pending_continuation_emits_no_failure():
     async def source():
         try:
             for payload in text_events("responses", "Hello ", complete=False):
-                yield f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n"
+                yield completed_output(
+                    (f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n",)
+                )
             state = current_stream_delivery()
             assert state is not None
             state.begin_continuation()

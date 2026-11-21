@@ -18,6 +18,7 @@ from free_claude_code.core.openai_responses import (
 from free_claude_code.providers.openai_responses.presentation import (
     NativeResponsesPresenter,
 )
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 def _adapter(request: OpenAIResponsesRequest) -> ResponsesToolAdapter:
@@ -112,7 +113,9 @@ def test_hosted_discovery_restores_definitions_and_replays_flat_names(
         )
     )
     events = parse_sse_text("".join(frames))
-    public = cast(list[JsonObject], events[-1].data["response"]["output"])
+    public = cast(
+        list[JsonObject], object_payload(events[-1].data["response"])["output"]
+    )
     continuation = OpenAIResponsesRequest(
         model="example",
         tools=request.tools,
@@ -224,17 +227,17 @@ def test_custom_tool_identity_and_history_preserve_namespaces() -> None:
     )
     original = request.model_dump()
     adapter = _adapter(request)
-    wire = adapter.request.model_dump()
-    nested = wire["tools"][1]["tools"][0]
+    wire: JsonObject = adapter.request.model_dump()
+    nested = object_array(object_array(wire["tools"])[1]["tools"])[0]
     assert nested["type"] == "function"
-    assert wire["input"][0]["name"] == nested["name"]
-    assert wire["input"][0]["namespace"] == "editor"
+    assert object_array(wire["input"])[0]["name"] == nested["name"]
+    assert object_array(wire["input"])[0]["namespace"] == "editor"
     assert wire["tool_choice"] == {
         "type": "function",
         "namespace": "editor",
         "name": nested["name"],
     }
-    assert wire["input"][1] == original["input"][1]
+    assert object_array(wire["input"])[1] == original["input"][1]
 
     output = [
         {
@@ -265,12 +268,15 @@ def test_custom_tool_identity_and_history_preserve_namespaces() -> None:
     }
     stream = "".join(_presenter(adapter).feed("response.completed", event))
     restored = parse_sse_text(stream)[0].data["response"]
-    assert restored["output"][0]["type"] == "custom_tool_call"
-    assert restored["output"][0]["name"] == "edit"
-    assert restored["output"][0]["namespace"] == "editor"
-    assert restored["output"][0]["input"] == "patch"
-    assert restored["output"][1] == output[1]
-    assert restored["tools"] == original["tools"]
+    assert (
+        object_array(object_payload(restored)["output"])[0]["type"]
+        == "custom_tool_call"
+    )
+    assert object_array(object_payload(restored)["output"])[0]["name"] == "edit"
+    assert object_array(object_payload(restored)["output"])[0]["namespace"] == "editor"
+    assert object_array(object_payload(restored)["output"])[0]["input"] == "patch"
+    assert array_payload(object_payload(restored)["output"])[1] == output[1]
+    assert object_payload(restored)["tools"] == original["tools"]
     assert request.model_dump() == original
 
 
@@ -322,7 +328,7 @@ def test_terminal_snapshot_restores_custom_item_id_without_prior_events(
     events = parse_sse_text(
         "".join(_presenter(adapter).feed(f"response.{status}", payload))
     )
-    restored = events[0].data["response"]["output"][0]
+    restored = array_payload(object_payload(events[0].data["response"])["output"])[0]
     assert restored == {
         "type": "custom_tool_call",
         "id": "ctc_snapshot",
@@ -367,7 +373,8 @@ def test_custom_conversion_preserves_tool_settings(field: str, value: object) ->
             ],
         }
     )
-    converted = _adapter(request).request.model_dump()["tools"][0]
+    body: JsonObject = _adapter(request).request.model_dump()
+    converted = object_array(body["tools"])[0]
     assert converted[field] == value
 
 
@@ -419,10 +426,23 @@ def test_client_discovery_converts_customs_and_preserves_each_definition() -> No
     )
     original = request.model_dump()
     adapter = _adapter(request)
-    wire = adapter.request.model_dump()
-    assert wire["input"][0]["tools"][0]["tools"][0]["type"] == "function"
-    assert wire["input"][1]["tools"][0]["tools"][0]["type"] == "function"
-    assert wire["input"][0]["tools"][0]["description"] == "Original group"
+    wire: JsonObject = adapter.request.model_dump()
+    assert (
+        object_array(object_array(object_array(wire["input"])[0]["tools"])[0]["tools"])[
+            0
+        ]["type"]
+        == "function"
+    )
+    assert (
+        object_array(object_array(object_array(wire["input"])[1]["tools"])[0]["tools"])[
+            0
+        ]["type"]
+        == "function"
+    )
+    assert (
+        object_array(object_array(wire["input"])[0]["tools"])[0]["description"]
+        == "Original group"
+    )
     event: JsonObject = {
         "type": "response.completed",
         "response": {
@@ -435,8 +455,8 @@ def test_client_discovery_converts_customs_and_preserves_each_definition() -> No
     }
     stream = "".join(_presenter(adapter).feed("response.completed", event))
     restored = parse_sse_text(stream)[0].data["response"]
-    assert restored["output"] == original["input"]
-    assert restored["tools"] == original["tools"]
+    assert object_payload(restored)["output"] == original["input"]
+    assert object_payload(restored)["tools"] == original["tools"]
     assert request.model_dump() == original
 
 
@@ -453,7 +473,7 @@ def test_flattened_custom_call_without_namespace_is_restored() -> None:
         ],
     )
     adapter = _adapter(request)
-    wire = adapter.request.model_dump()
+    wire: JsonObject = adapter.request.model_dump()
     event: JsonObject = {
         "type": "response.completed",
         "response": {
@@ -465,14 +485,18 @@ def test_flattened_custom_call_without_namespace_is_restored() -> None:
                     "type": "function_call",
                     "id": "item_one",
                     "call_id": "call_one",
-                    "name": wire["tools"][0]["tools"][0]["name"],
+                    "name": object_array(object_array(wire["tools"])[0]["tools"])[0][
+                        "name"
+                    ],
                     "arguments": '{"input":"patch"}',
                 }
             ],
         },
     }
     stream = "".join(_presenter(adapter).feed("response.completed", event))
-    item = parse_sse_text(stream)[0].data["response"]["output"][0]
+    item = array_payload(
+        object_payload(parse_sse_text(stream)[0].data["response"])["output"]
+    )[0]
     assert item == {
         "type": "custom_tool_call",
         "id": "item_one",
@@ -573,11 +597,11 @@ def test_custom_conversion_keeps_unrelated_fields_and_restores_allowed_choices()
         model="example", input="hello", tools=[tool], tool_choice=choice
     )
     adapter = _adapter(request)
-    wire = adapter.request.model_dump()
+    wire: JsonObject = adapter.request.model_dump()
     for field in ("defer_loading", "allowed_callers", "extension"):
-        assert wire["tools"][0][field] == tool[field]
+        assert object_array(wire["tools"])[0][field] == tool[field]
     assert adapter.restore_choice(wire["tool_choice"]) == choice
-    echoed = [{**wire["tools"][0], "provider_extension": "keep"}]
+    echoed = [{**object_array(wire["tools"])[0], "provider_extension": "keep"}]
     assert adapter.restore_tools(echoed) == [{**tool, "provider_extension": "keep"}]
 
 
@@ -668,9 +692,10 @@ def test_chat_and_native_adaptation_share_custom_input_and_description(
         input="hello",
         tools=[{"type": "custom", "name": "edit", "format": format_value}],
     )
-    native = _adapter(request).request.model_dump()["tools"][0]
+    body: JsonObject = _adapter(request).request.model_dump()
+    native = object_array(body["tools"])[0]
     chat_tools = build_responses_chat_request(
-        request, reasoning_replay=ReasoningReplayMode.DISABLED
+        request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
     ).body["tools"]
     assert isinstance(chat_tools, list)
     chat = chat_tools[0]["function"]
@@ -729,6 +754,6 @@ def test_adapted_presenter_preserves_terminal_failure_and_original_tool_metadata
     events = parse_sse_text("".join(presenter.terminal_failure(raw, failure)))
     assert len(events) == 1 and events[0].event == "response.failed"
     assert events[0].data["sequence_number"] == 2
-    assert events[0].data["response"]["tools"] == [tool]
-    assert events[0].data["response"]["status"] == "failed"
+    assert object_payload(events[0].data["response"])["tools"] == [tool]
+    assert object_payload(events[0].data["response"])["status"] == "failed"
     assert presenter.completed

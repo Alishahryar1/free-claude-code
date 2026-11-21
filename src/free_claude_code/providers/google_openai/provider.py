@@ -2,12 +2,14 @@
 
 from collections.abc import Iterator, Mapping
 from copy import deepcopy
-from typing import Any
+from typing import Any, override
 
 from free_claude_code.core.history_replay import ReplayOrigin
+from free_claude_code.core.json_types import wire_field
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.openai_chat import (
     ChatStreamOutput,
     OpenAIAsyncCredentialProvider,
@@ -33,6 +35,7 @@ class GoogleChatBehavior(OpenAIChatBehavior):
             tuple[ReplayOrigin, str], dict[str, Any]
         ] = {}
 
+    @override
     def record_tool_call_extra_content(
         self, tool_call_id: str, extra_content: dict[str, Any], *, origin: ReplayOrigin
     ) -> None:
@@ -48,6 +51,7 @@ class GoogleChatBehavior(OpenAIChatBehavior):
         self._tool_call_extra_content_by_id.pop(key, None)
         self._tool_call_extra_content_by_id[key] = deepcopy(extra_content)
 
+    @override
     def prepare_history_body(
         self,
         body: dict[str, Any],
@@ -66,6 +70,7 @@ class GoogleChatBehavior(OpenAIChatBehavior):
         )
         return body
 
+    @override
     def finalize_chat_body(
         self, body: dict[str, Any], *, reasoning: ReasoningPolicy
     ) -> dict[str, Any]:
@@ -76,10 +81,11 @@ class GoogleChatBehavior(OpenAIChatBehavior):
             apply_native_message_signatures(messages)
         return body
 
+    @override
     def extra_reasoning_events(
-        self, delta: Any, output: ChatStreamOutput, *, output_reasoning: bool
+        self, delta: object, output: ChatStreamOutput, *, output_reasoning: bool
     ) -> Iterator[str]:
-        extra = getattr(delta, "extra_content", None)
+        extra = wire_field(delta, "extra_content")
         google = extra.get("google") if isinstance(extra, Mapping) else None
         signature = (
             google.get("thought_signature") if isinstance(google, Mapping) else None
@@ -105,6 +111,7 @@ class GoogleOpenAIProvider(OpenAIChatProvider):
         *,
         profile: OpenAIChatProfile,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         api_key_provider: OpenAIAsyncCredentialProvider | None = None,
         default_headers: Mapping[str, str] | None = None,
     ) -> None:
@@ -112,6 +119,7 @@ class GoogleOpenAIProvider(OpenAIChatProvider):
             config,
             behavior=GoogleChatBehavior(profile),
             admission=admission,
+            history_cache=history_cache,
             api_key_provider=api_key_provider,
             default_headers=default_headers,
         )

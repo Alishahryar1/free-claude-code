@@ -81,7 +81,6 @@ def _configure(
         default_model_id=catalog.default_model_id,
         proxy_root_url=ctx.proxy_root_url,
         credentials_path=credentials_path,
-        provider_progress_timeout=ctx.settings.provider_progress_timeout,
     )
     patch_path = files.write_json("fcc.patch.yml", config)
     patch_args = ["--patch", str(patch_path)]

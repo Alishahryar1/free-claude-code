@@ -3,7 +3,7 @@
 import asyncio
 import uuid
 from dataclasses import dataclass
-from unittest.mock import AsyncMock
+from typing import override
 
 from free_claude_code.application.code_sessions.models import (
     CodeCatalog,
@@ -21,22 +21,30 @@ from free_claude_code.application.code_sessions.models import (
     RunStatus,
 )
 from free_claude_code.application.code_sessions.ports import EventSink, HarnessSelection
+from free_claude_code.application.code_sessions.service import CodeService
 from free_claude_code.config.model_refs import split_provider_model_ref
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.runtime.codex_app_server import CodexAppServer
 from free_claude_code.runtime.codex_protocol import CodexProtocol
+from tests.assertions import require_present
 
 
 class CodexPackets:
     """Feed native packets through the real adapter without starting a process."""
 
-    def __init__(self, connection):
+    def __init__(self, connection: FakeConnection):
         self.connection = connection
-        self.native = CodexAppServer([], {}, "", connection.sink)
+        metadata = self.metadata
+
+        class PacketServer(CodexAppServer):
+            @override
+            async def rpc(self, method: str, params: JsonObject) -> JsonObject:
+                return await metadata(method, params)
+
+        self.native = PacketServer([], {}, "", connection.sink)
         self.native.generation = connection.generation
         self.native._protocol = CodexProtocol(connection.generation)
         self.parents: dict[str, str] = {}
-        self.native.rpc = AsyncMock(side_effect=self.metadata)
 
     async def metadata(self, method: str, params: JsonObject) -> JsonObject:
         assert method == "thread/read" and params["includeTurns"] is False
@@ -52,7 +60,7 @@ class CodexPackets:
             }
         }
 
-    async def send(self, method, params):
+    async def send(self, method: str, params: JsonObject):
         if self.native.thread_id is None:
             future = asyncio.get_running_loop().create_future()
             self.native._pending["register"] = ("thread/resume", future)
@@ -66,8 +74,8 @@ class CodexPackets:
         self.native._queue.put_nowait(None)
         await self.native._dispatch()
 
-    async def spawn(self, child="child", parent=None):
-        self.parents[child] = parent or self.connection.thread_id
+    async def spawn(self, child: str = "child", parent: str | None = None):
+        self.parents[child] = parent or require_present(self.connection.thread_id)
         await self.send(
             "thread/started",
             {
@@ -76,7 +84,8 @@ class CodexPackets:
                     "source": {
                         "subAgent": {
                             "thread_spawn": {
-                                "parent_thread_id": parent or self.connection.thread_id,
+                                "parent_thread_id": parent
+                                or require_present(self.connection.thread_id),
                                 "depth": 1 if parent is None else 2,
                             }
                         }
@@ -86,9 +95,13 @@ class CodexPackets:
         )
 
     async def review(
-        self, child="child", review_id="review", status="inProgress", turn="child-turn"
+        self,
+        child: str = "child",
+        review_id: str = "review",
+        status: str = "inProgress",
+        turn: str = "child-turn",
     ):
-        payload = {
+        payload: JsonObject = {
             "threadId": child,
             "turnId": turn,
             "reviewId": review_id,
@@ -111,7 +124,7 @@ class CodexPackets:
             payload,
         )
 
-    async def warning(self, child="child", message="Native warning"):
+    async def warning(self, child: str = "child", message: str = "Native warning"):
         await self.send("guardianWarning", {"threadId": child, "message": message})
 
 
@@ -127,7 +140,7 @@ class FakeHarness:
         }
         self.configurations = {self.model: "capabilities-1"}
         self.context_windows: dict[str, int | None] = {self.model: None}
-        self.efforts = ("off", "low", "medium", "high", "xhigh", "max")
+        self.efforts: tuple[str, ...] = ("off", "low", "medium", "high", "xhigh", "max")
         self.default_effort = "medium"
         self.creation_gate = asyncio.Event()
         self.start_gate = asyncio.Event()
@@ -172,7 +185,7 @@ class FakeHarness:
             ),
         )
 
-    async def prepare(self, model, reasoning_effort, mode):
+    async def prepare(self, model: str, reasoning_effort: str | None, mode: CodeMode):
         if model not in self.configurations:
             raise CodeValidationError("This model is unavailable.")
         if reasoning_effort is not None and reasoning_effort not in self.efforts:
@@ -300,7 +313,9 @@ class FakeConnection:
             )
         await self.finish(turn_id, "interrupted")
 
-    async def finish(self, turn_id: str, status: RunStatus = "completed", message=None):
+    async def finish(
+        self, turn_id: str, status: RunStatus = "completed", message: str | None = None
+    ):
         await self.sink(
             HarnessEvent(
                 self.generation,
@@ -313,7 +328,13 @@ class FakeConnection:
         )
 
     async def text(
-        self, turn_id: str, item_id: str, text: str, *, complete=False, kind="text"
+        self,
+        turn_id: str,
+        item_id: str,
+        text: str,
+        *,
+        complete: bool = False,
+        kind: str = "text",
     ):
         item = ItemUpdate(
             turn_id,
@@ -420,7 +441,7 @@ class FakeConnection:
         await self.sink(HarnessEvent(self.generation, self.thread_id, "closed"))
 
 
-async def close_code_database(service):
+async def close_code_database(service: CodeService):
     """Tests composing a service directly also own its injected database."""
     from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
 

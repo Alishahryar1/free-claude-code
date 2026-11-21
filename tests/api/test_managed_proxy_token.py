@@ -14,7 +14,7 @@ from tests.api.support import create_test_app
 @pytest.mark.parametrize("managed_token", [None, "admin-token"])
 @pytest.mark.parametrize("client_token", [None, "different-terminal-token"])
 def test_independent_codex_token_authenticates_with_server(
-    monkeypatch, managed_token, client_token
+    monkeypatch: pytest.MonkeyPatch, managed_token: str | None, client_token: str | None
 ):
     store = ManagedConfigStore()
     store.initialize({})

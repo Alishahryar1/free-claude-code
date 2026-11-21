@@ -4,6 +4,8 @@ import asyncio
 import time
 from collections import deque
 from collections.abc import Callable
+from types import TracebackType
+from typing import Literal
 
 
 class StrictSlidingWindowLimiter:
@@ -24,7 +26,7 @@ class StrictSlidingWindowLimiter:
         if rate_window <= 0:
             raise ValueError("rate_window must be > 0")
 
-        self._rate_limit = int(rate_limit)
+        self._rate_limit = rate_limit
         self._rate_window = float(rate_window)
         self._times: deque[float] = deque()
         self._lock = asyncio.Lock()
@@ -68,5 +70,10 @@ class StrictSlidingWindowLimiter:
         await self.acquire()
         return self
 
-    async def __aexit__(self, exc_type, exc, tb) -> bool:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> Literal[False]:
         return False

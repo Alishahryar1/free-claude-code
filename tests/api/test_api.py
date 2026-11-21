@@ -1,13 +1,19 @@
+from typing import override
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi.applications import FastAPI
 from fastapi.testclient import TestClient
+from httpx import Response
 
 from free_claude_code.config.constants import DEFAULT_MODEL
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import ReasoningReplayMode
+from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -17,6 +23,7 @@ from free_claude_code.providers.openai_chat import (
 )
 from tests.api.support import create_test_app
 from tests.providers.support import immediate_admission, make_provider_config
+from tests.wire_payload import array_payload, object_payload, response_object
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -31,7 +38,9 @@ from tests.providers.support import immediate_admission, make_provider_config
         ),
     ],
 )
-def test_retired_model_ingress_calls_replacement(client, stream, prefix, ref, upstream):
+def test_retired_model_ingress_calls_replacement(
+    client: TestClient, stream: bool, prefix: str, ref: str, upstream: str
+):
     original = f"{prefix}{ref}"
     _stream_messages_calls.clear()
     response = client.post(
@@ -61,17 +70,25 @@ def app():
 mock_provider = MagicMock(spec=NvidiaNimProvider)
 
 # Track stream_messages calls for test_model_mapping
-_stream_messages_calls: list = []
+_stream_messages_calls: list[tuple[tuple[MessagesRequest, ...], dict[str, object]]] = []
 
 
-async def _mock_stream_messages(*args, **kwargs):
+async def _mock_stream_messages(*args: MessagesRequest, **kwargs: object):
     """Minimal async generator for streaming tests."""
     _stream_messages_calls.append((args, kwargs))
-    yield "event: message_start\ndata: {}\n\n"
-    yield "[DONE]\n\n"
+    yield StreamOutput(
+        (
+            'event: message_start\ndata: {"type":"message_start","message":{"type":"message","id":"m","role":"assistant","content":[],"model":"test"}}\n\n',
+        )
+    )
+    yield StreamOutput(
+        (
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n',
+        )
+    )
 
 
-async def _mock_pre_start_rate_limit(*args, **kwargs):
+async def _mock_pre_start_rate_limit(*args: MessagesRequest, **kwargs: object):
     """Provider stream that fails before any downstream-visible SSE chunk."""
     _stream_messages_calls.append((args, kwargs))
     raise ExecutionFailure(
@@ -80,22 +97,31 @@ async def _mock_pre_start_rate_limit(*args, **kwargs):
         message="upstream is busy",
         retryable=True,
     )
-    yield "unreachable"
+    yield StreamOutput(("unreachable",))
 
 
-async def _mock_empty_stream(*args, **kwargs):
+async def _mock_empty_stream(*args: MessagesRequest, **kwargs: object):
     """Provider stream that completes without a protocol frame."""
     _stream_messages_calls.append((args, kwargs))
     if False:
-        yield "unreachable"
+        yield StreamOutput(("unreachable",))
 
 
-def _terminal_json_error(response, *, status_code: int):
+def _invalid_request_error(response: Response):
+    assert response.status_code == 400
+    payload = response_object(response)
+    assert payload["type"] == "error"
+    assert payload["request_id"] == response.headers["request-id"]
+    assert object_payload(payload["error"])["type"] == "invalid_request_error"
+    return payload["error"]
+
+
+def _terminal_json_error(response: Response, *, status_code: int):
     assert response.status_code == status_code
     assert response.headers["content-type"].startswith("application/json")
     assert response.headers["x-should-retry"] == "false"
     request_id = response.headers["request-id"]
-    payload = response.json()
+    payload = response_object(response)
     assert payload["request_id"] == request_id
     return payload["error"]
 
@@ -104,7 +130,7 @@ mock_provider.stream_messages = _mock_stream_messages
 
 
 @pytest.fixture
-def client(app):
+def client(app: FastAPI):
     """HTTP client with provider resolution stubbed; patch only for this file."""
     with (
         patch(
@@ -133,10 +159,10 @@ def test_health(client: TestClient):
 def test_models_list(client: TestClient):
     response = client.get("/v1/models")
     assert response.status_code == 200
-    data = response.json()
+    data = response_object(response)
     assert data["has_more"] is False
-    ids = [item["id"] for item in data["data"]]
-    assert "claude-sonnet-4-20250514" in ids
+    ids = [object_payload(item)["id"] for item in array_payload(data["data"])]
+    assert "claude-sonnet-5-5" in ids
     assert data["first_id"] == ids[0]
     assert data["last_id"] == ids[-1]
     assert response.headers["x-request-id"] == response.headers["request-id"]
@@ -198,7 +224,7 @@ def test_auto_mode_classifier_without_stream_returns_json(client: TestClient):
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
-    body = response.json()
+    body = response_object(response)
     assert body["type"] == "message"
     assert body["usage"] == {"input_tokens": 0, "output_tokens": 0}
     routed_request = _stream_messages_calls[0][0][0]
@@ -232,7 +258,7 @@ def test_create_message_rejects_unportable_image_as_invalid_request() -> None:
             profile=OpenAIChatProfile(
                 OpenAIChatRequestPolicy(
                     provider_name="TEST_CHAT",
-                    reasoning_replay=ReasoningReplayMode.DISABLED,
+                    reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
                 ),
                 NO_REASONING,
             ),
@@ -331,32 +357,90 @@ def test_create_message_pre_start_provider_error_returns_terminal_json(
     mock_provider.stream_messages = _mock_stream_messages
 
 
-def test_create_message_preserves_system_role_messages(client: TestClient):
-    """Create message preserves latest-client system message placement."""
-    mock_provider.stream_messages = _mock_stream_messages
+@pytest.mark.parametrize(
+    "system_turn",
+    [
+        {"role": "system", "content": "system prompt"},
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "reminder"}],
+            "clear_at": "next_user_message",
+        },
+    ],
+    ids=["text", "clear-at"],
+)
+@pytest.mark.parametrize("leading", [True, False], ids=["leading", "mid"])
+def test_system_role_messages_are_rejected(
+    client: TestClient, system_turn: JsonObject, leading: bool
+):
+    """System prompts belong in ``system``; Claude Code retries without the turn."""
     _stream_messages_calls.clear()
-    payload = {
-        "model": "claude-3-sonnet",
-        "messages": [
-            {"role": "user", "content": "context"},
-            {"role": "system", "content": "system prompt"},
-            {"role": "user", "content": "Hi"},
-        ],
-        "max_tokens": 100,
-        "stream": True,
-    }
+    messages: list[JsonObject] = [{"role": "user", "content": "Hi"}]
+    messages.insert(0 if leading else 1, system_turn)
+    if not leading:
+        messages.append({"role": "user", "content": "again"})
 
-    response = client.post("/v1/messages", json=payload)
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "claude-3-sonnet",
+            "messages": messages,
+            "max_tokens": 100,
+            "stream": True,
+        },
+    )
 
-    assert response.status_code == 200
-    routed_request = _stream_messages_calls[0][0][0]
-    assert [message.role for message in routed_request.messages] == [
-        "user",
-        "system",
-        "user",
-    ]
-    assert routed_request.messages[1].content == "system prompt"
-    assert routed_request.system is None
+    error = _invalid_request_error(response)
+    assert "top-level `system` field" in error["message"]
+    assert "run `claude update`" in error["message"]
+    assert error["details"] == {"error_code": "mid_conversation_system_not_supported"}
+    assert _stream_messages_calls == []
+
+
+def test_system_role_rejection_names_the_claude_code_version(client: TestClient):
+    _stream_messages_calls.clear()
+    response = client.post(
+        "/v1/messages",
+        headers={"User-Agent": "claude-cli/2.1.288 (external, cli)"},
+        json={
+            "model": "claude-3-sonnet",
+            "messages": [
+                {"role": "user", "content": "Hi"},
+                {"role": "system", "content": "reminder"},
+            ],
+            "max_tokens": 100,
+        },
+    )
+
+    error = _invalid_request_error(response)
+    assert error["message"] == (
+        "Claude Code 2.1.288 sent a system message inside `messages`, which "
+        "Free Claude Code can't accept. Run `claude update`, then restart "
+        "Claude Code."
+    )
+    assert error["details"] == {"error_code": "mid_conversation_system_not_supported"}
+    assert _stream_messages_calls == []
+
+
+def test_count_tokens_rejects_system_role_messages_with_update_hint(
+    client: TestClient,
+):
+    response = client.post(
+        "/v1/messages/count_tokens",
+        headers={"User-Agent": "claude-cli/2.1.288 (external, cli)"},
+        json={
+            "model": "test",
+            "messages": [
+                {"role": "system", "content": "reminder"},
+                {"role": "user", "content": "Hello"},
+            ],
+        },
+    )
+
+    error = _invalid_request_error(response)
+    assert "Claude Code 2.1.288" in error["message"]
+    assert "Run `claude update`" in error["message"]
+    assert error["details"] == {"error_code": "mid_conversation_system_not_supported"}
 
 
 def test_model_mapping(client: TestClient):
@@ -426,7 +510,7 @@ def test_provider_execution_errors_preserve_status_and_type(
         "stream": True,
     }
 
-    def _raise_provider_error(*args, **kwargs):
+    def _raise_provider_error(*args: object, **kwargs: object):
         raise failure
 
     try:
@@ -463,7 +547,7 @@ def test_empty_provider_stream_returns_terminal_json(client: TestClient):
 def test_generic_stream_exception_returns_terminal_json(client: TestClient):
     """Unexpected provider execution failures return detailed terminal JSON."""
 
-    def _raise_runtime(*args, **kwargs):
+    def _raise_runtime(*args: object, **kwargs: object):
         raise RuntimeError("unexpected crash")
 
     mock_provider.stream_messages = _raise_runtime
@@ -492,7 +576,7 @@ def test_generic_stream_exception_with_status_code_returns_terminal_json(
             super().__init__(msg)
             self.status_code = status_code
 
-    def _raise_with_status(*args, **kwargs):
+    def _raise_with_status(*args: object, **kwargs: object):
         raise ExceptionWithStatus("bad gateway", 502)
 
     mock_provider.stream_messages = _raise_with_status
@@ -517,10 +601,11 @@ def test_generic_stream_exception_empty_message_returns_non_empty_error(
     """Exceptions with empty __str__ still return a readable HTTP detail."""
 
     class SilentError(RuntimeError):
+        @override
         def __str__(self):
             return ""
 
-    def _raise_silent(*args, **kwargs):
+    def _raise_silent(*args: object, **kwargs: object):
         raise SilentError()
 
     mock_provider.stream_messages = _raise_silent
@@ -550,7 +635,7 @@ def test_count_tokens_endpoint(client: TestClient):
     assert response.headers["request-id"].startswith("req_")
 
 
-def test_stop_endpoint_no_workflow_no_cli_503(app, client: TestClient):
+def test_stop_endpoint_no_workflow_no_cli_503(app: FastAPI, client: TestClient):
     """POST /stop without messaging workflow or cli_manager returns 503."""
     # Ensure no messaging workflow or cli_manager on app state
     if hasattr(app.state, "messaging_workflow"):

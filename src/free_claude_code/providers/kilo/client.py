@@ -1,10 +1,13 @@
 """Kilo.ai provider implementation."""
 
+from typing import override
+
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.reasoning import ReasoningEffort
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.openai_chat import (
     OpenAIChatProfile,
     OpenAIChatProvider,
@@ -32,10 +35,17 @@ class KiloProvider(OpenAIChatProvider):
     """Kilo gateway adapter with capability-aware discovery and reasoning."""
 
     def __init__(
-        self, config: ProviderConfig, *, admission: ProviderAdmissionController
+        self,
+        config: ProviderConfig,
+        *,
+        admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
     ) -> None:
-        super().__init__(config, profile=_PROFILE, admission=admission)
+        super().__init__(
+            config, profile=_PROFILE, admission=admission, history_cache=history_cache
+        )
 
+    @override
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
         """Advertise Kilo chat models that can execute FCC agent requests."""
         payload = await self._list_models_payload()

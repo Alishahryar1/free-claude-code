@@ -122,3 +122,28 @@ def test_duplicate_custom_provider_keeps_failed_save_draft(
     )
     expect(page.locator("#saveProvider")).to_be_enabled()
     expect(page.locator("#providers-custom .provider-card")).to_have_count(1)
+
+
+def test_saved_nonchat_format_opens_clean_and_can_switch_to_native_chat_fields(
+    page: Page, admin_base_url: str
+):
+    page.goto(admin_base_url + "/admin")
+    provider_id = add_provider(page, "Protocol gateway")
+    card = page.locator(f'[data-provider="{provider_id}"]')
+    card.get_by_role("button", name="Edit", exact=True).click()
+    dialog = page.locator("#providerDialog")
+    history = dialog.get_by_label("Reasoning history format", exact=True)
+    expect(history.locator("option")).to_have_count(2)
+    dialog.get_by_label("API format", exact=True).select_option("anthropic_messages")
+    page.locator("#saveProvider").click()
+    expect(dialog).not_to_be_visible()
+    card.get_by_role("button", name="Edit", exact=True).click()
+    expect(page.locator("#saveProvider")).to_be_disabled()
+    dialog.get_by_label("API format", exact=True).select_option("openai_chat")
+    expect(history).to_have_value("reasoning_content")
+    history.select_option("reasoning")
+    page.locator("#saveProvider").click()
+    expect(dialog).not_to_be_visible()
+    card.get_by_role("button", name="Edit", exact=True).click()
+    expect(history).to_have_value("reasoning")
+    expect(page.locator("#saveProvider")).to_be_disabled()

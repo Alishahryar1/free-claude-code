@@ -3,19 +3,21 @@ from pathlib import Path
 
 import pytest
 
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.harnesses import codex_integration
 from free_claude_code.harnesses.codex_integration import config_path
+from tests.wire_payload import object_payload
 
 URL = "http://127.0.0.1:8082"
 
 
-def operate(path, connected=None):
+def operate(path: Path, connected: bool | None = None):
     return codex_integration.configure(
         path, path.parent / "catalog.json", URL, connected
     )
 
 
-def test_connect_disconnect_preserve_model_comments_and_other_providers(tmp_path):
+def test_connect_disconnect_preserve_model_comments_and_other_providers(tmp_path: Path):
     path = tmp_path / "config.toml"
     original = '# My preferences\nmodel = "my-choice" # Keep this\n\n[model_providers.other]\nname = "Other"\n'
     path.write_text(original)
@@ -25,7 +27,8 @@ def test_connect_disconnect_preserve_model_comments_and_other_providers(tmp_path
     data = tomllib.loads(saved)
     assert data["model"] == "my-choice"
     assert data["model_provider"] == "fcc"
-    assert Path(data["model_catalog_json"]) == tmp_path / "catalog.json"
+    catalog_path: str = data["model_catalog_json"]
+    assert Path(catalog_path) == tmp_path / "catalog.json"
     assert data["model_providers"]["fcc"] == {
         "name": "Free Claude Code",
         "base_url": URL + "/v1",
@@ -42,7 +45,7 @@ def test_connect_disconnect_preserve_model_comments_and_other_providers(tmp_path
     assert '# My preferences\nmodel = "my-choice" # Keep this' in path.read_text()
 
 
-def test_missing_file_noops_and_unset_model(tmp_path):
+def test_missing_file_noops_and_unset_model(tmp_path: Path):
     path = tmp_path / "codex" / "config.toml"
     assert operate(path)["connected"] is False
     assert operate(path, False)["connected"] is False
@@ -59,7 +62,7 @@ def test_missing_file_noops_and_unset_model(tmp_path):
     assert path.stat().st_mtime_ns == before
 
 
-def test_inline_tables_merge_without_losing_extra_values(tmp_path):
+def test_inline_tables_merge_without_losing_extra_values(tmp_path: Path):
     path = tmp_path / "config.toml"
     path.write_text(
         'model_providers = {fcc = {name = "Old", extra = 7, auth = {command = "old", keep = true}}, other = {name = "Other"}} # Keep comment\n'
@@ -78,7 +81,7 @@ def test_inline_tables_merge_without_losing_extra_values(tmp_path):
 
 @pytest.mark.parametrize("previous_timeout", [None, 300000])
 def test_refresh_extends_fcc_waiting_and_preserves_retry_and_other_provider_settings(
-    tmp_path, previous_timeout
+    tmp_path: Path, previous_timeout: int | None
 ):
     path = tmp_path / "config.toml"
     timeout = (
@@ -99,7 +102,8 @@ def test_refresh_extends_fcc_waiting_and_preserves_retry_and_other_provider_sett
     assert codex_integration.refresh_connected(path, catalog_path, URL)
 
     saved = tomllib.loads(path.read_text())
-    provider = saved["model_providers"]["fcc"]
+    providers: JsonObject = saved["model_providers"]
+    provider = object_payload(providers["fcc"])
     assert provider["stream_idle_timeout_ms"] == 2147483647
     assert provider["request_max_retries"] == 3
     assert provider["stream_max_retries"] == 2
@@ -108,7 +112,7 @@ def test_refresh_extends_fcc_waiting_and_preserves_retry_and_other_provider_sett
     assert not codex_integration.refresh_connected(path, catalog_path, URL)
 
 
-def test_manual_connection_ignores_model_and_display_name(tmp_path):
+def test_manual_connection_ignores_model_and_display_name(tmp_path: Path):
     path = tmp_path / "config.toml"
     path.write_text(
         'model = "another-model"\nmodel_provider = "fcc"\n'
@@ -129,7 +133,7 @@ def test_manual_connection_ignores_model_and_display_name(tmp_path):
         '[model_providers.fcc]\nname = "Old"\n[other]\nkeep = true\n[model_providers.other]\nname = "Other"\n[model_providers.fcc.auth]\ncommand = "old"\n',
     ],
 )
-def test_valid_table_layouts_can_be_updated(tmp_path, content):
+def test_valid_table_layouts_can_be_updated(tmp_path: Path, content: str):
     path = tmp_path / "config.toml"
     path.write_text(content)
     original = tomllib.loads(content)
@@ -160,7 +164,7 @@ def test_valid_table_layouts_can_be_updated(tmp_path, content):
         ("catalog.json", "another-catalog.json"),
     ],
 )
-def test_changed_connection_fields_are_detected(tmp_path, old, new):
+def test_changed_connection_fields_are_detected(tmp_path: Path, old: str, new: str):
     path = tmp_path / "config.toml"
     operate(path, True)
     content = path.read_text()
@@ -169,7 +173,7 @@ def test_changed_connection_fields_are_detected(tmp_path, old, new):
     assert operate(path)["connected"] is False
 
 
-def test_disconnect_keeps_global_selections_for_another_provider(tmp_path):
+def test_disconnect_keeps_global_selections_for_another_provider(tmp_path: Path):
     path = tmp_path / "config.toml"
     operate(path, True)
     path.write_text(
@@ -180,7 +184,8 @@ def test_disconnect_keeps_global_selections_for_another_provider(tmp_path):
     operate(path, False)
     data = tomllib.loads(path.read_text())
     assert data["model_provider"] == "other"
-    assert Path(data["model_catalog_json"]) == tmp_path / "other.json"
+    catalog_path: str = data["model_catalog_json"]
+    assert Path(catalog_path) == tmp_path / "other.json"
     assert "fcc" not in data.get("model_providers", {})
 
 
@@ -194,7 +199,7 @@ def test_disconnect_keeps_global_selections_for_another_provider(tmp_path):
         '[model_providers.fcc]\nauth = "bad"',
     ],
 )
-def test_invalid_documents_are_not_rewritten(tmp_path, content):
+def test_invalid_documents_are_not_rewritten(tmp_path: Path, content: str):
     path = tmp_path / "config.toml"
     path.write_text(content)
     for action in (None, True, False):
@@ -203,11 +208,13 @@ def test_invalid_documents_are_not_rewritten(tmp_path, content):
         assert path.read_text() == content
 
 
-def test_atomic_failure_preserves_file_and_cleans_temp(tmp_path, monkeypatch):
+def test_atomic_failure_preserves_file_and_cleans_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     path = tmp_path / "config.toml"
     path.write_text('model = "keep"')
 
-    def fail(self, target):
+    def fail(self: object, target: object):
         raise PermissionError("failure")
 
     monkeypatch.setattr(Path, "replace", fail)
@@ -217,7 +224,7 @@ def test_atomic_failure_preserves_file_and_cleans_temp(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == [path]
 
 
-def test_symlink_unicode_and_path_display(tmp_path):
+def test_symlink_unicode_and_path_display(tmp_path: Path):
     target = tmp_path / "actual.toml"
     target.write_text('model = "模型" # Keep 😀\n', encoding="utf-8")
     path = tmp_path / "config.toml"
@@ -235,7 +242,9 @@ def test_symlink_unicode_and_path_display(tmp_path):
     assert "# Keep 😀" in target.read_text(encoding="utf-8")
 
 
-def test_native_config_path_honors_codex_home(tmp_path, monkeypatch):
+def test_native_config_path_honors_codex_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.delenv("CODEX_HOME", raising=False)
     assert config_path() == tmp_path / ".codex/config.toml"

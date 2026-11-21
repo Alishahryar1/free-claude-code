@@ -25,6 +25,7 @@ from free_claude_code.core.trace import trace_event
 from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
 from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.base import BaseProvider
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.model_listing import model_infos_from_ids
 from free_claude_code.providers.runtime.discovery import (
     _provider_query_failure_reason,
@@ -38,7 +39,7 @@ from free_claude_code.providers.runtime.model_cache import ProviderModelCache
 from free_claude_code.providers.runtime.runtime import ProviderRuntime
 
 ProviderRuntimeFactory = Callable[
-    [Settings, ProviderAdmissionRegistry], ProviderRuntime
+    [Settings, ProviderAdmissionRegistry, HistoryModeCache], ProviderRuntime
 ]
 ConnectedProviderIds = Callable[[], tuple[str, ...]]
 CommitConfig = Callable[[], Awaitable[None]]
@@ -171,6 +172,7 @@ class ProviderRuntimeManager:
         model_catalog_publisher: ModelCatalogPublisher | None = None,
     ) -> None:
         self._runtime_factory = runtime_factory
+        self._history_cache = HistoryModeCache()
         self._admission_registry = ProviderAdmissionRegistry(
             ProviderAdmissionLimits.from_settings(settings)
         )
@@ -192,7 +194,9 @@ class ProviderRuntimeManager:
         self._current = _ProviderGeneration(
             generation_id=1,
             settings=settings,
-            runtime=runtime_factory(settings, self._admission_registry),
+            runtime=runtime_factory(
+                settings, self._admission_registry, self._history_cache
+            ),
             cache=ProviderModelCache(
                 model_cache_provider_ids_for_settings(
                     settings, connected_provider_ids()
@@ -635,7 +639,7 @@ class ProviderRuntimeManager:
             candidate_runtime: ProviderRuntime | None = None
             try:
                 candidate_runtime = self._runtime_factory(
-                    settings, self._admission_registry
+                    settings, self._admission_registry, self._history_cache
                 )
                 await commit()
             except BaseException as exc:
@@ -747,6 +751,7 @@ class ProviderRuntimeManager:
                 raise RuntimeError("One or more provider runtimes failed to close.")
             self._current.cache.clear()
             self._admission_registry.close()
+            self._history_cache.clear()
             self._closed = True
 
     def _prune_admission(self) -> None:

@@ -12,7 +12,9 @@ from e2e import server_shutdown
 from e2e.code_support import CodeControl
 
 
-def test_completed_server_needs_no_diagnostics(tmp_path, request, capfd):
+def test_completed_server_needs_no_diagnostics(
+    tmp_path: Path, request: pytest.FixtureRequest, capfd: pytest.CaptureFixture[str]
+):
     thread = threading.Thread(target=lambda: None)
     thread.start()
     thread.join()
@@ -21,7 +23,10 @@ def test_completed_server_needs_no_diagnostics(tmp_path, request, capfd):
 
 
 def test_slow_server_finishes_after_diagnostic_threshold(
-    tmp_path, request, monkeypatch, capfd
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    capfd: pytest.CaptureFixture[str],
 ):
     control = CodeControl(tmp_path)
     ready = threading.Event()
@@ -31,14 +36,19 @@ def test_slow_server_finishes_after_diagnostic_threshold(
         nonlocal gate
         control.loop = asyncio.get_running_loop()
         gate = asyncio.Event()
-        job = asyncio.create_task(gate.wait(), name="pending-code-job")
+
+        async def wait_for_release() -> None:
+            assert gate is not None
+            await gate.wait()
+
+        job = asyncio.create_task(wait_for_release(), name="pending-code-job")
         control.service._jobs.add(job)
         ready.set()
         await job
 
     snapshot = server_shutdown._task_snapshot
 
-    def release_after_snapshot(control):
+    def release_after_snapshot(control: CodeControl):
         result = snapshot(control)
         assert gate is not None
         gate.set()
@@ -67,7 +77,9 @@ def test_slow_server_finishes_after_diagnostic_threshold(
 
 @pytest.mark.parametrize("workers", ["0", "1"])
 @pytest.mark.parametrize("extra_failure", [False, True])
-def test_shutdown_timeout_stops_later_tests(tmp_path, workers, extra_failure):
+def test_shutdown_timeout_stops_later_tests(
+    tmp_path: Path, workers: str, extra_failure: bool
+):
     (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
     (tmp_path / "test_shutdown.py").write_text(
         dedent(f"""

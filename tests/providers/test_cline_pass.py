@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import httpx2
 import pytest
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionChunk
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import CLINE_DEFAULT_BASE
@@ -17,6 +18,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     text_content,
     thinking_content,
 )
+from free_claude_code.core.history_replay import decode_replay
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.model_listing import ModelListResponseError
@@ -29,7 +31,9 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     profiled_provider,
+    sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload, string_payload
 
 
 @pytest.fixture
@@ -78,13 +82,13 @@ def _request(**overrides: JsonValue) -> MessagesRequest:
     return MessagesRequest.model_validate(payload)
 
 
-class AsyncStream(SDKStreamDouble):
-    def __init__(self, chunks: list[SimpleNamespace]) -> None:
+class AsyncStream(SDKStreamDouble[ChatCompletionChunk]):
+    def __init__(self, chunks: list[ChatCompletionChunk]) -> None:
         self._chunks = chunks
         self.closed = False
         super().__init__(self._iter(), close=self.aclose)
 
-    async def _iter(self) -> AsyncIterator[SimpleNamespace]:
+    async def _iter(self) -> AsyncIterator[ChatCompletionChunk]:
         for chunk in self._chunks:
             yield chunk
 
@@ -98,7 +102,7 @@ def _chunk(
     reasoning: str | None = None,
     reasoning_details: list[JsonObject] | None = None,
     finish_reason: str | None = None,
-) -> SimpleNamespace:
+) -> ChatCompletionChunk:
     delta = SimpleNamespace(
         content=content,
         reasoning=reasoning,
@@ -106,7 +110,7 @@ def _chunk(
         tool_calls=None,
     )
     choice = SimpleNamespace(delta=delta, finish_reason=finish_reason)
-    return SimpleNamespace(choices=[choice], usage=None)
+    return sdk_chat_chunk(SimpleNamespace(choices=[choice], usage=None))
 
 
 def test_init_uses_documented_cline_api(
@@ -183,15 +187,18 @@ def test_build_request_body_preserves_nested_model_images_tools_and_results(
     assert body["model"] == "cline-pass/kimi-k3"
     assert body["max_tokens"] == 321
     assert "max_completion_tokens" not in body
-    assert body["messages"][0] == {"role": "system", "content": "Be concise."}
-    assert body["messages"][1]["content"] == [
+    assert array_payload(body["messages"])[0] == {
+        "role": "system",
+        "content": "Be concise.",
+    }
+    assert object_payload(array_payload(body["messages"])[1])["content"] == [
         {"type": "text", "text": "Inspect this image."},
         {
             "type": "image_url",
             "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
         },
     ]
-    assert body["messages"][2]["tool_calls"] == [
+    assert object_payload(array_payload(body["messages"])[2])["tool_calls"] == [
         {
             "id": "call_inspect",
             "type": "function",
@@ -201,12 +208,17 @@ def test_build_request_body_preserves_nested_model_images_tools_and_results(
             },
         }
     ]
-    assert body["messages"][3] == {
+    assert array_payload(body["messages"])[3] == {
         "role": "tool",
         "tool_call_id": "call_inspect",
         "content": "image contents",
     }
-    assert body["tools"][0]["function"]["name"] == "inspect_image"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "inspect_image"
+    )
     assert body["tool_choice"] == {
         "type": "function",
         "function": {"name": "inspect_image"},
@@ -240,7 +252,7 @@ def test_build_request_body_adds_no_undocumented_reasoning_control_or_default_ca
         assert field not in body
 
 
-def test_build_request_body_replays_only_opaque_reasoning_details(
+def test_build_request_body_preserves_readable_and_native_reasoning(
     cline_pass_provider: OpenAIChatProvider,
 ) -> None:
     detail: JsonObject = {
@@ -270,13 +282,15 @@ def test_build_request_body_replays_only_opaque_reasoning_details(
         reasoning=ReasoningPolicy.on(),
     )
     assistant = next(
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     )
 
-    assert assistant["content"] == "Need a tool.\n\nI will inspect it."
-    assert assistant["reasoning_details"] == [detail]
-    assert "reasoning" not in assistant
-    assert "reasoning_content" not in assistant
+    assert object_payload(assistant)["content"] == "I will inspect it."
+    assert object_payload(assistant)["reasoning_details"] == [detail]
+    assert object_payload(assistant)["reasoning"] == "Need a tool."
+    assert "reasoning_content" not in object_payload(assistant)
     assert (
         cline_pass_provider._profile.reasoning_delta(
             SimpleNamespace(reasoning="next thought", reasoning_content="ignored")
@@ -310,11 +324,12 @@ async def test_stream_uses_upstream_sse_and_preserves_reasoning_details(
     ):
         event_text = "".join(
             [
-                event
+                frame
                 async for event in cline_pass_provider.stream_messages(
                     _request(),
                     reasoning=ReasoningPolicy.on(),
                 )
+                for frame in event.frames
             ]
         )
 
@@ -326,11 +341,13 @@ async def test_stream_uses_upstream_sse_and_preserves_reasoning_details(
     assert thinking_content(events) == "plan "
     assert text_content(events) == "done"
     records = [
-        event.data["delta"]["signature"]
+        object_payload(event.data["delta"])["signature"]
         for event in events
-        if event.data.get("delta", {}).get("type") == "signature_delta"
+        if object_payload(event.data.get("delta", {})).get("type") == "signature_delta"
     ]
-    assert records == [detail["signature"]]
+    assert [decode_replay(string_payload(record)).native for record in records] == [
+        {"reasoning_details": [detail]}
+    ]
     assert stream.closed
 
 

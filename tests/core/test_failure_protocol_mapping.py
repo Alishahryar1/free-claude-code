@@ -7,10 +7,12 @@ from free_claude_code.core.anthropic.errors import (
     anthropic_failure_payload,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses.errors import (
     openai_error_type_for_failure,
     openai_failure_payload,
 )
+from tests.wire_payload import object_payload
 
 
 @pytest.mark.parametrize(
@@ -62,8 +64,10 @@ def test_each_protocol_adds_its_client_compaction_trigger() -> None:
         retryable=False,
     )
 
-    anthropic_error = anthropic_failure_payload(failure)["error"]
-    openai_error = openai_failure_payload(failure)["error"]
+    anthropic_payload: JsonObject = anthropic_failure_payload(failure)
+    anthropic_error = object_payload(anthropic_payload["error"])
+    openai_payload: JsonObject = openai_failure_payload(failure)
+    openai_error = object_payload(openai_payload["error"])
 
     assert anthropic_error == {
         "type": "invalid_request_error",

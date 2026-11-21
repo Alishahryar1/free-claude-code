@@ -4,11 +4,12 @@ import pytest
 
 from free_claude_code.core.continuation_stream import ContinuationStream
 from free_claude_code.core.delivered_response import DeliveredResponse
+from tests.wire_payload import object_array, object_payload
 
 
 @pytest.mark.parametrize("summary", [False, True])
 @pytest.mark.parametrize("closed", ["none", "text", "part", "item"])
-def test_readable_reasoning_closes_only_missing_stages(summary, closed):
+def test_readable_reasoning_closes_only_missing_stages(summary: bool, closed: str):
     response = DeliveredResponse("responses")
     field = "summary" if summary else "content"
     part = {"type": "summary_text" if summary else "reasoning_text", "text": "Reason."}
@@ -139,11 +140,11 @@ def test_empty_blocks_and_usage_updates_do_not_finish_overlap():
             "delta": {"type": "text_delta", "text": "o world."},
         }
     )
-    assert events[0]["delta"]["text"] == "world."
+    assert object_payload(events[0]["delta"])["text"] == "world."
 
 
 @pytest.mark.parametrize("seed", ["added", "done"])
-def test_refusal_content_without_deltas_counts_as_progress(seed):
+def test_refusal_content_without_deltas_counts_as_progress(seed: str):
     response = DeliveredResponse("responses")
     response.observe(
         {
@@ -166,7 +167,9 @@ def test_refusal_content_without_deltas_counts_as_progress(seed):
     assert not response.can_handoff
 
 
-def test_handoff_fallback_preserves_already_closed_item_status(monkeypatch):
+def test_handoff_fallback_preserves_already_closed_item_status(
+    monkeypatch: pytest.MonkeyPatch,
+):
     response = DeliveredResponse("responses")
     response.observe(
         {
@@ -202,4 +205,6 @@ def test_handoff_fallback_preserves_already_closed_item_status(monkeypatch):
     result = continuation.finalize(
         continuation.prepare(response.handoff_events()[0])[0]
     )["response"]
-    assert [item["status"] for item in result["output"]] == ["incomplete", "completed"]
+    assert [
+        item["status"] for item in object_array(object_payload(result)["output"])
+    ] == ["incomplete", "completed"]

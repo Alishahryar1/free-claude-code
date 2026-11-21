@@ -5,8 +5,10 @@ import sqlite3
 import subprocess
 import sys
 import threading
+from collections.abc import Mapping
 from contextlib import closing
 from pathlib import Path
+from typing import Protocol, override
 
 import httpx
 import pytest
@@ -16,25 +18,33 @@ from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from free_claude_code.application.code_sessions.models import CodeUnavailableError
 from free_claude_code.runtime import sqlite_database
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
-from free_claude_code.runtime.sqlite_database import initialize_database
+from free_claude_code.runtime.sqlite_database import (
+    initialize_database,
+    query_rows,
+    required_column,
+)
+from tests.assertions import require_present
+from tests.fixture_types import DatabaseFactory
 
 
 @pytest.mark.asyncio
 async def test_transactions_reuse_connections_until_database_closes(
-    database_factory, tmp_path
+    database_factory: DatabaseFactory, tmp_path: Path
 ):
     database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
     await database.start()
-    observed = []
+    observed: list[sqlite3.Connection] = []
 
-    def observe(connection):
+    def observe(connection: sqlite3.Connection):
         observed.append(connection)
         assert connection.in_transaction
         assert connection.autocommit is True
         assert connection.execute("PRAGMA synchronous").fetchone()[0] == 2
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
-        return connection.execute("SELECT 1 AS value").fetchone()["value"]
+        row = query_rows(connection, "SELECT 1 AS value").fetchone()
+        assert row is not None
+        return required_column(row, "value", int)
 
     for write in (True, True, False, False):
         assert await database.run(observe, write=write) == 1
@@ -47,9 +57,15 @@ async def test_transactions_reuse_connections_until_database_closes(
             connection.execute("SELECT 1")
 
 
+def _deleted_count(connection: sqlite3.Connection) -> int:
+    row = query_rows(connection, "SELECT count(*) FROM code_deleted").fetchone()
+    assert row is not None
+    return required_column(row, 0, int)
+
+
 @pytest.mark.asyncio
 async def test_queued_writers_leave_workers_available_and_drain_on_close(
-    database_factory, tmp_path
+    database_factory: DatabaseFactory, tmp_path: Path
 ):
     database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
     await database.start()
@@ -58,7 +74,7 @@ async def test_queued_writers_leave_workers_available_and_drain_on_close(
     previous_limit = limiter.total_tokens
     limiter.total_tokens = 2
 
-    def write(connection, value):
+    def write(connection: sqlite3.Connection, value: str):
         if value == "0":
             entered.set()
             assert release.wait(10)
@@ -66,7 +82,7 @@ async def test_queued_writers_leave_workers_available_and_drain_on_close(
         return value
 
     writers = [asyncio.create_task(database.run(lambda c: write(c, "0")))]
-    readers = []
+    readers: list[asyncio.Task[int] | asyncio.Task[str]] = []
     closing_task = None
     try:
         assert await asyncio.to_thread(entered.wait, 3)
@@ -81,9 +97,7 @@ async def test_queued_writers_leave_workers_available_and_drain_on_close(
         readers = [
             asyncio.create_task(
                 database.run(
-                    lambda c: c.execute("SELECT count(*) FROM code_deleted").fetchone()[
-                        0
-                    ],
+                    _deleted_count,
                     write=False,
                 )
             ),
@@ -111,7 +125,7 @@ async def test_queued_writers_leave_workers_available_and_drain_on_close(
     await reopened.start()
     assert (
         await reopened.run(
-            lambda c: c.execute("SELECT count(*) FROM code_deleted").fetchone()[0],
+            _deleted_count,
             write=False,
         )
         == 12
@@ -120,21 +134,23 @@ async def test_queued_writers_leave_workers_available_and_drain_on_close(
 
 @pytest.mark.asyncio
 async def test_reader_leases_are_bounded_and_can_move_between_threads(
-    database_factory, tmp_path
+    database_factory: DatabaseFactory, tmp_path: Path
 ):
     database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
     await database.start()
     four_readers, release = threading.Event(), threading.Event()
-    observed = []
+    observed: list[sqlite3.Connection] = []
     guard = threading.Lock()
 
-    def read(connection):
+    def read(connection: sqlite3.Connection):
         with guard:
             observed.append(connection)
             if len(observed) == 4:
                 four_readers.set()
         assert release.wait(10)
-        return connection.execute("SELECT 1").fetchone()[0]
+        row = query_rows(connection, "SELECT 1").fetchone()
+        assert row is not None
+        return required_column(row, 0, int)
 
     tasks = [asyncio.create_task(database.run(read, write=False)) for _ in range(10)]
     try:
@@ -152,7 +168,7 @@ async def test_reader_leases_are_bounded_and_can_move_between_threads(
         errors = []
         finished, release_thread = threading.Event(), threading.Event()
 
-        def execute(wait):
+        def execute(wait: bool):
             try:
                 database.execute(lambda c: seen.append(c))
             except BaseException as exc:
@@ -182,30 +198,32 @@ async def test_reader_leases_are_bounded_and_can_move_between_threads(
     "failure", ["begin", "callback", "commit", "rollback", "closed"]
 )
 async def test_failed_transactions_discard_the_connection(
-    database_factory, tmp_path, failure
+    database_factory: DatabaseFactory, tmp_path: Path, failure: str
 ):
     database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
     await database.start()
-    observed = []
+    observed: list[sqlite3.Connection] = []
 
-    def authorize(action, arg1, arg2, name, trigger):
+    def authorize(
+        action: int, arg1: str | None, arg2: object, name: object, trigger: object
+    ):
         denied = {"begin": "BEGIN", "commit": "COMMIT", "rollback": "ROLLBACK"}
         if action == sqlite3.SQLITE_TRANSACTION and arg1 == denied.get(failure):
             return sqlite3.SQLITE_DENY
         return sqlite3.SQLITE_OK
 
-    def configure(connection):
+    def configure(connection: sqlite3.Connection):
         observed.append(connection)
         connection.set_authorizer(authorize)
 
     # Configure before BEGIN without wrapping/replacing sqlite3's transaction logic.
     def configure_lease():
-        with closing(database._writer.connect()) as lease:
-            configure(lease.driver_connection)
+        with closing(require_present(database._writer).connect()) as lease:
+            configure(require_present(lease.driver_connection))
 
     await database.work(configure_lease)
 
-    def fail(connection):
+    def fail(connection: sqlite3.Connection):
         connection.execute("INSERT INTO code_deleted VALUES ('failed')").close()
         if failure == "closed":
             connection.close()
@@ -224,7 +242,7 @@ async def test_failed_transactions_discard_the_connection(
     with pytest.raises(sqlite3.ProgrammingError, match="closed"):
         observed[0].execute("SELECT 1")
 
-    def verify(connection):
+    def verify(connection: sqlite3.Connection):
         assert connection is not observed[0]
         assert (
             connection.execute("SELECT count(*) FROM code_deleted").fetchone()[0] == 0
@@ -236,7 +254,7 @@ async def test_failed_transactions_discard_the_connection(
 
 @pytest.mark.asyncio
 async def test_checkout_timeout_uses_sqlite_error_contract(
-    database_factory, tmp_path, monkeypatch
+    database_factory: DatabaseFactory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
     await database.start()
@@ -253,13 +271,14 @@ async def test_checkout_timeout_uses_sqlite_error_contract(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_startup_failure_disposes_connections_before_releasing_owner(
-    tmp_path, cancel, initialized_database
+    tmp_path: Path, cancel: bool, initialized_database: Path
 ):
     shutil.copyfile(initialized_database, tmp_path / "fcc.db")
     entered, release = threading.Event(), threading.Event()
-    observed = []
+    observed: list[sqlite3.Connection] = []
 
     class GatedDatabase(sqlite_database.SQLiteDatabase):
+        @override
         def _initialize(self):
             super()._initialize()
             self.execute(lambda c: observed.append(c))
@@ -285,6 +304,7 @@ async def test_startup_failure_disposes_connections_before_releasing_owner(
             asyncio.CancelledError if cancel else sqlite3.OperationalError
         ):
             await starting
+        assert observed[0] is not None
         with pytest.raises(sqlite3.ProgrammingError, match="closed"):
             observed[0].execute("SELECT 1")
         reopened = sqlite_database.SQLiteDatabase(database.path, tmp_path / "fcc.lock")
@@ -297,25 +317,49 @@ async def test_startup_failure_disposes_connections_before_releasing_owner(
 
 
 @pytest.fixture(scope="module")
-def initialized_database(tmp_path_factory):
+def initialized_database(tmp_path_factory: pytest.TempPathFactory):
     """Build the schema once, outside the ownership test's synchronization window."""
     path = tmp_path_factory.mktemp("initialized-database") / "fcc.db"
     initialize_database(path)
     return path
 
 
-def test_connection_setup_failure_closes_raw_connection(tmp_path, monkeypatch):
+def test_connection_setup_failure_closes_raw_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     connect = sqlite3.connect
-    observed = []
+    observed: list[sqlite3.Connection] = []
+
+    class ParameterSequence(Protocol):
+        def __len__(self) -> int: ...
+
+        def __getitem__(self, index: int, /) -> object: ...
 
     class FailedSetup(sqlite3.Connection):
-        def execute(self, sql, *args):
+        @override
+        def execute(
+            self, sql: str, parameters: ParameterSequence | Mapping[str, object] = (), /
+        ):
             if sql.startswith("PRAGMA foreign_keys"):
                 raise sqlite3.OperationalError("injected configuration failure")
-            return super().execute(sql, *args)
+            return super().execute(sql, parameters)
 
-    def create(*args, **kwargs):
-        connection = connect(*args, **kwargs, factory=FailedSetup)
+    def create(
+        database: str,
+        *,
+        uri: bool,
+        timeout: float,
+        autocommit: bool,
+        check_same_thread: bool,
+    ):
+        connection = connect(
+            database,
+            uri=uri,
+            timeout=timeout,
+            autocommit=autocommit,
+            check_same_thread=check_same_thread,
+            factory=FailedSetup,
+        )
         observed.append(connection)
         return connection
 
@@ -327,25 +371,30 @@ def test_connection_setup_failure_closes_raw_connection(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_partial_pool_creation_cleans_up_writer(tmp_path, monkeypatch):
+async def test_partial_pool_creation_cleans_up_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     database = sqlite_database.SQLiteDatabase(
         tmp_path / "fcc.db", tmp_path / "fcc.lock"
     )
     create_pool = database._pool
-    observed = []
+    observed: list[sqlite3.Connection] = []
 
-    def partial(size):
+    def partial(size: int):
         if size == 4:
             raise RuntimeError("reader pool creation failed")
         pool = create_pool(size)
         with closing(pool.connect()) as lease:
-            observed.append(lease.driver_connection)
+            connection = lease.driver_connection
+            assert isinstance(connection, sqlite3.Connection)
+            observed.append(connection)
         return pool
 
     monkeypatch.setattr(database, "_pool", partial)
     try:
         with pytest.raises(RuntimeError, match="reader pool"):
             await database.start()
+        assert observed[0] is not None
         with pytest.raises(sqlite3.ProgrammingError, match="closed"):
             observed[0].execute("SELECT 1")
         other = sqlite_database.SQLiteDatabase(database.path, tmp_path / "fcc.lock")
@@ -359,14 +408,14 @@ async def test_partial_pool_creation_cleans_up_writer(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_disposal_failure_retains_owner_and_can_be_retried(
-    database_factory, tmp_path, monkeypatch
+    database_factory: DatabaseFactory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     database = database_factory(tmp_path / "fcc.db", tmp_path / "fcc.lock")
     await database.start()
     reader_connections = []
     await database.run(lambda c: reader_connections.append(c), write=False)
     writer = database._writer
-    dispose = writer.dispose
+    dispose = require_present(writer).dispose
 
     def fail():
         raise RuntimeError("injected disposal failure")
@@ -453,11 +502,13 @@ def historical_database(path: Path, version: int) -> None:
             connection.execute("UPDATE code_sessions SET context_used_tokens=1234")
 
 
-def snapshot(path: Path) -> dict[str, list[dict]]:
+def snapshot(path: Path) -> dict[str, list[dict[str, object]]]:
     with closing(sqlite3.connect(path)) as connection:
         connection.row_factory = sqlite3.Row
         return {
-            table: [dict(row) for row in connection.execute(f"SELECT * FROM {table}")]
+            table: [
+                dict(row) for row in query_rows(connection, f"SELECT * FROM {table}")
+            ]
             for table in (
                 "code_sessions",
                 "code_runs",
@@ -470,7 +521,7 @@ def snapshot(path: Path) -> dict[str, list[dict]]:
 
 @pytest.mark.parametrize("version", [0, 1, 2, 3])
 def test_historical_database_moves_and_upgrades_without_losing_records(
-    tmp_path, version
+    tmp_path: Path, version: int
 ):
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, version)
@@ -492,7 +543,7 @@ def test_historical_database_moves_and_upgrades_without_losing_records(
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
-def test_fresh_database_uses_only_destination_and_is_repeatable(tmp_path):
+def test_fresh_database_uses_only_destination_and_is_repeatable(tmp_path: Path):
     target, old = tmp_path / "fcc.db", tmp_path / "code/code.db"
     initialize_database(target, old)
     initialize_database(target, old)
@@ -500,7 +551,7 @@ def test_fresh_database_uses_only_destination_and_is_repeatable(tmp_path):
     assert all(not rows for rows in snapshot(target).values())
 
 
-def test_two_databases_are_preserved_without_choosing_a_winner(tmp_path):
+def test_two_databases_are_preserved_without_choosing_a_winner(tmp_path: Path):
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, 1)
     historical_database(target, 3)
@@ -513,7 +564,7 @@ def test_two_databases_are_preserved_without_choosing_a_winner(tmp_path):
 @pytest.mark.parametrize("suffix", ["-wal", "-shm", "-journal"])
 @pytest.mark.parametrize("location", ["fcc.db", "code/code.db"])
 def test_orphan_journals_are_not_treated_as_a_fresh_database(
-    tmp_path, suffix, location
+    tmp_path: Path, suffix: str, location: str
 ):
     orphan = tmp_path / (location + suffix)
     orphan.parent.mkdir(parents=True, exist_ok=True)
@@ -525,7 +576,7 @@ def test_orphan_journals_are_not_treated_as_a_fresh_database(
 
 
 @pytest.mark.parametrize("version", [-1, 6])
-def test_unsupported_version_is_not_moved_or_mutated(tmp_path, version):
+def test_unsupported_version_is_not_moved_or_mutated(tmp_path: Path, version: int):
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, 3)
     with closing(sqlite3.connect(old)) as connection:
@@ -540,7 +591,7 @@ def test_unsupported_version_is_not_moved_or_mutated(tmp_path, version):
 @pytest.mark.parametrize(
     "statement", ["CREATE TABLE unrelated(id)", "CREATE TABLE code_sessions(id)"]
 )
-def test_unrecognized_schema_is_not_blessed_or_moved(tmp_path, statement):
+def test_unrecognized_schema_is_not_blessed_or_moved(tmp_path: Path, statement: str):
     old, target = tmp_path / "code.db", tmp_path / "fcc.db"
     with closing(sqlite3.connect(old)) as connection:
         connection.execute(statement)
@@ -549,7 +600,7 @@ def test_unrecognized_schema_is_not_blessed_or_moved(tmp_path, statement):
     assert old.exists() and not target.exists()
 
 
-def test_committed_wal_survives_unclean_exit_and_relocation(tmp_path):
+def test_committed_wal_survives_unclean_exit_and_relocation(tmp_path: Path):
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, 3)
     subprocess.run(
@@ -575,13 +626,15 @@ os._exit(0)
     assert not any(old.parent.glob("code.db*"))
 
 
-def test_failed_rename_preserves_source_and_can_retry(tmp_path, monkeypatch):
+def test_failed_rename_preserves_source_and_can_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, 3)
     before = snapshot(old)
     with monkeypatch.context() as patch:
 
-        def fail_rename(self, target):
+        def fail_rename(self: object, target: object):
             raise PermissionError("move blocked")
 
         patch.setattr(Path, "rename", fail_rename)
@@ -595,14 +648,14 @@ def test_failed_rename_preserves_source_and_can_retry(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("failing_version", [1, 2])
 def test_migration_failure_after_move_rolls_back_and_retries_at_destination(
-    tmp_path, monkeypatch, failing_version
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing_version: int
 ):
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, 0)
     migrations = sqlite_database.MIGRATIONS
     original = migrations[failing_version - 1][1]
 
-    def fail_upgrade(connection):
+    def fail_upgrade(connection: sqlite3.Connection):
         original(connection)
         connection.execute("CREATE TABLE must_rollback(id)")
         raise sqlite3.DatabaseError("injected migration failure")
@@ -626,9 +679,10 @@ def test_migration_failure_after_move_rolls_back_and_retries_at_destination(
         assert not connection.execute(
             "SELECT name FROM sqlite_schema WHERE name='must_rollback'"
         ).fetchall()
-        columns = {
-            row[1] for row in connection.execute("PRAGMA table_info(code_sessions)")
-        }
+        table_info: list[tuple[int, str, str, int, str | None, int]] = (
+            connection.execute("PRAGMA table_info(code_sessions)").fetchall()
+        )
+        columns = {row[1] for row in table_info}
         assert "mode" not in columns
         assert (
             connection.execute("SELECT count(*) FROM code_items").fetchone()[0]
@@ -638,11 +692,13 @@ def test_migration_failure_after_move_rolls_back_and_retries_at_destination(
     assert len(snapshot(target)["code_items"]) == 2
 
 
-def test_fresh_schema_failure_rolls_back_all_ddl(tmp_path, monkeypatch):
+def test_fresh_schema_failure_rolls_back_all_ddl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     target = tmp_path / "fcc.db"
     original = sqlite_database.MIGRATIONS[0][1]
 
-    def fail_upgrade(connection):
+    def fail_upgrade(connection: sqlite3.Connection):
         original(connection)
         raise sqlite3.DatabaseError("injected fresh failure")
 
@@ -657,12 +713,14 @@ def test_fresh_schema_failure_rolls_back_all_ddl(tmp_path, monkeypatch):
     assert all(not rows for rows in snapshot(target).values())
 
 
-def test_current_schema_does_not_execute_historical_migrations(tmp_path, monkeypatch):
+def test_current_schema_does_not_execute_historical_migrations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     target = tmp_path / "fcc.db"
     historical_database(target, 3)
     initialize_database(target)
 
-    def already_applied(connection):
+    def already_applied(connection: object):
         pytest.fail("An applied migration was executed again")
 
     monkeypatch.setattr(
@@ -674,14 +732,14 @@ def test_current_schema_does_not_execute_historical_migrations(tmp_path, monkeyp
 
 
 def test_messaging_schema_failure_rolls_back_without_changing_code_history(
-    tmp_path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     target = tmp_path / "fcc.db"
     historical_database(target, 3)
     before = snapshot(target)
     migrations = sqlite_database.MIGRATIONS
 
-    def fail(connection):
+    def fail(connection: sqlite3.Connection):
         migrations[3][1](connection)
         raise sqlite3.DatabaseError("interrupted messaging schema")
 
@@ -706,13 +764,17 @@ def test_messaging_schema_failure_rolls_back_without_changing_code_history(
     assert snapshot(target) == before
 
 
-def test_busy_wal_is_not_renamed_and_retries_after_reader_closes(tmp_path, monkeypatch):
+def test_busy_wal_is_not_renamed_and_retries_after_reader_closes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, 3)
     connect = sqlite_database._connect
 
-    def no_wait(*args, **kwargs):
-        connection = connect(*args, **kwargs)
+    def no_wait(path: Path, *, existing: bool = False, check_same_thread: bool = True):
+        connection = connect(
+            path, existing=existing, check_same_thread=check_same_thread
+        )
         connection.execute("PRAGMA busy_timeout=0")
         return connection
 
@@ -734,7 +796,7 @@ def test_busy_wal_is_not_renamed_and_retries_after_reader_closes(tmp_path, monke
 
 
 @pytest.mark.parametrize("redirect", ["directory", "database"])
-def test_redirected_legacy_storage_is_not_moved(tmp_path, redirect):
+def test_redirected_legacy_storage_is_not_moved(tmp_path: Path, redirect: str):
     elsewhere = tmp_path / "elsewhere/code.db"
     historical_database(elsewhere, 3)
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
@@ -755,7 +817,7 @@ def test_redirected_legacy_storage_is_not_moved(tmp_path, redirect):
 
 @pytest.mark.asyncio
 async def test_restart_recovery_runs_after_current_schema_relocation(
-    database_factory, tmp_path
+    database_factory: DatabaseFactory, tmp_path: Path
 ):
     old, target, lock = (
         tmp_path / "code/code.db",
@@ -784,7 +846,7 @@ async def test_restart_recovery_runs_after_current_schema_relocation(
 
 @pytest.mark.asyncio
 async def test_old_owner_blocks_move_and_new_owner_uses_same_lock(
-    database_factory, tmp_path
+    database_factory: DatabaseFactory, tmp_path: Path
 ):
     old, target, lock = (
         tmp_path / "code/code.db",
@@ -813,7 +875,7 @@ async def test_old_owner_blocks_move_and_new_owner_uses_same_lock(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission contract")
-def test_relocated_database_keeps_private_permissions(tmp_path):
+def test_relocated_database_keeps_private_permissions(tmp_path: Path):
     old, target = tmp_path / "code/code.db", tmp_path / "fcc.db"
     historical_database(old, 3)
     old.chmod(0o600)
@@ -824,7 +886,7 @@ def test_relocated_database_keeps_private_permissions(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fail_migration", [False, True])
 async def test_production_startup_keeps_http_available_and_chat_cleanup_independent(
-    monkeypatch, fail_migration
+    monkeypatch: pytest.MonkeyPatch, fail_migration: bool
 ):
     from free_claude_code.config import paths
     from free_claude_code.config.settings import Settings
@@ -842,7 +904,7 @@ async def test_production_startup_keeps_http_available_and_chat_cleanup_independ
     assert chat_lock.acquire()
     entered, release = threading.Event(), threading.Event()
 
-    def gated_migration(*args):
+    def gated_migration(*args: Path):
         entered.set()
         assert release.wait(10)
         if fail_migration:
@@ -850,9 +912,19 @@ async def test_production_startup_keeps_http_available_and_chat_cleanup_independ
         initialize_database(*args)
 
     monkeypatch.setattr(sqlite_database, "initialize_database", gated_migration)
-    monkeypatch.setattr(bootstrap, "configure_logging", lambda *args, **kwargs: None)
+
+    def replace_configure_logging(*args: object, **kwargs: object):
+        return None
+
+    monkeypatch.setattr(bootstrap, "configure_logging", replace_configure_logging)
+
+    def replace_start_model_list_refresh(_: object):
+        return None
+
     monkeypatch.setattr(
-        ProviderRuntimeManager, "start_model_list_refresh", lambda _: None
+        ProviderRuntimeManager,
+        "start_model_list_refresh",
+        replace_start_model_list_refresh,
     )
     app = bootstrap.build_asgi_app(
         Settings().model_copy(update={"messaging_platform": "none"})

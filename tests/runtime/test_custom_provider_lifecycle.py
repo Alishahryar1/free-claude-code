@@ -17,7 +17,7 @@ pytestmark = pytest.mark.asyncio
 ID = "custom_" + "a" * 32
 
 
-def settings(**changes):
+def settings(**changes: object):
     definition = CustomProviderDefinition.model_validate(
         {
             "provider_id": ID,
@@ -77,7 +77,11 @@ async def test_changed_endpoint_cannot_inherit_catalog_but_rename_can():
         await release.wait()
         return frozenset()
 
-    def blocked(settings, admission_registry):
+    def blocked(
+        settings: Settings,
+        admission_registry: ProviderAdmissionRegistry,
+        history_cache: object = None,
+    ):
         runtime = factory(settings, admission_registry)
         assert isinstance(runtime, FakeRuntime)
         runtime.provider.list_model_infos.side_effect = wait

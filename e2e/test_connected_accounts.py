@@ -12,6 +12,7 @@ from free_claude_code.application.connected_accounts import (
     ConnectedAccountStatus,
 )
 from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import object_payload, response_object
 
 
 def _status(provider_id: str, *, connected: bool = False) -> JsonObject:
@@ -76,7 +77,7 @@ class _Accounts:
 
     def config(self, route: Route) -> None:
         response = route.fetch()
-        config = response.json()
+        config = response_object(response)
         assert isinstance(config, dict)
         providers = config["provider_status"]
         assert isinstance(providers, list)
@@ -108,13 +109,15 @@ class _Accounts:
         route.fulfill(response=response, json=config)
 
     def startup(self, route: Route) -> None:
-        data = route.fetch().json()
+        data = response_object(route.fetch())
         for provider_id, status in self.statuses.items():
             if status["connected"]:
                 model_count = status["model_count"]
                 assert isinstance(model_count, int)
-                data["startup"]["providers"][provider_id] = "ready"
-                data["cached_models"][provider_id] = [
+                object_payload(object_payload(data["startup"])["providers"])[
+                    provider_id
+                ] = "ready"
+                object_payload(data["cached_models"])[provider_id] = [
                     f"model-{index}" for index in range(model_count)
                 ]
         route.fulfill(json=data)
@@ -355,13 +358,19 @@ def test_oauth_card_follows_model_discovery_without_replacing_settings(
     phase = "starting"
 
     def status(route: Route) -> None:
-        data = route.fetch().json()
-        data["startup"]["providers"][provider_id] = phase
-        data["startup"]["providers"]["open_router"] = phase
-        data["cached_models"][provider_id] = (
+        data = response_object(route.fetch())
+        object_payload(object_payload(data["startup"])["providers"])[provider_id] = (
+            phase
+        )
+        object_payload(object_payload(data["startup"])["providers"])["open_router"] = (
+            phase
+        )
+        object_payload(data["cached_models"])[provider_id] = (
             ["model-a", "model-b"] if phase == "ready" else []
         )
-        data["cached_models"]["open_router"] = data["cached_models"][provider_id]
+        object_payload(data["cached_models"])["open_router"] = object_payload(
+            data["cached_models"]
+        )[provider_id]
         route.fulfill(json=data)
 
     page.route("**/admin/api/status", status)
@@ -371,9 +380,8 @@ def test_oauth_card_follows_model_discovery_without_replacing_settings(
     expect(card.get_by_role("button", name="Disconnect", exact=True)).to_be_enabled()
     expect(card.locator(".provider-meta")).to_have_text("Checking models…")
     expect(other).to_have_text("Checking models…")
-    expect(card.locator(".provider-meta")).to_have_css(
-        "color", other.evaluate("element => getComputedStyle(element).color")
-    )
+    other_color: str = other.evaluate("element => getComputedStyle(element).color")
+    expect(card.locator(".provider-meta")).to_have_css("color", other_color)
     dialog = open_provider(page, "openai")
     proxy = dialog.locator("#field-OPENAI_PROXY")
     proxy.fill("http://pending-proxy:8080")
@@ -386,9 +394,8 @@ def test_oauth_card_follows_model_discovery_without_replacing_settings(
     )
     expect(card.locator(".provider-meta")).to_have_text(expected_message)
     expect(other).to_have_text(expected_message)
-    expect(card.locator(".provider-meta")).to_have_css(
-        "color", other.evaluate("element => getComputedStyle(element).color")
-    )
+    other_color = other.evaluate("element => getComputedStyle(element).color")
+    expect(card.locator(".provider-meta")).to_have_css("color", other_color)
     expect(proxy).to_have_value("http://pending-proxy:8080")
     expect(proxy).to_be_focused()
     assert proxy.evaluate("input => [input.selectionStart, input.selectionEnd]") == [
@@ -405,9 +412,9 @@ def test_late_account_response_cannot_replace_discovered_model_count(
     account["model_count"] = 0
 
     def status(route: Route) -> None:
-        data = route.fetch().json()
-        data["startup"]["providers"]["openai"] = "ready"
-        data["cached_models"]["openai"] = ["model-a", "model-b"]
+        data = response_object(route.fetch())
+        object_payload(object_payload(data["startup"])["providers"])["openai"] = "ready"
+        object_payload(data["cached_models"])["openai"] = ["model-a", "model-b"]
         route.fulfill(json=data)
 
     page.route("**/admin/api/status", status)

@@ -226,7 +226,7 @@ CAPABILITY_CONTRACTS: tuple[CapabilityContract, ...] = (
             "tests/api/test_ordinary_error_phases.py",
             "tests/core/test_failure_protocol_mapping.py",
             "tests/providers/test_execution_failure_boundary.py",
-            "tests/providers/test_failure_policy.py",
+            "tests/providers/test_failure_reporting.py",
         ),
     ),
     CapabilityContract(

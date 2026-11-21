@@ -9,6 +9,7 @@ import pytest
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.core.anthropic import set_if_not_none
 from free_claude_code.core.anthropic.models import MessagesRequest, Tool
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.nvidia_nim.request_options import (
     _set_extra,
@@ -18,7 +19,6 @@ from free_claude_code.providers.nvidia_nim.request_options import (
 )
 from free_claude_code.providers.nvidia_nim.retry import (
     clone_body_without_chat_template,
-    clone_body_without_reasoning_content,
 )
 from free_claude_code.providers.nvidia_nim.tool_schema import (
     NIM_TOOL_ARGUMENT_ALIASES_KEY,
@@ -27,6 +27,12 @@ from free_claude_code.providers.nvidia_nim.tool_schema import (
 )
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import REASONING_OFF, REASONING_ON
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 GREP_SCHEMA_FROM_SERVER_LOG: dict[str, Any] = {
     "type": "object",
@@ -74,14 +80,14 @@ class TestSetIfNotNone:
         assert body["key"] == "value"
 
     def test_value_none_skips(self):
-        body = {}
+        body: JsonObject = {}
         set_if_not_none(body, "key", None)
         assert "key" not in body
 
 
 class TestSetExtra:
     def test_key_in_extra_body_skips(self):
-        extra = {"top_k": 42}
+        extra: JsonObject = {"top_k": 42}
         _set_extra(extra, "top_k", 10)
         assert extra["top_k"] == 42
 
@@ -102,7 +108,7 @@ class TestSetExtra:
 
 
 class TestBuildRequestBody:
-    def test_absent_sampling_defaults_are_not_injected(self, req):
+    def test_absent_sampling_defaults_are_not_injected(self, req: MessagesRequest):
         body = build_request_body(req, reasoning=REASONING_OFF)
 
         assert "temperature" not in body
@@ -110,7 +116,7 @@ class TestBuildRequestBody:
         assert "parallel_tool_calls" not in body
         assert "extra_body" not in body
 
-    def test_explicit_sampling_and_extras_survive(self, req):
+    def test_explicit_sampling_and_extras_survive(self, req: MessagesRequest):
         req.temperature = 0.3
         req.top_p = 1.0
         req.top_k = 15
@@ -126,7 +132,7 @@ class TestBuildRequestBody:
 
     @pytest.mark.parametrize("keep_custom", (False, True))
     def test_reasoning_extras_are_cleaned_without_mutating_request(
-        self, req, keep_custom
+        self, req: MessagesRequest, keep_custom: bool
     ):
         template_kwargs: dict[str, Any] = {"thinking": True, "reasoning_budget": 100}
         if keep_custom:
@@ -151,10 +157,12 @@ class TestBuildRequestBody:
         assert req.model_dump() == original
 
     @pytest.mark.parametrize("effort", list(ReasoningEffort))
-    def test_named_effort_passes_through(self, req, effort):
+    def test_named_effort_passes_through(
+        self, req: MessagesRequest, effort: ReasoningEffort
+    ):
         body = build_request_body(req, reasoning=ReasoningPolicy(effort=effort))
         assert body["reasoning_effort"] == effort.value
-        assert "chat_template_kwargs" not in body.get("extra_body", {})
+        assert "chat_template_kwargs" not in object_payload(body.get("extra_body", {}))
 
     def test_named_effort_replaces_client_reasoning_budgets(self):
         req = make_messages_request(
@@ -175,9 +183,9 @@ class TestBuildRequestBody:
         )
 
         extra_body = body["extra_body"]
-        assert "reasoning_budget" not in extra_body
+        assert "reasoning_budget" not in object_payload(extra_body)
         assert body["reasoning_effort"] == "high"
-        assert extra_body["chat_template_kwargs"] == {"custom": "value"}
+        assert object_payload(extra_body)["chat_template_kwargs"] == {"custom": "value"}
 
     @pytest.mark.parametrize(
         ("requested", "expected"),
@@ -190,13 +198,17 @@ class TestBuildRequestBody:
             ),
         ],
     )
-    def test_max_tokens_preserves_fcc_output_limit(self, req, requested, expected):
+    def test_max_tokens_preserves_fcc_output_limit(
+        self, req: MessagesRequest, requested: int | None, expected: int
+    ):
         req.max_tokens = requested
         body = build_request_body(req, reasoning=REASONING_ON)
         assert body["max_tokens"] == expected
 
     @pytest.mark.parametrize("client_top_p", (None, 0.0, 0.5, 0.95, 1.0))
-    def test_top_p_preserves_client_value_or_omission(self, req, client_top_p):
+    def test_top_p_preserves_client_value_or_omission(
+        self, req: MessagesRequest, client_top_p: float | None
+    ):
         req.top_p = client_top_p
 
         body = build_request_body(req, reasoning=REASONING_ON)
@@ -206,12 +218,14 @@ class TestBuildRequestBody:
         else:
             assert body["top_p"] == client_top_p
 
-    def test_include_stop_str_in_output_not_sent(self, req):
+    def test_include_stop_str_in_output_not_sent(self, req: MessagesRequest):
         body = build_request_body(req, reasoning=REASONING_ON)
-        assert "include_stop_str_in_output" not in body.get("extra_body", {})
+        assert "include_stop_str_in_output" not in object_payload(
+            body.get("extra_body", {})
+        )
 
     def test_tool_schema_boolean_subschemas_are_removed_without_mutating_request(
-        self, req
+        self, req: MessagesRequest
     ):
         tool_schema = {
             "type": "object",
@@ -234,17 +248,25 @@ class TestBuildRequestBody:
 
         body = build_request_body(req, reasoning=REASONING_OFF)
 
-        parameters = body["tools"][0]["function"]["parameters"]
-        properties = parameters["properties"]
-        assert "additionalProperties" not in parameters
-        assert "blocked" not in properties
-        assert "additionalProperties" not in properties["nested"]
-        assert properties["choice"]["anyOf"] == [{"type": "string"}]
-        assert properties["query"]["default"] is False
+        parameters = object_payload(
+            object_payload(array_payload(body["tools"])[0])["function"]
+        )["parameters"]
+        properties = object_payload(parameters)["properties"]
+        assert "additionalProperties" not in object_payload(parameters)
+        assert "blocked" not in object_payload(properties)
+        assert "additionalProperties" not in object_payload(
+            object_payload(properties)["nested"]
+        )
+        assert object_payload(object_payload(properties)["choice"])["anyOf"] == [
+            {"type": "string"}
+        ]
+        assert object_payload(object_payload(properties)["query"])["default"] is False
         assert tool_schema["additionalProperties"] is False
         assert tool_schema["properties"]["nested"]["additionalProperties"] is False
 
-    def test_grep_schema_type_parameter_is_aliased_without_mutating_request(self, req):
+    def test_grep_schema_type_parameter_is_aliased_without_mutating_request(
+        self, req: MessagesRequest
+    ):
         tool_schema = deepcopy(GREP_SCHEMA_FROM_SERVER_LOG)
         tool_schema["properties"]["_fcc_arg_type"] = {
             "type": "string",
@@ -262,33 +284,43 @@ class TestBuildRequestBody:
 
         body = build_request_body(req, reasoning=REASONING_OFF)
 
-        parameters = body["tools"][0]["function"]["parameters"]
-        properties = parameters["properties"]
-        aliases = body[NIM_TOOL_ARGUMENT_ALIASES_KEY]["Grep"]
-        assert "additionalProperties" not in parameters
-        assert properties["-A"] == original_schema["properties"]["-A"]
-        assert properties["-B"] == original_schema["properties"]["-B"]
-        assert properties["-C"] == original_schema["properties"]["-C"]
-        assert properties["-i"] == original_schema["properties"]["-i"]
-        assert properties["-n"] == original_schema["properties"]["-n"]
-        assert "type" not in properties
-        assert properties["pattern"] == original_schema["properties"]["pattern"]
-        assert properties["output_mode"]["enum"] == [
+        parameters = object_payload(
+            object_payload(array_payload(body["tools"])[0])["function"]
+        )["parameters"]
+        properties = object_payload(parameters)["properties"]
+        aliases = object_payload(body[NIM_TOOL_ARGUMENT_ALIASES_KEY])["Grep"]
+        assert "additionalProperties" not in object_payload(parameters)
+        assert object_payload(properties)["-A"] == original_schema["properties"]["-A"]
+        assert object_payload(properties)["-B"] == original_schema["properties"]["-B"]
+        assert object_payload(properties)["-C"] == original_schema["properties"]["-C"]
+        assert object_payload(properties)["-i"] == original_schema["properties"]["-i"]
+        assert object_payload(properties)["-n"] == original_schema["properties"]["-n"]
+        assert "type" not in object_payload(properties)
+        assert (
+            object_payload(properties)["pattern"]
+            == original_schema["properties"]["pattern"]
+        )
+        assert object_payload(object_payload(properties)["output_mode"])["enum"] == [
             "content",
             "files_with_matches",
             "count",
         ]
         assert (
-            properties["_fcc_arg_type"]
+            object_payload(properties)["_fcc_arg_type"]
             == original_schema["properties"]["_fcc_arg_type"]
         )
         assert aliases == {"_fcc_arg_type_2": "type"}
-        assert properties["_fcc_arg_type_2"] == original_schema["properties"]["type"]
-        assert "-A" in parameters["required"]
-        assert "_fcc_arg_type" in parameters["required"]
+        assert (
+            object_payload(properties)["_fcc_arg_type_2"]
+            == original_schema["properties"]["type"]
+        )
+        assert "-A" in array_payload(object_payload(parameters)["required"])
+        assert "_fcc_arg_type" in array_payload(object_payload(parameters)["required"])
         assert tool_schema == original_schema
 
-    def test_reported_long_tool_name_uses_generic_alias_after_nim_repairs(self, req):
+    def test_reported_long_tool_name_uses_generic_alias_after_nim_repairs(
+        self, req: MessagesRequest
+    ):
         """Issue #1307's 52nd tool is portable without losing NIM arg aliases."""
         long_name = "mcp__issue_1307__" + "x" * 85
         assert len(long_name) == 102
@@ -311,9 +343,11 @@ class TestBuildRequestBody:
 
         body = build_request_body(req, reasoning=REASONING_OFF)
 
-        wire_name = body["tools"][51]["function"]["name"]
+        wire_name = object_payload(
+            object_payload(array_payload(body["tools"])[51])["function"]
+        )["name"]
         assert wire_name != long_name
-        assert re.fullmatch(r"[A-Za-z0-9_-]{1,64}", wire_name)
+        assert re.fullmatch(r"[A-Za-z0-9_-]{1,64}", string_payload(wire_name))
         assert body[NIM_TOOL_ARGUMENT_ALIASES_KEY] == {
             long_name: {"_fcc_arg_type": "type"}
         }
@@ -323,7 +357,7 @@ class TestBuildRequestBody:
         )
         assert req.model_dump() == snapshot
 
-    def test_safe_tool_schema_does_not_add_alias_metadata(self, req):
+    def test_safe_tool_schema_does_not_add_alias_metadata(self, req: MessagesRequest):
         tool_schema = {
             "type": "object",
             "properties": {
@@ -344,12 +378,14 @@ class TestBuildRequestBody:
         body = build_request_body(req, reasoning=REASONING_OFF)
 
         assert NIM_TOOL_ARGUMENT_ALIASES_KEY not in body
-        parameters = body["tools"][0]["function"]["parameters"]
-        assert parameters["properties"] == tool_schema["properties"]
-        assert parameters["required"] == ["pattern"]
+        parameters = object_payload(
+            object_payload(array_payload(body["tools"])[0])["function"]
+        )["parameters"]
+        assert object_payload(parameters)["properties"] == tool_schema["properties"]
+        assert object_payload(parameters)["required"] == ["pattern"]
 
     def test_nested_schema_keyword_properties_are_aliased_without_mutating_request(
-        self, req
+        self, req: MessagesRequest
     ):
         tool_schema = {
             "type": "object",
@@ -376,20 +412,26 @@ class TestBuildRequestBody:
 
         body = build_request_body(req, reasoning=REASONING_OFF)
 
-        aliases = body[NIM_TOOL_ARGUMENT_ALIASES_KEY]["NotionLike"]
-        parent = body["tools"][0]["function"]["parameters"]["properties"]["parent"]
-        parent_properties = parent["properties"]
-        assert "type" not in parent_properties
-        assert parent_properties["_fcc_arg_type"] == {
+        aliases = object_payload(body[NIM_TOOL_ARGUMENT_ALIASES_KEY])["NotionLike"]
+        parent = object_payload(
+            object_payload(
+                object_payload(
+                    object_payload(array_payload(body["tools"])[0])["function"]
+                )["parameters"]
+            )["properties"]
+        )["parent"]
+        parent_properties = object_payload(parent)["properties"]
+        assert "type" not in object_payload(parent_properties)
+        assert object_payload(parent_properties)["_fcc_arg_type"] == {
             "type": "string",
             "enum": ["page_id"],
         }
-        assert parent["required"] == ["_fcc_arg_type", "id"]
+        assert object_payload(parent)["required"] == ["_fcc_arg_type", "id"]
         assert aliases == {"_fcc_arg_type": "type"}
         assert tool_schema == original_schema
 
     def test_private_alias_metadata_is_stripped_without_mutating_body(self):
-        body = {
+        body: JsonObject = {
             "model": "test",
             NIM_TOOL_ARGUMENT_ALIASES_KEY: {"Grep": {"_fcc_arg_A": "-A"}},
         }
@@ -419,7 +461,7 @@ class TestBuildRequestBody:
         )
 
         body = build_request_body(req, reasoning=REASONING_ON)
-        extra = body.get("extra_body", {})
+        extra = object_payload(body.get("extra_body", {}))
         assert body["reasoning_effort"] == "high"
         assert "chat_template_kwargs" not in extra
         assert "reasoning_budget" not in extra
@@ -441,7 +483,7 @@ class TestBuildRequestBody:
             reasoning=ReasoningPolicy.provider_default(),
         )
 
-        assert "chat_template_kwargs" not in body.get("extra_body", {})
+        assert "chat_template_kwargs" not in object_payload(body.get("extra_body", {}))
 
     def test_clone_body_without_chat_template(self):
         body = {
@@ -512,7 +554,7 @@ class TestBuildRequestBody:
         )
 
         body = build_request_body(req, reasoning=REASONING_OFF)
-        extra = body.get("extra_body", {})
+        extra = object_payload(body.get("extra_body", {}))
         assert body["reasoning_effort"] == "none"
         assert "chat_template_kwargs" not in extra
         assert "reasoning_budget" not in extra
@@ -540,7 +582,9 @@ class TestBuildRequestBody:
 
         body = build_request_body(req, reasoning=REASONING_ON)
         assert body["reasoning_effort"] == "high"
-        assert body["extra_body"]["chat_template_kwargs"] == {"custom": "value"}
+        assert object_payload(body["extra_body"])["chat_template_kwargs"] == {
+            "custom": "value"
+        }
 
     def test_explicit_chat_template_is_preserved(self):
         req = make_messages_request(
@@ -560,10 +604,10 @@ class TestBuildRequestBody:
 
         req.extra_body = {"chat_template": "custom_template"}
         body = build_request_body(req, reasoning=REASONING_ON)
-        extra = body.get("extra_body", {})
+        extra = object_payload(body.get("extra_body", {}))
         assert body["reasoning_effort"] == "high"
         assert "chat_template_kwargs" not in extra
-        assert extra["chat_template"] == "custom_template"
+        assert object_payload(extra)["chat_template"] == "custom_template"
 
     def test_no_reasoning_params_in_extra_body(self):
         req = make_messages_request(
@@ -582,7 +626,7 @@ class TestBuildRequestBody:
         )
 
         body = build_request_body(req, reasoning=REASONING_OFF)
-        extra = body.get("extra_body", {})
+        extra = object_payload(body.get("extra_body", {}))
         for param in (
             "thinking",
             "reasoning_split",
@@ -603,8 +647,8 @@ class TestBuildRequestBody:
         )
 
         assert body["reasoning_effort"] == "high"
-        assert "chat_template_kwargs" not in body.get("extra_body", {})
-        assert "reasoning_budget" not in body.get("extra_body", {})
+        assert "chat_template_kwargs" not in object_payload(body.get("extra_body", {}))
+        assert "reasoning_budget" not in object_payload(body.get("extra_body", {}))
 
     def test_assistant_thinking_blocks_removed_when_disabled(self):
         req = make_messages_request(
@@ -631,8 +675,10 @@ class TestBuildRequestBody:
         )
 
         body = build_request_body(req, reasoning=REASONING_OFF)
-        assert "<think>" not in body["messages"][0]["content"]
-        assert "answer" in body["messages"][0]["content"]
+        assert "<think>" not in string_payload(
+            object_array(body["messages"])[0]["content"]
+        )
+        assert "answer" in string_payload(object_array(body["messages"])[0]["content"])
 
     def test_assistant_thinking_replayed_as_reasoning_content_when_enabled(self):
         req = make_messages_request(
@@ -659,31 +705,7 @@ class TestBuildRequestBody:
         )
 
         body = build_request_body(req, reasoning=REASONING_ON)
-        assistant = body["messages"][0]
-        assert assistant["reasoning_content"] == "secret"
-        assert assistant["content"] == "answer"
-        assert "<think>" not in assistant["content"]
-
-    def test_clone_body_without_reasoning_content(self):
-        body = {
-            "model": "test",
-            "messages": [
-                {"role": "user", "content": "hi"},
-                {
-                    "role": "assistant",
-                    "content": "answer",
-                    "reasoning_content": "secret",
-                },
-            ],
-        }
-
-        cloned = clone_body_without_reasoning_content(body)
-
-        assert cloned is not None
-        assert "reasoning_content" not in cloned["messages"][1]
-        assert body["messages"][1]["reasoning_content"] == "secret"
-
-    def test_clone_body_without_reasoning_content_returns_none_when_unchanged(self):
-        body = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
-
-        assert clone_body_without_reasoning_content(body) is None
+        assistant = array_payload(body["messages"])[0]
+        assert object_payload(assistant)["reasoning_content"] == "secret"
+        assert object_payload(assistant)["content"] == "answer"
+        assert "<think>" not in string_payload(object_payload(assistant)["content"])

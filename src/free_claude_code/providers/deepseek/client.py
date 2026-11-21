@@ -1,14 +1,13 @@
 """DeepSeek provider implementation (OpenAI-compatible Chat Completions)."""
 
-from collections.abc import Mapping
-from typing import Any
+from typing import Any, override
 
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.core.anthropic.models import MessagesRequest
-from free_claude_code.core.history_replay import HistoryScope
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
     OpenAIChatBehavior,
@@ -26,7 +25,6 @@ from .compat import (
 _PROFILE = OpenAIChatProfile(
     DEEPSEEK_REQUEST_POLICY,
     NO_REASONING,
-    history_scope=HistoryScope.ALL,
 )
 
 
@@ -54,28 +52,29 @@ def _deepseek_cache_partition(
 class DeepSeekChatBehavior(OpenAIChatBehavior):
     """DeepSeek Chat adaptation without HTTP ownership."""
 
-    def history_scope(self, body: Mapping[str, Any]) -> HistoryScope:
-        return HistoryScope.ALL if body.get("tools") else HistoryScope.UNKNOWN
-
     @property
+    @override
     def reasoning_off_fields(self) -> tuple[tuple[str, ...], ...]:
         return (("extra_body", "thinking"),)
 
     @property
+    @override
     def normal_max_tokens(self) -> int:
         return ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 
+    @override
     def build_messages_body(
         self,
         request: MessagesRequest,
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> dict:
+    ) -> dict[str, Any]:
         return build_deepseek_request_body(
             request,
             reasoning=reasoning,
         )
 
+    @override
     def finalize_chat_body(
         self,
         body: dict[str, Any],
@@ -86,6 +85,7 @@ class DeepSeekChatBehavior(OpenAIChatBehavior):
         finalize_deepseek_chat_body(body, reasoning)
         return body
 
+    @override
     def cached_input_tokens(self, usage_info: object) -> int | None:
         cache_partition = _deepseek_cache_partition(usage_info)
         if cache_partition is None:
@@ -93,7 +93,8 @@ class DeepSeekChatBehavior(OpenAIChatBehavior):
         cache_hit_tokens, _, prompt_tokens = cache_partition
         return cache_hit_tokens if prompt_tokens is not None else None
 
-    def anthropic_usage_fields(self, usage_info: Any) -> dict[str, int]:
+    @override
+    def anthropic_usage_fields(self, usage_info: object) -> dict[str, int]:
         cache_partition = _deepseek_cache_partition(usage_info)
         if cache_partition is None:
             return {}
@@ -108,10 +109,15 @@ class DeepSeekProvider(OpenAIChatProvider):
     """DeepSeek using ``https://api.deepseek.com`` Chat Completions."""
 
     def __init__(
-        self, config: ProviderConfig, *, admission: ProviderAdmissionController
+        self,
+        config: ProviderConfig,
+        *,
+        admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
     ):
         super().__init__(
             config,
             behavior=DeepSeekChatBehavior(_PROFILE),
             admission=admission,
+            history_cache=history_cache,
         )

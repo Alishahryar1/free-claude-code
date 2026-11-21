@@ -56,15 +56,16 @@ _SCHEMA = (
 def upgrade(connection: sqlite3.Connection) -> None:
     for statement in _SCHEMA:
         connection.execute(statement)
-    for prompt in connection.execute(
+    prompts: list[sqlite3.Row] = connection.execute(
         "SELECT * FROM code_prompts ORDER BY rowid"
-    ).fetchall():
-        run = connection.execute(
+    ).fetchall()
+    for prompt in prompts:
+        run: sqlite3.Row | None = connection.execute(
             "SELECT id FROM code_runs WHERE session_id = ? AND native_turn_id = ?",
             (prompt["session_id"], prompt["native_turn_id"]),
         ).fetchone()
         if run is None and prompt["native_item_id"] is not None:
-            matches = connection.execute(
+            matches: list[sqlite3.Row] = connection.execute(
                 "SELECT DISTINCT run_id AS id FROM code_items WHERE session_id = ? AND native_item_id = ?",
                 (prompt["session_id"], prompt["native_item_id"]),
             ).fetchall()
@@ -79,10 +80,13 @@ def upgrade(connection: sqlite3.Connection) -> None:
             raise sqlite3.DatabaseError(
                 "A saved prompt has no saved conversation turn."
             )
-        sequence = connection.execute(
+        sequence_row: sqlite3.Row | None = connection.execute(
             "SELECT COALESCE(MAX(sequence), 0) + 1 FROM code_items WHERE session_id = ?",
             (prompt["session_id"],),
-        ).fetchone()[0]
+        ).fetchone()
+        if sequence_row is None:
+            raise sqlite3.DatabaseError("Could not allocate prompt sequence.")
+        sequence: int = sequence_row[0]
         connection.execute(
             "INSERT INTO code_items (session_id,id,run_id,sequence,kind,title,text,detail,complete,raw) "
             "VALUES (?,?,?,?,'prompt','','','',1,'{}')",

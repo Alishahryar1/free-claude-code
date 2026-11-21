@@ -13,7 +13,7 @@ from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.runtime.folder_picker import NativeFolderPicker
 
 
-async def _retained_handle_probe(directory, cancel):
+async def _retained_handle_probe(directory: str, cancel: bool):
     root = Path(directory)
     ready = root / "descendant.pid"
     child_script = (
@@ -33,7 +33,9 @@ async def _retained_handle_probe(directory, cancel):
     process = None
 
     async def spawn(
-        _initial, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        _initial,
+        stdout: int = asyncio.subprocess.PIPE,
+        stderr: int = asyncio.subprocess.PIPE,
     ):
         nonlocal process
         process = await asyncio.create_subprocess_exec(
@@ -77,7 +79,9 @@ async def _retained_handle_probe(directory, cancel):
 
 
 @pytest.mark.parametrize("cancel", [False, True])
-def test_picker_does_not_wait_for_inherited_output_handles(tmp_path, cancel):
+def test_picker_does_not_wait_for_inherited_output_handles(
+    tmp_path: Path, cancel: bool
+):
     script = (
         "import asyncio, runpy, sys; "
         "probe = runpy.run_path(sys.argv[1])['_retained_handle_probe']; "
@@ -100,7 +104,7 @@ def test_picker_does_not_wait_for_inherited_output_handles(tmp_path, cancel):
 class DialogProcess:
     """A real child, with barriers around the return from subprocess creation."""
 
-    def __init__(self, script):
+    def __init__(self, script: str):
         self.script = script
         self.started = asyncio.Event()
         self.return_spawn = asyncio.Event()
@@ -108,7 +112,7 @@ class DialogProcess:
         self.process: asyncio.subprocess.Process
         self.captures = []
 
-    async def spawn(self, _initial_path, stdout, stderr):
+    async def spawn(self, _initial_path, stdout: int, stderr: int):
         self.captures.extend((stdout, stderr))
         self.process = await asyncio.create_subprocess_exec(
             sys.executable,
@@ -125,7 +129,7 @@ class DialogProcess:
         return self.process
 
 
-async def _exec_identity_probe(directory, after_exec):
+async def _exec_identity_probe(directory: str, after_exec: bool):
     root = Path(directory)
     helper_ready, exec_ready, proceed = (
         root / name for name in ("helper.pid", "exec.pid", "proceed")
@@ -175,7 +179,9 @@ async def _exec_identity_probe(directory, after_exec):
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX exec replacement")
 @pytest.mark.parametrize("after_exec", [False, True])
-def test_posix_exec_preserves_owned_pid_and_cancellation(tmp_path, after_exec):
+def test_posix_exec_preserves_owned_pid_and_cancellation(
+    tmp_path: Path, after_exec: bool
+):
     script = (
         "import asyncio, runpy, sys; "
         "probe = runpy.run_path(sys.argv[1])['_exec_identity_probe']; "
@@ -198,7 +204,7 @@ def test_posix_exec_preserves_owned_pid_and_cancellation(tmp_path, after_exec):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancelled", [False, True])
 async def test_selection_and_cancellation_return_after_child_exit(
-    monkeypatch, tmp_path, cancelled
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cancelled: bool
 ):
     path = None if cancelled else str(tmp_path / "project café with spaces")
     if sys.platform.startswith("linux") and cancelled:
@@ -224,7 +230,7 @@ async def test_selection_and_cancellation_return_after_child_exit(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("spawn_fails", [False, True])
 async def test_spawn_and_result_failures_close_captures_before_unregister(
-    monkeypatch, spawn_fails
+    monkeypatch: pytest.MonkeyPatch, spawn_fails: bool
 ):
     from free_claude_code.runtime import folder_picker
 
@@ -233,13 +239,13 @@ async def test_spawn_and_result_failures_close_captures_before_unregister(
     captures = []
     registrations = []
 
-    async def spawn(initial, stdout, stderr):
+    async def spawn(initial: str | None, stdout: int, stderr: int):
         captures.extend((stdout, stderr))
         if spawn_fails:
             raise FileNotFoundError("Native executable disappeared")
         return await child.spawn(initial, stdout, stderr)
 
-    def unregister(pid):
+    def unregister(pid: int):
         assert child.process.returncode is not None
         for capture in captures:
             with pytest.raises(OSError):
@@ -260,11 +266,13 @@ async def test_spawn_and_result_failures_close_captures_before_unregister(
 
 
 @pytest.mark.asyncio
-async def test_selection_failure_racing_shutdown_is_reported_to_request(monkeypatch):
+async def test_selection_failure_racing_shutdown_is_reported_to_request(
+    monkeypatch: pytest.MonkeyPatch,
+):
     picker = NativeFolderPicker()
     started = asyncio.Event()
 
-    async def spawn(_initial, stdout, stderr):
+    async def spawn(_initial, stdout: object, stderr: object):
         started.set()
         await picker._stop.wait()
         raise FileNotFoundError("Native picker disappeared while shutdown started")
@@ -283,7 +291,9 @@ async def test_selection_failure_racing_shutdown_is_reported_to_request(monkeypa
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("output", ['{"path": 42}', "{}", "not json", '{"path":""}'])
-async def test_invalid_child_result_gives_manual_entry_guidance(monkeypatch, output):
+async def test_invalid_child_result_gives_manual_entry_guidance(
+    monkeypatch: pytest.MonkeyPatch, output: str
+):
     child = DialogProcess(f"print({output!r})")
     picker = NativeFolderPicker()
     monkeypatch.setattr(picker, "_spawn", child.spawn)
@@ -294,7 +304,9 @@ async def test_invalid_child_result_gives_manual_entry_guidance(monkeypatch, out
 
 
 @pytest.mark.asyncio
-async def test_two_clicks_and_disconnect_during_spawn_keep_one_owned_child(monkeypatch):
+async def test_two_clicks_and_disconnect_during_spawn_keep_one_owned_child(
+    monkeypatch: pytest.MonkeyPatch,
+):
     child = DialogProcess("import threading\nthreading.Event().wait()")
     child.return_spawn.clear()
     picker = NativeFolderPicker()
@@ -317,7 +329,9 @@ async def test_two_clicks_and_disconnect_during_spawn_keep_one_owned_child(monke
 
 
 @pytest.mark.asyncio
-async def test_shutdown_closes_picker_and_rejects_new_clicks(monkeypatch):
+async def test_shutdown_closes_picker_and_rejects_new_clicks(
+    monkeypatch: pytest.MonkeyPatch,
+):
     child = DialogProcess("import threading\nthreading.Event().wait()")
     picker = NativeFolderPicker()
     monkeypatch.setattr(picker, "_spawn", child.spawn)
@@ -333,7 +347,9 @@ async def test_shutdown_closes_picker_and_rejects_new_clicks(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_interrupted_close_still_waits_for_child_cleanup(monkeypatch):
+async def test_interrupted_close_still_waits_for_child_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+):
     child = DialogProcess("import threading\nthreading.Event().wait()")
     child.return_spawn.clear()
     picker = NativeFolderPicker()

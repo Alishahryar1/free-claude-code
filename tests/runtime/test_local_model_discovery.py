@@ -2,6 +2,7 @@
 
 import asyncio
 import socket
+from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -21,13 +22,19 @@ from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime import provider_manager
-from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from free_claude_code.runtime.provider_manager import (
+    ModelCatalogPublisher,
+    ProviderRuntimeManager,
+)
 from tests.runtime.catalog_support import finish_discovery, finish_publication
+from tests.wire_payload import object_payload
 
 LOCAL_IDS = ("lmstudio", "llamacpp", "ollama")
 
 
-def provider(*ids, error=None):
+def provider(
+    *ids: str, error: Exception | Callable[[], Awaitable[object]] | None = None
+):
     value = MagicMock(spec=BaseProvider)
     value.list_model_infos = AsyncMock(
         return_value=frozenset(ProviderModelInfo(model) for model in ids),
@@ -37,7 +44,12 @@ def provider(*ids, error=None):
     return value
 
 
-def manager_for(settings=None, providers=None, **kwargs):
+def manager_for(
+    settings: Settings | None = None,
+    providers: dict[str, MagicMock] | None = None,
+    *,
+    model_catalog_publisher: ModelCatalogPublisher | None = None,
+):
     settings = settings or Settings()
     providers = providers or {name: provider(name + "-model") for name in LOCAL_IDS}
     all_providers = {
@@ -47,12 +59,13 @@ def manager_for(settings=None, providers=None, **kwargs):
     }
     return ProviderRuntimeManager(
         settings,
-        runtime_factory=lambda snapshot, registry: ProviderRuntime(
+        runtime_factory=lambda snapshot, registry, history_cache=None: ProviderRuntime(
             snapshot,
             registry,
+            None,
             {(name, 1): value for name, value in all_providers.items()},
         ),
-        **kwargs,
+        model_catalog_publisher=model_catalog_publisher,
     )
 
 
@@ -125,7 +138,7 @@ async def test_shutdown_cancels_owned_local_probes_and_cleans_providers():
     cancelled = set()
     ready = asyncio.Event()
 
-    def held(name):
+    def held(name: str):
         async def list_models():
             started.add(name)
             if started == set(LOCAL_IDS):
@@ -151,7 +164,7 @@ async def test_shutdown_cancels_owned_local_probes_and_cleans_providers():
 
 @pytest.mark.asyncio
 async def test_local_deadlines_are_parallel_and_do_not_block_other_provider_readiness(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(
         provider_manager, "LOCAL_DISCOVERY_TIMEOUT_SECONDS", 0.05, raising=False
@@ -160,7 +173,7 @@ async def test_local_deadlines_are_parallel_and_do_not_block_other_provider_read
     cancelled = set()
     all_started = asyncio.Event()
 
-    def held(name):
+    def held(name: str):
         async def list_models():
             entered.add(name)
             if len(entered) == len(LOCAL_IDS):
@@ -188,7 +201,10 @@ async def test_local_deadlines_are_parallel_and_do_not_block_other_provider_read
         status = manager.catalog_status()
         assert status["catalog"] == "ready"
         assert status["catalog_file"] == "ready"
-        assert all(status["providers"][name] == "unavailable" for name in LOCAL_IDS)
+        assert all(
+            object_payload(status["providers"])[name] == "unavailable"
+            for name in LOCAL_IDS
+        )
     finally:
         await manager.close()
 
@@ -198,7 +214,7 @@ async def test_local_deadlines_are_parallel_and_do_not_block_other_provider_read
 )
 @pytest.mark.asyncio
 async def test_optional_absence_is_quiet_but_shared_manual_test_keeps_failure(
-    failure, caplog
+    failure: Exception, caplog: pytest.LogCaptureFixture
 ):
     entered, release = asyncio.Event(), asyncio.Event()
 
@@ -223,7 +239,10 @@ async def test_optional_absence_is_quiet_but_shared_manual_test_keeps_failure(
         assert result.failed_provider_ids == ("ollama",)
         assert "private-url" not in str(result.failure_messages)
         assert providers["ollama"].list_model_infos.await_count == 1
-        assert manager.catalog_status()["providers"]["ollama"] == "unavailable"
+        assert (
+            object_payload(manager.catalog_status()["providers"])["ollama"]
+            == "unavailable"
+        )
         assert not [record for record in caplog.records if record.levelno >= 30]
     finally:
         release.set()
@@ -235,7 +254,7 @@ async def test_optional_absence_is_quiet_but_shared_manual_test_keeps_failure(
     ["managed_default", "process_default", "url", "proxy", "model", "fallback"],
 )
 @pytest.mark.asyncio
-async def test_explicit_local_configuration_reports_failure(intent):
+async def test_explicit_local_configuration_reports_failure(intent: str):
     default_url = Settings().ollama_base_url
     expected_provider = "lmstudio" if intent == "proxy" else "ollama"
     if intent == "managed_default":
@@ -262,7 +281,10 @@ async def test_explicit_local_configuration_reports_failure(intent):
         result = await manager.refresh_model_list_cache()
         assert result.failed_provider_ids == (expected_provider,)
         assert expected_provider in result.failure_messages
-        assert manager.catalog_status()["providers"][expected_provider] == "failed"
+        assert (
+            object_payload(manager.catalog_status()["providers"])[expected_provider]
+            == "failed"
+        )
     finally:
         await manager.close()
 
@@ -280,7 +302,9 @@ async def test_explicit_local_configuration_reports_failure(intent):
     ],
 )
 @pytest.mark.asyncio
-async def test_responding_or_broken_optional_provider_reports_real_errors(failure):
+async def test_responding_or_broken_optional_provider_reports_real_errors(
+    failure: Exception,
+):
     providers = {
         name: provider(error=failure if name == "ollama" else ConnectionError())
         for name in LOCAL_IDS
@@ -290,7 +314,9 @@ async def test_responding_or_broken_optional_provider_reports_real_errors(failur
         result = await manager.refresh_model_list_cache()
         assert result.failed_provider_ids == ("ollama",)
         assert "private-response" not in str(result.failure_messages)
-        assert manager.catalog_status()["providers"]["ollama"] == "failed"
+        assert (
+            object_payload(manager.catalog_status()["providers"])["ollama"] == "failed"
+        )
     finally:
         await manager.close()
 
@@ -309,7 +335,7 @@ async def test_responding_or_broken_optional_provider_reports_real_errors(failur
 )
 @pytest.mark.asyncio
 async def test_local_endpoint_change_discards_old_inventory_on_failed_rediscovery(
-    local_id, attr
+    local_id: str, attr: str
 ):
     providers = {name: provider(error=ConnectionError()) for name in LOCAL_IDS}
     manager = manager_for(providers=providers)
@@ -330,7 +356,7 @@ async def test_local_endpoint_change_discards_old_inventory_on_failed_rediscover
 
 @pytest.mark.asyncio
 async def test_optional_timeout_releases_real_admission_and_keeps_recovery_logs_quiet(
-    monkeypatch, caplog
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ):
     monkeypatch.setattr(provider_manager, "LOCAL_DISCOVERY_TIMEOUT_SECONDS", 0.05)
     controller = ProviderAdmissionController(
@@ -389,7 +415,7 @@ async def test_optional_timeout_releases_real_admission_and_keeps_recovery_logs_
 )
 @pytest.mark.asyncio
 async def test_local_deadline_preserves_actual_failure_during_admission_backoff(
-    monkeypatch, failure
+    monkeypatch: pytest.MonkeyPatch, failure: Exception
 ):
     monkeypatch.setattr(provider_manager, "LOCAL_DISCOVERY_TIMEOUT_SECONDS", 0.05)
     controller = ProviderAdmissionController(

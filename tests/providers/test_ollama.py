@@ -1,5 +1,6 @@
 """Tests for the local and Cloud Ollama OpenAI-compatible providers."""
 
+from collections.abc import Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,7 +22,9 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
     reasoning_for,
+    sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload
 
 OLLAMA_MODEL = "llama3.1:8b"
 OLLAMA_CLOUD_MODEL = "qwen3-coder:480b"
@@ -83,7 +86,7 @@ def test_build_request_body_uses_openai_chat_shape() -> None:
     body = _provider()._chat._build_request_body(make_messages_request(OLLAMA_MODEL))
 
     assert body["model"] == OLLAMA_MODEL
-    assert body["messages"][0]["role"] == "system"
+    assert object_payload(array_payload(body["messages"])[0])["role"] == "system"
     assert "reasoning_effort" not in body
     assert "thinking" not in body
     assert "extra_body" not in body
@@ -135,14 +138,18 @@ def test_cloud_build_request_body_replays_thinking_in_ollama_reasoning_field() -
     )
 
     assistant = next(
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     )
-    assert assistant["reasoning"] == "Inspect the repository."
-    assert "reasoning_content" not in assistant
+    assert object_payload(assistant)["reasoning"] == "Inspect the repository."
+    assert "reasoning_content" not in object_payload(assistant)
 
 
 @pytest.mark.parametrize("provider", [_provider, _cloud_provider])
-def test_replay_is_independent_of_disabled_current_turn_reasoning(provider) -> None:
+def test_replay_is_independent_of_disabled_current_turn_reasoning(
+    provider: Callable[[], OpenAIChatProvider],
+) -> None:
     request = make_messages_request(
         OLLAMA_CLOUD_MODEL,
         messages=[
@@ -159,13 +166,15 @@ def test_replay_is_independent_of_disabled_current_turn_reasoning(provider) -> N
 
     body = provider()._chat._build_request_body(request, reasoning=REASONING_OFF)
     assistant = next(
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     )
 
     assert body["reasoning_effort"] == "none"
-    assert assistant["reasoning"] == "Hidden plan."
-    assert "reasoning_content" not in assistant
-    assert assistant["content"] == "Visible answer."
+    assert object_payload(assistant)["reasoning"] == "Hidden plan."
+    assert "reasoning_content" not in object_payload(assistant)
+    assert object_payload(assistant)["content"] == "Visible answer."
 
 
 @pytest.mark.asyncio
@@ -185,7 +194,7 @@ async def test_stream_messages_uses_shared_openai_chat_provider() -> None:
     chunk.usage = MagicMock(prompt_tokens=8, completion_tokens=4)
 
     async def stream():
-        yield chunk
+        yield sdk_chat_chunk(chunk)
 
     with patch.object(
         provider._client.chat.completions,
@@ -195,10 +204,11 @@ async def test_stream_messages_uses_shared_openai_chat_provider() -> None:
     ) as create:
         output = "".join(
             [
-                event
+                frame
                 async for event in provider.stream_messages(
                     make_messages_request(OLLAMA_MODEL)
                 )
+                for frame in event.frames
             ]
         )
 
@@ -225,7 +235,7 @@ async def test_cloud_stream_maps_ollama_reasoning_delta_to_anthropic_thinking() 
     chunk.usage = MagicMock(prompt_tokens=8, completion_tokens=4)
 
     async def stream():
-        yield chunk
+        yield sdk_chat_chunk(chunk)
 
     with patch.object(
         client._client.chat.completions,
@@ -235,10 +245,11 @@ async def test_cloud_stream_maps_ollama_reasoning_delta_to_anthropic_thinking() 
     ):
         output = "".join(
             [
-                event
+                frame
                 async for event in client.stream_messages(
                     make_messages_request(OLLAMA_CLOUD_MODEL)
                 )
+                for frame in event.frames
             ]
         )
 

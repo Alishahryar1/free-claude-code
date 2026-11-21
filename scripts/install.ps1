@@ -3,6 +3,7 @@ param(
     [string] $TorchBackend = "",
     [switch] $RtkHeadroom,
     [switch] $DryRun,
+    [switch] $Update,
     [switch] $Help,
     [Parameter(ValueFromRemainingArguments = $true)]
     [object[]] $RemainingArgs = @()
@@ -26,7 +27,7 @@ $DshPackage = "@deepseek-ai/dsh@latest"
 $GrokInstallUrl = "https://x.ai/cli/install.ps1"
 $MuseInstallUrl = "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install-muse.ps1"
 $AgyInstallUrl = "https://antigravity.google/cli/install.ps1"
-$AgyMinimumVersion = "1.4.7"
+$AgyMinimumVersion = "1.5.9"
 $RtkVersion = "0.44.2"
 $HeadroomPackage = "headroom-ai[mcp]==0.40.0"
 $RtkReleaseBaseUrl = "https://github.com/rtk-ai/rtk/releases/download/v$RtkVersion"
@@ -91,6 +92,7 @@ Options:
   -VoiceLocal            Install local Whisper voice transcription support.
   -TorchBackend VALUE    Use a uv PyTorch backend, such as cu130. Requires local voice.
   -RtkHeadroom           Install and configure RTK + Headroom token optimization.
+  -Update                Skip when FCC is already this release or newer.
   -DryRun                Print commands without running them.
   -Help                  Show this help text.
 "@
@@ -2023,10 +2025,71 @@ function Show-InstallerNextSteps {
         Write-Host "Run Aider with: fcc-aider"
     }
     if ($script:InstallAgy) {
-        Write-Host "Connect Antigravity CLI on FCC's Integrations page first."
         Write-Host "Run Antigravity CLI with: fcc-agy"
     }
 
+}
+
+function Get-InstalledFccVersion {
+    # Look where uv usually lives without changing the PATH the installer preserves.
+    $originalPath = $env:Path
+    $originalErrorPreference = $ErrorActionPreference
+    try {
+        Add-KnownBinDirectories
+        $uv = Get-ApplicationCommand "uv"
+        if (-not $uv) { return $null }
+        $ErrorActionPreference = "Continue"
+        $global:LASTEXITCODE = $null
+        $listing = @(& $uv.Source tool list 2>$null)
+        if ($LASTEXITCODE -ne 0) { return $null }
+        foreach ($line in $listing) {
+            if ("$line" -cmatch '\Afree-claude-code v(\S+)') { return $Matches[1] }
+        }
+        return $null
+    }
+    catch { return $null }
+    finally {
+        $ErrorActionPreference = $originalErrorPreference
+        $env:Path = $originalPath
+    }
+}
+
+function Compare-FccVersions {
+    # Returns older, current, or newer for an installed version against a release.
+    param([string] $Installed, [string] $Release)
+
+    $pattern = '\A(\d+)\.(\d+)\.(\d+)(.*)\z'
+    if ($Release -cnotmatch $pattern -or $Matches[4]) { return $null }
+    $releaseParts = @([Numerics.BigInteger]::Parse($Matches[1]), [Numerics.BigInteger]::Parse($Matches[2]), [Numerics.BigInteger]::Parse($Matches[3]))
+    if ($Installed -cnotmatch $pattern) { return $null }
+    $installedParts = @([Numerics.BigInteger]::Parse($Matches[1]), [Numerics.BigInteger]::Parse($Matches[2]), [Numerics.BigInteger]::Parse($Matches[3]))
+    $suffix = $Matches[4]
+    for ($i = 0; $i -lt 3; $i++) {
+        if ($installedParts[$i] -gt $releaseParts[$i]) { return "newer" }
+        if ($installedParts[$i] -lt $releaseParts[$i]) { return "older" }
+    }
+    # Local and post builds follow the release; dev and pre-releases precede it.
+    if (-not $suffix) { return "current" }
+    if ($suffix -cmatch '\A(\+|\.post)') { return "newer" }
+    return "older"
+}
+
+function Test-FccUpdateNeeded {
+    $installed = Get-InstalledFccVersion
+    if (-not $installed) { return $true }
+    $comparison = Compare-FccVersions -Installed $installed -Release $FccInstallVersion
+    if ($comparison -eq "current") {
+        Write-Host "FCC $installed is already up to date."
+        return $false
+    }
+    if ($comparison -eq "newer") {
+        Write-Host "FCC $installed is newer than the published version $FccInstallVersion. No update needed."
+        return $false
+    }
+    if ($comparison -eq "older") {
+        Write-Host "FCC update available: $installed -> $FccInstallVersion."
+    }
+    return $true
 }
 
 function Invoke-SelectedReleaseInstaller {
@@ -2137,6 +2200,9 @@ if (-not $DryRun) {
     if (-not $installerRelease) {
         $installerParameters = @{} + $PSBoundParameters
         Invoke-SelectedReleaseInstaller -InstallerArguments $installerParameters
+        return
+    }
+    if ($Update -and -not (Test-FccUpdateNeeded)) {
         return
     }
     try {

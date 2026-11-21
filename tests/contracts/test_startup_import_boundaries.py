@@ -19,7 +19,9 @@ import pytest
         ),
     ],
 )
-def test_entrypoint_import_does_not_load_optional_runtime(module, forbidden):
+def test_entrypoint_import_does_not_load_optional_runtime(
+    module: str, forbidden: tuple[str, ...]
+):
     script = f"""
 import importlib
 import sys
@@ -56,7 +58,7 @@ async def main():
             assert threading.get_ident() == thread
             return provider
         return construct
-    assert await create_provider("groq", Settings(groq_api_keys="test"), ProviderAdmissionRegistry(ProviderAdmissionLimits(1, 2, 2)), provider_loaders={"groq": load}) is provider
+    assert await create_provider("groq", Settings(groq_api_keys="test"), ProviderAdmissionRegistry(ProviderAdmissionLimits(1, 2, 2, 5)), provider_loaders={"groq": load}) is provider
     await provider.cleanup()
 
 asyncio.run(main())

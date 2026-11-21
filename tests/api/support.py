@@ -2,10 +2,13 @@
 
 import asyncio
 from collections.abc import Mapping, MutableMapping
+from typing import override
 
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from free_claude_code.api.app import create_app
+from free_claude_code.api.dependencies import app_services
 from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.code_sessions import CodeApplicationPort
 from free_claude_code.application.connected_accounts import ConnectedAccountPort
@@ -13,36 +16,53 @@ from free_claude_code.application.model_metadata import ProviderModelRefreshResu
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonValue
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime, RestartCallback
 from free_claude_code.runtime.configuration import ConfigurationService
-from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from free_claude_code.runtime.provider_manager import (
+    ProviderRuntimeManager,
+    _ProviderGeneration,
+)
 from tests.config.credential_support import credential_edit
 from tests.web_tools_support import StubWebToolsClient
+from tests.wire_payload import array_payload, object_payload, response_object
 
 
-def post_config(client, path, *, json):
-    values = json.get("values", {})
+def post_config(client: TestClient, path: str, *, json: Mapping[str, JsonValue]):
+    values = object_payload(json.get("values", {}))
     credential_keys = {
         d.credential_env for d in PROVIDER_CATALOG.values() if d.credential_env
     }
     if credential_keys.intersection(values):
-        config = client.get("/admin/api/config").json()
-        fields = {field["key"]: field for field in config["fields"]}
+        config = response_object(client.get("/admin/api/config"))
+        fields = {
+            object_payload(field)["key"]: field
+            for field in array_payload(config["fields"])
+        }
         values = {
-            key: credential_edit(fields[key]["value"], value)
+            key: credential_edit(
+                object_payload(object_payload(fields[key])["value"]), value
+            )
             if key in credential_keys
             else value
             for key, value in values.items()
         }
-    return client.post(path, json=json | {"values": values})
+    return client.post(path, json={**json, "values": values})
 
 
 class ApiTestRuntime(ProviderRuntimeManager):
     """API-only tests supply metadata explicitly; startup/discovery has separate tests."""
 
-    def _catalog_task(self, generation, provider_id, *, refresh=False):
+    @override
+    def _catalog_task(
+        self,
+        generation: _ProviderGeneration,
+        provider_id: str,
+        *,
+        refresh: bool = False,
+    ):
         if refresh:
             return super()._catalog_task(generation, provider_id, refresh=True)
         task = generation.catalog_tasks.get(provider_id)
@@ -86,13 +106,16 @@ def create_test_app(
     else:
         manager = ApiTestRuntime(
             settings,
-            runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
-                snapshot,
-                admission_registry,
-                {
-                    (provider_id, 1): provider
-                    for provider_id, provider in providers.items()
-                },
+            runtime_factory=lambda snapshot, admission_registry, history_cache=None: (
+                ProviderRuntime(
+                    snapshot,
+                    admission_registry,
+                    None,
+                    {
+                        (provider_id, 1): provider
+                        for provider_id, provider in providers.items()
+                    },
+                )
             ),
             connected_provider_ids=connected_provider_ids,
         )
@@ -116,7 +139,7 @@ def create_test_app(
 
 def runtime_for_app(app: FastAPI) -> ApplicationRuntime:
     """Return the runtime supplied by :func:`create_test_app`."""
-    runtime = app.state.services.admin
+    runtime = app_services(app).admin
     if not isinstance(runtime, ApplicationRuntime):
         raise TypeError("Test app does not use ApplicationRuntime")
     return runtime
@@ -124,7 +147,7 @@ def runtime_for_app(app: FastAPI) -> ApplicationRuntime:
 
 def provider_manager_for_app(app: FastAPI) -> ProviderRuntimeManager:
     """Return the provider manager supplied by :func:`create_test_app`."""
-    manager = app.state.services.requests
+    manager = app_services(app).requests
     if not isinstance(manager, ProviderRuntimeManager):
         raise TypeError("Test app does not use ProviderRuntimeManager")
     return manager

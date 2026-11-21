@@ -7,8 +7,10 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from fastapi.applications import FastAPI
 from fastapi.testclient import TestClient
 
+from free_claude_code.api.dependencies import app_services
 from free_claude_code.application.connected_accounts import (
     ConnectedAccountLoginMode,
     ConnectedAccountState,
@@ -28,6 +30,7 @@ from free_claude_code.config.model_refs import ModelFallback, decode_model_fallb
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.server_urls import local_admin_url
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.version import package_version
 from tests.api.support import (
     create_test_app,
@@ -35,9 +38,16 @@ from tests.api.support import (
     provider_manager_for_app,
     runtime_for_app,
 )
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    response_object,
+    string_payload,
+)
 
 
-def _local_client(app):
+def _local_client(app: FastAPI):
     return TestClient(
         app,
         base_url="http://127.0.0.1",
@@ -57,7 +67,7 @@ def _local_client(app):
         f"/admin/assets/{package_version()}/chat_sessions.css",
     ),
 )
-def test_retired_chat_urls_are_not_served(path):
+def test_retired_chat_urls_are_not_served(path: str):
     client = _local_client(create_test_app())
     assert client.get(path).status_code == 404
 
@@ -72,7 +82,9 @@ def test_admin_retains_code_without_chat_markup():
     assert client.get("/admin/code").status_code == 200
 
 
-def test_admin_retirement_preview_apply_and_runtime_agree(monkeypatch, tmp_path):
+def test_admin_retirement_preview_apply_and_runtime_agree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -85,17 +97,19 @@ def test_admin_retirement_preview_apply_and_runtime_agree(monkeypatch, tmp_path)
     monkeypatch.setenv("MODEL_OPUS", "github_models/retired-process")
     app = create_test_app()
     client = _local_client(app)
-    body = post_config(
-        client,
-        "/admin/api/config/apply",
-        json={
-            "values": {
-                "MODEL_SONNET": "github_models/stale",
-                "MODEL_OPUS": "deepseek/cannot-unlock",
-                "MODEL_FALLBACKS": "groq/a,github_models/old,deepseek/b",
-            }
-        },
-    ).json()
+    body = response_object(
+        post_config(
+            client,
+            "/admin/api/config/apply",
+            json={
+                "values": {
+                    "MODEL_SONNET": "github_models/stale",
+                    "MODEL_OPUS": "deepseek/cannot-unlock",
+                    "MODEL_FALLBACKS": "groq/a,github_models/old,deepseek/b",
+                }
+            },
+        )
+    )
     assert body["applied"]
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=groq/default" in text
@@ -105,9 +119,9 @@ def test_admin_retirement_preview_apply_and_runtime_agree(monkeypatch, tmp_path)
         dotenv_values_from_file(env_file)["MODEL_FALLBACKS"]
     ) == (ModelFallback(model="groq/a"), ModelFallback(model="deepseek/b"))
     assert "preserve-secret" in text and "http://user:secret@proxy.test" in text
-    assert "preserve-secret" not in body["env_preview"]
-    assert "http://user:secret@proxy.test" not in body["env_preview"]
-    assert "PRIVATE=********" in body["env_preview"]
+    assert "preserve-secret" not in string_payload(body["env_preview"])
+    assert "http://user:secret@proxy.test" not in string_payload(body["env_preview"])
+    assert "PRIVATE=********" in string_payload(body["env_preview"])
     effective = provider_manager_for_app(app).current_settings()
     assert effective.model == "groq/default"
     assert effective.model_opus is None and effective.model_sonnet is None
@@ -117,7 +131,9 @@ def test_admin_retirement_preview_apply_and_runtime_agree(monkeypatch, tmp_path)
     )
 
 
-def test_admin_super_migration_preview_apply_and_runtime_agree(monkeypatch, tmp_path):
+def test_admin_super_migration_preview_apply_and_runtime_agree(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     old = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
@@ -142,10 +158,10 @@ def test_admin_super_migration_preview_apply_and_runtime_agree(monkeypatch, tmp_
     }
     response = post_config(client, "/admin/api/config/apply", json=submission)
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"]
-    assert old not in body["env_preview"]
-    assert "PRIVATE=********" in body["env_preview"]
+    assert old not in string_payload(body["env_preview"])
+    assert "PRIVATE=********" in string_payload(body["env_preview"])
     values = dotenv_values_from_file(env_file)
     assert values["MODEL"] == values["MODEL_SONNET"] == new
     assert values["MODEL_OPUS"] == "groq/managed"
@@ -161,7 +177,7 @@ def test_admin_super_migration_preview_apply_and_runtime_agree(monkeypatch, tmp_
 
 
 @pytest.fixture(autouse=True)
-def _offline_credential_checks(monkeypatch):
+def _offline_credential_checks(monkeypatch: pytest.MonkeyPatch):
     """These tests exercise config persistence; probe HTTP has its own suite."""
     monkeypatch.setattr(
         "free_claude_code.runtime.application.check_credentials",
@@ -169,31 +185,24 @@ def _offline_credential_checks(monkeypatch):
     )
 
 
-def _set_home(monkeypatch, tmp_path: Path) -> None:
+def _set_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.chdir(tmp_path)
 
 
-def _clear_process_config(monkeypatch) -> None:
+def _clear_process_config(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in (
         "MODEL",
         "MODEL_FALLBACKS",
-        "NVIDIA_NIM_API_KEY",
-        "HUGGINGFACE_API_KEY",
-        "OPENROUTER_API_KEY",
-        "AWS_BEARER_TOKEN_BEDROCK",
         "BEDROCK_BASE_URL",
         "BEDROCK_PROXY",
-        "OLLAMA_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
         "PROXY_AUTH_ENABLED",
         "TELEGRAM_PROXY_URL",
         "FCC_ENV_FILE",
-        "CLOUDFLARE_API_TOKEN",
         "CLOUDFLARE_ACCOUNT_ID",
         "GITHUB_MODELS_TOKEN",
-        "SAMBANOVA_API_KEY",
         "HOST",
         "PORT",
         "FCC_OPEN_BROWSER",
@@ -206,6 +215,8 @@ def _clear_process_config(monkeypatch) -> None:
     ):
         monkeypatch.delenv(key, raising=False)
     for descriptor in PROVIDER_CATALOG.values():
+        if descriptor.credential_env is not None:
+            monkeypatch.delenv(descriptor.credential_env, raising=False)
         if descriptor.proxy_attr is None:
             continue
         alias = Settings.model_fields[descriptor.proxy_attr].validation_alias
@@ -227,7 +238,9 @@ def _catalog_proxy_env_keys() -> tuple[str, ...]:
 @pytest.mark.parametrize(
     "path", ["/admin", "/admin/model_config", "/admin/messaging", "/admin/integrations"]
 )
-def test_admin_page_is_loopback_only(monkeypatch, tmp_path, path):
+def test_admin_page_is_loopback_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str
+):
     _set_home(monkeypatch, tmp_path)
     app = create_test_app()
 
@@ -236,7 +249,9 @@ def test_admin_page_is_loopback_only(monkeypatch, tmp_path, path):
     assert remote_client.get(path).status_code == 403
 
 
-def test_admin_page_uses_installed_version(monkeypatch, tmp_path):
+def test_admin_page_uses_installed_version(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     monkeypatch.setattr(
         "free_claude_code.api.admin_routes.package_version",
@@ -279,10 +294,10 @@ def test_admin_page_uses_installed_version(monkeypatch, tmp_path):
     ),
 )
 def test_admin_versioned_assets_serve_packaged_files(
-    monkeypatch,
-    tmp_path,
-    filename,
-    media_type,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    filename: str,
+    media_type: str,
 ):
     mimetypes.init()
     monkeypatch.setitem(mimetypes.types_map, Path(filename).suffix, "text/plain")
@@ -304,7 +319,9 @@ def test_admin_versioned_assets_serve_packaged_files(
     assert response.content == asset_path.read_bytes()
 
 
-def test_admin_versioned_logo_reuses_packaged_app_icon(monkeypatch, tmp_path):
+def test_admin_versioned_logo_reuses_packaged_app_icon(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     asset_path = (
         Path(__file__).resolve().parents[2]
         / "src"
@@ -335,7 +352,9 @@ def test_admin_versioned_logo_reuses_packaged_app_icon(monkeypatch, tmp_path):
         "/admin/api/config",
     ),
 )
-def test_admin_responses_are_never_cached(monkeypatch, tmp_path, path):
+def test_admin_responses_are_never_cached(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str
+):
     _set_home(monkeypatch, tmp_path)
     response = _local_client(create_test_app()).get(path)
 
@@ -366,11 +385,11 @@ def test_admin_responses_are_never_cached(monkeypatch, tmp_path, path):
     ),
 )
 def test_admin_http_errors_are_never_cached(
-    monkeypatch,
-    tmp_path,
-    path,
-    client_host,
-    expected_status,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    path: str,
+    client_host: str,
+    expected_status: int,
 ):
     _set_home(monkeypatch, tmp_path)
     client = TestClient(
@@ -385,7 +404,9 @@ def test_admin_http_errors_are_never_cached(
     assert response.headers["cache-control"] == "no-store"
 
 
-def test_admin_apply_payload_validation_errors_are_never_cached(monkeypatch, tmp_path):
+def test_admin_apply_payload_validation_errors_are_never_cached(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
 
     response = _local_client(create_test_app()).post(
@@ -398,7 +419,9 @@ def test_admin_apply_payload_validation_errors_are_never_cached(monkeypatch, tmp
     assert response.headers["cache-control"] == "no-store"
 
 
-def test_admin_unexpected_errors_are_never_cached(monkeypatch, tmp_path):
+def test_admin_unexpected_errors_are_never_cached(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     client = TestClient(
         create_test_app(),
@@ -417,7 +440,9 @@ def test_admin_unexpected_errors_are_never_cached(monkeypatch, tmp_path):
     assert response.headers["cache-control"] == "no-store"
 
 
-def test_admin_cache_policy_does_not_match_similar_public_paths(monkeypatch, tmp_path):
+def test_admin_cache_policy_does_not_match_similar_public_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
 
     response = _local_client(create_test_app()).get("/administrator")
@@ -502,7 +527,7 @@ class _FakeConnectedAccount:
 
 
 def test_admin_connected_account_routes_are_safe_loopback_only_and_uncached(
-    monkeypatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     _set_home(monkeypatch, tmp_path)
     account = _FakeConnectedAccount()
@@ -544,11 +569,11 @@ def test_admin_connected_account_routes_are_safe_loopback_only_and_uncached(
 )
 @pytest.mark.parametrize("payload", [{}, {"mode": None}])
 def test_admin_login_uses_the_provider_default(
-    monkeypatch,
-    tmp_path,
-    provider_id,
-    default_mode,
-    payload,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider_id: str,
+    default_mode: str,
+    payload: JsonObject,
 ):
     _set_home(monkeypatch, tmp_path)
     account = _FakeConnectedAccount(provider_id)
@@ -572,7 +597,7 @@ def test_admin_login_uses_the_provider_default(
 
 @pytest.mark.parametrize("mode", ["browser", "unrecognized"])
 def test_admin_rejects_unsupported_login_modes_before_starting(
-    monkeypatch, tmp_path, mode
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str
 ):
     _set_home(monkeypatch, tmp_path)
     account = _FakeConnectedAccount("github_copilot")
@@ -590,7 +615,7 @@ def test_admin_rejects_unsupported_login_modes_before_starting(
 
 
 def test_admin_connected_account_identity_modes_and_disconnect_are_independent(
-    monkeypatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     _set_home(monkeypatch, tmp_path)
     openai = _FakeConnectedAccount()
@@ -603,8 +628,10 @@ def test_admin_connected_account_identity_modes_and_disconnect_are_independent(
         )
     )
 
-    openai_status = client.get("/admin/api/providers/openai/auth").json()
-    copilot_status = client.get("/admin/api/providers/github_copilot/auth").json()
+    openai_status = response_object(client.get("/admin/api/providers/openai/auth"))
+    copilot_status = response_object(
+        client.get("/admin/api/providers/github_copilot/auth")
+    )
     assert openai_status["email"] == "safe@example.com"
     assert openai_status["supported_login_modes"] == ["browser", "device"]
     assert copilot_status["display_identity"] == "octocat"
@@ -619,12 +646,17 @@ def test_admin_connected_account_identity_modes_and_disconnect_are_independent(
     assert openai.cancelled is False
     disconnected = client.delete("/admin/api/providers/github_copilot/auth")
     assert disconnected.status_code == 200
-    assert disconnected.json()["connected"] is False
-    assert disconnected.json()["supported_login_modes"] == ["device"]
-    assert client.get("/admin/api/providers/openai/auth").json()["connected"] is True
+    assert response_object(disconnected)["connected"] is False
+    assert response_object(disconnected)["supported_login_modes"] == ["device"]
+    assert (
+        response_object(client.get("/admin/api/providers/openai/auth"))["connected"]
+        is True
+    )
 
 
-def test_admin_openai_keeps_explicit_device_login(monkeypatch, tmp_path):
+def test_admin_openai_keeps_explicit_device_login(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     account = _FakeConnectedAccount()
     client = _local_client(create_test_app(connected_accounts={"openai": account}))
@@ -637,7 +669,9 @@ def test_admin_openai_keeps_explicit_device_login(monkeypatch, tmp_path):
     assert account.started_modes == [ConnectedAccountLoginMode.DEVICE]
 
 
-def test_admin_rejects_auth_routes_for_non_connected_provider(monkeypatch, tmp_path):
+def test_admin_rejects_auth_routes_for_non_connected_provider(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
 
     response = _local_client(create_test_app()).get(
@@ -647,7 +681,9 @@ def test_admin_rejects_auth_routes_for_non_connected_provider(monkeypatch, tmp_p
     assert response.status_code == 404
 
 
-def test_admin_page_no_longer_renders_generated_env_panel(monkeypatch, tmp_path):
+def test_admin_page_no_longer_renders_generated_env_panel(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     app = create_test_app()
 
@@ -658,7 +694,9 @@ def test_admin_page_no_longer_renders_generated_env_panel(monkeypatch, tmp_path)
     assert "envPreview" not in response.text
 
 
-def test_admin_page_no_longer_renders_global_status_header(monkeypatch, tmp_path):
+def test_admin_page_no_longer_renders_global_status_header(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     app = create_test_app()
 
@@ -746,7 +784,9 @@ def test_admin_static_model_combobox_preserves_custom_slugs_and_none_semantics()
     assert '"warn"' in script
 
 
-def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):
+def test_admin_config_masks_secrets_and_exposes_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -754,8 +794,8 @@ def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):
     response = _local_client(app).get("/admin/api/config")
 
     assert response.status_code == 200
-    body = response.json()
-    keys = {field["key"] for field in body["fields"]}
+    body = response_object(response)
+    keys = {object_payload(field)["key"] for field in array_payload(body["fields"])}
     assert "MODEL_FABLE" in keys
     assert "REASONING_FABLE" in keys
     assert "ANTHROPIC_AUTH_TOKEN" in keys
@@ -780,52 +820,50 @@ def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):
     assert "CLAUDE_CLI_BIN" not in keys
     assert "LOG_FILE" not in keys
     auth_field = next(
-        field for field in body["fields"] if field["key"] == "ANTHROPIC_AUTH_TOKEN"
+        field
+        for field in array_payload(body["fields"])
+        if object_payload(field)["key"] == "ANTHROPIC_AUTH_TOKEN"
     )
-    assert auth_field["secret"] is True
-    assert auth_field["value"] == MASKED_SECRET
-    assert auth_field["source"] == "default"
-    assert auth_field["nullable"] is False
+    assert object_payload(auth_field)["secret"] is True
+    assert object_payload(auth_field)["value"] == MASKED_SECRET
+    assert object_payload(auth_field)["source"] == "default"
+    assert object_payload(auth_field)["nullable"] is False
     telegram_proxy_field = next(
-        field for field in body["fields"] if field["key"] == "TELEGRAM_PROXY_URL"
+        field
+        for field in array_payload(body["fields"])
+        if object_payload(field)["key"] == "TELEGRAM_PROXY_URL"
     )
-    assert telegram_proxy_field["secret"] is True
-    assert telegram_proxy_field["value"] is None
-    assert telegram_proxy_field["configured"] is False
-    assert telegram_proxy_field["nullable"] is True
+    assert object_payload(telegram_proxy_field)["secret"] is True
+    assert object_payload(telegram_proxy_field)["value"] is None
+    assert object_payload(telegram_proxy_field)["configured"] is False
+    assert object_payload(telegram_proxy_field)["nullable"] is True
     assert body["paths"] == {"managed": str(tmp_path / ".fcc" / ".env")}
     catalog_smoke_keys = {
         f"FCC_SMOKE_MODEL_{provider_id.upper()}" for provider_id in PROVIDER_CATALOG
     }
     actual_smoke_keys = {
-        field["key"]
-        for field in body["fields"]
-        if field["key"].startswith("FCC_SMOKE_MODEL_")
+        object_payload(field)["key"]
+        for field in array_payload(body["fields"])
+        if string_payload(object_payload(field)["key"]).startswith("FCC_SMOKE_MODEL_")
     }
     assert actual_smoke_keys == catalog_smoke_keys | {
         "FCC_SMOKE_MODEL_MISTRAL_REASONING"
     }
     open_browser_field = next(
-        field for field in body["fields"] if field["key"] == "FCC_OPEN_BROWSER"
+        field
+        for field in array_payload(body["fields"])
+        if object_payload(field)["key"] == "FCC_OPEN_BROWSER"
     )
-    assert open_browser_field["type"] == "boolean"
-    assert open_browser_field["value"] == "true"
-    assert open_browser_field["restart_required"] is False
-    progress_timeout_field = next(
-        field for field in body["fields"] if field["key"] == "PROVIDER_PROGRESS_TIMEOUT"
-    )
-    assert progress_timeout_field["label"] == "Provider Progress Timeout"
-    assert progress_timeout_field["section"] == "runtime"
-    assert progress_timeout_field["type"] == "number"
-    assert progress_timeout_field["value"] == "600.0"
-    assert progress_timeout_field["advanced"] is True
-    assert progress_timeout_field["restart_required"] is False
-    assert "non-empty protocol event" in progress_timeout_field["description"]
-    assert "Independent of HTTP Read Timeout" in progress_timeout_field["description"]
+    assert object_payload(open_browser_field)["type"] == "boolean"
+    assert object_payload(open_browser_field)["value"] == "true"
+    assert object_payload(open_browser_field)["restart_required"] is False
+    assert "PROVIDER_PROGRESS_TIMEOUT" not in {
+        object_payload(field)["key"] for field in array_payload(body["fields"])
+    }
     model_field_types = {
-        field["key"]: field["type"]
-        for field in body["fields"]
-        if field["key"]
+        field["key"]: object_payload(field)["type"]
+        for field in object_array(body["fields"])
+        if object_payload(field)["key"]
         in {
             "MODEL",
             "MODEL_FABLE",
@@ -844,22 +882,32 @@ def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):
         "MODEL_FALLBACKS": "model_list",
     }
     fallback_field = next(
-        field for field in body["fields"] if field["key"] == "MODEL_FALLBACKS"
+        field
+        for field in array_payload(body["fields"])
+        if object_payload(field)["key"] == "MODEL_FALLBACKS"
     )
-    assert fallback_field["label"] == "Fallback Models"
-    assert fallback_field["value"] is None
-    assert fallback_field["nullable"] is True
-    assert fallback_field["restart_required"] is False
-    assert "fails before output" in fallback_field["description"]
-    assert "every client" in fallback_field["description"]
-    assert "multiple providers" in fallback_field["description"]
+    assert object_payload(fallback_field)["label"] == "Fallback Models"
+    assert object_payload(fallback_field)["value"] is None
+    assert object_payload(fallback_field)["nullable"] is True
+    assert object_payload(fallback_field)["restart_required"] is False
+    assert "fails before output" in string_payload(
+        object_payload(fallback_field)["description"]
+    )
+    assert "every client" in string_payload(
+        object_payload(fallback_field)["description"]
+    )
+    assert "multiple providers" in string_payload(
+        object_payload(fallback_field)["description"]
+    )
     reasoning_policy = next(
-        field for field in body["fields"] if field["key"] == "REASONING_POLICY"
+        field
+        for field in array_payload(body["fields"])
+        if object_payload(field)["key"] == "REASONING_POLICY"
     )
-    assert reasoning_policy["section"] == "models"
-    assert reasoning_policy["type"] == "select"
-    assert reasoning_policy["value"] == "client"
-    assert reasoning_policy["options"] == [
+    assert object_payload(reasoning_policy)["section"] == "models"
+    assert object_payload(reasoning_policy)["type"] == "select"
+    assert object_payload(reasoning_policy)["value"] == "client"
+    assert object_payload(reasoning_policy)["options"] == [
         {"value": "off", "label": "Off"},
         {"value": "client", "label": "From client"},
         {"value": "low", "label": "Low"},
@@ -869,20 +917,26 @@ def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):
         {"value": "max", "label": "Max"},
     ]
     route_reasoning = next(
-        field for field in body["fields"] if field["key"] == "REASONING_FABLE"
+        field
+        for field in array_payload(body["fields"])
+        if object_payload(field)["key"] == "REASONING_FABLE"
     )
-    assert route_reasoning["options"] == [
+    assert object_payload(route_reasoning)["options"] == [
         {"value": "inherit", "label": "Inherit"},
-        *reasoning_policy["options"],
+        *array_payload(object_payload(reasoning_policy)["options"]),
     ]
     assert all(
-        field["section"] == "models"
-        for field in body["fields"]
-        if field["key"].startswith("REASONING_")
+        object_payload(field)["section"] == "models"
+        for field in array_payload(body["fields"])
+        if string_payload(object_payload(field)["key"]).startswith("REASONING_")
     )
-    assert "reasoning" not in {section["id"] for section in body["sections"]}
+    assert "reasoning" not in {
+        object_payload(section)["id"] for section in array_payload(body["sections"])
+    }
     restart_required = {
-        field["key"] for field in body["fields"] if field["restart_required"] is True
+        object_payload(field)["key"]
+        for field in array_payload(body["fields"])
+        if object_payload(field)["restart_required"] is True
     }
     assert {
         "ANTHROPIC_AUTH_TOKEN",
@@ -915,7 +969,9 @@ def test_admin_models_include_configured_and_cached_canonical_slugs():
 
     assert response.status_code == 200
     assert {
-        key: value for key, value in response.json().items() if key != "model_labels"
+        key: value
+        for key, value in response_object(response).items()
+        if key != "model_labels"
     } == {
         "models": [
             "nvidia_nim/configured-model",
@@ -926,13 +982,15 @@ def test_admin_models_include_configured_and_cached_canonical_slugs():
     }
 
 
-def test_admin_model_refresh_returns_the_updated_canonical_catalog():
+def test_admin_model_refresh_returns_the_updated_canonical_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+):
     settings = Settings(
         model="deepseek/deepseek-chat",
         deepseek_api_keys=normalize_api_keys("deepseek-key"),
     )
     app = create_test_app(settings)
-    runtime = app.state.services.admin
+    runtime = app_services(app).admin
 
     async def refresh_models() -> ProviderModelRefreshResult:
         provider_manager_for_app(app).cache_model_infos(
@@ -941,43 +999,58 @@ def test_admin_model_refresh_returns_the_updated_canonical_catalog():
         )
         return ProviderModelRefreshResult(refreshed_provider_ids=("deepseek",))
 
-    runtime.refresh_models = AsyncMock(side_effect=refresh_models)
-
-    response = _local_client(app).post("/admin/api/models/refresh")
-
-    assert response.status_code == 200
-    assert {
-        key: value for key, value in response.json().items() if key != "model_labels"
-    } == {
-        "models": ["deepseek/deepseek-chat", "deepseek/deepseek-reasoner"],
-        "failed_providers": [],
-    }
-    runtime.refresh_models.assert_awaited_once_with()
-
-
-def test_admin_model_refresh_reports_partial_provider_failures():
-    settings = Settings(model="deepseek/deepseek-chat")
-    app = create_test_app(settings)
-    runtime = app.state.services.admin
-    runtime.refresh_models = AsyncMock(
-        return_value=ProviderModelRefreshResult(
-            refreshed_provider_ids=("deepseek",),
-            failed_provider_ids=("open_router",),
-        )
+    monkeypatch.setattr(
+        runtime, "refresh_models", AsyncMock(side_effect=refresh_models)
     )
 
     response = _local_client(app).post("/admin/api/models/refresh")
 
     assert response.status_code == 200
     assert {
-        key: value for key, value in response.json().items() if key != "model_labels"
+        key: value
+        for key, value in response_object(response).items()
+        if key != "model_labels"
+    } == {
+        "models": ["deepseek/deepseek-chat", "deepseek/deepseek-reasoner"],
+        "failed_providers": [],
+    }
+    assert isinstance(runtime.refresh_models, AsyncMock)
+    runtime.refresh_models.assert_awaited_once_with()
+
+
+def test_admin_model_refresh_reports_partial_provider_failures(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    settings = Settings(model="deepseek/deepseek-chat")
+    app = create_test_app(settings)
+    runtime = app_services(app).admin
+    monkeypatch.setattr(
+        runtime,
+        "refresh_models",
+        AsyncMock(
+            return_value=ProviderModelRefreshResult(
+                refreshed_provider_ids=("deepseek",),
+                failed_provider_ids=("open_router",),
+            )
+        ),
+    )
+
+    response = _local_client(app).post("/admin/api/models/refresh")
+
+    assert response.status_code == 200
+    assert {
+        key: value
+        for key, value in response_object(response).items()
+        if key != "model_labels"
     } == {
         "models": ["deepseek/deepseek-chat"],
         "failed_providers": ["open_router"],
     }
 
 
-def test_admin_config_preserves_managed_env_source_contract(monkeypatch, tmp_path):
+def test_admin_config_preserves_managed_env_source_contract(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -988,13 +1061,19 @@ def test_admin_config_preserves_managed_env_source_contract(monkeypatch, tmp_pat
     response = _local_client(app).get("/admin/api/config")
 
     assert response.status_code == 200
-    body = response.json()
-    model_field = next(field for field in body["fields"] if field["key"] == "MODEL")
-    assert model_field["source"] == "managed_env"
-    assert model_field["locked"] is False
+    body = response_object(response)
+    model_field = next(
+        field
+        for field in array_payload(body["fields"])
+        if object_payload(field)["key"] == "MODEL"
+    )
+    assert object_payload(model_field)["source"] == "managed_env"
+    assert object_payload(model_field)["locked"] is False
 
 
-def test_admin_apply_persists_open_browser_for_next_launch(monkeypatch, tmp_path):
+def test_admin_apply_persists_open_browser_for_next_launch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1006,7 +1085,7 @@ def test_admin_apply_persists_open_browser_for_next_launch(monkeypatch, tmp_path
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
     assert body["pending_fields"] == []
     assert body["restart"] == {
@@ -1019,31 +1098,9 @@ def test_admin_apply_persists_open_browser_for_next_launch(monkeypatch, tmp_path
     assert "FCC_OPEN_BROWSER=false" in managed_env.read_text(encoding="utf-8")
 
 
-def test_admin_apply_hot_publishes_provider_progress_timeout(monkeypatch, tmp_path):
-    _set_home(monkeypatch, tmp_path)
-    _clear_process_config(monkeypatch)
-    app = create_test_app()
-
-    response = post_config(
-        _local_client(app),
-        "/admin/api/config/apply",
-        json={"values": {"PROVIDER_PROGRESS_TIMEOUT": 900}},
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["applied"] is True
-    assert body["pending_fields"] == []
-    assert body["restart"]["required"] is False
-    assert (
-        provider_manager_for_app(app).current_settings().provider_progress_timeout
-        == 900.0
-    )
-    managed_env = tmp_path / ".fcc" / ".env"
-    assert "PROVIDER_PROGRESS_TIMEOUT=900" in managed_env.read_text(encoding="utf-8")
-
-
-def test_admin_apply_hot_publishes_ordered_model_fallbacks(monkeypatch, tmp_path):
+def test_admin_apply_hot_publishes_ordered_model_fallbacks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1056,9 +1113,9 @@ def test_admin_apply_hot_publishes_ordered_model_fallbacks(monkeypatch, tmp_path
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
-    assert body["restart"]["required"] is False
+    assert object_payload(body["restart"])["required"] is False
     assert provider_manager_for_app(app).current_settings().model_fallbacks == (
         ModelFallback(model="open_router/vendor/model-a"),
         ModelFallback(model="groq/vendor/model-b"),
@@ -1069,16 +1126,22 @@ def test_admin_apply_hot_publishes_ordered_model_fallbacks(monkeypatch, tmp_path
         == provider_manager_for_app(app).current_settings().model_fallbacks
     )
 
-    loaded = _local_client(app).get("/admin/api/config").json()
-    field = next(item for item in loaded["fields"] if item["key"] == "MODEL_FALLBACKS")
+    loaded = response_object(_local_client(app).get("/admin/api/config"))
+    field = next(
+        item
+        for item in array_payload(loaded["fields"])
+        if object_payload(item)["key"] == "MODEL_FALLBACKS"
+    )
     assert (
-        decode_model_fallbacks(field["value"])
+        decode_model_fallbacks(object_payload(field)["value"])
         == provider_manager_for_app(app).current_settings().model_fallbacks
     )
-    assert field["source"] == "managed_env"
+    assert object_payload(field)["source"] == "managed_env"
 
 
-def test_admin_apply_null_removes_model_fallbacks(monkeypatch, tmp_path):
+def test_admin_apply_null_removes_model_fallbacks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -1101,9 +1164,9 @@ def test_admin_apply_null_removes_model_fallbacks(monkeypatch, tmp_path):
     assert "MODEL_FALLBACKS=" not in env_file.read_text(encoding="utf-8")
 
 
-def test_admin_rejects_invalid_provider_progress_timeout_without_writing(
-    monkeypatch,
-    tmp_path,
+def test_admin_ignores_retired_progress_setting_without_writing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -1116,15 +1179,20 @@ def test_admin_rejects_invalid_provider_progress_timeout_without_writing(
     )
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["applied"] is False
-    assert body["valid"] is False
-    assert any("PROVIDER_PROGRESS_TIMEOUT" in error for error in body["errors"])
+    body = response_object(response)
+    assert body["applied"] is True
+    assert body["valid"] is True
+    assert body["errors"] == []
+    assert "provider_progress_timeout" not in (
+        provider_manager_for_app(app).current_settings().model_dump()
+    )
     managed_env = tmp_path / ".fcc" / ".env"
     assert "PROVIDER_PROGRESS_TIMEOUT=" not in managed_env.read_text(encoding="utf-8")
 
 
-def test_admin_apply_masks_telegram_proxy_credentials(monkeypatch, tmp_path):
+def test_admin_apply_masks_telegram_proxy_credentials(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1137,16 +1205,18 @@ def test_admin_apply_masks_telegram_proxy_credentials(monkeypatch, tmp_path):
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
-    assert "TELEGRAM_PROXY_URL=********" in body["env_preview"]
-    assert proxy_url not in body["env_preview"]
+    assert "TELEGRAM_PROXY_URL=********" in string_payload(body["env_preview"])
+    assert proxy_url not in string_payload(body["env_preview"])
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert f"TELEGRAM_PROXY_URL={proxy_url}" in text
 
 
-def test_admin_apply_null_removes_optional_secret(monkeypatch, tmp_path):
+def test_admin_apply_null_removes_optional_secret(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -1170,9 +1240,9 @@ def test_admin_apply_null_removes_optional_secret(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("submitted", [MASKED_SECRET, "", "   "])
 def test_admin_apply_masked_or_blank_secret_is_unchanged(
-    monkeypatch,
-    tmp_path,
-    submitted,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    submitted: str,
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -1199,7 +1269,9 @@ def test_admin_apply_masked_or_blank_secret_is_unchanged(
     ) == ["original-secret"]
 
 
-def test_admin_apply_rejects_bad_model_shape(monkeypatch, tmp_path):
+def test_admin_apply_rejects_bad_model_shape(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1211,13 +1283,18 @@ def test_admin_apply_rejects_bad_model_shape(monkeypatch, tmp_path):
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is False
     assert body["valid"] is False
-    assert any("provider type" in error for error in body["errors"])
+    assert any(
+        "provider type" in string_payload(error)
+        for error in array_payload(body["errors"])
+    )
 
 
-def test_admin_apply_rejects_duplicate_model_fallbacks(monkeypatch, tmp_path):
+def test_admin_apply_rejects_duplicate_model_fallbacks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1230,17 +1307,20 @@ def test_admin_apply_rejects_duplicate_model_fallbacks(monkeypatch, tmp_path):
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is False
     assert body["valid"] is False
-    assert any("duplicate" in error.lower() for error in body["errors"])
+    assert any(
+        "duplicate" in string_payload(error).lower()
+        for error in array_payload(body["errors"])
+    )
 
 
 @pytest.mark.parametrize("proxy_key", _catalog_proxy_env_keys())
 def test_admin_apply_rejects_invalid_catalog_provider_proxy(
-    monkeypatch,
-    tmp_path,
-    proxy_key,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    proxy_key: str,
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -1253,7 +1333,7 @@ def test_admin_apply_rejects_invalid_catalog_provider_proxy(
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is False
     assert body["valid"] is False
     assert body["errors"] == [
@@ -1276,7 +1356,9 @@ def test_admin_apply_rejects_invalid_catalog_provider_proxy(
         "  http://127.0.0.1:8080  ",
     ),
 )
-def test_admin_apply_accepts_httpx_provider_proxy(monkeypatch, tmp_path, proxy):
+def test_admin_apply_accepts_httpx_provider_proxy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, proxy: str
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
 
@@ -1301,7 +1383,9 @@ def test_admin_apply_accepts_httpx_provider_proxy(monkeypatch, tmp_path, proxy):
         "http://proxy.example:notaport",
     ),
 )
-def test_admin_apply_rejects_unusable_provider_proxy(monkeypatch, tmp_path, proxy):
+def test_admin_apply_rejects_unusable_provider_proxy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, proxy: str
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
 
@@ -1312,17 +1396,19 @@ def test_admin_apply_rejects_unusable_provider_proxy(monkeypatch, tmp_path, prox
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is False
     assert body["valid"] is False
-    assert len(body["errors"]) == 1
-    assert body["errors"][0].startswith("OPENAI_PROXY: must be a proxy URL")
-    assert "OPENAI_PROXY=********" in body["env_preview"]
+    assert len(array_payload(body["errors"])) == 1
+    assert string_payload(array_payload(body["errors"])[0]).startswith(
+        "OPENAI_PROXY: must be a proxy URL"
+    )
+    assert "OPENAI_PROXY=********" in string_payload(body["env_preview"])
 
 
 def test_admin_apply_rejects_invalid_provider_proxy_without_side_effects(
-    monkeypatch,
-    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -1346,7 +1432,7 @@ def test_admin_apply_rejects_invalid_provider_proxy_without_side_effects(
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["valid"] is False
     assert body["applied"] is False
     assert body["pending_fields"] == []
@@ -1357,8 +1443,8 @@ def test_admin_apply_rejects_invalid_provider_proxy_without_side_effects(
 
 
 def test_admin_apply_validates_retained_proxy_and_allows_removal(
-    monkeypatch,
-    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -1394,9 +1480,9 @@ def test_admin_apply_validates_retained_proxy_and_allows_removal(
 
 @pytest.mark.parametrize("submitted", (MASKED_SECRET, "", "   "))
 def test_admin_apply_preserves_valid_stored_proxy_secret(
-    monkeypatch,
-    tmp_path,
-    submitted,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    submitted: str,
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -1414,15 +1500,15 @@ def test_admin_apply_preserves_valid_stored_proxy_secret(
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
     assert body["valid"] is True
-    assert "OPENAI_PROXY=********" in body["env_preview"]
+    assert "OPENAI_PROXY=********" in string_payload(body["env_preview"])
     assert "password" not in response.text
 
 
 def test_admin_apply_writes_complete_managed_env_and_masks_preview(
-    monkeypatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -1440,9 +1526,9 @@ def test_admin_apply_writes_complete_managed_env_and_masks_preview(
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
-    assert "OPENROUTER_API_KEY=********" in body["env_preview"]
+    assert "OPENROUTER_API_KEY=********" in string_payload(body["env_preview"])
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text("utf-8")
     assert "MODEL=open_router/test-model" in text
@@ -1461,7 +1547,9 @@ def test_admin_apply_writes_complete_managed_env_and_masks_preview(
     }
 
 
-def test_admin_apply_writes_fireworks_key_and_masks_preview(monkeypatch, tmp_path):
+def test_admin_apply_writes_fireworks_key_and_masks_preview(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1478,9 +1566,9 @@ def test_admin_apply_writes_fireworks_key_and_masks_preview(monkeypatch, tmp_pat
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
-    assert "FIREWORKS_API_KEY=********" in body["env_preview"]
+    assert "FIREWORKS_API_KEY=********" in string_payload(body["env_preview"])
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=fireworks/test-model" in text
@@ -1489,7 +1577,9 @@ def test_admin_apply_writes_fireworks_key_and_masks_preview(monkeypatch, tmp_pat
     ]
 
 
-def test_admin_apply_writes_gemini_key_and_masks_preview(monkeypatch, tmp_path):
+def test_admin_apply_writes_gemini_key_and_masks_preview(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1506,16 +1596,18 @@ def test_admin_apply_writes_gemini_key_and_masks_preview(monkeypatch, tmp_path):
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
-    assert "GEMINI_API_KEY=********" in body["env_preview"]
+    assert "GEMINI_API_KEY=********" in string_payload(body["env_preview"])
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=gemini/models/gemini-3.1-flash-lite" in text
     assert json.loads(dotenv_values_from_text(text)["GEMINI_API_KEY"]) == ["gm-secret"]
 
 
-def test_admin_apply_writes_groq_key_and_masks_preview(monkeypatch, tmp_path):
+def test_admin_apply_writes_groq_key_and_masks_preview(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1532,16 +1624,18 @@ def test_admin_apply_writes_groq_key_and_masks_preview(monkeypatch, tmp_path):
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
-    assert "GROQ_API_KEY=********" in body["env_preview"]
+    assert "GROQ_API_KEY=********" in string_payload(body["env_preview"])
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=groq/llama-3.3-70b-versatile" in text
     assert json.loads(dotenv_values_from_text(text)["GROQ_API_KEY"]) == ["gq-secret"]
 
 
-def test_admin_apply_writes_sambanova_key_and_masks_preview(monkeypatch, tmp_path):
+def test_admin_apply_writes_sambanova_key_and_masks_preview(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1558,9 +1652,9 @@ def test_admin_apply_writes_sambanova_key_and_masks_preview(monkeypatch, tmp_pat
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
-    assert "SAMBANOVA_API_KEY=********" in body["env_preview"]
+    assert "SAMBANOVA_API_KEY=********" in string_payload(body["env_preview"])
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=sambanova/Meta-Llama-3.3-70B-Instruct" in text
@@ -1569,7 +1663,9 @@ def test_admin_apply_writes_sambanova_key_and_masks_preview(monkeypatch, tmp_pat
     ]
 
 
-def test_admin_apply_writes_cerebras_key_and_masks_preview(monkeypatch, tmp_path):
+def test_admin_apply_writes_cerebras_key_and_masks_preview(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1586,9 +1682,9 @@ def test_admin_apply_writes_cerebras_key_and_masks_preview(monkeypatch, tmp_path
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
-    assert "CEREBRAS_API_KEY=********" in body["env_preview"]
+    assert "CEREBRAS_API_KEY=********" in string_payload(body["env_preview"])
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=cerebras/llama3.1-8b" in text
@@ -1597,7 +1693,9 @@ def test_admin_apply_writes_cerebras_key_and_masks_preview(monkeypatch, tmp_path
     ]
 
 
-def test_admin_apply_writes_bedrock_region_config_and_masks_key(monkeypatch, tmp_path):
+def test_admin_apply_writes_bedrock_region_config_and_masks_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1615,9 +1713,9 @@ def test_admin_apply_writes_bedrock_region_config_and_masks_key(monkeypatch, tmp
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
-    assert "AWS_BEARER_TOKEN_BEDROCK=********" in body["env_preview"]
+    assert "AWS_BEARER_TOKEN_BEDROCK=********" in string_payload(body["env_preview"])
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=bedrock/openai.gpt-oss-120b" in text
@@ -1627,7 +1725,9 @@ def test_admin_apply_writes_bedrock_region_config_and_masks_key(monkeypatch, tmp
     assert "BEDROCK_BASE_URL=https://bedrock-mantle.us-west-2.api.aws/v1" in text
 
 
-def test_admin_apply_writes_cloudflare_fields_and_masks_preview(monkeypatch, tmp_path):
+def test_admin_apply_writes_cloudflare_fields_and_masks_preview(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1645,10 +1745,10 @@ def test_admin_apply_writes_cloudflare_fields_and_masks_preview(monkeypatch, tmp
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
-    assert "CLOUDFLARE_API_TOKEN=********" in body["env_preview"]
-    assert "CLOUDFLARE_ACCOUNT_ID=cf-account" in body["env_preview"]
+    assert "CLOUDFLARE_API_TOKEN=********" in string_payload(body["env_preview"])
+    assert "CLOUDFLARE_ACCOUNT_ID=cf-account" in string_payload(body["env_preview"])
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=cloudflare/@cf/moonshotai/kimi-k2.6" in text
@@ -1658,7 +1758,9 @@ def test_admin_apply_writes_cloudflare_fields_and_masks_preview(monkeypatch, tmp
     assert "CLOUDFLARE_ACCOUNT_ID=cf-account" in text
 
 
-def test_admin_apply_writes_huggingface_key_and_masks_preview(monkeypatch, tmp_path):
+def test_admin_apply_writes_huggingface_key_and_masks_preview(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1675,10 +1777,10 @@ def test_admin_apply_writes_huggingface_key_and_masks_preview(monkeypatch, tmp_p
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
     assert body["pending_fields"] == ["HUGGINGFACE_API_KEY"]
-    assert "HUGGINGFACE_API_KEY=********" in body["env_preview"]
+    assert "HUGGINGFACE_API_KEY=********" in string_payload(body["env_preview"])
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=huggingface/openai/gpt-oss-120b:fastest" in text
@@ -1695,10 +1797,10 @@ def test_admin_apply_writes_huggingface_key_and_masks_preview(monkeypatch, tmp_p
     ],
 )
 def test_admin_key_change_requires_restart_for_active_voice_backend(
-    monkeypatch,
-    tmp_path,
-    device,
-    credential_key,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    device: str,
+    credential_key: str,
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -1724,7 +1826,7 @@ def test_admin_key_change_requires_restart_for_active_voice_backend(
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
     assert body["pending_fields"] == [credential_key]
     assert body["restart"] == {
@@ -1749,11 +1851,11 @@ def test_admin_key_change_requires_restart_for_active_voice_backend(
     ],
 )
 def test_admin_constructor_captured_setting_requires_restart(
-    monkeypatch,
-    tmp_path,
-    key,
-    initial,
-    updated,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    key: str,
+    initial: str,
+    updated: str,
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -1769,7 +1871,7 @@ def test_admin_constructor_captured_setting_requires_restart(
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
     assert body["pending_fields"] == [key]
     assert body["restart"] == {
@@ -1780,7 +1882,9 @@ def test_admin_constructor_captured_setting_requires_restart(
     }
 
 
-def test_admin_apply_writes_cohere_key_and_masks_preview(monkeypatch, tmp_path):
+def test_admin_apply_writes_cohere_key_and_masks_preview(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1797,9 +1901,9 @@ def test_admin_apply_writes_cohere_key_and_masks_preview(monkeypatch, tmp_path):
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
-    assert "COHERE_API_KEY=********" in body["env_preview"]
+    assert "COHERE_API_KEY=********" in string_payload(body["env_preview"])
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=cohere/command-a-plus-05-2026" in text
@@ -1809,7 +1913,7 @@ def test_admin_apply_writes_cohere_key_and_masks_preview(monkeypatch, tmp_path):
 
 
 def test_admin_apply_replaces_retired_model_and_ignores_retired_credential(
-    monkeypatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -1827,9 +1931,9 @@ def test_admin_apply_replaces_retired_model_and_ignores_retired_credential(
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
-    assert "GITHUB_MODELS_TOKEN" not in body["env_preview"]
+    assert "GITHUB_MODELS_TOKEN" not in string_payload(body["env_preview"])
     env_file = tmp_path / ".fcc" / ".env"
     text = env_file.read_text(encoding="utf-8")
     assert "MODEL=" not in text
@@ -1837,7 +1941,7 @@ def test_admin_apply_replaces_retired_model_and_ignores_retired_credential(
 
 
 def test_admin_apply_preserves_hidden_diagnostics_and_smoke_values(
-    monkeypatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -1863,7 +1967,7 @@ def test_admin_apply_preserves_hidden_diagnostics_and_smoke_values(
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
     text = env_file.read_text("utf-8")
     assert "MODEL=open_router/test-model" in text
@@ -1871,7 +1975,9 @@ def test_admin_apply_preserves_hidden_diagnostics_and_smoke_values(
     assert "FCC_SMOKE_MODEL_ZAI=zai/smoke-model" in text
 
 
-def test_admin_apply_preserves_unrecognized_managed_zai_base_url(monkeypatch, tmp_path):
+def test_admin_apply_preserves_unrecognized_managed_zai_base_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -1896,14 +2002,16 @@ def test_admin_apply_preserves_unrecognized_managed_zai_base_url(monkeypatch, tm
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
     text = env_file.read_text("utf-8")
     assert json.loads(dotenv_values_from_text(text)["ZAI_API_KEY"]) == ["zai-secret"]
     assert "ZAI_BASE_URL=https://custom.zai.invalid/v1" in text
 
 
-def test_admin_apply_preserves_unrecognized_managed_assignments(monkeypatch, tmp_path):
+def test_admin_apply_preserves_unrecognized_managed_assignments(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -1928,7 +2036,7 @@ def test_admin_apply_preserves_unrecognized_managed_assignments(monkeypatch, tmp
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
     text = env_file.read_text("utf-8")
     assert "MODEL=open_router/test-model" in text
@@ -1938,7 +2046,7 @@ def test_admin_apply_preserves_unrecognized_managed_assignments(monkeypatch, tmp
 
 @pytest.mark.parametrize("already_saved", [True, False])
 def test_admin_ignores_retired_request_settings_and_preserves_saved_values(
-    monkeypatch, tmp_path, already_saved
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, already_saved: bool
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -1961,7 +2069,10 @@ def test_admin_ignores_retired_request_settings_and_preserves_saved_values(
     with _local_client(create_test_app()) as client:
         response = client.get("/admin/api/config")
         assert response.status_code == 200
-        fields = {field["key"] for field in response.json()["fields"]}
+        fields = {
+            object_payload(field)["key"]
+            for field in array_payload(response_object(response)["fields"])
+        }
         assert not fields.intersection(retired)
 
         response = post_config(
@@ -1971,17 +2082,21 @@ def test_admin_ignores_retired_request_settings_and_preserves_saved_values(
         )
 
     assert response.status_code == 200
-    assert response.json()["applied"] is True
+    assert response_object(response)["applied"] is True
     values = dotenv_values_from_text(env_file.read_text(encoding="utf-8"))
     assert values["LOG_LEVEL"] == "DEBUG"
     if not already_saved:
         assert not values.keys() & retired.keys()
     for key, value in saved.items():
         assert values[key] == value
-        assert f"{key}=********" in response.json()["env_preview"]
+        assert f"{key}=********" in string_payload(
+            response_object(response)["env_preview"]
+        )
 
 
-def test_admin_apply_restart_required_reports_automatic_restart(monkeypatch, tmp_path):
+def test_admin_apply_restart_required_reports_automatic_restart(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     callbacks: list[str] = []
@@ -1990,7 +2105,9 @@ def test_admin_apply_restart_required_reports_automatic_restart(monkeypatch, tmp
         callbacks.append("restart")
 
     app = create_test_app(restart_callback=restart_callback)
-    instance_id = _local_client(app).get("/admin/api/status").json()["instance_id"]
+    instance_id = response_object(_local_client(app).get("/admin/api/status"))[
+        "instance_id"
+    ]
 
     response = post_config(
         _local_client(app),
@@ -1999,7 +2116,7 @@ def test_admin_apply_restart_required_reports_automatic_restart(monkeypatch, tmp
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
     assert body["pending_fields"] == ["PORT"]
     assert body["restart"] == {
@@ -2013,17 +2130,17 @@ def test_admin_apply_restart_required_reports_automatic_restart(monkeypatch, tmp
 
 
 @pytest.mark.parametrize("origin", ["http://127.0.0.1:8082", "http://localhost:9090"])
-def test_admin_restart_status_can_be_read_from_another_local_address(origin):
+def test_admin_restart_status_can_be_read_from_another_local_address(origin: str):
     app = create_test_app()
     response = _local_client(app).get("/admin/api/status", headers={"Origin": origin})
     assert response.status_code == 200
     assert response.headers["Access-Control-Allow-Origin"] == origin
     assert response.headers["Vary"] == "Origin"
-    initial = response.json()
+    initial = response_object(response)
     assert initial["status"] == "running"
     assert isinstance(initial["instance_id"], str) and initial["instance_id"]
     runtime_for_app(app).begin_shutdown()
-    stopping = _local_client(app).get("/admin/api/status").json()
+    stopping = response_object(_local_client(app).get("/admin/api/status"))
     assert stopping["status"] == "stopping"
     assert stopping["instance_id"] == initial["instance_id"]
 
@@ -2036,7 +2153,9 @@ def test_admin_restart_status_does_not_allow_a_remote_web_origin():
     assert "Access-Control-Allow-Origin" not in response.headers
 
 
-def test_admin_apply_restart_required_reports_manual_fallback(monkeypatch, tmp_path):
+def test_admin_apply_restart_required_reports_manual_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -2048,7 +2167,7 @@ def test_admin_apply_restart_required_reports_manual_fallback(monkeypatch, tmp_p
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
     assert body["pending_fields"] == ["PORT"]
     assert body["restart"] == {
@@ -2060,7 +2179,7 @@ def test_admin_apply_restart_required_reports_manual_fallback(monkeypatch, tmp_p
 
 
 def test_restart_signal_failure_reports_saved_config_and_manual_restart(
-    monkeypatch, tmp_path, caplog
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -2070,13 +2189,13 @@ def test_restart_signal_failure_reports_saved_config_and_manual_restart(
 
     app = create_test_app(restart_callback=restart_callback)
     client = _local_client(app)
-    original_port = client.get("/admin/api/status").json()["port"]
+    original_port = response_object(client.get("/admin/api/status"))["port"]
     response = post_config(
         client, "/admin/api/config/apply", json={"values": {"PORT": "9090"}}
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is True
     assert body["restart"] == {
         "required": True,
@@ -2085,7 +2204,7 @@ def test_restart_signal_failure_reports_saved_config_and_manual_restart(
         "fields": ["PORT"],
     }
     assert "PORT=9090" in (tmp_path / ".fcc" / ".env").read_text()
-    status = client.get("/admin/api/status").json()
+    status = response_object(client.get("/admin/api/status"))
     assert status["port"] == original_port
     assert status["pending_fields"] == ["PORT"]
     assert "private restart failure detail" not in response.text + caplog.text
@@ -2097,7 +2216,10 @@ def test_restart_signal_failure_reports_saved_config_and_manual_restart(
 )
 @pytest.mark.parametrize("signal_recovers", [False, True])
 def test_pending_restart_survives_later_apply(
-    monkeypatch, tmp_path, followup, signal_recovers
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    followup: JsonObject,
+    signal_recovers: bool,
 ):
     from unittest.mock import MagicMock
 
@@ -2116,25 +2238,31 @@ def test_pending_restart_survives_later_apply(
     )
     app = create_test_app(settings, restart_callback=callback)
     client = _local_client(app)
-    assert post_config(
-        client, "/admin/api/config/apply", json={"values": {"PORT": "9090"}}
-    ).json()["restart"]["required"]
-    result = post_config(
-        client, "/admin/api/config/apply", json={"values": followup}
-    ).json()
+    assert object_payload(
+        response_object(
+            post_config(
+                client, "/admin/api/config/apply", json={"values": {"PORT": "9090"}}
+            )
+        )["restart"]
+    )["required"]
+    result = response_object(
+        post_config(client, "/admin/api/config/apply", json={"values": followup})
+    )
     fields = ["PORT", "LOG_LEVEL"] if "LOG_LEVEL" in followup else ["PORT"]
     assert result["applied"] is True
-    assert result["restart"]["required"] is True
-    assert result["restart"]["automatic"] is signal_recovers
-    assert result["restart"]["fields"] == fields
+    assert object_payload(result["restart"])["required"] is True
+    assert object_payload(result["restart"])["automatic"] is signal_recovers
+    assert object_payload(result["restart"])["fields"] == fields
     assert callback.call_count == 2
-    status = client.get("/admin/api/status").json()
+    status = response_object(client.get("/admin/api/status"))
     assert status["port"] == settings.port
     assert status["pending_fields"] == ([] if signal_recovers else fields)
     assert provider_manager_for_app(app).current_generation_id == 1
 
 
-def test_reverting_pending_restart_restores_hot_apply(monkeypatch, tmp_path):
+def test_reverting_pending_restart_restores_hot_apply(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     from unittest.mock import MagicMock
 
     from free_claude_code.config.loader import ManagedConfigStore
@@ -2149,30 +2277,40 @@ def test_reverting_pending_restart_restores_hot_apply(monkeypatch, tmp_path):
     client = _local_client(app)
     post_config(client, "/admin/api/config/apply", json={"values": {"PORT": "9090"}})
     with patch.object(provider_manager_for_app(app), "_start_pass", MagicMock()):
-        result = post_config(
-            client,
-            "/admin/api/config/apply",
-            json={"values": {"PORT": str(settings.port), "MODEL": "nvidia_nim/new"}},
-        ).json()
+        result = response_object(
+            post_config(
+                client,
+                "/admin/api/config/apply",
+                json={
+                    "values": {"PORT": str(settings.port), "MODEL": "nvidia_nim/new"}
+                },
+            )
+        )
     assert result["applied"] is True
-    assert result["restart"]["required"] is False
+    assert object_payload(result["restart"])["required"] is False
     assert callback.call_count == 1
-    status = client.get("/admin/api/status").json()
+    status = response_object(client.get("/admin/api/status"))
     assert status["pending_fields"] == []
     assert status["port"] == settings.port
     assert status["model"] == "nvidia_nim/new"
 
 
-def test_admin_process_env_values_are_locked_and_not_written(monkeypatch, tmp_path):
+def test_admin_process_env_values_are_locked_and_not_written(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     monkeypatch.setenv("MODEL", "open_router/process-model")
     app = create_test_app()
 
-    config = _local_client(app).get("/admin/api/config").json()
-    model_field = next(field for field in config["fields"] if field["key"] == "MODEL")
-    assert model_field["locked"] is True
-    assert model_field["source"] == "process"
+    config = response_object(_local_client(app).get("/admin/api/config"))
+    model_field = next(
+        field
+        for field in array_payload(config["fields"])
+        if object_payload(field)["key"] == "MODEL"
+    )
+    assert object_payload(model_field)["locked"] is True
+    assert object_payload(model_field)["source"] == "process"
 
     response = post_config(
         _local_client(app),
@@ -2186,17 +2324,21 @@ def test_admin_process_env_values_are_locked_and_not_written(monkeypatch, tmp_pa
 
 
 def test_admin_process_model_fallbacks_are_locked_and_not_written(
-    monkeypatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     monkeypatch.setenv("MODEL_FALLBACKS", "open_router/process-model")
     app = create_test_app()
 
-    config = _local_client(app).get("/admin/api/config").json()
-    field = next(item for item in config["fields"] if item["key"] == "MODEL_FALLBACKS")
-    assert field["locked"] is True
-    assert field["source"] == "process"
+    config = response_object(_local_client(app).get("/admin/api/config"))
+    field = next(
+        item
+        for item in array_payload(config["fields"])
+        if object_payload(item)["key"] == "MODEL_FALLBACKS"
+    )
+    assert object_payload(field)["locked"] is True
+    assert object_payload(field)["source"] == "process"
 
     response = post_config(
         _local_client(app),
@@ -2209,7 +2351,9 @@ def test_admin_process_model_fallbacks_are_locked_and_not_written(
     assert "MODEL_FALLBACKS=" not in env_file.read_text("utf-8")
 
 
-def test_admin_never_reads_arbitrary_current_directory_env(monkeypatch, tmp_path):
+def test_admin_never_reads_arbitrary_current_directory_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     monkeypatch.chdir(tmp_path)
@@ -2219,10 +2363,17 @@ def test_admin_never_reads_arbitrary_current_directory_env(monkeypatch, tmp_path
     )
     app = create_test_app()
 
-    config = _local_client(app).get("/admin/api/config").json()
-    model_field = next(field for field in config["fields"] if field["key"] == "MODEL")
-    assert model_field["value"] == "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
-    assert model_field["source"] == "default"
+    config = response_object(_local_client(app).get("/admin/api/config"))
+    model_field = next(
+        field
+        for field in array_payload(config["fields"])
+        if object_payload(field)["key"] == "MODEL"
+    )
+    assert (
+        object_payload(model_field)["value"]
+        == "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
+    )
+    assert object_payload(model_field)["source"] == "default"
 
     response = post_config(
         _local_client(app),
@@ -2236,7 +2387,9 @@ def test_admin_never_reads_arbitrary_current_directory_env(monkeypatch, tmp_path
     assert "DEEPSEEK_API_KEY=deepseek-secret" not in managed_text
 
 
-def test_admin_migration_removes_blank_required_managed_values(monkeypatch, tmp_path):
+def test_admin_migration_removes_blank_required_managed_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -2264,7 +2417,7 @@ def test_admin_migration_removes_blank_required_managed_values(monkeypatch, tmp_
 
 
 def test_admin_migrates_empty_auth_token_to_explicit_disabled_state(
-    monkeypatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -2299,10 +2452,10 @@ def test_admin_migrates_empty_auth_token_to_explicit_disabled_state(
     ],
 )
 def test_admin_apply_rejects_missing_required_value_without_writing(
-    monkeypatch,
-    tmp_path,
-    submitted,
-    message,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    submitted: str | None,
+    message: str,
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -2321,14 +2474,16 @@ def test_admin_apply_rejects_missing_required_value_without_writing(
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert body["applied"] is False
     assert body["valid"] is False
-    assert f"MESSAGING_PLATFORM: {message}" in body["errors"]
+    assert f"MESSAGING_PLATFORM: {message}" in array_payload(body["errors"])
     assert env_file.read_bytes() == baseline
 
 
-def test_admin_apply_preserves_false_and_numeric_zero(monkeypatch, tmp_path):
+def test_admin_apply_preserves_false_and_numeric_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -2353,20 +2508,20 @@ def test_admin_apply_preserves_false_and_numeric_zero(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("provider_id", ["lmstudio", "llamacpp", "ollama"])
 def test_admin_local_provider_status_reports_reachable(
-    monkeypatch, tmp_path, provider_id
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, provider_id: str
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
 
     class FakeAsyncClient:
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *args: object, **kwargs: object):
             pass
 
         async def __aenter__(self):
             return self
 
-        async def __aexit__(self, *args):
+        async def __aexit__(self, *args: object):
             return None
 
         async def get(self, url: str):
@@ -2383,7 +2538,7 @@ def test_admin_local_provider_status_reports_reachable(
 
 
 def test_admin_local_provider_status_checks_only_requested_provider(
-    monkeypatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -2391,13 +2546,13 @@ def test_admin_local_provider_status_checks_only_requested_provider(
     calls = 0
 
     class CountingAsyncClient:
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *args: object, **kwargs: object):
             pass
 
         async def __aenter__(self):
             return self
 
-        async def __aexit__(self, *args):
+        async def __aexit__(self, *args: object):
             return None
 
         async def get(self, url: str):
@@ -2415,7 +2570,7 @@ def test_admin_local_provider_status_checks_only_requested_provider(
 
 
 def test_admin_config_exposes_structured_provider_configuration_targets(
-    monkeypatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -2424,20 +2579,24 @@ def test_admin_config_exposes_structured_provider_configuration_targets(
 
     assert response.status_code == 200
     providers = {
-        provider["provider_id"]: provider
-        for provider in response.json()["provider_status"]
+        object_payload(provider)["provider_id"]: provider
+        for provider in object_array(response_object(response)["provider_status"])
     }
-    assert providers["nvidia_nim"]["configuration_keys"] == ["NVIDIA_NIM_API_KEY"]
-    assert providers["nvidia_nim"]["missing_configuration_keys"] == [
+    assert object_payload(providers["nvidia_nim"])["configuration_keys"] == [
         "NVIDIA_NIM_API_KEY"
     ]
-    assert "configuration" not in providers["nvidia_nim"]
-    assert providers["lmstudio"]["status"] == "configured"
-    assert providers["lmstudio"]["configuration_keys"] == ["LM_STUDIO_BASE_URL"]
+    assert object_payload(providers["nvidia_nim"])["missing_configuration_keys"] == [
+        "NVIDIA_NIM_API_KEY"
+    ]
+    assert "configuration" not in object_payload(providers["nvidia_nim"])
+    assert object_payload(providers["lmstudio"])["status"] == "configured"
+    assert object_payload(providers["lmstudio"])["configuration_keys"] == [
+        "LM_STUDIO_BASE_URL"
+    ]
 
 
 def test_admin_local_provider_failure_does_not_return_exception_text(
-    monkeypatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
@@ -2447,7 +2606,7 @@ def test_admin_local_provider_failure_does_not_return_exception_text(
         async def __aenter__(self):
             return self
 
-        async def __aexit__(self, *args):
+        async def __aexit__(self, *args: object):
             return None
 
         async def get(self, url: str):
@@ -2462,7 +2621,7 @@ def test_admin_local_provider_failure_does_not_return_exception_text(
         response = _local_client(app).get("/admin/api/providers/lmstudio/local-status")
 
     assert response.status_code == 200
-    provider = response.json()
+    provider = response_object(response)
     assert provider["status"] == "offline"
     assert provider["message"] == (
         "Could not connect. Verify the URL and that the local provider is running."
@@ -2486,7 +2645,7 @@ def test_admin_local_provider_failure_does_not_return_exception_text(
     ),
 )
 def test_admin_provider_test_route_preserves_runtime_result(
-    monkeypatch, tmp_path, result
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, result: JsonObject
 ):
     _set_home(monkeypatch, tmp_path)
     app = create_test_app()

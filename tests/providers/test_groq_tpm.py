@@ -9,19 +9,19 @@ import pytest
 
 from free_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.failures import FailureKind
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
-from free_claude_code.providers.admission import ProviderOperationKind
-from free_claude_code.providers.failure_policy import classify_provider_failure
+from free_claude_code.providers.failure_reporting import finalize_provider_failure
 from free_claude_code.providers.groq import GroqProvider
 from free_claude_code.providers.groq.client import GroqChatBehavior
 from free_claude_code.providers.groq.tpm import correct_tpm_completion_budget
-from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     SDKStreamDouble,
     immediate_admission,
     make_provider_config,
+    sdk_chat_chunk,
 )
 
 _MODEL = "openai/gpt-oss-120b"
@@ -37,9 +37,11 @@ _ITPM_MESSAGE = (
 
 @pytest.mark.parametrize("wrapped", [False, True])
 @pytest.mark.parametrize("message", [_ITPM_MESSAGE, "Token allowance exceeded"])
-def test_token_limit_failure_is_actionable_without_parsing_prose(wrapped, message):
+def test_token_limit_failure_is_actionable_without_parsing_prose(
+    wrapped: bool, message: str
+):
     error = _status_error(detail=_detail(message), wrapped=wrapped)
-    failure = classify_provider_failure(
+    failure = finalize_provider_failure(
         error,
         provider_name="GROQ",
         read_timeout_s=30,
@@ -97,11 +99,11 @@ def _status_error(
         _status_error(detail="not JSON"),
     ],
 )
-def test_unrelated_or_ambiguous_errors_defer_to_shared_policy(error):
+def test_unrelated_or_ambiguous_errors_defer_to_shared_policy(error: Exception):
     assert GroqChatBehavior().failure_override(error) is None
 
 
-def _body(max_completion_tokens: object = _ORIGINAL_MAX) -> dict:
+def _body(max_completion_tokens: JsonValue = _ORIGINAL_MAX) -> JsonObject:
     return {
         "model": _MODEL,
         "messages": [{"role": "user", "content": "hello"}],
@@ -120,24 +122,42 @@ def _provider(*, max_attempts: int = 5) -> GroqProvider:
 
 
 def _chunk(*, content: str | None = None, finish_reason: str | None = None):
-    return MagicMock(
-        choices=[
-            MagicMock(
-                delta=MagicMock(
-                    content=content,
-                    reasoning_content=None,
-                    tool_calls=None,
-                ),
-                finish_reason=finish_reason,
-            )
-        ],
-        usage=None,
+    return sdk_chat_chunk(
+        MagicMock(
+            choices=[
+                MagicMock(
+                    delta=MagicMock(
+                        content=content,
+                        reasoning_content=None,
+                        tool_calls=None,
+                    ),
+                    finish_reason=finish_reason,
+                )
+            ],
+            usage=None,
+        )
     )
 
 
 async def _successful_stream():
     yield _chunk(content="working")
     yield _chunk(finish_reason="stop")
+
+
+async def _drain(
+    provider: GroqProvider,
+    *,
+    max_tokens: int = _ORIGINAL_MAX,
+    reasoning: ReasoningPolicy = ReasoningPolicy.off(),
+) -> None:
+    _ = [
+        frame
+        async for event in provider.stream_messages(
+            make_messages_request(_MODEL, max_tokens=max_tokens),
+            reasoning=reasoning,
+        )
+        for frame in event.frames
+    ]
 
 
 @pytest.mark.parametrize("wrapped", [False, True], ids=["sdk-detail", "wire-wrapper"])
@@ -163,7 +183,7 @@ def test_exact_tpm_rejection_corrects_only_completion_budget(wrapped: bool) -> N
 @pytest.mark.parametrize(
     "quota", ["input tokens per minute (ITPM)", "output tokens per minute (OTPM)"]
 )
-def test_separate_token_quotas_do_not_use_combined_tpm_arithmetic(quota):
+def test_separate_token_quotas_do_not_use_combined_tpm_arithmetic(quota: str):
     error = _status_error(detail=_detail(f"{quota}: Limit 8000, Requested 26206"))
     assert correct_tpm_completion_budget(error, _body()) is None
     failure = GroqChatBehavior().failure_override(error)
@@ -272,7 +292,7 @@ def test_separate_token_quotas_do_not_use_combined_tpm_arithmetic(quota):
 )
 def test_non_authoritative_tpm_rejection_is_not_corrected(
     error: Exception,
-    body: dict,
+    body: JsonObject,
 ) -> None:
     assert correct_tpm_completion_budget(error, body) is None
 
@@ -288,11 +308,12 @@ async def test_tpm_correction_emits_one_downstream_lifecycle() -> None:
     with patch.object(provider._client.chat.completions, "create", create):
         raw = "".join(
             [
-                event
+                frame
                 async for event in provider.stream_messages(
                     request,
                     reasoning=ReasoningPolicy.off(),
                 )
+                for frame in event.frames
             ]
         )
 
@@ -307,19 +328,15 @@ async def test_tpm_correction_emits_one_downstream_lifecycle() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tpm_correction_is_one_shot_per_stream_creation() -> None:
+async def test_tpm_correction_is_one_shot_per_request() -> None:
     provider = _provider()
     create = AsyncMock(side_effect=[_status_error(), _status_error()])
 
     with (
         patch.object(provider._client.chat.completions, "create", create),
-        pytest.raises(openai.APIStatusError),
+        pytest.raises(ExecutionFailure),
     ):
-        await provider._chat._create_stream(
-            _body(),
-            RequestRecovery(provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
+        await _drain(provider)
 
     assert create.await_count == 2
 
@@ -331,13 +348,9 @@ async def test_tpm_correction_respects_physical_attempt_ceiling() -> None:
 
     with (
         patch.object(provider._client.chat.completions, "create", create),
-        pytest.raises(openai.APIStatusError),
+        pytest.raises(ExecutionFailure),
     ):
-        await provider._chat._create_stream(
-            _body(),
-            RequestRecovery(provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
+        await _drain(provider)
 
     assert create.await_count == 1
 
@@ -356,71 +369,47 @@ async def test_tpm_and_reasoning_corrections_compose(
     errors: tuple[str, str],
 ) -> None:
     provider = _provider()
-    request = make_messages_request(_MODEL, max_tokens=_ORIGINAL_MAX)
-    body = provider._chat._build_request_body(
-        request,
-        reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
-    )
     failures = {
         "tpm": _status_error(),
         "reasoning": _reasoning_error(),
     }
-    create = AsyncMock(side_effect=[*(failures[name] for name in errors), object()])
-    execution = provider._admission.start_execution()
+    create = AsyncMock(
+        side_effect=[
+            *(failures[name] for name in errors),
+            SDKStreamDouble(_successful_stream()),
+        ]
+    )
 
     with patch.object(provider._client.chat.completions, "create", create):
-        (
-            _stream,
-            accepted_body,
-            attempt,
-            _sent_body,
-        ) = await provider._chat._create_stream(
-            body,
-            RequestRecovery(execution),
-            ProviderOperationKind.GENERATION,
+        await _drain(
+            provider, reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
         )
-        await attempt.aclose()
 
     assert create.await_count == 3
-    assert execution.attempts_started == 3
-    assert accepted_body["max_completion_tokens"] == _CORRECTED_MAX
-    assert accepted_body["reasoning_effort"] == "default"
+    accepted = create.await_args_list[2].kwargs
+    assert accepted["max_completion_tokens"] == _CORRECTED_MAX
+    assert accepted["reasoning_effort"] == "default"
 
 
 @pytest.mark.asyncio
-async def test_distinct_bodies_get_independent_tpm_corrections() -> None:
+async def test_distinct_requests_get_independent_tpm_corrections() -> None:
     provider = _provider()
-    execution = provider._admission.start_execution()
     second_error = _status_error(
         detail=_detail("tokens per minute (TPM): Limit 8000, Requested 22000")
     )
-    create = AsyncMock(side_effect=[_status_error(), object(), second_error, object()])
+    create = AsyncMock(
+        side_effect=[
+            _status_error(),
+            SDKStreamDouble(_successful_stream()),
+            second_error,
+            SDKStreamDouble(_successful_stream()),
+        ]
+    )
 
     with patch.object(provider._client.chat.completions, "create", create):
-        (
-            _stream,
-            first_body,
-            first_attempt,
-            _sent_body,
-        ) = await provider._chat._create_stream(
-            _body(),
-            RequestRecovery(execution),
-            ProviderOperationKind.CONTINUATION,
-        )
-        await first_attempt.accept()
-        await first_attempt.aclose()
-        (
-            _stream,
-            second_body,
-            second_attempt,
-            _sent_body,
-        ) = await provider._chat._create_stream(
-            _body(20_000),
-            RequestRecovery(execution),
-            ProviderOperationKind.TOOL_REPAIR,
-        )
-        await second_attempt.aclose()
+        await _drain(provider)
+        await _drain(provider, max_tokens=20_000)
 
-    assert execution.attempts_started == 4
-    assert first_body["max_completion_tokens"] == _CORRECTED_MAX
-    assert second_body["max_completion_tokens"] == 6_000
+    assert create.await_count == 4
+    assert create.await_args_list[1].kwargs["max_completion_tokens"] == _CORRECTED_MAX
+    assert create.await_args_list[3].kwargs["max_completion_tokens"] == 6_000

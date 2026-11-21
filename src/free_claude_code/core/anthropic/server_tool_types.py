@@ -3,6 +3,7 @@
 from typing import Final
 
 SERVER_TOOL_USE: Final = "server_tool_use"
+HIDDEN_WEB_SEARCH_NAME: Final = "fcc_web_search"
 WEB_SEARCH_TOOL_RESULT: Final = "web_search_tool_result"
 WEB_FETCH_TOOL_RESULT: Final = "web_fetch_tool_result"
 WEB_SEARCH_TOOL_RESULT_ERROR: Final = "web_search_tool_result_error"

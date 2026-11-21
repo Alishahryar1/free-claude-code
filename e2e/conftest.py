@@ -5,7 +5,7 @@ import socket
 import sys
 import threading
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -19,6 +19,7 @@ from free_claude_code.api.app import create_app
 from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config import env_migrations, paths
+from free_claude_code.config.admin.credentials import CredentialSubmission
 from free_claude_code.config.env_migrations import recognized_env_keys
 from free_claude_code.config.loader import (
     ManagedConfigStore,
@@ -29,6 +30,7 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.harnesses import (
     claude_desktop_integration,
     claude_integration,
@@ -114,10 +116,10 @@ class _ModelListingProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-        continuation=None,
-    ) -> AsyncIterator[str]:
+        continuation: object = None,
+    ) -> AsyncIterator[StreamOutput]:
         if False:
-            yield ""
+            yield StreamOutput(("",))
 
     async def stream_responses(
         self,
@@ -129,14 +131,14 @@ class _ModelListingProvider(BaseProvider):
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
-        continuation=None,
-    ) -> AsyncIterator[str]:
+        continuation: object = None,
+    ) -> AsyncIterator[StreamOutput]:
         if False:
-            yield ""
+            yield StreamOutput(("",))
 
 
 @pytest.fixture
-def code_control(tmp_path):
+def code_control(tmp_path: Path):
     return CodeControl(tmp_path / "code")
 
 
@@ -166,8 +168,8 @@ def admin_base_url(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     code_control: CodeControl,
-    admin_client_files,
-    provider_load_guard,
+    admin_client_files: object,
+    provider_load_guard: object,
 ) -> Iterator[str]:
     """Serve one fully isolated Admin application on an OS-assigned port."""
 
@@ -225,14 +227,17 @@ def admin_base_url(
     monkeypatch.setenv("VOICE_NOTE_ENABLED", "false")
     monkeypatch.setenv("FCC_OPEN_BROWSER", "false")
     monkeypatch.setenv("PROXY_AUTH_ENABLED", "false")
-    for key, value in getattr(request, "param", {}).items():
+    overrides: dict[str, str] = getattr(request, "param", {})
+    for key, value in overrides.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(paths, "config_dir_path", lambda: config_dir)
     monkeypatch.setattr(env_migrations, "legacy_env_paths", lambda: ())
     monkeypatch.setattr(env_migrations, "verified_checkout_env_path", lambda: None)
     clear_settings_cache()
 
-    async def verified_credentials(settings, submissions):
+    async def verified_credentials(
+        settings: object, submissions: Sequence[CredentialSubmission]
+    ):
         return tuple(
             CredentialCheck(
                 submission.key,
@@ -289,7 +294,11 @@ def admin_base_url(
     }
 
     async def fixture_provider(
-        provider_id: str, _settings: Settings, _admission_registry, _api_key_number
+        provider_id: str,
+        _settings: Settings,
+        _admission_registry,
+        _api_key_number,
+        _history_cache=None,
     ) -> BaseProvider:
         if provider_id not in providers:
             raise AssertionError(f"Missing browser fixture provider: {provider_id}")
@@ -297,11 +306,17 @@ def admin_base_url(
 
     manager = ProviderRuntimeManager(
         get_settings(),
-        runtime_factory=lambda snapshot, admission_registry: ProviderRuntime(
-            snapshot,
-            admission_registry,
-            {(provider_id, 1): provider for provider_id, provider in providers.items()},
-            provider_constructor=fixture_provider,
+        runtime_factory=lambda snapshot, admission_registry, history_cache=None: (
+            ProviderRuntime(
+                snapshot,
+                admission_registry,
+                None,
+                {
+                    (provider_id, 1): provider
+                    for provider_id, provider in providers.items()
+                },
+                provider_constructor=fixture_provider,
+            )
         ),
     )
     runtime = ApplicationRuntime(
@@ -311,10 +326,16 @@ def admin_base_url(
         code_service=code_control.service,
         database=code_control.database,
     )
+
+    async def pick_folder(
+        picker: NativeFolderPicker, initial: str | None, stop: asyncio.Event
+    ) -> str | None:
+        return await code_control.folder_picker.select(initial, stop)
+
     monkeypatch.setattr(
         NativeFolderPicker,
         "_select",
-        lambda _picker, initial, stop: code_control.folder_picker.select(initial, stop),
+        pick_folder,
     )
     app = RuntimeASGIApp(
         create_app(
@@ -350,7 +371,8 @@ def admin_base_url(
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(("127.0.0.1", 0))
     listener.listen(128)
-    port = listener.getsockname()[1]
+    address: tuple[str, int] = listener.getsockname()
+    port = address[1]
     server = uvicorn.Server(
         uvicorn.Config(
             app,

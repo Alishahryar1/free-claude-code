@@ -4,15 +4,20 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx as native_httpx
 import httpx2 as httpx
 import pytest
 from fastapi.responses import JSONResponse, StreamingResponse
 from openai import APIError, AsyncOpenAI, BadRequestError
+from openai.types.chat import ChatCompletionChunk
 
 from free_claude_code.api.handlers import MessagesHandler
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
-from free_claude_code.config.reasoning import FALLBACK_REASONING_PREFERENCES
+from free_claude_code.config.reasoning import (
+    FALLBACK_REASONING_PREFERENCES,
+    ReasoningPreference,
+)
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
@@ -20,7 +25,9 @@ from free_claude_code.core.anthropic.stream_contracts import (
     text_content,
     thinking_content,
 )
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.reasoning import ReasoningCapability
+from free_claude_code.providers.gemini import GeminiProvider
 from free_claude_code.providers.open_router import OpenRouterProvider
 from tests.api.model_fallback_support import (
     ControlledFallbackProvider,
@@ -30,11 +37,14 @@ from tests.providers.support import (
     SDKStreamDouble,
     immediate_admission,
     make_provider_config,
+    sdk_chat_chunk,
 )
+from tests.providers.test_gemini import _sse
 from tests.web_tools_support import StubWebToolsClient
+from tests.wire_payload import decode_object, int_payload, object_payload
 
 
-class ClassifierStream(SDKStreamDouble):
+class ClassifierStream(SDKStreamDouble[ChatCompletionChunk]):
     def __init__(self, *, starved: bool = False, error: Exception | None = None):
         self.starved = starved
         self.error = error
@@ -49,19 +59,21 @@ class ClassifierStream(SDKStreamDouble):
             (None if self.starved else "<severity>0</severity>", None, None),
             (None, None, "length" if self.starved else "stop"),
         ):
-            yield SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        delta=SimpleNamespace(
-                            content=text,
-                            reasoning=reasoning,
-                            reasoning_content=reasoning,
-                            tool_calls=None,
-                        ),
-                        finish_reason=finish,
-                    )
-                ],
-                usage=None,
+            yield sdk_chat_chunk(
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(
+                                content=text,
+                                reasoning=reasoning,
+                                reasoning_content=reasoning,
+                                tool_calls=None,
+                            ),
+                            finish_reason=finish,
+                        )
+                    ],
+                    usage=None,
+                )
             )
 
     async def aclose(self):
@@ -89,6 +101,96 @@ def classifier_request():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("capability", "off", "limit"),
+    [
+        ("none", False, 64),
+        ("optional", True, 64),
+        ("required", False, None),
+        ("unknown", True, None),
+    ],
+)
+@pytest.mark.parametrize("rejection", [None, "mandatory", "field", "unrelated"])
+async def test_native_gemini_classifier_preserves_reasoning_preparation(
+    capability: str, off: bool, limit: int | None, rejection: str | None
+):
+    bodies = []
+
+    def reply(request: native_httpx.Request):
+        body = decode_object(request.content)
+        bodies.append(body)
+        config = body["generationConfig"]
+        if (
+            object_payload(object_payload(config)["thinkingConfig"]).get(
+                "thinkingBudget"
+            )
+            == 0
+            and rejection
+        ):
+            error = {
+                "mandatory": {"message": "Thinking cannot be disabled"},
+                "field": {
+                    "message": "Value is not supported",
+                    "param": "generationConfig.thinkingConfig.thinkingBudget",
+                },
+                "unrelated": {"message": "Invalid tool schema", "param": "tools"},
+            }[rejection]
+            return native_httpx.Response(400, json={"error": error})
+        return _sse(
+            [
+                {"text": "Private classifier reasoning", "thought": True},
+                {"text": "<severity>0</severity>"},
+            ]
+        )
+
+    provider = GeminiProvider(
+        make_provider_config("test", "https://gemini.invalid/v1beta"),
+        admission=immediate_admission(),
+        transport=native_httpx.MockTransport(reply),
+    )
+    try:
+        response = await MessagesHandler(
+            Settings(),
+            provider_resolver=AsyncMock(return_value=provider),
+            model_info_lookup=lambda *_: ProviderModelInfo(
+                "models/gemini-2.5-flash",
+                reasoning_capability=ReasoningCapability(capability),
+            ),
+            web_tools=StubWebToolsClient(),
+        ).create(
+            classifier_request().model_copy(
+                update={"model": "gemini/models/gemini-2.5-flash"}
+            )
+        )
+        assert isinstance(response, JSONResponse)
+        if off and rejection == "unrelated":
+            assert response.status_code >= 400
+            assert len(bodies) == 1
+        else:
+            assert response.status_code == 200
+            assert json.loads(bytes(response.body))["content"] == [
+                {"type": "text", "text": "<severity>0</severity>"}
+            ]
+            assert len(bodies) == (2 if off and rejection else 1)
+        config = bodies[0]["generationConfig"]
+        assert object_payload(config).get("maxOutputTokens") == limit
+        assert (
+            object_payload(object_payload(config)["thinkingConfig"]).get(
+                "thinkingBudget"
+            )
+            == 0
+        ) is off
+        if len(bodies) == 2:
+            retried = bodies[1]["generationConfig"]
+            assert "maxOutputTokens" not in object_payload(retried)
+            assert "thinkingBudget" not in object_payload(
+                object_payload(retried)["thinkingConfig"]
+            )
+    finally:
+        await provider.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("error", "corrects"),
     [
         ({"code": 400, "message": "Reasoning cannot be disabled."}, True),
@@ -110,13 +212,13 @@ def classifier_request():
     ids=["numeric", "metadata", "unrelated", "other-field", "permission"],
 )
 async def test_openrouter_numeric_sse_rejection_uses_classifier_correction(
-    error, corrects
+    error: JsonObject, corrects: bool
 ):
     bodies = []
 
-    def upstream(request):
-        bodies.append(json.loads(request.content))
-        chunk = {
+    def upstream(request: httpx.Request):
+        bodies.append(decode_object(request.content))
+        chunk: JsonObject = {
             "id": "gen-test",
             "object": "chat.completion.chunk",
             "created": 1,
@@ -155,11 +257,13 @@ async def test_openrouter_numeric_sse_rejection_uses_classifier_correction(
             admission=immediate_admission(),
         )
     try:
+
+        def resolve_provider(_: str, _api_key_number: int):
+            return provider
+
         response = await MessagesHandler(
             Settings(),
-            provider_resolver=AsyncMock(
-                side_effect=lambda _, _api_key_number: provider
-            ),
+            provider_resolver=AsyncMock(side_effect=resolve_provider),
             web_tools=StubWebToolsClient(),
         ).create(classifier_request())
         assert isinstance(response, JSONResponse)
@@ -187,7 +291,7 @@ async def test_openrouter_numeric_sse_rejection_uses_classifier_correction(
     ids=["off-ignored", "off-rejected", "off-stream-rejected"],
 )
 async def test_classifier_mandatory_reasoning_still_returns_verdict(
-    reject_off, stream, fallback_effort
+    reject_off: bool | str, stream: bool, fallback_effort: ReasoningPreference | None
 ):
     provider = OpenRouterProvider(
         make_provider_config(api_key="test", base_url="https://openrouter.test/v1"),
@@ -207,11 +311,14 @@ async def test_classifier_mandatory_reasoning_still_returns_verdict(
         )
         request = request.model_copy(update={"model": "nvidia_nim/primary"})
 
-    async def upstream(**body):
+    async def upstream(**body: JsonValue):
         bodies.append(body)
         if (
             reject_off
-            and body.get("extra_body", {}).get("reasoning", {}).get("enabled") is False
+            and object_payload(
+                object_payload(body.get("extra_body", {})).get("reasoning", {})
+            ).get("enabled")
+            is False
         ):
             error = {
                 "error": {
@@ -242,18 +349,18 @@ async def test_classifier_mandatory_reasoning_still_returns_verdict(
                 ),
                 body=error,
             )
-        result = ClassifierStream(starved=body.get("max_tokens", 0) < 2048)
+        result = ClassifierStream(starved=int_payload(body.get("max_tokens", 0)) < 2048)
         streams.append(result)
         return result
 
     try:
+
+        def resolve_provider(provider_id: str, _api_key_number: int):
+            return primary if provider_id == "nvidia_nim" else provider
+
         handler = MessagesHandler(
             settings,
-            provider_resolver=AsyncMock(
-                side_effect=lambda provider_id, _api_key_number: (
-                    primary if provider_id == "nvidia_nim" else provider
-                )
-            ),
+            provider_resolver=AsyncMock(side_effect=resolve_provider),
             web_tools=StubWebToolsClient(),
         )
         with patch.object(
@@ -273,7 +380,7 @@ async def test_classifier_mandatory_reasoning_still_returns_verdict(
                 assert events[-1].event == "message_stop"
             else:
                 assert isinstance(response, JSONResponse)
-                message = json.loads(bytes(response.body))
+                message = decode_object(bytes(response.body))
                 assert message["content"] == [
                     {"type": "text", "text": "<severity>0</severity>"}
                 ]
@@ -296,7 +403,7 @@ async def test_classifier_mandatory_reasoning_still_returns_verdict(
     ],
 )
 async def test_handler_uses_cached_capabilities_for_the_selected_provider(
-    capability, off, limit
+    capability: str, off: bool, limit: int
 ):
     provider = OpenRouterProvider(
         make_provider_config("test", "https://provider.invalid/v1"),
@@ -304,16 +411,18 @@ async def test_handler_uses_cached_capabilities_for_the_selected_provider(
     )
     bodies = []
 
-    async def upstream(**body):
+    async def upstream(**body: JsonValue):
         bodies.append(body)
         return ClassifierStream()
 
     try:
+
+        def resolve_provider(_: str, _api_key_number: int):
+            return provider
+
         handler = MessagesHandler(
             Settings(),
-            provider_resolver=AsyncMock(
-                side_effect=lambda _, _api_key_number: provider
-            ),
+            provider_resolver=AsyncMock(side_effect=resolve_provider),
             model_info_lookup=lambda provider_id, model_id: next(
                 (
                     info
@@ -340,7 +449,10 @@ async def test_handler_uses_cached_capabilities_for_the_selected_provider(
             {"type": "text", "text": "<severity>0</severity>"}
         ]
         assert (
-            bodies[0].get("extra_body", {}).get("reasoning", {}).get("enabled") is False
+            object_payload(
+                object_payload(bodies[0].get("extra_body", {})).get("reasoning", {})
+            ).get("enabled")
+            is False
         ) is off
         assert bodies[0]["max_tokens"] == limit
     finally:

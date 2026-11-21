@@ -3,6 +3,7 @@
 import pytest
 
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.groq import GroqProvider
@@ -23,7 +24,7 @@ async def test_allowed_model_override_uses_effective_wire_model_for_recovery():
         jitter=0,
     )
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if bodies[-1]["model"] == "healthy":
             return 200, text_events("chat", "worked")
         return 503, {"type": "server_error", "message": "Unavailable"}
@@ -37,14 +38,15 @@ async def test_allowed_model_override_uses_effective_wire_model_for_recovery():
         ),
     ) as (_, bodies, provider):
 
-        async def send(model, override, public_model):
+        async def send(model: str, override: str, public_model: str):
             return [
-                event
+                frame
                 async for event in provider.stream_messages(
                     make_messages_request(model, extra_body={"model": override}),
                     reasoning=ReasoningPolicy.provider_default(),
                     response_model=public_model,
                 )
+                for frame in event.frames
             ]
 
         with pytest.raises(ExecutionFailure):
@@ -59,7 +61,9 @@ async def test_allowed_model_override_uses_effective_wire_model_for_recovery():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid_model", [None, 1, {"bad": "model"}])
-async def test_invalid_override_keeps_existing_upstream_rejection(invalid_model):
+async def test_invalid_override_keeps_existing_upstream_rejection(
+    invalid_model: JsonValue,
+):
     async with _harness(
         "chat",
         lambda _: (400, {"type": "invalid_request_error", "message": "Invalid model"}),

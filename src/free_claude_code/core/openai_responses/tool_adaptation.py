@@ -532,7 +532,7 @@ class ResponsesToolAdapter:
                         "custom",
                     ):
                         if identity is None:
-                            edits = []
+                            edits.clear()
                     else:
                         edits = [edit for edit in edits if edit.namespace == namespace]
                     scoped = [edit for edit in edits if edit.scope == scope]
@@ -621,15 +621,11 @@ class ResponsesToolEventAdapter:
         self._tools = tools
         self._custom_items: set[str] = set()
         self._search_items: set[str] = set()
-        self._sequence = 0
 
     def feed(
         self, event_type: str, payload: JsonObject
     ) -> Iterable[tuple[str, JsonObject]]:
         data = deepcopy(payload)
-        sequence = data.get("sequence_number")
-        if isinstance(sequence, int) and not isinstance(sequence, bool):
-            self._sequence = max(self._sequence, sequence)
         original_item = data.get("item")
         item = self._tools.restore_item(original_item)
         if isinstance(item, dict):
@@ -642,7 +638,8 @@ class ResponsesToolEventAdapter:
                     and isinstance(original_item, dict)
                     and original_item.get("type") == "function_call"
                 ):
-                    item["arguments"] = {}
+                    arguments: JsonObject = {}
+                    item["arguments"] = arguments
             if (
                 isinstance(original_item, dict)
                 and original_item.get("type") == "function_call"
@@ -698,8 +695,9 @@ class ResponsesToolEventAdapter:
                         # the provider's error or prevent safe model fallback.
                 response["output"] = restored
             if "tools" in response:
+                original_empty_tools: list[JsonObject] = []
                 response["tools"] = (
-                    deepcopy(self._tools.original.tools or [])
+                    deepcopy(self._tools.original.tools) or original_empty_tools
                     if self._tools._policy.client_tool_search
                     or self._tools._policy.flatten_namespaces
                     else self._tools.restore_tools(response["tools"])
@@ -713,10 +711,9 @@ class ResponsesToolEventAdapter:
                 )
         yield self._emit(event_type, data)
 
-    def _emit(self, event_type: str, payload: JsonObject) -> tuple[str, JsonObject]:
-        payload = {**payload, "type": event_type, "sequence_number": self._sequence}
-        self._sequence += 1
-        return event_type, payload
+    @staticmethod
+    def _emit(event_type: str, payload: JsonObject) -> tuple[str, JsonObject]:
+        return event_type, {**payload, "type": event_type}
 
 
 def _name(value: Mapping[str, JsonValue]) -> str:

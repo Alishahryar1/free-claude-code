@@ -1,9 +1,10 @@
 """Summarize smoke JSON reports for local and workflow triage."""
 
-import json
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+
+from tests.wire_payload import decode_object, object_array
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,8 +28,8 @@ def summarize_reports(results_dir: Path) -> SmokeSummary:
     outcomes = 0
     for path in sorted(results_dir.glob("report-*.json")):
         reports += 1
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        for outcome in payload.get("outcomes", []):
+        payload = decode_object(path.read_text(encoding="utf-8"))
+        for outcome in object_array(payload.get("outcomes", [])):
             if not isinstance(outcome, dict):
                 continue
             outcomes += 1

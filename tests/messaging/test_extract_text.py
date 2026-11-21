@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from free_claude_code.core.anthropic import extract_text_from_content
+from free_claude_code.core.json_types import JsonValue
 
 
 class TestExtractTextFromContent:
@@ -76,7 +77,7 @@ class TestExtractTextFromContent:
 # --- Parametrized Edge Case Tests ---
 
 
-def _make_block(text_val):
+def _make_block(text_val: JsonValue):
     b = MagicMock()
     b.text = text_val
     return b
@@ -94,7 +95,7 @@ def _make_block(text_val):
     ],
     ids=["string", "empty_str", "none", "int", "empty_list", "whitespace_only"],
 )
-def test_extract_text_scalar_and_empty_parametrized(content, expected):
+def test_extract_text_scalar_and_empty_parametrized(content: JsonValue, expected: str):
     """Parametrized scalar and empty input handling."""
     assert extract_text_from_content(content) == expected
 

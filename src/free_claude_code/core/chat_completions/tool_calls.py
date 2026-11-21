@@ -1,0 +1,667 @@
+"""Choice-scoped Chat call accumulation; only source termination seals calls."""
+
+import json
+import uuid
+from collections.abc import Mapping
+from copy import deepcopy
+from dataclasses import dataclass, field
+
+from free_claude_code.core.json_types import (
+    JsonObject,
+    JsonValue,
+    json_index,
+    json_object,
+    json_objects,
+    load_json_value,
+)
+
+from ..failures import ExecutionFailure, FailureKind
+from ..openai_tool_names import OpenAIToolNameCodec
+from ..stream_recovery import SourceRecoverySnapshot, StreamFailureContext
+from ..tool_call_buffer import OrderedToolCallBuffer, RetentionBudget
+from .response import chat_failure
+
+
+class AmbiguousToolCallIdentityError(ExecutionFailure):
+    """No unique upstream call owns a fragment."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: FailureKind = FailureKind.UPSTREAM,
+        status_code: int = 502,
+        retryable: bool = False,
+        stream_context: StreamFailureContext | None = None,
+    ) -> None:
+        super().__init__(
+            kind,
+            status_code,
+            message,
+            retryable,
+            stream_context
+            or StreamFailureContext(
+                SourceRecoverySnapshot(unsafe_reason="ambiguous_tool_identity")
+            ),
+        )
+
+
+@dataclass(slots=True)
+class _Identity:
+    index: int | None = None
+    tool_id: str | None = None
+
+
+class ToolCallIdentityResolver:
+    def __init__(self, budget: RetentionBudget | None = None) -> None:
+        self._calls: list[_Identity] = []
+        self._budget = budget
+
+    def resolve(self, raw_index: object, raw_id: object) -> tuple[int, str | None]:
+        index = (
+            raw_index
+            if isinstance(raw_index, int)
+            and not isinstance(raw_index, bool)
+            and raw_index >= 0
+            else None
+        )
+        tool_id = raw_id if isinstance(raw_id, str) and raw_id.strip() else None
+        if index is None and tool_id is None:
+            raise AmbiguousToolCallIdentityError(
+                "Tool fragment has neither a usable index nor an ID."
+            )
+        matches = [
+            slot
+            for slot, call in enumerate(self._calls)
+            if (index is None or call.index in (None, index))
+            and (tool_id is None or call.tool_id in (None, tool_id))
+        ]
+        if not any(
+            (index is not None and self._calls[slot].index == index)
+            or (tool_id is not None and self._calls[slot].tool_id == tool_id)
+            for slot in matches
+        ):
+            matches.clear()
+        if len(matches) > 1:
+            raise AmbiguousToolCallIdentityError(
+                "Tool fragment has ambiguous identity."
+            )
+        if matches:
+            slot = matches[0]
+        else:
+            slot = len(self._calls)
+            if self._budget is not None:
+                self._budget.add(32)
+            self._calls.append(_Identity())
+        call = self._calls[slot]
+        if index is not None:
+            call.index = index
+        if tool_id is not None:
+            if self._budget is not None and call.tool_id is None:
+                self._budget.add(len(tool_id.encode("utf-8")), 0)
+            call.tool_id = tool_id
+        return slot, call.tool_id
+
+
+@dataclass(frozen=True, slots=True)
+class CompletedChatCall:
+    choice: int
+    index: int
+    body: JsonObject
+    envelope: JsonObject
+    extensions: tuple[JsonObject, ...] = ()
+
+
+@dataclass(slots=True)
+class _PendingCall:
+    choice: int
+    index: int
+    envelope: JsonObject
+    body: JsonObject = field(default_factory=dict)
+    names: list[str] = field(default_factory=list)
+    arguments: list[str] = field(default_factory=list)
+    extensions: list[JsonObject] = field(default_factory=list)
+    kind: str = "function"
+    completed: CompletedChatCall | None = None
+
+    def add(self, fragment: Mapping[str, JsonValue], *, tool_id: str | None) -> None:
+        if isinstance(fragment.get("custom"), Mapping):
+            self.kind = "custom"
+        function = json_object(fragment.get(self.kind) or {})
+        if name := function.get("name"):
+            if not isinstance(name, str):
+                raise chat_failure("Tool name fragment must be a string")
+            self.names.append(name)
+        arguments = function.get("input" if self.kind == "custom" else "arguments")
+        if arguments is not None:
+            if not isinstance(arguments, str):
+                raise chat_failure("Tool argument fragment must be a string")
+            self.arguments.append(arguments)
+        if tool_id is not None:
+            self.body["id"] = tool_id
+        if fragment.get("type") is not None:
+            self.body["type"] = fragment["type"]
+        extra: JsonObject = {
+            key: deepcopy(value)
+            for key, value in fragment.items()
+            if key not in {"index", "id", "type", "function", "custom"}
+            and value is not None
+        }
+        function_extra = {
+            key: deepcopy(value)
+            for key, value in function.items()
+            if key not in {"name", "arguments", "input"} and value is not None
+        }
+        if function_extra:
+            extra[self.kind] = function_extra
+        if extra:
+            self.extensions.append(extra)
+
+    def seal(self) -> None:
+        name = "".join(self.names)
+        if not name.strip():
+            raise chat_failure("Completed tool call has no name")
+        text_key = "input" if self.kind == "custom" else "arguments"
+        function: JsonObject = {"name": name, text_key: "".join(self.arguments)}
+        body: JsonObject = {
+            **self.body,
+            "type": self.body.get("type", self.kind),
+            self.kind: function,
+        }
+        # Keep the ordinary single metadata snapshot readily available to presenters.
+        # Distinct fragment-associated snapshots also remain available to native output.
+        for extra in self.extensions:
+            for key, value in extra.items():
+                if key == self.kind:
+                    function.update(json_object(value))
+                else:
+                    body[key] = value
+        self.completed = CompletedChatCall(
+            self.choice, self.index, body, self.envelope, tuple(self.extensions)
+        )
+
+
+type ChatSourceOutput = JsonObject | CompletedChatCall
+
+
+@dataclass(slots=True)
+class _NativeGroup:
+    frames: list[JsonObject] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class CompletedChatBatch:
+    frames: tuple[JsonObject, ...]
+
+
+class ChatToolCallBuffer:
+    def __init__(
+        self, *, budget: RetentionBudget | None = None, native: bool = False
+    ) -> None:
+        self._buffer = OrderedToolCallBuffer[JsonObject | _PendingCall | _NativeGroup](
+            budget
+        )
+        self._identities: dict[int, ToolCallIdentityResolver] = {}
+        self._calls: dict[tuple[int, int], _PendingCall] = {}
+        self._finished: dict[int, tuple[JsonValue, JsonValue]] = {}
+        self._refused_choices: set[int] = set()
+        self._native = native
+        self._native_group: _NativeGroup | None = None
+
+    def feed(
+        self, payload: Mapping[str, JsonValue]
+    ) -> list[ChatSourceOutput | CompletedChatBatch]:
+        choices = list(json_objects(payload.get("choices") or []))
+        active = []
+        seen = set()
+        for choice in choices:
+            index = choice.get("index", 0)
+            if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+                raise chat_failure("Invalid Chat choice index")
+            if index in seen:
+                raise chat_failure("Chat chunk repeated a choice index")
+            seen.add(index)
+            if index in self._finished:
+                if not isinstance(
+                    payload.get("usage"), Mapping
+                ) or not _accounting_choice(choice, self._finished[index]):
+                    raise chat_failure("Chat choice changed after completion")
+            else:
+                active.append(choice)
+        if len(active) != len(choices):
+            # Completion belongs to the choice; final accounting belongs to the
+            # response. Downstream consumers already accept usage-only chunks.
+            payload = {**payload, "choices": active}
+        if self._native:
+            return [
+                output
+                for part in _native_parts(payload)
+                for output in self._feed_native(part)
+            ]
+        envelope: JsonObject = {
+            key: deepcopy(value) for key, value in payload.items() if key != "choices"
+        }
+        choices = active
+        if not choices:
+            self._append(dict(payload))
+        for position, choice in enumerate(choices):
+            choice_index = json_index(choice.get("index", 0))
+            if choice_index in self._finished:
+                raise chat_failure("Chat choice changed after completion")
+            delta = dict(json_object(choice.get("delta") or {}))
+            calls: JsonValue = delta.pop("tool_calls", None) or []
+            if delta.get("refusal"):
+                self._refused_choices.add(choice_index)
+            if choice_index in self._refused_choices:
+                calls = []
+            finish = choice.get("finish_reason")
+            ordinary = {**choice, "delta": delta, "finish_reason": None}
+            if delta or any(
+                key not in {"index", "delta", "finish_reason"} and value is not None
+                for key, value in choice.items()
+            ):
+                self._append({**envelope, "choices": [ordinary]})
+            elif position == 0 and (
+                envelope.get("usage") is not None
+                or any(
+                    key
+                    not in {
+                        "id",
+                        "object",
+                        "created",
+                        "model",
+                        "system_fingerprint",
+                        "service_tier",
+                        "usage",
+                    }
+                    for key in envelope
+                )
+            ):
+                self._append({**envelope, "choices": []})
+            for fragment in json_objects(calls):
+                resolver = self._identities.setdefault(
+                    choice_index, ToolCallIdentityResolver(self._buffer.budget)
+                )
+                slot, tool_id = resolver.resolve(
+                    fragment.get("index"), fragment.get("id")
+                )
+                key = (choice_index, slot)
+                if key not in self._calls:
+                    base = {
+                        key: value
+                        for key, value in envelope.items()
+                        if key
+                        in {
+                            "id",
+                            "object",
+                            "created",
+                            "model",
+                            "system_fingerprint",
+                            "service_tier",
+                        }
+                    }
+                    call = _PendingCall(choice_index, slot, base)
+                    self._buffer.reserve(key, call)
+                    self._calls[key] = call
+                self._buffer.grow(key, _size(fragment))
+                self._calls[key].add(fragment, tool_id=tool_id)
+            if finish is not None:
+                self._finish_choice(choice)
+                self._append(
+                    {
+                        **envelope,
+                        "choices": [{**choice, "delta": {}, "finish_reason": finish}],
+                    }
+                )
+        return self._drain()
+
+    def _feed_native(
+        self, payload: Mapping[str, JsonValue]
+    ) -> list[ChatSourceOutput | CompletedChatBatch]:
+        data = deepcopy(dict(payload))
+        has_calls = any(
+            json_object(choice.get("delta") or {}).get("tool_calls")
+            for choice in json_objects(data.get("choices", []))
+        )
+        if self._native_group is None and not has_calls:
+            for choice in json_objects(data.get("choices", [])):
+                if choice.get("finish_reason") is not None:
+                    self._remember_finish(choice)
+            return [data]
+        if self._native_group is None:
+            self._native_group = _NativeGroup()
+            self._buffer.reserve("native", self._native_group)
+        self._buffer.grow("native", _size(data))
+        self._native_group.frames.append(data)
+        for choice in json_objects(data.get("choices", [])):
+            choice_index = json_index(choice.get("index", 0))
+            if choice_index in self._finished:
+                raise chat_failure("Chat choice changed after completion")
+            for fragment in json_objects(
+                json_object(choice.get("delta") or {}).get("tool_calls") or []
+            ):
+                resolver = self._identities.setdefault(
+                    choice_index, ToolCallIdentityResolver(self._buffer.budget)
+                )
+                slot, tool_id = resolver.resolve(
+                    fragment.get("index"), fragment.get("id")
+                )
+                key = (choice_index, slot)
+                if key not in self._calls:
+                    self._calls[key] = _PendingCall(choice_index, slot, {})
+                self._buffer.grow("native", 0)
+                self._calls[key].add(fragment, tool_id=tool_id)
+                fragment["index"] = slot
+            reason = choice.get("finish_reason")
+            if reason is not None:
+                if reason in ("stop", "tool_calls"):
+                    for (owner, _), call in self._calls.items():
+                        if owner == choice_index:
+                            call.seal()
+                self._remember_finish(choice)
+        if all(choice in self._finished for choice, _ in self._calls):
+            self._complete_native_group()
+        return self._drain()
+
+    def _complete_native_group(self) -> None:
+        group = self._native_group
+        if group is None:
+            return
+        identities: set[tuple[int, str]] = set()
+        for call in self._calls.values():
+            if call.completed is None:
+                continue
+            identity = call.completed.body.get("id")
+            if not isinstance(identity, str) or not identity.strip():
+                raise AmbiguousToolCallIdentityError(
+                    "Completed native Chat call requires an ID"
+                )
+            key = (call.choice, identity)
+            if key in identities:
+                raise AmbiguousToolCallIdentityError(
+                    "Native Chat calls share an execution ID"
+                )
+            identities.add(key)
+        seen: set[tuple[int, int]] = set()
+        for data in group.frames:
+            for choice in json_objects(data.get("choices", [])):
+                delta = json_object(choice.get("delta") or {})
+                raw_fragments = delta.get("tool_calls")
+                if raw_fragments is None:
+                    continue
+                fragments = list(json_objects(raw_fragments))
+                choice_index = json_index(choice.get("index", 0))
+                retained: list[JsonObject] = []
+                dropped = any(
+                    self._calls[(choice_index, json_index(fragment["index"]))].completed
+                    is None
+                    for fragment in fragments
+                )
+                opaque_envelope = any(
+                    key
+                    not in {
+                        "id",
+                        "object",
+                        "created",
+                        "model",
+                        "system_fingerprint",
+                        "service_tier",
+                        "usage",
+                        "choices",
+                    }
+                    for key in data
+                )
+                opaque_envelope |= any(
+                    key not in {"index", "delta", "finish_reason", "logprobs"}
+                    for key in choice
+                )
+                opaque_envelope |= any(
+                    key
+                    not in {
+                        "role",
+                        "content",
+                        "reasoning",
+                        "reasoning_content",
+                        "reasoning_details",
+                        "refusal",
+                        "tool_calls",
+                    }
+                    for key in delta
+                )
+                if dropped and opaque_envelope:
+                    raise AmbiguousToolCallIdentityError(
+                        "Cannot separate unfinished calls from an opaque native Chat envelope"
+                    )
+                for fragment in fragments:
+                    key = (choice_index, json_index(fragment["index"]))
+                    call = self._calls[key]
+                    if call.completed is None:
+                        continue
+                    function = fragment.get(call.kind)
+                    if key not in seen:
+                        if not isinstance(function, dict):
+                            function = {}
+                            fragment[call.kind] = function
+                        function["name"] = json_object(call.completed.body[call.kind])[
+                            "name"
+                        ]
+                        if call.completed.body.get("id"):
+                            fragment["id"] = call.completed.body["id"]
+                        seen.add(key)
+                    elif isinstance(function, dict):
+                        function.pop("name", None)
+                    if fragment.get("id") != call.completed.body["id"]:
+                        fragment.pop("id", None)
+                    retained.append(fragment)
+                if retained:
+                    delta["tool_calls"] = retained
+                else:
+                    delta.pop("tool_calls", None)
+        self._buffer.complete("native")
+        self._native_group = None
+        self._calls.clear()
+
+    def _append(self, value: JsonObject) -> None:
+        self._buffer.append(deepcopy(value), size=_size(value))
+
+    def _finish_choice(self, choice: Mapping[str, JsonValue]) -> None:
+        index = json_index(choice.get("index", 0))
+        keys = [key for key in self._calls if key[0] == index]
+        reason = choice.get("finish_reason")
+        if reason in ("stop", "tool_calls") and index not in self._refused_choices:
+            for key in keys:
+                self._calls[key].seal()
+            for key in keys:
+                self._buffer.complete(key)
+        else:
+            for key in keys:
+                self._buffer.discard(key)
+                del self._calls[key]
+        self._refused_choices.discard(index)
+        self._remember_finish(choice)
+
+    def _remember_finish(self, choice: Mapping[str, JsonValue]) -> None:
+        markers = (choice.get("finish_reason"), choice.get("native_finish_reason"))
+        self._buffer.budget.add(32 + _size(markers))
+        self._finished[json_index(choice.get("index", 0))] = deepcopy(markers)
+
+    def _drain(self) -> list[ChatSourceOutput | CompletedChatBatch]:
+        result: list[ChatSourceOutput | CompletedChatBatch] = []
+        for item in self._buffer.drain():
+            if isinstance(item, _PendingCall):
+                assert item.completed is not None
+                result.append(item.completed)
+                del self._calls[(item.choice, item.index)]
+            elif isinstance(item, _NativeGroup):
+                result.append(CompletedChatBatch(tuple(item.frames)))
+            else:
+                result.append(item)
+        return result
+
+    def abandon(self) -> list[ChatSourceOutput | CompletedChatBatch]:
+        if self._native:
+            self._complete_native_group()
+            return self._drain()
+        self._buffer.discard_pending()
+        result = self._drain()
+        self._calls.clear()
+        return result
+
+
+def _accounting_choice(
+    choice: Mapping[str, JsonValue], finished: tuple[JsonValue, JsonValue]
+) -> bool:
+    """Only discard fields that repeat completion or carry no choice content."""
+    if (
+        choice.get("finish_reason") != finished[0]
+        or choice.get("native_finish_reason") not in (None, finished[1])
+        or choice.get("logprobs") is not None
+        or choice.keys()
+        - {"index", "delta", "finish_reason", "native_finish_reason", "logprobs"}
+    ):
+        return False
+    delta = choice.get("delta")
+    if not isinstance(delta, Mapping):
+        return False
+    for key, value in delta.items():
+        if key == "role":
+            empty = value in (None, "assistant")
+        elif key in {"content", "reasoning", "reasoning_content", "refusal"}:
+            empty = value in (None, "")
+        elif key in {"reasoning_details", "tool_calls"}:
+            empty = value is None or value == []
+        elif key in {"function_call", "audio"}:
+            empty = value is None
+        else:
+            return False
+        if not empty:
+            return False
+    return True
+
+
+def _native_parts(payload: Mapping[str, JsonValue]) -> list[JsonObject]:
+    """Separate standard content from calls without guessing opaque associations."""
+    data = dict(payload)
+    choices = list(json_objects(data.get("choices") or []))
+    if not any(
+        json_object(choice.get("delta") or {}).get("tool_calls") for choice in choices
+    ):
+        return [data]
+    if any(
+        key
+        not in {
+            "id",
+            "object",
+            "created",
+            "model",
+            "system_fingerprint",
+            "service_tier",
+            "usage",
+            "choices",
+        }
+        for key in data
+    ) or any(
+        any(
+            key not in {"index", "delta", "finish_reason", "logprobs"} for key in choice
+        )
+        or any(
+            key
+            not in {
+                "role",
+                "content",
+                "reasoning",
+                "reasoning_content",
+                "reasoning_details",
+                "refusal",
+                "tool_calls",
+            }
+            for key in json_object(choice.get("delta") or {})
+        )
+        for choice in choices
+    ):
+        return [data]
+    envelope = {key: value for key, value in data.items() if key != "choices"}
+    base = {
+        key: value
+        for key, value in envelope.items()
+        if key in {"id", "object", "created", "model"}
+    }
+    result: list[JsonObject] = []
+    for choice in choices:
+        delta = dict(json_object(choice.get("delta") or {}))
+        calls = delta.pop("tool_calls", None)
+        if not calls:
+            result.append({**(base if result else envelope), "choices": [choice]})
+            continue
+        if delta or choice.get("logprobs") is not None:
+            ordinary = {**choice, "delta": delta, "finish_reason": None}
+            result.append({**(base if result else envelope), "choices": [ordinary]})
+        tool_choice = {key: value for key, value in choice.items() if key != "logprobs"}
+        tool_choice["delta"] = {"tool_calls": calls}
+        result.append({**(base if result else envelope), "choices": [tool_choice]})
+    return result
+
+
+def finalize_chat_call(
+    call: CompletedChatCall,
+    *,
+    codec: OpenAIToolNameCodec,
+    aliases: Mapping[str, dict[str, str]],
+    reserved_ids: set[str],
+) -> CompletedChatCall:
+    metadata = [
+        extra["extra_content"] for extra in call.extensions if "extra_content" in extra
+    ]
+    if metadata and any(value != metadata[0] for value in metadata[1:]):
+        raise AmbiguousToolCallIdentityError(
+            "This destination cannot preserve multiple distinct call metadata fragments"
+        )
+    body = deepcopy(call.body)
+    kind = "custom" if "custom" in body else "function"
+    function = json_object(body[kind])
+    encoded_name = function["name"]
+    if not isinstance(encoded_name, str):
+        raise chat_failure("Completed tool call has an invalid name")
+    name = codec.decode(encoded_name)
+    function["name"] = name
+    if kind == "function" and (mapping := aliases.get(name)):
+        arguments = function["arguments"]
+        if not isinstance(arguments, str):
+            raise chat_failure("Completed tool call has invalid arguments")
+        restored = restore_tool_argument_aliases(arguments, mapping)
+        if restored is not None:
+            function["arguments"] = restored
+    tool_id = body.get("id")
+    if not isinstance(tool_id, str) or not tool_id.strip() or tool_id in reserved_ids:
+        tool_id = f"tool_{uuid.uuid4()}"
+        while tool_id in reserved_ids:
+            tool_id = f"tool_{uuid.uuid4()}"
+    body["id"] = tool_id
+    reserved_ids.add(tool_id)
+    return CompletedChatCall(
+        call.choice, call.index, body, call.envelope, call.extensions
+    )
+
+
+def restore_tool_argument_aliases(
+    argument_json: str, aliases: Mapping[str, str]
+) -> str | None:
+    try:
+        parsed = load_json_value(argument_json)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return argument_json
+
+    def restore(value: JsonValue) -> JsonValue:
+        if isinstance(value, dict):
+            return {aliases.get(key, key): restore(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [restore(item) for item in value]
+        return value
+
+    return json.dumps(restore(parsed))
+
+
+def _size(value: object) -> int:
+    return len(json.dumps(value, ensure_ascii=False).encode("utf-8"))

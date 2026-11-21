@@ -1,28 +1,153 @@
 """Provider test helpers with explicit admission ownership."""
 
-import json
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
+from inspect import isawaitable
+from types import SimpleNamespace
+from typing import cast
+from unittest.mock import Mock
 
+import httpx
 import httpx2
 from openai import AsyncOpenAI
+from openai._models import construct_type
+from openai.types.chat import ChatCompletionChunk
+from openai.types.chat.completion_create_params import CompletionCreateParamsStreaming
+from pydantic import BaseModel
 
 from free_claude_code.application.reasoning import client_reasoning_policy
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.async_iterators import AsyncCloseable
-from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.providers.admission import (
-    UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
-    ProviderAdmissionController,
-)
-from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.core.chat_completions.request import ChatRequest
+from free_claude_code.core.gemini import GeminiRequest
+from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.openai_responses import OpenAIResponsesRequest
+from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
+from free_claude_code.core.stream_recovery import ContinuationSeed
+from free_claude_code.providers.admission import ProviderAdmissionController
+from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.openai_chat import (
     OpenAIChatProvider,
     create_openai_chat_provider,
 )
+from tests.wire_payload import (
+    decode_object,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
+
+type MockResponse = httpx.Response | httpx2.Response
+type MockHandler[RequestT] = Callable[
+    [RequestT], MockResponse | Awaitable[MockResponse]
+]
+
+
+async def mock_response[ResponseT: (httpx.Response, httpx2.Response)](
+    result: MockResponse | Awaitable[MockResponse],
+    expected: type[ResponseT],
+) -> ResponseT:
+    response = await result if isawaitable(result) else result
+    assert isinstance(response, expected)
+    return response
+
 
 REASONING_DEFAULT = ReasoningPolicy.provider_default()
 REASONING_ON = ReasoningPolicy.on()
 REASONING_OFF = ReasoningPolicy.off()
+
+
+def stream_provider_request(
+    provider: BaseProvider,
+    wire: str,
+    request: ChatRequest | MessagesRequest | OpenAIResponsesRequest | GeminiRequest,
+    *,
+    request_id: str | None = None,
+    response_model: str | None = None,
+    reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+    continuation: ContinuationSeed | None = None,
+) -> AsyncIterator[StreamOutput]:
+    if wire == "messages":
+        assert isinstance(request, MessagesRequest)
+        return provider.stream_messages(
+            request,
+            request_id=request_id,
+            response_model=response_model,
+            reasoning=reasoning,
+            continuation=continuation,
+        )
+    if wire == "responses":
+        assert isinstance(request, OpenAIResponsesRequest)
+        return provider.stream_responses(
+            request,
+            request_id=request_id,
+            response_model=response_model,
+            reasoning=reasoning,
+            continuation=continuation,
+        )
+    if wire == "gemini":
+        assert isinstance(request, GeminiRequest)
+        return provider.stream_gemini(
+            request,
+            request_id=request_id,
+            response_model=response_model,
+            reasoning=reasoning,
+            continuation=continuation,
+        )
+    assert wire == "chat" and isinstance(request, ChatRequest)
+    return provider.stream_chat(
+        request,
+        request_id=request_id,
+        response_model=response_model,
+        reasoning=reasoning,
+        continuation=continuation,
+    )
+
+
+def sdk_chat_chunk(value: object) -> ChatCompletionChunk:
+    """Use the SDK's permissive wire construction for explicitly populated fixtures."""
+    if isinstance(value, ChatCompletionChunk):
+        return value
+
+    def plain(item: object) -> JsonValue:
+        if isinstance(item, (Mock, SimpleNamespace)):
+            attributes: dict[str, object] = vars(item)
+            return {
+                key: plain(value)
+                for key, value in attributes.items()
+                if not key.startswith("_") and key not in {"method_calls"}
+            }
+        if isinstance(item, BaseModel):
+            data: JsonObject = item.model_dump(mode="json")
+            return data
+        if isinstance(item, dict):
+            return {key: plain(value) for key, value in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [plain(value) for value in item]
+        assert item is None or isinstance(item, (str, int, float, bool)), type(item)
+        return item
+
+    payload: JsonObject = {
+        "id": "chat_fixture",
+        "object": "chat.completion.chunk",
+        "model": "test",
+        "created": 0,
+        **object_payload(plain(value)),
+    }
+    for choice in object_array(payload.get("choices", [])):
+        choice.setdefault("index", 0)
+    if isinstance(usage := payload.get("usage"), dict):
+        usage.update(object_payload(usage.pop("model_extra", {})))
+        usage.setdefault(
+            "total_tokens",
+            int_payload(usage.get("prompt_tokens") or 0)
+            + int_payload(usage.get("completion_tokens") or 0),
+        )
+    chunk = construct_type(value=payload, type_=ChatCompletionChunk)
+    assert isinstance(chunk, ChatCompletionChunk)
+    return chunk
 
 
 class SDKStreamDouble[EventT](AsyncIterator[EventT]):
@@ -52,6 +177,18 @@ class SDKStreamDouble[EventT](AsyncIterator[EventT]):
                 await self._close()
 
 
+def completed_chat_stream(text: str = "ok") -> SDKStreamDouble[ChatCompletionChunk]:
+    """Return an SDK stream that completes one text reply."""
+
+    async def chunks() -> AsyncIterator[ChatCompletionChunk]:
+        yield sdk_chat_chunk(
+            {"choices": [{"delta": {"role": "assistant", "content": text}}]}
+        )
+        yield sdk_chat_chunk({"choices": [{"delta": {}, "finish_reason": "stop"}]})
+
+    return SDKStreamDouble(chunks())
+
+
 def make_provider_config(
     api_key: str | None,
     base_url: str,
@@ -76,12 +213,19 @@ def make_provider_config(
     )
 
 
-async def capture_openai_chat_wire_body(body: dict) -> dict:
+class PreparedChatRequest(CompletionCreateParamsStreaming, closed=True):
+    """Configured provider options sent through the OpenAI SDK."""
+
+
+async def capture_openai_chat_wire_body(body: JsonObject) -> JsonObject:
     """Return the JSON body serialized by the OpenAI chat client."""
-    captured: list[dict] = []
+    if "stream" in body:
+        raise TypeError("Prepared chat body already contains stream")
+
+    captured: list[JsonObject] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        payload = json.loads(request.content)
+        payload = decode_object(request.content)
         assert isinstance(payload, dict)
         captured.append(payload)
         return httpx2.Response(
@@ -97,7 +241,9 @@ async def capture_openai_chat_wire_body(body: dict) -> dict:
         max_retries=0,
     )
     try:
-        stream = await client.chat.completions.create(**body, stream=True)
+        # The provider prepared these SDK options, including provider extensions.
+        params = cast(PreparedChatRequest, {**body, "stream": True})
+        stream = await client.chat.completions.create(**params)
         await stream.close()
     finally:
         await client.close()
@@ -109,7 +255,7 @@ async def capture_openai_chat_wire_body(body: dict) -> dict:
 def immediate_admission(
     *,
     provider_name: str = "TEST",
-    max_attempts: int = UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
+    max_attempts: int = PROVIDER_MAX_ATTEMPTS_DEFAULT,
 ) -> ProviderAdmissionController:
     """Return a real controller with deterministic zero-delay recovery."""
     return ProviderAdmissionController(
@@ -142,3 +288,63 @@ def reasoning_for(request: MessagesRequest) -> ReasoningPolicy:
     """Resolve provider-test input through the production client boundary."""
 
     return client_reasoning_policy(request)
+
+
+def without_empty_reasoning(value: JsonValue) -> JsonValue:
+    """Compare unrelated wire contracts without negotiated empty placeholders.
+
+    Populated reasoning and all other request fields remain observable. Projection
+    tests assert the empty representations themselves.
+    """
+    empty_items: tuple[JsonObject, ...] = (
+        {"type": "thinking", "thinking": ""},
+        {
+            "type": "reasoning",
+            "content": [{"type": "reasoning_text", "text": ""}],
+            "summary": [],
+        },
+    )
+    if isinstance(value, list):
+        return [
+            without_empty_reasoning(item) for item in value if item not in empty_items
+        ]
+    if isinstance(value, dict):
+        return {
+            key: without_empty_reasoning(item)
+            for key, item in value.items()
+            if not (
+                value.get("role") == "assistant"
+                and key in {"reasoning_content", "reasoning"}
+                and item == ""
+            )
+        }
+    return value
+
+
+def continuation_seed(text: str = "", thinking: str = ""):
+    from free_claude_code.core.stream_recovery import ContinuationSeed
+
+    items: list[JsonObject] = []
+    if thinking:
+        items.append({"type": "thinking", "thinking": thinking})
+    if text:
+        items.append({"type": "text", "text": text})
+    return ContinuationSeed("messages", tuple(items))
+
+
+def assistant_history_text(rows: JsonValue):
+    """Read actual assistant answer text across both upstream request formats."""
+    parts = []
+    for row in object_array(rows):
+        if row.get("role") != "assistant":
+            continue
+        content = row.get("content", "")
+        if isinstance(content, str):
+            parts.append(content)
+        else:
+            parts.extend(
+                string_payload(part.get("text", ""))
+                for part in object_array(content)
+                if part.get("type") in {"text", "output_text"}
+            )
+    return "".join(parts)

@@ -4,18 +4,21 @@ import threading
 import httpx
 import pytest
 
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.harnesses import vscode_chat_integration as vscode
 from tests.api.support import create_test_app, runtime_for_app
 
 
 @pytest.mark.asyncio
-async def test_integration_endpoints_finish_while_one_worker_is_held(monkeypatch):
+async def test_integration_endpoints_finish_while_one_worker_is_held(
+    monkeypatch: pytest.MonkeyPatch,
+):
     app = create_test_app()
     runtime = runtime_for_app(app)
     entered, release = asyncio.Event(), threading.Event()
     loop = asyncio.get_running_loop()
 
-    def held(path):
+    def held(path: object) -> JsonObject:
         loop.call_soon_threadsafe(entered.set)
         assert release.wait(5)
         return {"connected": False, "paths": {}}
@@ -33,7 +36,6 @@ async def test_integration_endpoints_finish_while_one_worker_is_held(monkeypatch
                     *(
                         client.get(f"/admin/api/integrations/{integration}")
                         for integration in [
-                            "antigravity",
                             "claude-vscode",
                             "claude-desktop",
                             "codex",

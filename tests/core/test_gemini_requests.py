@@ -25,17 +25,18 @@ from free_claude_code.core.history_replay import (
     ReplayOrigin,
     ReplayRecord,
 )
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.reasoning import ReasoningPolicy
+from tests.wire_payload import object_array, object_payload
 
 
-def request(**extra):
+def request(**extra: object):
     return GeminiRequest.model_validate(
         {"model": "backend", "contents": [{"parts": [{"text": "hello"}]}], **extra}
     )
 
 
-def build(value, protocol):
+def build(value: GeminiRequest, protocol: str):
     if protocol == "chat":
         return build_gemini_chat_request(value)
     if protocol == "messages":
@@ -46,7 +47,7 @@ def build(value, protocol):
 
 
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
-def test_direct_builders_preserve_parallel_tool_history_and_schema(protocol):
+def test_direct_builders_preserve_parallel_tool_history_and_schema(protocol: str):
     source = request(
         tools=[
             {
@@ -107,8 +108,19 @@ def test_direct_builders_preserve_parallel_tool_history_and_schema(protocol):
     before = source.model_dump()
     prepared = build(source, protocol)
     assert prepared.reserved_tool_ids == {"a", "b"}
-    assert prepared.tool_schemas["read.file"]["properties"]["path"]["default"] is None
-    assert prepared.tool_schemas["read.file"]["additionalProperties"] is False
+    assert prepared.declared_names == frozenset({"read.file"})
+    tool = object_array(prepared.body["tools"])[0]
+    schema = (
+        object_payload(tool["function"])["parameters"]
+        if protocol == "chat"
+        else tool["parameters"]
+        if protocol == "responses"
+        else tool["input_schema"]
+    )
+    schema = object_payload(schema)
+    path = object_payload(object_payload(schema["properties"])["path"])
+    assert path["default"] is None
+    assert schema["additionalProperties"] is False
     assert source.model_dump() == before
     assert prepared.body["model"] == "backend"
     values = prepared.body["input" if protocol == "responses" else "messages"]
@@ -144,13 +156,13 @@ def test_protocol_aliases_and_nulls_do_not_rewrite_arbitrary_json():
         ("responseLogprobs", True),
     ],
 )
-def test_unsupported_generation_fields_are_explicit(field, value):
+def test_unsupported_generation_fields_are_explicit(field: str, value: JsonValue):
     with pytest.raises(ValidationError):
         request(generationConfig={field: value})
 
 
 @pytest.mark.parametrize("protocol", ["messages", "responses"])
-def test_destination_does_not_silently_drop_sampling_controls(protocol):
+def test_destination_does_not_silently_drop_sampling_controls(protocol: str):
     with pytest.raises(GeminiConversionError, match="seed"):
         build(request(generationConfig={"seed": 42}), protocol)
 

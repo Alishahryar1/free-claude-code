@@ -1,6 +1,9 @@
 import asyncio
 import uuid
+from collections.abc import Sequence
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Unpack, override
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -10,6 +13,7 @@ from free_claude_code.application.code_sessions import CodeConflictError, CodeSe
 from free_claude_code.application.code_sessions import service as service_module
 from free_claude_code.application.code_sessions.models import (
     CodeItem,
+    CodeMode,
     CodeRun,
     CodeSession,
     CodeUnavailableError,
@@ -18,14 +22,19 @@ from free_claude_code.application.code_sessions.models import (
     ItemUpdate,
     PromptRequest,
 )
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
+from free_claude_code.runtime.codex_app_server import CodexAppServer
 from free_claude_code.runtime.codex_protocol import CodexProtocol
+from tests.assertions import record_extra, require_exception_info, require_present
 from tests.code_sessions_support import (
     CodexPackets,
     FakeConnection,
     FakeHarness,
     close_code_database,
 )
+from tests.fixture_types import DatabaseFactory, ProgressChanges
+from tests.wire_payload import array_payload, object_payload
 
 
 def new_id():
@@ -33,7 +42,7 @@ def new_id():
 
 
 @pytest_asyncio.fixture
-async def code(database_factory, tmp_path):
+async def code(database_factory: DatabaseFactory, tmp_path: Path):
     harness = FakeHarness()
     store = SQLiteCodeStore(
         database_factory(tmp_path / "code.db", tmp_path / "code.lock")
@@ -47,13 +56,15 @@ async def code(database_factory, tmp_path):
         await close_code_database(service)
 
 
-async def session_for(code):
+async def session_for(code: tuple[CodeService, FakeHarness, Path]):
     service, _, directory = code
     return await service.create_session(new_id(), str(directory))
 
 
 @pytest.mark.asyncio
-async def test_history_pages_do_not_create_execution_owners(code, monkeypatch):
+async def test_history_pages_do_not_create_execution_owners(
+    code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
+):
     service, harness, directory = code
     session = await service._store.create(
         CodeSession(id=new_id(), cwd=str(directory), model=harness.model)
@@ -98,7 +109,9 @@ async def test_history_pages_do_not_create_execution_owners(code, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_completed_turn_releases_bodies_but_keeps_connection(code):
+async def test_completed_turn_releases_bodies_but_keeps_connection(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -122,7 +135,9 @@ async def test_completed_turn_releases_bodies_but_keeps_connection(code):
 
 
 @pytest.mark.asyncio
-async def test_many_turns_release_history_and_preserve_prompt_receipts(code):
+async def test_many_turns_release_history_and_preserve_prompt_receipts(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     previous_sequence = 0
@@ -160,8 +175,8 @@ async def test_many_turns_release_history_and_preserve_prompt_receipts(code):
         session = detail.session
         owner = service._owners[session.id]
         assert not owner.state.items and not owner.state.prompts
-        assert tuple(owner.state.runs) == (detail.run.id,)
-    assert len(harness.connections) == 1 and not connection.closed
+        assert tuple(owner.state.runs) == (require_present(detail.run).id,)
+    assert len(harness.connections) == 1 and not harness.connections[0].closed
     for prompt_id, response_id in receipts:
         receipt = await service.answer(
             session.id, prompt_id, response_id, {"decision": "accept"}
@@ -174,7 +189,7 @@ async def test_many_turns_release_history_and_preserve_prompt_receipts(code):
 
 @pytest.mark.asyncio
 async def test_cold_history_gate_serializes_owner_creation_without_blocking_other_sessions(
-    code, monkeypatch
+    code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
 ):
     service, harness, directory = code
     sessions = [
@@ -186,11 +201,13 @@ async def test_cold_history_gate_serializes_owner_creation_without_blocking_othe
     entered, release = asyncio.Event(), asyncio.Event()
     read = service._store.read_history
 
-    async def gated_read(session_id, *args):
+    async def gated_read(
+        session_id: str, before: tuple[int, int] | None, include_item_ids: Sequence[str]
+    ):
         if session_id == sessions[0].id:
             entered.set()
             await release.wait()
-        return await read(session_id, *args)
+        return await read(session_id, before, include_item_ids)
 
     monkeypatch.setattr(service._store, "read_history", gated_read)
     reading = asyncio.create_task(service.get_detail(sessions[0].id))
@@ -223,7 +240,7 @@ async def test_cold_history_gate_serializes_owner_creation_without_blocking_othe
 
 @pytest.mark.asyncio
 async def test_execution_seed_resumes_sequence_without_hydrating_old_transcript(
-    code, monkeypatch
+    code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
 ):
     service, harness, directory = code
     session = await service._store.create(
@@ -255,17 +272,17 @@ async def test_execution_seed_resumes_sequence_without_hydrating_old_transcript(
 
 @pytest.mark.asyncio
 async def test_catalog_wait_releases_session_lock_and_revalidates_before_admission(
-    code, monkeypatch
+    code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
 ):
     service, harness, _ = code
     session = await session_for(code)
     entered, release = asyncio.Event(), asyncio.Event()
     prepare = harness.prepare
 
-    async def held_prepare(*args):
+    async def held_prepare(model: str, effort: str | None, mode: CodeMode):
         entered.set()
         await release.wait()
-        return await prepare(*args)
+        return await prepare(model, effort, mode)
 
     monkeypatch.setattr(harness, "prepare", held_prepare)
     sending = asyncio.create_task(
@@ -295,10 +312,10 @@ async def test_catalog_wait_releases_session_lock_and_revalidates_before_admissi
 
 
 @pytest.fixture
-def flush_timer(monkeypatch):
+def flush_timer(monkeypatch: pytest.MonkeyPatch):
     sleeping, release = asyncio.Event(), asyncio.Event()
 
-    async def sleep(delay):
+    async def sleep(delay: float):
         assert delay == 0.25
         sleeping.set()
         await release.wait()
@@ -316,7 +333,11 @@ def flush_timer(monkeypatch):
     [(BrokenPipeError, False, "failed"), (ConnectionResetError, True, "completed")],
 )
 async def test_child_lookup_pipe_failure_delivers_queued_close(
-    code, monkeypatch, failure, finished, status
+    code: tuple[CodeService, FakeHarness, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    failure: type[Exception],
+    finished: bool,
+    status: str,
 ):
     service, harness, _ = code
     session = await session_for(code)
@@ -331,7 +352,7 @@ async def test_child_lookup_pipe_failure_delivers_queued_close(
     if finished:
         await connection.finish("turn-1")
     native = packets.native
-    monkeypatch.delattr(native, "rpc")
+    monkeypatch.setattr(type(native), "rpc", CodexAppServer.rpc)
     native._alive = True
     native._process = Mock(
         stdin=Mock(drain=AsyncMock(side_effect=failure("Pipe closed")))
@@ -355,7 +376,7 @@ async def test_child_lookup_pipe_failure_delivers_queued_close(
         await native._dispatch()
         detail = await service.get_detail(session.id)
         assert detail.active_review_ids == ()
-        assert detail.run.status == status
+        assert require_present(detail.run).status == status
         assert [item.kind for item in detail.items] == ["user", "subagent_auto_review"]
         assert not detail.items[-1].complete
     finally:
@@ -364,7 +385,9 @@ async def test_child_lookup_pipe_failure_delivers_queued_close(
 
 
 @pytest.mark.asyncio
-async def test_pending_child_review_outside_page_keeps_its_run_and_history_cursor(code):
+async def test_pending_child_review_outside_page_keeps_its_run_and_history_cursor(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     first = await service.send(
@@ -414,7 +437,7 @@ async def test_pending_child_review_outside_page_keeps_its_run_and_history_curso
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ownership", ["notification", "metadata"])
 async def test_owned_child_reviews_and_warnings_reach_saved_parent_transcript(
-    code, ownership
+    code: tuple[CodeService, FakeHarness, Path], ownership: str
 ):
     service, harness, _ = code
     session = await session_for(code)
@@ -431,14 +454,14 @@ async def test_owned_child_reviews_and_warnings_reach_saved_parent_transcript(
     else:
         packets.parents.update(
             {
-                "child": connection.thread_id,
+                "child": require_present(connection.thread_id),
                 "grandchild": "child",
                 "unrelated": "outside",
             }
         )
     for child in (connection.thread_id, "child", "grandchild", "unrelated"):
-        await packets.review(child, status="approved", turn="turn-1")
-        await packets.warning(child)
+        await packets.review(require_present(child), status="approved", turn="turn-1")
+        await packets.warning(require_present(child))
     detail = await service.get_detail(session.id)
     assert [item.kind for item in detail.items] == [
         "user",
@@ -459,11 +482,13 @@ async def test_owned_child_reviews_and_warnings_reach_saved_parent_transcript(
         "message": "Native warning",
     }
     assert await service._store.items(session.id, None, None) == detail.items
-    assert detail.run.status == "running"
+    assert require_present(detail.run).status == "running"
 
 
 @pytest.mark.asyncio
-async def test_child_review_stays_with_first_entry_after_next_turn_begins(code):
+async def test_child_review_stays_with_first_entry_after_next_turn_begins(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     first = await service.send(
@@ -487,7 +512,9 @@ async def test_child_review_stays_with_first_entry_after_next_turn_begins(code):
     subscription, ready = await service.subscribe()
     events = aiter(subscription)
     try:
-        assert ready["sessions"][0]["active_review_ids"] == [review.id]
+        assert object_payload(array_payload(ready["sessions"])[0])[
+            "active_review_ids"
+        ] == [review.id]
         session = (await service.get_detail(session.id)).session
         harness.start_gate.clear()
         harness.started.clear()
@@ -520,17 +547,28 @@ async def test_child_review_stays_with_first_entry_after_next_turn_begins(code):
         )
         assert saved.title == "Sub-agent Auto-review: Denied" and saved.complete
         assert detail.active_review_ids == ()
-        assert detail.run.id == second.id and detail.run.native_turn_id is None
+        assert (
+            require_present(detail.run).id == second.id
+            and require_present(detail.run).native_turn_id is None
+        )
         assert all(item.run_id == second.id for item in detail.items[-3:])
-        while (event := await asyncio.wait_for(anext(events), 3)).data.get(
-            "item", {}
-        ).get("id") != review.id:
+        while (
+            object_payload(
+                object_payload(
+                    (event := await asyncio.wait_for(anext(events), 3)).data
+                ).get("item", {})
+            ).get("id")
+            != review.id
+        ):
             pass
-        assert event.data["runs"][0]["id"] == first.id
-        assert event.data["run"]["id"] == second.id
+        assert object_payload(array_payload(event.data["runs"])[0])["id"] == first.id
+        assert object_payload(event.data["run"])["id"] == second.id
         harness.start_gate.set()
         await asyncio.wait_for(harness.started.wait(), 3)
-        assert (await service.get_detail(session.id)).run.native_turn_id == "turn-2"
+        assert (
+            require_present((await service.get_detail(session.id)).run).native_turn_id
+            == "turn-2"
+        )
         await connection.finish("turn-2")
     finally:
         harness.start_gate.set()
@@ -540,7 +578,9 @@ async def test_child_review_stays_with_first_entry_after_next_turn_begins(code):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("closure", ["native", "service"])
 async def test_pending_child_review_becomes_unavailable_when_idle_connection_ends(
-    database_factory, code, closure
+    database_factory: DatabaseFactory,
+    code: tuple[CodeService, FakeHarness, Path],
+    closure: str,
 ):
     service, harness, directory = code
     session = await session_for(code)
@@ -570,7 +610,7 @@ async def test_pending_child_review_becomes_unavailable_when_idle_connection_end
         detail = await service.get_detail(session.id)
         assert detail.items == before.items
         assert detail.active_review_ids == ()
-        assert detail.run.status == "completed"
+        assert require_present(detail.run).status == "completed"
         await service.close()
         await close_code_database(service)
         restarted = CodeService(
@@ -591,7 +631,9 @@ async def test_pending_child_review_becomes_unavailable_when_idle_connection_end
 
 
 @pytest.mark.asyncio
-async def test_mode_is_captured_per_turn_and_does_not_recreate_native_process(code):
+async def test_mode_is_captured_per_turn_and_does_not_recreate_native_process(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     modes = ["full_access", "config", "ask", "auto_review"]
@@ -622,8 +664,8 @@ async def test_mode_is_captured_per_turn_and_does_not_recreate_native_process(co
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pending_output", [False, True])
 async def test_reobserved_child_review_publishes_liveness_on_new_native_connection(
-    code,
-    pending_output,
+    code: tuple[CodeService, FakeHarness, Path],
+    pending_output: bool,
 ):
     service, harness, _ = code
     session = await session_for(code)
@@ -658,17 +700,23 @@ async def test_reobserved_child_review_publishes_liveness_on_new_native_connecti
         while event.data["active_review_ids"] != [review.id]:
             event = await asyncio.wait_for(anext(aiter(subscription)), 3)
         assert event.data["active_review_ids"] == [review.id]
-        assert event.data.get("item", {}).get("id") == review.id
-        assert event.data["runs"][0]["id"] == review.run_id
+        assert object_payload(event.data.get("item", {})).get("id") == review.id
+        assert (
+            object_payload(array_payload(event.data["runs"])[0])["id"] == review.run_id
+        )
         detail = await service.get_detail(session.id)
         assert next(item for item in detail.items if item.id == review.id) == review
-        assert detail.run.status == ("running" if pending_output else "completed")
+        assert require_present(detail.run).status == (
+            "running" if pending_output else "completed"
+        )
     finally:
         await subscription.aclose()
 
 
 @pytest.mark.asyncio
-async def test_forced_interrupt_clears_pending_child_review_liveness(code, monkeypatch):
+async def test_forced_interrupt_clears_pending_child_review_liveness(
+    code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
+):
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -685,16 +733,20 @@ async def test_forced_interrupt_clears_pending_child_review_liveness(code, monke
         raise CodeUnavailableError("Native interrupt transport failed")
 
     monkeypatch.setattr(connection, "interrupt", unavailable)
-    await service.stop(session.id, (await service.get_detail(session.id)).run.id)
+    await service.stop(
+        session.id, require_present((await service.get_detail(session.id)).run).id
+    )
     await asyncio.wait_for(service.wait_idle(session.id), 3)
     detail = await service.get_detail(session.id)
     assert detail.active_review_ids == ()
-    assert detail.run.status == "interrupted"
+    assert require_present(detail.run).status == "interrupted"
     assert not detail.items[-1].complete
 
 
 @pytest.mark.asyncio
-async def test_mode_change_and_send_compete_for_one_revision(code):
+async def test_mode_change_and_send_compete_for_one_revision(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     results = await asyncio.gather(
@@ -720,7 +772,9 @@ async def test_mode_change_and_send_compete_for_one_revision(code):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", [None, "plan", "never", {}, 1])
-async def test_invalid_mode_is_rejected_without_changing_session(code, mode):
+async def test_invalid_mode_is_rejected_without_changing_session(
+    code: tuple[CodeService, FakeHarness, Path], mode: JsonValue
+):
     service, _, _ = code
     session = await session_for(code)
     with pytest.raises(CodeValidationError):
@@ -729,10 +783,12 @@ async def test_invalid_mode_is_rejected_without_changing_session(code, mode):
 
 
 @pytest.mark.asyncio
-async def test_native_defaults_are_saved_before_input_and_preserved_on_resume(code):
+async def test_native_defaults_are_saved_before_input_and_preserved_on_resume(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
-    original = {"policy": "configured-original"}
+    original: JsonObject = {"policy": "configured-original"}
     harness.permission_defaults = original
     session = await service.update_settings(
         session.id, session.revision, {"mode": "full_access"}
@@ -762,15 +818,19 @@ async def test_native_defaults_are_saved_before_input_and_preserved_on_resume(co
 
 
 @pytest.mark.asyncio
-async def test_failure_saving_native_defaults_never_submits_input(code, monkeypatch):
+async def test_failure_saving_native_defaults_never_submits_input(
+    code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
+):
     service, harness, _ = code
     session = await session_for(code)
     save = service._store.save_progress
 
-    async def reject_defaults(session, *args, **kwargs):
+    async def reject_defaults(
+        session: CodeSession, revision: int, **kwargs: Unpack[ProgressChanges]
+    ):
         if session.native_permission_defaults is not None:
             raise CodeUnavailableError("Unable to save permission defaults")
-        await save(session, *args, **kwargs)
+        await save(session, revision, **kwargs)
 
     monkeypatch.setattr(service._store, "save_progress", reject_defaults)
     await service.send(
@@ -778,12 +838,14 @@ async def test_failure_saving_native_defaults_never_submits_input(code, monkeypa
     )
     await asyncio.wait_for(service.wait_idle(session.id), 3)
     assert not any(connection.inputs for connection in harness.connections)
-    assert not (await service._store.latest_run(session.id)).submission_started
+    assert not (
+        require_present(await service._store.latest_run(session.id))
+    ).submission_started
 
 
 @pytest.mark.asyncio
 async def test_native_reviews_and_notices_keep_identity_order_and_survive_restart(
-    database_factory, code
+    database_factory: DatabaseFactory, code: tuple[CodeService, FakeHarness, Path]
 ):
     service, harness, directory = code
     session = await session_for(code)
@@ -802,27 +864,34 @@ async def test_native_reviews_and_notices_keep_identity_order_and_survive_restar
     }
     for review_id in ("one", "two"):
         await connection.sink(
-            protocol.notification(
-                "item/autoApprovalReview/started", {**payload, "reviewId": review_id}
+            require_present(
+                protocol.notification(
+                    "item/autoApprovalReview/started",
+                    {**payload, "reviewId": review_id},
+                )
             )
         )
     await connection.text("turn-1", "reply", "After reviews", complete=True)
     before = await service.get_detail(session.id)
     for review_id in ("two", "one"):
         await connection.sink(
-            protocol.notification(
-                "item/autoApprovalReview/completed",
-                {
-                    **payload,
-                    "reviewId": review_id,
-                    "review": {"status": "denied", "rationale": "Native refusal"},
-                },
+            require_present(
+                protocol.notification(
+                    "item/autoApprovalReview/completed",
+                    {
+                        **payload,
+                        "reviewId": review_id,
+                        "review": {"status": "denied", "rationale": "Native refusal"},
+                    },
+                )
             )
         )
     await connection.sink(
-        protocol.notification(
-            "guardianWarning",
-            {"threadId": connection.thread_id, "message": "Native warning"},
+        require_present(
+            protocol.notification(
+                "guardianWarning",
+                {"threadId": connection.thread_id, "message": "Native warning"},
+            )
         )
     )
     await connection.sink(
@@ -840,7 +909,7 @@ async def test_native_reviews_and_notices_keep_identity_order_and_survive_restar
         "notice",
     ]
     assert all(item.title == "Auto-review: Denied" for item in detail.items[1:3])
-    assert detail.run.status == "completed"
+    assert require_present(detail.run).status == "completed"
     assert detail.items[-1].text == "Native warning"
     await service.close()
     await close_code_database(service)
@@ -858,7 +927,9 @@ async def test_native_reviews_and_notices_keep_identity_order_and_survive_restar
 
 
 @pytest.mark.asyncio
-async def test_selected_model_and_effort_are_session_settings_captured_on_send(code):
+async def test_selected_model_and_effort_are_session_settings_captured_on_send(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     harness.configurations["provider/other"] = "other"
     session = await session_for(code)
@@ -900,7 +971,7 @@ async def test_selected_model_and_effort_are_session_settings_captured_on_send(c
 
 @pytest.mark.asyncio
 async def test_catalog_effort_removal_requires_choice_but_model_change_resolves_default(
-    code,
+    code: tuple[CodeService, FakeHarness, Path],
 ):
     service, harness, _ = code
     session = await session_for(code)
@@ -926,7 +997,7 @@ async def test_catalog_effort_removal_requires_choice_but_model_change_resolves_
 
 @pytest.mark.asyncio
 async def test_failed_outcome_is_durable_once_after_partial_output_and_older_pagination(
-    code,
+    code: tuple[CodeService, FakeHarness, Path],
 ):
     service, harness, _ = code
     session = await session_for(code)
@@ -942,7 +1013,7 @@ async def test_failed_outcome_is_durable_once_after_partial_output_and_older_pag
     detail = await service.get_detail(session.id)
     assert detail.session.error is None
     assert detail.runs == (detail.run,)
-    assert detail.run.error == "Provider rejected the request"
+    assert require_present(detail.run).error == "Provider rejected the request"
     assert [item.text for item in detail.items] == [
         "first",
         "partial text",
@@ -968,13 +1039,13 @@ async def test_failed_outcome_is_durable_once_after_partial_output_and_older_pag
     older = await service.get_detail(session.id, before=latest.next_before)
     assert (
         next(value for value in older.runs if value.id == run.id).error
-        == detail.run.error
+        == require_present(detail.run).error
     )
 
 
 @pytest.mark.asyncio
 async def test_retry_notice_does_not_finish_run_and_stale_error_is_ignored(
-    database_factory, code
+    database_factory: DatabaseFactory, code: tuple[CodeService, FakeHarness, Path]
 ):
     service, harness, directory = code
     session = await session_for(code)
@@ -995,7 +1066,7 @@ async def test_retry_notice_does_not_finish_run_and_stale_error_is_ignored(
         )
     )
     detail = await service.get_detail(session.id)
-    assert detail.run.status == "running"
+    assert require_present(detail.run).status == "running"
     assert [item.kind for item in detail.items] == ["user", "text", "notice"]
     assert detail.items[-1].text == "Retrying… retry"
     assert detail.items[-1].sequence > detail.items[-2].sequence
@@ -1005,7 +1076,7 @@ async def test_retry_notice_does_not_finish_run_and_stale_error_is_ignored(
         )
     )
     detail = await service.get_detail(session.id)
-    assert detail.run.status == "running"
+    assert require_present(detail.run).status == "running"
     assert detail.items[-1].text == "Codex reported an error."
     await connection.text("turn-1", "text", "success", complete=True)
     await connection.finish("turn-1")
@@ -1022,7 +1093,7 @@ async def test_retry_notice_does_not_finish_run_and_stale_error_is_ignored(
     )
     assert service.cursor == cursor
     await subscription.aclose()
-    assert (await service.get_detail(session.id)).run.error is None
+    assert require_present((await service.get_detail(session.id)).run).error is None
     detail = await service.get_detail(session.id)
     await service.close()
     await close_code_database(service)
@@ -1042,7 +1113,7 @@ async def test_retry_notice_does_not_finish_run_and_stale_error_is_ignored(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("client_id", [True, False])
 async def test_acknowledgement_loss_recovers_old_turn_before_newer_send(
-    code, client_id
+    code: tuple[CodeService, FakeHarness, Path], client_id: bool
 ):
     service, harness, _ = code
     session = await session_for(code)
@@ -1052,7 +1123,7 @@ async def test_acknowledgement_loss_recovers_old_turn_before_newer_send(
     )
     await harness.submitted.wait()
     connection = harness.connections[0]
-    harness.histories[connection.thread_id] = [
+    harness.histories[require_present(connection.thread_id)] = [
         ItemUpdate(
             "turn-1",
             "native-user",
@@ -1066,7 +1137,7 @@ async def test_acknowledgement_loss_recovers_old_turn_before_newer_send(
     await connection.close()
     await service.wait_idle(session.id)
     detail = await service.get_detail(session.id)
-    assert detail.run.status == "failed"
+    assert require_present(detail.run).status == "failed"
     await service.send(
         session.id,
         new_id(),
@@ -1086,7 +1157,9 @@ async def test_acknowledgement_loss_recovers_old_turn_before_newer_send(
 
 
 @pytest.mark.asyncio
-async def test_prompt_membership_and_deleted_subscription_are_authoritative(code):
+async def test_prompt_membership_and_deleted_subscription_are_authoritative(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -1110,7 +1183,9 @@ async def test_prompt_membership_and_deleted_subscription_are_authoritative(code
 
 
 @pytest.mark.asyncio
-async def test_ambiguous_native_history_fails_recovery_without_resending_input(code):
+async def test_ambiguous_native_history_fails_recovery_without_resending_input(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     harness.start_gate.clear()
@@ -1119,7 +1194,7 @@ async def test_ambiguous_native_history_fails_recovery_without_resending_input(c
     )
     await harness.submitted.wait()
     connection = harness.connections[0]
-    harness.histories[connection.thread_id] = [
+    harness.histories[require_present(connection.thread_id)] = [
         ItemUpdate(turn_id, "item", "text", text="unmatched", complete=True)
         for turn_id in ("unknown-1", "unknown-2")
     ]
@@ -1135,14 +1210,16 @@ async def test_ambiguous_native_history_fails_recovery_without_resending_input(c
     )
     await service.wait_idle(session.id)
     detail = await service.get_detail(session.id)
-    assert detail.run.status == "failed"
-    assert "could not be matched" in detail.run.error
+    assert require_present(detail.run).status == "failed"
+    assert "could not be matched" in require_present(require_present(detail.run).error)
     assert [item.text for item in detail.items] == ["first", "second"]
     assert sum(len(connection.inputs) for connection in harness.connections) == 1
 
 
 @pytest.mark.asyncio
-async def test_settings_and_send_compete_for_the_same_revision(code):
+async def test_settings_and_send_compete_for_the_same_revision(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     outcomes = await asyncio.gather(
@@ -1169,7 +1246,9 @@ async def test_settings_and_send_compete_for_the_same_revision(code):
 
 
 @pytest.mark.asyncio
-async def test_old_service_epoch_cannot_admit_a_new_send_but_can_read_receipt(code):
+async def test_old_service_epoch_cannot_admit_a_new_send_but_can_read_receipt(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     with pytest.raises(CodeConflictError, match="restarted"):
@@ -1187,7 +1266,9 @@ async def test_old_service_epoch_cannot_admit_a_new_send_but_can_read_receipt(co
 
 
 @pytest.mark.asyncio
-async def test_poorer_native_history_keeps_captured_source_and_reasoning(code):
+async def test_poorer_native_history_keeps_captured_source_and_reasoning(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -1220,7 +1301,7 @@ async def test_poorer_native_history_keeps_captured_source_and_reasoning(code):
         )
     )
     await connection.finish("turn-1")
-    harness.histories[connection.thread_id] = [
+    harness.histories[require_present(connection.thread_id)] = [
         ItemUpdate(
             "turn-1",
             "reasoning",
@@ -1250,8 +1331,11 @@ async def test_poorer_native_history_keeps_captured_source_and_reasoning(code):
 
 
 @pytest.mark.asyncio
-async def test_storage_start_failure_is_isolated_to_code(database_factory, tmp_path):
+async def test_storage_start_failure_is_isolated_to_code(
+    database_factory: DatabaseFactory, tmp_path: Path
+):
     class BrokenStore(SQLiteCodeStore):
+        @override
         async def start(self):
             raise CodeUnavailableError("Code disk unavailable")
 
@@ -1268,7 +1352,9 @@ async def test_storage_start_failure_is_isolated_to_code(database_factory, tmp_p
 
 
 @pytest.mark.asyncio
-async def test_shutdown_settles_run_when_native_interrupt_never_acknowledges(code):
+async def test_shutdown_settles_run_when_native_interrupt_never_acknowledges(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -1286,7 +1372,9 @@ async def test_shutdown_settles_run_when_native_interrupt_never_acknowledges(cod
 
 @pytest.mark.asyncio
 async def test_storage_failure_retires_native_work_even_with_pending_prompt(
-    code, monkeypatch, caplog
+    code: tuple[CodeService, FakeHarness, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ):
     service, harness, _ = code
     session = await session_for(code)
@@ -1299,7 +1387,7 @@ async def test_storage_failure_retires_native_work_even_with_pending_prompt(
 
     error = CodeUnavailableError("Code disk unavailable")
 
-    async def fail_save(*args, **kwargs):
+    async def fail_save(*args: object, **kwargs: object):
         raise error
 
     monkeypatch.setattr(service._store, "save_progress", fail_save)
@@ -1311,19 +1399,21 @@ async def test_storage_failure_retires_native_work_even_with_pending_prompt(
     await service.close()
     failures = [record for record in caplog.records if record.levelname == "ERROR"]
     assert len(failures) == 1
-    assert failures[0].extra == {
+    assert record_extra(failures[0]) == {
         "event": "code.storage_failed",
         "operation": "save_progress",
         "session_id": session.id,
         "run_id": run.id,
     }
-    assert failures[0].exc_info[1] is error
+    assert require_exception_info(failures[0].exc_info)[1] is error
     assert "fail_save" in caplog.text
 
 
 @pytest.mark.asyncio
 async def test_shutdown_storage_read_failure_logs_original_cause(
-    code, monkeypatch, caplog
+    code: tuple[CodeService, FakeHarness, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ):
     service, harness, _ = code
     session = await session_for(code)
@@ -1339,16 +1429,19 @@ async def test_shutdown_storage_read_failure_logs_original_cause(
     assert harness.connections[0].closed
     failures = [record for record in caplog.records if record.levelname == "ERROR"]
     assert len(failures) == 1
-    assert failures[0].extra["operation"] == "stop_run"
-    assert failures[0].extra["session_id"] == session.id
-    assert failures[0].extra["run_id"] == run.id
-    assert failures[0].exc_info[1] is error
+    assert record_extra(failures[0])["operation"] == "stop_run"
+    assert record_extra(failures[0])["session_id"] == session.id
+    assert record_extra(failures[0])["run_id"] == run.id
+    assert require_exception_info(failures[0].exc_info)[1] is error
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("conflict", [False, True])
 async def test_delete_before_first_run_logs_only_terminal_storage_failure(
-    code, monkeypatch, caplog, conflict
+    code: tuple[CodeService, FakeHarness, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    conflict: bool,
 ):
     service, _, _ = code
     session = await session_for(code)
@@ -1372,21 +1465,23 @@ async def test_delete_before_first_run_logs_only_terminal_storage_failure(
     failures = [record for record in caplog.records if record.levelname == "ERROR"]
     assert len(failures) == (0 if conflict else 1)
     if not conflict:
-        assert failures[0].extra["session_id"] == session.id
-        assert failures[0].extra["run_id"] is None
-        assert failures[0].extra["operation"] == "save_progress"
-        assert failures[0].exc_info[1] is error
+        assert record_extra(failures[0])["session_id"] == session.id
+        assert record_extra(failures[0])["run_id"] is None
+        assert record_extra(failures[0])["operation"] == "save_progress"
+        assert require_exception_info(failures[0].exc_info)[1] is error
 
 
 @pytest.mark.asyncio
-async def test_same_send_id_in_two_sessions_has_independent_receipts(code, monkeypatch):
+async def test_same_send_id_in_two_sessions_has_independent_receipts(
+    code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
+):
     service, harness, _ = code
     first, second = await session_for(code), await session_for(code)
     original = service._store.get_run
     looked_up = 0
     barrier = asyncio.Event()
 
-    async def simultaneous_lookup(session_id, run_id):
+    async def simultaneous_lookup(session_id: str, run_id: str):
         nonlocal looked_up
         result = await original(session_id, run_id)
         looked_up += 1
@@ -1417,7 +1512,7 @@ async def test_same_send_id_in_two_sessions_has_independent_receipts(code, monke
     assert sum(len(connection.inputs) for connection in harness.connections) == 2
 
 
-async def idle_native(code):
+async def idle_native(code: tuple[CodeService, FakeHarness, Path]):
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -1429,7 +1524,9 @@ async def idle_native(code):
 
 
 @pytest.mark.asyncio
-async def test_deletion_fences_commands_and_repeated_delete_has_one_native_call(code):
+async def test_deletion_fences_commands_and_repeated_delete_has_one_native_call(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, folder = code
     session = await idle_native(code)
     project = folder / "project.txt"
@@ -1452,7 +1549,9 @@ async def test_deletion_fences_commands_and_repeated_delete_has_one_native_call(
 
 
 @pytest.mark.asyncio
-async def test_lost_native_delete_ack_reconciles_without_repeating_delete(code):
+async def test_lost_native_delete_ack_reconciles_without_repeating_delete(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await idle_native(code)
     harness.delete_before_error = True
@@ -1465,13 +1564,13 @@ async def test_lost_native_delete_ack_reconciles_without_repeating_delete(code):
 
 @pytest.mark.asyncio
 async def test_local_delete_commit_failure_keeps_fence_and_can_reconcile(
-    code, monkeypatch
+    code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
 ):
     service, harness, _ = code
     session = await idle_native(code)
     original = service._store.delete
 
-    async def failing_delete(session_id):
+    async def failing_delete(session_id: object):
         raise CodeUnavailableError("Delete commit failed")
 
     monkeypatch.setattr(service._store, "delete", failing_delete)
@@ -1496,7 +1595,9 @@ async def test_local_delete_commit_failure_keeps_fence_and_can_reconcile(
 
 
 @pytest.mark.asyncio
-async def test_late_old_native_events_cannot_claim_a_new_turn_before_ack(code):
+async def test_late_old_native_events_cannot_claim_a_new_turn_before_ack(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await idle_native(code)
     connection = harness.connections[0]
@@ -1517,26 +1618,28 @@ async def test_late_old_native_events_cannot_claim_a_new_turn_before_ack(code):
     await connection.text("turn-1", "late", "obsolete", complete=True)
     await connection.finish("turn-1")
     detail = await service.get_detail(session.id)
-    assert detail.run.status == "preparing"
+    assert require_present(detail.run).status == "preparing"
     assert not any(item.text == "obsolete" for item in detail.items)
     harness.start_gate.set()
     await harness.started.wait()
     detail = await service.get_detail(session.id)
-    assert detail.run.native_turn_id == "turn-2"
+    assert require_present(detail.run).native_turn_id == "turn-2"
 
 
 @pytest.mark.asyncio
-async def test_creation_identity_received_during_cleanup_is_saved(code, monkeypatch):
+async def test_creation_identity_received_during_cleanup_is_saved(
+    code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
+):
     service, harness, _ = code
     session = await session_for(code)
     original_close = FakeConnection.close
 
-    async def failed_create(connection):
+    async def failed_create(connection: object):
         raise CodeUnavailableError("Native creation acknowledgement timed out")
 
-    async def close_with_late_reply(connection):
+    async def close_with_late_reply(connection: FakeConnection):
         connection.thread_id = "late-native-id"
-        harness.histories[connection.thread_id] = []
+        harness.histories[require_present(connection.thread_id)] = []
         await original_close(connection)
 
     monkeypatch.setattr(FakeConnection, "create_thread", failed_create)
@@ -1551,13 +1654,13 @@ async def test_creation_identity_received_during_cleanup_is_saved(code, monkeypa
     await service.wait_idle(session.id)
     detail = await service.get_detail(session.id)
     assert detail.session.native_thread_id == "late-native-id"
-    assert detail.run.status == "failed"
+    assert require_present(detail.run).status == "failed"
     assert not harness.connections[0].inputs
 
 
 @pytest.mark.asyncio
 async def test_failed_stop_persistence_closes_work_without_waiting_for_more_output(
-    code, monkeypatch
+    code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
 ):
     service, harness, _ = code
     session = await session_for(code)
@@ -1570,7 +1673,7 @@ async def test_failed_stop_persistence_closes_work_without_waiting_for_more_outp
     )
     await harness.started.wait()
 
-    async def failed_save(*args, **kwargs):
+    async def failed_save(*args: object, **kwargs: object):
         raise CodeUnavailableError("Disk failed")
 
     monkeypatch.setattr(service._store, "save_progress", failed_save)
@@ -1581,7 +1684,9 @@ async def test_failed_stop_persistence_closes_work_without_waiting_for_more_outp
 
 
 @pytest.mark.asyncio
-async def test_create_is_lazy_and_retry_does_not_duplicate(code):
+async def test_create_is_lazy_and_retry_does_not_duplicate(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, directory = code
     session = await session_for(code)
     repeated = await service.create_session(session.id, str(directory))
@@ -1591,7 +1696,9 @@ async def test_create_is_lazy_and_retry_does_not_duplicate(code):
 
 
 @pytest.mark.asyncio
-async def test_competing_sends_admit_only_one_and_repeat_returns_receipt(code):
+async def test_competing_sends_admit_only_one_and_repeat_returns_receipt(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     command = new_id()
@@ -1628,7 +1735,9 @@ async def test_competing_sends_admit_only_one_and_repeat_returns_receipt(code):
 
 
 @pytest.mark.asyncio
-async def test_http_cancellation_does_not_cancel_native_creation(code):
+async def test_http_cancellation_does_not_cancel_native_creation(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     harness.creation_gate.clear()
@@ -1639,7 +1748,7 @@ async def test_http_cancellation_does_not_cancel_native_creation(code):
     await harness.creating.wait()
     # There is no HTTP-owned native waiter left to cancel after admission.
     detail = await service.get_detail(session.id)
-    assert detail.run.id == command
+    assert require_present(detail.run).id == command
     harness.creation_gate.set()
     await harness.started.wait()
     detail = await service.get_detail(session.id)
@@ -1648,7 +1757,9 @@ async def test_http_cancellation_does_not_cancel_native_creation(code):
 
 
 @pytest.mark.asyncio
-async def test_stop_before_native_ack_targets_that_run_only(code):
+async def test_stop_before_native_ack_targets_that_run_only(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     harness.start_gate.clear()
@@ -1663,7 +1774,7 @@ async def test_stop_before_native_ack_targets_that_run_only(code):
     assert connection.interrupts == ["turn-1"]
     await connection.finish("turn-1", "interrupted")
     detail = await service.get_detail(session.id)
-    assert detail.run.status == "interrupted"
+    assert require_present(detail.run).status == "interrupted"
     second = await service.send(
         session.id,
         new_id(),
@@ -1678,7 +1789,9 @@ async def test_stop_before_native_ack_targets_that_run_only(code):
 
 
 @pytest.mark.asyncio
-async def test_stop_during_creation_prevents_native_submission(code):
+async def test_stop_during_creation_prevents_native_submission(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     harness.creation_gate.clear()
@@ -1694,13 +1807,15 @@ async def test_stop_during_creation_prevents_native_submission(code):
     harness.creation_gate.set()
     await service.wait_idle(session.id)
     detail = await service.get_detail(session.id)
-    assert detail.run.status == "interrupted"
+    assert require_present(detail.run).status == "interrupted"
     assert detail.session.native_thread_id == "native-1"
     assert harness.connections[0].inputs == []
 
 
 @pytest.mark.asyncio
-async def test_browser_observers_are_independent_of_work(code):
+async def test_browser_observers_are_independent_of_work(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     first, _ = await service.subscribe()
@@ -1720,12 +1835,14 @@ async def test_browser_observers_are_independent_of_work(code):
     await connection.finish("turn-1")
     detail = await service.get_detail(session.id)
     assert detail.items[-1].text == "Still running"
-    assert detail.run.status == "completed"
+    assert require_present(detail.run).status == "completed"
     assert not connection.closed
 
 
 @pytest.mark.asyncio
-async def test_idle_delete_removes_both_histories_and_blocks_late_create(code):
+async def test_idle_delete_removes_both_histories_and_blocks_late_create(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, directory = code
     session = await session_for(code)
     await service.send(
@@ -1747,7 +1864,7 @@ async def test_idle_delete_removes_both_histories_and_blocks_late_create(code):
 
 @pytest.mark.asyncio
 async def test_restart_preserves_receipt_and_does_not_replay_input(
-    database_factory, tmp_path
+    database_factory: DatabaseFactory, tmp_path: Path
 ):
     harness = FakeHarness()
     database, lock = tmp_path / "code.db", tmp_path / "code.lock"
@@ -1776,7 +1893,9 @@ async def test_restart_preserves_receipt_and_does_not_replay_input(
 
 
 @pytest.mark.asyncio
-async def test_two_answers_claim_one_native_prompt(code):
+async def test_two_answers_claim_one_native_prompt(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -1802,8 +1921,8 @@ async def test_two_answers_claim_one_native_prompt(code):
 
 @pytest.mark.asyncio
 async def test_prompt_arrival_has_one_durable_position_despite_repeated_native_item(
-    database_factory,
-    code,
+    database_factory: DatabaseFactory,
+    code: tuple[CodeService, FakeHarness, Path],
 ):
     service, harness, directory = code
     session = await session_for(code)
@@ -1841,8 +1960,13 @@ async def test_prompt_arrival_has_one_durable_position_despite_repeated_native_i
                 if event.event == "item.updated":
                     event = await anext(events)
                 assert event.event == "prompt.updated"
-                assert event.data["item"]["id"] == event.data["prompt"]["id"]
-                assert event.data["runs"][0]["id"] == run.id
+                assert (
+                    object_payload(event.data["item"])["id"]
+                    == object_payload(event.data["prompt"])["id"]
+                )
+                assert (
+                    object_payload(array_payload(event.data["runs"])[0])["id"] == run.id
+                )
         for request_id in (1, "1"):
             await connection.resolve(request_id)
         await connection.text(
@@ -1894,7 +2018,9 @@ async def test_prompt_arrival_has_one_durable_position_despite_repeated_native_i
 
 
 @pytest.mark.asyncio
-async def test_active_prompt_outside_page_keeps_its_entry_run_and_older_cursor(code):
+async def test_active_prompt_outside_page_keeps_its_entry_run_and_older_cursor(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     run = await service.send(
@@ -1924,7 +2050,9 @@ async def test_active_prompt_outside_page_keeps_its_entry_run_and_older_cursor(c
 
 
 @pytest.mark.asyncio
-async def test_prompt_during_thread_creation_has_a_saved_run_without_native_ids(code):
+async def test_prompt_during_thread_creation_has_a_saved_run_without_native_ids(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     harness.creation_gate.clear()
@@ -1936,7 +2064,7 @@ async def test_prompt_during_thread_creation_has_a_saved_run_without_native_ids(
     try:
         await connection.prompt(0, turn_id=None)
         detail = await service.get_detail(session.id)
-        assert detail.run.native_turn_id is None
+        assert require_present(detail.run).native_turn_id is None
         assert detail.items[-1].id == detail.prompts[0].id
         assert detail.items[-1].run_id == run.id
         assert detail.items[-1].sequence == 2
@@ -1947,7 +2075,9 @@ async def test_prompt_during_thread_creation_has_a_saved_run_without_native_ids(
 
 
 @pytest.mark.asyncio
-async def test_native_resolution_while_answer_is_waiting_never_resurrects_prompt(code):
+async def test_native_resolution_while_answer_is_waiting_never_resurrects_prompt(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -1968,7 +2098,9 @@ async def test_native_resolution_while_answer_is_waiting_never_resurrects_prompt
 
 
 @pytest.mark.asyncio
-async def test_streaming_does_not_invalidate_rename_revision(code):
+async def test_streaming_does_not_invalidate_rename_revision(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -1987,7 +2119,9 @@ async def test_streaming_does_not_invalidate_rename_revision(code):
 
 
 @pytest.mark.asyncio
-async def test_context_usage_is_an_absolute_deduplicated_session_snapshot(code):
+async def test_context_usage_is_an_absolute_deduplicated_session_snapshot(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -2004,7 +2138,7 @@ async def test_context_usage_is_an_absolute_deduplicated_session_snapshot(code):
             event = await anext(events)
         after = await service.get_detail(session.id)
         assert event.event == "session.updated"
-        assert event.data["session"]["context_used_tokens"] == 90_000
+        assert object_payload(event.data["session"])["context_used_tokens"] == 90_000
         assert after.session.context_used_tokens == 90_000
         assert after.session.revision == before.session.revision
         assert after.session.updated_at == before.session.updated_at
@@ -2027,7 +2161,9 @@ async def test_context_usage_is_an_absolute_deduplicated_session_snapshot(code):
 
 
 @pytest.mark.asyncio
-async def test_context_usage_is_retained_across_model_changes(code):
+async def test_context_usage_is_retained_across_model_changes(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     harness.configurations["provider/other"] = "other"
     session = await session_for(code)
@@ -2065,7 +2201,9 @@ async def test_context_usage_is_retained_across_model_changes(code):
 
 
 @pytest.mark.asyncio
-async def test_resumed_context_usage_is_accepted_after_the_next_run_is_admitted(code):
+async def test_resumed_context_usage_is_accepted_after_the_next_run_is_admitted(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -2105,7 +2243,9 @@ async def test_resumed_context_usage_is_accepted_after_the_next_run_is_admitted(
 
 
 @pytest.mark.asyncio
-async def test_catalog_replacement_is_limited_to_selected_entry_and_session(code):
+async def test_catalog_replacement_is_limited_to_selected_entry_and_session(
+    code: tuple[CodeService, FakeHarness, Path],
+):
     service, harness, _ = code
     harness.configurations["provider/other"] = "other-1"
     session = await session_for(code)
@@ -2148,13 +2288,20 @@ async def test_catalog_replacement_is_limited_to_selected_entry_and_session(code
 
 @pytest.mark.asyncio
 async def test_cancelled_http_admission_still_commits_and_executes_once(
-    database_factory, tmp_path
+    database_factory: DatabaseFactory, tmp_path: Path
 ):
     committed = asyncio.Event()
     release = asyncio.Event()
 
     class GatedStore(SQLiteCodeStore):
-        async def admit_run(self, session, run, item, expected_revision):
+        @override
+        async def admit_run(
+            self,
+            session: CodeSession,
+            run: CodeRun,
+            item: CodeItem,
+            expected_revision: int,
+        ):
             result = await super().admit_run(session, run, item, expected_revision)
             committed.set()
             await release.wait()
@@ -2202,7 +2349,10 @@ async def test_cancelled_http_admission_still_commits_and_executes_once(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("trigger", ["timer", "size", "complete", "detail"])
 async def test_buffer_staging_and_each_flush_preserve_commit_and_observer_order(
-    code, monkeypatch, flush_timer, trigger
+    code: tuple[CodeService, FakeHarness, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    flush_timer: tuple[asyncio.Event, asyncio.Event],
+    trigger: str,
 ):
     service, harness, _ = code
     session = await session_for(code)
@@ -2216,7 +2366,9 @@ async def test_buffer_staging_and_each_flush_preserve_commit_and_observer_order(
     save = service._store.save_progress
     writes = []
 
-    async def observe_save(session, revision, **values):
+    async def observe_save(
+        session: CodeSession, revision: int, **values: Unpack[ProgressChanges]
+    ):
         if values.get("items"):
             assert service.cursor == before.cursor
         await save(session, revision, **values)
@@ -2232,7 +2384,10 @@ async def test_buffer_staging_and_each_flush_preserve_commit_and_observer_order(
         await connection.text("turn-1", "answer", text)
         observer, snapshot = await service.subscribe()
         await observer.aclose()
-        assert snapshot["sessions"][0]["version"] == before.version + 1
+        assert (
+            object_payload(array_payload(snapshot["sessions"])[0])["version"]
+            == before.version + 1
+        )
         assert snapshot["cursor"] == before.cursor
         assert await service._store.items(session.id, None, None) == before.items
         assert writes == []
@@ -2265,7 +2420,9 @@ async def test_buffer_staging_and_each_flush_preserve_commit_and_observer_order(
 
 @pytest.mark.asyncio
 async def test_failed_terminal_bundle_retains_committed_records_and_staged_output(
-    code, monkeypatch, flush_timer
+    code: tuple[CodeService, FakeHarness, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    flush_timer: tuple[asyncio.Event, asyncio.Event],
 ):
     service, harness, _ = code
     session = await session_for(code)
@@ -2279,16 +2436,19 @@ async def test_failed_terminal_bundle_retains_committed_records_and_staged_outpu
     await connection.text("turn-1", "answer", "unsaved")
     await asyncio.wait_for(flush_timer[0].wait(), 3)
     save, publish = service._store.save_progress, service._events.publish
-    attempted, published = [], []
+    attempted: list[tuple[CodeSession, ProgressChanges]] = []
+    published: list[tuple[str, JsonObject]] = []
 
-    async def reject_terminal(session, revision, **values):
+    async def reject_terminal(
+        session: CodeSession, revision: int, **values: Unpack[ProgressChanges]
+    ):
         run = values.get("run")
         if run is not None and run.status == "completed":
             attempted.append((session, values))
             raise CodeUnavailableError("Terminal commit failed")
         await save(session, revision, **values)
 
-    def observe(event, data):
+    def observe(event: str, data: JsonObject):
         published.append((event, data))
         return publish(event, data)
 
@@ -2307,13 +2467,14 @@ async def test_failed_terminal_bundle_retains_committed_records_and_staged_outpu
     assert await service._store.prompts(session.id) == before.prompts
     owner = service._owners[session.id]
     assert owner.state.session == before.session and owner.state.run == before.run
-    assert owner.state.runs[before.run.id] == before.run
+    assert owner.state.runs[require_present(before.run).id] == before.run
     assert tuple(owner.state.prompts.values()) == before.prompts
     assert [item.text for item in owner.state.pending_items] == ["unsaved"]
     assert connection.closed
     assert published and all(event == "session.notice" for event, _ in published)
     assert all(
-        data["run"] == before.run.model_dump(mode="json") for _, data in published
+        data["run"] == require_present(before.run).model_dump(mode="json")
+        for _, data in published
     )
     with pytest.raises(CodeUnavailableError):
         await service.get_detail(session.id)
@@ -2322,7 +2483,10 @@ async def test_failed_terminal_bundle_retains_committed_records_and_staged_outpu
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fail", [False, True])
 async def test_review_liveness_flush_includes_pending_output_and_keeps_staging_version(
-    code, monkeypatch, flush_timer, fail
+    code: tuple[CodeService, FakeHarness, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    flush_timer: tuple[asyncio.Event, asyncio.Event],
+    fail: bool,
 ):
     service, harness, _ = code
     session = await session_for(code)
@@ -2350,9 +2514,12 @@ async def test_review_liveness_flush_includes_pending_output_and_keeps_staging_v
     await second.text("turn-2", "reply", "pending")
     await asyncio.wait_for(flush_timer[0].wait(), 3)
     save, publish = service._store.save_progress, service._events.publish
-    writes, published = [], []
+    writes: list[tuple[CodeItem, ...]] = []
+    published: list[tuple[str, JsonObject]] = []
 
-    async def observe_save(session, revision, **values):
+    async def observe_save(
+        session: CodeSession, revision: int, **values: Unpack[ProgressChanges]
+    ):
         assert service._version == before.version + 1
         assert service.cursor == before.cursor
         writes.append(tuple(values["items"]))
@@ -2360,7 +2527,7 @@ async def test_review_liveness_flush_includes_pending_output_and_keeps_staging_v
             raise CodeUnavailableError("Review flush failed")
         await save(session, revision, **values)
 
-    def observe(event, data):
+    def observe(event: str, data: JsonObject):
         published.append((event, data))
         return publish(event, data)
 
@@ -2394,7 +2561,9 @@ async def test_review_liveness_flush_includes_pending_output_and_keeps_staging_v
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native_exists", [False, True])
 async def test_startup_reconciles_persisted_deletion_without_another_native_delete(
-    database_factory, code, native_exists
+    database_factory: DatabaseFactory,
+    code: tuple[CodeService, FakeHarness, Path],
+    native_exists: bool,
 ):
     service, harness, directory = code
     session = await idle_native(code)
@@ -2407,7 +2576,7 @@ async def test_startup_reconciles_persisted_deletion_without_another_native_dele
     await service.close()
     await close_code_database(service)
     if not native_exists:
-        harness.histories.pop(session.native_thread_id)
+        harness.histories.pop(require_present(session.native_thread_id))
     restarted = CodeService(
         SQLiteCodeStore(
             database_factory(directory / "code.db", directory / "code.lock")
@@ -2431,7 +2600,9 @@ async def test_startup_reconciles_persisted_deletion_without_another_native_dele
 @pytest.mark.asyncio
 @pytest.mark.parametrize("may_have_input", [False, True])
 async def test_missing_native_history_is_recreated_only_before_possible_input(
-    database_factory, code, may_have_input
+    database_factory: DatabaseFactory,
+    code: tuple[CodeService, FakeHarness, Path],
+    may_have_input: bool,
 ):
     service, harness, directory = code
     session = await session_for(code)
@@ -2474,7 +2645,9 @@ async def test_missing_native_history_is_recreated_only_before_possible_input(
 
 
 @pytest.mark.asyncio
-async def test_cancelled_close_waiter_does_not_cancel_owned_shutdown(code, monkeypatch):
+async def test_cancelled_close_waiter_does_not_cancel_owned_shutdown(
+    code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
+):
     service, harness, _ = code
     session = await idle_native(code)
     connection = harness.connections[0]

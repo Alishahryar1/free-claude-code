@@ -24,7 +24,6 @@ def claude_proxy_values(proxy_root_url: str, auth_token: str) -> dict[str, str]:
         "API_FORCE_IDLE_TIMEOUT": "0",
         # Zero retains Claude's 5-minute non-streaming timeout. Use its timer cap.
         "API_TIMEOUT_MS": "2147483647",
-        "DISABLE_AUTOUPDATER": "1",
         "DISABLE_FEEDBACK_COMMAND": "1",
         "DISABLE_ERROR_REPORTING": "1",
     }

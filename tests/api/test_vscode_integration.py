@@ -6,13 +6,21 @@ from fastapi.testclient import TestClient
 
 from free_claude_code.config.settings import Settings
 from free_claude_code.harnesses import claude_integration, claude_onboarding
+from free_claude_code.runtime.application import ApplicationRuntime
 from tests.api.support import create_test_app, runtime_for_app
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_payload,
+    response_object,
+    response_payload,
+)
 
 ROOT = "/admin/api/integrations/claude-vscode"
 
 
 @pytest.fixture
-def integration(tmp_path, monkeypatch):
+def integration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     path = tmp_path / "settings.json"
     monkeypatch.setattr(claude_integration, "settings_path", lambda: path)
     monkeypatch.setattr(
@@ -27,37 +35,41 @@ def integration(tmp_path, monkeypatch):
         yield client, path, runtime_for_app(app)
 
 
-def test_routes_read_actual_file_connect_and_disconnect(integration):
+def test_routes_read_actual_file_connect_and_disconnect(
+    integration: tuple[TestClient, Path, ApplicationRuntime],
+):
     client, path, _ = integration
-    assert client.get(ROOT).json()["connected"] is False
+    assert response_object(client.get(ROOT))["connected"] is False
     response = client.post(f"{ROOT}/connect")
     assert response.status_code == 200
-    assert response.json() == {"connected": True}
+    assert response_payload(response) == {"connected": True}
     assert response.headers["cache-control"] == "no-store"
-    data = json.loads(path.read_text())
+    data = decode_object(path.read_text())
     environment = {
-        entry["name"]: entry["value"]
-        for entry in data["claudeCode.environmentVariables"]
+        object_payload(entry)["name"]: object_payload(entry)["value"]
+        for entry in array_payload(data["claudeCode.environmentVariables"])
     }
     assert environment["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:4321"
     assert environment["ANTHROPIC_AUTH_TOKEN"] == "integration-secret"
     assert "integration-secret" not in response.text
-    assert client.get(ROOT).json()["connected"] is True
+    assert response_object(client.get(ROOT))["connected"] is True
     state_path = path.parent / ".claude.json"
-    assert json.loads(state_path.read_text())["hasCompletedOnboarding"] is True
+    assert decode_object(state_path.read_text())["hasCompletedOnboarding"] is True
     state_path.write_text('{"hasCompletedOnboarding":false}')
-    assert client.get(ROOT).json()["connected"] is True
-    assert client.post(f"{ROOT}/connect").json() == {"connected": True}
+    assert response_object(client.get(ROOT))["connected"] is True
+    assert response_payload(client.post(f"{ROOT}/connect")) == {"connected": True}
     path.write_text("{}")
-    assert client.get(ROOT).json()["connected"] is False
-    assert client.post(f"{ROOT}/disconnect").json() == {"connected": False}
-    assert json.loads(state_path.read_text())["hasCompletedOnboarding"] is True
+    assert response_object(client.get(ROOT))["connected"] is False
+    assert response_payload(client.post(f"{ROOT}/disconnect")) == {"connected": False}
+    assert decode_object(state_path.read_text())["hasCompletedOnboarding"] is True
 
 
 @pytest.mark.parametrize(
     "source", [None, '{"hasCompletedOnboarding":false}', "{invalid", "[]"]
 )
-def test_connection_status_ignores_global_onboarding(integration, source):
+def test_connection_status_ignores_global_onboarding(
+    integration: tuple[TestClient, Path, ApplicationRuntime], source: str | None
+):
     client, path, _ = integration
     assert client.post(f"{ROOT}/connect").status_code == 200
     state_path = path.parent / ".claude.json"
@@ -75,7 +87,9 @@ def test_connection_status_ignores_global_onboarding(integration, source):
 
 
 @pytest.mark.parametrize("field", ["vscode_settings", "claude_state"])
-def test_status_reports_resolved_file_paths_without_creating_files(integration, field):
+def test_status_reports_resolved_file_paths_without_creating_files(
+    integration: tuple[TestClient, Path, ApplicationRuntime], field: str
+):
     client, path, _ = integration
     state_path = path.parent / ".claude.json"
     result = client.get(ROOT)
@@ -101,7 +115,9 @@ def test_status_reports_resolved_file_paths_without_creating_files(integration, 
 
 @pytest.mark.parametrize("action", ["", "/connect", "/disconnect"])
 @pytest.mark.parametrize("target", ["settings", "state"])
-def test_invalid_file_returns_safe_uncached_error(integration, action, target):
+def test_invalid_file_returns_safe_uncached_error(
+    integration: tuple[TestClient, Path, ApplicationRuntime], action: str, target: str
+):
     client, path, _ = integration
     source = '{"integration-secret": malformed}'
     if target == "state":
@@ -121,7 +137,11 @@ def test_invalid_file_returns_safe_uncached_error(integration, action, target):
 @pytest.mark.parametrize(
     "headers", [{"Host": "evil.test"}, {"Origin": "https://evil.test"}]
 )
-def test_local_admin_security_applies(integration, action, headers):
+def test_local_admin_security_applies(
+    integration: tuple[TestClient, Path, ApplicationRuntime],
+    action: str,
+    headers: dict[str, str],
+):
     client, path, _ = integration
     response = client.request(
         "GET" if not action else "POST", ROOT + action, headers=headers
@@ -130,7 +150,9 @@ def test_local_admin_security_applies(integration, action, headers):
     assert not path.exists()
 
 
-def test_remote_client_is_rejected(integration):
+def test_remote_client_is_rejected(
+    integration: tuple[TestClient, Path, ApplicationRuntime],
+):
     client, path, _ = integration
     with TestClient(
         client.app, base_url="http://127.0.0.1", client=("192.0.2.1", 50000)
@@ -139,10 +161,13 @@ def test_remote_client_is_rejected(integration):
     assert not path.exists()
 
 
-def test_io_failure_returns_safe_error(integration, monkeypatch):
+def test_io_failure_returns_safe_error(
+    integration: tuple[TestClient, Path, ApplicationRuntime],
+    monkeypatch: pytest.MonkeyPatch,
+):
     client, _, _ = integration
 
-    def fail(*args):
+    def fail(*args: object):
         raise PermissionError("integration-secret")
 
     monkeypatch.setattr(claude_integration, "configure", fail)
@@ -152,13 +177,17 @@ def test_io_failure_returns_safe_error(integration, monkeypatch):
 
 
 @pytest.mark.parametrize("failed_file", ["state", "settings"])
-def test_connect_partial_write_is_retryable(integration, monkeypatch, failed_file):
+def test_connect_partial_write_is_retryable(
+    integration: tuple[TestClient, Path, ApplicationRuntime],
+    monkeypatch: pytest.MonkeyPatch,
+    failed_file: str,
+):
     client, path, _ = integration
     state = claude_onboarding.state_path()
     path.write_text('{"keep":true}')
     original_replace = Path.replace
 
-    def fail(self, target):
+    def fail(self: Path, target: Path):
         if target == (state if failed_file == "state" else path):
             raise PermissionError("denied")
         return original_replace(self, target)
@@ -175,7 +204,9 @@ def test_connect_partial_write_is_retryable(integration, monkeypatch, failed_fil
     assert client.post(f"{ROOT}/connect").json() == {"connected": True}
 
 
-def test_invalid_vscode_preflight_does_not_complete_onboarding(integration):
+def test_invalid_vscode_preflight_does_not_complete_onboarding(
+    integration: tuple[TestClient, Path, ApplicationRuntime],
+):
     client, path, _ = integration
     path.write_text('{"claudeCode.environmentVariables":{}}')
     state = claude_onboarding.state_path()
@@ -184,16 +215,19 @@ def test_invalid_vscode_preflight_does_not_complete_onboarding(integration):
     assert state.read_text() == '{"hasCompletedOnboarding":false}'
 
 
-def test_connection_status_does_not_resolve_global_state(integration, monkeypatch):
+def test_connection_status_does_not_resolve_global_state(
+    integration: tuple[TestClient, Path, ApplicationRuntime],
+    monkeypatch: pytest.MonkeyPatch,
+):
     client, _, _ = integration
     assert client.post(f"{ROOT}/connect").status_code == 200
     state = claude_onboarding.state_path()
     resolve = Path.resolve
 
-    def fail_global(self, *args, **kwargs):
+    def fail_global(self: Path, *, strict: bool = False):
         if self == state:
             raise OSError("global state is inaccessible")
-        return resolve(self, *args, **kwargs)
+        return resolve(self, strict=strict)
 
     monkeypatch.setattr(Path, "resolve", fail_global)
     response = client.get(ROOT)
@@ -202,7 +236,9 @@ def test_connection_status_does_not_resolve_global_state(integration, monkeypatc
     assert response.json()["paths"]["claude_state"] == str(state.absolute())
 
 
-def test_pending_restart_and_shutdown_do_not_write(integration):
+def test_pending_restart_and_shutdown_do_not_write(
+    integration: tuple[TestClient, Path, ApplicationRuntime],
+):
     client, path, runtime = integration
     runtime._pending_fields = ["PORT"]
     assert client.post(f"{ROOT}/connect").status_code == 503

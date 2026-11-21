@@ -1,6 +1,5 @@
 """Check logging levels in a subprocess without changing pytest's global sinks."""
 
-import json
 import subprocess
 import sys
 from unittest.mock import AsyncMock, Mock, patch
@@ -15,14 +14,21 @@ from free_claude_code.application import execution
 from free_claude_code.config.settings import Settings
 from free_claude_code.core import trace
 from free_claude_code.core.anthropic import TokenCountRequest
+from free_claude_code.core.json_types import load_json_value
+from free_claude_code.core.stream_delivery import (
+    StreamDeliveryState,
+    bind_stream_delivery,
+)
 from free_claude_code.providers.openai_chat import transport as chat_transport
 from tests.application.test_execution import (
     FakeProvider,
     ResponsesFakeProvider,
     _routed_request,
     _routed_responses_request,
+    stream_routed_request,
 )
 from tests.providers.test_openai_chat_transport import _consume, _success, _transport
+from tests.wire_payload import int_payload, object_payload, string_payload
 
 
 async def _probe(level: str, raw: bool) -> None:
@@ -30,7 +36,7 @@ async def _probe(level: str, raw: bool) -> None:
     rows = []
     if level != "NONE":
         logger.add(
-            lambda message: rows.append(json.loads(message)),
+            lambda message: rows.append(load_json_value(message)),
             level=level,
             serialize=True,
         )
@@ -56,6 +62,7 @@ async def _probe(level: str, raw: bool) -> None:
             "provider_chat_body_snapshot",
             wraps=chat_transport.provider_chat_body_snapshot,
         ) as provider_snapshot,
+        bind_stream_delivery(StreamDeliveryState()),
         logger.contextualize(request_id="req_lazy", instance_id="instance_lazy"),
     ):
         trace.trace_event(fields, stage="unit", event="lazy.probe", source="test")
@@ -65,15 +72,18 @@ async def _probe(level: str, raw: bool) -> None:
         ):
             executor = execution.ProviderExecutor(
                 AsyncMock(return_value=provider),
-                progress_timeout_seconds=60,
                 token_counter=lambda *args: 1,
                 responses_token_counter=lambda request: 1,
                 log_raw_payloads=raw,
             )
             output = [
                 chunk
-                async for chunk in getattr(executor, f"stream_{wire}")(
-                    routed, raw_log_payload=raw_payload, request_id="req_lazy"
+                async for chunk in stream_routed_request(
+                    executor,
+                    wire,
+                    routed,
+                    raw_log_payload=raw_payload,
+                    request_id="req_lazy",
                 )
             ]
             assert output
@@ -110,12 +120,17 @@ async def _probe(level: str, raw: bool) -> None:
         assert bool(sanitize.call_count) == bool(expected)
     if expected:
         payloads = [
-            row["record"]["extra"]["trace_payload"]
+            object_payload(object_payload(object_payload(row)["record"])["extra"])[
+                "trace_payload"
+            ]
             for row in rows
-            if "trace_payload" in row["record"]["extra"]
+            if "trace_payload"
+            in object_payload(object_payload(object_payload(row)["record"])["extra"])
         ]
         probe = next(
-            payload for payload in payloads if payload["event"] == "lazy.probe"
+            payload
+            for payload in payloads
+            if object_payload(payload)["event"] == "lazy.probe"
         )
         assert probe == {
             "stage": "unit",
@@ -126,20 +141,53 @@ async def _probe(level: str, raw: bool) -> None:
         ingress_payload = next(
             payload
             for payload in payloads
-            if payload["event"] == "free_claude_code.api.request.received"
+            if object_payload(payload)["event"]
+            == "free_claude_code.api.request.received"
         )
-        assert ingress_payload["snapshot"]["model"] == "gateway-model"
         assert (
-            ingress_payload["snapshot"]["messages"]
+            object_payload(object_payload(ingress_payload)["snapshot"])["model"]
+            == "gateway-model"
+        )
+        assert (
+            object_payload(object_payload(ingress_payload)["snapshot"])["messages"]
             == routed.request.model_dump()["messages"]
         )
-        assert rows[0]["record"]["extra"]["request_id"] == "req_lazy"
-        assert rows[0]["record"]["extra"]["instance_id"] == "instance_lazy"
+        assert (
+            object_payload(object_payload(object_payload(rows[0])["record"])["extra"])[
+                "request_id"
+            ]
+            == "req_lazy"
+        )
+        assert (
+            object_payload(object_payload(object_payload(rows[0])["record"])["extra"])[
+                "instance_id"
+            ]
+            == "instance_lazy"
+        )
     else:
-        assert all(row["record"]["level"]["no"] >= 20 for row in rows)
-        assert all("trace_payload" not in row["record"]["extra"] for row in rows)
+        assert all(
+            int_payload(
+                object_payload(object_payload(object_payload(row)["record"])["level"])[
+                    "no"
+                ]
+            )
+            >= 20
+            for row in rows
+        )
+        assert all(
+            "trace_payload"
+            not in object_payload(
+                object_payload(object_payload(row)["record"])["extra"]
+            )
+            for row in rows
+        )
     assert (
-        sum(row["record"]["message"].startswith("FULL_") for row in rows)
+        sum(
+            string_payload(
+                object_payload(object_payload(row)["record"])["message"]
+            ).startswith("FULL_")
+            for row in rows
+        )
         == 2 * expected * raw
     )
 
@@ -160,7 +208,7 @@ async def _probe(level: str, raw: bool) -> None:
 
 @pytest.mark.parametrize("level", ["INFO", "DEBUG", "NONE"])
 @pytest.mark.parametrize("raw", [False, True])
-def test_debug_payloads_are_built_only_when_enabled(level, raw):
+def test_debug_payloads_are_built_only_when_enabled(level: str, raw: bool):
     result = subprocess.run(
         [
             sys.executable,

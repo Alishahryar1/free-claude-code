@@ -14,7 +14,7 @@ $CheckOrder = @(
     "suppressions",
     "ruff-format",
     "ruff-check",
-    "ty",
+    "pyrefly",
     "pytest",
     "playwright",
     "macos-desktop"
@@ -24,15 +24,15 @@ function Show-Usage {
     @"
 Usage: ci.ps1 [options]
 
-Runs the local sequence for the same check IDs enforced by GitHub CI.
-Requires uv on PATH when running ruff, ty, pytest, or Playwright checks.
+Runs the local sequence for checks enforced by GitHub CI.
+Requires uv on PATH when running Ruff, Pyrefly, pytest, or Playwright checks.
 Local ruff checks repair formatting and autofixable lint before later checks.
 
 Checks (in order):
   suppressions   Ban type ignores and legacy future annotations
   ruff-format    uv run ruff format
   ruff-check     uv run ruff check --fix
-  ty             uv run ty check
+  pyrefly        uv run pyrefly check
   pytest         uv run pytest -v --tb=short
   playwright     Install Chromium and run deterministic Admin browser tests
   macos-desktop  Build and test the native app (macOS GUI required, -Only)
@@ -134,13 +134,12 @@ function Test-SelectedChecksNeedUv {
 
 function Invoke-SuppressionsCheck {
     Write-Step "Ban suppressions and legacy annotations"
-    $pattern = '# type: ignore|# ty: ignore|from __future__ import annotations'
-    Write-Host "+ Get-ChildItem -Recurse -Filter *.py (excluding .venv, .git) | Select-String '$pattern'"
+    $pattern = '# type: ignore|# ty: ignore|#\s*pyrefly:\s*ignore|from __future__ import annotations'
+    Write-Host "+ Get-ChildItem -Recurse -Include *.py,*.pyi (excluding .venv, .git) | Select-String '$pattern'"
 
     if (-not $DryRun) {
         $scanErrors = @()
-        $matches = Get-ChildItem -Path . -Recurse -Force -File -ErrorAction SilentlyContinue -ErrorVariable +scanErrors |
-            Where-Object { $_.Extension -eq '.py' } |
+        $matches = Get-ChildItem -Path . -Recurse -Include *.py,*.pyi -File -ErrorAction SilentlyContinue -ErrorVariable +scanErrors |
             Where-Object {
                 $full = $_.FullName
                 $full -notmatch '[\\/]\.venv[\\/]' -and
@@ -156,7 +155,7 @@ function Invoke-SuppressionsCheck {
 
         if ($matches) {
             $matches | ForEach-Object { Write-Host $_.Line }
-            throw "type: ignore / ty: ignore comments and legacy future annotations are not allowed. Fix the underlying type/import issue instead."
+            throw "Type-checker suppressions and legacy future annotations are not allowed. Fix the underlying type/import issue instead."
         }
     }
 }
@@ -171,9 +170,9 @@ function Invoke-RuffLintCheck {
     Invoke-CiCommand -FilePath "uv" -Arguments @("run", "ruff", "check", "--fix")
 }
 
-function Invoke-TyCheck {
-    Write-Step "ty check"
-    Invoke-CiCommand -FilePath "uv" -Arguments @("run", "ty", "check")
+function Invoke-PyreflyCheck {
+    Write-Step "pyrefly check"
+    Invoke-CiCommand -FilePath "uv" -Arguments @("run", "pyrefly", "check")
 }
 
 function Invoke-PytestCheck {
@@ -198,7 +197,7 @@ function Invoke-Check {
         "suppressions" { Invoke-SuppressionsCheck }
         "ruff-format" { Invoke-RuffFormatCheck }
         "ruff-check" { Invoke-RuffLintCheck }
-        "ty" { Invoke-TyCheck }
+        "pyrefly" { Invoke-PyreflyCheck }
         "pytest" { Invoke-PytestCheck }
         "playwright" { Invoke-PlaywrightCheck }
         "macos-desktop" {

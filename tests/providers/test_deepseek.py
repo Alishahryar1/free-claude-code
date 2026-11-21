@@ -2,6 +2,7 @@
 
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -20,9 +21,10 @@ from free_claude_code.core.anthropic.models import (
     Tool,
 )
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_chat import is_synthetic_chat_tool_turn_boundary
 from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
+from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from tests.providers.support import (
     REASONING_OFF,
@@ -32,6 +34,13 @@ from tests.providers.support import (
     immediate_admission,
     make_provider_config,
     reasoning_for,
+    sdk_chat_chunk,
+)
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
 )
 
 
@@ -44,7 +53,7 @@ def deepseek_config():
 
 
 @pytest.fixture
-def deepseek_provider(deepseek_config):
+def deepseek_provider(deepseek_config: ProviderConfig):
     return DeepSeekProvider(deepseek_config, admission=immediate_admission())
 
 
@@ -52,7 +61,7 @@ def test_default_base_url_alias():
     assert DEEPSEEK_DEFAULT_BASE == "https://api.deepseek.com"
 
 
-def test_init(deepseek_config):
+def test_init(deepseek_config: ProviderConfig):
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_client:
@@ -62,7 +71,9 @@ def test_init(deepseek_config):
     assert mock_client.called
 
 
-def test_responses_request_uses_deepseek_chat_policy(deepseek_provider):
+def test_responses_request_uses_deepseek_chat_policy(
+    deepseek_provider: DeepSeekProvider,
+):
     request = OpenAIResponsesRequest.model_validate(
         {
             "model": "deepseek-chat",
@@ -104,7 +115,7 @@ def test_responses_request_uses_deepseek_chat_policy(deepseek_provider):
 
 
 def test_responses_tool_history_keeps_deepseek_replayable_reasoning(
-    deepseek_provider,
+    deepseek_provider: DeepSeekProvider,
 ):
     request = OpenAIResponsesRequest.model_validate(
         {
@@ -133,7 +144,9 @@ def test_responses_tool_history_keeps_deepseek_replayable_reasoning(
         request, reasoning=REASONING_ON
     )
 
-    assert translated.body["messages"][0]["reasoning_content"] == "Inspect first"
+    messages = translated.body["messages"]
+    assert isinstance(messages, list)
+    assert messages[0]["reasoning_content"] == "Inspect first"
     assert translated.body["extra_body"] == {"thinking": {"type": "enabled"}}
 
 
@@ -239,7 +252,10 @@ def test_responses_tool_history_keeps_deepseek_replayable_reasoning(
     ],
 )
 def test_maps_only_complete_consistent_cache_usage(
-    deepseek_provider, usage, anthropic_expected, responses_cached
+    deepseek_provider: DeepSeekProvider,
+    usage: JsonObject,
+    anthropic_expected: JsonObject,
+    responses_cached: int | None,
 ) -> None:
     assert (
         deepseek_provider._behavior.anthropic_usage_fields(usage) == anthropic_expected
@@ -247,7 +263,7 @@ def test_maps_only_complete_consistent_cache_usage(
     assert deepseek_provider._behavior.cached_input_tokens(usage) == responses_cached
 
 
-def test_build_request_body_openai_chat_shape(deepseek_provider):
+def test_build_request_body_openai_chat_shape(deepseek_provider: DeepSeekProvider):
     request = MessagesRequest(
         model="deepseek-v4-pro",
         max_tokens=100,
@@ -259,14 +275,14 @@ def test_build_request_body_openai_chat_shape(deepseek_provider):
     )
     assert body["model"] == "deepseek-v4-pro"
     assert "stream" not in body
-    assert body["messages"][0] == {"role": "system", "content": "S"}
-    assert body["messages"][1]["role"] == "user"
-    assert body["messages"][1] == {"role": "user", "content": "Hello"}
+    assert array_payload(body["messages"])[0] == {"role": "system", "content": "S"}
+    assert object_payload(array_payload(body["messages"])[1])["role"] == "user"
+    assert array_payload(body["messages"])[1] == {"role": "user", "content": "Hello"}
     assert body["max_tokens"] == 100
     assert "stream_options" not in body
 
 
-def test_build_request_body_default_max_tokens(deepseek_provider):
+def test_build_request_body_default_max_tokens(deepseek_provider: DeepSeekProvider):
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="x")],
@@ -277,7 +293,7 @@ def test_build_request_body_default_max_tokens(deepseek_provider):
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 
 
-def test_build_request_body_thinking_enabled(deepseek_provider):
+def test_build_request_body_thinking_enabled(deepseek_provider: DeepSeekProvider):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -288,10 +304,12 @@ def test_build_request_body_thinking_enabled(deepseek_provider):
     body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
-    assert body["extra_body"]["thinking"] == {"type": "enabled"}
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "enabled"}
 
 
-def test_build_request_body_tool_list_keeps_thinking(deepseek_provider):
+def test_build_request_body_tool_list_keeps_thinking(
+    deepseek_provider: DeepSeekProvider,
+):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -311,11 +329,18 @@ def test_build_request_body_tool_list_keeps_thinking(deepseek_provider):
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["thinking"] == {"type": "enabled"}
-    assert body["tools"][0]["function"]["name"] == "Read"
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "enabled"}
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "Read"
+    )
 
 
-def test_build_request_body_tool_choice_keeps_thinking(deepseek_provider):
+def test_build_request_body_tool_choice_keeps_thinking(
+    deepseek_provider: DeepSeekProvider,
+):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -330,12 +355,12 @@ def test_build_request_body_tool_choice_keeps_thinking(deepseek_provider):
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["thinking"] == {"type": "enabled"}
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "enabled"}
     assert body["tool_choice"] == "auto"
 
 
 def test_build_request_body_forced_tool_choice_downgrades_to_auto(
-    deepseek_provider,
+    deepseek_provider: DeepSeekProvider,
 ):
     request = MessagesRequest.model_validate(
         {
@@ -357,7 +382,7 @@ def test_build_request_body_forced_tool_choice_downgrades_to_auto(
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["thinking"] == {"type": "enabled"}
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "enabled"}
     assert body["tool_choice"] == "auto"
 
 
@@ -377,11 +402,11 @@ def test_build_request_body_encodes_reasoning_off():
         }
     )
     body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
-    assert body["extra_body"]["thinking"] == {"type": "disabled"}
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "disabled"}
     assert "stream_options" not in body
 
 
-def test_non_tool_thinking_survives_conversion(deepseek_provider):
+def test_non_tool_thinking_survives_conversion(deepseek_provider: DeepSeekProvider):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -403,14 +428,16 @@ def test_non_tool_thinking_survives_conversion(deepseek_provider):
     body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
-    assert body["messages"][0] == {
+    assert array_payload(body["messages"])[0] == {
         "role": "assistant",
         "content": "out",
         "reasoning_content": "plain",
     }
 
 
-def test_redacted_thinking_is_kept_until_destination_preparation(deepseek_provider):
+def test_redacted_thinking_is_kept_until_destination_preparation(
+    deepseek_provider: DeepSeekProvider,
+):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -428,13 +455,15 @@ def test_redacted_thinking_is_kept_until_destination_preparation(deepseek_provid
     body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
-    assert body["messages"][0]["reasoning_details"] == [
+    assert object_payload(array_payload(body["messages"])[0])["reasoning_details"] == [
         {"type": "reasoning.encrypted", "data": "opaque"}
     ]
     assert request.model_dump()["messages"][0]["content"][0]["data"] == "opaque"
 
 
-def test_tool_history_with_replayable_thinking_preserves_thinking(deepseek_provider):
+def test_tool_history_with_replayable_thinking_preserves_thinking(
+    deepseek_provider: DeepSeekProvider,
+):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -482,19 +511,35 @@ def test_tool_history_with_replayable_thinking_preserves_thinking(deepseek_provi
     assert body["reasoning_effort"] == "high"
     assert "context_management" not in body
     assert "output_config" not in body
-    assistant = body["messages"][0]
-    assert assistant["content"] == ""
-    assert assistant["reasoning_content"] == "hidden"
-    assert assistant["tool_calls"][0]["function"]["name"] == "Read"
-    assert assistant["tool_calls"][0]["function"]["arguments"] == '{"file_path": "x"}'
-    assert body["messages"][1] == {
+    assistant = array_payload(body["messages"])[0]
+    assert object_payload(assistant)["content"] == ""
+    assert object_payload(assistant)["reasoning_content"] == "hidden"
+    assert (
+        object_payload(
+            object_payload(array_payload(object_payload(assistant)["tool_calls"])[0])[
+                "function"
+            ]
+        )["name"]
+        == "Read"
+    )
+    assert (
+        object_payload(
+            object_payload(array_payload(object_payload(assistant)["tool_calls"])[0])[
+                "function"
+            ]
+        )["arguments"]
+        == '{"file_path": "x"}'
+    )
+    assert array_payload(body["messages"])[1] == {
         "role": "tool",
         "tool_call_id": "t1",
         "content": "ok",
     }
 
 
-def test_tool_history_with_unsigned_thinking_preserves_thinking(deepseek_provider):
+def test_tool_history_with_unsigned_thinking_preserves_thinking(
+    deepseek_provider: DeepSeekProvider,
+):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -530,11 +575,16 @@ def test_tool_history_with_unsigned_thinking_preserves_thinking(deepseek_provide
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["thinking"] == {"type": "enabled"}
-    assert body["messages"][0]["reasoning_content"] == "plain"
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "enabled"}
+    assert (
+        object_payload(array_payload(body["messages"])[0])["reasoning_content"]
+        == "plain"
+    )
 
 
-def test_tool_history_without_thinking_keeps_selected_effort(deepseek_provider):
+def test_tool_history_without_thinking_keeps_selected_effort(
+    deepseek_provider: DeepSeekProvider,
+):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -586,17 +636,33 @@ def test_tool_history_without_thinking_keeps_selected_effort(deepseek_provider):
     )
 
     assert body["reasoning_effort"] == "high"
-    assert body["extra_body"].get("thinking") != {"type": "disabled"}
-    assert body["messages"][0]["reasoning_content"] == ""
+    assert object_payload(body["extra_body"]).get("thinking") != {"type": "disabled"}
+    assert object_payload(array_payload(body["messages"])[0])["reasoning_content"] == ""
     assert "context_management" not in body
     assert "output_config" not in body
-    assert body["tools"][0]["function"]["name"] == "Read"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "Read"
+    )
     assert body["tool_choice"] == "auto"
-    assert body["messages"][0]["tool_calls"][0]["function"]["name"] == "Read"
-    assert body["messages"][1]["role"] == "tool"
+    assert (
+        object_payload(
+            object_payload(
+                array_payload(
+                    object_payload(array_payload(body["messages"])[0])["tool_calls"]
+                )[0]
+            )["function"]
+        )["name"]
+        == "Read"
+    )
+    assert object_payload(array_payload(body["messages"])[1])["role"] == "tool"
 
 
-def test_tool_history_with_empty_thinking_preserves_reasoning_state(deepseek_provider):
+def test_tool_history_with_empty_thinking_preserves_reasoning_state(
+    deepseek_provider: DeepSeekProvider,
+):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -632,13 +698,22 @@ def test_tool_history_with_empty_thinking_preserves_reasoning_state(deepseek_pro
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["thinking"] == {"type": "enabled"}
-    assert body["messages"][0]["reasoning_content"] == ""
-    assert body["messages"][0]["tool_calls"][0]["function"]["name"] == "Read"
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "enabled"}
+    assert object_payload(array_payload(body["messages"])[0])["reasoning_content"] == ""
+    assert (
+        object_payload(
+            object_payload(
+                array_payload(
+                    object_payload(array_payload(body["messages"])[0])["tool_calls"]
+                )[0]
+            )["function"]
+        )["name"]
+        == "Read"
+    )
 
 
 def test_tool_history_with_empty_top_level_reasoning_preserves_reasoning_state(
-    deepseek_provider,
+    deepseek_provider: DeepSeekProvider,
 ):
     request = MessagesRequest.model_validate(
         {
@@ -675,9 +750,18 @@ def test_tool_history_with_empty_top_level_reasoning_preserves_reasoning_state(
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["thinking"] == {"type": "enabled"}
-    assert body["messages"][0]["reasoning_content"] == ""
-    assert body["messages"][0]["tool_calls"][0]["function"]["name"] == "Read"
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "enabled"}
+    assert object_payload(array_payload(body["messages"])[0])["reasoning_content"] == ""
+    assert (
+        object_payload(
+            object_payload(
+                array_payload(
+                    object_payload(array_payload(body["messages"])[0])["tool_calls"]
+                )[0]
+            )["function"]
+        )["name"]
+        == "Read"
+    )
 
 
 def test_thinking_off_preserves_historical_reasoning():
@@ -703,8 +787,10 @@ def test_thinking_off_preserves_historical_reasoning():
         }
     )
     body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
-    assert body["extra_body"]["thinking"] == {"type": "disabled"}
-    assert body["messages"][0]["reasoning_content"] == "sec"
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "disabled"}
+    assert (
+        object_payload(array_payload(body["messages"])[0])["reasoning_content"] == "sec"
+    )
 
 
 def test_thinking_off_still_replays_required_tool_reasoning():
@@ -747,11 +833,14 @@ def test_thinking_off_still_replays_required_tool_reasoning():
 
     body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
 
-    assert body["extra_body"]["thinking"] == {"type": "disabled"}
-    assert body["messages"][0]["reasoning_content"] == "required"
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "disabled"}
+    assert (
+        object_payload(array_payload(body["messages"])[0])["reasoning_content"]
+        == "required"
+    )
 
 
-def test_passthrough_tool_use_and_result(deepseek_provider):
+def test_passthrough_tool_use_and_result(deepseek_provider: DeepSeekProvider):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -783,8 +872,17 @@ def test_passthrough_tool_use_and_result(deepseek_provider):
     body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
-    assert body["messages"][0]["tool_calls"][0]["function"]["name"] == "n"
-    assert body["messages"][1]["role"] == "tool"
+    assert (
+        object_payload(
+            object_payload(
+                array_payload(
+                    object_payload(array_payload(body["messages"])[0])["tool_calls"]
+                )[0]
+            )["function"]
+        )["name"]
+        == "n"
+    )
+    assert object_payload(array_payload(body["messages"])[1])["role"] == "tool"
 
 
 @pytest.mark.parametrize(
@@ -811,7 +909,10 @@ def test_passthrough_tool_use_and_result(deepseek_provider):
     ],
 )
 def test_forwards_user_image_for_any_model(
-    deepseek_provider, model, source, expected_url
+    deepseek_provider: DeepSeekProvider,
+    model: str,
+    source: JsonObject,
+    expected_url: str,
 ):
     request = MessagesRequest(
         model=model,
@@ -863,20 +964,20 @@ def test_vision_model_strips_user_document():
     )
     provider.stream_messages(request, reasoning=REASONING_ON)
     body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
-    content = body["messages"][0]["content"]
+    content = object_payload(array_payload(body["messages"])[0])["content"]
     assert content
     if isinstance(content, str):
         lowered = content.lower()
     else:
         texts = [
             part.get("text", "")
-            for part in content
+            for part in array_payload(content)
             if isinstance(part, dict) and part.get("type") == "text"
         ]
-        lowered = "\n".join(texts).lower()
+        lowered = "\n".join(map(string_payload, texts)).lower()
         assert not any(
             isinstance(part, dict) and part.get("type") == "image_url"
-            for part in content
+            for part in array_payload(content)
         )
     assert "attachment omitted" in lowered
     assert "document inputs" in lowered
@@ -950,10 +1051,14 @@ def test_startup_preserves_completed_server_tool_history():
     )
     provider.stream_messages(request)
     body = provider._chat._build_request_body(request)
-    assert "[Earlier tool record]" in body["messages"][0]["content"]
+    assert "[Earlier tool record]" in string_payload(
+        object_array(body["messages"])[0]["content"]
+    )
 
 
-def test_non_tool_top_level_reasoning_survives_conversion(deepseek_provider):
+def test_non_tool_top_level_reasoning_survives_conversion(
+    deepseek_provider: DeepSeekProvider,
+):
     request = MessagesRequest(
         model="m",
         messages=[
@@ -967,14 +1072,14 @@ def test_non_tool_top_level_reasoning_survives_conversion(deepseek_provider):
     body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)
     )
-    assert body["messages"][0] == {
+    assert array_payload(body["messages"])[0] == {
         "role": "assistant",
         "content": "hi",
         "reasoning_content": "r",
     }
 
 
-def test_tool_call_top_level_reasoning_is_replayed(deepseek_provider):
+def test_tool_call_top_level_reasoning_is_replayed(deepseek_provider: DeepSeekProvider):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1009,12 +1114,15 @@ def test_tool_call_top_level_reasoning_is_replayed(deepseek_provider):
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["messages"][0]["reasoning_content"] == "required"
+    assert (
+        object_payload(array_payload(body["messages"])[0])["reasoning_content"]
+        == "required"
+    )
 
 
 @pytest.mark.asyncio
 async def test_wire_messages_keep_prefix_and_effort_when_old_reasoning_is_absent(
-    deepseek_provider,
+    deepseek_provider: DeepSeekProvider,
 ):
     prefix_messages = [
         {"role": "user", "content": "first"},
@@ -1075,7 +1183,7 @@ async def test_wire_messages_keep_prefix_and_effort_when_old_reasoning_is_absent
         },
     ]
 
-    def build(messages: list[dict]) -> dict:
+    def build(messages: Sequence[Mapping[str, JsonValue]]) -> JsonObject:
         request = MessagesRequest.model_validate(
             {
                 "model": "deepseek-v4-pro",
@@ -1092,63 +1200,82 @@ async def test_wire_messages_keep_prefix_and_effort_when_old_reasoning_is_absent
     first_messages = first_wire["messages"]
     continued = continued_wire["messages"]
 
-    assert continued[: len(first_messages)] == first_messages
+    assert (
+        array_payload(continued)[: len(object_array(first_messages))] == first_messages
+    )
     assistant_messages = [
-        message for message in first_messages if message["role"] == "assistant"
+        message
+        for message in object_array(first_messages)
+        if object_payload(message)["role"] == "assistant"
     ]
-    assert assistant_messages[0]["reasoning_content"] == "ordinary reasoning"
-    assert assistant_messages[1]["reasoning_content"] == "required tool reasoning"
+    assert (
+        object_payload(assistant_messages[0])["reasoning_content"]
+        == "ordinary reasoning"
+    )
+    assert (
+        object_payload(assistant_messages[1])["reasoning_content"]
+        == "required tool reasoning"
+    )
     assert first_wire["thinking"] == {"type": "enabled"}
     assert continued_wire["thinking"] == {"type": "enabled"}
 
 
 @pytest.mark.asyncio
-async def test_stream_uses_chat_completions_and_maps_cache_usage(deepseek_provider):
+async def test_stream_uses_chat_completions_and_maps_cache_usage(
+    deepseek_provider: DeepSeekProvider,
+):
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="hi")],
     )
 
     async def fake_stream():
-        yield SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    delta=SimpleNamespace(
-                        content="hello", reasoning_content=None, tool_calls=None
-                    ),
-                    finish_reason=None,
-                )
-            ],
-            usage=None,
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content="hello", reasoning_content=None, tool_calls=None
+                        ),
+                        finish_reason=None,
+                    )
+                ],
+                usage=None,
+            )
         )
-        yield SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    delta=SimpleNamespace(
-                        content=None, reasoning_content=None, tool_calls=None
-                    ),
-                    finish_reason="stop",
-                )
-            ],
-            usage=None,
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None, reasoning_content=None, tool_calls=None
+                        ),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=None,
+            )
         )
-        yield SimpleNamespace(
-            choices=[],
-            usage=SimpleNamespace(
-                completion_tokens=3,
-                prompt_tokens=30,
-                prompt_cache_hit_tokens=10,
-                prompt_cache_miss_tokens=20,
-            ),
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[],
+                usage=SimpleNamespace(
+                    completion_tokens=3,
+                    prompt_tokens=30,
+                    prompt_cache_hit_tokens=10,
+                    prompt_cache_miss_tokens=20,
+                ),
+            )
         )
 
     create = AsyncMock(return_value=SDKStreamDouble(fake_stream()))
     with patch.object(deepseek_provider._client.chat.completions, "create", create):
         chunks = [
-            chunk
+            frame
             async for chunk in deepseek_provider.stream_messages(
                 request, input_tokens=7, request_id="r1"
             )
+            for frame in chunk.frames
         ]
 
     create.assert_awaited_once()
@@ -1161,7 +1288,7 @@ async def test_stream_uses_chat_completions_and_maps_cache_usage(deepseek_provid
     usage = next(
         event.data["usage"] for event in parsed if event.event == "message_delta"
     )
-    assert "cache_creation_input_tokens" not in usage
+    assert "cache_creation_input_tokens" not in object_payload(usage)
     assert usage == {
         "input_tokens": 20,
         "output_tokens": 3,
@@ -1170,51 +1297,60 @@ async def test_stream_uses_chat_completions_and_maps_cache_usage(deepseek_provid
 
 
 @pytest.mark.asyncio
-async def test_responses_stream_maps_deepseek_cache_usage(deepseek_provider):
+async def test_responses_stream_maps_deepseek_cache_usage(
+    deepseek_provider: DeepSeekProvider,
+):
     request = OpenAIResponsesRequest(model="m", input="hi")
 
     async def fake_stream():
-        yield SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    delta=SimpleNamespace(
-                        content="hello", reasoning_content=None, tool_calls=None
-                    ),
-                    finish_reason=None,
-                )
-            ],
-            usage=None,
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content="hello", reasoning_content=None, tool_calls=None
+                        ),
+                        finish_reason=None,
+                    )
+                ],
+                usage=None,
+            )
         )
-        yield SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    delta=SimpleNamespace(
-                        content=None, reasoning_content=None, tool_calls=None
-                    ),
-                    finish_reason="stop",
-                )
-            ],
-            usage=None,
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None, reasoning_content=None, tool_calls=None
+                        ),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=None,
+            )
         )
-        yield SimpleNamespace(
-            choices=[],
-            usage=SimpleNamespace(
-                completion_tokens=3,
-                prompt_tokens=30,
-                model_extra={
-                    "prompt_cache_hit_tokens": 10,
-                    "prompt_cache_miss_tokens": 20,
-                },
-            ),
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[],
+                usage=SimpleNamespace(
+                    completion_tokens=3,
+                    prompt_tokens=30,
+                    model_extra={
+                        "prompt_cache_hit_tokens": 10,
+                        "prompt_cache_miss_tokens": 20,
+                    },
+                ),
+            )
         )
 
     create = AsyncMock(return_value=SDKStreamDouble(fake_stream()))
     with patch.object(deepseek_provider._client.chat.completions, "create", create):
         chunks = [
-            chunk
+            frame
             async for chunk in deepseek_provider.stream_responses(
                 request, input_tokens=7, request_id="r1"
             )
+            for frame in chunk.frames
         ]
 
     parsed = parse_sse_text("".join(chunks))
@@ -1223,7 +1359,7 @@ async def test_responses_stream_maps_deepseek_cache_usage(deepseek_provider):
         for event in parsed
         if event.event == "response.completed"
     )
-    assert completed["usage"] == {
+    assert object_payload(completed)["usage"] == {
         "input_tokens": 30,
         "input_tokens_details": {"cached_tokens": 10},
         "output_tokens": 3,
@@ -1232,7 +1368,9 @@ async def test_responses_stream_maps_deepseek_cache_usage(deepseek_provider):
     }
 
 
-def test_preserves_extra_body_for_openai_chat_request(deepseek_provider):
+def test_preserves_extra_body_for_openai_chat_request(
+    deepseek_provider: DeepSeekProvider,
+):
     raw = {
         "model": "m",
         "max_tokens": 3,
@@ -1244,7 +1382,9 @@ def test_preserves_extra_body_for_openai_chat_request(deepseek_provider):
     assert body["extra_body"] == {"note": 1}
 
 
-def test_normalizes_tool_result_content_array_to_string(deepseek_provider):
+def test_normalizes_tool_result_content_array_to_string(
+    deepseek_provider: DeepSeekProvider,
+):
     """Test that tool_result content arrays are normalized to strings for DeepSeek API."""
     request = MessagesRequest.model_validate(
         {
@@ -1282,14 +1422,14 @@ def test_normalizes_tool_result_content_array_to_string(deepseek_provider):
         request, reasoning=reasoning_for(request)
     )
 
-    tool_result = body["messages"][1]
-    assert tool_result["role"] == "tool"
-    assert isinstance(tool_result["content"], str)
-    assert "file1.txt" in tool_result["content"]
-    assert "file2.txt" in tool_result["content"]
+    tool_result = array_payload(body["messages"])[1]
+    assert object_payload(tool_result)["role"] == "tool"
+    assert isinstance(object_payload(tool_result)["content"], str)
+    assert "file1.txt" in string_payload(object_payload(tool_result)["content"])
+    assert "file2.txt" in string_payload(object_payload(tool_result)["content"])
 
 
-def test_strips_document_blocks_for_deepseek(deepseek_provider):
+def test_strips_document_blocks_for_deepseek(deepseek_provider: DeepSeekProvider):
     """Document blocks (e.g. PDFs from Claude Code) are stripped since DeepSeek can't process them."""
     request = MessagesRequest.model_validate(
         {
@@ -1318,14 +1458,14 @@ def test_strips_document_blocks_for_deepseek(deepseek_provider):
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["messages"][0] == {
+    assert array_payload(body["messages"])[0] == {
         "role": "tool",
         "tool_call_id": "t1",
         "content": "PDF text extracted",
     }
 
 
-def test_preserves_user_image_and_text_order(deepseek_provider):
+def test_preserves_user_image_and_text_order(deepseek_provider: DeepSeekProvider):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1368,7 +1508,9 @@ def test_preserves_user_image_and_text_order(deepseek_provider):
     ]
 
 
-def test_normalizes_tool_result_content_dict_to_string(deepseek_provider):
+def test_normalizes_tool_result_content_dict_to_string(
+    deepseek_provider: DeepSeekProvider,
+):
     """Test that tool_result content dicts are normalized to JSON strings."""
     request = MessagesRequest.model_validate(
         {
@@ -1403,15 +1545,17 @@ def test_normalizes_tool_result_content_dict_to_string(deepseek_provider):
         request, reasoning=reasoning_for(request)
     )
 
-    tool_result = body["messages"][1]
-    assert tool_result["role"] == "tool"
-    assert isinstance(tool_result["content"], str)
-    assert "status" in tool_result["content"]
-    assert "success" in tool_result["content"]
+    tool_result = array_payload(body["messages"])[1]
+    assert object_payload(tool_result)["role"] == "tool"
+    assert isinstance(object_payload(tool_result)["content"], str)
+    assert "status" in string_payload(object_payload(tool_result)["content"])
+    assert "success" in string_payload(object_payload(tool_result)["content"])
 
 
 @pytest.mark.parametrize("model", ["deepseek-flash", "deepseek-v4-flash-vision-exp"])
-def test_preserves_image_and_text_inside_tool_result(deepseek_provider, model):
+def test_preserves_image_and_text_inside_tool_result(
+    deepseek_provider: DeepSeekProvider, model: str
+):
     request = MessagesRequest.model_validate(
         {
             "model": model,
@@ -1456,19 +1600,21 @@ def test_preserves_image_and_text_inside_tool_result(deepseek_provider, model):
         request, reasoning=reasoning_for(request)
     )
 
-    assert [message["role"] for message in body["messages"]] == [
+    assert [
+        object_payload(message)["role"] for message in array_payload(body["messages"])
+    ] == [
         "assistant",
         "tool",
         "assistant",
         "user",
     ]
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "tool",
         "tool_call_id": "t1",
         "content": "[Image-bearing tool output follows in user content.]",
     }
-    assert is_synthetic_chat_tool_turn_boundary(body["messages"][2])
-    assert body["messages"][3]["content"] == [
+    assert is_synthetic_chat_tool_turn_boundary(array_payload(body["messages"])[2])
+    assert object_payload(array_payload(body["messages"])[3])["content"] == [
         {"type": "text", "text": 'Image-bearing output for tool call "t1":'},
         {"type": "text", "text": "screenshot saved"},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,YQ=="}},
@@ -1476,7 +1622,9 @@ def test_preserves_image_and_text_inside_tool_result(deepseek_provider, model):
     ]
 
 
-def test_image_only_tool_result_reaches_user_content(deepseek_provider):
+def test_image_only_tool_result_reaches_user_content(
+    deepseek_provider: DeepSeekProvider,
+):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1518,19 +1666,21 @@ def test_image_only_tool_result_reaches_user_content(deepseek_provider):
         request, reasoning=reasoning_for(request)
     )
 
-    assert [message["role"] for message in body["messages"]] == [
+    assert [
+        object_payload(message)["role"] for message in array_payload(body["messages"])
+    ] == [
         "assistant",
         "tool",
         "assistant",
         "user",
     ]
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "tool",
         "tool_call_id": "t1",
         "content": "[Image-bearing tool output follows in user content.]",
     }
-    assert is_synthetic_chat_tool_turn_boundary(body["messages"][2])
-    assert body["messages"][3]["content"] == [
+    assert is_synthetic_chat_tool_turn_boundary(array_payload(body["messages"])[2])
+    assert object_payload(array_payload(body["messages"])[3])["content"] == [
         {"type": "text", "text": 'Image-bearing output for tool call "t1":'},
         {
             "type": "image_url",
@@ -1547,8 +1697,8 @@ def test_image_only_tool_result_reaches_user_content(deepseek_provider):
     ],
 )
 def test_document_or_empty_tool_result_keeps_placeholder(
-    deepseek_provider,
-    tool_content,
+    deepseek_provider: DeepSeekProvider,
+    tool_content: list[JsonObject],
 ):
     """Document-only and empty tool results retain their omission marker."""
     request = MessagesRequest.model_validate(
@@ -1584,15 +1734,26 @@ def test_document_or_empty_tool_result_keeps_placeholder(
         request, reasoning=reasoning_for(request)
     )
 
-    tool_result = body["messages"][1]
-    assert tool_result["role"] == "tool"
-    assert isinstance(tool_result["content"], str)
-    assert "attachment omitted" in tool_result["content"].lower()
-    assert "document inputs" in tool_result["content"].lower()
-    assert "image omitted" not in tool_result["content"].lower()
+    tool_result = array_payload(body["messages"])[1]
+    assert object_payload(tool_result)["role"] == "tool"
+    assert isinstance(object_payload(tool_result)["content"], str)
+    assert (
+        "attachment omitted"
+        in string_payload(object_payload(tool_result)["content"]).lower()
+    )
+    assert (
+        "document inputs"
+        in string_payload(object_payload(tool_result)["content"]).lower()
+    )
+    assert (
+        "image omitted"
+        not in string_payload(object_payload(tool_result)["content"]).lower()
+    )
 
 
-def test_document_only_message_replaced_with_placeholder(deepseek_provider):
+def test_document_only_message_replaced_with_placeholder(
+    deepseek_provider: DeepSeekProvider,
+):
     """A top-level document-only message remains non-empty after stripping."""
     request = MessagesRequest.model_validate(
         {
@@ -1615,12 +1776,14 @@ def test_document_only_message_replaced_with_placeholder(deepseek_provider):
         request, reasoning=reasoning_for(request)
     )
 
-    content = body["messages"][0]["content"]
-    assert "attachment omitted" in content.lower()
-    assert "document inputs" in content.lower()
+    content = object_payload(array_payload(body["messages"])[0])["content"]
+    assert "attachment omitted" in string_payload(content).lower()
+    assert "document inputs" in string_payload(content).lower()
 
 
-def test_warns_when_stripping_document_blocks(deepseek_provider, caplog):
+def test_warns_when_stripping_document_blocks(
+    deepseek_provider: DeepSeekProvider, caplog: pytest.LogCaptureFixture
+):
     """A warning identifies documents omitted from user and tool content."""
     request = MessagesRequest.model_validate(
         {
@@ -1699,7 +1862,11 @@ def test_warns_when_stripping_document_blocks(deepseek_provider, caplog):
         ],
     ],
 )
-def test_no_warning_when_no_documents(deepseek_provider, caplog, content):
+def test_no_warning_when_no_documents(
+    deepseek_provider: DeepSeekProvider,
+    caplog: pytest.LogCaptureFixture,
+    content: list[JsonObject] | str,
+):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1715,7 +1882,9 @@ def test_no_warning_when_no_documents(deepseek_provider, caplog, content):
     assert not any(r.levelno == logging.WARNING for r in caplog.records)
 
 
-def test_parallel_tool_results_close_before_image_content(deepseek_provider):
+def test_parallel_tool_results_close_before_image_content(
+    deepseek_provider: DeepSeekProvider,
+):
     request = MessagesRequest.model_validate(
         {
             "model": "deepseek-flash",
@@ -1759,21 +1928,25 @@ def test_parallel_tool_results_close_before_image_content(deepseek_provider):
     body = deepseek_provider._chat._build_request_body(request, reasoning=REASONING_ON)
 
     messages = body["messages"]
-    assert [message["role"] for message in messages] == [
+    assert [object_payload(message)["role"] for message in array_payload(messages)] == [
         "assistant",
         "tool",
         "tool",
         "assistant",
         "user",
     ]
-    assert [message["tool_call_id"] for message in messages[1:3]] == ["t1", "t2"]
+    assert [
+        object_payload(message)["tool_call_id"]
+        for message in array_payload(messages)[1:3]
+    ] == ["t1", "t2"]
     assert (
-        messages[1]["content"] == "[Image-bearing tool output follows in user content.]"
+        object_payload(array_payload(messages)[1])["content"]
+        == "[Image-bearing tool output follows in user content.]"
     )
-    assert messages[2]["content"] == "text result"
-    assert is_synthetic_chat_tool_turn_boundary(messages[3])
-    assert messages[3]["reasoning_content"] == ""
-    assert messages[4]["content"] == [
+    assert object_payload(array_payload(messages)[2])["content"] == "text result"
+    assert is_synthetic_chat_tool_turn_boundary(array_payload(messages)[3])
+    assert object_payload(array_payload(messages)[3])["reasoning_content"] == ""
+    assert object_payload(array_payload(messages)[4])["content"] == [
         {"type": "text", "text": 'Image-bearing output for tool call "t1":'},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,YQ=="}},
     ]
@@ -1781,7 +1954,7 @@ def test_parallel_tool_results_close_before_image_content(deepseek_provider):
 
 @pytest.mark.parametrize("inside_tool_result", [False, True])
 def test_mixed_attachment_content_omits_only_document(
-    deepseek_provider, inside_tool_result
+    deepseek_provider: DeepSeekProvider, inside_tool_result: bool
 ):
     content = [
         {
@@ -1792,7 +1965,7 @@ def test_mixed_attachment_content_omits_only_document(
     ]
     messages = [{"role": "user", "content": content}]
     if inside_tool_result:
-        messages = [
+        messages: list[JsonObject] = [
             {
                 "role": "assistant",
                 "content": [
@@ -1815,10 +1988,10 @@ def test_mixed_attachment_content_omits_only_document(
 
     images = [
         part
-        for message in body["messages"]
-        if isinstance(message.get("content"), list)
-        for part in message["content"]
-        if part.get("type") == "image_url"
+        for message in array_payload(body["messages"])
+        if isinstance(object_payload(message).get("content"), list)
+        for part in array_payload(object_payload(message)["content"])
+        if object_payload(part).get("type") == "image_url"
     ]
     assert images == [
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,YQ=="}}
@@ -1846,7 +2019,7 @@ def test_mixed_attachment_content_omits_only_document(
     ],
 )
 def test_rejects_unportable_image_without_exposing_source(
-    deepseek_provider, source, error
+    deepseek_provider: DeepSeekProvider, source: JsonObject, error: str
 ):
     request = MessagesRequest(
         model="deepseek-flash",
@@ -1863,7 +2036,7 @@ def test_rejects_unportable_image_without_exposing_source(
     assert "private_" not in str(exc_info.value)
 
 
-def test_shared_conversion_rejects_assistant_image(deepseek_provider):
+def test_shared_conversion_rejects_assistant_image(deepseek_provider: DeepSeekProvider):
     image = {
         "type": "image",
         "source": {"type": "url", "url": "https://images.example.test/shot.png"},
@@ -1881,8 +2054,8 @@ def test_shared_conversion_rejects_assistant_image(deepseek_provider):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire_api", ["messages", "responses"])
-async def test_upstream_image_rejection_preserves_image_and_fails_once(
-    deepseek_provider, wire_api
+async def test_upstream_image_rejection_replaces_image_with_a_note(
+    deepseek_provider: DeepSeekProvider, wire_api: str
 ):
     if wire_api == "messages":
         request = MessagesRequest(
@@ -1938,34 +2111,43 @@ async def test_upstream_image_rejection_preserves_image_and_fails_once(
         },
     )
 
-    try:
-        with (
-            patch.object(
-                deepseek_provider._client.chat.completions,
-                "create",
-                new_callable=AsyncMock,
-                side_effect=error,
-            ) as create,
-            pytest.raises(ExecutionFailure) as exc_info,
-        ):
-            async for _ in stream:
-                pass
+    async def answered():
+        for delta, finish_reason in (("I cannot see the image.", None), (None, "stop")):
+            yield sdk_chat_chunk(
+                SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            delta=SimpleNamespace(
+                                content=delta, reasoning_content=None, tool_calls=None
+                            ),
+                            finish_reason=finish_reason,
+                        )
+                    ],
+                    usage=None,
+                )
+            )
 
-        assert create.call_count == 1
-        assert create.call_args.kwargs["messages"] == [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": "data:image/png;base64,YQ=="},
-                    }
-                ],
-            }
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,YQ=="}}
+    note = {
+        "type": "text",
+        "text": (
+            "[image omitted: this model cannot accept image input. "
+            "Tell the user the image was not seen.]"
+        ),
+    }
+    try:
+        with patch.object(
+            deepseek_provider._client.chat.completions,
+            "create",
+            new_callable=AsyncMock,
+            side_effect=[error, SDKStreamDouble(answered())],
+        ) as create:
+            text = "".join([frame async for chunk in stream for frame in chunk.frames])
+
+        assert "I cannot see the image." in text
+        assert [call.kwargs["messages"] for call in create.call_args_list] == [
+            [{"role": "user", "content": [image]}],
+            [{"role": "user", "content": [note]}],
         ]
-        assert exc_info.value.kind is FailureKind.INVALID_REQUEST
-        assert exc_info.value.status_code == 400
-        assert exc_info.value.retryable is False
-        assert "does not support image inputs" in exc_info.value.message
     finally:
         await deepseek_provider.cleanup()

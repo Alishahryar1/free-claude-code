@@ -14,7 +14,7 @@ from free_claude_code.config.settings import Settings
 ID = "custom_" + "a" * 32
 
 
-def definition(**changes):
+def definition(**changes: object):
     return CustomProviderDefinition.model_validate(
         {
             "provider_id": ID,
@@ -50,13 +50,13 @@ def test_private_storage_round_trip_and_routing():
         "https://example.org/#fragment",
     ],
 )
-def test_invalid_api_bases_are_rejected(url):
+def test_invalid_api_bases_are_rejected(url: str):
     with pytest.raises(ValidationError):
         definition(base_url=url)
 
 
 @pytest.mark.parametrize("prefix", ["", "anthropic/", "claude-3-freecc-no-thinking/"])
-def test_unknown_custom_reference_never_falls_back(prefix):
+def test_unknown_custom_reference_never_falls_back(prefix: str):
     with pytest.raises(UnknownProviderError):
         ModelRouter(Settings()).resolve(f"{prefix}{ID}/missing")
 
@@ -76,3 +76,21 @@ def test_duplicate_names_and_missing_route_targets_are_rejected():
 def test_format_and_reasoning_must_match():
     with pytest.raises(ValidationError):
         definition(api_format="anthropic_messages", reasoning_format="openai_effort")
+
+
+@pytest.mark.parametrize("saved", ["disabled", "think_tags"])
+def test_saved_chat_prose_formats_normalize_without_mutating_input(saved: str):
+    payload = {
+        "provider_id": ID,
+        "display_name": "Legacy",
+        "base_url": "https://gateway.test/v1",
+        "reasoning_history_format": saved,
+    }
+    parsed = CustomProviderDefinition.model_validate(payload)
+    assert parsed.reasoning_history_format == "reasoning_content"
+    assert payload["reasoning_history_format"] == saved
+
+
+@pytest.mark.parametrize("api_format", ["openai_responses", "anthropic_messages"])
+def test_nonchat_unused_history_sentinel_is_preserved(api_format: str):
+    assert definition(api_format=api_format).reasoning_history_format == "disabled"

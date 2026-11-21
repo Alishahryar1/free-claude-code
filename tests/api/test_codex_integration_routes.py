@@ -1,4 +1,5 @@
 import tomllib
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -6,13 +7,14 @@ from fastapi.testclient import TestClient
 from free_claude_code.config.paths import codex_model_catalog_path
 from free_claude_code.config.settings import Settings
 from free_claude_code.harnesses import codex_integration
+from free_claude_code.runtime.application import ApplicationRuntime
 from tests.api.support import create_test_app, runtime_for_app
 
 ROOT = "/admin/api/integrations/codex"
 
 
 @pytest.fixture
-def integration(tmp_path, monkeypatch):
+def integration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     path = tmp_path / "config.toml"
     monkeypatch.setattr(codex_integration, "config_path", lambda: path)
     app = create_test_app(
@@ -24,7 +26,9 @@ def integration(tmp_path, monkeypatch):
         yield client, path, runtime_for_app(app)
 
 
-def test_routes_inspect_connect_and_disconnect(integration):
+def test_routes_inspect_connect_and_disconnect(
+    integration: tuple[TestClient, Path, ApplicationRuntime],
+):
     client, path, _ = integration
     response = client.get(ROOT)
     assert response.json() == {
@@ -52,7 +56,9 @@ def test_routes_inspect_connect_and_disconnect(integration):
 
 
 @pytest.mark.parametrize("action", ["", "/connect", "/disconnect"])
-def test_invalid_file_returns_safe_uncached_error(integration, action):
+def test_invalid_file_returns_safe_uncached_error(
+    integration: tuple[TestClient, Path, ApplicationRuntime], action: str
+):
     client, path, _ = integration
     source = "[integration-secret"
     path.write_text(source)
@@ -68,7 +74,11 @@ def test_invalid_file_returns_safe_uncached_error(integration, action):
 @pytest.mark.parametrize(
     "headers", [{"Host": "evil.test"}, {"Origin": "https://evil.test"}]
 )
-def test_local_admin_security_applies(integration, action, headers):
+def test_local_admin_security_applies(
+    integration: tuple[TestClient, Path, ApplicationRuntime],
+    action: str,
+    headers: dict[str, str],
+):
     client, path, _ = integration
     response = client.request(
         "GET" if not action else "POST", ROOT + action, headers=headers
@@ -77,7 +87,9 @@ def test_local_admin_security_applies(integration, action, headers):
     assert not path.exists()
 
 
-def test_remote_client_is_rejected(integration):
+def test_remote_client_is_rejected(
+    integration: tuple[TestClient, Path, ApplicationRuntime],
+):
     client, path, _ = integration
     with TestClient(
         client.app, base_url="http://127.0.0.1", client=("192.0.2.1", 50000)
@@ -86,10 +98,13 @@ def test_remote_client_is_rejected(integration):
     assert not path.exists()
 
 
-def test_io_failure_returns_safe_error(integration, monkeypatch):
+def test_io_failure_returns_safe_error(
+    integration: tuple[TestClient, Path, ApplicationRuntime],
+    monkeypatch: pytest.MonkeyPatch,
+):
     client, _, _ = integration
 
-    def fail(*args):
+    def fail(*args: object):
         raise PermissionError("integration-secret")
 
     monkeypatch.setattr(codex_integration, "configure", fail)
@@ -99,7 +114,9 @@ def test_io_failure_returns_safe_error(integration, monkeypatch):
     assert "integration-secret" not in response.text
 
 
-def test_pending_restart_and_shutdown_do_not_write(integration):
+def test_pending_restart_and_shutdown_do_not_write(
+    integration: tuple[TestClient, Path, ApplicationRuntime],
+):
     client, path, runtime = integration
     runtime._pending_fields = ["PORT"]
     assert client.post(f"{ROOT}/connect").status_code == 503

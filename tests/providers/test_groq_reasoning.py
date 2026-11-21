@@ -10,29 +10,31 @@ import pytest
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
+from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
     parse_sse_text,
     text_content,
 )
+from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import (
     ReasoningCapability,
     ReasoningEffort,
     ReasoningPolicy,
 )
-from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.groq import GroqProvider
 from free_claude_code.providers.groq.client import (
     GroqChatBehavior,
     _parse_reasoning_vocabulary,
     _rewrite_reasoning_effort,
 )
-from free_claude_code.providers.request_recovery import RequestRecovery
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     SDKStreamDouble,
     capture_openai_chat_wire_body,
     immediate_admission,
     make_provider_config,
+    sdk_chat_chunk,
 )
 
 _MODEL = "opaque-model-a"
@@ -94,15 +96,35 @@ def _chunk(*, content: str | None = None, finish_reason: str | None = None):
         reasoning_content=None,
         tool_calls=None,
     )
-    return MagicMock(
-        choices=[MagicMock(delta=delta, finish_reason=finish_reason)],
-        usage=None,
+    return sdk_chat_chunk(
+        MagicMock(
+            choices=[MagicMock(delta=delta, finish_reason=finish_reason)],
+            usage=None,
+        )
     )
 
 
 async def _successful_stream(text: str = "visible"):
     yield _chunk(content=text)
     yield _chunk(finish_reason="stop")
+
+
+async def _drain(
+    provider: GroqProvider,
+    reasoning: ReasoningPolicy,
+    request: MessagesRequest | None = None,
+):
+    _ = [
+        frame
+        async for event in provider.stream_messages(
+            request or _request(), reasoning=reasoning
+        )
+        for frame in event.frames
+    ]
+
+
+def _sent(create: AsyncMock, index: int) -> JsonObject:
+    return dict(create.await_args_list[index].kwargs)
 
 
 @pytest.mark.asyncio
@@ -114,11 +136,11 @@ async def _successful_stream(text: str = "visible"):
         "accepted options for reasoning_effort include default",
     ],
 )
-async def test_classifier_correction_does_not_change_later_requests(message):
+async def test_classifier_correction_does_not_change_later_requests(message: str):
     provider = _provider()
     sent = []
 
-    async def create(**body):
+    async def create(**body: object):
         sent.append(body)
         if len(sent) == 1:
             raise _BadRequest(message, body={"message": message})
@@ -128,7 +150,7 @@ async def test_classifier_correction_does_not_change_later_requests(message):
         with patch.object(provider._client.chat.completions, "create", create):
             classifier = "".join(
                 [
-                    event
+                    frame
                     async for event in provider.stream_messages(
                         make_messages_request(_MODEL, max_tokens=64),
                         reasoning=ReasoningPolicy.prefer_off(),
@@ -136,15 +158,17 @@ async def test_classifier_correction_does_not_change_later_requests(message):
                             _MODEL, reasoning_capability=ReasoningCapability.OPTIONAL
                         ),
                     )
+                    for frame in event.frames
                 ]
             )
             ordinary = "".join(
                 [
-                    event
+                    frame
                     async for event in provider.stream_messages(
                         _request(),
                         reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
                     )
+                    for frame in event.frames
                 ]
             )
     finally:
@@ -411,44 +435,27 @@ async def test_initial_reasoning_policy_reaches_sdk_wire(
 async def test_exact_issue_retries_with_default_and_learns_model() -> None:
     provider = _provider()
     policy = ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
-    body = provider._chat._build_request_body(_request(), reasoning=policy)
     create = AsyncMock(
-        side_effect=[_vocabulary_error(), SDKStreamDouble(_successful_stream())]
+        side_effect=[
+            _vocabulary_error(),
+            SDKStreamDouble(_successful_stream()),
+            SDKStreamDouble(_successful_stream()),
+        ]
     )
 
     with patch.object(provider._client.chat.completions, "create", create):
-        _stream, used_body, attempt, _sent_body = await provider._chat._create_stream(
-            body,
-            RequestRecovery(provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
-        await _stream.aclose()
-        await attempt.aclose()
+        await _drain(provider, policy)
+        assert create.await_count == 2
+        assert _sent(create, 0)["reasoning_effort"] == "high"
+        assert _sent(create, 1)["reasoning_effort"] == "default"
+        assert _reasoning_vocabularies(provider) == {
+            _MODEL: frozenset({"none", "default"})
+        }
 
-    assert create.await_count == 2
-    assert create.await_args_list[0].kwargs["reasoning_effort"] == "high"
-    assert create.await_args_list[1].kwargs["reasoning_effort"] == "default"
-    assert used_body["reasoning_effort"] == "default"
-    assert _reasoning_vocabularies(provider) == {_MODEL: frozenset({"none", "default"})}
+        await _drain(provider, policy)
 
-    next_body = provider._chat._build_request_body(_request(), reasoning=policy)
-    assert next_body["reasoning_effort"] == "default"
-    next_create = AsyncMock(return_value=SDKStreamDouble(_successful_stream()))
-    with patch.object(provider._client.chat.completions, "create", next_create):
-        (
-            _stream,
-            next_used_body,
-            next_attempt,
-            _sent_body,
-        ) = await provider._chat._create_stream(
-            next_body,
-            RequestRecovery(provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
-        await _stream.aclose()
-        await next_attempt.aclose()
-    assert next_create.await_count == 1
-    assert next_used_body["reasoning_effort"] == "default"
+    assert create.await_count == 3
+    assert _sent(create, 2)["reasoning_effort"] == "default"
 
 
 def test_cached_none_default_preserves_off() -> None:
@@ -499,27 +506,17 @@ def test_cached_named_vocabulary_omits_unrepresentable_off() -> None:
 @pytest.mark.asyncio
 async def test_unknown_vocabulary_retries_without_effort_and_negative_caches() -> None:
     provider = _provider()
-    body = provider._chat._build_request_body(
-        _request(),
-        reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
-    )
     create = AsyncMock(
         side_effect=[
             _vocabulary_error("`balanced` or `extreme`"),
-            object(),
+            SDKStreamDouble(_successful_stream()),
         ]
     )
 
     with patch.object(provider._client.chat.completions, "create", create):
-        _stream, used_body, attempt, _sent_body = await provider._chat._create_stream(
-            body,
-            RequestRecovery(provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
-        await attempt.aclose()
+        await _drain(provider, ReasoningPolicy.on(effort=ReasoningEffort.HIGH))
 
-    assert "reasoning_effort" not in create.await_args_list[1].kwargs
-    assert "reasoning_effort" not in used_body
+    assert "reasoning_effort" not in _sent(create, 1)
     assert _reasoning_vocabularies(provider)[_MODEL] == frozenset()
     assert "reasoning_effort" not in provider._chat._build_request_body(
         _request(),
@@ -545,10 +542,6 @@ def test_reasoning_cache_isolated_by_opaque_model_id() -> None:
 async def test_concurrent_first_requests_can_learn_without_state_corruption() -> None:
     provider = _provider()
     policy = ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
-    bodies = [
-        provider._chat._build_request_body(_request(), reasoning=policy),
-        provider._chat._build_request_body(_request(), reasoning=policy),
-    ]
     initial_calls = 0
     release_initial_errors = asyncio.Event()
     sent_efforts: list[str | None] = []
@@ -563,25 +556,15 @@ async def test_concurrent_first_requests_can_learn_without_state_corruption() ->
                 release_initial_errors.set()
             await release_initial_errors.wait()
             raise _vocabulary_error()
-        return object()
-
-    async def execute(body: dict):
-        _stream, used_body, attempt, _sent_body = await provider._chat._create_stream(
-            body,
-            RequestRecovery(provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
-        await attempt.aclose()
-        return used_body
+        return SDKStreamDouble(_successful_stream())
 
     mock_create = AsyncMock(side_effect=create)
     with patch.object(provider._client.chat.completions, "create", mock_create):
-        used_bodies = await asyncio.gather(*(execute(body) for body in bodies))
+        await asyncio.gather(_drain(provider, policy), _drain(provider, policy))
 
     assert mock_create.await_count == 4
     assert sent_efforts.count("high") == 2
     assert sent_efforts.count("default") == 2
-    assert all(body["reasoning_effort"] == "default" for body in used_bodies)
     assert _reasoning_vocabularies(provider) == {_MODEL: frozenset({"none", "default"})}
 
 
@@ -590,29 +573,18 @@ async def test_stale_cache_self_heals_without_guessing_original_effort() -> None
     provider = _provider()
     policy = ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
     _reasoning_vocabularies(provider)[_MODEL] = frozenset({"none", "default"})
-    cached_body = provider._chat._build_request_body(_request(), reasoning=policy)
-    assert cached_body["reasoning_effort"] == "default"
     create = AsyncMock(
         side_effect=[
             _vocabulary_error("`low`, `medium`, or `high`", current="default"),
-            object(),
+            SDKStreamDouble(_successful_stream()),
         ]
     )
 
     with patch.object(provider._client.chat.completions, "create", create):
-        (
-            _stream,
-            corrected_body,
-            attempt,
-            _sent_body,
-        ) = await provider._chat._create_stream(
-            cached_body,
-            RequestRecovery(provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
-        await attempt.aclose()
+        await _drain(provider, policy)
 
-    assert "reasoning_effort" not in corrected_body
+    assert _sent(create, 0)["reasoning_effort"] == "default"
+    assert "reasoning_effort" not in _sent(create, 1)
     assert _reasoning_vocabularies(provider)[_MODEL] == frozenset(
         {"low", "medium", "high"}
     )
@@ -623,21 +595,13 @@ async def test_stale_cache_self_heals_without_guessing_original_effort() -> None
 @pytest.mark.asyncio
 async def test_unrelated_400_propagates_without_cache_poisoning() -> None:
     provider = _provider()
-    body = provider._chat._build_request_body(
-        _request(),
-        reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
-    )
     create = AsyncMock(side_effect=_BadRequest("messages: invalid role 'wizard'"))
 
     with (
         patch.object(provider._client.chat.completions, "create", create),
-        pytest.raises(_BadRequest, match="wizard"),
+        pytest.raises(ExecutionFailure),
     ):
-        await provider._chat._create_stream(
-            body,
-            RequestRecovery(provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
+        await _drain(provider, ReasoningPolicy.on(effort=ReasoningEffort.HIGH))
 
     assert create.await_count == 1
     assert _reasoning_vocabularies(provider) == {}
@@ -646,10 +610,6 @@ async def test_unrelated_400_propagates_without_cache_poisoning() -> None:
 @pytest.mark.asyncio
 async def test_nested_unrelated_allow_list_cannot_retry_or_poison_cache() -> None:
     provider = _provider()
-    body = provider._chat._build_request_body(
-        _request(),
-        reasoning=ReasoningPolicy.off(),
-    )
     error = _BadRequest(
         "invalid request",
         body={
@@ -661,37 +621,25 @@ async def test_nested_unrelated_allow_list_cannot_retry_or_poison_cache() -> Non
 
     with (
         patch.object(provider._client.chat.completions, "create", create),
-        pytest.raises(_BadRequest),
+        pytest.raises(ExecutionFailure),
     ):
-        await provider._chat._create_stream(
-            body,
-            RequestRecovery(provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
+        await _drain(provider, ReasoningPolicy.off())
 
     assert create.await_count == 1
-    assert create.await_args_list[0].kwargs["reasoning_effort"] == "none"
+    assert _sent(create, 0)["reasoning_effort"] == "none"
     assert _reasoning_vocabularies(provider) == {}
 
 
 @pytest.mark.asyncio
 async def test_advertised_current_value_does_not_retry_or_cache() -> None:
     provider = _provider()
-    body = provider._chat._build_request_body(
-        _request(),
-        reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
-    )
     create = AsyncMock(side_effect=_vocabulary_error("`low`, `medium`, or `high`"))
 
     with (
         patch.object(provider._client.chat.completions, "create", create),
-        pytest.raises(_BadRequest),
+        pytest.raises(ExecutionFailure),
     ):
-        await provider._chat._create_stream(
-            body,
-            RequestRecovery(provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
+        await _drain(provider, ReasoningPolicy.on(effort=ReasoningEffort.HIGH))
 
     assert create.await_count == 1
     assert _reasoning_vocabularies(provider) == {}
@@ -701,18 +649,13 @@ async def test_advertised_current_value_does_not_retry_or_cache() -> None:
 async def test_last_attempt_learns_but_does_not_exceed_budget() -> None:
     provider = _provider(max_attempts=1)
     policy = ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
-    body = provider._chat._build_request_body(_request(), reasoning=policy)
     create = AsyncMock(side_effect=_vocabulary_error())
 
     with (
         patch.object(provider._client.chat.completions, "create", create),
-        pytest.raises(_BadRequest),
+        pytest.raises(ExecutionFailure),
     ):
-        await provider._chat._create_stream(
-            body,
-            RequestRecovery(provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
+        await _drain(provider, policy)
 
     assert create.await_count == 1
     assert _reasoning_vocabularies(provider)[_MODEL] == frozenset({"none", "default"})
@@ -727,50 +670,39 @@ async def test_last_attempt_learns_but_does_not_exceed_budget() -> None:
 @pytest.mark.asyncio
 async def test_output_cap_and_reasoning_corrections_share_one_session() -> None:
     provider = _provider()
-    body = provider._chat._build_request_body(
-        make_messages_request(_MODEL, max_tokens=64_000),
-        reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
-    )
     cap_error = _BadRequest("max_completion_tokens must be less than or equal to 40960")
-    create = AsyncMock(side_effect=[cap_error, _vocabulary_error(), object()])
-    execution = provider._admission.start_execution()
+    create = AsyncMock(
+        side_effect=[
+            cap_error,
+            _vocabulary_error(),
+            SDKStreamDouble(_successful_stream()),
+        ]
+    )
 
     with patch.object(provider._client.chat.completions, "create", create):
-        _stream, used_body, attempt, _sent_body = await provider._chat._create_stream(
-            body,
-            RequestRecovery(execution),
-            ProviderOperationKind.GENERATION,
+        await _drain(
+            provider,
+            ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
+            make_messages_request(_MODEL, max_tokens=64_000),
         )
-        await attempt.aclose()
 
     assert create.await_count == 3
-    assert execution.attempts_started == 3
-    assert create.await_args_list[1].kwargs["max_completion_tokens"] == 40_960
-    assert create.await_args_list[1].kwargs["reasoning_effort"] == "high"
-    assert create.await_args_list[2].kwargs["max_completion_tokens"] == 40_960
-    assert create.await_args_list[2].kwargs["reasoning_effort"] == "default"
-    assert used_body["max_completion_tokens"] == 40_960
-    assert used_body["reasoning_effort"] == "default"
+    assert _sent(create, 1)["max_completion_tokens"] == 40_960
+    assert _sent(create, 1)["reasoning_effort"] == "high"
+    assert _sent(create, 2)["max_completion_tokens"] == 40_960
+    assert _sent(create, 2)["reasoning_effort"] == "default"
 
 
 @pytest.mark.asyncio
 async def test_corrected_request_cannot_enter_vocabulary_retry_loop() -> None:
     provider = _provider()
-    body = provider._chat._build_request_body(
-        _request(),
-        reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH),
-    )
     create = AsyncMock(side_effect=[_vocabulary_error(), _vocabulary_error()])
 
     with (
         patch.object(provider._client.chat.completions, "create", create),
-        pytest.raises(_BadRequest),
+        pytest.raises(ExecutionFailure),
     ):
-        await provider._chat._create_stream(
-            body,
-            RequestRecovery(provider._admission.start_execution()),
-            ProviderOperationKind.GENERATION,
-        )
+        await _drain(provider, ReasoningPolicy.on(effort=ReasoningEffort.HIGH))
 
     assert create.await_count == 2
 
@@ -787,11 +719,12 @@ async def test_reasoning_correction_emits_one_downstream_lifecycle() -> None:
     with patch.object(provider._client.chat.completions, "create", create):
         raw = "".join(
             [
-                event
+                frame
                 async for event in provider.stream_messages(
                     request,
                     reasoning=policy,
                 )
+                for frame in event.frames
             ]
         )
 

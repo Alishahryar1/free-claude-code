@@ -6,6 +6,7 @@ from collections.abc import Callable
 import pytest
 import pytest_asyncio
 
+from free_claude_code.messaging.delivery_failures import PlatformRateLimited
 from free_claude_code.messaging.limiter import MessagingRateLimiter
 
 
@@ -78,7 +79,7 @@ class TestMessagingRateLimiter:
 
         edits = []
 
-        async def mock_edit(msg_id, content):
+        async def mock_edit(msg_id: str, content: str):
             edits.append((msg_id, content))
             return f"done_{content}"
 
@@ -102,11 +103,11 @@ class TestMessagingRateLimiter:
         call_counts = {}
         msg_id = "test_msg_hang"
 
-        async def mock_edit(mid, content):
+        async def mock_edit(mid: str, content: str):
             call_counts[mid] = call_counts.get(mid, 0) + 1
             return f"result_{content}"
 
-        async def task(i):
+        async def task(i: int):
             return await limiter.enqueue(
                 lambda i=i: mock_edit(msg_id, f"v{i}"), dedup_key=f"edit:{msg_id}"
             )
@@ -124,48 +125,38 @@ class TestMessagingRateLimiter:
         assert call_counts[msg_id] <= 2, f"Too many actual calls: {call_counts[msg_id]}"
 
     @pytest.mark.asyncio
-    async def test_flood_wait_handling(self):
-        """Test that FloodWait exceptions pause the worker."""
+    async def test_platform_rate_limit_pauses_the_worker(self):
+        """A platform rate limit holds later work for its retry_after."""
         limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
-
-        # Mock exception with .seconds attribute
-        class FloodWait(Exception):
-            def __init__(self, seconds):
-                self.seconds = seconds
-                super().__init__(f"Flood wait {seconds}s")
-
         call_count = 0
 
         async def mock_fail():
             nonlocal call_count
             call_count += 1
-            raise FloodWait(1)  # 1 second wait
+            raise PlatformRateLimited(1)
 
         async def mock_success():
             nonlocal call_count
             call_count += 1
             return "success"
 
-        # First call fails and triggers pause
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(PlatformRateLimited):
             await limiter.enqueue(mock_fail, dedup_key="key1")
 
         assert limiter._paused_until > 0
 
-        # Enqueue success, it should wait
         start = time.time()
         await limiter.enqueue(mock_success, dedup_key="key2")
         duration = time.time() - start
 
-        # Should have waited at least ~1s
         assert duration >= 0.9, (
-            f"Should have waited for FloodWait, but took {duration:.2f}s"
+            f"Should have waited for the rate limit, but took {duration:.2f}s"
         )
         assert call_count == 2
 
     @pytest.mark.asyncio
-    async def test_flood_wait_retry_after_parsing(self):
-        """Error message with 'retry after N' parses the wait seconds."""
+    async def test_flood_wording_alone_does_not_pause(self):
+        """Only a typed platform rate limit pauses; error text does not."""
         limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
 
         async def mock_flood():
@@ -174,8 +165,7 @@ class TestMessagingRateLimiter:
         with contextlib.suppress(Exception):
             await limiter.enqueue(mock_flood, dedup_key="retry_parse")
 
-        # Should have parsed "after 2" -> 2 seconds
-        assert limiter._paused_until > 0
+        assert limiter._paused_until == 0
 
     @pytest.mark.asyncio
     async def test_non_flood_exception_no_pause(self):
@@ -192,24 +182,6 @@ class TestMessagingRateLimiter:
         assert limiter._paused_until == 0
 
     @pytest.mark.asyncio
-    async def test_flood_with_seconds_attribute(self):
-        """Exception with .seconds attribute uses that value for pause."""
-        limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
-
-        class FloodWaitCustom(Exception):
-            def __init__(self):
-                self.seconds = 2
-                super().__init__("Flood wait custom")
-
-        async def mock_flood():
-            raise FloodWaitCustom()
-
-        with contextlib.suppress(Exception):
-            await limiter.enqueue(mock_flood, dedup_key="flood_sec")
-
-        assert limiter._paused_until > 0
-
-    @pytest.mark.asyncio
     async def test_proactive_strict_sliding_window(self):
         """
         Proactive limiter should enforce a strict sliding window:
@@ -221,7 +193,9 @@ class TestMessagingRateLimiter:
             async def _do() -> float:
                 return time.monotonic()
 
-            return await limiter.enqueue(_do, dedup_key=f"strict:{i}")
+            result = await limiter.enqueue(_do, dedup_key=f"strict:{i}")
+            assert isinstance(result, float)
+            return result
 
         acquired = await asyncio.gather(*(acquire(i) for i in range(5)))
         acquired.sort()
@@ -255,20 +229,43 @@ class TestMessagingRateLimiter:
             await future2
 
     @pytest.mark.asyncio
-    async def test_fire_and_forget_failure_logged(self, caplog):
-        """fire_and_forget with failing task logs error and does not re-raise."""
+    async def test_fire_and_forget_failure_logged(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ):
+        """fire_and_forget logs its own failure and does not re-raise."""
         limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
 
-        async def fail_task():
-            raise ValueError("fire_and_forget failed")
+        async def failing_enqueue(func: object, dedup_key: object = None):
+            raise ValueError("secret upstream detail")
 
-        limiter.fire_and_forget(fail_task, dedup_key="fire_fail")
+        async def task():
+            return None
+
+        # Fail before the worker sees the task, so only fire_and_forget can log.
+        monkeypatch.setattr(limiter, "enqueue", failing_enqueue)
+        limiter.fire_and_forget(task, dedup_key="fire_fail")
         await asyncio.wait_for(asyncio.gather(*limiter._background_tasks), timeout=2.0)
 
-        joined = " ".join(str(r.message) for r in caplog.records)
-        assert "Final error in fire_and_forget for key fire_fail" in joined
-        assert "ValueError" in joined
-        assert "fire_and_forget failed" not in joined
+        errors = [r.message for r in caplog.records if r.levelname == "ERROR"]
+        assert any("fire_fail" in m and "ValueError" in m for m in errors)
+        joined = " ".join(r.message for r in caplog.records)
+        assert "secret upstream detail" not in joined
+
+    @pytest.mark.asyncio
+    async def test_fire_and_forget_runs_failed_task_once(self):
+        """A failed background task is not replayed; platform adapters own retries."""
+        limiter = self.create_limiter(rate_limit=10, rate_window=1.0)
+        calls = 0
+
+        async def fail_task():
+            nonlocal calls
+            calls += 1
+            raise ConnectionError("connect failed")
+
+        limiter.fire_and_forget(fail_task, dedup_key="edit:1:2")
+        await asyncio.wait_for(asyncio.gather(*limiter._background_tasks), timeout=5.0)
+
+        assert calls == 1
 
     @pytest.mark.asyncio
     async def test_shutdown_settles_active_queued_and_background_work(self):

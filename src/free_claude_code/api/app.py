@@ -1,5 +1,7 @@
 """Pure FastAPI application factory."""
 
+from collections.abc import Sequence
+
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import (
     http_exception_handler,
@@ -8,6 +10,7 @@ from fastapi.exception_handlers import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from loguru import logger
+from pydantic_core import ErrorDetails
 from starlette.exceptions import HTTPException
 
 from free_claude_code.application.code_sessions import (
@@ -48,6 +51,11 @@ from .routes import router
 from .validation_log import summarize_request_validation_body
 
 
+def _public_http_error_message(detail: object) -> str:
+    """Convert FastAPI's JSON detail to the message expected by generation clients."""
+    return str(detail)
+
+
 def create_app(services: ApiServices) -> FastAPI:
     """Create the HTTP adapter around explicitly supplied runtime services."""
     app = FastAPI(title="Claude Code Proxy", version=package_version())
@@ -63,10 +71,23 @@ def create_app(services: ApiServices) -> FastAPI:
 
     @app.exception_handler(HTTPException)
     async def public_http_error_handler(request: Request, exc: HTTPException):
+        if generation_api(request.url.path) == "chat":
+            return JSONResponse(
+                status_code=exc.status_code,
+                headers=exc.headers,
+                content=openai_error_payload(
+                    message=_public_http_error_message(exc.detail),
+                    error_type="authentication_error"
+                    if exc.status_code == 401
+                    else "invalid_request_error",
+                ),
+            )
         if generation_api(request.url.path) == "gemini":
             return JSONResponse(
                 status_code=exc.status_code,
-                content=gemini_error_payload(exc.status_code, str(exc.detail)),
+                content=gemini_error_payload(
+                    exc.status_code, _public_http_error_message(exc.detail)
+                ),
                 headers=exc.headers,
             )
         return await http_exception_handler(request, exc)
@@ -100,6 +121,7 @@ def create_app(services: ApiServices) -> FastAPI:
             body = {"_json_error": type(error).__name__}
 
         message_summary, tool_names = summarize_request_validation_body(body)
+        errors: Sequence[ErrorDetails] = exc.errors()
         trace_event(
             stage="ingress",
             event="server.request.validation_failed",
@@ -109,26 +131,35 @@ def create_app(services: ApiServices) -> FastAPI:
                 key: "[REDACTED]" if key == "key" else value
                 for key, value in request.query_params.items()
             },
-            error_locs=[list(error.get("loc", ())) for error in exc.errors()],
-            error_types=[str(error.get("type", "")) for error in exc.errors()],
+            error_locs=[list(error["loc"]) for error in errors],
+            error_types=[error["type"] for error in errors],
             message_summary=message_summary,
             tool_names=tool_names,
         )
-        if generation_api(request.url.path) == "gemini":
+        if generation_api(request.url.path) in {"gemini", "chat"}:
             message = "; ".join(
                 f"{'.'.join(map(str, error['loc']))}: {error['msg']}"
-                for error in exc.errors()
+                for error in errors
             )
             return JSONResponse(
-                status_code=400, content=gemini_error_payload(400, message)
+                status_code=400,
+                content=gemini_error_payload(400, message)
+                if generation_api(request.url.path) == "gemini"
+                else openai_error_payload(
+                    message=message, error_type="invalid_request_error"
+                ),
             )
         if request.url.path == "/admin/api/config/apply":
             return JSONResponse(
                 status_code=422,
                 content={
                     "detail": [
-                        {key: error[key] for key in ("loc", "msg", "type")}
-                        for error in exc.errors()
+                        {
+                            "loc": error["loc"],
+                            "msg": error["msg"],
+                            "type": error["type"],
+                        }
+                        for error in errors
                     ]
                 },
             )
@@ -168,7 +199,7 @@ def create_app(services: ApiServices) -> FastAPI:
             message = safe_exception_message(exc)
             if generation_api(request.url.path) == "gemini":
                 content = gemini_error_payload(500, message)
-            elif request.url.path == "/v1/responses":
+            elif generation_api(request.url.path) in {"responses", "chat"}:
                 content = openai_error_payload(message=message, error_type="api_error")
             else:
                 content = anthropic_error_payload(

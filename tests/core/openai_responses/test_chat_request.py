@@ -139,7 +139,6 @@ def test_build_responses_chat_request_preserves_rich_supported_semantics() -> No
             {
                 "role": "assistant",
                 "content": "",
-                "reasoning_content": "",
                 "reasoning_details": [
                     {"type": "reasoning.summary", "summary": "Use the tool."},
                     {"type": "reasoning.encrypted", "data": "opaque-replay"},
@@ -221,11 +220,6 @@ def test_build_responses_chat_request_preserves_rich_supported_semantics() -> No
     [
         (ReasoningReplayMode.REASONING_CONTENT, {"reasoning_content": "Think"}),
         (ReasoningReplayMode.REASONING, {"reasoning": "Think"}),
-        (ReasoningReplayMode.THINK_TAGS, {"content": "<think>\nThink\n</think>"}),
-        (
-            ReasoningReplayMode.DISABLED,
-            {"content": "Think\n\nAnswer"},
-        ),
     ],
 )
 def test_build_responses_chat_request_uses_provider_reasoning_replay(
@@ -249,16 +243,7 @@ def test_build_responses_chat_request_uses_provider_reasoning_replay(
     assert isinstance(messages, list)
     assistant = messages[0]
     assert isinstance(assistant, dict)
-    if mode is ReasoningReplayMode.THINK_TAGS:
-        assert assistant["content"] == "<think>\nThink\n</think>\n\nAnswer"
-    else:
-        for key, value in expected.items():
-            assert assistant[key] == value
-        if mode is ReasoningReplayMode.DISABLED:
-            assert assistant == {
-                "role": "assistant",
-                "content": "Think\n\nAnswer",
-            }
+    assert assistant == {"role": "assistant", "content": "Answer", **expected}
 
 
 def test_build_responses_chat_request_keeps_malformed_call_and_error_result() -> None:
@@ -298,7 +283,6 @@ def test_build_responses_chat_request_keeps_malformed_call_and_error_result() ->
         {
             "role": "assistant",
             "content": "",
-            "reasoning_content": "",
             "tool_calls": [
                 {
                     "id": "call_bad",
@@ -311,7 +295,6 @@ def test_build_responses_chat_request_keeps_malformed_call_and_error_result() ->
         {
             "role": "assistant",
             "content": "",
-            "reasoning_content": "",
             "tool_calls": [
                 {
                     "id": "call_good",
@@ -341,7 +324,7 @@ def test_build_responses_chat_request_rejects_unportable_direct_image(
     with pytest.raises(ResponsesConversionError, match="input_image"):
         build_responses_chat_request(
             _request(input=[image]),
-            reasoning_replay=ReasoningReplayMode.DISABLED,
+            reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
         )
 
 
@@ -359,7 +342,7 @@ def test_build_responses_chat_request_preserves_chat_shaped_image_detail() -> No
                 }
             ]
         ),
-        reasoning_replay=ReasoningReplayMode.DISABLED,
+        reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
     )
 
     assert translated.body["messages"] == [
@@ -401,7 +384,7 @@ def test_build_responses_chat_request_relocates_rich_function_output() -> None:
                 },
             ]
         ),
-        reasoning_replay=ReasoningReplayMode.DISABLED,
+        reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
     )
 
     messages = translated.body["messages"]
@@ -473,7 +456,7 @@ def test_build_responses_chat_request_closes_parallel_tools_before_rich_outputs(
                 },
             ]
         ),
-        reasoning_replay=ReasoningReplayMode.DISABLED,
+        reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
     )
 
     messages = translated.body["messages"]
@@ -532,7 +515,7 @@ def test_build_responses_chat_request_flushes_rich_output_before_later_input() -
                 {"role": "user", "content": "Describe the image."},
             ]
         ),
-        reasoning_replay=ReasoningReplayMode.DISABLED,
+        reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
     )
 
     messages = translated.body["messages"]
@@ -558,7 +541,7 @@ def test_build_responses_chat_request_relocates_computer_screenshot() -> None:
                 }
             ]
         ),
-        reasoning_replay=ReasoningReplayMode.DISABLED,
+        reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
     )
 
     assert translated.body["messages"] == [
@@ -627,7 +610,7 @@ def test_build_responses_chat_request_rejects_unportable_computer_screenshot(
                     }
                 ]
             ),
-            reasoning_replay=ReasoningReplayMode.DISABLED,
+            reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
         )
 
 
@@ -643,7 +626,7 @@ def test_build_responses_chat_request_skips_unsupported_optional_items_and_choic
             tools=[{"type": "web_search_preview"}],
             tool_choice={"type": "web_search_preview"},
         ),
-        reasoning_replay=ReasoningReplayMode.DISABLED,
+        reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
     )
 
     assert translated.body == {
@@ -656,7 +639,7 @@ def test_build_responses_chat_request_rejects_no_usable_input() -> None:
     with pytest.raises(ResponsesConversionError, match="usable input"):
         build_responses_chat_request(
             _request(input=[{"type": "computer_screenshot", "image_url": "x"}]),
-            reasoning_replay=ReasoningReplayMode.DISABLED,
+            reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
         )
 
 
@@ -677,7 +660,7 @@ def test_build_responses_chat_request_rejects_message_with_only_file_id_image() 
                     }
                 ]
             ),
-            reasoning_replay=ReasoningReplayMode.DISABLED,
+            reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
         )
 
 
@@ -709,5 +692,5 @@ def test_build_responses_chat_request_rejects_colliding_tool_wire_names() -> Non
                     "name": "echo value",
                 },
             ),
-            reasoning_replay=ReasoningReplayMode.DISABLED,
+            reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
         )

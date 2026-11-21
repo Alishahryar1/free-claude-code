@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -57,12 +58,100 @@ def _powershell_interpreter() -> str:
     return pwsh
 
 
+@pytest.mark.parametrize("script_name", ["ci.sh", "ci.ps1"])
+@pytest.mark.parametrize("suffix", [".py", ".pyi"])
+@pytest.mark.parametrize(
+    ("before", "after", "directive"),
+    [
+        (" ", " ", "ignore[bad-assignment]"),
+        (" ", " ", "ignore-errors"),
+        ("", "", "ignore"),
+    ],
+)
+def test_ci_rejects_pyrefly_suppressions(
+    tmp_path: Path,
+    script_name: str,
+    suffix: str,
+    before: str,
+    after: str,
+    directive: str,
+) -> None:
+    comment = f"#{before}pyrefly:{after}{directive}"
+    assignment = "x: int = 'invalid'"
+    source = (
+        f"{comment}\n{assignment}\n"
+        if directive == "ignore-errors"
+        else f"{assignment}  {comment}\n"
+    )
+    (tmp_path / f"sample{suffix}").write_text(source, encoding="utf-8")
+    script = str(_repo_root() / "scripts" / script_name)
+    if script_name == "ci.sh":
+        command = [_shell_interpreter(), script, "--only", "suppressions"]
+    else:
+        command = [
+            _powershell_interpreter(),
+            "-NoProfile",
+            "-File",
+            script,
+            "-Only",
+            "suppressions",
+        ]
+    result = subprocess.run(
+        command, cwd=tmp_path, text=True, capture_output=True, check=False
+    )
+    assert result.returncode != 0
+    assert comment in result.stdout
+
+
+@pytest.mark.parametrize("suffix", [".py", ".pyi"])
+@pytest.mark.parametrize(
+    ("source", "diagnostic"),
+    [
+        (
+            "from typing import cast\nx: str\ny = cast(str, x)\n",
+            "redundant-cast",
+        ),
+        (
+            "from typing import Any\npayload: Any\nvalue = payload.get('name')\n",
+            "explicit-any-use",
+        ),
+        ("x: int = 'invalid'  # type:ignore\n", "bad-assignment"),
+        ("x: int = 'invalid'  # pyrefly:\u0085ignore\n", "bad-assignment"),
+        (f"# {'pyrefly: ignore-errors'}\nx: int = 'invalid'\n", "bad-assignment"),
+    ],
+)
+def test_pyrefly_check_enforces_project_diagnostics(
+    tmp_path: Path, suffix: str, source: str, diagnostic: str
+) -> None:
+    sample = tmp_path / f"sample{suffix}"
+    sample.write_text(source, encoding="utf-8")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pyrefly",
+            "check",
+            "--config",
+            str(_repo_root() / "pyproject.toml"),
+            "--output-format",
+            "min-text",
+            str(sample),
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 1, result.stderr
+    assert f"[{diagnostic}]" in result.stdout
+
+
 def test_ci_sh_runs_ci_checks_in_order() -> None:
     text = _script_text("ci.sh")
     legacy_future_import = "from __future__ import " + "annotations"
 
     assert (
-        'CHECK_ORDER="suppressions ruff-format ruff-check ty pytest playwright macos-desktop"'
+        'CHECK_ORDER="suppressions ruff-format ruff-check pyrefly pytest playwright macos-desktop"'
         in text
     )
     assert "grep -rE" in text
@@ -74,7 +163,7 @@ def test_ci_sh_runs_ci_checks_in_order() -> None:
     assert "uv run ruff format" in text
     assert "uv run ruff format --check" not in text
     assert "uv run ruff check --fix" in text
-    assert "uv run ty check" in text
+    assert "uv run pyrefly check" in text
     assert "uv run pytest -v --tb=short" in text
     assert "uv run playwright install chromium" in text
     assert "uv run pytest e2e -v --tb=short" in text
@@ -200,7 +289,7 @@ def test_ci_sh_fail_fast_runs_checks_sequentially() -> None:
     suppress_index = text.index("run_suppressions()")
     ruff_format_index = text.index("run_ruff_format()")
     ruff_check_index = text.index("run_ruff_check()")
-    ty_index = text.index("run_ty()")
+    pyrefly_index = text.index("run_pyrefly()")
     pytest_index = text.index("run_pytest()")
     playwright_index = text.index("run_playwright()")
 
@@ -208,7 +297,7 @@ def test_ci_sh_fail_fast_runs_checks_sequentially() -> None:
         suppress_index
         < ruff_format_index
         < ruff_check_index
-        < ty_index
+        < pyrefly_index
         < pytest_index
         < playwright_index
     )
@@ -222,7 +311,7 @@ def test_ci_ps1_runs_ci_checks_in_order() -> None:
     assert '"suppressions"' in text
     assert '"ruff-format"' in text
     assert '"ruff-check"' in text
-    assert '"ty"' in text
+    assert '"pyrefly"' in text
     assert '"pytest"' in text
     assert '"playwright"' in text
     assert "Select-String -Pattern" in text
@@ -350,6 +439,7 @@ def test_ci_ps1_suppression_only_does_not_require_uv() -> None:
 def test_ci_ps1_suppression_scan_warns_when_paths_are_unreadable() -> None:
     body = _braced_body(_script_text("ci.ps1"), "function Invoke-SuppressionsCheck")
 
+    assert "-Include *.py,*.pyi" in body
     assert body.count("-ErrorVariable +scanErrors") == 2
     assert "Write-Warning" in body
 
@@ -361,14 +451,14 @@ def test_ci_ps1_fail_fast_runs_checks_sequentially() -> None:
     assert "Invoke-SuppressionsCheck" in text
     assert "Invoke-RuffFormatCheck" in text
     assert "Invoke-RuffLintCheck" in text
-    assert "Invoke-TyCheck" in text
+    assert "Invoke-PyreflyCheck" in text
     assert "Invoke-PytestCheck" in text
     assert "Invoke-PlaywrightCheck" in text
 
     suppress_index = text.index("function Invoke-SuppressionsCheck")
     ruff_format_index = text.index("function Invoke-RuffFormatCheck")
     ruff_check_index = text.index("function Invoke-RuffLintCheck")
-    ty_index = text.index("function Invoke-TyCheck")
+    pyrefly_index = text.index("function Invoke-PyreflyCheck")
     pytest_index = text.index("function Invoke-PytestCheck")
     playwright_index = text.index("function Invoke-PlaywrightCheck")
 
@@ -376,7 +466,7 @@ def test_ci_ps1_fail_fast_runs_checks_sequentially() -> None:
         suppress_index
         < ruff_format_index
         < ruff_check_index
-        < ty_index
+        < pyrefly_index
         < pytest_index
         < playwright_index
     )

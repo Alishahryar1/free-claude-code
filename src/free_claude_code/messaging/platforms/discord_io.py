@@ -1,15 +1,40 @@
 """Discord outbound delivery."""
 
+import asyncio
+import secrets
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
+import aiohttp
+from loguru import logger
+
+from ..delivery_failures import (
+    MAX_ATTEMPTS,
+    CallState,
+    DeliveryFailure,
+    FailureKind,
+    Retry,
+    decide,
+)
 from ..limiter import MessagingRateLimiter
 from .outbox import PlatformOutbox
 
 DISCORD_MESSAGE_LIMIT = 2000
 
-ClientGetter = Callable[[], Any]
-DiscordGetter = Callable[[], Any]
+if TYPE_CHECKING:
+    from discord import Client, Forbidden, Intents, Message, MessageReference, NotFound
+    from discord.abc import Messageable
+
+
+class DiscordLibrary(Protocol):
+    Intents: type[Intents]
+    MessageReference: type[MessageReference]
+    NotFound: type[NotFound]
+    Forbidden: type[Forbidden]
+
+
+type ClientGetter = Callable[[], Client]
+type DiscordGetter = Callable[[], DiscordLibrary]
 
 
 def truncate_discord_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> str:
@@ -17,6 +42,24 @@ def truncate_discord_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> s
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
+
+
+def _failure(error: BaseException) -> DeliveryFailure:
+    """Read a failed Discord call as a platform-neutral delivery failure.
+
+    discord.py already retries rate limits, server errors and the macOS and
+    Windows connection resets, so only connection failures it lets through
+    and responses cut off midway count as lost calls. A failed certificate
+    check fails the same way on every attempt.
+    """
+    if isinstance(error, aiohttp.ClientConnectorCertificateError):
+        return DeliveryFailure(FailureKind.REJECTED)
+    if isinstance(
+        error,
+        aiohttp.ClientConnectionError | aiohttp.ClientPayloadError | TimeoutError,
+    ):
+        return DeliveryFailure(FailureKind.NETWORK)
+    return DeliveryFailure(FailureKind.REJECTED)
 
 
 class DiscordMessenger:
@@ -38,6 +81,37 @@ class DiscordMessenger:
             delete_many=self.delete_messages,
         )
 
+    async def _with_retry[T](self, func: Callable[[], Awaitable[T]]) -> T:
+        """Run one Discord operation, retrying calls lost on the network."""
+        attempts = 1
+        while True:
+            try:
+                return await func()
+            except Exception as e:
+                failure = _failure(e)
+                state = CallState(
+                    attempts=attempts, formatted=False, suppress_known=True
+                )
+                match decide(failure, state):
+                    case Retry(delay=delay):
+                        logger.warning(
+                            "Discord API network error (attempt {}/{}): {}. Retrying in {}s...",
+                            attempts,
+                            MAX_ATTEMPTS,
+                            type(e).__name__,
+                            delay,
+                        )
+                        attempts += 1
+                        await asyncio.sleep(delay)
+                    case _:
+                        if failure.kind is FailureKind.NETWORK:
+                            logger.error(
+                                "Discord API failed after {} attempts: {}",
+                                attempts,
+                                type(e).__name__,
+                            )
+                        raise
+
     async def send_message(
         self,
         chat_id: str,
@@ -53,7 +127,10 @@ class DiscordMessenger:
             raise RuntimeError(f"Channel {chat_id} not found")
 
         text = truncate_discord_message(text)
-        channel = cast(Any, channel)
+        message_channel = cast("Messageable", channel)
+        # Discord returns the existing message when a nonce is reused, so a
+        # retried send whose response was lost does not post twice.
+        nonce = secrets.token_hex(12)
 
         if reply_to:
             discord = self._get_discord()
@@ -61,10 +138,17 @@ class DiscordMessenger:
                 message_id=int(reply_to),
                 channel_id=int(chat_id),
             )
-            msg = await channel.send(content=text, reference=ref)
-        else:
-            msg = await channel.send(content=text)
 
+            async def _send() -> Message:
+                return await message_channel.send(
+                    content=text, reference=ref, nonce=nonce
+                )
+        else:
+
+            async def _send() -> Message:
+                return await message_channel.send(content=text, nonce=nonce)
+
+        msg = await self._with_retry(_send)
         return str(msg.id)
 
     async def edit_message(
@@ -81,13 +165,16 @@ class DiscordMessenger:
             raise RuntimeError(f"Channel {chat_id} not found")
 
         discord = self._get_discord()
-        channel = cast(Any, channel)
-        try:
-            msg = await channel.fetch_message(int(message_id))
-        except discord.NotFound:
-            return
+        message_channel = cast("Messageable", channel)
 
-        await msg.edit(content=truncate_discord_message(text))
+        async def _edit() -> None:
+            try:
+                msg = await message_channel.fetch_message(int(message_id))
+            except discord.NotFound:
+                return
+            await msg.edit(content=truncate_discord_message(text))
+
+        await self._with_retry(_edit)
 
     async def delete_message(self, chat_id: str, message_id: str) -> None:
         """Delete a Discord message immediately."""
@@ -97,12 +184,16 @@ class DiscordMessenger:
             return
 
         discord = self._get_discord()
-        channel = cast(Any, channel)
-        try:
-            msg = await channel.fetch_message(int(message_id))
-            await msg.delete()
-        except discord.NotFound, discord.Forbidden:
-            pass
+        message_channel = cast("Messageable", channel)
+
+        async def _delete() -> None:
+            try:
+                msg = await message_channel.fetch_message(int(message_id))
+                await msg.delete()
+            except discord.NotFound, discord.Forbidden:
+                pass
+
+        await self._with_retry(_delete)
 
     async def delete_messages(self, chat_id: str, message_ids: list[str]) -> None:
         """Delete multiple Discord messages best-effort."""
@@ -158,7 +249,7 @@ class DiscordMessenger:
             fire_and_forget,
         )
 
-    def fire_and_forget(self, task: Awaitable[Any]) -> None:
+    def fire_and_forget(self, task: Awaitable[object]) -> None:
         """Execute a coroutine without awaiting it."""
         self._outbox.fire_and_forget(task)
 

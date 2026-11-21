@@ -17,12 +17,12 @@ from tests.scripts.test_version_policy import commit, git, write
 @pytest.mark.parametrize(
     "kind,expected", [("patch", "6.2.67"), ("minor", "6.3.0"), ("major", "7.0.0")]
 )
-def test_one_increment(kind, expected):
+def test_one_increment(kind: str, expected: str):
     assert next_version("6.2.66", kind) == expected
 
 
 @pytest.fixture(scope="session")
-def releases_template(tmp_path_factory):
+def releases_template(tmp_path_factory: pytest.TempPathFactory):
     tmp_path = tmp_path_factory.mktemp("publish-release-template")
     git(tmp_path, "init", "--template=", "-b", "main")
     write(tmp_path, "src/file.py", "base")
@@ -35,7 +35,7 @@ def releases_template(tmp_path_factory):
 
 
 @pytest.fixture
-def releases(tmp_path, monkeypatch, releases_template):
+def releases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, releases_template: Path):
     shutil.copytree(releases_template, tmp_path, dirs_exist_ok=True)
     monkeypatch.chdir(tmp_path)
     state = FakeRemote(tmp_path)
@@ -59,7 +59,7 @@ class Release(TypedDict):
 
 
 class FakeRemote:
-    def __init__(self, repo):
+    def __init__(self, repo: Path):
         self.repo = repo
         self.releases: dict[str, Release] = {
             "v1.2.3": {
@@ -72,13 +72,13 @@ class FakeRemote:
         }
         self.files = {}
         self.calls = []
-        self.fail = None
+        self.fail: str | None = None
         self.builds = 0
         self.native_builds = []
         self.uploaded = {}
         self.real_command = publishing.command
 
-    def command(self, args, *, cwd=None):
+    def command(self, args: list[str], *, cwd: Path | None = None):
         if "--repo" in args:
             args = args[: args.index("--repo")]
         self.calls.append(args)
@@ -129,7 +129,7 @@ class FakeRemote:
                     }
                 )
                 if self.fail == "stage":
-                    self.fail = None
+                    self.fail: str | None = None
                     raise RuntimeError("interrupted staging")
         elif args[:3] == ["gh", "release", "delete-asset"]:
             tag, name = args[3:5]
@@ -144,7 +144,7 @@ class FakeRemote:
                 (dest / asset["name"]).write_bytes(self.files[tag, asset["name"]])
         elif args[:3] == ["gh", "release", "edit"]:
             if self.fail == "finalize":
-                self.fail = None
+                self.fail: str | None = None
                 raise RuntimeError("interrupted finalization")
             self.releases[args[3]]["draft"] = False
         elif args[:2] == ["uv", "build"]:
@@ -163,7 +163,7 @@ class FakeRemote:
                     assert self.uploaded[file.name] == data
                 self.uploaded[file.name] = data
                 if self.fail == "publish":
-                    self.fail = None
+                    self.fail: str | None = None
                     raise RuntimeError("interrupted publication")
         elif args[0] == publishing.sys.executable:
             assert cwd is not None
@@ -176,7 +176,7 @@ class FakeRemote:
             raise AssertionError(args)
         return ""
 
-    def advance(self, title="patch: Change", path="src/file.py"):
+    def advance(self, title: str = "patch: Change", path: str = "src/file.py"):
         write(self.repo, path, title)
         head = commit(self.repo, title)
         git(self.repo, "update-ref", "refs/remotes/origin/main", head)
@@ -186,7 +186,7 @@ class FakeRemote:
         return publishing.Publisher("owner/repo")
 
 
-def test_nonrelease_never_allocates_or_builds(releases):
+def test_nonrelease_never_allocates_or_builds(releases: tuple[Path, FakeRemote]):
     _, remote = releases
     head = remote.advance("Explain usage", "README.md")
     remote.publisher().publish(head)
@@ -195,7 +195,7 @@ def test_nonrelease_never_allocates_or_builds(releases):
 
 
 def test_native_preparation_uses_release_commit_despite_dirty_current_checkout(
-    releases,
+    releases: tuple[Path, FakeRemote],
 ):
     repo, remote = releases
     head = remote.advance()
@@ -209,7 +209,9 @@ def test_native_preparation_uses_release_commit_despite_dirty_current_checkout(
     ).read_text() == "# unrelated work in current checkout"
 
 
-def test_historical_release_without_native_builder_can_resume(releases):
+def test_historical_release_without_native_builder_can_resume(
+    releases: tuple[Path, FakeRemote],
+):
     repo, remote = releases
     git(repo, "rm", "scripts/build_macos_launcher.py")
     head = remote.advance()
@@ -223,7 +225,9 @@ def test_historical_release_without_native_builder_can_resume(releases):
 
 @pytest.mark.parametrize("existing_draft", [False, True])
 def test_stale_release_list_does_not_block_staging(
-    releases, monkeypatch, existing_draft
+    releases: tuple[Path, FakeRemote],
+    monkeypatch: pytest.MonkeyPatch,
+    existing_draft: bool,
 ):
     _, remote = releases
     head = remote.advance()
@@ -233,7 +237,7 @@ def test_stale_release_list_does_not_block_staging(
             remote.publisher().publish(head)
     listed = json.dumps([list(remote.releases.values())])
 
-    def stale_listing(args, *, cwd=None):
+    def stale_listing(args: list[str], *, cwd: Path | None = None):
         if args[:2] == ["gh", "api"] and any(
             arg.endswith("/releases?per_page=100") for arg in args
         ):
@@ -247,7 +251,9 @@ def test_stale_release_list_does_not_block_staging(
 
 
 @pytest.mark.parametrize("failure", ["stage", "publish", "finalize"])
-def test_retries_keep_version_and_published_bytes(releases, failure):
+def test_retries_keep_version_and_published_bytes(
+    releases: tuple[Path, FakeRemote], failure: str
+):
     repo, remote = releases
     head = remote.advance()
     remote.fail = failure
@@ -266,7 +272,9 @@ def test_retries_keep_version_and_published_bytes(releases, failure):
     assert remote.builds == builds
 
 
-def test_later_commit_waits_even_if_previous_failed_before_tag(releases):
+def test_later_commit_waits_even_if_previous_failed_before_tag(
+    releases: tuple[Path, FakeRemote],
+):
     _, remote = releases
     first = remote.advance()
     second = remote.advance("minor: Second")
@@ -277,7 +285,9 @@ def test_later_commit_waits_even_if_previous_failed_before_tag(releases):
     assert not remote.releases["v1.3.0"]["draft"]
 
 
-def test_later_commit_waits_for_draft_and_old_retry_is_noop(releases):
+def test_later_commit_waits_for_draft_and_old_retry_is_noop(
+    releases: tuple[Path, FakeRemote],
+):
     _, remote = releases
     first = remote.advance()
     remote.fail = "publish"
@@ -293,7 +303,37 @@ def test_later_commit_waits_for_draft_and_old_retry_is_noop(releases):
     assert not any(c[:3] == ["gh", "release", "edit"] for c in remote.calls[calls:])
 
 
-def test_tag_collision_and_extra_target_tag_are_rejected(releases):
+def test_publish_after_withdrawn_draft_and_reject_its_retry(
+    releases: tuple[Path, FakeRemote], monkeypatch: pytest.MonkeyPatch
+):
+    repo, remote = releases
+    withdrawn = remote.advance("patch: Withdrawn change")
+    git(repo, "tag", "v1.2.4", withdrawn)
+    withdrawn_release: Release = {
+        "id": 2,
+        "tag_name": "v1.2.4",
+        "draft": True,
+        "prerelease": False,
+        "assets": [],
+    }
+    remote.releases["v1.2.4"] = withdrawn_release
+    monkeypatch.setattr(publishing, "WITHDRAWN_RELEASE", ("v1.2.4", withdrawn))
+    restored = remote.advance("patch: Restore publishing")
+
+    remote.publisher().publish(restored)
+    assert git(repo, "rev-parse", "v1.2.5") == restored
+    assert not remote.releases["v1.2.5"]["draft"]
+
+    with pytest.raises(ValueError, match="was withdrawn"):
+        remote.publisher().publish(withdrawn)
+    assert git(repo, "rev-parse", "v1.2.4") == withdrawn
+    assert remote.releases["v1.2.4"]["draft"]
+    assert set(remote.uploaded) == set(publishing.distribution_names("1.2.5"))
+
+
+def test_tag_collision_and_extra_target_tag_are_rejected(
+    releases: tuple[Path, FakeRemote],
+):
     repo, remote = releases
     head = remote.advance()
     git(repo, "tag", "v1.2.4", "v1.2.3")
@@ -305,7 +345,7 @@ def test_tag_collision_and_extra_target_tag_are_rejected(releases):
         remote.publisher().publish(head)
 
 
-def test_target_must_be_main_ancestor(releases):
+def test_target_must_be_main_ancestor(releases: tuple[Path, FakeRemote]):
     repo, remote = releases
     git(repo, "checkout", "-b", "other")
     write(repo, "src/other.py", "other")
@@ -314,14 +354,14 @@ def test_target_must_be_main_ancestor(releases):
         remote.publisher().publish(head)
 
 
-def test_malformed_or_bypassed_title_cannot_publish(releases):
+def test_malformed_or_bypassed_title_cannot_publish(releases: tuple[Path, FakeRemote]):
     _, remote = releases
     head = remote.advance("Oops")
     with pytest.raises(ValueError, match="require"):
         remote.publisher().publish(head)
 
 
-def test_reserved_tag_and_missing_draft_can_resume(releases):
+def test_reserved_tag_and_missing_draft_can_resume(releases: tuple[Path, FakeRemote]):
     repo, remote = releases
     head = remote.advance()
     git(repo, "tag", "v1.2.4", head)
@@ -330,7 +370,9 @@ def test_reserved_tag_and_missing_draft_can_resume(releases):
     assert not remote.releases["v1.2.4"]["draft"]
 
 
-def test_staged_bytes_are_verified_before_any_retry_upload(releases):
+def test_staged_bytes_are_verified_before_any_retry_upload(
+    releases: tuple[Path, FakeRemote],
+):
     _, remote = releases
     head = remote.advance()
     remote.fail = "publish"
@@ -344,7 +386,9 @@ def test_staged_bytes_are_verified_before_any_retry_upload(releases):
     assert not any(c[:2] == ["uv", "publish"] for c in remote.calls[before:])
 
 
-def test_no_release_does_not_wait_for_an_unfinished_release(releases):
+def test_no_release_does_not_wait_for_an_unfinished_release(
+    releases: tuple[Path, FakeRemote],
+):
     _, remote = releases
     first = remote.advance()
     remote.fail = "publish"

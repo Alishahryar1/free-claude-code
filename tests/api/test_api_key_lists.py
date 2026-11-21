@@ -6,31 +6,46 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from fastapi.applications import FastAPI
 from fastapi.testclient import TestClient
 
+from free_claude_code.config.admin.credentials import CredentialSubmission
 from free_claude_code.config.loader import ManagedConfigStore
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.credential_validation import (
     CredentialCheck,
     CredentialStatus,
 )
 from tests.api.support import create_test_app, provider_manager_for_app, runtime_for_app
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    response_object,
+    response_payload,
+)
 
 
-def client_for(app):
+def client_for(app: FastAPI):
     return TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000))
 
 
-def edit(client, key, entries):
+def edit(client: TestClient, key: str, entries: list[JsonObject]):
     field = next(
         field
-        for field in client.get("/admin/api/config").json()["fields"]
-        if field["key"] == key
+        for field in array_payload(
+            response_object(client.get("/admin/api/config"))["fields"]
+        )
+        if object_payload(field)["key"] == key
     )
-    return {"revision": field["value"]["revision"], "entries": entries}
+    return {
+        "revision": object_payload(object_payload(field)["value"])["revision"],
+        "entries": entries,
+    }
 
 
 def test_rejected_inactive_key_prevents_all_writes_and_checks_keep_row_identity(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     app = create_test_app()
     client = client_for(app)
@@ -57,21 +72,27 @@ def test_rejected_inactive_key_prevents_all_writes_and_checks_keep_row_identity(
     }
     response = client.post("/admin/api/config/apply", json=payload)
     assert response.status_code == 200
-    body = response.json()
+    body = response_object(response)
     assert not body["applied"]
-    assert [check["index"] for check in body["credential_checks"]] == [0, 1]
+    assert [
+        object_payload(check)["index"]
+        for check in object_array(body["credential_checks"])
+    ] == [
+        0,
+        1,
+    ]
     assert store.path.read_bytes() == before
     assert provider_manager_for_app(app).current_generation_id == 1
     assert checks.await_args is not None
-    assert (
-        checks.await_args.args[1][0].credentials[1].get_secret_value()
-        == "inactive-private"
-    )
+    submissions: list[CredentialSubmission] = checks.await_args.args[1]
+    assert submissions[0].credentials[1].get_secret_value() == "inactive-private"
     assert "active-private" not in response.text
     assert "inactive-private" not in response.text
 
 
-def test_stale_revision_returns_conflict_without_checking_or_writing(monkeypatch):
+def test_stale_revision_returns_conflict_without_checking_or_writing(
+    monkeypatch: pytest.MonkeyPatch,
+):
     app = create_test_app()
     client = client_for(app)
     checks = AsyncMock(return_value=())
@@ -96,13 +117,13 @@ def test_stale_revision_returns_conflict_without_checking_or_writing(monkeypatch
 
 @pytest.mark.asyncio
 async def test_intervening_managed_write_during_probe_cannot_publish_or_overwrite(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     app = create_test_app()
     store = ManagedConfigStore()
     started, release = asyncio.Event(), asyncio.Event()
 
-    async def held_checks(settings, submissions):
+    async def held_checks(settings: object, submissions: object):
         started.set()
         await release.wait()
         return ()
@@ -115,13 +136,17 @@ async def test_intervening_managed_write_during_probe_cannot_publish_or_overwrit
     ) as client:
         field = next(
             field
-            for field in (await client.get("/admin/api/config")).json()["fields"]
-            if field["key"] == "OPENAI_API_KEY"
+            for field in array_payload(
+                response_object(await client.get("/admin/api/config"))["fields"]
+            )
+            if object_payload(field)["key"] == "OPENAI_API_KEY"
         )
         payload = {
             "values": {
                 "OPENAI_API_KEY": {
-                    "revision": field["value"]["revision"],
+                    "revision": object_payload(object_payload(field)["value"])[
+                        "revision"
+                    ],
                     "entries": [{"value": "probe-private"}],
                 }
             }
@@ -158,4 +183,4 @@ def test_malformed_custom_edit_does_not_echo_nested_credential_inputs():
     )
     assert response.status_code == 422
     assert "malformed-private-sentinel" not in response.text
-    assert "input" not in json.dumps(response.json())
+    assert "input" not in json.dumps(response_payload(response))

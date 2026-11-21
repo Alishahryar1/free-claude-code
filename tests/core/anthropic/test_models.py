@@ -1,5 +1,5 @@
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from free_claude_code.core.anthropic.conversion import (
     OpenAIConversionError,
@@ -12,6 +12,8 @@ from free_claude_code.core.anthropic.models import (
     MessagesRequest,
     TokenCountRequest,
 )
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import object_payload
 
 
 def test_messages_request_parses_without_model_mapping_side_effects():
@@ -37,47 +39,19 @@ def test_messages_request_rejects_null_stream() -> None:
         )
 
 
-def test_messages_request_preserves_system_role_message_order():
-    request = MessagesRequest.model_validate(
-        {
-            "model": "claude-3-opus",
-            "max_tokens": 100,
-            "messages": [
-                {"role": "user", "content": "first"},
-                {"role": "system", "content": "system prompt"},
-                {"role": "user", "content": "second"},
-            ],
-        }
-    )
+@pytest.mark.parametrize("model", [MessagesRequest, TokenCountRequest])
+@pytest.mark.parametrize("position", [0, 1])
+def test_system_role_messages_are_rejected(model: type[BaseModel], position: int):
+    messages = [{"role": "user", "content": "hello"}]
+    messages.insert(position, {"role": "system", "content": "message system"})
 
-    assert [message.role for message in request.messages] == [
-        "user",
-        "system",
-        "user",
-    ]
-    assert request.messages[1].content == "system prompt"
-    assert request.system is None
+    with pytest.raises(ValidationError):
+        model.model_validate(
+            {"model": "claude-3-opus", "max_tokens": 100, "messages": messages}
+        )
 
 
-def test_messages_request_keeps_top_level_and_inline_system_content_distinct():
-    request = MessagesRequest.model_validate(
-        {
-            "model": "claude-3-opus",
-            "max_tokens": 100,
-            "system": "existing system",
-            "messages": [
-                {"role": "system", "content": "message system"},
-                {"role": "user", "content": "hello"},
-            ],
-        }
-    )
-
-    assert request.system == "existing system"
-    assert [message.role for message in request.messages] == ["system", "user"]
-    assert request.messages[0].content == "message system"
-
-
-def test_messages_request_preserves_inline_system_block_metadata():
+def test_messages_request_preserves_system_block_metadata():
     request = MessagesRequest.model_validate(
         {
             "model": "claude-3-opus",
@@ -89,33 +63,13 @@ def test_messages_request_preserves_inline_system_block_metadata():
                     "cache_control": {"type": "ephemeral"},
                 }
             ],
-            "messages": [
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "message system",
-                            "cache_control": {"type": "ephemeral"},
-                        }
-                    ],
-                },
-                {"role": "user", "content": "hello"},
-            ],
+            "messages": [{"role": "user", "content": "hello"}],
         }
     )
 
-    assert len(request.messages) == 2
     assert isinstance(request.system, list)
     assert [block.text for block in request.system] == ["existing system"]
     assert request.system[0].model_dump()["cache_control"] == {"type": "ephemeral"}
-    inline_content = request.messages[0].content
-    assert isinstance(inline_content, list)
-    assert inline_content[0].model_dump() == {
-        "type": "text",
-        "text": "message system",
-        "cache_control": {"type": "ephemeral"},
-    }
 
 
 def test_messages_request_ignores_internal_routing_fields_when_supplied():
@@ -140,22 +94,6 @@ def test_token_count_request_parses_without_model_mapping_side_effects():
     )
 
     assert request.model == "claude-3-sonnet"
-
-
-def test_token_count_request_preserves_system_role_messages():
-    request = TokenCountRequest.model_validate(
-        {
-            "model": "claude-3-sonnet",
-            "messages": [
-                {"role": "system", "content": "counting system"},
-                {"role": "user", "content": "hello"},
-            ],
-        }
-    )
-
-    assert [message.role for message in request.messages] == ["system", "user"]
-    assert request.messages[0].content == "counting system"
-    assert request.system is None
 
 
 def test_messages_request_preserves_thinking_signature():
@@ -285,12 +223,13 @@ def test_document_and_web_fetch_blocks_preserve_protocol_extensions() -> None:
 
 
 def test_content_block_descriptions_remain_in_the_public_schema() -> None:
-    definitions = MessagesRequest.model_json_schema()["$defs"]
+    schema: JsonObject = MessagesRequest.model_json_schema()
+    definitions = object_payload(schema["$defs"])
 
-    assert definitions["ContentBlockDocument"]["description"] == (
+    assert object_payload(definitions["ContentBlockDocument"])["description"] == (
         "Anthropic document block (e.g. PDF files via the Files API)."
     )
-    assert definitions["ContentBlockServerToolUse"]["description"] == (
+    assert object_payload(definitions["ContentBlockServerToolUse"])["description"] == (
         "Anthropic server-side tool invocation (e.g. ``web_search``, ``web_fetch``)."
     )
 

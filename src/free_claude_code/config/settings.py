@@ -13,7 +13,11 @@ from pydantic import (
 )
 
 from .api_keys import ApiKeyList
-from .constants import DEFAULT_MODEL, HTTP_CONNECT_TIMEOUT_DEFAULT
+from .constants import (
+    DEFAULT_MODEL,
+    HTTP_CONNECT_TIMEOUT_DEFAULT,
+    PROVIDER_MAX_ATTEMPTS_DEFAULT,
+)
 from .custom_providers import CustomProviderDefinition, decode_custom_providers
 from .model_refs import ModelFallback, ModelFallbacks
 from .provider_catalog import (
@@ -81,6 +85,11 @@ class Settings(BaseModel):
             None,
         )
 
+    def credential_keys(self, field: str) -> ApiKeyList:
+        """Read a validated key-list field selected by the provider catalog."""
+        keys: ApiKeyList = getattr(self, field)
+        return keys
+
     @model_validator(mode="after")
     def validate_provider_references(self) -> Settings:
         ids = [item.provider_id for item in self.custom_providers]
@@ -95,7 +104,7 @@ class Settings(BaseModel):
             "model_haiku",
             "model_fallbacks",
         ):
-            value = getattr(self, field)
+            value: str | tuple[ModelFallback, ...] | None = getattr(self, field)
             refs = value if isinstance(value, tuple) else (value,) if value else ()
             for ref in refs:
                 model_ref = ref.model if isinstance(ref, ModelFallback) else ref
@@ -110,7 +119,7 @@ class Settings(BaseModel):
                     if definition is not None:
                         keys = definition.api_keys
                     elif descriptor is not None and descriptor.credential_attr:
-                        keys = getattr(self, descriptor.credential_attr)
+                        keys = self.credential_keys(descriptor.credential_attr)
                     else:
                         raise ValueError(
                             f"MODEL_FALLBACKS: {provider_id} has no API key list."
@@ -608,14 +617,10 @@ class Settings(BaseModel):
     provider_max_concurrency: int = Field(
         default=2, gt=0, validation_alias="PROVIDER_MAX_CONCURRENCY"
     )
-    provider_progress_timeout: float = Field(
-        default=600.0,
+    provider_max_attempts: int = Field(
+        default=PROVIDER_MAX_ATTEMPTS_DEFAULT,
         gt=0,
-        # Responses metadata adds 60 seconds before encoding this as a u64.
-        # The next representable float below 2**64 leaves more than that margin.
-        lt=float(1 << 64),
-        allow_inf_nan=False,
-        validation_alias="PROVIDER_PROGRESS_TIMEOUT",
+        validation_alias="PROVIDER_MAX_ATTEMPTS",
     )
     reasoning_policy: ReasoningPreference = Field(
         default=ReasoningPreference.CLIENT,

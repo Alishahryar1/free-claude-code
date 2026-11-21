@@ -6,13 +6,10 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.token_estimation import estimate_text_tokens
 
 from .emitter import AnthropicSseEmitter
-from .recovery import (
-    ToolSchema,
-    parse_complete_tool_input,
-)
 
 
 def _safe_usage_int(value: object) -> int:
@@ -28,7 +25,6 @@ class ToolBlockState:
     name: str
     extra_content: dict[str, Any] | None = None
     started: bool = False
-    pre_start_args: str = ""
 
 
 @dataclass
@@ -66,32 +62,6 @@ class StreamBlockLedger:
 
     def reserve_index(self, index: int) -> None:
         self.next_index = max(self.next_index, index + 1)
-
-    def ensure_tool_state(self, index: int) -> ToolBlockState:
-        if index not in self.tool_states:
-            self.tool_states[index] = ToolBlockState(
-                block_index=-1, tool_id="", name=""
-            )
-        return self.tool_states[index]
-
-    def set_tool_extra_content(
-        self, index: int, extra_content: dict[str, Any] | None
-    ) -> None:
-        if extra_content:
-            self.ensure_tool_state(index).extra_content = extra_content
-
-    def register_tool_name(self, index: int, name: str) -> None:
-        if index not in self.tool_states:
-            self.tool_states[index] = ToolBlockState(
-                block_index=-1, tool_id="", name=name
-            )
-            return
-        state = self.tool_states[index]
-        prev = state.name
-        if not prev or name.startswith(prev):
-            state.name = name
-        elif not prev.startswith(name):
-            state.name = prev + name
 
 
 class AnthropicStreamLedger:
@@ -173,7 +143,9 @@ class AnthropicStreamLedger:
         self.message_stopped = True
         return self._emitter.event("message_stop", {"type": "message_stop"})
 
-    def content_block_start(self, index: int, block_type: str, **kwargs: Any) -> str:
+    def content_block_start(
+        self, index: int, block_type: str, **kwargs: JsonValue
+    ) -> str:
         content_block: dict[str, Any] = {"type": block_type}
         if block_type == "thinking":
             content_block["thinking"] = kwargs.get("thinking", "")
@@ -335,17 +307,6 @@ class AnthropicStreamLedger:
                 {"type": "content_block_stop", "index": idx},
             )
 
-    def can_salvage_tool_use(self, schemas: dict[str, ToolSchema]) -> bool:
-        tool_blocks = self.tool_blocks()
-        if not tool_blocks:
-            return False
-        for block in tool_blocks:
-            if not block.tool_id or not block.name:
-                return False
-            if parse_complete_tool_input(block.content, block.name, schemas) is None:
-                return False
-        return True
-
     def tool_blocks(self) -> list[StreamBlockState]:
         return [
             block
@@ -369,8 +330,8 @@ class AnthropicStreamLedger:
         return bool(self._content_blocks)
 
     def final_stop_reason(self, fallback: str) -> str:
-        if self.has_emitted_tool_block():
-            return "tool_use"
+        if fallback in ("end_turn", "tool_use"):
+            return "tool_use" if self.has_emitted_tool_block() else "end_turn"
         return fallback
 
     def has_terminal_message(self) -> bool:
@@ -406,7 +367,7 @@ class AnthropicStreamLedger:
         for block in self.tool_blocks():
             yield block.name, block.content
 
-    def _record_block_start(self, index: int, block: dict[str, Any]) -> None:
+    def _record_block_start(self, index: int, block: JsonObject) -> None:
         self.blocks.reserve_index(index)
         block_type = str(block.get("type", ""))
         state = StreamBlockState(index=index, block_type=block_type)

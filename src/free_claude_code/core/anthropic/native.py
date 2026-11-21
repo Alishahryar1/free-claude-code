@@ -75,7 +75,7 @@ def validate_messages_json(body: JsonObject) -> None:
 
     try:
         json.dumps(body, ensure_ascii=False, allow_nan=False).encode("utf-8")
-    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise NativeMessagesError(
             "Messages request must be finite JSON encodable as UTF-8."
         ) from exc
@@ -120,7 +120,7 @@ def build_native_messages_request(
 
     if not request.messages:
         raise NativeMessagesError("Messages input must not be empty.")
-    body = cast(JsonObject, dump_messages_request(request))
+    body = dump_messages_request(request)
     raw_request = cast(JsonObject, request.model_dump(mode="json", exclude_none=True))
     for name in request.model_extra or ():
         if name not in raw_request:
@@ -144,22 +144,6 @@ def build_native_messages_request(
                 "reasoning_content cannot be replayed losslessly."
             )
         raw = cast(JsonObject, message.model_dump(mode="json", exclude_none=True))
-        if message.role == "system":
-            if messages:
-                raise NativeMessagesError(
-                    "Native Messages supports only leading system messages."
-                )
-            content = raw["content"]
-            if isinstance(content, str):
-                system.append({"type": "text", "text": content})
-            elif isinstance(content, list):
-                if any(
-                    not isinstance(block, Mapping) or block.get("type") != "text"
-                    for block in content
-                ):
-                    raise NativeMessagesError("System content must contain only text.")
-                system.extend(content)
-            continue
         messages.append(raw)
     if not messages:
         raise NativeMessagesError("Messages input must contain a conversational turn.")

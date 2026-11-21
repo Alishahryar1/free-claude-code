@@ -13,6 +13,7 @@ from free_claude_code.cli.commands import (
     open_admin_when_ready,
 )
 from free_claude_code.config.paths import config_dir_path
+from free_claude_code.config.settings import Settings
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
 
 
@@ -120,7 +121,7 @@ def launch_desktop(
     """Show the tray before acquiring configuration, singleton and server ownership."""
     supervisor = ServerSupervisor(console_logging=False)
 
-    def reuse_existing(settings) -> bool:
+    def reuse_existing(settings: Settings) -> bool:
         if auto_started:
             controller.quit()
             return True

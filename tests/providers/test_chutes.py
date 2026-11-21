@@ -21,6 +21,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload, object_payload
 
 _MODEL = "Qwen/Qwen3-32B-TEE"
 
@@ -71,7 +72,7 @@ def test_preserves_upstream_reasoning_default(
     assert "extra_body" not in body
 
 
-def test_does_not_replay_reasoning_but_preserves_tool_history(
+def test_keeps_reasoning_separate_and_preserves_tool_history(
     chutes_provider: OpenAIChatProvider,
 ) -> None:
     request = MessagesRequest.model_validate(
@@ -111,12 +112,15 @@ def test_does_not_replay_reasoning_but_preserves_tool_history(
         reasoning=reasoning_for(request),
     )
 
-    assistant = body["messages"][1]
-    assert assistant["content"] == "Read it first.\n\nI will inspect it."
-    assert assistant["tool_calls"][0]["id"] == "toolu_1"
-    assert "reasoning_content" not in assistant
-    assert "reasoning" not in assistant
-    assert body["messages"][2] == {
+    assistant = array_payload(body["messages"])[1]
+    assert object_payload(assistant)["content"] == "I will inspect it."
+    assert (
+        object_payload(array_payload(object_payload(assistant)["tool_calls"])[0])["id"]
+        == "toolu_1"
+    )
+    assert object_payload(assistant)["reasoning_content"] == "Read it first."
+    assert "reasoning" not in object_payload(assistant)
+    assert array_payload(body["messages"])[2] == {
         "role": "tool",
         "tool_call_id": "toolu_1",
         "content": "print('hello')",
@@ -125,27 +129,32 @@ def test_does_not_replay_reasoning_but_preserves_tool_history(
 
 @pytest.mark.asyncio
 async def test_lists_only_semantically_agent_capable_models(
+    monkeypatch: pytest.MonkeyPatch,
     chutes_provider: OpenAIChatProvider,
 ) -> None:
-    chutes_provider._client.get = AsyncMock(
-        return_value={
-            "data": [
-                _catalog_model(input_modalities=("text", "image")),
-                _catalog_model(
-                    "plain-agent",
-                    supported_features=("tools",),
-                ),
-                _catalog_model(
-                    "image-generator",
-                    output_modalities=("image",),
-                ),
-                _catalog_model(
-                    "chat-without-tools",
-                    supported_features=("reasoning",),
-                ),
-                {"id": "legacy-without-capability-metadata"},
-            ]
-        }
+    monkeypatch.setattr(
+        chutes_provider._client,
+        "get",
+        AsyncMock(
+            return_value={
+                "data": [
+                    _catalog_model(input_modalities=("text", "image")),
+                    _catalog_model(
+                        "plain-agent",
+                        supported_features=("tools",),
+                    ),
+                    _catalog_model(
+                        "image-generator",
+                        output_modalities=("image",),
+                    ),
+                    _catalog_model(
+                        "chat-without-tools",
+                        supported_features=("reasoning",),
+                    ),
+                    {"id": "legacy-without-capability-metadata"},
+                ]
+            }
+        ),
     )
 
     model_infos = await chutes_provider.list_model_infos()
@@ -189,11 +198,14 @@ async def test_lists_only_semantically_agent_capable_models(
 )
 @pytest.mark.asyncio
 async def test_rejects_malformed_or_unusable_catalog_atomically(
+    monkeypatch: pytest.MonkeyPatch,
     chutes_provider: OpenAIChatProvider,
     item: dict[str, object],
     message: str,
 ) -> None:
-    chutes_provider._client.get = AsyncMock(return_value={"data": [item]})
+    monkeypatch.setattr(
+        chutes_provider._client, "get", AsyncMock(return_value={"data": [item]})
+    )
 
     with pytest.raises(ModelListResponseError, match=message):
         await chutes_provider.list_model_infos()
@@ -205,20 +217,25 @@ async def test_rejects_malformed_or_unusable_catalog_atomically(
 )
 @pytest.mark.asyncio
 async def test_incomplete_record_cannot_bypass_later_metadata_validation(
+    monkeypatch: pytest.MonkeyPatch,
     chutes_provider: OpenAIChatProvider,
     supported_features: object,
 ) -> None:
-    chutes_provider._client.get = AsyncMock(
-        return_value={
-            "data": [
-                _catalog_model(),
-                {
-                    "id": "incomplete-malformed-model",
-                    "output_modalities": ["text"],
-                    "supported_features": supported_features,
-                },
-            ]
-        }
+    monkeypatch.setattr(
+        chutes_provider._client,
+        "get",
+        AsyncMock(
+            return_value={
+                "data": [
+                    _catalog_model(),
+                    {
+                        "id": "incomplete-malformed-model",
+                        "output_modalities": ["text"],
+                        "supported_features": supported_features,
+                    },
+                ]
+            }
+        ),
     )
 
     with pytest.raises(
