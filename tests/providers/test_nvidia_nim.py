@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
@@ -22,8 +23,10 @@ from free_claude_code.core.history_replay import (
     ReplayRecord,
     encode_replay,
 )
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.nvidia_nim.client import _PROFILE as NIM_PROFILE
 from free_claude_code.providers.nvidia_nim.tool_schema import (
@@ -44,20 +47,19 @@ from tests.providers.test_native_tool_arguments import tool_events
 from tests.wire_payload import object_array, object_payload, string_payload
 
 
-def message(role, content):
+def message(role: str, content: Sequence[Mapping[str, object]] | str):
     return {"role": role, "content": content}
 
 
-def tool(name, description, input_schema):
+def tool(name: str, description: str, input_schema: Mapping[str, JsonValue]):
     return {"name": name, "description": description, "input_schema": input_schema}
 
 
-def block(**fields):
+def block(**fields: object):
     return fields
 
 
-def make_request(**overrides):
-    model = overrides.pop("model", "test-model")
+def make_request(model: str = "test-model", **overrides: object):
     overrides.setdefault("stop_sequences", ["STOP"])
     return make_messages_request(model, **overrides)
 
@@ -190,14 +192,16 @@ def _alias_events():
         ("messages", "reasoning_content"),
     ],
 )
-async def test_argument_aliases_survive_request_corrections(wire, correction):
+async def test_argument_aliases_survive_request_corrections(
+    wire: Literal["messages", "responses"], correction: str | None
+):
     request = _alias_request(wire, reasoning_history=correction == "reasoning_content")
     if correction == "chat_template":
         assert isinstance(request, MessagesRequest)
         request.extra_body = {"chat_template": "custom_template"}
     original = deepcopy(request.model_dump())
 
-    def responder(bodies):
+    def responder(bodies: list[JsonObject]):
         if len(bodies) == 1 and correction:
             return 400, {"message": f"Unsupported field: {correction}"}
         return 200, _alias_events()
@@ -239,7 +243,7 @@ async def test_argument_aliases_survive_request_corrections(wire, correction):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("early_sse", [False, True])
-async def test_argument_aliases_survive_shared_history_correction(early_sse):
+async def test_argument_aliases_survive_shared_history_correction(early_sse: bool):
     # Test adapter exercises the shared history path; native NIM disables details.
     def provider_factory():
         with patch(
@@ -261,7 +265,7 @@ async def test_argument_aliases_survive_shared_history_correction(early_sse):
         ),
     )
 
-    def responder(bodies):
+    def responder(bodies: list[JsonObject]):
         if len(bodies) == 1:
             error = {
                 "code": "invalid_encrypted_content",
@@ -287,7 +291,7 @@ async def test_argument_aliases_survive_shared_history_correction(early_sse):
     assert all(NIM_TOOL_ARGUMENT_ALIASES_KEY not in body for body in bodies)
 
 
-def _input_json_deltas(events):
+def _input_json_deltas(events: list[str]):
     deltas = []
     for event in events:
         if "event: content_block_delta" not in event:
@@ -304,11 +308,11 @@ def _input_json_deltas(events):
 
 def _tool_call_chunk(
     *,
-    name,
-    arguments,
-    tool_id="call_1",
-    index=0,
-    finish_reason=None,
+    name: str | None,
+    arguments: str,
+    tool_id: str = "call_1",
+    index: int = 0,
+    finish_reason: str | None = None,
 ):
     mock_tc = MagicMock()
     mock_tc.index = index
@@ -327,10 +331,10 @@ def _tool_call_chunk(
 
 
 def _content_chunk(
-    content,
+    content: str | None,
     *,
-    finish_reason=None,
-    reasoning_content=None,
+    finish_reason: str | None = None,
+    reasoning_content: str | None = None,
 ):
     mock_chunk = MagicMock()
     mock_chunk.choices = [
@@ -372,7 +376,7 @@ def _make_internal_server_error(message: str) -> openai.InternalServerError:
 
 
 @pytest.mark.asyncio
-async def test_init(provider_config):
+async def test_init(provider_config: ProviderConfig):
     """Test provider initialization."""
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
@@ -409,7 +413,7 @@ async def test_init_uses_configurable_timeouts():
 
 
 @pytest.mark.asyncio
-async def test_build_request_body(provider_config):
+async def test_build_request_body(provider_config: ProviderConfig):
     """Test request body construction."""
     provider = NvidiaNimProvider(
         provider_config,
@@ -428,7 +432,7 @@ async def test_build_request_body(provider_config):
     assert body["reasoning_effort"] == "high"
 
 
-def test_responses_request_uses_nim_chat_policy(provider_config):
+def test_responses_request_uses_nim_chat_policy(provider_config: ProviderConfig):
     original_name = "mcp__responses__" + "x" * 80
     provider = NvidiaNimProvider(
         provider_config,
@@ -485,7 +489,7 @@ def test_responses_request_uses_nim_chat_policy(provider_config):
     [(None, ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS), (128, 128)],
 )
 def test_responses_request_omits_sampling_defaults(
-    provider_config, requested, expected
+    provider_config: ProviderConfig, requested: int | None, expected: int
 ):
     provider = NvidiaNimProvider(provider_config, admission=immediate_admission())
     request = OpenAIResponsesRequest(
@@ -514,7 +518,7 @@ async def test_reasoning_rejection_preserves_normal_output_allowance():
     request.max_tokens = 64
     original = deepcopy(request.model_dump())
 
-    def responder(bodies):
+    def responder(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 400, {"message": "Reasoning is mandatory and cannot be disabled."}
         return 200, _alias_events()
@@ -540,7 +544,7 @@ async def test_reasoning_rejection_preserves_normal_output_allowance():
 
 @pytest.mark.asyncio
 async def test_build_request_body_encodes_explicit_reasoning_off(
-    provider_config,
+    provider_config: ProviderConfig,
 ):
     provider = NvidiaNimProvider(
         provider_config,
@@ -557,7 +561,7 @@ async def test_build_request_body_encodes_explicit_reasoning_off(
 
 @pytest.mark.asyncio
 async def test_build_request_body_omits_reasoning_when_request_disables_thinking(
-    provider_config,
+    provider_config: ProviderConfig,
 ):
     provider = NvidiaNimProvider(
         provider_config,
@@ -573,7 +577,9 @@ async def test_build_request_body_omits_reasoning_when_request_disables_thinking
     assert "reasoning_budget" not in extra
 
 
-def test_startup_and_build_request_issue_206_post_tool_text(nim_provider):
+def test_startup_and_build_request_issue_206_post_tool_text(
+    nim_provider: NvidiaNimProvider,
+):
     """Regression: assistant message with tool_use then text plus tool results (GitHub #206)."""
     tool_id = "toolu_issue_206"
     req = make_request(
@@ -610,7 +616,7 @@ def test_startup_and_build_request_issue_206_post_tool_text(nim_provider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_text(nim_provider):
+async def test_stream_messages_text(nim_provider: NvidiaNimProvider):
     """Test streaming text response."""
     req = make_request()
 
@@ -661,7 +667,9 @@ async def test_stream_messages_text(nim_provider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_thinking_reasoning_content(nim_provider):
+async def test_stream_messages_thinking_reasoning_content(
+    nim_provider: NvidiaNimProvider,
+):
     """Test streaming with native reasoning_content."""
     req = make_request()
 
@@ -708,7 +716,9 @@ async def test_stream_messages_thinking_reasoning_content(nim_provider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_suppresses_thinking_when_disabled(provider_config):
+async def test_stream_messages_suppresses_thinking_when_disabled(
+    provider_config: ProviderConfig,
+):
     provider = NvidiaNimProvider(
         provider_config,
         admission=immediate_admission(),
@@ -754,7 +764,9 @@ def _make_bad_request_error(message: str) -> openai.BadRequestError:
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_retries_without_chat_template(provider_config):
+async def test_stream_messages_retries_without_chat_template(
+    provider_config: ProviderConfig,
+):
     provider = NvidiaNimProvider(
         provider_config,
         admission=immediate_admission(),
@@ -811,7 +823,7 @@ async def test_stream_messages_retries_without_chat_template(provider_config):
 
 @pytest.mark.asyncio
 async def test_stream_messages_retries_without_chat_template_kwargs_issue_993(
-    provider_config,
+    provider_config: ProviderConfig,
 ):
     provider = NvidiaNimProvider(
         provider_config,
@@ -866,7 +878,9 @@ async def test_stream_messages_retries_without_chat_template_kwargs_issue_993(
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_does_not_retry_unrelated_bad_request(provider_config):
+async def test_stream_messages_does_not_retry_unrelated_bad_request(
+    provider_config: ProviderConfig,
+):
     provider = NvidiaNimProvider(
         provider_config,
         admission=immediate_admission(),
@@ -886,7 +900,7 @@ async def test_stream_messages_does_not_retry_unrelated_bad_request(provider_con
 
 
 @pytest.mark.asyncio
-async def test_tool_call_stream(nim_provider):
+async def test_tool_call_stream(nim_provider: NvidiaNimProvider):
     """Test streaming tool calls."""
     req = make_request()
 
@@ -926,7 +940,7 @@ async def test_tool_call_stream(nim_provider):
         assert "search" in starts[0]
 
 
-def _read_tools(wire):
+def _read_tools(wire: Literal["messages", "responses"]):
     schema = {
         "type": "object",
         "properties": {"path": {"type": "string"}},
@@ -978,7 +992,13 @@ _MINIMAX_MARKUP = (
         ("minimaxai/minimax-m3.1-flash", [_MINIMAX_MARKUP], True, "reasoning_content"),
     ],
 )
-async def test_minimax_markup_is_not_a_tool_call(wire, model, parts, with_tools, field):
+async def test_minimax_markup_is_not_a_tool_call(
+    wire: Literal["messages", "responses"],
+    model: str,
+    parts: list[str],
+    with_tools: bool,
+    field: str,
+):
     template = _events_for("chat")[0]
     upstream = [
         {
@@ -1041,7 +1061,9 @@ async def test_minimax_markup_is_not_a_tool_call(wire, model, parts, with_tools,
 
 
 @pytest.mark.asyncio
-async def test_nim_normalization_preserves_reasoning_chunks(nim_provider):
+async def test_nim_normalization_preserves_reasoning_chunks(
+    nim_provider: NvidiaNimProvider,
+):
     chunks = [
         _content_chunk(None, reasoning_content=_MINIMAX_MARKUP[:20]),
         _content_chunk(
@@ -1068,7 +1090,9 @@ async def test_nim_normalization_preserves_reasoning_chunks(nim_provider):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_nim_structured_tool_arguments_are_preserved(wire):
+async def test_nim_structured_tool_arguments_are_preserved(
+    wire: Literal["messages", "responses"],
+):
     arguments = '{ "path": "README.md", "options": {"count": 2, "enabled": true}, "tags": ["a", "b"] }'
     async with _harness(
         "chat",
@@ -1104,7 +1128,9 @@ async def test_nim_structured_tool_arguments_are_preserved(wire):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_restores_aliased_tool_arguments(nim_provider):
+async def test_stream_messages_restores_aliased_tool_arguments(
+    nim_provider: NvidiaNimProvider,
+):
     """NIM-safe argument aliases are restored before Anthropic SSE emission."""
     req = make_request(
         tools=[
@@ -1159,7 +1185,9 @@ async def test_stream_messages_restores_aliased_tool_arguments(nim_provider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_buffers_chunked_aliased_tool_arguments(nim_provider):
+async def test_stream_messages_buffers_chunked_aliased_tool_arguments(
+    nim_provider: NvidiaNimProvider,
+):
     """Chunked aliased args are emitted once as restored Claude Code args."""
     req = make_request(
         tools=[
@@ -1209,7 +1237,9 @@ async def test_stream_messages_buffers_chunked_aliased_tool_arguments(nim_provid
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_restores_nested_aliased_tool_arguments(nim_provider):
+async def test_stream_messages_restores_nested_aliased_tool_arguments(
+    nim_provider: NvidiaNimProvider,
+):
     req = make_request(
         tools=[
             tool(
@@ -1259,7 +1289,9 @@ async def test_stream_messages_restores_nested_aliased_tool_arguments(nim_provid
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_task_tool_preserves_background_true(nim_provider):
+async def test_stream_messages_task_tool_preserves_background_true(
+    nim_provider: NvidiaNimProvider,
+):
     req = make_request(
         tools=[
             tool(
@@ -1309,7 +1341,9 @@ async def test_stream_messages_task_tool_preserves_background_true(nim_provider)
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_retries_without_reasoning_content(nim_provider):
+async def test_stream_messages_retries_without_reasoning_content(
+    nim_provider: NvidiaNimProvider,
+):
     req = make_request(
         system=None,
         messages=[
@@ -1374,7 +1408,7 @@ async def test_stream_messages_retries_without_reasoning_content(nim_provider):
 
 @pytest.mark.asyncio
 async def test_stream_messages_bad_request_without_reasoning_budget_does_not_retry(
-    nim_provider,
+    nim_provider: NvidiaNimProvider,
 ):
     req = make_request()
     error = _make_bad_request_error("Unsupported field: top_k")
@@ -1397,7 +1431,7 @@ async def test_stream_messages_bad_request_without_reasoning_budget_does_not_ret
 
 @pytest.mark.asyncio
 async def test_stream_messages_unrelated_internal_error_does_not_downgrade(
-    nim_provider,
+    nim_provider: NvidiaNimProvider,
 ):
     req = make_request()
     error = _make_internal_server_error("unrelated internal provider failure")
@@ -1424,7 +1458,7 @@ async def test_stream_messages_unrelated_internal_error_does_not_downgrade(
 
 @pytest.mark.asyncio
 async def test_stream_messages_internal_reasoning_content_error_does_not_downgrade(
-    nim_provider,
+    nim_provider: NvidiaNimProvider,
 ):
     req = make_request()
     error = _make_internal_server_error(

@@ -1,5 +1,6 @@
 """Accounting after a choice finishes must not reopen or mutate that choice."""
 
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 
 import pytest
@@ -10,13 +11,13 @@ from free_claude_code.core.chat_completions.tool_calls import (
     CompletedChatCall,
 )
 from free_claude_code.core.failures import ExecutionFailure
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.tool_call_buffer import RetentionBudget, ToolBufferLimitError
 from tests.core.test_chat_tool_buffer import call, event
 from tests.wire_payload import array_payload, object_array, object_payload
 
 
-def terminal(reason="stop", choice=0) -> JsonObject:
+def terminal(reason: str = "stop", choice: int = 0) -> JsonObject:
     result = event(content="", finish=reason, choice=choice)
     choice_row = object_array(result["choices"])[0]
     choice_row.update(native_finish_reason=reason)
@@ -24,7 +25,7 @@ def terminal(reason="stop", choice=0) -> JsonObject:
     return result
 
 
-def accounting(reason="stop", choice=0) -> JsonObject:
+def accounting(reason: str = "stop", choice: int = 0) -> JsonObject:
     return {
         **terminal(reason, choice),
         "usage": {
@@ -37,7 +38,9 @@ def accounting(reason="stop", choice=0) -> JsonObject:
     }
 
 
-def frames(outputs):
+def frames(
+    outputs: Sequence[Mapping[str, JsonValue] | CompletedChatCall | CompletedChatBatch],
+):
     return [
         frame
         for item in outputs
@@ -48,7 +51,9 @@ def frames(outputs):
 
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("reason", ["stop", "tool_calls", "length", "content_filter"])
-def test_repeated_finish_is_an_accounting_frame_without_changing_input(native, reason):
+def test_repeated_finish_is_an_accounting_frame_without_changing_input(
+    native: bool, reason: str
+):
     buffer = ChatToolCallBuffer(native=native)
     buffer.feed(terminal(reason))
     trailer = accounting(reason)
@@ -70,7 +75,9 @@ def test_repeated_finish_is_an_accounting_frame_without_changing_input(native, r
         {"refusal": "", "audio": None, "function_call": None},
     ],
 )
-def test_empty_optional_fields_do_not_create_late_content(native, delta):
+def test_empty_optional_fields_do_not_create_late_content(
+    native: bool, delta: JsonObject
+):
     buffer = ChatToolCallBuffer(native=native)
     buffer.feed(terminal())
     trailer = accounting()
@@ -98,15 +105,17 @@ def test_empty_optional_fields_do_not_create_late_content(native, delta):
                 ("reasoning_content", "late"),
                 ("reasoning_details", [{"signature": "late"}]),
                 ("refusal", "late"),
-                ("audio", {}),
+                ("audio", dict[str, JsonValue]()),
                 ("tool_calls", [call(0, "late", "{}", "x")]),
-                ("function_call", {}),
+                ("function_call", dict[str, JsonValue]()),
                 ("unknown", ""),
             ]
         ],
     ],
 )
-def test_accounting_does_not_hide_late_content_or_contradictions(native, change):
+def test_accounting_does_not_hide_late_content_or_contradictions(
+    native: bool, change: JsonObject
+):
     buffer = ChatToolCallBuffer(native=native)
     buffer.feed(terminal())
     invalid = accounting()
@@ -122,7 +131,7 @@ def test_accounting_does_not_hide_late_content_or_contradictions(native, change)
 
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("usage", [None, [], "", 0])
-def test_empty_repeated_choice_requires_accounting(native, usage):
+def test_empty_repeated_choice_requires_accounting(native: bool, usage: JsonValue):
     buffer = ChatToolCallBuffer(native=native)
     buffer.feed(terminal())
     with pytest.raises(ExecutionFailure):
@@ -130,7 +139,7 @@ def test_empty_repeated_choice_requires_accounting(native, usage):
 
 
 @pytest.mark.parametrize("native", [False, True])
-def test_first_finish_with_usage_still_completes_a_call(native):
+def test_first_finish_with_usage_still_completes_a_call(native: bool):
     buffer = ChatToolCallBuffer(native=native)
     first = accounting("tool_calls")
     object_array(first["choices"])[0]["delta"] = {
@@ -149,7 +158,7 @@ def test_first_finish_with_usage_still_completes_a_call(native):
 
 
 @pytest.mark.parametrize("native", [False, True])
-def test_mixed_accounting_and_active_tool_keeps_usage_and_source_order(native):
+def test_mixed_accounting_and_active_tool_keeps_usage_and_source_order(native: bool):
     buffer = ChatToolCallBuffer(native=native)
     buffer.feed(terminal())
     assert buffer.feed(event([call(0, "read", "{", "a")], choice=1)) == []
@@ -177,7 +186,7 @@ def test_mixed_accounting_and_active_tool_keeps_usage_and_source_order(native):
 
 @pytest.mark.parametrize("native", [False, True])
 def test_accounting_is_idempotent_but_finished_identity_retention_remains_bounded(
-    native,
+    native: bool,
 ):
     budget = RetentionBudget(max_records=4)
     buffer = ChatToolCallBuffer(native=native, budget=budget)
@@ -192,7 +201,7 @@ def test_accounting_is_idempotent_but_finished_identity_retention_remains_bounde
 
 
 @pytest.mark.parametrize("native", [False, True])
-def test_retained_finish_markers_count_toward_byte_limit(native):
+def test_retained_finish_markers_count_toward_byte_limit(native: bool):
     buffer = ChatToolCallBuffer(native=native, budget=RetentionBudget(max_bytes=512))
     final = terminal()
     object_array(final["choices"])[0]["native_finish_reason"] = "x" * 600
@@ -201,7 +210,7 @@ def test_retained_finish_markers_count_toward_byte_limit(native):
 
 
 @pytest.mark.parametrize("native", [False, True])
-def test_duplicate_choice_index_is_rejected_before_first_completion(native):
+def test_duplicate_choice_index_is_rejected_before_first_completion(native: bool):
     buffer = ChatToolCallBuffer(native=native)
     invalid = terminal()
     array_payload(invalid["choices"]).append(

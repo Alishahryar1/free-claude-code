@@ -1,14 +1,17 @@
 """Tests for token counting helpers."""
 
 import json
+from collections.abc import Callable
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from free_claude_code.core.anthropic import get_token_count
 from free_claude_code.core.anthropic.models import (
+    NativeTokenCountMessage,
     SystemContent,
 )
+from free_claude_code.core.json_types import JsonObject, JsonValue
 
 
 class TestGetTokenCount:
@@ -102,7 +105,8 @@ class TestGetTokenCount:
         tool = MagicMock()
         tool.name = "search"
         tool.description = "Search for information"
-        tool.input_schema = {"type": "object", "properties": {}}
+        schema: JsonObject = {"type": "object", "properties": {}}
+        tool.input_schema = schema
 
         count = get_token_count([msg], tools=[tool])
         assert count > 0
@@ -240,24 +244,26 @@ class TestGetTokenCount:
         }
         text = {"type": "text", "text": "Screenshot captured"}
 
-        def user_message(*blocks):
+        def user_message(*blocks: object):
             msg = MagicMock()
             msg.content = list(blocks)
             return msg
 
-        def tool_result(*parts):
+        def tool_result(*parts: object):
             return user_message(
                 {"type": "tool_result", "tool_use_id": "t1", "content": list(parts)}
             )
 
-        def image_cost(wrap):
+        def image_cost(wrap: Callable[..., NativeTokenCountMessage]):
             return get_token_count([wrap(text, image)]) - get_token_count([wrap(text)])
 
         assert image_cost(tool_result) == image_cost(user_message)
         assert image_cost(tool_result) < 1_000
 
     @pytest.mark.parametrize("data", [12345, ["a"], {"x": 1}])
-    def test_tool_result_image_with_non_string_data_gets_the_flat_cost(self, data):
+    def test_tool_result_image_with_non_string_data_gets_the_flat_cost(
+        self, data: JsonValue
+    ):
         """Tool-result content is not validated, so image data can be any JSON value.
 
         A number used to reach ``len()`` and turn count_tokens into an HTTP 500.
@@ -283,7 +289,9 @@ class TestGetTokenCount:
             [],
         ],
     )
-    def test_image_free_tool_result_list_is_counted_as_before(self, parts):
+    def test_image_free_tool_result_list_is_counted_as_before(
+        self, parts: list[JsonObject]
+    ):
         """Only images leave the serialized payload; image-free results are unchanged."""
         msg = MagicMock()
         msg.content = [{"type": "tool_result", "tool_use_id": "t1", "content": parts}]

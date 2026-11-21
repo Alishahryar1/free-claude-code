@@ -198,7 +198,7 @@ class ManagedClaudeSessionManager:
                 )
             logger.info("All sessions stopped")
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, int]:
         """Get session statistics."""
         return {
             "active_sessions": len(self._sessions),

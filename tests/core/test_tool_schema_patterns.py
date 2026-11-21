@@ -8,6 +8,7 @@ import pytest
 
 from free_claude_code.core.anthropic.conversion import build_base_request_body
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.json_types import JsonValue
 from free_claude_code.core.openai_responses.provider_input import (
     build_responses_provider_request,
 )
@@ -22,7 +23,7 @@ ARTIFACT_PATTERN = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
     "pattern", [r"^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]{1,200}$", ARTIFACT_PATTERN]
 )
 def test_claude_converters_preserve_artifact_rules_in_portable_pattern(
-    wire_format, pattern
+    wire_format: str, pattern: str
 ):
     schema = {
         "type": "object",
@@ -59,7 +60,7 @@ def test_claude_converters_preserve_artifact_rules_in_portable_pattern(
     assert request.model_dump() == original
 
 
-def translated_pattern(pattern):
+def translated_pattern(pattern: str):
     return translate_tool_schema_patterns({"pattern": pattern})["pattern"]
 
 
@@ -70,7 +71,7 @@ def translated_pattern(pattern):
     ids=["repeat-overflow", "group-recursion"],
 )
 def test_compiler_limits_preserve_original_schema_in_both_converters(
-    wire_format, pattern
+    wire_format: str, pattern: str
 ):
     schema = {"type": "string", "pattern": pattern}
     request = MessagesRequest.model_validate(
@@ -95,7 +96,7 @@ def test_compiler_limits_preserve_original_schema_in_both_converters(
 
 
 @pytest.mark.parametrize("category", ["Cc", "Cf", "Zl", "Zp"])
-def test_category_expansion_preserves_every_unicode_scalar(category):
+def test_category_expansion_preserves_every_unicode_scalar(category: str):
     regex = re.compile(translated_pattern(r"[^\p{" + category + "}]+"))
     for point in range(0x110000):
         if 0xD800 <= point <= 0xDFFF:
@@ -138,7 +139,7 @@ def test_category_expansion_preserves_every_unicode_scalar(category):
         ],
     ],
 )
-def test_artifact_restrictions_survive_translation(name, accepted):
+def test_artifact_restrictions_survive_translation(name: str, accepted: bool):
     assert bool(re.fullmatch(translated_pattern(ARTIFACT_PATTERN), name)) == accepted
 
 
@@ -171,7 +172,7 @@ def test_artifact_restrictions_survive_translation(name, accepted):
         r"\[^\p{Cc}]",
     ],
 )
-def test_unsupported_or_literal_patterns_remain_unchanged(pattern):
+def test_unsupported_or_literal_patterns_remain_unchanged(pattern: str):
     schema = {"type": "string", "pattern": pattern}
     assert translate_tool_schema_patterns(schema) is schema
 
@@ -186,7 +187,7 @@ def test_unsupported_or_literal_patterns_remain_unchanged(pattern):
         (r"[^\p{Zl}][^\p{Zp}]", "\u2028x", "ab"),
     ],
 )
-def test_class_escaping_is_preserved(pattern, excluded, accepted):
+def test_class_escaping_is_preserved(pattern: str, excluded: str, accepted: str):
     translated = translated_pattern(pattern)
     assert translated != pattern
     regex = re.compile(translated)
@@ -209,7 +210,7 @@ def test_class_escaping_is_preserved(pattern, excluded, accepted):
         "dependencies",
     ],
 )
-def test_schema_maps_visit_values_and_preserve_names(container):
+def test_schema_maps_visit_values_and_preserve_names(container: str):
     child = {"type": "string", "pattern": r"[^\p{Cc}]"}
     schema = {container: {"pattern": child, r"\p{Cc}": True, "required": ["name"]}}
     original = deepcopy(schema)
@@ -237,14 +238,14 @@ def test_schema_maps_visit_values_and_preserve_names(container):
         "contentSchema",
     ],
 )
-def test_single_schema_keywords_are_translated(keyword):
+def test_single_schema_keywords_are_translated(keyword: str):
     schema = {keyword: {"pattern": r"[^\p{Cf}]"}}
     converted = translate_tool_schema_patterns(schema)
     assert converted[keyword]["pattern"] != schema[keyword]["pattern"]
 
 
 @pytest.mark.parametrize("keyword", ["allOf", "anyOf", "oneOf", "prefixItems", "items"])
-def test_schema_arrays_preserve_boolean_and_unchanged_children(keyword):
+def test_schema_arrays_preserve_boolean_and_unchanged_children(keyword: str):
     child = {"type": "string", "pattern": r"[a-z]"}
     schema = {keyword: [child, False, {"pattern": r"[^\p{Cf}]"}]}
     converted = translate_tool_schema_patterns(schema)
@@ -276,5 +277,5 @@ def test_instance_data_is_untouched_and_translation_is_idempotent():
 @pytest.mark.parametrize(
     "schema", [True, False, {}, {"pattern": 123}, {"type": "string"}]
 )
-def test_non_patterns_remain_unchanged(schema):
+def test_non_patterns_remain_unchanged(schema: JsonValue):
     assert translate_tool_schema_patterns(schema) is schema

@@ -29,9 +29,9 @@ from tests.providers.test_native_tool_arguments import tool_events
 
 def test_native_fallback_closes_source_preserves_options_and_filters_candidates():
     bodies = []
-    wires = []
+    wires: list[Wire] = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         body = json.loads(request.content)
         bodies.append(body)
         if len(bodies) > 1:
@@ -85,7 +85,7 @@ def test_native_fallback_closes_source_preserves_options_and_filters_candidates(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("target", ["chat", "messages", "responses"])
 async def test_responses_sdk_consumes_fallback_and_replays_only_real_tool_history(
-    target,
+    target: str,
 ):
     async with (
         _harness(

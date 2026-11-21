@@ -1,4 +1,5 @@
 import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -317,7 +318,7 @@ def test_openrouter_native_e2e(smoke_config: SmokeConfig) -> None:
 def _run_provider_scenario(
     smoke_config: SmokeConfig,
     provider_model: ProviderModel,
-    scenario,
+    scenario: Callable[[SmokeConfig, ProviderModel], None],
 ) -> None:
     try:
         scenario(smoke_config, provider_model)

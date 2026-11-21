@@ -2,9 +2,11 @@
 
 import copy
 import json
+from pathlib import Path
 
 import pytest
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 from free_claude_code.application.model_catalog import CatalogModel, ModelCatalog
 from free_claude_code.harnesses import dsh_desktop_integration as desktop
@@ -16,21 +18,21 @@ ROUTE = "free-claude-code"
 REF = desktop.DSH_DESKTOP_API_KEY
 
 
-def catalog(name="fixture/model"):
+def catalog(name: str = "fixture/model"):
     return ModelCatalog((CatalogModel(name, name, name, True),), name)
 
 
-def read(path):
+def read(path: Path):
     return YAML(typ="rt").load(path.read_text(encoding="utf-8"))
 
 
-def write(path, value):
+def write(path: Path, value: CommentedMap | CommentedSeq):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as stream:
         YAML(typ="rt").dump(value, stream)
 
 
-def config(rows, identity):
+def config(rows: CommentedSeq, identity: str):
     return next(
         row["config"]
         for row in reversed(rows)
@@ -39,7 +41,7 @@ def config(rows, identity):
 
 
 @pytest.fixture
-def home(tmp_path):
+def home(tmp_path: Path):
     root = tmp_path / "dsh"
     profile = root / "profiles/desktop"
     profile.mkdir(parents=True)
@@ -48,15 +50,15 @@ def home(tmp_path):
     return root
 
 
-def connect(home, token=TOKEN, model="fixture/model"):
+def connect(home: Path, token: str = TOKEN, model: str = "fixture/model"):
     return desktop.configure(home, URL, token, catalog(model))
 
 
-def status(home):
+def status(home: Path):
     return desktop.status(home, URL, TOKEN, catalog())
 
 
-def test_connect_status_disconnect_and_reconnect(home):
+def test_connect_status_disconnect_and_reconnect(home: Path):
     assert not status(home)["connected"]
     result = connect(home)
     assert result["connected"]
@@ -99,7 +101,7 @@ def test_connect_status_disconnect_and_reconnect(home):
         "missing-token",
     ],
 )
-def test_status_requires_all_fcc_keys_and_connect_replaces_them(home, field):
+def test_status_requires_all_fcc_keys_and_connect_replaces_them(home: Path, field: str):
     connect(home)
     patch = home / "profiles/desktop/cordis.patch.yml"
     credentials = home / ".credentials.yaml"
@@ -124,7 +126,7 @@ def test_status_requires_all_fcc_keys_and_connect_replaces_them(home, field):
     assert status(home)["connected"]
 
 
-def test_status_compares_current_catalog_url_and_token(home):
+def test_status_compares_current_catalog_url_and_token(home: Path):
     connect(home)
     for url, token, models in [
         (URL + "-changed", TOKEN, catalog()),
@@ -134,7 +136,7 @@ def test_status_compares_current_catalog_url_and_token(home):
         assert not desktop.status(home, url, token, models)["connected"]
 
 
-def test_other_settings_accounts_comments_tags_and_peer_files_are_preserved(home):
+def test_other_settings_accounts_comments_tags_and_peer_files_are_preserved(home: Path):
     patch = home / "profiles/desktop/cordis.patch.yml"
     patch.write_text("""# keep native settings
 - id: unrelated
@@ -175,7 +177,7 @@ def test_other_settings_accounts_comments_tags_and_peer_files_are_preserved(home
     assert peer.read_text() == "unreadable unrelated profile, even if it names " + REF
 
 
-def test_disconnect_removes_all_fcc_copies_and_preserves_other_default(home):
+def test_disconnect_removes_all_fcc_copies_and_preserves_other_default(home: Path):
     connect(home)
     patch = home / "profiles/desktop/cordis.patch.yml"
     rows = read(patch)
@@ -197,16 +199,18 @@ def test_disconnect_removes_all_fcc_copies_and_preserves_other_default(home):
 
 @pytest.mark.parametrize("operation", ["connect", "disconnect"])
 def test_partial_write_is_disconnected_and_connect_can_repair(
-    home, monkeypatch, operation
+    home: Path, monkeypatch: pytest.MonkeyPatch, operation: str
 ):
     if operation == "disconnect":
         connect(home)
     original = dsh_files.write_yaml
 
-    def fail(path, *args, **kwargs):
+    def fail(
+        path: Path, document: CommentedMap | CommentedSeq, *, private: bool = False
+    ):
         if path == home / ".credentials.yaml":
             raise PermissionError("test failure")
-        return original(path, *args, **kwargs)
+        return original(path, document, private=private)
 
     with monkeypatch.context() as scoped:
         scoped.setattr(dsh_files, "write_yaml", fail)
@@ -217,7 +221,7 @@ def test_partial_write_is_disconnected_and_connect_can_repair(
     assert not desktop.disconnect(home)["connected"]
 
 
-def test_absent_home_status_disconnect_and_refresh_create_nothing(tmp_path):
+def test_absent_home_status_disconnect_and_refresh_create_nothing(tmp_path: Path):
     home = tmp_path / "absent"
     assert not status(home)["connected"]
     assert not desktop.disconnect(home)["connected"]
@@ -225,7 +229,7 @@ def test_absent_home_status_disconnect_and_refresh_create_nothing(tmp_path):
     assert not home.exists()
 
 
-def test_invalid_yaml_does_not_modify_files_or_expose_secrets(home):
+def test_invalid_yaml_does_not_modify_files_or_expose_secrets(home: Path):
     patch = home / "profiles/desktop/cordis.patch.yml"
     patch.write_text("secret: [private-token")
     before = patch.read_bytes()
@@ -236,20 +240,24 @@ def test_invalid_yaml_does_not_modify_files_or_expose_secrets(home):
     assert not (home / ".credentials.yaml").exists()
 
 
-def test_connect_honors_native_profile_lock(home, monkeypatch):
+def test_connect_honors_native_profile_lock(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+):
     lock = home / "profiles/desktop/package.json.lock"
     lock.write_text("native writer")
     original = dsh_files.file_lock
-    monkeypatch.setattr(
-        dsh_files, "file_lock", lambda path, **kwargs: original(path, wait=0)
-    )
+
+    def replace_file_lock(path: Path, **kwargs: object):
+        return original(path, wait=0)
+
+    monkeypatch.setattr(dsh_files, "file_lock", replace_file_lock)
     with pytest.raises(TimeoutError):
         connect(home)
     assert lock.read_text() == "native writer"
     assert not (home / ".credentials.yaml").exists()
 
 
-def test_refresh_replaces_old_derived_timeout_and_preserves_other_settings(home):
+def test_refresh_replaces_old_derived_timeout_and_preserves_other_settings(home: Path):
     connect(home)
     patch = home / "profiles/desktop/cordis.patch.yml"
     rows = read(patch)

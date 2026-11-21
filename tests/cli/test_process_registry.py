@@ -2,6 +2,8 @@ import os
 import subprocess
 from unittest.mock import patch
 
+import pytest
+
 
 def test_process_registry_register_pid_zero_noop():
     """register_pid(0) is a no-op (early return)."""
@@ -31,14 +33,16 @@ def test_process_registry_ensure_atexit_idempotent():
     # Should not raise; atexit handler registered once
 
 
-def test_process_registry_kill_all_exception_logged_no_raise(monkeypatch):
+def test_process_registry_kill_all_exception_logged_no_raise(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Exception in os.kill/taskkill is logged but does not raise."""
     from free_claude_code.cli import process_registry as pr
 
     monkeypatch.setattr(pr, "_pids", {99999})
     monkeypatch.setattr(os, "name", "posix", raising=False)
 
-    def _kill_raises(pid, sig):
+    def _kill_raises(pid: object, sig: object):
         raise ProcessLookupError("no such process")
 
     with patch("os.kill", _kill_raises):
@@ -61,7 +65,7 @@ def test_process_registry_kill_all_best_effort_empty_is_noop():
 
 
 def test_process_registry_kill_all_best_effort_windows_noop_when_taskkill_missing(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     from free_claude_code.cli import process_registry as pr
 
@@ -72,20 +76,26 @@ def test_process_registry_kill_all_best_effort_windows_noop_when_taskkill_missin
     # If taskkill isn't callable, we still should not crash.
     import subprocess
 
-    def _boom(*args, **kwargs):
+    def _boom(*args: object, **kwargs: object):
         raise FileNotFoundError("taskkill missing")
 
     monkeypatch.setattr(subprocess, "run", _boom)
     pr.kill_all_best_effort()
 
 
-def test_process_registry_kill_pid_tree_windows_uses_taskkill(monkeypatch):
+def test_process_registry_kill_pid_tree_windows_uses_taskkill(
+    monkeypatch: pytest.MonkeyPatch,
+):
     from free_claude_code.cli import process_registry as pr
 
-    calls = []
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
     monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     monkeypatch.setattr(os, "name", "nt", raising=False)
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: calls.append((a, kw)))
+
+    def record_call(*args: object, **kwargs: object) -> None:
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(subprocess, "run", record_call)
 
     pr.kill_pid_tree_best_effort(12345)
 

@@ -26,10 +26,12 @@ from tests.providers.test_gemini_transport import chat_response
 @pytest.mark.parametrize(
     "wire", ["openai_chat", "openai_responses", "anthropic_messages"]
 )
-def test_caller_native_signature_is_rejected_before_inference(wire, streaming):
+def test_caller_native_signature_is_rejected_before_inference(
+    wire: str, streaming: bool
+):
     sent = []
 
-    def reply(request):
+    def reply(request: httpx.Request | httpx2.Request):
         sent.append(request)
         raise AssertionError("Unsupported history must be rejected before inference")
 
@@ -74,11 +76,11 @@ def test_caller_native_signature_is_rejected_before_inference(wire, streaming):
 )
 @pytest.mark.parametrize("streaming", [False, True])
 def test_full_http_to_upstream_matrix_keeps_route_controls_and_credentials(
-    wire, streaming
+    wire: str, streaming: bool
 ):
     sent = []
 
-    def reply(request):
+    def reply(request: httpx.Request | httpx2.Request):
         sent.append((json.loads(request.content), dict(request.headers)))
         response = httpx.Response if wire == "anthropic_messages" else httpx2.Response
         return response(
@@ -152,7 +154,7 @@ def test_full_http_to_upstream_matrix_keeps_route_controls_and_credentials(
     "first_wire", ["openai_chat", "openai_responses", "anthropic_messages"]
 )
 def test_gemini_http_fallback_keeps_one_response_across_egresses(
-    first_wire, streaming, structured, monkeypatch
+    first_wire: str, streaming: bool, structured: bool, monkeypatch: pytest.MonkeyPatch
 ):
     sent = []
 
@@ -250,10 +252,10 @@ def test_gemini_http_fallback_keeps_one_response_across_egresses(
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-def test_public_fallback_omits_hidden_unsigned_history(streaming):
+def test_public_fallback_omits_hidden_unsigned_history(streaming: bool):
     sent = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         body = json.loads(request.content)
         sent.append(body)
         if body["model"] == "first":

@@ -15,16 +15,16 @@ from tests.api.support import create_test_app
 ROOT = "/admin/api/integrations/claude-desktop"
 
 
-def test_pending_disconnect_survives_runtime_restart(monkeypatch):
+def test_pending_disconnect_survives_runtime_restart(monkeypatch: pytest.MonkeyPatch):
     settings = Settings(host="127.0.0.1", port=4321, proxy_auth_token="original")
     root = desktop.config_root()
     profile = root / "configLibrary" / f"{desktop.FCC_ID}.json"
     unlink = Path.unlink
 
-    def fail(path, *args, **kwargs):
+    def fail(path: Path, missing_ok: bool = False):
         if path == profile:
             raise PermissionError("test")
-        return unlink(path, *args, **kwargs)
+        return unlink(path, missing_ok=missing_ok)
 
     with TestClient(
         create_test_app(settings),
@@ -65,7 +65,7 @@ def client():
         yield client
 
 
-def test_desktop_routes_connect_disconnect_and_hide_credentials(client):
+def test_desktop_routes_connect_disconnect_and_hide_credentials(client: TestClient):
     root = desktop.config_root()
     response = client.get(ROOT)
     assert response.json()["connected"] is False
@@ -95,7 +95,7 @@ def test_desktop_routes_connect_disconnect_and_hide_credentials(client):
 
 
 @pytest.mark.parametrize("action", ["", "/connect", "/disconnect", "/refresh"])
-def test_desktop_admin_routes_reject_other_origins(client, action):
+def test_desktop_admin_routes_reject_other_origins(client: TestClient, action: str):
     response = client.request(
         "POST" if action else "GET",
         ROOT + action,
@@ -105,7 +105,9 @@ def test_desktop_admin_routes_reject_other_origins(client, action):
     assert not desktop.config_root().exists()
 
 
-def test_managed_desktop_error_is_safe(client, monkeypatch):
+def test_managed_desktop_error_is_safe(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
     def managed():
         raise desktop.ManagedDesktopError("private-policy-secret")
 
@@ -156,13 +158,13 @@ def test_desktop_model_view_preserves_labels_and_query_precedence():
     "model",
     ["claude-fcc/", "claude-fcc/zz", "claude-fcc", desktop_model_id("unknown/model")],
 )
-def test_invalid_desktop_model_never_routes_to_default(model):
+def test_invalid_desktop_model_never_routes_to_default(model: str):
     with pytest.raises(InvalidRequestError):
         ModelRouter(Settings()).resolve(model)
 
 
 @pytest.mark.parametrize("no_thinking", [False, True])
-def test_desktop_token_count_routes_to_original_provider(no_thinking):
+def test_desktop_token_count_routes_to_original_provider(no_thinking: bool):
     ref = "groq/desktop-model"
     app = create_test_app(Settings(proxy_auth_enabled=False))
     with (
@@ -187,7 +189,9 @@ def test_desktop_token_count_routes_to_original_provider(no_thinking):
     assert routed["provider_model_ref"] == ref
 
 
-def test_pending_windows_migration_reports_recovery_without_writes(client, monkeypatch):
+def test_pending_windows_migration_reports_recovery_without_writes(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setattr(desktop.sys, "platform", "win32")
     legacy = desktop.legacy_windows_root()
     assert legacy is not None

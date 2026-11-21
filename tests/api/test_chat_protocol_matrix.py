@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from tests.api.support import create_test_app, provider_manager_for_app
 from tests.providers.test_custom_provider import completion, definition, provider
 
@@ -18,11 +19,11 @@ from tests.providers.test_custom_provider import completion, definition, provide
 )
 @pytest.mark.parametrize("streaming", [False, True])
 def test_chat_http_dispatch_preserves_controls_credentials_and_public_model(
-    wire, streaming
+    wire: str, streaming: bool
 ):
     sent = []
 
-    def reply(request):
+    def reply(request: httpx.Request | httpx2.Request):
         sent.append((json.loads(request.content), dict(request.headers)))
         module = httpx if wire == "anthropic_messages" else httpx2
         return module.Response(
@@ -95,10 +96,12 @@ def test_chat_http_dispatch_preserves_controls_credentials_and_public_model(
 @pytest.mark.parametrize(
     "strict", [{}, {"strict": None}, {"strict": False}, {"strict": True}]
 )
-def test_chat_function_strictness_survives_upstream_translation(wire, strict):
+def test_chat_function_strictness_survives_upstream_translation(
+    wire: str, strict: JsonObject
+):
     sent = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         sent.append(json.loads(request.content))
         return httpx2.Response(
             200, text=completion(wire), headers={"content-type": "text/event-stream"}
@@ -165,7 +168,7 @@ def test_chat_validation_and_auth_errors_use_openai_shape():
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("with_tool", [False, True])
 def test_native_chat_null_tool_delta_preserves_text_and_later_calls(
-    streaming, with_tool
+    streaming: bool, with_tool: bool
 ):
     from tests.api.test_four_protocol_matrix import matrix_app, response_value
 
@@ -175,11 +178,12 @@ def test_native_chat_null_tool_delta_preserves_text_and_later_calls(
         "type": "function",
         "function": {"name": "read", "arguments": "{}"},
     }
-    deltas = [
+    deltas: list[JsonObject] = [
         {"role": "assistant", "content": "hello", "tool_calls": None},
-        *([{"tool_calls": [{**call, "function": None}]}] if with_tool else []),
-        {"tool_calls": [call]} if with_tool else {"tool_calls": None},
     ]
+    if with_tool:
+        deltas.append({"tool_calls": [{**call, "function": None}]})
+    deltas.append({"tool_calls": [call] if with_tool else None})
 
     def reply(_):
         events = [
@@ -206,7 +210,7 @@ def test_native_chat_null_tool_delta_preserves_text_and_later_calls(
             text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
         )
 
-    with TestClient(matrix_app("chat", reply)) as client:
+    with TestClient(matrix_app("chat", sdk_reply=reply)) as client:
         response = client.post(
             "/v1/chat/completions",
             json={
@@ -252,7 +256,7 @@ def test_native_chat_null_tool_delta_preserves_text_and_later_calls(
         {"messages": [{"role": "assistant", "reasoning_details": ["bad"]}]},
     ],
 )
-def test_chat_malformed_fields_fail_before_provider_execution(changes):
+def test_chat_malformed_fields_fail_before_provider_execution(changes: JsonObject):
     app = create_test_app(Settings())
     with TestClient(app) as client:
         response = client.post(
@@ -301,7 +305,7 @@ def test_chat_malformed_fields_fail_before_provider_execution(changes):
     ],
 )
 def test_native_chat_nullable_fields_accumulate_later_values(
-    streaming, field, updates, expected
+    streaming: bool, field: str, updates: list[JsonValue], expected: JsonValue
 ):
     from tests.api.test_four_protocol_matrix import matrix_app, response_value
 
@@ -333,7 +337,7 @@ def test_native_chat_nullable_fields_accumulate_later_values(
             text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
         )
 
-    with TestClient(matrix_app("chat", reply)) as client:
+    with TestClient(matrix_app("chat", sdk_reply=reply)) as client:
         response = client.post(
             "/v1/chat/completions",
             json={
@@ -350,7 +354,7 @@ def test_native_chat_nullable_fields_accumulate_later_values(
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-def test_native_custom_tool_fragments_survive_public_chat_response(streaming):
+def test_native_custom_tool_fragments_survive_public_chat_response(streaming: bool):
     from tests.api.test_four_protocol_matrix import matrix_app, response_value
 
     chunks = [
@@ -395,7 +399,7 @@ def test_native_custom_tool_fragments_survive_public_chat_response(streaming):
             text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
         )
 
-    with TestClient(matrix_app("chat", reply)) as client:
+    with TestClient(matrix_app("chat", sdk_reply=reply)) as client:
         response = client.post(
             "/v1/chat/completions",
             json={

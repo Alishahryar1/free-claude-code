@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from copy import deepcopy
+from typing import override
 
 import httpx
 import httpx2
@@ -13,6 +14,7 @@ from openai import AsyncOpenAI
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.core.stream_output import StreamOutput
@@ -55,7 +57,7 @@ class Context:
 
 def _response(request: httpx2.Request) -> httpx2.Response:
     if request.url.path.endswith("/responses"):
-        payload = {
+        payload: JsonObject = {
             "type": "response.completed",
             "response": {
                 "id": "resp",
@@ -151,6 +153,7 @@ async def test_responses_credential_failure_does_not_retry_generation(
     responses_ingress: bool,
 ) -> None:
     class FailingContext(Context):
+        @override
         async def endpoint(self, *, force_refresh: bool = False) -> HttpEndpoint:
             if not refresh or force_refresh:
                 self.calls.append(force_refresh)

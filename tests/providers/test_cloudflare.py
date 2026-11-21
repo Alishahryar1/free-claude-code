@@ -18,6 +18,7 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.chat_completions.response import ChatResponseAccumulator
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.cloudflare import (
     CloudflareProvider,
@@ -347,7 +348,7 @@ async def test_stream_maps_openai_tool_calls_to_tool_use(
 @pytest.mark.parametrize("wire", ["messages", "chat"])
 @pytest.mark.parametrize("numeric", [206, 0, -7, 1.25])
 async def test_numeric_text_reaches_translated_and_native_consumers(
-    cloudflare_provider, wire, numeric
+    cloudflare_provider: CloudflareProvider, wire: str, numeric: float | int
 ):
     chunks = [
         sdk_chat_chunk(
@@ -397,7 +398,9 @@ async def test_numeric_text_reaches_translated_and_native_consumers(
 
 
 @pytest.mark.asyncio
-async def test_captured_cloudflare_numeric_stream(cloudflare_provider):
+async def test_captured_cloudflare_numeric_stream(
+    cloudflare_provider: CloudflareProvider,
+):
     chunks = json.loads(
         (Path(__file__).parent / "fixtures/cloudflare_numeric_content.json").read_text()
     )
@@ -422,7 +425,9 @@ async def test_captured_cloudflare_numeric_stream(cloudflare_provider):
 @pytest.mark.parametrize(
     "value", [True, False, {}, [], float("inf"), float("-inf"), float("nan")]
 )
-def test_cloudflare_rejects_non_text_non_numeric_content(cloudflare_provider, value):
+def test_cloudflare_rejects_non_text_non_numeric_content(
+    cloudflare_provider: CloudflareProvider, value: JsonValue
+):
     chunk = sdk_chat_chunk({"choices": [{"delta": {"content": value}}]})
     with pytest.raises(ExecutionFailure) as caught:
         cloudflare_provider._behavior.normalize_chunk(chunk)
@@ -431,9 +436,9 @@ def test_cloudflare_rejects_non_text_non_numeric_content(cloudflare_provider, va
 
 
 def test_cloudflare_normalization_preserves_other_fields_and_source(
-    cloudflare_provider,
+    cloudflare_provider: CloudflareProvider,
 ):
-    payload = {
+    payload: JsonObject = {
         "opaque": {"keep": 0},
         "usage": {"prompt_tokens": 3, "completion_tokens": 2},
         "choices": [
@@ -469,13 +474,13 @@ def test_cloudflare_normalization_preserves_other_fields_and_source(
             **payload,
             "choices": [
                 {
-                    **payload["choices"][0],
+                    **object_array(payload["choices"])[0],
                     "delta": {
                         **object_payload(object_array(payload["choices"])[0]["delta"]),
                         "content": "0",
                     },
                 },
-                *payload["choices"][1:],
+                *object_array(payload["choices"])[1:],
             ],
         }
     )
@@ -490,6 +495,8 @@ def test_cloudflare_normalization_preserves_other_fields_and_source(
     "payload",
     [{}, {"choices": []}, {"choices": [{"delta": {}}]}, {"choices": [{"delta": None}]}],
 )
-def test_cloudflare_leaves_non_content_frames_unchanged(cloudflare_provider, payload):
+def test_cloudflare_leaves_non_content_frames_unchanged(
+    cloudflare_provider: CloudflareProvider, payload: JsonObject
+):
     chunk = sdk_chat_chunk(payload)
     assert cloudflare_provider._behavior.normalize_chunk(chunk) is chunk

@@ -6,7 +6,7 @@ import time
 from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import httpx
 import pytest
@@ -43,6 +43,7 @@ class FakeOpenAIUpstream:
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
 
+            @override
             def log_message(self, format: str, *args: Any) -> None:
                 return
 

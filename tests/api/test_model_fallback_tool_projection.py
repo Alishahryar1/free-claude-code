@@ -1,5 +1,6 @@
 """A failed native tool snapshot must preserve routing and the provider error."""
 
+from collections.abc import AsyncIterator
 from copy import deepcopy
 
 import pytest
@@ -8,7 +9,9 @@ from free_claude_code.api.response_streams import (
     openai_responses_sse_streaming_response,
 )
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import ResponsesToolPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from tests.api.test_delivered_stream_recovery import public_text, text_events
 from tests.api.test_midstream_model_fallback import delivered_candidates
 from tests.api.test_response_streams import _json_error
@@ -18,8 +21,8 @@ from tests.wire_payload import array_payload, object_payload
 
 
 @pytest.fixture(autouse=True)
-def public_responses(monkeypatch):
-    async def response(wire, body):
+def public_responses(monkeypatch: pytest.MonkeyPatch):
+    async def response(wire: str, body: AsyncIterator[StreamOutput]):
         assert wire == "responses"
         return await openai_responses_sse_streaming_response(
             body,
@@ -31,18 +34,24 @@ def public_responses(monkeypatch):
     monkeypatch.setattr("tests.api.test_midstream_model_fallback._response", response)
 
 
-def interrupted_search(bodies, status, *, text="", terminal="failed"):
+def interrupted_search(
+    bodies: list[JsonObject],
+    status: str | None,
+    *,
+    text: str = "",
+    terminal: str = "failed",
+):
     events = text_events("responses", text, complete=False)
     if not text:
         events = events[:1]
     response = deepcopy(object_payload(text_events("responses", text)[-1]["response"]))
     if not text:
-        response["output"] = []
+        response.update(output=[])
     call = {
         "type": "function_call",
         "id": "fc_abandoned",
         "call_id": "call_abandoned",
-        "name": bodies[-1]["tools"][0]["name"],
+        "name": object_payload(array_payload(bodies[-1]["tools"])[0])["name"],
         "arguments": '{"query":',
     }
     if status is not None:
@@ -87,7 +96,7 @@ def interrupted_search(bodies, status, *, text="", terminal="failed"):
 @pytest.mark.parametrize("release", [False, True])
 @pytest.mark.parametrize("status", [None, "completed", "incomplete"])
 async def test_failed_client_search_projection_preserves_model_fallback(
-    monkeypatch, release, status
+    monkeypatch: pytest.MonkeyPatch, release: bool, status: str | None
 ):
     async with (
         _harness(
@@ -111,11 +120,11 @@ async def test_failed_client_search_projection_preserves_model_fallback(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", [None, "completed", "incomplete"])
 async def test_final_search_failure_keeps_native_error_metadata_and_valid_output(
-    monkeypatch, status
+    monkeypatch: pytest.MonkeyPatch, status: str | None
 ):
     source = []
 
-    def failed(bodies):
+    def failed(bodies: list[JsonObject]):
         source.extend(interrupted_search(bodies, status, text="Saved text"))
         return 200, source
 
@@ -149,8 +158,8 @@ async def test_final_search_failure_keeps_native_error_metadata_and_valid_output
 @pytest.mark.asyncio
 @pytest.mark.parametrize("terminal", ["completed", "incomplete"])
 async def test_invalid_successful_search_snapshot_still_fails_without_fallback(
-    monkeypatch,
-    terminal,
+    monkeypatch: pytest.MonkeyPatch,
+    terminal: str,
 ):
     async with (
         _harness(

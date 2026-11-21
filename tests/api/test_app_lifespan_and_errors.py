@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from loguru import logger
+from starlette.types import Message, Scope
 
 from free_claude_code.api.request_ids import RequestCorrelationMiddleware
 from free_claude_code.application.errors import (
@@ -32,6 +33,7 @@ from free_claude_code.runtime.bootstrap import _create_transcriber, build_asgi_a
 from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.api.support import create_test_app
+from tests.assertions import record_extra
 
 
 def _settings(**updates: object) -> Settings:
@@ -46,14 +48,16 @@ def _settings(**updates: object) -> Settings:
 
 
 @pytest.fixture(autouse=True)
-def _redirect_fcc_home(monkeypatch, tmp_path):
+def _redirect_fcc_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
 
 
 @pytest.mark.asyncio
-async def test_runtime_startup_logs_admin_url_without_printed_server_banner(caplog):
+async def test_runtime_startup_logs_admin_url_without_printed_server_banner(
+    caplog: pytest.LogCaptureFixture,
+):
     settings = _settings(
         messaging_platform="none",
         host="127.0.0.1",
@@ -90,17 +94,17 @@ async def test_runtime_startup_logs_admin_url_without_printed_server_banner(capl
     startup = [
         record
         for record in caplog.records
-        if record.extra.get("event") == "server.starting"
+        if record_extra(record).get("event") == "server.starting"
     ]
     assert len(startup) == 1
-    assert startup[0].extra["instance_id"] == runtime.instance_id
-    assert startup[0].extra["fcc_version"] == package_version()
+    assert record_extra(startup[0])["instance_id"] == runtime.instance_id
+    assert record_extra(startup[0])["fcc_version"] == package_version()
 
 
 @pytest.mark.parametrize(
     "path", ["/v1/chat/completions", "/v1beta/models/test:generateContent"]
 )
-def test_generation_http_errors_convert_structured_details_to_text(path):
+def test_generation_http_errors_convert_structured_details_to_text(path: str):
     app = create_test_app(_settings())
     detail = {"reason": "invalid request"}
 
@@ -236,7 +240,9 @@ def test_startup_failure_message_preserves_existing_concise_contract():
 
 
 @pytest.mark.asyncio
-async def test_runtime_asgi_app_starts_and_closes_owner_once(caplog):
+async def test_runtime_asgi_app_starts_and_closes_owner_once(
+    caplog: pytest.LogCaptureFixture,
+):
     runtime = MagicMock(spec=ApplicationRuntime, instance_id="lifespan-instance")
     runtime.settings = _settings()
     runtime.start = AsyncMock(side_effect=lambda: logger.info("lifespan starting"))
@@ -253,12 +259,12 @@ async def test_runtime_asgi_app_starts_and_closes_owner_once(caplog):
             {"type": "lifespan.shutdown"},
         ]
     )
-    sent: list[dict[str, str]] = []
+    sent: list[Message] = []
 
     async def receive():
         return next(received)
 
-    async def send(message):
+    async def send(message: Message):
         sent.append(message)
 
     await app({"type": "lifespan"}, receive, send)
@@ -271,23 +277,24 @@ async def test_runtime_asgi_app_starts_and_closes_owner_once(caplog):
     ]
     assert len(caplog.records) == 2
     assert all(
-        record.extra["instance_id"] == "lifespan-instance" for record in caplog.records
+        record_extra(record)["instance_id"] == "lifespan-instance"
+        for record in caplog.records
     )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [None, RuntimeError, asyncio.CancelledError])
 async def test_asgi_log_context_isolated_across_runtimes_tasks_and_workers(
-    caplog, failure
+    caplog: pytest.LogCaptureFixture, failure: type[Exception]
 ):
     release = asyncio.Event()
     jobs = []
 
-    async def background(path):
+    async def background(path: str):
         await release.wait()
         logger.info("background {}", path)
 
-    async def app(scope, receive, send):
+    async def app(scope: Scope, receive: object, send: object):
         path = scope["path"]
         logger.info("request {}", path)
         jobs.append(asyncio.create_task(background(path)))
@@ -295,7 +302,7 @@ async def test_asgi_log_context_isolated_across_runtimes_tasks_and_workers(
         if failure is not None:
             raise failure()
 
-    async def request(name):
+    async def request(name: str):
         runtime = MagicMock(spec=ApplicationRuntime, instance_id=name)
         wrapped = RuntimeASGIApp(RequestCorrelationMiddleware(app), runtime)
         try:
@@ -319,13 +326,13 @@ async def test_asgi_log_context_isolated_across_runtimes_tasks_and_workers(
             record for record in caplog.records if record.message.endswith("/" + name)
         ]
         assert len(records) == 3
-        assert all(record.extra["instance_id"] == name for record in records)
-        assert len({record.extra["request_id"] for record in records}) == 1
+        assert all(record_extra(record)["instance_id"] == name for record in records)
+        assert len({record_extra(record)["request_id"] for record in records}) == 1
         after = next(
             record for record in caplog.records if record.message == "after " + name
         )
-        assert "instance_id" not in after.extra
-        assert "request_id" not in after.extra
+        assert "instance_id" not in record_extra(after)
+        assert "request_id" not in record_extra(after)
     assert all(
         isinstance(result, failure) if failure else result is None for result in results
     )
@@ -344,12 +351,12 @@ async def test_runtime_asgi_app_reports_incomplete_owned_shutdown() -> None:
             {"type": "lifespan.shutdown"},
         ]
     )
-    sent: list[dict[str, str]] = []
+    sent: list[Message] = []
 
     async def receive():
         return next(received)
 
-    async def send(message):
+    async def send(message: Message):
         sent.append(message)
 
     await app({"type": "lifespan"}, receive, send)
@@ -367,12 +374,12 @@ async def test_runtime_asgi_app_reports_concise_startup_failure():
     runtime.start = AsyncMock(side_effect=RuntimeError("secret"))
     runtime.close = AsyncMock()
     app = RuntimeASGIApp(AsyncMock(), runtime)
-    sent: list[dict[str, str]] = []
+    sent: list[Message] = []
 
     async def receive():
         return {"type": "lifespan.startup"}
 
-    async def send(message):
+    async def send(message: Message):
         sent.append(message)
 
     await app({"type": "lifespan"}, receive, send)
@@ -386,7 +393,7 @@ async def test_runtime_asgi_app_reports_concise_startup_failure():
     runtime.close.assert_not_awaited()
 
 
-def test_bootstrap_configures_default_log_and_publishes_only_services(tmp_path):
+def test_bootstrap_configures_default_log_and_publishes_only_services(tmp_path: Path):
     log_path = tmp_path / "server.log"
     settings = _settings()
 
@@ -442,7 +449,9 @@ def test_bootstrap_wires_the_codex_catalog_publisher() -> None:
     assert manager._model_catalog_publisher is publisher
 
 
-def test_bootstrap_honors_process_log_file_override(monkeypatch, tmp_path):
+def test_bootstrap_honors_process_log_file_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     log_path = tmp_path / "custom.log"
     monkeypatch.setenv("LOG_FILE", str(log_path))
 
@@ -466,7 +475,7 @@ async def test_bootstrap_constructs_fresh_runtime_owned_transcribers() -> None:
 
 @pytest.mark.asyncio
 async def test_bootstrap_constructs_isolated_runtime_resource_graphs(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = _settings(
         model="nvidia_nim/test-model",

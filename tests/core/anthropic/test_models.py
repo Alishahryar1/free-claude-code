@@ -1,5 +1,5 @@
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from free_claude_code.core.anthropic.conversion import (
     OpenAIConversionError,
@@ -39,7 +39,7 @@ def test_messages_request_rejects_null_stream() -> None:
 
 @pytest.mark.parametrize("model", [MessagesRequest, TokenCountRequest])
 @pytest.mark.parametrize("position", [0, 1])
-def test_system_role_messages_are_rejected(model, position):
+def test_system_role_messages_are_rejected(model: type[BaseModel], position: int):
     messages = [{"role": "user", "content": "hello"}]
     messages.insert(position, {"role": "system", "content": "message system"})
 

@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from aiohttp.web import AppRunner
 
 from free_claude_code.application.connected_accounts import (
     ConnectedAccountLoginMode,
@@ -54,12 +55,12 @@ def _credential_document(*, expires_at: int) -> dict[str, object]:
 
 
 def test_saved_connection_inspection_has_no_client_or_write_side_effects(
-    monkeypatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     path = tmp_path / "openai.json"
     monkeypatch.setattr(openai_auth, "openai_auth_path", lambda: path)
 
-    def forbidden(*args, **kwargs):
+    def forbidden(*args: object, **kwargs: object):
         pytest.fail("saved inspection must not construct an HTTP client")
 
     monkeypatch.setattr(openai_auth.httpx, "AsyncClient", forbidden)
@@ -307,12 +308,12 @@ async def test_disconnect_revokes_refresh_token_and_always_deletes_credentials(
 
 @pytest.mark.asyncio
 async def test_browser_authorization_validates_state_and_returns_pkce_grant(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     callback_hosts: list[str] = []
     tcp_site = openai_login.web.TCPSite
 
-    def recording_site(runner, host: str, port: int):
+    def recording_site(runner: AppRunner, host: str, port: int):
         callback_hosts.append(host)
         return tcp_site(runner, host, port)
 
@@ -466,7 +467,7 @@ async def test_device_login_persists_account_and_reports_only_safe_state(
 
 @pytest.mark.asyncio
 async def test_close_waits_for_pending_login_resource_cleanup(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     class PendingBrowser:

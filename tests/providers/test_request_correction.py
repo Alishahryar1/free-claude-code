@@ -232,7 +232,7 @@ def test_history_mode_stays_without_negotiated_history():
     ],
     ids=["no-status", "canonical-400-without-response"],
 )
-def test_history_mode_stays_without_an_http_400_response(error):
+def test_history_mode_stays_without_an_http_400_response(error: Exception):
     corrector = RequestCorrector("chat")
     _, rejection = _negotiated(error, _readable_source())
 

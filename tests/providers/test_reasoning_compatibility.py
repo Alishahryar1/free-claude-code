@@ -5,6 +5,7 @@ import pytest
 from openai import BadRequestError
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningCapability, ReasoningPolicy
 from free_claude_code.providers.reasoning_compatibility import (
     ReasoningCorrection,
@@ -25,7 +26,7 @@ from tests.providers.request_factory import make_messages_request
     ],
 )
 def test_prepare_uses_explicit_capability_and_available_encoding(
-    capability, can_disable, control, limit
+    capability: str, can_disable: bool, control: str, limit: int
 ):
     request = make_messages_request(
         "arbitrary",
@@ -54,7 +55,7 @@ def test_prepare_uses_explicit_capability_and_available_encoding(
     ("requested", "normal", "expected"), [(12000, 8192, 12000), (12000, None, None)]
 )
 def test_normal_allowance_preserves_larger_limits_or_omission(
-    requested, normal, expected
+    requested: int, normal: int | None, expected: int | None
 ):
     request = make_messages_request("route", max_tokens=requested)
     prepared, _ = prepare_messages_reasoning(
@@ -93,7 +94,9 @@ def test_normal_allowance_preserves_larger_limits_or_omission(
         ("Unknown error", None, False),
     ],
 )
-def test_correction_requires_rejection_of_the_sent_control(message, param, correct):
+def test_correction_requires_rejection_of_the_sent_control(
+    message: str, param: str | None, correct: bool
+):
     body = {
         "model": "route",
         "messages": [{"role": "user", "content": "classify"}],
@@ -123,7 +126,7 @@ def test_correction_requires_rejection_of_the_sent_control(message, param, corre
 
 
 @pytest.mark.parametrize("sent", [{}, {"reasoning_effort": "high"}])
-def test_correction_requires_the_off_control_to_have_reached_the_wire(sent):
+def test_correction_requires_the_off_control_to_have_reached_the_wire(sent: JsonObject):
     error = BadRequestError(
         "Reasoning cannot be disabled",
         response=httpx2.Response(

@@ -620,7 +620,7 @@ class PowerShellUninstallHarness:
 def powershell_uninstall_harness(
     tmp_path: Path,
     request: pytest.FixtureRequest,
-    powershell_module_paths,
+    powershell_module_paths: dict[str, str],
 ) -> PowerShellUninstallHarness:
     powershell = request.param
     if powershell is None or os.name != "nt":

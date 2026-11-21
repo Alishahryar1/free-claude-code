@@ -5,7 +5,7 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from copy import deepcopy
-from typing import Any
+from typing import Any, override
 
 import httpx2
 import pytest
@@ -61,10 +61,12 @@ from tests.public_stream import delivered
     ],
     ids=["mandatory", "unsupported_value"],
 )
-async def test_tolerant_classifier_corrects_required_reasoning(stream_error, error):
+async def test_tolerant_classifier_corrects_required_reasoning(
+    stream_error: bool, error: JsonObject
+):
     bodies = []
 
-    def handler(request):
+    def handler(request: httpx2.Request):
         body = json.loads(request.content)
         bodies.append(body)
         if body.get("reasoning", {}).get("effort") == "none":
@@ -349,6 +351,7 @@ async def test_concurrent_requests_do_not_share_tool_identities() -> None:
         def __init__(self, content: str) -> None:
             self.content = content
 
+        @override
         async def __aiter__(self):
             await asyncio.wait_for(both_started.wait(), timeout=5)
             yield self.content.encode()
@@ -831,7 +834,7 @@ async def test_top_level_context_error_is_canonical_and_not_retried(
 async def test_native_committed_truncation_emits_one_failed_terminal() -> None:
     attempts = 0
     committed = "x" * 70_000
-    created = {
+    created: JsonObject = {
         "type": "response.created",
         "sequence_number": 0,
         "response": {
@@ -1422,6 +1425,7 @@ async def test_sdk_stream_interruptions_retry_before_commit(
     error_type: type[Exception],
 ) -> None:
     class InterruptedBody(httpx2.AsyncByteStream):
+        @override
         async def __aiter__(self):
             if buffered:
                 yield _sse(
@@ -1522,11 +1526,13 @@ class _BlockingBody(httpx2.AsyncByteStream):
         self.entered = asyncio.Event()
         self.closed = asyncio.Event()
 
+    @override
     async def __aiter__(self):
         self.entered.set()
         await asyncio.Event().wait()
         yield b""
 
+    @override
     async def aclose(self) -> None:
         self.closed.set()
 
@@ -1575,7 +1581,7 @@ async def test_startup_rejects_fields_responses_cannot_represent() -> None:
 async def test_claude_artifact_pattern_is_portable_on_the_sdk_wire():
     captured = []
 
-    def handler(request):
+    def handler(request: httpx2.Request):
         body = json.loads(request.content)
         captured.append(body)
         return httpx2.Response(

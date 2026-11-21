@@ -71,11 +71,11 @@ async def _collect(stream: AsyncIterator[StreamOutput]) -> str:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ingress", ["messages", "responses"])
 async def test_key_one_authenticates_discovery_and_failure_never_tries_later_keys(
-    ingress,
+    ingress: str,
 ):
     requests = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         requests.append(request)
         if request.url.path == "/v1/models":
             return httpx2.Response(

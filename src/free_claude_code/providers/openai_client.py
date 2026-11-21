@@ -1,5 +1,7 @@
 """Bind resolved endpoints to isolated OpenAI SDK request clients."""
 
+from typing import override
+
 import httpx
 import httpx2
 from openai import AsyncOpenAI, Omit
@@ -13,6 +15,7 @@ class _BorrowedTransport(httpx2.AsyncBaseTransport):
     def __init__(self, transport: httpx2.AsyncBaseTransport) -> None:
         self._transport = transport
 
+    @override
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         return await self._transport.handle_async_request(request)
 

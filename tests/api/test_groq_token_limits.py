@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from free_claude_code.core.json_types import JsonObject
 from tests.api.support import create_test_app
 from tests.providers.test_groq_tpm import (
     _ITPM_MESSAGE,
@@ -19,7 +20,9 @@ from tests.providers.test_groq_tpm import (
     ("wire", "stream"), [("messages", False), ("messages", True), ("responses", True)]
 )
 @pytest.mark.parametrize("quota", ["itpm", "tpm"])
-def test_groq_quota_failure_reaches_clients_after_correction(wire, stream, quota):
+def test_groq_quota_failure_reaches_clients_after_correction(
+    wire: str, stream: bool, quota: str
+):
     provider = _provider()
     error = (
         _status_error(detail=_detail(_ITPM_MESSAGE))
@@ -27,7 +30,7 @@ def test_groq_quota_failure_reaches_clients_after_correction(wire, stream, quota
         else _status_error()
     )
     create = AsyncMock(side_effect=error)
-    payload = {"model": f"groq/{_MODEL}", "stream": stream}
+    payload: JsonObject = {"model": f"groq/{_MODEL}", "stream": stream}
     if wire == "messages":
         payload.update(
             messages=[{"role": "user", "content": "Hello"}], max_tokens=_ORIGINAL_MAX

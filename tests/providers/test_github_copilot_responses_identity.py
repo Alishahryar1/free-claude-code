@@ -8,7 +8,7 @@ match the raw HTTP capture; no credentials or model reasoning are retained.
 import json
 from copy import deepcopy
 from pathlib import Path
-from typing import cast
+from typing import cast, override
 
 import httpx2
 import pytest
@@ -501,6 +501,7 @@ async def test_copilot_partial_failure_output_does_not_mask_authentication_refre
     _item(recovered[2])["id"] = "recovered-tool"
 
     class RefreshHarness(Harness):
+        @override
         def openai(self, request: httpx2.Request) -> httpx2.Response:
             if self.runtime.sessions[0].endpoint_calls > 1:
                 self.responses_content = responses_sse(*recovered).encode()

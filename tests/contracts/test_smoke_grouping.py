@@ -5,12 +5,13 @@ import os
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 from smoke.conftest import provider_xdist_group
 from smoke.lib.config import ProviderModel
 
 
-def test_provider_groups_stay_on_one_worker(tmp_path):
+def test_provider_groups_stay_on_one_worker(tmp_path: Path):
     groups = {
         name: provider_xdist_group(ProviderModel(name, f"{name}/model", "test"))
         for name in ("alpha", "beta")

@@ -1,5 +1,6 @@
 import json
 from collections.abc import AsyncIterator
+from typing import override
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -40,7 +41,7 @@ _RESPONSE_ID = "resp_test"
 def test_responses_route_carries_generation_model_limit_to_messages_egress():
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         bodies.append(json.loads(request.content))
         return httpx.Response(
             200,
@@ -94,6 +95,7 @@ class PreStartFailingProvider(FakeProvider):
     def __init__(self) -> None:
         super().__init__([])
 
+    @override
     async def stream_responses(
         self,
         request_data: OpenAIResponsesRequest,
@@ -141,7 +143,12 @@ def test_responses_probe_endpoints_return_204(
         ),
     ],
 )
-def test_retired_response_id_uses_replacement(responses_client, prefix, ref, upstream):
+def test_retired_response_id_uses_replacement(
+    responses_client: tuple[TestClient, FakeProvider],
+    prefix: str,
+    ref: str,
+    upstream: str,
+):
     client, provider = responses_client
     original = f"{prefix}{ref}"
     response = client.post("/v1/responses", json={"model": original, "input": "hello"})

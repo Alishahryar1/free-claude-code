@@ -1,6 +1,8 @@
 import json
 import subprocess
 import time
+from collections.abc import Sequence
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,15 +16,17 @@ ROOT = "/admin/api/integrations/jetbrains-acp"
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(jb, "config_path", lambda: tmp_path / "acp.json")
     monkeypatch.setattr(jb, "registry_path", lambda: tmp_path / "installed.json")
     monkeypatch.setattr(jb, "system_root", lambda: tmp_path / "systems")
-    monkeypatch.setattr(
-        jb.subprocess,
-        "run",
-        lambda args, **kw: subprocess.CompletedProcess(args, 0, "v24.19.0", ""),
-    )
+
+    def run_probe(
+        args: Sequence[str], **options: object
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 0, "v24.19.0", "")
+
+    monkeypatch.setattr(jb.subprocess, "run", run_probe)
     with TestClient(
         create_test_app(Settings(proxy_auth_token="secret")),
         base_url="http://127.0.0.1",
@@ -31,7 +35,7 @@ def client(tmp_path, monkeypatch):
         yield client
 
 
-def test_api_connect_failure_retry_disconnect_and_safe_status(client):
+def test_api_connect_failure_retry_disconnect_and_safe_status(client: TestClient):
     status = client.get(ROOT)
     assert status.status_code == 200
     assert status.json()["connected"] is False
@@ -60,7 +64,7 @@ def test_api_connect_failure_retry_disconnect_and_safe_status(client):
 
 
 @pytest.mark.parametrize("action", ["", "/connect", "/disconnect", "/refresh"])
-def test_routes_reject_other_origins(client, action):
+def test_routes_reject_other_origins(client: TestClient, action: str):
     response = client.request(
         "POST" if action else "GET",
         ROOT + action,

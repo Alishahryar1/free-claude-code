@@ -202,7 +202,7 @@ class SQLiteDatabase:
         self._started = False
         self._closing = False
         self._startup_error: Exception | None = None
-        self._operations: set[asyncio.Task] = set()
+        self._operations: set[asyncio.Task[object]] = set()
         self._writer: QueuePool | None = None
         self._readers: QueuePool | None = None
         self._write_admission = asyncio.Semaphore(1)

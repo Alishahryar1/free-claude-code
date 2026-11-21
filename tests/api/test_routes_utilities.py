@@ -1,11 +1,13 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi.applications import FastAPI
 from fastapi.testclient import TestClient
 
 from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.ports import StopResult
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject
 from tests.api.support import create_test_app
 from tests.web_tools_support import StubWebToolsClient
 
@@ -16,13 +18,13 @@ def app():
 
 
 @pytest.fixture
-def client(app):
+def client(app: FastAPI):
     return TestClient(app)
 
 
-def test_create_message_empty_messages_returns_400(client):
+def test_create_message_empty_messages_returns_400(client: TestClient):
     """POST /v1/messages with messages: [] returns 400 invalid_request_error."""
-    payload = {
+    payload: JsonObject = {
         "model": "claude-3-sonnet",
         "max_tokens": 100,
         "messages": [],
@@ -35,9 +37,9 @@ def test_create_message_empty_messages_returns_400(client):
     assert "cannot be empty" in data.get("error", {}).get("message", "")
 
 
-def test_count_tokens_empty_messages_returns_400(client):
+def test_count_tokens_empty_messages_returns_400(client: TestClient):
     """POST /v1/messages/count_tokens with messages: [] matches messages validation."""
-    payload = {"model": "claude-3-sonnet", "messages": []}
+    payload: JsonObject = {"model": "claude-3-sonnet", "messages": []}
     response = client.post("/v1/messages/count_tokens", json=payload)
     assert response.status_code == 400
     data = response.json()
@@ -46,7 +48,7 @@ def test_count_tokens_empty_messages_returns_400(client):
     assert "cannot be empty" in data.get("error", {}).get("message", "")
 
 
-def test_count_tokens_endpoint(client):
+def test_count_tokens_endpoint(client: TestClient):
     payload = {
         "model": "claude-3-sonnet",
         "messages": [{"role": "user", "content": "hello"}],
@@ -70,7 +72,9 @@ def test_count_tokens_endpoint(client):
         ),
     ],
 )
-def test_count_tokens_retired_model_uses_replacement(prefix, ref, target):
+def test_count_tokens_retired_model_uses_replacement(
+    prefix: str, ref: str, target: str
+):
     test_app = create_test_app(
         Settings(MODEL="groq/default", MODEL_OPUS="deepseek/opus")
     )
@@ -96,7 +100,7 @@ def test_count_tokens_retired_model_uses_replacement(prefix, ref, target):
     assert routed["gateway_model"] == f"{prefix}{ref}"
 
 
-def test_count_tokens_error_returns_500(client):
+def test_count_tokens_error_returns_500(client: TestClient):
     """When get_token_count raises, count_tokens returns 500."""
     payload = {
         "model": "claude-3-sonnet",
@@ -113,7 +117,7 @@ def test_count_tokens_error_returns_500(client):
     assert "token error" in response.json()["detail"]
 
 
-def test_stop_cli_with_messaging_workflow(app, client):
+def test_stop_cli_with_messaging_workflow(app: FastAPI, client: TestClient):
     session_control = MagicMock()
     session_control.stop_all = AsyncMock(return_value=StopResult(cancelled_count=3))
     services = app.state.services
@@ -131,7 +135,7 @@ def test_stop_cli_with_messaging_workflow(app, client):
     session_control.stop_all.assert_awaited_once()
 
 
-def test_stop_cli_fallback_to_manager(app, client):
+def test_stop_cli_fallback_to_manager(app: FastAPI, client: TestClient):
     session_control = MagicMock()
     session_control.stop_all = AsyncMock(return_value=StopResult(source="cli_manager"))
     services = app.state.services

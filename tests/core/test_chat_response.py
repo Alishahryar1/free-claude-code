@@ -6,6 +6,7 @@ from free_claude_code.core.chat_completions.response import (
     ChatResponseAccumulator,
     NativeChatRelay,
 )
+from free_claude_code.core.json_types import JsonObject
 
 
 def test_native_chat_preserves_choices_unknown_fields_and_literal_thought_tags():
@@ -83,7 +84,12 @@ def test_native_gemini_json_preserves_metadata_and_late_usage():
 
 def test_chat_logprobs_accumulate_after_null_and_survive_trailing_null():
     accumulator = ChatResponseAccumulator()
-    token = {"token": "hello", "logprob": -0.1, "bytes": None, "top_logprobs": []}
+    token: JsonObject = {
+        "token": "hello",
+        "logprob": -0.1,
+        "bytes": None,
+        "top_logprobs": [],
+    }
     for content in (None, [token], None):
         accumulator.feed(
             {
@@ -152,7 +158,9 @@ def test_native_legacy_function_arguments_accumulate_without_replacement():
         ],
     ],
 )
-def test_distinct_native_reasoning_records_keep_their_boundaries(details):
+def test_distinct_native_reasoning_records_keep_their_boundaries(
+    details: list[JsonObject],
+):
     accumulator = ChatResponseAccumulator()
     for detail in details:
         accumulator.feed(

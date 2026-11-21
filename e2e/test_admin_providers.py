@@ -341,7 +341,7 @@ def test_admin_loading_finishes_before_local_availability_checks(
 ) -> None:
     pending: list[Route] = []
 
-    def hold(route):
+    def hold(route: Route):
         pending.append(route)
         page.evaluate("window.localChecks = (window.localChecks || 0) + 1")
 

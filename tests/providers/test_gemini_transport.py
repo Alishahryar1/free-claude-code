@@ -1,6 +1,7 @@
 """Direct Gemini ingress through the real upstream transport adapters."""
 
 import json
+from collections.abc import AsyncIterable, AsyncIterator
 from copy import deepcopy
 
 import httpx
@@ -17,8 +18,18 @@ from free_claude_code.core.gemini.response import GeminiResponseAccumulator
 from free_claude_code.core.history_replay import readable_reasoning
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
+from free_claude_code.providers.anthropic_messages.transport import (
+    AnthropicMessagesTransport,
+)
 from free_claude_code.providers.google_openai.provider import GoogleChatBehavior
-from free_claude_code.providers.openai_chat import OpenAIChatTransport
+from free_claude_code.providers.openai_chat import (
+    OpenAIChatProvider,
+    OpenAIChatTransport,
+)
+from free_claude_code.providers.openai_responses.transport import (
+    OpenAIResponsesTransport,
+)
 from free_claude_code.providers.vertex.client import _PROFILE as GOOGLE_PROFILE
 from tests.providers.support import immediate_admission
 from tests.providers.test_anthropic_messages_transport import (
@@ -45,14 +56,19 @@ from tests.providers.test_openai_responses_transport import (
 from tests.wire_payload import object_array, object_payload
 
 
-def gemini_request(**values):
+def gemini_request(**values: object):
     return GeminiRequest.model_validate(
         {"model": "model", "contents": [{"parts": [{"text": "hello"}]}], **values}
     )
 
 
-def chat_response(deltas, *, finish="stop", usage=None):
-    chunks = [
+def chat_response(
+    deltas: list[JsonObject],
+    *,
+    finish: str | None = "stop",
+    usage: JsonObject | None = None,
+):
+    chunks: list[JsonObject] = [
         {
             "id": "upstream",
             "object": "chat.completion.chunk",
@@ -80,15 +96,44 @@ def chat_response(deltas, *, finish="stop", usage=None):
     )
 
 
-async def collect_frames(stream):
+def gemini_stream(
+    transport: AnthropicMessagesTransport
+    | OpenAIChatProvider
+    | OpenAIResponsesTransport,
+    request: GeminiRequest,
+    *,
+    request_id: str,
+) -> AsyncIterator[StreamOutput]:
+    reasoning = ReasoningPolicy.provider_default()
+    if isinstance(transport, AnthropicMessagesTransport):
+        return transport.stream_gemini(
+            request,
+            endpoint_context=Endpoint(),
+            request_id=request_id,
+            response_model="public",
+            reasoning=reasoning,
+        )
+    return transport.stream_gemini(
+        request,
+        input_tokens=0,
+        request_id=request_id,
+        response_model="public",
+        reasoning=reasoning,
+    )
+
+
+async def collect_frames(stream: AsyncIterable[str | bytes | memoryview]):
     aggregate = GeminiResponseAccumulator()
-    chunks = [frame async for frame in stream]
+    chunks: list[str] = []
+    async for frame in stream:
+        assert isinstance(frame, str)
+        chunks.append(frame)
     for event in parse_sse_text("".join(chunks)):
         aggregate.feed(event.data)
     return aggregate.result(), chunks
 
 
-async def collect(stream):
+async def collect(stream: AsyncIterator[StreamOutput]):
     return await collect_frames(collected_frames(stream, protocol="gemini"))
 
 
@@ -96,7 +141,7 @@ async def collect(stream):
 async def test_chat_gemini_stream_preserves_text_identity_and_reported_usage():
     sent = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         sent.append(json.loads(request.content))
         return chat_response(
             [{"content": "hello "}, {"content": "world"}],
@@ -133,8 +178,8 @@ async def test_chat_gemini_stream_preserves_text_identity_and_reported_usage():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("arguments", ["{", "[]", "null"])
-async def test_chat_gemini_never_releases_invalid_executable_arguments(arguments):
-    def reply(request):
+async def test_chat_gemini_never_releases_invalid_executable_arguments(arguments: str):
+    def reply(request: object):
         return chat_response(
             [
                 {
@@ -167,7 +212,7 @@ async def test_chat_gemini_never_releases_invalid_executable_arguments(arguments
 async def test_messages_gemini_text_and_native_thinking_replay():
     sent = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         sent.append(json.loads(request.content))
         events = messages_events()
         events[1:1] = [
@@ -223,7 +268,7 @@ async def test_responses_gemini_text_complete_call_and_late_reasoning_replay():
         "summary": [{"type": "summary_text", "text": "thought"}],
         "encrypted_content": "opaque",
     }
-    message = {
+    message: JsonObject = {
         "id": "msg_one",
         "type": "message",
         "role": "assistant",
@@ -239,7 +284,7 @@ async def test_responses_gemini_text_complete_call_and_late_reasoning_replay():
         "arguments": '{"path":"a"}',
     }
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         sent.append(json.loads(request.content))
         return httpx2.Response(
             200,
@@ -304,7 +349,7 @@ async def test_responses_gemini_text_complete_call_and_late_reasoning_replay():
 @pytest.mark.parametrize("visible", [False, True])
 @pytest.mark.parametrize("first_only_at_terminal", [False, True])
 async def test_responses_gemini_replay_uses_output_order_not_completion_order(
-    terminal, visible, first_only_at_terminal
+    terminal: str, visible: bool, first_only_at_terminal: bool
 ):
     first = {
         "type": "reasoning",
@@ -340,7 +385,7 @@ async def test_responses_gemini_replay_uses_output_order_not_completion_order(
     events.append({"type": terminal, "response": response})
     async with _harness("responses", lambda _: (200, events)) as (_, bodies, adapter):
 
-        async def send(request):
+        async def send(request: GeminiRequest):
             return await collect(
                 adapter.stream_gemini(
                     request,
@@ -401,7 +446,7 @@ async def test_responses_gemini_replay_uses_output_order_not_completion_order(
     ],
 )
 async def test_responses_gemini_usage_accounts_for_terminal_only_reasoning(
-    visible, kind, breakdown, expected
+    visible: bool, kind: str, breakdown: int | None, expected: JsonObject
 ):
     item = {
         "type": "reasoning",
@@ -445,12 +490,12 @@ async def test_responses_gemini_usage_accounts_for_terminal_only_reasoning(
 @pytest.mark.parametrize("tool_call", [False, True])
 @pytest.mark.parametrize("same_connection", [False, True])
 async def test_google_replay_survives_client_replacement_and_preserves_edited_args(
-    tool_call, same_connection
+    tool_call: bool, same_connection: bool
 ):
     sent = []
     opaque = {"google": {"thought_signature": "native-signed-bytes"}}
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         sent.append(json.loads(request.content))
         if len(sent) > 1:
             return chat_response([{"content": "continued"}])
@@ -476,7 +521,7 @@ async def test_google_replay_survives_client_replacement_and_preserves_edited_ar
             )
         return chat_response([{"content": "answer", "extra_content": opaque}])
 
-    async def execute(request, key):
+    async def execute(request: GeminiRequest, key: str):
         async with AsyncOpenAI(
             api_key=key,
             base_url="https://provider.invalid/v1",
@@ -544,13 +589,8 @@ async def test_google_replay_survives_client_replacement_and_preserves_edited_ar
     "arguments", ['{"path":42,"extra":null}', '{"path":', "[]", "null", '{"path":NaN}']
 )
 async def test_fragmented_tools_require_object_json_without_schema_coercion(
-    protocol, arguments
+    protocol: str, arguments: str
 ):
-    options = (
-        {"endpoint_context": Endpoint()}
-        if protocol == "messages"
-        else {"input_tokens": 0}
-    )
     request = gemini_request(
         tools=[
             {
@@ -572,13 +612,7 @@ async def test_fragmented_tools_require_object_json_without_schema_coercion(
     async with _harness(
         protocol, lambda _: (200, tool_events(protocol, arguments)), max_attempts=1
     ) as (_, bodies, transport):
-        stream = transport.stream_gemini(
-            request,
-            request_id="fragmented",
-            response_model="public",
-            reasoning=ReasoningPolicy.provider_default(),
-            **options,
-        )
+        stream = gemini_stream(transport, request, request_id="fragmented")
         if arguments.startswith('{"path":42'):
             result, chunks = await collect(stream)
             calls = [
@@ -596,29 +630,20 @@ async def test_fragmented_tools_require_object_json_without_schema_coercion(
         else:
             with pytest.raises(ExecutionFailure):
                 async for chunk in stream:
-                    chunks.append(chunk)
+                    chunks.extend(chunk.frames)
             assert not any("functionCall" in chunk for chunk in chunks)
         assert len(bodies) == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
-async def test_unknown_upstream_function_is_rejected(protocol):
-    options = (
-        {"endpoint_context": Endpoint()}
-        if protocol == "messages"
-        else {"input_tokens": 0}
-    )
+async def test_unknown_upstream_function_is_rejected(protocol: str):
     async with _harness(
         protocol, lambda _: (200, tool_events(protocol, "{}")), max_attempts=1
     ) as (_, bodies, transport):
         with pytest.raises(ExecutionFailure, match="undeclared"):
-            async for chunk in transport.stream_gemini(
-                gemini_request(),
-                request_id="unknown",
-                response_model="public",
-                reasoning=ReasoningPolicy.provider_default(),
-                **options,
+            async for chunk in gemini_stream(
+                transport, gemini_request(), request_id="unknown"
             ):
                 assert "functionCall" not in "".join(chunk.frames)
         assert len(bodies) == 1

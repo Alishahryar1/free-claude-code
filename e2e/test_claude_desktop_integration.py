@@ -2,14 +2,18 @@ import json
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import expect
+from playwright.sync_api import Page, Route, expect
 
 from free_claude_code.harnesses import claude_desktop_integration as desktop
 
 
 @pytest.mark.parametrize("status_failure", ["none", "read", "startup"])
 def test_real_disconnect_failure_keeps_retry_after_reload(
-    page, admin_base_url, tmp_path, monkeypatch, status_failure
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status_failure: str,
 ):
     profile = tmp_path / "Claude-3p/configLibrary" / f"{desktop.FCC_ID}.json"
     page.goto(admin_base_url + "/admin/integrations")
@@ -21,10 +25,10 @@ def test_real_disconnect_failure_keeps_retry_after_reload(
     expect(opener).to_have_text("Disconnect")
     unlink = Path.unlink
 
-    def fail(path, *args, **kwargs):
+    def fail(path: Path, missing_ok: bool = False):
         if path == profile:
             raise PermissionError("test")
-        return unlink(path, *args, **kwargs)
+        return unlink(path, missing_ok=missing_ok)
 
     with monkeypatch.context() as patch:
         patch.setattr(Path, "unlink", fail)
@@ -41,7 +45,7 @@ def test_real_disconnect_failure_keeps_retry_after_reload(
             marker = tmp_path / ".fcc/claude-desktop-disconnect.json"
             failed = {"state": "failed", "message": "Startup check failed"}
 
-            def failed_update(route):
+            def failed_update(route: Route):
                 result = route.fetch()
                 body = result.json()
                 if marker.exists():
@@ -49,7 +53,7 @@ def test_real_disconnect_failure_keeps_retry_after_reload(
                     body["update"] = failed
                 route.fulfill(response=result, json=body)
 
-            def failed_startup(route):
+            def failed_startup(route: Route):
                 result = route.fetch()
                 body = result.json()
                 if marker.exists():
@@ -81,7 +85,9 @@ def test_real_disconnect_failure_keeps_retry_after_reload(
     assert not (tmp_path / ".fcc/claude-desktop-disconnect.json").exists()
 
 
-def test_desktop_connect_disconnect_and_retry(page, admin_base_url, tmp_path):
+def test_desktop_connect_disconnect_and_retry(
+    page: Page, admin_base_url: str, tmp_path: Path
+):
     page.set_viewport_size({"width": 1440, "height": 1000})
     page.goto(admin_base_url + "/admin/integrations")
     opener = page.locator("#openClaudeDesktopIntegration")

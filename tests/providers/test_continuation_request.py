@@ -6,6 +6,7 @@ from dataclasses import replace
 
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.history_replay import (
     HistoryMode,
     ReplayOrigin,
@@ -22,7 +23,7 @@ from tests.providers.support import assistant_history_text, continuation_seed
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("initial_text", ["", "First "])
 def test_next_continuation_preserves_corrected_history_and_options(
-    protocol, initial_text
+    protocol: WireProtocol, initial_text: str
 ):
     field = "input" if protocol == "responses" else "messages"
     user_turn = {"role": "user", "content": "Continue"}
@@ -67,7 +68,9 @@ def test_next_continuation_preserves_corrected_history_and_options(
 
 
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
-def test_original_turns_matching_private_instruction_are_preserved(protocol):
+def test_original_turns_matching_private_instruction_are_preserved(
+    protocol: WireProtocol,
+):
     field = "input" if protocol == "responses" else "messages"
     instruction_turn = ContinuationRequest(protocol).build(
         {field: []}, continuation_seed()
@@ -93,7 +96,9 @@ def test_responses_string_input_is_preserved_across_continuations():
 
 
 @pytest.mark.parametrize("parts", [None, [], [""], ["Half", ""], ["   ", ""]])
-def test_messages_suffix_accepts_summary_only_and_incomplete_text(parts):
+def test_messages_suffix_accepts_summary_only_and_incomplete_text(
+    parts: list[str] | None,
+):
     items: list[JsonObject] = [
         {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Summary"}]}
     ]
@@ -132,7 +137,9 @@ def test_messages_suffix_accepts_summary_only_and_incomplete_text(parts):
 
 
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
-def test_native_continuation_carriers_project_and_replace_as_one_suffix(protocol):
+def test_native_continuation_carriers_project_and_replace_as_one_suffix(
+    protocol: WireProtocol,
+):
     field = "input" if protocol == "responses" else "messages"
     source = ReplayOrigin("source", "chat", "endpoint", "account", "model")
     record = ReplayRecord(source, {"reasoning_content": "retained native thought"})

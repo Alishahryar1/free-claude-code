@@ -1,6 +1,7 @@
 """Session identity across real ingress, routing, provider, and SDK boundaries."""
 
 import asyncio
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from unittest.mock import patch
 
@@ -25,7 +26,7 @@ pytestmark = pytest.mark.asyncio
 OPENCODE_USER_AGENT = "opencode/latest/2.0.10/cli"
 
 
-def successful_response(request):
+def successful_response(request: httpx2.Request):
     body = (
         _responses_event_stream("hello")
         if request.url.path.endswith("/responses")
@@ -37,11 +38,14 @@ def successful_response(request):
 
 
 @asynccontextmanager
-async def wire_client(provider_id="opencode_zen", handler=None):
+async def wire_client(
+    provider_id: str = "opencode_zen",
+    handler: Callable[[httpx2.Request], Awaitable[httpx2.Response]] | None = None,
+):
     requests = []
     catalog_requests = []
 
-    async def generation(request):
+    async def generation(request: httpx2.Request):
         requests.append(request)
         if handler is not None:
             return await handler(request)
@@ -55,7 +59,7 @@ async def wire_client(provider_id="opencode_zen", handler=None):
             )
         return successful_response(request)
 
-    def catalog(request):
+    def catalog(request: httpx.Request):
         catalog_requests.append(request)
         return httpx.Response(
             200,
@@ -66,11 +70,24 @@ async def wire_client(provider_id="opencode_zen", handler=None):
             ),
         )
 
-    def sdk(**kwargs):
-        kwargs["http_client"] = httpx2.AsyncClient(
-            transport=httpx2.MockTransport(generation)
+    def sdk(
+        *,
+        api_key: str | Callable[[], Awaitable[str]],
+        base_url: str,
+        max_retries: int,
+        default_headers: Mapping[str, str] | None,
+        timeout: httpx2.Timeout,
+        http_client: httpx2.AsyncClient | None,
+    ) -> AsyncOpenAI:
+        assert http_client is None
+        return AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            max_retries=max_retries,
+            default_headers=default_headers,
+            timeout=timeout,
+            http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(generation)),
         )
-        return AsyncOpenAI(**kwargs)
 
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI", side_effect=sdk
@@ -104,7 +121,7 @@ async def wire_client(provider_id="opencode_zen", handler=None):
         await provider_manager_for_app(app).close()
 
 
-def payload(ingress, provider_id, selector):
+def payload(ingress: str, provider_id: str, selector: str):
     request: JsonObject = {"model": f"{provider_id}/{selector}", "stream": True}
     if ingress == "responses":
         request["input"] = "hello"
@@ -121,9 +138,9 @@ def payload(ingress, provider_id, selector):
     [("User-Agent", OPENCODE_USER_AGENT), ("uSeR-aGeNt", "claude-cli/2.1.0")],
 )
 async def test_upstream_receives_one_original_client_user_agent(
-    provider_id, selector, ingress, header_name, user_agent
+    provider_id: str, selector: str, ingress: str, header_name: str, user_agent: str
 ):
-    async def upstream(request):
+    async def upstream(request: httpx2.Request):
         if request.headers.get_list("user-agent") != [user_agent]:
             return httpx2.Response(
                 403,
@@ -160,7 +177,7 @@ async def test_upstream_receives_one_original_client_user_agent(
 @pytest.mark.parametrize("selector", ["responses-selector", "chat-selector"])
 @pytest.mark.parametrize("user_agent", [None, b"", b" \t ", b"client/caf\xe9"])
 async def test_unusable_user_agent_keeps_fallback_after_another_client_request(
-    provider_id, selector, user_agent
+    provider_id: str, selector: str, user_agent: bytes | None
 ):
     async with wire_client(provider_id) as (client, provider, requests, _catalogs):
         request = payload("responses", provider_id, selector)
@@ -192,7 +209,7 @@ async def test_unusable_user_agent_keeps_fallback_after_another_client_request(
 @pytest.mark.parametrize("selector", ["responses-selector", "chat-selector"])
 @pytest.mark.parametrize("ingress", ["responses", "messages"])
 async def test_existing_session_id_reaches_opencode_without_forwarding_other_headers(
-    provider_id, selector, ingress
+    provider_id: str, selector: str, ingress: str
 ):
     async with wire_client(provider_id) as (client, provider, requests, catalogs):
         defaults = {
@@ -238,7 +255,7 @@ async def test_existing_session_id_reaches_opencode_without_forwarding_other_hea
 
 @pytest.mark.parametrize("selector", ["responses-selector", "chat-selector"])
 async def test_session_header_precedence_and_absence_do_not_invent_or_reuse_identity(
-    selector,
+    selector: str,
 ):
     async with wire_client() as (client, _provider, requests, _catalogs):
         request = payload("responses", "opencode_zen", selector)
@@ -272,7 +289,7 @@ async def test_session_header_precedence_and_absence_do_not_invent_or_reuse_iden
 @pytest.mark.parametrize("selector", ["responses-selector", "chat-selector"])
 @pytest.mark.parametrize("ingress", ["responses", "messages"])
 async def test_launch_fallback_is_stable_until_a_native_conversation_id_is_available(
-    selector, ingress
+    selector: str, ingress: str
 ):
     async with wire_client() as (client, _provider, requests, _catalogs):
         for launch_id, native_id in (
@@ -307,14 +324,14 @@ async def test_launch_fallback_is_stable_until_a_native_conversation_id_is_avail
     ],
 )
 async def test_concurrent_conversations_keep_their_session_ids_during_retry(
-    selector, session_header
+    selector: str, session_header: str
 ):
     first_arrived = asyncio.Event()
     second_arrived = asyncio.Event()
     attempts = []
     user_agents = []
 
-    async def upstream(request):
+    async def upstream(request: httpx2.Request):
         session = request.headers.get("x-opencode-session")
         attempts.append(session)
         user_agents.append(request.headers.get_list("user-agent"))

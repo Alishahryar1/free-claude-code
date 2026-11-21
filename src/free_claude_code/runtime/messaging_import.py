@@ -51,7 +51,7 @@ def read_legacy(path: Path) -> LegacyData:
         candidates = list(candidates.values())
     if not isinstance(candidates, list):
         result.reject()
-        candidates = []
+        candidates = list[object]()
     # Historical JSON loading used the last duplicate tree identity.
     decoded: dict[TreeIdentity, TreeSnapshot] = {}
     for candidate in candidates:
@@ -73,7 +73,7 @@ def read_legacy(path: Path) -> LegacyData:
     messages = raw.get("managed_messages", raw.get("message_log", {}))
     if not isinstance(messages, dict):
         result.reject()
-        messages = {}
+        messages = dict[str, object]()
     for chat_key, items in messages.items():
         if (
             not isinstance(chat_key, str)

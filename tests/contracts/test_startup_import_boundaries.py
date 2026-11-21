@@ -19,7 +19,9 @@ import pytest
         ),
     ],
 )
-def test_entrypoint_import_does_not_load_optional_runtime(module, forbidden):
+def test_entrypoint_import_does_not_load_optional_runtime(
+    module: str, forbidden: tuple[str, ...]
+):
     script = f"""
 import importlib
 import sys

@@ -252,7 +252,9 @@ async def test_catalog_refresh_preserves_selection_and_behavior_fingerprint():
 @pytest.mark.parametrize(
     "modalities", [frozenset(), frozenset({ModelInputModality.IMAGE})]
 )
-def test_non_text_capabilities_retain_the_native_text_fallback(modalities):
+def test_non_text_capabilities_retain_the_native_text_fallback(
+    modalities: frozenset[ModelInputModality],
+):
     from free_claude_code.application.model_catalog import read_model_catalog
 
     snapshot = ModelCatalogSnapshot(

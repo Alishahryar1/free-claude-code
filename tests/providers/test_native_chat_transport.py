@@ -3,6 +3,7 @@ import json
 import pytest
 
 from free_claude_code.core.chat_completions.request import ChatRequest
+from free_claude_code.core.json_types import JsonObject
 from tests.providers.test_history_transports import _harness
 
 
@@ -31,7 +32,7 @@ async def test_direct_chat_preserves_native_request_and_stream_through_sdk():
         "extra_headers": {"x-native-extension": "body-value"},
         "stream": True,
     }
-    events = [
+    events: list[JsonObject] = [
         {
             "id": "native-id",
             "object": "chat.completion.chunk",

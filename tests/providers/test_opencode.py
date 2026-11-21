@@ -31,6 +31,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
 )
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.history_replay import ReplayOrigin, prepare_history
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import (
@@ -57,6 +58,7 @@ from tests.providers.support import (
     reasoning_for,
     without_empty_reasoning,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 def _config():
@@ -189,7 +191,7 @@ def _responses_event_stream(text: str) -> str:
 
 
 def _chat_event_stream(text: str) -> str:
-    chunks = (
+    chunks: tuple[JsonObject, ...] = (
         {
             "id": "chatcmpl_1",
             "object": "chat.completion.chunk",
@@ -1072,7 +1074,7 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
     fallback_path: str,
     fallback_text: str,
     midstream: bool,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from tests.api.test_delivered_stream_recovery import text_events
 
@@ -1125,8 +1127,12 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
         fallbacks=(ProviderModelCandidate(target(fallback_model)),),
         reasoning_preference=ReasoningPreference.INHERIT,
     )
+
+    def resolve_provider(_provider_id: str, _api_key_number: int):
+        return provider
+
     executor = ProviderExecutor(
-        AsyncMock(side_effect=lambda _provider_id, _api_key_number: provider),
+        AsyncMock(side_effect=resolve_provider),
     )
 
     try:
@@ -1271,16 +1277,16 @@ async def test_warm_startup_rejects_unknown_and_route_specific_fields() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cleanup_attempts_both_owned_clients_when_generation_close_fails() -> (
-    None
-):
+async def test_cleanup_attempts_both_owned_clients_when_generation_close_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     provider, _generation_requests, _catalog_requests = _provider_with_wire_transports(
         _catalog_payload()
     )
     generation_close = AsyncMock(side_effect=RuntimeError("generation close failed"))
     catalog_close = AsyncMock()
-    provider._client.close = generation_close
-    provider._catalog._client.aclose = catalog_close
+    monkeypatch.setattr(provider._client, "close", generation_close)
+    monkeypatch.setattr(provider._catalog._client, "aclose", catalog_close)
 
     with pytest.raises(RuntimeError, match="generation close failed"):
         await provider.cleanup()
@@ -1402,12 +1408,22 @@ async def test_tool_only_history_sends_empty_reasoning_content_on_wire(
         )
     )
 
-    assistant = wire["messages"][0]
-    assert assistant["content"] == ""
-    assert assistant["reasoning_content"] == ""
-    assert assistant["tool_calls"][0]["id"] == "call_missing"
-    assert assistant["tool_calls"][0]["function"]["name"] == "Read"
-    assert wire["messages"][1] == {
+    assistant = array_payload(wire["messages"])[0]
+    assert object_payload(assistant)["content"] == ""
+    assert object_payload(assistant)["reasoning_content"] == ""
+    assert (
+        object_payload(array_payload(object_payload(assistant)["tool_calls"])[0])["id"]
+        == "call_missing"
+    )
+    assert (
+        object_payload(
+            object_payload(array_payload(object_payload(assistant)["tool_calls"])[0])[
+                "function"
+            ]
+        )["name"]
+        == "Read"
+    )
+    assert array_payload(wire["messages"])[1] == {
         "role": "tool",
         "tool_call_id": "call_missing",
         "content": "file contents",

@@ -1,8 +1,9 @@
 import asyncio
 import contextlib
 import os
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Unpack
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -23,6 +24,14 @@ from free_claude_code.harnesses import (
     jetbrains_acp_integration,
     vscode_chat_integration,
 )
+from free_claude_code.messaging.models import IncomingMessage
+from free_claude_code.providers.base import ProviderConfig
+from tests.fixture_types import (
+    DatabaseFactory,
+    IncomingMessageFactory,
+    IncomingMessageOverrides,
+    MessagingStoreFactory,
+)
 from tests.providers.support import (
     immediate_admission,
     make_provider_config,
@@ -37,7 +46,7 @@ os.environ["ANTHROPIC_AUTH_TOKEN"] = ""
 
 
 @pytest.fixture(autouse=True)
-def _response_delivery_context(request):
+def _response_delivery_context(request: pytest.FixtureRequest):
     """Direct provider tests run inside an unreleased private response context."""
     if "api" in request.node.path.relative_to(Path(__file__).parent).parts:
         yield
@@ -47,7 +56,7 @@ def _response_delivery_context(request):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_managed_config(monkeypatch, tmp_path):
+def _isolate_managed_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Keep every test away from real home, checkout, and running-server config."""
 
     config_dir = tmp_path / ".fcc"
@@ -118,7 +127,7 @@ def provider_config():
 
 
 @pytest.fixture
-def nim_provider(provider_config):
+def nim_provider(provider_config: ProviderConfig):
     from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 
     return NvidiaNimProvider(
@@ -128,14 +137,14 @@ def nim_provider(provider_config):
 
 
 @pytest.fixture
-def open_router_provider(provider_config):
+def open_router_provider(provider_config: ProviderConfig):
     from free_claude_code.providers.open_router import OpenRouterProvider
 
     return OpenRouterProvider(provider_config, admission=immediate_admission())
 
 
 @pytest.fixture
-def lmstudio_provider(provider_config):
+def lmstudio_provider(provider_config: ProviderConfig):
     from free_claude_code.providers.lmstudio import LMStudioProvider
 
     lmstudio_config = make_provider_config(
@@ -152,7 +161,7 @@ def lmstudio_provider(provider_config):
 
 
 @pytest.fixture
-def llamacpp_provider(provider_config):
+def llamacpp_provider(provider_config: object):
     from free_claude_code.providers.openai_chat import create_openai_chat_provider
 
     llamacpp_config = make_provider_config(
@@ -214,7 +223,7 @@ def mock_platform():
     platform.cancel_all_pending_voices = AsyncMock(return_value=())
     platform.cancel_pending_voices_in_scope = AsyncMock(return_value=())
 
-    def _fire_and_forget(task):
+    def _fire_and_forget(task: object):
         if asyncio.iscoroutine(task):
             # Create a task to avoid "coroutine was never awaited" warning
             return asyncio.create_task(task)
@@ -229,13 +238,14 @@ def mock_session_store():
     from free_claude_code.messaging.trees import ConversationSnapshot, MessagingStore
 
     store = AsyncMock(spec=MessagingStore)
-    store.get_tracked_message_ids_for_chat.return_value = []
+    tracked_message_ids: list[str] = []
+    store.get_tracked_message_ids_for_chat.return_value = tracked_message_ids
     store.load_conversation_snapshot.return_value = ConversationSnapshot()
     return store
 
 
 @pytest.fixture
-def incoming_message_factory():
+def incoming_message_factory() -> IncomingMessageFactory:
     _valid_keys = frozenset(
         {
             "text",
@@ -252,8 +262,7 @@ def incoming_message_factory():
         }
     )
 
-    def _create(**kwargs):
-        from free_claude_code.messaging.models import IncomingMessage
+    def _create(**kwargs: Unpack[IncomingMessageOverrides]) -> IncomingMessage:
 
         defaults: dict[str, Any] = {
             "text": "hello",
@@ -274,7 +283,7 @@ def incoming_message_factory():
 
 
 @pytest.fixture(autouse=True)
-def _propagate_loguru_to_caplog(caplog):
+def _propagate_loguru_to_caplog(caplog: pytest.LogCaptureFixture):
     """Capture Loguru directly without re-entering the stdlib interceptor."""
     from loguru import logger as loguru_logger
 
@@ -291,15 +300,21 @@ def _propagate_loguru_to_caplog(caplog):
 
 
 @pytest_asyncio.fixture
-async def messaging_store_factory(tmp_path):
+async def messaging_store_factory(
+    tmp_path: Path,
+) -> AsyncIterator[MessagingStoreFactory]:
     """Real SQLite stores with fixture-owned lifetime and optional old JSON input."""
     from free_claude_code.runtime.messaging_import import import_legacy
     from free_claude_code.runtime.messaging_sqlite import SQLiteMessagingStore
     from free_claude_code.runtime.sqlite_database import SQLiteDatabase
 
-    databases = {}
+    databases: dict[Path, SQLiteDatabase] = {}
 
-    async def create(*, storage_path=None, managed_message_cap=None):
+    async def create(
+        *,
+        storage_path: str | Path | None = None,
+        managed_message_cap: int | None = None,
+    ):
         path = Path(storage_path) if storage_path is not None else tmp_path / "fcc.db"
         database_path = path.with_suffix(".db")
         database = databases.get(database_path)
@@ -322,14 +337,14 @@ async def messaging_store_factory(tmp_path):
 
 
 @pytest_asyncio.fixture
-async def database_factory():
+async def database_factory() -> AsyncIterator[DatabaseFactory]:
     """Own database resources for tests that compose individual services."""
     from free_claude_code.runtime.sqlite_database import SQLiteDatabase
 
     databases = []
 
-    def create(*args, **kwargs):
-        database = SQLiteDatabase(*args, **kwargs)
+    def create(path: Path, lock_path: Path, *, legacy_path: Path | None = None):
+        database = SQLiteDatabase(path, lock_path, legacy_path=legacy_path)
         databases.append(database)
         return database
 

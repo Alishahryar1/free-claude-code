@@ -9,6 +9,7 @@ import sys
 import threading
 import zipfile
 from pathlib import Path
+from typing import override
 
 import pytest
 
@@ -21,7 +22,7 @@ LATEST = {"current": INSTALLED, "newer-installed": "0.9.0"}
 
 
 @contextlib.contextmanager
-def installer_server(body, status, latest):
+def installer_server(body: str, status: int, latest: str):
     requests = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -51,7 +52,8 @@ def installer_server(body, status, latest):
             self.end_headers()
             self.wfile.write(payload)
 
-        def log_message(self, format, *args):
+        @override
+        def log_message(self, format: object, *args: object):
             pass
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -67,7 +69,7 @@ def installer_server(body, status, latest):
         thread.join()
 
 
-def fixture_wheel(area, url):
+def fixture_wheel(area: Path, url: str):
     wheel = area / f"free_claude_code-{INSTALLED}-py3-none-any.whl"
     dist = f"free_claude_code-{INSTALLED}"
     with zipfile.ZipFile(wheel, "w") as archive:
@@ -106,7 +108,7 @@ def fixture_wheel(area, url):
     ],
 )
 def test_installed_update_delegates_and_survives_replacement(
-    tmp_path, outcome, powershell_module_paths
+    tmp_path: Path, outcome: str, powershell_module_paths: dict[str, str]
 ):
     uv = shutil.which("uv")
     if uv is None:

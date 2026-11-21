@@ -101,7 +101,7 @@ class TestSetExtra:
 
 
 class TestBuildRequestBody:
-    def test_absent_sampling_defaults_are_not_injected(self, req):
+    def test_absent_sampling_defaults_are_not_injected(self, req: MessagesRequest):
         body = build_request_body(req, reasoning=REASONING_OFF)
 
         assert "temperature" not in body
@@ -109,7 +109,7 @@ class TestBuildRequestBody:
         assert "parallel_tool_calls" not in body
         assert "extra_body" not in body
 
-    def test_explicit_sampling_and_extras_survive(self, req):
+    def test_explicit_sampling_and_extras_survive(self, req: MessagesRequest):
         req.temperature = 0.3
         req.top_p = 1.0
         req.top_k = 15
@@ -125,7 +125,7 @@ class TestBuildRequestBody:
 
     @pytest.mark.parametrize("keep_custom", (False, True))
     def test_reasoning_extras_are_cleaned_without_mutating_request(
-        self, req, keep_custom
+        self, req: MessagesRequest, keep_custom: bool
     ):
         template_kwargs: dict[str, Any] = {"thinking": True, "reasoning_budget": 100}
         if keep_custom:
@@ -150,7 +150,9 @@ class TestBuildRequestBody:
         assert req.model_dump() == original
 
     @pytest.mark.parametrize("effort", list(ReasoningEffort))
-    def test_named_effort_passes_through(self, req, effort):
+    def test_named_effort_passes_through(
+        self, req: MessagesRequest, effort: ReasoningEffort
+    ):
         body = build_request_body(req, reasoning=ReasoningPolicy(effort=effort))
         assert body["reasoning_effort"] == effort.value
         assert "chat_template_kwargs" not in body.get("extra_body", {})
@@ -189,13 +191,17 @@ class TestBuildRequestBody:
             ),
         ],
     )
-    def test_max_tokens_preserves_fcc_output_limit(self, req, requested, expected):
+    def test_max_tokens_preserves_fcc_output_limit(
+        self, req: MessagesRequest, requested: int | None, expected: int
+    ):
         req.max_tokens = requested
         body = build_request_body(req, reasoning=REASONING_ON)
         assert body["max_tokens"] == expected
 
     @pytest.mark.parametrize("client_top_p", (None, 0.0, 0.5, 0.95, 1.0))
-    def test_top_p_preserves_client_value_or_omission(self, req, client_top_p):
+    def test_top_p_preserves_client_value_or_omission(
+        self, req: MessagesRequest, client_top_p: float | None
+    ):
         req.top_p = client_top_p
 
         body = build_request_body(req, reasoning=REASONING_ON)
@@ -205,12 +211,12 @@ class TestBuildRequestBody:
         else:
             assert body["top_p"] == client_top_p
 
-    def test_include_stop_str_in_output_not_sent(self, req):
+    def test_include_stop_str_in_output_not_sent(self, req: MessagesRequest):
         body = build_request_body(req, reasoning=REASONING_ON)
         assert "include_stop_str_in_output" not in body.get("extra_body", {})
 
     def test_tool_schema_boolean_subschemas_are_removed_without_mutating_request(
-        self, req
+        self, req: MessagesRequest
     ):
         tool_schema = {
             "type": "object",
@@ -243,7 +249,9 @@ class TestBuildRequestBody:
         assert tool_schema["additionalProperties"] is False
         assert tool_schema["properties"]["nested"]["additionalProperties"] is False
 
-    def test_grep_schema_type_parameter_is_aliased_without_mutating_request(self, req):
+    def test_grep_schema_type_parameter_is_aliased_without_mutating_request(
+        self, req: MessagesRequest
+    ):
         tool_schema = deepcopy(GREP_SCHEMA_FROM_SERVER_LOG)
         tool_schema["properties"]["_fcc_arg_type"] = {
             "type": "string",
@@ -287,7 +295,9 @@ class TestBuildRequestBody:
         assert "_fcc_arg_type" in parameters["required"]
         assert tool_schema == original_schema
 
-    def test_reported_long_tool_name_uses_generic_alias_after_nim_repairs(self, req):
+    def test_reported_long_tool_name_uses_generic_alias_after_nim_repairs(
+        self, req: MessagesRequest
+    ):
         """Issue #1307's 52nd tool is portable without losing NIM arg aliases."""
         long_name = "mcp__issue_1307__" + "x" * 85
         assert len(long_name) == 102
@@ -322,7 +332,7 @@ class TestBuildRequestBody:
         )
         assert req.model_dump() == snapshot
 
-    def test_safe_tool_schema_does_not_add_alias_metadata(self, req):
+    def test_safe_tool_schema_does_not_add_alias_metadata(self, req: MessagesRequest):
         tool_schema = {
             "type": "object",
             "properties": {
@@ -348,7 +358,7 @@ class TestBuildRequestBody:
         assert parameters["required"] == ["pattern"]
 
     def test_nested_schema_keyword_properties_are_aliased_without_mutating_request(
-        self, req
+        self, req: MessagesRequest
     ):
         tool_schema = {
             "type": "object",

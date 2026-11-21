@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from free_claude_code.messaging.trees.transitions import NodeClaim
+
 # --- Existing Tests ---
 
 
@@ -92,7 +94,7 @@ class TestTreeQueueManager:
 
         processed = asyncio.Event()
 
-        async def processor(claim):
+        async def processor(claim: NodeClaim):
             assert claim.node.node_id == "1"
             processed.set()
 

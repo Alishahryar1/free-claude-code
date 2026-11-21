@@ -72,7 +72,7 @@ async def _open(execution: ProviderExecution) -> ProviderAttempt:
 
 
 @pytest.fixture
-def recovery_clock(monkeypatch):
+def recovery_clock(monkeypatch: pytest.MonkeyPatch):
     clock = SimpleNamespace(now=100.0)
     monotonic_time = SimpleNamespace(monotonic=lambda: clock.now)
     monkeypatch.setattr(admission, "time", monotonic_time)
@@ -605,7 +605,9 @@ async def test_discovery_requests_share_recovery_health() -> None:
 
 
 @pytest.mark.asyncio
-async def test_one_leader_backs_off_while_followers_coalesce(recovery_clock) -> None:
+async def test_one_leader_backs_off_while_followers_coalesce(
+    recovery_clock: SimpleNamespace,
+) -> None:
     controller = _controller(base_delay=2.0, max_delay=60.0)
     leader_execution = controller.start_execution()
     follower_execution = controller.start_execution()
@@ -664,7 +666,9 @@ async def test_cancelled_follower_leaves_recovery_episode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancelled_backoff_leader_transfers_to_a_waiter(recovery_clock) -> None:
+async def test_cancelled_backoff_leader_transfers_to_a_waiter(
+    recovery_clock: SimpleNamespace,
+) -> None:
     controller = _controller(base_delay=2.0, max_delay=60.0)
     leader_execution = controller.start_execution()
     follower_execution = controller.start_execution()
@@ -924,7 +928,7 @@ async def test_late_in_flight_failure_keeps_exhausted_generation_outcome() -> No
 @pytest.mark.asyncio
 @pytest.mark.parametrize("hint", ["7", "60", "invalid", None])
 async def test_retry_after_within_ceiling_keeps_coordinated_backoff(
-    hint, recovery_clock
+    hint: str | None, recovery_clock: SimpleNamespace
 ):
     controller = _controller(max_attempts=2, base_delay=1, max_delay=60)
     execution = controller.start_execution()
@@ -948,7 +952,9 @@ async def test_retry_after_within_ceiling_keeps_coordinated_backoff(
 
 
 @pytest.mark.asyncio
-async def test_long_http_date_stops_retry_and_reopens_at_deadline(recovery_clock):
+async def test_long_http_date_stops_retry_and_reopens_at_deadline(
+    recovery_clock: SimpleNamespace,
+):
     controller = _controller(max_delay=60)
     future = format_datetime(datetime.now(UTC) + timedelta(hours=1), usegmt=True)
     error = _status_error(503, retry_after=future)
@@ -984,7 +990,7 @@ async def test_long_http_date_stops_retry_and_reopens_at_deadline(recovery_clock
 @pytest.mark.asyncio
 @pytest.mark.parametrize("leader_wait", ["backoff", "capacity", "in_flight"])
 async def test_long_hint_supersedes_short_recovery_and_releases_waiters(
-    leader_wait, recovery_clock
+    leader_wait: str, recovery_clock: SimpleNamespace
 ):
     controller = _controller(max_concurrency=3, base_delay=10, max_delay=60)
     leader = controller.start_execution(model="primary")
@@ -1055,7 +1061,9 @@ async def test_long_hint_supersedes_short_recovery_and_releases_waiters(
 
 @pytest.mark.parametrize("elapsed", [0, 30, 120, 3600])
 @pytest.mark.asyncio
-async def test_terminal_waiters_keep_captured_failure(elapsed, recovery_clock):
+async def test_terminal_waiters_keep_captured_failure(
+    elapsed: int, recovery_clock: SimpleNamespace
+):
     controller = _controller(base_delay=10, max_delay=60)
     queued_execution = controller.start_execution(model="primary")
     between_attempts = controller.start_execution(model="primary")
@@ -1131,7 +1139,7 @@ async def test_terminal_waiters_keep_captured_failure(elapsed, recovery_clock):
 @pytest.mark.parametrize("long_first", [False, True])
 @pytest.mark.asyncio
 async def test_terminal_episode_selects_late_attempt_failure(
-    recovery_clock, late_budget, long_first
+    recovery_clock: SimpleNamespace, late_budget: int, long_first: bool
 ):
     controller = _controller(max_attempts=2, max_delay=60)
     leader = controller.start_execution(model="primary")
@@ -1178,7 +1186,9 @@ async def test_terminal_episode_selects_late_attempt_failure(
 
 
 @pytest.mark.asyncio
-async def test_gate_rejection_stays_terminal_after_route_reopens(recovery_clock):
+async def test_gate_rejection_stays_terminal_after_route_reopens(
+    recovery_clock: SimpleNamespace,
+):
     controller = _controller(max_delay=60)
     source = await _open(controller.start_execution(model="primary"))
     try:

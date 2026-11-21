@@ -6,7 +6,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import Protocol
+from typing import Protocol, override
 
 import httpx
 
@@ -529,9 +529,11 @@ class _MessagesAttempt(TransportAttempt):
         self._stopped = False
 
     @property
+    @override
     def normal_stop_seen(self) -> bool:
         return self._stopped
 
+    @override
     async def prepare(self) -> None:
         transport = self._transport
         forwarding = self._forwarding
@@ -572,6 +574,7 @@ class _MessagesAttempt(TransportAttempt):
             headers=headers,
         )
 
+    @override
     async def stream(self, scope: ProviderAttemptScope) -> AsyncIterator[StreamOutput]:
         assert self._request is not None and self._presenter is not None
         presenter = self._presenter
@@ -623,11 +626,13 @@ class _MessagesAttempt(TransportAttempt):
                 "Messages stream ended without message_stop."
             )
 
+    @override
     def resolution_error(self, error: Exception) -> Exception:
         if isinstance(error, NativeMessagesError):
             return RetryableProviderProtocolError(str(error))
         return error
 
+    @override
     def abandon(self, error: Exception) -> Iterator[StreamOutput]:
         if self._presenter is None:
             return
@@ -635,6 +640,7 @@ class _MessagesAttempt(TransportAttempt):
             if frames := _present(self._presenter, group):
                 yield completed_output(frames)
 
+    @override
     def failure_payload(
         self, error: Exception, failure: ExecutionFailure
     ) -> JsonObject | None:
@@ -642,6 +648,7 @@ class _MessagesAttempt(TransportAttempt):
             return self._presenter.failure_payload(failure)
         return None
 
+    @override
     def handoff(self) -> Iterator[StreamOutput]:
         if isinstance(self._presenter, GeminiMessagesStream):
             for event in self._presenter.handoff():

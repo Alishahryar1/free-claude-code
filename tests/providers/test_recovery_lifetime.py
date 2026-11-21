@@ -10,7 +10,10 @@ import pytest
 
 from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.providers import admission
-from free_claude_code.providers.admission import ProviderOperationKind
+from free_claude_code.providers.admission import (
+    ProviderAdmissionController,
+    ProviderOperationKind,
+)
 from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
 from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.http import ProviderAttemptScope
@@ -22,7 +25,7 @@ class Payload:
     pass
 
 
-async def exhaust(controller, model):
+async def exhaust(controller: ProviderAdmissionController, model: str):
     payload = Payload()
 
     async def request():
@@ -135,7 +138,7 @@ async def test_timer_does_not_capture_request_context():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("custom", [False, True])
-async def test_registry_retirement_releases_scheduled_controller(custom):
+async def test_registry_retirement_releases_scheduled_controller(custom: bool):
     registry = ProviderAdmissionRegistry(
         ProviderAdmissionLimits(1000, 60, 5, PROVIDER_MAX_ATTEMPTS_DEFAULT)
     )
@@ -174,14 +177,14 @@ async def test_expiry_allows_concurrent_fresh_attempts():
 
 
 @pytest.fixture
-def clock(monkeypatch):
+def clock(monkeypatch: pytest.MonkeyPatch):
     now = [100.0]
     monkeypatch.setattr(admission, "time", SimpleNamespace(monotonic=lambda: now[0]))
     return now
 
 
 @pytest.mark.asyncio
-async def test_live_members_and_reserved_probes_survive_deadlines(clock):
+async def test_live_members_and_reserved_probes_survive_deadlines(clock: list[float]):
     controller = _controller(base_delay=1, max_delay=1)
     leader = controller.start_execution(model="a")
     follower = controller.start_execution(model="a")
@@ -221,7 +224,7 @@ async def test_live_members_and_reserved_probes_survive_deadlines(clock):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("probe", [False, True])
-async def test_terminal_execution_cannot_open_queued_attempt(probe):
+async def test_terminal_execution_cannot_open_queued_attempt(probe: bool):
     controller = _controller(max_concurrency=1)
     execution = controller.start_execution(model="a")
     if probe:
@@ -241,7 +244,7 @@ async def test_terminal_execution_cannot_open_queued_attempt(probe):
 
 
 @pytest.mark.asyncio
-async def test_exhausted_waiters_keep_their_failure_after_expiry(clock):
+async def test_exhausted_waiters_keep_their_failure_after_expiry(clock: list[float]):
     controller = _controller(max_attempts=2, base_delay=1, max_delay=1)
     leader = controller.start_execution(model="a")
     followers = [controller.start_execution(model="a") for _ in range(3)]
@@ -272,7 +275,9 @@ async def test_exhausted_waiters_keep_their_failure_after_expiry(clock):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("expired", [False, True])
-async def test_late_normal_failure_obeys_current_cooldown(clock, expired):
+async def test_late_normal_failure_obeys_current_cooldown(
+    clock: list[float], expired: bool
+):
     controller = _controller(max_attempts=2, base_delay=1, max_delay=1)
     leader = controller.start_execution(model="a")
     late = controller.start_execution(model="a")
@@ -304,7 +309,9 @@ async def test_late_normal_failure_obeys_current_cooldown(clock, expired):
 
 
 @pytest.mark.asyncio
-async def test_one_timer_tracks_multiple_deadlines_and_current_state(clock):
+async def test_one_timer_tracks_multiple_deadlines_and_current_state(
+    clock: list[float],
+):
     controller = _controller(max_attempts=1, base_delay=1, max_delay=1)
     await exhaust(controller, "a")
     first_timer = controller._expiry_timer
@@ -358,7 +365,9 @@ async def test_zero_delay_expiry_preserves_occupied_capacity_and_rate_history():
 
 
 @pytest.mark.asyncio
-async def test_old_backoff_cancellation_cannot_detach_replacement_leader(clock):
+async def test_old_backoff_cancellation_cannot_detach_replacement_leader(
+    clock: list[float],
+):
     controller = _controller(base_delay=1, max_delay=1)
     leader = controller.start_execution(model="a")
     follower = controller.start_execution(model="a")

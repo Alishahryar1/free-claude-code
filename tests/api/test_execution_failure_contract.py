@@ -3,7 +3,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping
-from typing import Any, cast
+from typing import Any, cast, override
 from unittest.mock import MagicMock, patch
 
 import httpx2
@@ -275,11 +275,12 @@ def _client_for(
 @pytest.mark.parametrize("path", ["/v1/messages", "/v1/responses"])
 @pytest.mark.parametrize("partial", [False, True])
 def test_retired_progress_value_does_not_interrupt_slow_response(
-    path, partial, monkeypatch
+    path: str, partial: bool, monkeypatch: pytest.MonkeyPatch
 ):
     closed = []
 
     class SlowStream(httpx2.AsyncByteStream):
+        @override
         async def __aiter__(self):
             chunks = [
                 ("data: " + json.dumps(event) + "\n\n").encode()
@@ -297,6 +298,7 @@ def test_retired_progress_value_does_not_interrupt_slow_response(
                 yield chunk
             yield b"data: [DONE]\n\n"
 
+        @override
         async def aclose(self):
             closed.append(True)
 
@@ -348,7 +350,7 @@ def test_retired_progress_value_does_not_interrupt_slow_response(
 
 @pytest.mark.parametrize("partial", [False, True])
 def test_sdk_stream_invalid_request_preserves_public_error_semantics(
-    partial, monkeypatch
+    partial: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = 0
 

@@ -37,7 +37,7 @@ def _write_managed_config(home: Path, text: str) -> None:
 
 
 @pytest.mark.smoke_target("config")
-def test_env_precedence_e2e(smoke_config: SmokeConfig, tmp_path) -> None:
+def test_env_precedence_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> None:
     home = tmp_path / "home"
     _write_managed_config(
         home,
@@ -64,7 +64,7 @@ def test_env_precedence_e2e(smoke_config: SmokeConfig, tmp_path) -> None:
 
 
 @pytest.mark.smoke_target("config")
-def test_removed_env_migration_e2e(smoke_config: SmokeConfig, tmp_path) -> None:
+def test_removed_env_migration_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> None:
     home = tmp_path / "home"
     env_file = tmp_path / "legacy-explicit.env"
     original = 'MODEL="deepseek/imported-once"\n'
@@ -102,7 +102,7 @@ def test_removed_env_migration_e2e(smoke_config: SmokeConfig, tmp_path) -> None:
 
 
 @pytest.mark.smoke_target("config")
-def test_route_reasoning_config_e2e(smoke_config: SmokeConfig, tmp_path) -> None:
+def test_route_reasoning_config_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> None:
     home = tmp_path / "home"
     _write_managed_config(
         home,
@@ -142,7 +142,7 @@ def test_route_reasoning_config_e2e(smoke_config: SmokeConfig, tmp_path) -> None
 
 
 @pytest.mark.smoke_target("config")
-def test_proxy_timeout_config_e2e(smoke_config: SmokeConfig, tmp_path) -> None:
+def test_proxy_timeout_config_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> None:
     home = tmp_path / "home"
     _write_managed_config(
         home,

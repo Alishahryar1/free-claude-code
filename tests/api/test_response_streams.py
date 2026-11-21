@@ -10,7 +10,7 @@ import pytest
 from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
 from starlette.responses import Response
-from starlette.types import Message, Scope
+from starlette.types import Message, Receive, Scope, Send
 
 from free_claude_code.api.request_ids import RequestCorrelationMiddleware
 from free_claude_code.api.response_streams import (
@@ -25,6 +25,7 @@ from free_claude_code.core.anthropic import (
 )
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from tests.assertions import record_extra, require_exception_info
 from tests.stream_packets import packets
 
 
@@ -425,7 +426,7 @@ async def test_asgi_23_correlation_boundary_preserves_response_start_cleanup() -
     assert isinstance(response, ManagedStreamingResponse)
     await bind_response_lifetime(response, release)
 
-    async def app(scope, receive, send) -> None:
+    async def app(scope: Scope, receive: Receive, send: Send) -> None:
         await response(scope, receive, send)
 
     async def receive() -> Message:
@@ -580,7 +581,9 @@ async def test_cancellation_during_pre_start_error_cleanup_waits_for_close() -> 
 
 
 @pytest.mark.asyncio
-async def test_cleanup_failures_warn_once_and_do_not_replace_success(caplog) -> None:
+async def test_cleanup_failures_warn_once_and_do_not_replace_success(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     close_error = RuntimeError("close detail")
     release_error = RuntimeError("release detail")
 
@@ -611,18 +614,22 @@ async def test_cleanup_failures_warn_once_and_do_not_replace_success(caplog) -> 
     assert b"".join(message.get("body", b"") for message in messages) == b"ok"
     warnings = [record for record in caplog.records if record.levelname == "WARNING"]
     assert len(warnings) == 2
-    assert warnings[0].extra["event"] == "stream.input.close_failed"
-    assert warnings[0].extra["owner"] == "ManagedStreamingResponse"
-    assert warnings[0].exc_info[1] is close_error
-    assert warnings[1].extra["operation"] == "release_resource"
-    assert warnings[1].exc_info[1] is release_error
-    assert all(record.extra["request_id"] == "req_cleanup" for record in warnings)
+    assert record_extra(warnings[0])["event"] == "stream.input.close_failed"
+    assert record_extra(warnings[0])["owner"] == "ManagedStreamingResponse"
+    assert require_exception_info(warnings[0].exc_info)[1] is close_error
+    assert record_extra(warnings[1])["operation"] == "release_resource"
+    assert require_exception_info(warnings[1].exc_info)[1] is release_error
+    assert all(
+        record_extra(record)["request_id"] == "req_cleanup" for record in warnings
+    )
     assert "aclose" in caplog.text
     release.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_body_close_cancellation_propagates_without_releasing(caplog) -> None:
+async def test_body_close_cancellation_propagates_without_releasing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     class CloseIsCancelled:
         def __aiter__(self):
             return self

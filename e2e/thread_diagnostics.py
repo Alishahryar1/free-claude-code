@@ -35,7 +35,7 @@ def dump_threads_after(
         timer.join()
 
 
-def pytest_addoption(parser) -> None:
+def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addini("thread_dump_timeout", "Print slow-test thread stacks", default="0")
 
 

@@ -1,6 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonValue
 from smoke.conftest import (
     DISABLED_PROVIDER_MODEL,
     provider_model_params,
@@ -21,7 +24,7 @@ from smoke.lib.config import (
 )
 
 
-def _settings(**overrides) -> Settings:
+def _settings(**overrides: JsonValue) -> Settings:
     return Settings.model_validate(
         {
             "model": "nvidia_nim/test",
@@ -34,22 +37,25 @@ def _settings(**overrides) -> Settings:
     )
 
 
-def _smoke_config(**overrides) -> SmokeConfig:
-    values = {
-        "root": Path("."),
-        "results_dir": Path(".smoke-results"),
-        "live": False,
-        "interactive": False,
-        "targets": DEFAULT_TARGETS,
-        "provider_matrix": frozenset(),
-        "timeout_s": 45.0,
-        "prompt": "Reply with exactly: FCC_SMOKE_PONG",
-        "claude_bin": "claude",
-        "worker_id": "main",
-        "settings": _settings(),
-    }
-    values.update(overrides)
-    return SmokeConfig(**values)
+def _smoke_config(
+    *,
+    settings: Settings | None = None,
+    provider_matrix: frozenset[str] = frozenset(),
+    live: bool = False,
+) -> SmokeConfig:
+    return SmokeConfig(
+        root=Path("."),
+        results_dir=Path(".smoke-results"),
+        live=live,
+        interactive=False,
+        targets=DEFAULT_TARGETS,
+        provider_matrix=provider_matrix,
+        timeout_s=45.0,
+        prompt="Reply with exactly: FCC_SMOKE_PONG",
+        claude_bin="claude",
+        worker_id="main",
+        settings=_settings() if settings is None else settings,
+    )
 
 
 def test_ollama_is_default_smoke_target() -> None:
@@ -88,7 +94,9 @@ def test_ollama_provider_matrix_filters_models() -> None:
     assert [model.provider for model in config.provider_models()] == ["ollama"]
 
 
-def test_ollama_cloud_provider_configuration_uses_api_key(monkeypatch) -> None:
+def test_ollama_cloud_provider_configuration_uses_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_OLLAMA_CLOUD", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -104,7 +112,7 @@ def test_ollama_cloud_provider_configuration_uses_api_key(monkeypatch) -> None:
 
 
 def test_provider_smoke_models_cover_configured_providers_independent_of_model_mapping(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_DEEPSEEK", raising=False)
     config = _smoke_config(
@@ -121,7 +129,7 @@ def test_provider_smoke_models_cover_configured_providers_independent_of_model_m
 
 
 def test_poolside_provider_configuration_uses_documented_default_model(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_POOLSIDE", raising=False)
     config = _smoke_config(
@@ -138,7 +146,7 @@ def test_poolside_provider_configuration_uses_documented_default_model(
 
 
 def test_llm7_provider_configuration_uses_stable_default_selector(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_LLM7", raising=False)
     config = _smoke_config(
@@ -155,7 +163,7 @@ def test_llm7_provider_configuration_uses_stable_default_selector(
 
 
 def test_llm7_smoke_override_accepts_selector_with_or_without_prefix(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = _settings(
         llm7_api_keys="llm7-key",
@@ -169,7 +177,9 @@ def test_llm7_smoke_override_accepts_selector_with_or_without_prefix(
         assert models[0].source == "FCC_SMOKE_MODEL_LLM7"
 
 
-def test_llm7_is_not_enabled_without_explicit_credential(monkeypatch) -> None:
+def test_llm7_is_not_enabled_without_explicit_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_LLM7", raising=False)
     config = _smoke_config(
         provider_matrix=frozenset({"llm7"}),
@@ -181,7 +191,7 @@ def test_llm7_is_not_enabled_without_explicit_credential(monkeypatch) -> None:
 
 
 def test_lightning_provider_configuration_uses_documented_default_model(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_LIGHTNING", raising=False)
     config = _smoke_config(
@@ -198,7 +208,7 @@ def test_lightning_provider_configuration_uses_documented_default_model(
 
 
 def test_lightning_smoke_override_accepts_model_with_or_without_prefix(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = _settings(
         lightning_api_keys="lightning-key",
@@ -215,7 +225,9 @@ def test_lightning_smoke_override_accepts_model_with_or_without_prefix(
         assert models[0].source == "FCC_SMOKE_MODEL_LIGHTNING"
 
 
-def test_lightning_is_not_enabled_without_explicit_credential(monkeypatch) -> None:
+def test_lightning_is_not_enabled_without_explicit_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_LIGHTNING", raising=False)
     config = _smoke_config(
         provider_matrix=frozenset({"lightning"}),
@@ -227,7 +239,7 @@ def test_lightning_is_not_enabled_without_explicit_credential(monkeypatch) -> No
 
 
 def test_experiential_provider_configuration_uses_documented_free_model(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_EXPERIENTIAL", raising=False)
     config = _smoke_config(
@@ -244,7 +256,7 @@ def test_experiential_provider_configuration_uses_documented_free_model(
 
 
 def test_experiential_smoke_override_accepts_model_with_or_without_prefix(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = _settings(
         experiential_api_keys="experiential-key",
@@ -262,7 +274,7 @@ def test_experiential_smoke_override_accepts_model_with_or_without_prefix(
 
 
 def test_experiential_is_not_enabled_without_explicit_credential(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_EXPERIENTIAL", raising=False)
     config = _smoke_config(
@@ -275,7 +287,7 @@ def test_experiential_is_not_enabled_without_explicit_credential(
 
 
 def test_cheaperinference_provider_configuration_uses_default_model(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_CHEAPERINFERENCE", raising=False)
     config = _smoke_config(
@@ -292,7 +304,7 @@ def test_cheaperinference_provider_configuration_uses_default_model(
 
 
 def test_cheaperinference_smoke_override_accepts_model_with_or_without_prefix(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = _settings(
         cheaperinference_api_keys="ci_live_key",
@@ -310,7 +322,7 @@ def test_cheaperinference_smoke_override_accepts_model_with_or_without_prefix(
 
 
 def test_cheaperinference_is_not_enabled_without_explicit_credential(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_CHEAPERINFERENCE", raising=False)
     config = _smoke_config(
@@ -323,7 +335,7 @@ def test_cheaperinference_is_not_enabled_without_explicit_credential(
 
 
 def test_orcarouter_provider_configuration_uses_documented_free_model(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_ORCAROUTER", raising=False)
     config = _smoke_config(
@@ -340,7 +352,7 @@ def test_orcarouter_provider_configuration_uses_documented_free_model(
 
 
 def test_orcarouter_smoke_override_accepts_model_with_or_without_prefix(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = _settings(
         orcarouter_api_keys="orcarouter-key",
@@ -357,7 +369,9 @@ def test_orcarouter_smoke_override_accepts_model_with_or_without_prefix(
         assert models[0].source == "FCC_SMOKE_MODEL_ORCAROUTER"
 
 
-def test_orcarouter_is_not_enabled_without_explicit_credential(monkeypatch) -> None:
+def test_orcarouter_is_not_enabled_without_explicit_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_ORCAROUTER", raising=False)
     config = _smoke_config(
         provider_matrix=frozenset({"orcarouter"}),
@@ -368,7 +382,9 @@ def test_orcarouter_is_not_enabled_without_explicit_credential(monkeypatch) -> N
     assert config.provider_smoke_models() == []
 
 
-def test_xai_provider_smoke_uses_current_grok_model(monkeypatch) -> None:
+def test_xai_provider_smoke_uses_current_grok_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_XAI", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -384,7 +400,7 @@ def test_xai_provider_smoke_uses_current_grok_model(monkeypatch) -> None:
 
 
 def test_cline_pass_provider_smoke_uses_low_cost_subscription_model(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_CLINE_PASS", raising=False)
     config = _smoke_config(
@@ -401,7 +417,7 @@ def test_cline_pass_provider_smoke_uses_low_cost_subscription_model(
 
 
 def test_cline_pass_smoke_override_accepts_full_or_upstream_model_ref(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = _settings(
         cline_api_keys="cline-key",
@@ -418,7 +434,9 @@ def test_cline_pass_smoke_override_accepts_full_or_upstream_model_ref(
         assert models[0].source == "FCC_SMOKE_MODEL_CLINE_PASS"
 
 
-def test_zai_shared_key_enables_both_provider_smoke_surfaces(monkeypatch) -> None:
+def test_zai_shared_key_enables_both_provider_smoke_surfaces(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_ZAI", raising=False)
     monkeypatch.delenv("FCC_SMOKE_MODEL_ZAI_API", raising=False)
     config = _smoke_config(
@@ -435,7 +453,9 @@ def test_zai_shared_key_enables_both_provider_smoke_surfaces(monkeypatch) -> Non
     ]
 
 
-def test_zai_api_smoke_override_is_independent_from_coding_plan(monkeypatch) -> None:
+def test_zai_api_smoke_override_is_independent_from_coding_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_ZAI", raising=False)
     monkeypatch.setenv("FCC_SMOKE_MODEL_ZAI_API", "zai_api/glm-5.2")
     config = _smoke_config(
@@ -452,7 +472,9 @@ def test_zai_api_smoke_override_is_independent_from_coding_plan(monkeypatch) -> 
     ]
 
 
-def test_qwencloud_provider_smoke_uses_current_coding_model(monkeypatch) -> None:
+def test_qwencloud_provider_smoke_uses_current_coding_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_QWENCLOUD", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -467,7 +489,9 @@ def test_qwencloud_provider_smoke_uses_current_coding_model(monkeypatch) -> None
     assert models[0].source == "provider_default"
 
 
-def test_qwencloud_coding_provider_smoke_uses_recommended_model(monkeypatch) -> None:
+def test_qwencloud_coding_provider_smoke_uses_recommended_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_QWENCLOUD_CODING", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -483,7 +507,7 @@ def test_qwencloud_coding_provider_smoke_uses_recommended_model(monkeypatch) -> 
 
 
 def test_qwencloud_coding_smoke_override_is_independent_from_token_plan(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_QWENCLOUD", raising=False)
     monkeypatch.setenv(
@@ -509,7 +533,9 @@ def test_qwencloud_coding_smoke_override_is_independent_from_token_plan(
     ]
 
 
-def test_together_provider_smoke_uses_current_coding_model(monkeypatch) -> None:
+def test_together_provider_smoke_uses_current_coding_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_TOGETHER", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -524,7 +550,9 @@ def test_together_provider_smoke_uses_current_coding_model(monkeypatch) -> None:
     assert models[0].source == "provider_default"
 
 
-def test_deepinfra_provider_smoke_uses_current_coding_model(monkeypatch) -> None:
+def test_deepinfra_provider_smoke_uses_current_coding_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_DEEPINFRA", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -539,7 +567,9 @@ def test_deepinfra_provider_smoke_uses_current_coding_model(monkeypatch) -> None
     assert models[0].source == "provider_default"
 
 
-def test_siliconflow_provider_smoke_uses_documented_chat_model(monkeypatch) -> None:
+def test_siliconflow_provider_smoke_uses_documented_chat_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_SILICONFLOW", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -554,7 +584,9 @@ def test_siliconflow_provider_smoke_uses_documented_chat_model(monkeypatch) -> N
     assert models[0].source == "provider_default"
 
 
-def test_nebius_provider_smoke_uses_documented_agent_model(monkeypatch) -> None:
+def test_nebius_provider_smoke_uses_documented_agent_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_NEBIUS", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -569,7 +601,9 @@ def test_nebius_provider_smoke_uses_documented_agent_model(monkeypatch) -> None:
     assert models[0].source == "provider_default"
 
 
-def test_chutes_provider_smoke_uses_documented_agent_model(monkeypatch) -> None:
+def test_chutes_provider_smoke_uses_documented_agent_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_CHUTES", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -584,7 +618,9 @@ def test_chutes_provider_smoke_uses_documented_agent_model(monkeypatch) -> None:
     assert models[0].source == "provider_default"
 
 
-def test_scaleway_provider_smoke_uses_documented_agent_model(monkeypatch) -> None:
+def test_scaleway_provider_smoke_uses_documented_agent_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_SCALEWAY", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -599,7 +635,9 @@ def test_scaleway_provider_smoke_uses_documented_agent_model(monkeypatch) -> Non
     assert models[0].source == "provider_default"
 
 
-def test_opper_provider_smoke_uses_documented_agent_model(monkeypatch) -> None:
+def test_opper_provider_smoke_uses_documented_agent_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_OPPER", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -614,7 +652,9 @@ def test_opper_provider_smoke_uses_documented_agent_model(monkeypatch) -> None:
     assert models[0].source == "provider_default"
 
 
-def test_featherless_provider_smoke_uses_documented_agent_model(monkeypatch) -> None:
+def test_featherless_provider_smoke_uses_documented_agent_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_FEATHERLESS", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -629,7 +669,9 @@ def test_featherless_provider_smoke_uses_documented_agent_model(monkeypatch) -> 
     assert models[0].source == "provider_default"
 
 
-def test_agnes_provider_smoke_uses_documented_model(monkeypatch) -> None:
+def test_agnes_provider_smoke_uses_documented_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_AGNES", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -644,7 +686,9 @@ def test_agnes_provider_smoke_uses_documented_model(monkeypatch) -> None:
     assert models[0].source == "provider_default"
 
 
-def test_zenmux_provider_smoke_uses_current_free_model(monkeypatch) -> None:
+def test_zenmux_provider_smoke_uses_current_free_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_ZENMUX", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -659,7 +703,9 @@ def test_zenmux_provider_smoke_uses_current_free_model(monkeypatch) -> None:
     assert models[0].source == "provider_default"
 
 
-def test_wandb_provider_smoke_uses_documented_tool_model(monkeypatch) -> None:
+def test_wandb_provider_smoke_uses_documented_tool_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_WANDB", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -674,7 +720,9 @@ def test_wandb_provider_smoke_uses_documented_tool_model(monkeypatch) -> None:
     assert models[0].source == "provider_default"
 
 
-def test_wandb_provider_smoke_honors_model_override(monkeypatch) -> None:
+def test_wandb_provider_smoke_honors_model_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("FCC_SMOKE_MODEL_WANDB", "deepseek-ai/DeepSeek-V4-Flash")
     config = _smoke_config(
         settings=_settings(
@@ -690,7 +738,7 @@ def test_wandb_provider_smoke_honors_model_override(monkeypatch) -> None:
 
 
 def test_connected_account_provider_smoke_requires_explicit_model(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_OPENAI", raising=False)
     config = _smoke_config(
@@ -713,7 +761,9 @@ def test_connected_account_provider_smoke_requires_explicit_model(
     ]
 
 
-def test_openrouter_provider_smoke_uses_concrete_free_model(monkeypatch) -> None:
+def test_openrouter_provider_smoke_uses_concrete_free_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_OPEN_ROUTER", raising=False)
     config = _smoke_config(settings=_settings(open_router_api_keys="openrouter-key"))
 
@@ -724,7 +774,9 @@ def test_openrouter_provider_smoke_uses_concrete_free_model(monkeypatch) -> None
     assert models[0].source == "provider_default"
 
 
-def test_kilo_provider_smoke_uses_concrete_free_model(monkeypatch) -> None:
+def test_kilo_provider_smoke_uses_concrete_free_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_KILO", raising=False)
     config = _smoke_config(settings=_settings(kilo_api_keys="anonymous"))
 
@@ -735,7 +787,9 @@ def test_kilo_provider_smoke_uses_concrete_free_model(monkeypatch) -> None:
     assert models[0].source == "provider_default"
 
 
-def test_bedrock_provider_configuration_uses_official_api_key(monkeypatch) -> None:
+def test_bedrock_provider_configuration_uses_official_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_BEDROCK", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -751,7 +805,7 @@ def test_bedrock_provider_configuration_uses_official_api_key(monkeypatch) -> No
 
 
 def test_azure_openai_provider_configuration_requires_key_and_resource_url(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_AZURE_OPENAI", raising=False)
     settings = _settings(
@@ -772,7 +826,9 @@ def test_azure_openai_provider_configuration_requires_key_and_resource_url(
     )
 
 
-def test_vertex_provider_configuration_uses_project_id(monkeypatch) -> None:
+def test_vertex_provider_configuration_uses_project_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_VERTEX", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -787,7 +843,9 @@ def test_vertex_provider_configuration_uses_project_id(monkeypatch) -> None:
     assert models[0].source == "provider_default"
 
 
-def test_wafer_provider_configuration_uses_api_key(monkeypatch) -> None:
+def test_wafer_provider_configuration_uses_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_WAFER", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -801,7 +859,9 @@ def test_wafer_provider_configuration_uses_api_key(monkeypatch) -> None:
     assert models[0].full_model == PROVIDER_SMOKE_DEFAULT_MODELS["wafer"]
 
 
-def test_kimi_code_provider_configuration_uses_subscription_key(monkeypatch) -> None:
+def test_kimi_code_provider_configuration_uses_subscription_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_KIMI_CODE", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -816,7 +876,9 @@ def test_kimi_code_provider_configuration_uses_subscription_key(monkeypatch) -> 
     assert models[0].source == "provider_default"
 
 
-def test_minimax_provider_configuration_uses_api_key(monkeypatch) -> None:
+def test_minimax_provider_configuration_uses_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_MINIMAX", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -831,7 +893,7 @@ def test_minimax_provider_configuration_uses_api_key(monkeypatch) -> None:
 
 
 def test_cloudflare_provider_configuration_requires_token_and_account(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_CLOUDFLARE", raising=False)
     config = _smoke_config(
@@ -858,7 +920,9 @@ def test_cloudflare_provider_configuration_missing_account_is_unconfigured() -> 
     assert not config.has_provider_configuration("cloudflare")
 
 
-def test_vercel_provider_configuration_uses_api_key(monkeypatch) -> None:
+def test_vercel_provider_configuration_uses_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_VERCEL", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -872,7 +936,9 @@ def test_vercel_provider_configuration_uses_api_key(monkeypatch) -> None:
     assert models[0].full_model == PROVIDER_SMOKE_DEFAULT_MODELS["vercel"]
 
 
-def test_huggingface_provider_configuration_uses_api_key(monkeypatch) -> None:
+def test_huggingface_provider_configuration_uses_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_HUGGINGFACE", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -886,7 +952,9 @@ def test_huggingface_provider_configuration_uses_api_key(monkeypatch) -> None:
     assert models[0].full_model == PROVIDER_SMOKE_DEFAULT_MODELS["huggingface"]
 
 
-def test_cohere_provider_configuration_uses_api_key(monkeypatch) -> None:
+def test_cohere_provider_configuration_uses_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_COHERE", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -900,7 +968,9 @@ def test_cohere_provider_configuration_uses_api_key(monkeypatch) -> None:
     assert models[0].full_model == PROVIDER_SMOKE_DEFAULT_MODELS["cohere"]
 
 
-def test_sambanova_provider_configuration_uses_api_key(monkeypatch) -> None:
+def test_sambanova_provider_configuration_uses_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_SAMBANOVA", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -915,7 +985,7 @@ def test_sambanova_provider_configuration_uses_api_key(monkeypatch) -> None:
 
 
 def test_provider_smoke_model_override_accepts_model_name_without_prefix(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("FCC_SMOKE_MODEL_DEEPSEEK", "deepseek-reasoner")
     config = _smoke_config(
@@ -932,7 +1002,7 @@ def test_provider_smoke_model_override_accepts_model_name_without_prefix(
 
 
 def test_provider_smoke_model_override_accepts_owner_model_name(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(
         "FCC_SMOKE_MODEL_NVIDIA_NIM", "nvidia/nemotron-3-super-120b-a12b"
@@ -953,7 +1023,7 @@ def test_provider_smoke_model_override_accepts_owner_model_name(
 
 
 def test_provider_smoke_model_override_preserves_namespaced_upstream_model(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("FCC_SMOKE_MODEL_DEEPSEEK", "ollama/llama3.1")
     config = _smoke_config(
@@ -968,7 +1038,9 @@ def test_provider_smoke_model_override_preserves_namespaced_upstream_model(
     assert models[0].full_model == "deepseek/ollama/llama3.1"
 
 
-def test_mistral_reasoning_smoke_uses_reasoning_default(monkeypatch) -> None:
+def test_mistral_reasoning_smoke_uses_reasoning_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_MISTRAL_REASONING", raising=False)
     config = _smoke_config(settings=_settings(mistral_api_keys="mistral-key"))
 
@@ -980,7 +1052,9 @@ def test_mistral_reasoning_smoke_uses_reasoning_default(monkeypatch) -> None:
     assert model.source == "mistral_reasoning_default"
 
 
-def test_mistral_reasoning_smoke_accepts_override(monkeypatch) -> None:
+def test_mistral_reasoning_smoke_accepts_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("FCC_SMOKE_MODEL_MISTRAL_REASONING", "mistral-medium-3-5")
     config = _smoke_config(settings=_settings(mistral_api_keys="mistral-key"))
 
@@ -991,7 +1065,9 @@ def test_mistral_reasoning_smoke_accepts_override(monkeypatch) -> None:
     assert model.source == "FCC_SMOKE_MODEL_MISTRAL_REASONING"
 
 
-def test_mistral_reasoning_smoke_respects_provider_matrix(monkeypatch) -> None:
+def test_mistral_reasoning_smoke_respects_provider_matrix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_MISTRAL_REASONING", raising=False)
     config = _smoke_config(
         settings=_settings(mistral_api_keys="mistral-key"),
@@ -1001,7 +1077,9 @@ def test_mistral_reasoning_smoke_respects_provider_matrix(monkeypatch) -> None:
     assert config.mistral_reasoning_smoke_model() is None
 
 
-def test_provider_smoke_matrix_filters_provider_catalog(monkeypatch) -> None:
+def test_provider_smoke_matrix_filters_provider_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_DEEPSEEK", raising=False)
     config = _smoke_config(
         settings=_settings(
@@ -1017,7 +1095,7 @@ def test_provider_smoke_matrix_filters_provider_catalog(monkeypatch) -> None:
 
 
 def test_provider_smoke_collection_params_are_grouped_by_provider(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_DEEPSEEK", raising=False)
     monkeypatch.delenv("FCC_SMOKE_MODEL_NVIDIA_NIM", raising=False)
@@ -1051,7 +1129,7 @@ def test_provider_smoke_collection_uses_disabled_placeholder_when_not_live() -> 
 
 
 def test_provider_smoke_includes_local_provider_when_model_mapping_uses_it(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_OLLAMA", raising=False)
     config = _smoke_config(settings=_settings(model="ollama/llama3.1"))
@@ -1060,7 +1138,7 @@ def test_provider_smoke_includes_local_provider_when_model_mapping_uses_it(
 
 
 def test_provider_smoke_does_not_include_default_local_urls_when_unmapped(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_OLLAMA", raising=False)
     config = _smoke_config(settings=_settings(model="nvidia_nim/test"))
@@ -1114,7 +1192,9 @@ def test_nvidia_nim_cli_models_preserve_namespaced_upstream_model() -> None:
     }
 
 
-def test_smoke_config_returns_nvidia_nim_cli_provider_models(monkeypatch) -> None:
+def test_smoke_config_returns_nvidia_nim_cli_provider_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_NIM_MODELS", raising=False)
     monkeypatch.delenv("FCC_SMOKE_NIM_EXTRA_MODELS", raising=False)
     config = _smoke_config(
@@ -1131,7 +1211,9 @@ def test_smoke_config_returns_nvidia_nim_cli_provider_models(monkeypatch) -> Non
     assert models[0].source == "nvidia_nim_cli_default"
 
 
-def test_smoke_config_requires_explicit_nvidia_nim_vision_model(monkeypatch) -> None:
+def test_smoke_config_requires_explicit_nvidia_nim_vision_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config = _smoke_config()
     monkeypatch.delenv("FCC_SMOKE_MODEL_NVIDIA_NIM_VISION", raising=False)
 
@@ -1205,7 +1287,9 @@ def test_openrouter_free_cli_models_preserve_namespaced_upstream_model() -> None
     }
 
 
-def test_smoke_config_returns_openrouter_free_cli_provider_models(monkeypatch) -> None:
+def test_smoke_config_returns_openrouter_free_cli_provider_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_OPENROUTER_FREE_MODELS", raising=False)
     monkeypatch.delenv("FCC_SMOKE_OPENROUTER_FREE_EXTRA_MODELS", raising=False)
     config = _smoke_config(
@@ -1223,7 +1307,7 @@ def test_smoke_config_returns_openrouter_free_cli_provider_models(monkeypatch) -
 
 
 def test_xkiro_provider_configuration_uses_documented_free_model(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_XKIRO", raising=False)
     config = _smoke_config(
@@ -1240,7 +1324,7 @@ def test_xkiro_provider_configuration_uses_documented_free_model(
 
 
 def test_xkiro_smoke_override_accepts_model_with_or_without_prefix(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = _settings(
         xkiro_api_keys="xkiro-key",
@@ -1257,7 +1341,9 @@ def test_xkiro_smoke_override_accepts_model_with_or_without_prefix(
         assert models[0].source == "FCC_SMOKE_MODEL_XKIRO"
 
 
-def test_xkiro_is_not_enabled_without_explicit_credential(monkeypatch) -> None:
+def test_xkiro_is_not_enabled_without_explicit_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("FCC_SMOKE_MODEL_XKIRO", raising=False)
     config = _smoke_config(
         provider_matrix=frozenset({"xkiro"}),

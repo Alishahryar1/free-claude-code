@@ -13,7 +13,7 @@ from collections.abc import Generator
 from contextlib import closing, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import httpx
 import pytest
@@ -29,6 +29,7 @@ from free_claude_code.core.json_types import JsonObject
 from smoke.lib.child_process import run_captured_text
 from smoke.lib.config import SmokeConfig
 from smoke.lib.e2e import SmokeServerDriver
+from tests.wire_payload import object_array, object_payload
 
 pytestmark = [
     pytest.mark.live,
@@ -110,6 +111,7 @@ def _canned_provider(
     state: dict[str, Any] = {"requests": [], "command": None, "reviews": 0}
 
     class Handler(BaseHTTPRequestHandler):
+        @override
         def log_message(self, format: str, *args: object) -> None:
             pass
 
@@ -214,7 +216,8 @@ def _canned_provider(
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Connection", "close")
                 self.end_headers()
-                for payload, finish in ((delta, None), ({}, reason)):
+                empty_delta: JsonObject = {}
+                for payload, finish in ((delta, None), (empty_delta, reason)):
                     chunk = {
                         "id": "chatcmpl-" + uuid.uuid4().hex,
                         "object": "chat.completion.chunk",
@@ -243,7 +246,7 @@ def _canned_provider(
         thread.join(timeout=5)
 
 
-async def _events(response: httpx.Response, queue: asyncio.Queue) -> None:
+async def _events(response: httpx.Response, queue: asyncio.Queue[JsonObject]) -> None:
     async for line in response.aiter_lines():
         if line.startswith("data: "):
             queue.put_nowait(json.loads(line[6:]))
@@ -316,10 +319,14 @@ async def _exercise(
                             if event.get("session_id") != session["id"]:
                                 continue
                             pending = event.get("prompt")
-                            if pending and pending["status"] == "pending":
+                            if pending is not None:
+                                pending = object_payload(pending)
+                            if pending is not None and pending["status"] == "pending":
                                 assert mode in {"config", "ask"}, pending
                                 approvals += 1
-                                choices = pending["form"]["choices"]
+                                choices = object_array(
+                                    object_payload(pending["form"])["choices"]
+                                )
                                 choice = next(
                                     choice["id"]
                                     for choice in choices
@@ -335,7 +342,7 @@ async def _exercise(
                                 answer.raise_for_status()
                             run = event.get("run")
                             if (
-                                run
+                                isinstance(run, dict)
                                 and run["id"] == run_id
                                 and run["status"]
                                 in {"completed", "failed", "interrupted"}

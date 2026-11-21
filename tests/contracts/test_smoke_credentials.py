@@ -23,7 +23,7 @@ from smoke.product import test_codex_modes_product_live as codex_smoke
         }
     ),
 )
-def test_smoke_redaction_expands_every_catalog_credential_collection(key):
+def test_smoke_redaction_expands_every_catalog_credential_collection(key: str):
     first, second = "private-primary-key", "private-primary-key-with-suffix"
     encoded = json.dumps([first, second])
     message = f"{first}; {second}; {encoded}"
@@ -68,18 +68,24 @@ def test_smoke_redaction_does_not_fail_while_reporting_malformed_array_input():
     "credential", ["synthetic-first", '["synthetic-first","synthetic-tail"]']
 )
 def test_live_codex_smoke_exports_first_key_as_subprocess_text(
-    monkeypatch, tmp_path, credential
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, credential: str
 ):
     monkeypatch.setenv("FCC_SMOKE_CODEX_FREE_MODEL", "open_router/synthetic/free:free")
-    monkeypatch.setattr(
-        codex_smoke.shutil, "which", lambda name: str(tmp_path / "bin" / "codex")
-    )
+
+    def replace_which(name: object):
+        return str(tmp_path / "bin" / "codex")
+
+    monkeypatch.setattr(codex_smoke.shutil, "which", replace_which)
+
+    def replace_run_captured_text(*args: object, **kwargs: object):
+        return subprocess.CompletedProcess(
+            ["codex", "--version"], 0, stdout="codex synthetic\n", stderr=""
+        )
+
     monkeypatch.setattr(
         codex_smoke,
         "run_captured_text",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            ["codex", "--version"], 0, stdout="codex synthetic\n", stderr=""
-        ),
+        replace_run_captured_text,
     )
     response = httpx.Response(
         200,
@@ -93,13 +99,18 @@ def test_live_codex_smoke_exports_first_key_as_subprocess_text(
             ]
         },
     )
-    monkeypatch.setattr(codex_smoke.httpx, "get", lambda *args, **kwargs: response)
+
+    def replace_get(*args: object, **kwargs: object):
+        return response
+
+    monkeypatch.setattr(codex_smoke.httpx, "get", replace_get)
 
     class CapturedLaunch(Exception):
         pass
 
-    def capture(command, **kwargs):
+    def capture(command: object, **kwargs: object):
         env = kwargs["env"]
+        assert isinstance(env, dict)
         assert env["OPENROUTER_API_KEY"] == "synthetic-first"
         assert all(isinstance(value, str) for value in env.values())
         raise CapturedLaunch

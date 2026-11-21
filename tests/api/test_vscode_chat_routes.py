@@ -1,10 +1,12 @@
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.config.settings import Settings
 from free_claude_code.harnesses import vscode_chat_integration as vscode
+from free_claude_code.runtime.application import ApplicationRuntime
 from tests.api.support import create_test_app, runtime_for_app
 
 ROOT = "/admin/api/integrations/vscode-chat"
@@ -21,7 +23,9 @@ def integration():
         yield client, vscode.config_path(), runtime_for_app(app)
 
 
-def test_connect_disconnect_and_doctor_status(integration):
+def test_connect_disconnect_and_doctor_status(
+    integration: tuple[TestClient, Path, ApplicationRuntime],
+):
     from free_claude_code.runtime.diagnostics import integration_report
 
     client, path, runtime = integration
@@ -52,7 +56,11 @@ def test_connect_disconnect_and_doctor_status(integration):
 @pytest.mark.parametrize(
     "headers", [{"Host": "evil.test"}, {"Origin": "https://evil.test"}]
 )
-def test_local_admin_security(integration, action, headers):
+def test_local_admin_security(
+    integration: tuple[TestClient, Path, ApplicationRuntime],
+    action: str,
+    headers: dict[str, str],
+):
     client, path, _ = integration
     assert (
         client.request(
@@ -63,7 +71,9 @@ def test_local_admin_security(integration, action, headers):
     assert not path.exists()
 
 
-def test_bad_configuration_errors_do_not_leak_credentials(integration):
+def test_bad_configuration_errors_do_not_leak_credentials(
+    integration: tuple[TestClient, Path, ApplicationRuntime],
+):
     client, path, _ = integration
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('{"integration-secret":bad}')
@@ -75,7 +85,9 @@ def test_bad_configuration_errors_do_not_leak_credentials(integration):
     assert path.read_text() == '{"integration-secret":bad}'
 
 
-def test_pending_restart_and_shutdown_reject_writes(integration):
+def test_pending_restart_and_shutdown_reject_writes(
+    integration: tuple[TestClient, Path, ApplicationRuntime],
+):
     client, path, runtime = integration
     runtime._pending_fields = ["PORT"]
     assert client.post(ROOT + "/connect").status_code == 503

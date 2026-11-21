@@ -17,6 +17,7 @@ from free_claude_code.core.failures import (
     find_execution_failure,
 )
 from free_claude_code.core.gemini.response import gemini_finished, gemini_parts
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.replay_finalization import finalize_replay
 from free_claude_code.core.stream_delivery import (
     StreamDeliveryState,
@@ -186,7 +187,8 @@ class PublicResponseStream(AsyncIterator[str]):
             # Failure snapshots may be based on the provider's empty start frame.
             # Use only retained public evidence, independently of a failed mapper.
             if self._delivered.retention_exhausted:
-                response["output"] = []
+                output: list[JsonObject] = []
+                response["output"] = output
                 response["usage"] = None
                 error = response.get("error")
                 error = error if isinstance(error, dict) else {}

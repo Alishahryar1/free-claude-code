@@ -1,11 +1,14 @@
 """Numbered secret rows keep their saved identity through edits and checks."""
 
 import json
+from collections.abc import Sequence
+from pathlib import Path
 
 import pytest
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Locator, Page, expect
 
 from e2e.provider_support import close_provider, open_provider
+from free_claude_code.config.admin.credentials import CredentialSubmission
 from free_claude_code.config.env_files import dotenv_values_from_file
 from free_claude_code.providers.credential_validation import (
     CredentialCheck,
@@ -13,14 +16,14 @@ from free_claude_code.providers.credential_validation import (
 )
 
 
-def add_key(dialog, value):
+def add_key(dialog: Locator, value: str):
     dialog.get_by_role("button", name="Add key", exact=True).click()
     inputs = dialog.locator(".api-key-row input")
     inputs.last.fill(value)
 
 
 def test_keyboard_reorder_replace_remove_and_reopen_preserve_saved_keys(
-    page: Page, admin_base_url: str, tmp_path
+    page: Page, admin_base_url: str, tmp_path: Path
 ):
     page.goto(admin_base_url + "/admin")
     dialog = open_provider(page, "nvidia_nim")
@@ -59,7 +62,7 @@ def test_keyboard_reorder_replace_remove_and_reopen_preserve_saved_keys(
 
 
 def test_adding_row_finishes_move_before_next_keyboard_cancel(
-    page: Page, admin_base_url: str, tmp_path
+    page: Page, admin_base_url: str, tmp_path: Path
 ):
     page.goto(admin_base_url + "/admin")
     dialog = open_provider(page, "nvidia_nim")
@@ -93,7 +96,7 @@ def test_adding_row_finishes_move_before_next_keyboard_cancel(
 
 
 def test_actual_drag_reorders_without_exposing_saved_values(
-    page: Page, admin_base_url: str, tmp_path
+    page: Page, admin_base_url: str, tmp_path: Path
 ):
     page.goto(admin_base_url + "/admin")
     dialog = open_provider(page, "nvidia_nim")
@@ -139,11 +142,11 @@ def test_blank_duplicates_and_cancel_preserve_the_whole_draft(
 
 
 def test_warning_save_refreshes_masks_and_is_clean_then_rechecks_retained_rows(
-    page: Page, admin_base_url: str, monkeypatch, tmp_path
+    page: Page, admin_base_url: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     checked = []
 
-    async def warnings(settings, submissions):
+    async def warnings(settings: object, submissions: Sequence[CredentialSubmission]):
         checked.append([key.get_secret_value() for key in submissions[0].credentials])
         return tuple(
             CredentialCheck(
@@ -233,7 +236,11 @@ def test_conflict_preserves_draft_and_reopening_loads_fresh_references(
     ],
 )
 def test_either_shared_provider_edits_the_same_ordered_list(
-    page: Page, admin_base_url: str, tmp_path, provider_pair, key
+    page: Page,
+    admin_base_url: str,
+    tmp_path: Path,
+    provider_pair: tuple[str, str],
+    key: str,
 ):
     page.goto(admin_base_url + "/admin")
     dialog = open_provider(page, provider_pair[0])
@@ -256,7 +263,7 @@ def test_either_shared_provider_edits_the_same_ordered_list(
 
 
 def test_long_list_scrolls_and_escape_cancels_only_the_keyboard_move(
-    page: Page, admin_base_url: str, tmp_path
+    page: Page, admin_base_url: str, tmp_path: Path
 ):
     page.set_viewport_size({"width": 1280, "height": 720})
     page.goto(admin_base_url + "/admin")
@@ -287,9 +294,11 @@ def test_long_list_scrolls_and_escape_cancels_only_the_keyboard_move(
 
 
 def test_custom_warning_save_and_rename_retain_masked_rows(
-    page: Page, admin_base_url: str, monkeypatch, tmp_path
+    page: Page, admin_base_url: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
-    async def unavailable(settings, submissions):
+    async def unavailable(
+        settings: object, submissions: Sequence[CredentialSubmission]
+    ):
         return tuple(
             CredentialCheck(
                 submission.key,
@@ -332,9 +341,11 @@ def test_custom_warning_save_and_rename_retain_masked_rows(
 
 
 def test_saved_warning_followed_by_reload_failure_requires_fresh_masks(
-    page: Page, admin_base_url: str, monkeypatch
+    page: Page, admin_base_url: str, monkeypatch: pytest.MonkeyPatch
 ):
-    async def unavailable(settings, submissions):
+    async def unavailable(
+        settings: object, submissions: Sequence[CredentialSubmission]
+    ):
         return tuple(
             CredentialCheck(
                 submission.key,

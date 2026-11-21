@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from collections.abc import Callable
 from unittest.mock import patch
 
 import httpx2
@@ -121,7 +122,7 @@ def sent_parts(request: httpx2.Request) -> list[dict[str, object]]:
     ]
 
 
-def nim_app(reply):
+def nim_app(reply: Callable[[httpx2.Request], httpx2.Response]):
     client = AsyncOpenAI(
         api_key="upstream-key",
         base_url=NVIDIA_NIM_DEFAULT_BASE,
@@ -168,7 +169,9 @@ def text_only_upstream(requests: list[httpx2.Request], *, in_stream: bool):
 
 @pytest.mark.parametrize("in_stream", [True, False])
 @pytest.mark.parametrize("wire", WIRES)
-def test_rejected_image_is_replaced_by_a_note_and_remembered(wire, in_stream):
+def test_rejected_image_is_replaced_by_a_note_and_remembered(
+    wire: str, in_stream: bool
+):
     requests: list[httpx2.Request] = []
     provider, app = nim_app(text_only_upstream(requests, in_stream=in_stream))
     path, payload = image_request(wire)
@@ -216,7 +219,7 @@ def test_a_model_that_accepts_images_still_receives_them():
 
 
 @pytest.mark.parametrize("in_stream", [True, False])
-def test_rejection_of_a_request_without_media_is_not_retried(in_stream):
+def test_rejection_of_a_request_without_media_is_not_retried(in_stream: bool):
     requests: list[httpx2.Request] = []
 
     def reply(request: httpx2.Request) -> httpx2.Response:

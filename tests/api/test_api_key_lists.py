@@ -6,9 +6,11 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from fastapi.applications import FastAPI
 from fastapi.testclient import TestClient
 
 from free_claude_code.config.loader import ManagedConfigStore
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.credential_validation import (
     CredentialCheck,
     CredentialStatus,
@@ -16,11 +18,11 @@ from free_claude_code.providers.credential_validation import (
 from tests.api.support import create_test_app, provider_manager_for_app, runtime_for_app
 
 
-def client_for(app):
+def client_for(app: FastAPI):
     return TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000))
 
 
-def edit(client, key, entries):
+def edit(client: TestClient, key: str, entries: list[JsonObject]):
     field = next(
         field
         for field in client.get("/admin/api/config").json()["fields"]
@@ -30,7 +32,7 @@ def edit(client, key, entries):
 
 
 def test_rejected_inactive_key_prevents_all_writes_and_checks_keep_row_identity(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     app = create_test_app()
     client = client_for(app)
@@ -71,7 +73,9 @@ def test_rejected_inactive_key_prevents_all_writes_and_checks_keep_row_identity(
     assert "inactive-private" not in response.text
 
 
-def test_stale_revision_returns_conflict_without_checking_or_writing(monkeypatch):
+def test_stale_revision_returns_conflict_without_checking_or_writing(
+    monkeypatch: pytest.MonkeyPatch,
+):
     app = create_test_app()
     client = client_for(app)
     checks = AsyncMock(return_value=())
@@ -96,13 +100,13 @@ def test_stale_revision_returns_conflict_without_checking_or_writing(monkeypatch
 
 @pytest.mark.asyncio
 async def test_intervening_managed_write_during_probe_cannot_publish_or_overwrite(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     app = create_test_app()
     store = ManagedConfigStore()
     started, release = asyncio.Event(), asyncio.Event()
 
-    async def held_checks(settings, submissions):
+    async def held_checks(settings: object, submissions: object):
         started.set()
         await release.wait()
         return ()

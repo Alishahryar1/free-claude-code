@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonValue
 
 from .content import streamed_tool_arguments
 from .stream_contracts import SSEEvent
@@ -71,9 +72,9 @@ async def aggregate_anthropic_sse_to_message(
                 )
             elif dtype == "citations_delta":
                 citation = delta.get("citation")
-                citations = blocks[idx].get("citations")
+                citations: object = blocks[idx].get("citations")
                 if citations is None:
-                    citations = []
+                    citations = list[JsonValue]()
                 if isinstance(citation, dict) and isinstance(citations, list):
                     blocks[idx]["citations"] = [*citations, dict(citation)]
         elif ptype == "message_delta":
@@ -91,7 +92,7 @@ async def aggregate_anthropic_sse_to_message(
                     else {}
                 )
                 merged.update(
-                    {k: v for k, v in usage.items() if isinstance(v, int | dict)}
+                    {k: v for k, v in usage.items() if isinstance(v, (int, dict))}
                 )
                 message["usage"] = merged
         elif ptype == "error":

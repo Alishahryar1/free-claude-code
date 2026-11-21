@@ -73,7 +73,7 @@ class ToolCallIdentityResolver:
             or (tool_id is not None and self._calls[slot].tool_id == tool_id)
             for slot in matches
         ):
-            matches = []
+            matches.clear()
         if len(matches) > 1:
             raise AmbiguousToolCallIdentityError(
                 "Tool fragment has ambiguous identity."
@@ -431,7 +431,8 @@ class ChatToolCallBuffer:
                     function = fragment.get(call.kind)
                     if key not in seen:
                         if not isinstance(function, dict):
-                            function = fragment[call.kind] = {}
+                            function: dict[str, object] = {}
+                            fragment[call.kind] = function
                         function["name"] = call.completed.body[call.kind]["name"]
                         if call.completed.body.get("id"):
                             fragment["id"] = call.completed.body["id"]

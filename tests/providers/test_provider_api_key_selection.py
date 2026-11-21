@@ -22,7 +22,7 @@ KEYS = ["synthetic-first", "synthetic-second", "synthetic-third"]
 
 
 @pytest.mark.parametrize("provider", ["groq", "gemini", "anthropic", "openai_api"])
-def test_builtin_provider_configuration_selects_the_numbered_key(provider):
+def test_builtin_provider_configuration_selects_the_numbered_key(provider: str):
     settings = Settings(
         GROQ_API_KEY=KEYS,
         GEMINI_API_KEY=KEYS,

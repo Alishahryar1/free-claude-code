@@ -4,14 +4,16 @@ import asyncio
 import json
 from copy import deepcopy
 from itertools import pairwise
+from typing import override
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.anthropic.stream_contracts import SSEEvent, parse_sse_text
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
@@ -139,7 +141,7 @@ def text_events(protocol: str, text: str, *, complete: bool = True) -> list[Json
     return [{**event, "sequence_number": index} for index, event in enumerate(events)]
 
 
-def public_text(events, wire):
+def public_text(events: list[SSEEvent], wire: str):
     if wire == "messages":
         return "".join(
             event.data.get("delta", {}).get("text", "")
@@ -153,7 +155,7 @@ def public_text(events, wire):
     )
 
 
-def assert_completed(events, wire):
+def assert_completed(events: list[SSEEvent], wire: str):
     assert events[-1].event == (
         "message_stop" if wire == "messages" else "response.completed"
     )
@@ -184,8 +186,10 @@ def assert_completed(events, wire):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_text_cutoff_continues_one_response_and_preserves_tools(protocol, wire):
-    def reply(bodies):
+async def test_text_cutoff_continues_one_response_and_preserves_tools(
+    protocol: str, wire: WireProtocol
+):
+    def reply(bodies: list[JsonObject]):
         return 200, text_events(
             protocol,
             "Hello " if len(bodies) == 1 else "world.",
@@ -218,7 +222,9 @@ async def test_text_cutoff_continues_one_response_and_preserves_tools(protocol, 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_released_tool_finishes_handoff_without_another_request(protocol, wire):
+async def test_released_tool_finishes_handoff_without_another_request(
+    protocol: str, wire: WireProtocol
+):
     def reply(_bodies):
         events = tool_events(protocol, '{"path":"kept"}')
         return 200, events[:-1]
@@ -242,14 +248,14 @@ async def test_released_tool_finishes_handoff_without_another_request(protocol, 
         assert events[-1].data["response"]["output"][0]["call_id"] == "call_probe"
 
 
-def after_text(protocol, tail):
+def after_text(protocol: str, tail: list[JsonObject]):
     events = text_events(protocol, "Before. ")
     events = events[:-1] if protocol != "messages" else events[:-2]
     tail = deepcopy(tail if protocol == "chat" else tail[1:])
     for event in tail:
         field = "index" if protocol == "messages" else "output_index"
         if field in event:
-            event[field] += 1
+            event[field] = int_payload(event[field]) + 1
     combined = events + tail
     if protocol == "responses":
         for index, event in enumerate(combined):
@@ -261,9 +267,9 @@ def after_text(protocol, tail):
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_partial_call_after_public_text_is_discarded_before_continuation(
-    protocol, wire
+    protocol: str, wire: WireProtocol
 ):
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, after_text(protocol, partial_tool(protocol))
         assert "abandoned" not in str(bodies[-1])
@@ -297,8 +303,10 @@ async def test_partial_call_after_public_text_is_discarded_before_continuation(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_repeated_interruption_uses_latest_prefix_and_one_budget(protocol, wire):
-    def reply(bodies):
+async def test_repeated_interruption_uses_latest_prefix_and_one_budget(
+    protocol: str, wire: WireProtocol
+):
+    def reply(bodies: list[JsonObject]):
         index = len(bodies) - 1
         return 200, text_events(
             protocol, ["One ", "two ", "three."][index], complete=index == 2
@@ -315,7 +323,10 @@ async def test_repeated_interruption_uses_latest_prefix_and_one_budget(protocol,
     history = without_empty_reasoning(
         bodies[-1].get("messages", bodies[-1].get("input"))
     )
-    assert history[0] == bodies[0].get("messages", bodies[0].get("input"))[0]
+    assert (
+        history[0]
+        == array_payload(bodies[0].get("messages", bodies[0].get("input")))[0]
+    )
     assert sum(row.get("role") == "user" for row in history) == 2
     assert assistant_history_text(history) == "One two "
 
@@ -332,9 +343,9 @@ async def test_repeated_interruption_uses_latest_prefix_and_one_budget(protocol,
     ],
 )
 async def test_exact_overlap_filter_preserves_nonmatching_text(
-    protocol, wire, candidate, expected
+    protocol: str, wire: WireProtocol, candidate: str, expected: str
 ):
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         return 200, text_events(
             protocol,
             "Hello " if len(bodies) == 1 else candidate,
@@ -363,7 +374,9 @@ async def test_exact_overlap_filter_preserves_nonmatching_text(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_exact_replay_without_new_output_is_not_success(protocol, wire):
+async def test_exact_replay_without_new_output_is_not_success(
+    protocol: str, wire: WireProtocol
+):
     async with _harness(
         protocol,
         lambda bodies: (200, text_events(protocol, "Same.", complete=len(bodies) > 1)),
@@ -392,9 +405,9 @@ async def test_exact_replay_without_new_output_is_not_success(protocol, wire):
     ],
 )
 async def test_partial_overlap_across_single_character_chunks(
-    protocol, wire, prefix, candidate, expected
+    protocol: str, wire: WireProtocol, prefix: str, candidate: str, expected: str
 ):
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events(protocol, prefix, complete=False)
         events = text_events(protocol, candidate)
@@ -446,7 +459,7 @@ async def test_native_passthrough_continuation_closes_original_connection():
     first = Wire([_sse(*text_events("messages", "Hello ", complete=False))])
     second = Wire([_sse(*text_events("messages", "world."))])
 
-    def reply(request):
+    def reply(request: httpx.Request):
         bodies.append(json.loads(request.content))
         if len(bodies) == 2:
             assert first.closed
@@ -475,7 +488,7 @@ async def test_native_passthrough_continuation_closes_original_connection():
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("complete", [False, True])
 async def test_retention_limit_does_not_truncate_healthy_output(
-    monkeypatch, wire, complete
+    monkeypatch: pytest.MonkeyPatch, wire: WireProtocol, complete: bool
 ):
     monkeypatch.setattr(
         "free_claude_code.core.delivered_response.RECOVERY_RETENTION_BYTES", 100
@@ -501,17 +514,17 @@ async def test_retention_limit_does_not_truncate_healthy_output(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("continuation", [False, True])
 async def test_stopped_continuation_cannot_request_another_body_correction(
-    monkeypatch, wire, continuation
+    monkeypatch: pytest.MonkeyPatch, wire: WireProtocol, continuation: bool
 ):
     corrections = []
 
-    def correction(*args, **kwargs):
+    def correction(*args: object, **kwargs: object):
         corrections.append(True)
         return None
 
     monkeypatch.setattr(RequestCorrector, "correct", correction)
 
-    def adapter(kind, payload):
+    def adapter(kind: str, payload: JsonObject):
         if kind == "response.completed":
             raise RetryableProviderProtocolError("malformed terminal snapshot")
         return payload
@@ -541,7 +554,9 @@ async def test_stopped_continuation_cannot_request_another_body_correction(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_opaque_reasoning_is_not_regenerated_after_delivery(protocol, wire):
+async def test_opaque_reasoning_is_not_regenerated_after_delivery(
+    protocol: str, wire: WireProtocol
+):
     events = _events_for(protocol)
     if protocol == "chat":
         events = events[:1]
@@ -561,7 +576,7 @@ async def test_opaque_reasoning_is_not_regenerated_after_delivery(protocol, wire
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_hidden_hosted_action_after_text_blocks_continuation(wire):
+async def test_hidden_hosted_action_after_text_blocks_continuation(wire: WireProtocol):
     events = after_text("responses", partial_tool("responses"))
     events.append(
         {
@@ -596,17 +611,19 @@ async def test_cancellation_during_continuation_closes_both_attempts():
     class BlockingWire(httpx.AsyncByteStream):
         closes = 0
 
+        @override
         async def __aiter__(self):
             yield _sse(*text_events("messages", "second ", complete=False))
             entered.set()
             await asyncio.Event().wait()
 
+        @override
         async def aclose(self):
             self.closes += 1
 
     second = BlockingWire()
 
-    def reply(request):
+    def reply(request: httpx.Request):
         calls.append(request)
         return httpx.Response(
             200,
@@ -638,7 +655,9 @@ async def test_cancellation_during_continuation_closes_both_attempts():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_completed_signed_thinking_and_call_can_finish_without_regeneration(wire):
+async def test_completed_signed_thinking_and_call_can_finish_without_regeneration(
+    wire: WireProtocol,
+):
     events = _events_for("messages")[:-2]
     calls = tool_events("messages", '{"path":"kept"}')[1:]
     for event in calls:
@@ -658,7 +677,7 @@ def test_http_recovery_then_real_harness_tool_result_has_no_private_history():
     sent = []
     wires = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         body = json.loads(request.content)
         sent.append(body)
         if len(sent) == 3:
@@ -736,7 +755,9 @@ def test_http_recovery_then_real_harness_tool_result_has_no_private_history():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("structured", [False, True])
-async def test_readable_thinking_retries_or_continues_into_text(wire, structured):
+async def test_readable_thinking_retries_or_continues_into_text(
+    wire: WireProtocol, structured: bool
+):
     first = text_events("chat", "", complete=False)
     thought = "Look at the request first."
     object_array(first[0]["choices"])[0]["delta"] = {"reasoning_content": thought}
@@ -770,7 +791,7 @@ async def test_readable_thinking_retries_or_continues_into_text(wire, structured
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("echo", [False, True])
 async def test_retention_limit_during_continuation_keeps_final_output_consistent(
-    monkeypatch, wire, echo
+    monkeypatch: pytest.MonkeyPatch, wire: WireProtocol, echo: bool
 ):
     monkeypatch.setattr(
         "free_claude_code.core.delivered_response.RECOVERY_RETENTION_BYTES", 1200
@@ -819,7 +840,7 @@ async def test_retention_limit_during_continuation_keeps_final_output_consistent
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_partial_replay_without_new_output_is_not_success(wire):
+async def test_partial_replay_without_new_output_is_not_success(wire: WireProtocol):
     async with _harness(
         "messages",
         lambda bodies: (
@@ -842,8 +863,8 @@ async def test_partial_replay_without_new_output_is_not_success(wire):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_seeded_text_start_participates_in_overlap_filter(wire):
-    def reply(bodies):
+async def test_seeded_text_start_participates_in_overlap_filter(wire: WireProtocol):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("messages", "The answer is", complete=False)
         events = text_events("messages", " 42")

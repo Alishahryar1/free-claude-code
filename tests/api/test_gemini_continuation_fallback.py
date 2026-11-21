@@ -21,10 +21,10 @@ from tests.providers.support import immediate_admission, make_provider_config
 
 
 @pytest.mark.parametrize("wire", ["messages", "chat", "responses", "gemini"])
-def test_fallback_into_gemini_and_followup(wire, monkeypatch):
+def test_fallback_into_gemini_and_followup(wire: str, monkeypatch: pytest.MonkeyPatch):
     calls = []
 
-    def chat_reply(request):
+    def chat_reply(request: httpx2.Request):
         calls.append(("chat", json.loads(request.content)))
         return httpx2.Response(
             200,
@@ -35,7 +35,7 @@ def test_fallback_into_gemini_and_followup(wire, monkeypatch):
             ),
         )
 
-    def gemini_reply(request):
+    def gemini_reply(request: httpx.Request):
         calls.append(("gemini", json.loads(request.content)))
         event = native(
             "is 42." if sum(k == "gemini" for k, b in calls) == 1 else "FOLLOWUP_OK",

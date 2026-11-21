@@ -2,11 +2,12 @@ import asyncio
 import json
 import socket
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping
-from typing import Any
+from typing import Any, override
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from aiohttp.abc import AbstractResolver
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import free_claude_code.runtime.web_tools.constants as web_tool_constants
@@ -108,6 +109,7 @@ class FixedProviderModelRouter(ModelRouter):
         self._fixed_provider_id = provider_id
         self._fixed_provider_model = provider_model
 
+    @override
     def resolve_messages_request(
         self, request: MessagesRequest
     ) -> RoutedMessagesRequest:
@@ -409,9 +411,13 @@ def _automatic_search_service(
     settings: Settings | None = None,
 ) -> MessagesHandler:
     effective_settings = settings or Settings()
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return provider
+
     return MessagesHandler(
         effective_settings,
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         model_router=FixedProviderModelRouter(
             effective_settings,
             _PROVIDER_IDS[0],
@@ -698,9 +704,13 @@ async def test_service_rejects_forced_server_tool_when_local_handler_is_disabled
     """Every provider needs FCC's local handler for forced server tools."""
     settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": False})
     assert settings.enable_web_server_tools is False
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return MagicMock()
+
     service = MessagesHandler(
         settings,
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: MagicMock()),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         model_router=FixedProviderModelRouter(settings, provider_id),
         web_tools=StubWebToolsClient(),
     )
@@ -772,7 +782,9 @@ async def test_automatic_web_search_uses_model_query_and_filters_domains(
     )
     seen_queries: list[str] = []
 
-    async def fake_search(self, query: str) -> list[WebSearchResult]:
+    async def fake_search(
+        self: HTTPWebToolsClient, query: str
+    ) -> list[WebSearchResult]:
         seen_queries.append(query)
         return [
             WebSearchResult(title="Allowed", url="https://docs.example.com/page"),
@@ -1237,7 +1249,9 @@ async def test_automatic_web_search_aggregates_when_stream_false(
         _provider_tool_events(arguments={"query": "json query"})
     )
 
-    async def fake_search(self, _query: str) -> list[WebSearchResult]:
+    async def fake_search(
+        self: HTTPWebToolsClient, _query: str
+    ) -> list[WebSearchResult]:
         return [WebSearchResult(title="JSON result", url="https://example.com/json")]
 
     monkeypatch.setattr(
@@ -1269,7 +1283,9 @@ async def test_automatic_web_search_runs_multiple_calls_in_one_message(
     provider = ScriptedSelectionProvider(_provider_tool_events(additional_calls=1))
     seen_queries: list[str] = []
 
-    async def fake_search(self, query: str) -> list[WebSearchResult]:
+    async def fake_search(
+        self: HTTPWebToolsClient, query: str
+    ) -> list[WebSearchResult]:
         seen_queries.append(query)
         return [
             WebSearchResult(title=f"{query} first", url="https://example.com/1"),
@@ -1311,7 +1327,9 @@ async def test_automatic_web_search_streams_ordered_multiple_calls(
 ) -> None:
     provider = ScriptedSelectionProvider(_provider_tool_events(additional_calls=1))
 
-    async def fake_search(self, query: str) -> list[WebSearchResult]:
+    async def fake_search(
+        self: HTTPWebToolsClient, query: str
+    ) -> list[WebSearchResult]:
         return [WebSearchResult(title=query, url=f"https://example.com/{query}")]
 
     monkeypatch.setattr(
@@ -1432,7 +1450,9 @@ async def test_automatic_web_search_keeps_other_results_when_one_search_fails(
 ) -> None:
     provider = ScriptedSelectionProvider(_provider_tool_events(additional_calls=1))
 
-    async def fake_search(self, query: str) -> list[WebSearchResult]:
+    async def fake_search(
+        self: HTTPWebToolsClient, query: str
+    ) -> list[WebSearchResult]:
         if query == "extra-0":
             raise RuntimeError("search unavailable")
         return [WebSearchResult(title="found", url="https://example.com/")]
@@ -1484,7 +1504,9 @@ async def test_automatic_web_search_bounds_parallel_local_searches(
     peak = 0
     started: list[str] = []
 
-    async def fake_search(self, query: str) -> list[WebSearchResult]:
+    async def fake_search(
+        self: HTTPWebToolsClient, query: str
+    ) -> list[WebSearchResult]:
         nonlocal active, peak
         active += 1
         peak = max(peak, active)
@@ -1531,7 +1553,9 @@ async def test_automatic_web_search_cancellation_stops_parallel_searches(
     started: set[str] = set()
     cancelled: set[str] = set()
 
-    async def fake_search(self, query: str) -> list[WebSearchResult]:
+    async def fake_search(
+        self: HTTPWebToolsClient, query: str
+    ) -> list[WebSearchResult]:
         started.add(query)
         if len(started) == 2:
             both_started.set()
@@ -1569,7 +1593,9 @@ async def test_automatic_web_search_can_search_again_after_completed_history(
         _provider_tool_events(arguments={"query": "first"})
     )
 
-    async def fake_search(self, query: str) -> list[WebSearchResult]:
+    async def fake_search(
+        self: HTTPWebToolsClient, query: str
+    ) -> list[WebSearchResult]:
         return [WebSearchResult(title=query, url=f"https://example.com/{query}")]
 
     monkeypatch.setattr(
@@ -1941,11 +1967,13 @@ def _aiohttp_client_session_patch(
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_pins_validated_addresses_for_every_redirect(monkeypatch):
+async def test_web_fetch_pins_validated_addresses_for_every_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+):
     addresses = iter(["8.8.8.8", "1.1.1.1"])
     resolved_hosts = []
 
-    def resolve(host, port, **kwargs):
+    def resolve(host: str, port: int, **kwargs: object):
         resolved_hosts.append(host)
         return [
             (
@@ -1965,7 +1993,7 @@ async def test_web_fetch_pins_validated_addresses_for_every_redirect(monkeypatch
     client_cm, _ = _aiohttp_client_session_patch(redirect, final)
     connectors = []
 
-    def connector(**kwargs):
+    def connector(**kwargs: object):
         value = MagicMock()
         value.close = AsyncMock()
         connectors.append((kwargs["resolver"], value))
@@ -1990,6 +2018,7 @@ async def test_web_fetch_pins_validated_addresses_for_every_redirect(monkeypatch
     for (resolver, value), expected in zip(
         connectors, ["8.8.8.8", "1.1.1.1"], strict=True
     ):
+        assert isinstance(resolver, AbstractResolver)
         pinned = await resolver.resolve("ignored.example", 443)
         assert [row["host"] for row in pinned] == [expected]
         value.close.assert_awaited_once()
@@ -2015,7 +2044,9 @@ async def test_run_web_fetch_follows_redirect_when_each_hop_is_allowed():
 
 
 @pytest.mark.asyncio
-async def test_run_web_fetch_truncates_large_body_to_byte_cap(monkeypatch):
+async def test_run_web_fetch_truncates_large_body_to_byte_cap(
+    monkeypatch: pytest.MonkeyPatch,
+):
     huge = b"x" * 5000
     res_ok = _aiohttp_response(200, url="http://8.8.8.8/big", body=huge)
     client_cm, _ = _aiohttp_client_session_patch(res_ok)
@@ -2086,8 +2117,10 @@ async def test_run_web_fetch_excess_redirects_raises():
 
 
 @pytest.mark.asyncio
-async def test_streams_web_search_server_tool_result(monkeypatch):
-    async def fake_search(self, query: str) -> list[WebSearchResult]:
+async def test_streams_web_search_server_tool_result(monkeypatch: pytest.MonkeyPatch):
+    async def fake_search(
+        self: HTTPWebToolsClient, query: str
+    ) -> list[WebSearchResult]:
         assert query == "DeepSeek V4 model release 2026"
         return [
             WebSearchResult(title="DeepSeek V4 Released", url="https://example.com/v4")
@@ -2151,8 +2184,12 @@ async def test_streams_web_search_server_tool_result(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_service_streams_forced_web_search_by_default(monkeypatch):
-    async def fake_search(self, _query: str) -> list[WebSearchResult]:
+async def test_service_streams_forced_web_search_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def fake_search(
+        self: HTTPWebToolsClient, _query: str
+    ) -> list[WebSearchResult]:
         return [
             WebSearchResult(title="DeepSeek V4 Released", url="https://example.com/v4")
         ]
@@ -2198,8 +2235,12 @@ async def test_service_streams_forced_web_search_by_default(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_service_aggregates_forced_web_search_when_stream_false(monkeypatch):
-    async def fake_search(self, _query: str) -> list[WebSearchResult]:
+async def test_service_aggregates_forced_web_search_when_stream_false(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def fake_search(
+        self: HTTPWebToolsClient, _query: str
+    ) -> list[WebSearchResult]:
         return [
             WebSearchResult(title="DeepSeek V4 Released", url="https://example.com/v4")
         ]
@@ -2241,12 +2282,14 @@ async def test_service_aggregates_forced_web_search_when_stream_false(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(monkeypatch):
+async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Only the latest user message supplies the URL (not earlier transcript text)."""
     target = "https://new-only.example.com/page"
 
     async def fake_fetch(
-        self, url: str, *, egress: WebFetchEgressPolicy
+        self: HTTPWebToolsClient, url: str, *, egress: WebFetchEgressPolicy
     ) -> WebFetchResult:
         assert url == target
         return WebFetchResult(url=url, title="T", media_type="text/plain", data="x")
@@ -2282,9 +2325,11 @@ async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_service_aggregates_forced_web_fetch_when_stream_false(monkeypatch):
+async def test_service_aggregates_forced_web_fetch_when_stream_false(
+    monkeypatch: pytest.MonkeyPatch,
+):
     async def fake_fetch(
-        self, url: str, *, egress: WebFetchEgressPolicy
+        self: HTTPWebToolsClient, url: str, *, egress: WebFetchEgressPolicy
     ) -> WebFetchResult:
         return WebFetchResult(
             url=url,
@@ -2328,9 +2373,9 @@ async def test_service_aggregates_forced_web_fetch_when_stream_false(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_streams_web_fetch_server_tool_result(monkeypatch):
+async def test_streams_web_fetch_server_tool_result(monkeypatch: pytest.MonkeyPatch):
     async def fake_fetch(
-        self, url: str, *, egress: WebFetchEgressPolicy
+        self: HTTPWebToolsClient, url: str, *, egress: WebFetchEgressPolicy
     ) -> WebFetchResult:
         assert url == "https://example.com/article"
         return WebFetchResult(
@@ -2388,10 +2433,14 @@ async def test_streams_web_fetch_server_tool_result(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
+async def test_streams_web_fetch_error_summary_generic_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+):
     secret = "sensitive-upstream-token"
 
-    async def boom(self, _url: str, *, egress: WebFetchEgressPolicy) -> WebFetchResult:
+    async def boom(
+        self: object, _url: str, *, egress: WebFetchEgressPolicy
+    ) -> WebFetchResult:
         raise ValueError(secret)
 
     monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.fetch", boom)
@@ -2449,9 +2498,11 @@ async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_streams_web_fetch_error_summary_verbose_includes_exception_class(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ):
-    async def boom(self, _url: str, *, egress: WebFetchEgressPolicy) -> WebFetchResult:
+    async def boom(
+        self: object, _url: str, *, egress: WebFetchEgressPolicy
+    ) -> WebFetchResult:
         raise OSError(5, "oops")
 
     monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.fetch", boom)
@@ -2481,7 +2532,7 @@ async def test_streams_web_fetch_error_summary_verbose_includes_exception_class(
 async def test_read_response_body_capped_truncates_single_oversized_chunk():
     cap = 500
 
-    async def aiter_bytes(chunk_size=None):
+    async def aiter_bytes(chunk_size: object = None):
         yield b"z" * (cap * 20)
 
     response = MagicMock()
@@ -2497,7 +2548,7 @@ async def test_drain_response_body_capped_stops_after_first_chunk_when_oversized
     cap = 300
     chunk_calls = {"n": 0}
 
-    async def aiter_bytes(chunk_size=None):
+    async def aiter_bytes(chunk_size: object = None):
         chunk_calls["n"] += 1
         yield b"y" * (cap * 10)
 
@@ -2514,9 +2565,13 @@ async def test_service_rejects_listed_server_tools_for_every_provider(
     provider_id: str,
 ) -> None:
     settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": False})
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return MagicMock()
+
     service = MessagesHandler(
         settings,
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: MagicMock()),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         model_router=FixedProviderModelRouter(settings, provider_id),
         web_tools=StubWebToolsClient(),
     )
@@ -2558,7 +2613,7 @@ async def test_automatic_selection_stays_private_until_provider_finishes() -> No
 @pytest.mark.parametrize("tool_name", ["web_search", "web_fetch"])
 @pytest.mark.parametrize("close_before_outbound", [False, True])
 async def test_local_tool_start_precedes_outbound_and_cancellation_closes_operation(
-    monkeypatch, tool_name: str, close_before_outbound: bool
+    monkeypatch: pytest.MonkeyPatch, tool_name: str, close_before_outbound: bool
 ) -> None:
     entered, closed = asyncio.Event(), asyncio.Event()
 
@@ -2616,7 +2671,7 @@ async def test_local_tool_start_precedes_outbound_and_cancellation_closes_operat
 )
 @pytest.mark.parametrize("stream", [False, True])
 async def test_local_failures_remain_completed_tool_results(
-    monkeypatch, tool_name: str, automatic: bool, stream: bool
+    monkeypatch: pytest.MonkeyPatch, tool_name: str, automatic: bool, stream: bool
 ) -> None:
     async def fail(*_args, **_kwargs):
         raise OSError("private upstream detail")

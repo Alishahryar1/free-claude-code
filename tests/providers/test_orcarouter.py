@@ -168,18 +168,20 @@ def test_replays_reasoning_content_with_tool_history(
 
 @pytest.mark.asyncio
 async def test_model_catalog_extracts_bare_model_ids(
+    monkeypatch: pytest.MonkeyPatch,
     orcarouter_provider: OpenAIChatProvider,
 ) -> None:
-    orcarouter_provider._client.get = AsyncMock(
+    mock_get = AsyncMock(
         return_value={"data": [{"id": _MODEL}, {"id": "orcarouter/free"}]}
     )
+    monkeypatch.setattr(orcarouter_provider._client, "get", mock_get)
 
     model_infos = await orcarouter_provider.list_model_infos()
 
     assert model_infos == frozenset(
         {ProviderModelInfo(_MODEL), ProviderModelInfo("orcarouter/free")}
     )
-    orcarouter_provider._client.get.assert_awaited_once_with(
+    mock_get.assert_awaited_once_with(
         "/models",
         cast_to=object,
     )
@@ -195,11 +197,14 @@ async def test_model_catalog_extracts_bare_model_ids(
     ],
 )
 async def test_rejects_malformed_or_empty_catalog_atomically(
+    monkeypatch: pytest.MonkeyPatch,
     orcarouter_provider: OpenAIChatProvider,
     payload: object,
     message: str,
 ) -> None:
-    orcarouter_provider._client.get = AsyncMock(return_value=payload)
+    monkeypatch.setattr(
+        orcarouter_provider._client, "get", AsyncMock(return_value=payload)
+    )
 
     with pytest.raises(ModelListResponseError, match=message):
         await orcarouter_provider.list_model_infos()
@@ -235,30 +240,35 @@ async def test_model_catalog_uses_documented_url_and_bearer_auth(
 
 @pytest.mark.asyncio
 async def test_lists_only_chat_completions_capable_models(
+    monkeypatch: pytest.MonkeyPatch,
     orcarouter_provider: OpenAIChatProvider,
 ) -> None:
-    orcarouter_provider._client.get = AsyncMock(
-        return_value={
-            "data": [
-                {
-                    "id": "chat-model",
-                    "supported_endpoint_types": ["openai", "anthropic"],
-                },
-                {"id": _MODEL, "supported_endpoint_types": None},
-                {
-                    "id": "google/gemini-embedding-001",
-                    "supported_endpoint_types": ["embeddings"],
-                },
-                {
-                    "id": "google/gemini-3-pro-image-preview",
-                    "supported_endpoint_types": ["gemini"],
-                },
-                {
-                    "id": "openai/gpt-4o-mini",
-                    "supported_endpoint_types": ["openai"],
-                },
-            ]
-        }
+    monkeypatch.setattr(
+        orcarouter_provider._client,
+        "get",
+        AsyncMock(
+            return_value={
+                "data": [
+                    {
+                        "id": "chat-model",
+                        "supported_endpoint_types": ["openai", "anthropic"],
+                    },
+                    {"id": _MODEL, "supported_endpoint_types": None},
+                    {
+                        "id": "google/gemini-embedding-001",
+                        "supported_endpoint_types": ["embeddings"],
+                    },
+                    {
+                        "id": "google/gemini-3-pro-image-preview",
+                        "supported_endpoint_types": ["gemini"],
+                    },
+                    {
+                        "id": "openai/gpt-4o-mini",
+                        "supported_endpoint_types": ["openai"],
+                    },
+                ]
+            }
+        ),
     )
 
     model_infos = await orcarouter_provider.list_model_infos()

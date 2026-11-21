@@ -9,6 +9,7 @@ from openai import AsyncOpenAI
 from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
 from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
@@ -150,7 +151,7 @@ async def test_provider_discovery_call_and_result_round_trip(
                     },
                 ]
             if not name:
-                message = {
+                message: JsonObject = {
                     "id": "msg_done",
                     "type": "message",
                     "status": "completed",

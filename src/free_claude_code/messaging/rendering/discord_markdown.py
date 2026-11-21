@@ -4,9 +4,18 @@ Discord uses standard markdown: **bold**, *italic*, `code`, ```code block```.
 Used by the message handler and Discord platform adapter.
 """
 
+from typing import Literal, TypedDict
+
 from markdown_it import MarkdownIt
+from markdown_it.token import Token
 
 from .markdown_tables import normalize_gfm_tables
+
+
+class _ListFrame(TypedDict):
+    type: Literal["ordered", "bullet"]
+    index: int
+
 
 # Discord escapes: \ * _ ` ~ | >
 DISCORD_SPECIAL = set("\\*_`~|>")
@@ -60,7 +69,7 @@ def render_markdown_to_discord(text: str) -> str:
     text = normalize_gfm_tables(text)
     tokens = _MD.parse(text)
 
-    def render_inline_table_plain(children) -> str:
+    def render_inline_table_plain(children: list[Token]) -> str:
         out: list[str] = []
         for tok in children:
             if tok.type == "text" or tok.type == "code_inline":
@@ -71,7 +80,7 @@ def render_markdown_to_discord(text: str) -> str:
                 out.append(tok.content)
         return "".join(out)
 
-    def render_inline(children) -> str:
+    def render_inline(children: list[Token]) -> str:
         out: list[str] = []
         i = 0
         while i < len(children):
@@ -93,11 +102,11 @@ def render_markdown_to_discord(text: str) -> str:
                 href = ""
                 if tok.attrs:
                     if isinstance(tok.attrs, dict):
-                        href = tok.attrs.get("href", "")
+                        href = str(tok.attrs.get("href", ""))
                     else:
                         for key, val in tok.attrs:
                             if key == "href":
-                                href = val
+                                href = str(val)
                                 break
                 inner_tokens = []
                 i += 1
@@ -114,11 +123,11 @@ def render_markdown_to_discord(text: str) -> str:
                 alt = tok.content or ""
                 if tok.attrs:
                     if isinstance(tok.attrs, dict):
-                        href = tok.attrs.get("src", "")
+                        href = str(tok.attrs.get("src", ""))
                     else:
                         for key, val in tok.attrs:
                             if key == "src":
-                                href = val
+                                href = str(val)
                                 break
                 if alt:
                     out.append(f"{escape_discord(alt)} ({href})")
@@ -130,7 +139,7 @@ def render_markdown_to_discord(text: str) -> str:
         return "".join(out)
 
     out: list[str] = []
-    list_stack: list[dict] = []
+    list_stack: list[_ListFrame] = []
     pending_prefix: str | None = None
     blockquote_level = 0
     in_heading = False

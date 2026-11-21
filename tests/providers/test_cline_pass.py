@@ -81,7 +81,7 @@ def _request(**overrides: JsonValue) -> MessagesRequest:
     return MessagesRequest.model_validate(payload)
 
 
-class AsyncStream(SDKStreamDouble):
+class AsyncStream(SDKStreamDouble[ChatCompletionChunk]):
     def __init__(self, chunks: list[ChatCompletionChunk]) -> None:
         self._chunks = chunks
         self.closed = False

@@ -14,7 +14,11 @@ from free_claude_code.config import logging_config
 from free_claude_code.config.logging_config import configure_logging
 
 
-def test_log_capture_does_not_feed_back_into_interception(caplog, capsys, monkeypatch):
+def test_log_capture_does_not_feed_back_into_interception(
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(logging.root, "handlers", [logging_config.InterceptHandler()])
     with caplog.at_level(logging.WARNING):
         logger.info("below capture level")
@@ -24,14 +28,14 @@ def test_log_capture_does_not_feed_back_into_interception(caplog, capsys, monkey
     assert "Logging error" not in capsys.readouterr().err
 
 
-def test_configure_logging_creates_parent_directories(tmp_path) -> None:
+def test_configure_logging_creates_parent_directories(tmp_path: Path) -> None:
     """Nested log path: parent directories are created before opening."""
     log_file = tmp_path / "nested" / "dir" / "app.log"
     configure_logging(str(log_file), force=True)
     assert log_file.is_file()
 
 
-def test_native_json_preserves_bound_and_request_context(tmp_path):
+def test_native_json_preserves_bound_and_request_context(tmp_path: Path):
     log_file = tmp_path / "context.log"
     configure_logging(log_file, force=True)
     with logger.contextualize(request_id="req-test", session_id="session-test"):
@@ -49,7 +53,7 @@ def test_native_json_preserves_bound_and_request_context(tmp_path):
 
 
 @pytest.mark.parametrize("stdlib", [False, True])
-def test_native_json_preserves_exception_chain_and_stack(tmp_path, stdlib):
+def test_native_json_preserves_exception_chain_and_stack(tmp_path: Path, stdlib: bool):
     log_file = tmp_path / "exception.log"
     configure_logging(log_file, force=True)
     try:
@@ -77,7 +81,9 @@ def test_native_json_preserves_exception_chain_and_stack(tmp_path, stdlib):
 
 
 @pytest.mark.parametrize("stdlib", [False, True])
-def test_exception_logs_omit_local_values_but_keep_explicit_context(tmp_path, stdlib):
+def test_exception_logs_omit_local_values_but_keep_explicit_context(
+    tmp_path: Path, stdlib: bool
+):
     log_file = tmp_path / "exception.log"
     configure_logging(log_file, force=True)
     secret = "DUMMY_EXCEPTION_CREDENTIAL"
@@ -101,7 +107,7 @@ def test_exception_logs_omit_local_values_but_keep_explicit_context(tmp_path, st
     assert "KeyError: 'Request-ID'" in row["text"]
 
 
-def test_logging_preserves_records_across_process_restarts(tmp_path):
+def test_logging_preserves_records_across_process_restarts(tmp_path: Path):
     log_file = tmp_path / "server.log"
     script = """
 import sys
@@ -129,7 +135,7 @@ logger.remove()
     ]
 
 
-def test_forced_logging_reconfiguration_preserves_records(tmp_path):
+def test_forced_logging_reconfiguration_preserves_records(tmp_path: Path):
     log_file = tmp_path / "server.log"
     configure_logging(log_file, force=True)
     logger.info("before reconfiguration")
@@ -145,7 +151,7 @@ def test_forced_logging_reconfiguration_preserves_records(tmp_path):
     ]
 
 
-def test_configure_logging_writes_json_to_file(tmp_path):
+def test_configure_logging_writes_json_to_file(tmp_path: Path):
     """configure_logging writes JSON lines to the specified file."""
     log_file = str(tmp_path / "test.log")
     configure_logging(log_file, force=True)
@@ -169,7 +175,7 @@ def test_configure_logging_writes_json_to_file(tmp_path):
         assert "text" in record or "message" in record or "record" in record
 
 
-def test_configure_logging_idempotent(tmp_path):
+def test_configure_logging_idempotent(tmp_path: Path):
     """configure_logging is idempotent - safe to call twice with force."""
     log_file = str(tmp_path / "test.log")
     configure_logging(log_file, force=True)
@@ -179,7 +185,7 @@ def test_configure_logging_idempotent(tmp_path):
     logger.info("After second configure")
 
 
-def test_configure_logging_replaces_sink_when_path_changes(tmp_path):
+def test_configure_logging_replaces_sink_when_path_changes(tmp_path: Path):
     """A path-only restart switches destinations without truncating either file."""
     first_log = tmp_path / "first.log"
     second_log = tmp_path / "nested" / "second.log"
@@ -208,7 +214,7 @@ def test_configure_logging_replaces_sink_when_path_changes(tmp_path):
         "first line\nsecond line \u2603",
     ],
 )
-def test_native_json_preserves_message_text(tmp_path, message):
+def test_native_json_preserves_message_text(tmp_path: Path, message: str):
     log_file = tmp_path / "message.log"
     configure_logging(log_file, force=True)
     logger.info(message)
@@ -220,7 +226,7 @@ def test_native_json_preserves_message_text(tmp_path, message):
     assert message in row["text"]
 
 
-def test_noisy_third_party_loggers_quieted_when_not_verbose(tmp_path) -> None:
+def test_noisy_third_party_loggers_quieted_when_not_verbose(tmp_path: Path) -> None:
     log_file = str(tmp_path / "quiet.log")
     configure_logging(log_file, force=True, verbose_third_party=False)
     assert logging.getLogger("openai").level >= logging.WARNING
@@ -231,14 +237,16 @@ def test_noisy_third_party_loggers_quieted_when_not_verbose(tmp_path) -> None:
     assert logging.getLogger("httpcore").level >= logging.WARNING
 
 
-def test_noisy_third_party_loggers_reset_when_verbose(tmp_path) -> None:
+def test_noisy_third_party_loggers_reset_when_verbose(tmp_path: Path) -> None:
     log_file = str(tmp_path / "verbose.log")
     configure_logging(log_file, force=True, verbose_third_party=True)
     assert logging.getLogger("openai").level == logging.NOTSET
     assert logging.getLogger("httpx").level == logging.NOTSET
 
 
-def test_openai_request_payload_debug_requires_verbose_third_party(tmp_path) -> None:
+def test_openai_request_payload_debug_requires_verbose_third_party(
+    tmp_path: Path,
+) -> None:
     log_file = tmp_path / "openai.log"
     marker = "Request options: sensitive-prompt"
     openai_logger = logging.getLogger("openai._base_client")
@@ -264,7 +272,7 @@ def test_openai_request_payload_debug_requires_verbose_third_party(tmp_path) -> 
     assert marker in log_file.read_text(encoding="utf-8")
 
 
-def test_configure_logging_respects_level(tmp_path) -> None:
+def test_configure_logging_respects_level(tmp_path: Path) -> None:
     """INFO level suppresses DEBUG messages from the file sink."""
     log_file = str(tmp_path / "level.log")
     configure_logging(log_file, force=True, level="INFO")
@@ -278,7 +286,7 @@ def test_configure_logging_respects_level(tmp_path) -> None:
     assert "should not appear" not in text
 
 
-def test_configure_logging_defaults_to_info(tmp_path) -> None:
+def test_configure_logging_defaults_to_info(tmp_path: Path) -> None:
     """Customer default keeps lifecycle logs while suppressing debug diagnostics."""
     log_file = str(tmp_path / "default.log")
     configure_logging(log_file, force=True)
@@ -292,7 +300,7 @@ def test_configure_logging_defaults_to_info(tmp_path) -> None:
     assert "info message" in text
 
 
-def test_file_sink_bounds_rotated_log_retention(tmp_path) -> None:
+def test_file_sink_bounds_rotated_log_retention(tmp_path: Path) -> None:
     """Five archives plus the active 50 MB file bound normal disk usage."""
     log_file = tmp_path / "bounded.log"
 
@@ -303,7 +311,7 @@ def test_file_sink_bounds_rotated_log_retention(tmp_path) -> None:
     assert add.call_args.kwargs["retention"] == 5
 
 
-def test_configure_logging_handles_level_change_on_restart(tmp_path) -> None:
+def test_configure_logging_handles_level_change_on_restart(tmp_path: Path) -> None:
     """Restart with a different level replaces the sink without truncating."""
     log_file = str(tmp_path / "restart.log")
 
@@ -327,7 +335,7 @@ def test_configure_logging_handles_level_change_on_restart(tmp_path) -> None:
     assert "second info" in text
 
 
-def test_configure_logging_skips_when_level_unchanged(tmp_path) -> None:
+def test_configure_logging_skips_when_level_unchanged(tmp_path: Path) -> None:
     """When level hasn't changed, the existing sink is reused."""
     log_file = str(tmp_path / "same.log")
     configure_logging(log_file, force=True, level="WARNING")
@@ -344,7 +352,7 @@ def test_configure_logging_skips_when_level_unchanged(tmp_path) -> None:
     assert "second warning" in text
 
 
-def test_configure_logging_updates_verbosity_on_same_level(tmp_path) -> None:
+def test_configure_logging_updates_verbosity_on_same_level(tmp_path: Path) -> None:
     """When verbose_third_party changes but level stays the same, third-party
     logger levels are updated without touching the file sink."""
     log_file = str(tmp_path / "verbosity.log")

@@ -8,6 +8,7 @@ from free_claude_code.messaging.voice import (
     PendingVoiceRegistry,
     VoiceCancellationResult,
     VoiceHandoffOutcome,
+    _PendingVoice,
 )
 
 TELEGRAM_CHAT = MessageScope(platform="telegram", chat_id="chat")
@@ -323,7 +324,7 @@ async def test_handoff_finalization_survives_repeated_caller_cancellation(
     release_finalization = asyncio.Event()
     complete_if_owned = registry._complete_if_owned
 
-    async def gated_completion(entry) -> bool:
+    async def gated_completion(entry: _PendingVoice) -> bool:
         finalization_started.set()
         await release_finalization.wait()
         return await complete_if_owned(entry)

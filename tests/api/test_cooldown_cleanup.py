@@ -1,6 +1,8 @@
 """Request failures stay fixed while shared recovery continues."""
 
 import asyncio
+from types import SimpleNamespace
+from typing import override
 
 import httpx
 import httpx2
@@ -26,10 +28,12 @@ class DelayedResponseClose(httpx.AsyncByteStream):
         self.closing = closing
         self.release = release
 
+    @override
     async def __aiter__(self):
         # The bounded error reader leaves the response open for the attempt scope.
         yield b"x" * (ERROR_DETAIL_DISPLAY_CAP_BYTES + 1)
 
+    @override
     async def aclose(self) -> None:
         self.closing.set()
         await self.release.wait()
@@ -47,7 +51,9 @@ def assert_cooldown(response: httpx.Response, detail: str, seconds: int = 3600) 
 
 
 @pytest.mark.asyncio
-async def test_active_request_keeps_failure_through_response_close(cooldown_clock):
+async def test_active_request_keeps_failure_through_response_close(
+    cooldown_clock: SimpleNamespace,
+):
     calls = 0
     first_entered = asyncio.Event()
     both_entered = asyncio.Event()
@@ -55,7 +61,7 @@ async def test_active_request_keeps_failure_through_response_close(cooldown_cloc
     release_first = asyncio.Event()
     detail = "longer upstream cooldown"
 
-    async def upstream(request):
+    async def upstream(request: object):
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -103,7 +109,9 @@ async def test_active_request_keeps_failure_through_response_close(cooldown_cloc
 
 @pytest.mark.parametrize("translated", [False, True])
 @pytest.mark.asyncio
-async def test_cooldown_during_retry_cleanup_reaches_wire(cooldown_clock, translated):
+async def test_cooldown_during_retry_cleanup_reaches_wire(
+    cooldown_clock: SimpleNamespace, translated: bool
+):
     calls = 0
     leader_entered = asyncio.Event()
     follower_entered = asyncio.Event()
@@ -113,7 +121,7 @@ async def test_cooldown_during_retry_cleanup_reaches_wire(cooldown_clock, transl
     release = asyncio.Event()
     detail = "shared upstream cooldown"
 
-    async def upstream(request):
+    async def upstream(request: object):
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -188,7 +196,7 @@ async def test_cooldown_during_retry_cleanup_reaches_wire(cooldown_clock, transl
 @pytest.mark.parametrize("api_format", ["openai_chat", "openai_responses"])
 @pytest.mark.asyncio
 async def test_owned_client_close_preserves_captured_failure(
-    api_format, cooldown_clock, monkeypatch
+    api_format: str, cooldown_clock: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ):
     first_entered = asyncio.Event()
     both_entered = asyncio.Event()
@@ -197,13 +205,13 @@ async def test_owned_client_close_preserves_captured_failure(
     original_close = OpenAIRequestClient.aclose
     calls = 0
 
-    async def gated_close(self):
+    async def gated_close(self: OpenAIRequestClient):
         if not closing.is_set():
             closing.set()
             await release.wait()
         await original_close(self)
 
-    async def upstream(request):
+    async def upstream(request: object):
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -253,12 +261,14 @@ async def test_owned_client_close_preserves_captured_failure(
 
 
 @pytest.mark.asyncio
-async def test_ordinary_terminal_failure_survives_cooldown_promotion(cooldown_clock):
+async def test_ordinary_terminal_failure_survives_cooldown_promotion(
+    cooldown_clock: SimpleNamespace,
+):
     leader_entered, late_entered, all_entered = (asyncio.Event() for _ in range(3))
     leader_done, late_closing, release_late = (asyncio.Event() for _ in range(3))
     calls = 0
 
-    async def upstream(request):
+    async def upstream(request: object):
         nonlocal calls
         calls += 1
         if calls == 1:

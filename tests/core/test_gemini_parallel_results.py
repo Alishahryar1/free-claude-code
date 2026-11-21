@@ -21,7 +21,7 @@ ORIGIN = ReplayOrigin(
 )
 
 
-def parallel_turn(shared_name=False):
+def parallel_turn(shared_name: bool = False):
     native: dict[str, Any] = {
         "role": "model",
         "parts": [
@@ -74,7 +74,7 @@ def parallel_turn(shared_name=False):
 @pytest.mark.parametrize("reverse_results", [False, True])
 @pytest.mark.parametrize("shared_name", [False, True])
 def test_parallel_results_share_one_turn_before_followup(
-    separate_messages, reverse_results, shared_name
+    separate_messages: bool, reverse_results: bool, shared_name: bool
 ):
     native, assistant, results = parallel_turn(shared_name)
     ordered = list(reversed(results)) if reverse_results else results
@@ -192,7 +192,7 @@ def test_result_groups_do_not_cross_assistant_turns():
 
 
 @pytest.mark.parametrize("invalid", ["missing", "duplicate", "unknown", "interleaved"])
-def test_invalid_result_batches_are_rejected(invalid):
+def test_invalid_result_batches_are_rejected(invalid: str):
     _, assistant, results = parallel_turn()
     messages = [assistant, {"role": "user", "content": [results[0]]}]
     if invalid == "duplicate":

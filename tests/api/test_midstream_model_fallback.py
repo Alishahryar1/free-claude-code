@@ -1,12 +1,19 @@
 """Model fallback continues the public response through real provider transports."""
 
+from collections.abc import Mapping, Sequence
+
 import pytest
 
 from free_claude_code.application.model_fallback import stream_model_candidates
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.application.routing import ProviderModelCandidate
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_delivery import current_stream_delivery
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
+from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.open_router import OpenRouterProvider
 from free_claude_code.providers.recovery_policy import RecoveryTiming
 from tests.api.test_delivered_stream_recovery import (
@@ -26,16 +33,31 @@ from tests.providers.support import (
     make_provider_config,
     without_empty_reasoning,
 )
-from tests.providers.test_history_transports import _events_for, _harness
+from tests.providers.test_history_transports import _events_for, _harness, _Send
 from tests.providers.test_native_tool_arguments import tool_events
-from tests.wire_payload import array_payload, object_array, object_payload
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
-async def delivered_candidates(senders, wire, *, tools=None, history=None):
+async def delivered_candidates(
+    senders: Sequence[_Send],
+    wire: WireProtocol,
+    *,
+    tools: list[JsonObject] | None = None,
+    history: Sequence[Mapping[str, JsonValue]] | None = None,
+):
     if history is None:
         history = [{"role": "user", "content": "greet"}]
 
-    async def open_candidate(index, candidate, continuation=None):
+    async def open_candidate(
+        index: int,
+        candidate: ProviderModelCandidate,
+        continuation: ContinuationSeed | None = None,
+    ):
         return senders[index](
             wire,
             history,
@@ -68,7 +90,9 @@ async def delivered_candidates(senders, wire, *, tools=None, history=None):
     "case",
     ["full", "summary", "summary_empty_text", "text_empty_part", "summary_whitespace"],
 )
-async def test_messages_fallback_accepts_partial_output_slots(wire, case):
+async def test_messages_fallback_accepts_partial_output_slots(
+    wire: WireProtocol, case: str
+):
     prefix = (
         "Half"
         if case == "text_empty_part"
@@ -120,7 +144,9 @@ async def test_messages_fallback_accepts_partial_output_slots(wire, case):
 @pytest.mark.parametrize("source", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("target", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_exhausted_model_continues_on_next_candidate(source, target, wire):
+async def test_exhausted_model_continues_on_next_candidate(
+    source: str, target: str, wire: WireProtocol
+):
     async with (
         _harness(
             source,
@@ -163,7 +189,9 @@ async def test_exhausted_model_continues_on_next_candidate(source, target, wire)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("target", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_fallback_preserves_readable_reasoning_without_a_heading(target, wire):
+async def test_fallback_preserves_readable_reasoning_without_a_heading(
+    target: str, wire: WireProtocol
+):
     interrupted = followed_by_text(reasoning_events(closed=False), "Hello ")
     async with (
         _harness("responses", lambda _: (200, interrupted), max_attempts=1) as (
@@ -181,10 +209,14 @@ async def test_fallback_preserves_readable_reasoning_without_a_heading(target, w
 
     assert len(bodies) == 1
     history = bodies[0].get("messages", bodies[0].get("input"))
-    content = history[-1]["content"]
-    instruction = content if isinstance(content, str) else content[0]["text"]
-    assert "Find 17." not in instruction
-    assert "Find 17." in str(history[:-1])
+    content = object_payload(array_payload(history)[-1])["content"]
+    instruction = (
+        content
+        if isinstance(content, str)
+        else object_payload(array_payload(content)[0])["text"]
+    )
+    assert "Find 17." not in string_payload(instruction)
+    assert "Find 17." in str(array_payload(history)[:-1])
     events = parse_sse_text(raw)
     assert_completed(events, wire)
     assert public_text(events, wire) == "Hello world."
@@ -193,7 +225,9 @@ async def test_fallback_preserves_readable_reasoning_without_a_heading(target, w
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_normal_completion_never_opens_another_candidate(protocol, wire):
+async def test_normal_completion_never_opens_another_candidate(
+    protocol: str, wire: WireProtocol
+):
     async with (
         _harness(protocol, lambda _: (200, text_events(protocol, "Done."))) as (
             first,
@@ -217,7 +251,9 @@ async def test_normal_completion_never_opens_another_candidate(protocol, wire):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_each_model_receives_the_latest_prefix_and_its_own_budget(wire):
+async def test_each_model_receives_the_latest_prefix_and_its_own_budget(
+    wire: WireProtocol,
+):
     async with (
         _harness(
             "chat",
@@ -272,7 +308,7 @@ async def test_each_model_receives_the_latest_prefix_and_its_own_budget(wire):
     ],
 )
 async def test_permanent_rejection_advances_without_erasing_incoming_prefix(
-    wire, status, error
+    wire: WireProtocol, status: int, error: JsonObject
 ):
     async with (
         _harness(
@@ -306,7 +342,9 @@ async def test_permanent_rejection_advances_without_erasing_incoming_prefix(
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("visible", [False, True])
-async def test_abandoned_calls_never_cross_model_boundary(protocol, wire, visible):
+async def test_abandoned_calls_never_cross_model_boundary(
+    protocol: str, wire: WireProtocol, visible: bool
+):
     failed_events = partial_tool(protocol)
     if visible:
         failed_events = after_text(protocol, failed_events)
@@ -349,7 +387,7 @@ async def test_abandoned_calls_never_cross_model_boundary(protocol, wire, visibl
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_first_fallback_call_rejects_native_state_without_trying_next_model(
-    protocol, wire
+    protocol: str, wire: WireProtocol
 ):
     async with (
         _harness(
@@ -381,7 +419,7 @@ async def test_first_fallback_call_rejects_native_state_without_trying_next_mode
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("text", ["", "Hello "])
 async def test_first_fallback_call_cannot_complete_without_new_output(
-    protocol, wire, text
+    protocol: str, wire: WireProtocol, text: str
 ):
     async with (
         _harness(
@@ -410,7 +448,7 @@ async def test_first_fallback_call_cannot_complete_without_new_output(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("permanent", [False, True])
 async def test_released_calls_handoff_only_for_retryable_failure(
-    protocol, wire, permanent
+    protocol: str, wire: WireProtocol, permanent: bool
 ):
     completed = tool_events(protocol, '{"path":"kept"}')
     failed_events = completed[:-2] if protocol == "messages" else completed[:-1]
@@ -465,7 +503,9 @@ async def test_released_calls_handoff_only_for_retryable_failure(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_source_native_state_prevents_model_fallback(protocol, wire):
+async def test_source_native_state_prevents_model_fallback(
+    protocol: str, wire: WireProtocol
+):
     async with (
         _harness(
             protocol, lambda _: (200, _events_for(protocol)[:-1]), max_attempts=1
@@ -487,7 +527,7 @@ async def test_source_native_state_prevents_model_fallback(protocol, wire):
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("later_failure", [False, True])
 async def test_hidden_hosted_activity_remains_a_model_boundary_after_local_retry(
-    wire, later_failure
+    wire: WireProtocol, later_failure: bool
 ):
     hidden = [
         *partial_tool("responses"),
@@ -503,7 +543,7 @@ async def test_hidden_hosted_activity_remains_a_model_boundary_after_local_retry
         },
     ]
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, hidden
         if later_failure:
@@ -538,9 +578,9 @@ async def test_hidden_hosted_activity_remains_a_model_boundary_after_local_retry
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("partial", [False, True])
 async def test_exhausted_model_allows_another_model_on_same_client(
-    protocol, wire, partial
+    protocol: str, wire: WireProtocol, partial: bool
 ):
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if bodies[-1]["model"] == "model-1":
             return 200, text_events(protocol, "world.")
         if partial and len(bodies) == 1:
@@ -568,7 +608,7 @@ async def test_exhausted_model_allows_another_model_on_same_client(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_shared_cooldown_skips_candidate_with_zero_calls_and_keeps_seed(
-    monkeypatch, wire
+    monkeypatch: pytest.MonkeyPatch, wire: WireProtocol
 ):
     shared = ProviderAdmissionController(
         provider_name="shared",
@@ -581,14 +621,14 @@ async def test_shared_cooldown_skips_candidate_with_zero_calls_and_keeps_seed(
     executions = []
     start = shared.start_execution
 
-    def capture(**kwargs):
-        execution = start(**kwargs)
+    def capture(*, request_id: str | None = None, model: str | None = None):
+        execution = start(request_id=request_id, model=model)
         executions.append(execution)
         return execution
 
     monkeypatch.setattr(shared, "start_execution", capture)
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("chat", "Hello ", complete=False)
         return 503, {"type": "server_error", "message": "Unavailable"}
@@ -609,7 +649,16 @@ async def test_shared_cooldown_skips_candidate_with_zero_calls_and_keeps_seed(
         ),
     ):
 
-        def same_model(wire, history, *, tools, model, continuation):
+        def same_model(
+            wire: str,
+            history: object,
+            *,
+            tools: object = None,
+            model: str = "requested",
+            continuation: ContinuationSeed | None = None,
+            reasoning: ReasoningPolicy | None = None,
+            endpoint_context: EndpointContext | None = None,
+        ):
             return first(
                 wire,
                 history,

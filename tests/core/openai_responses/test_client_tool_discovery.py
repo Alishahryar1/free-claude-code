@@ -876,7 +876,12 @@ def test_latest_discovery_and_explicit_definitions_have_stable_precedence() -> N
             "defer_loading": True,
         }
 
-    history = [
+    tool_batches: list[list[JsonObject]] = [
+        [declaration("old")],
+        [declaration("new")],
+        [],
+    ]
+    history: list[JsonObject] = [
         {
             "type": "tool_search_output",
             "call_id": str(i),
@@ -884,7 +889,7 @@ def test_latest_discovery_and_explicit_definitions_have_stable_precedence() -> N
             "status": "completed",
             "tools": tools,
         }
-        for i, tools in enumerate([[declaration("old")], [declaration("new")], []])
+        for i, tools in enumerate(tool_batches)
     ]
     request = OpenAIResponsesRequest(model="example", input=history, tools=[SEARCH])
     adapter = ResponsesToolAdapter(

@@ -37,7 +37,7 @@ def merge_custom_provider(
         if provider_id is not None:
             raise ValueError("Provider IDs are assigned by FCC")
         provider_id = "custom_" + uuid4().hex
-        values = {}
+        values: JsonObject = {}
     else:
         if provider_id is None:
             raise ValueError("A provider ID is required")

@@ -1,7 +1,9 @@
 """Mistral affinity reaches upstream requests through both public APIs."""
 
 import json
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
+from typing import override
 from unittest.mock import patch
 
 import httpx
@@ -18,10 +20,12 @@ from tests.providers.test_opencode import _chat_event_stream
 
 
 @asynccontextmanager
-async def mistral_wire(handler=None):
+async def mistral_wire(
+    handler: Callable[[httpx2.Request, int], Awaitable[httpx2.Response]] | None = None,
+):
     requests = []
 
-    async def generation(request):
+    async def generation(request: httpx2.Request):
         requests.append(request)
         if handler is not None:
             return await handler(request, len(requests))
@@ -31,11 +35,24 @@ async def mistral_wire(handler=None):
             text=_chat_event_stream("hello"),
         )
 
-    def sdk(**kwargs):
-        kwargs["http_client"] = httpx2.AsyncClient(
-            transport=httpx2.MockTransport(generation)
+    def sdk(
+        *,
+        api_key: str | Callable[[], Awaitable[str]],
+        base_url: str,
+        max_retries: int,
+        default_headers: Mapping[str, str] | None,
+        timeout: httpx2.Timeout,
+        http_client: httpx2.AsyncClient | None,
+    ) -> AsyncOpenAI:
+        assert http_client is None
+        return AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            max_retries=max_retries,
+            default_headers=default_headers,
+            timeout=timeout,
+            http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(generation)),
         )
-        return AsyncOpenAI(**kwargs)
 
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI", side_effect=sdk
@@ -78,7 +95,7 @@ async def mistral_wire(handler=None):
         "x-fcc-launch-id",
     ],
 )
-async def test_affinity_for_existing_harness_identity(ingress, header):
+async def test_affinity_for_existing_harness_identity(ingress: str, header: str):
     payload: JsonObject = {"model": "mistral/mistral-large-latest", "stream": True}
     if ingress == "messages":
         payload.update(messages=[{"role": "user", "content": "hello"}], max_tokens=128)
@@ -94,6 +111,7 @@ async def test_affinity_for_existing_harness_identity(ingress, header):
 
 
 class InterruptedStream(httpx2.AsyncByteStream):
+    @override
     async def __aiter__(self):
         event = {
             "id": "chatcmpl-test",
@@ -114,8 +132,8 @@ class InterruptedStream(httpx2.AsyncByteStream):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("session_id", [None, "conversation-a"])
-async def test_nonstream_recovery_keeps_affinity(session_id):
-    async def handler(request, number):
+async def test_nonstream_recovery_keeps_affinity(session_id: str | None):
+    async def handler(request: object, number: int):
         if number == 1:
             return httpx2.Response(
                 200,

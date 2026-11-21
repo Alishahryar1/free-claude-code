@@ -4,9 +4,18 @@ Renders common Markdown into Telegram MarkdownV2 format.
 Used by the message handler and Telegram platform adapter.
 """
 
+from typing import Literal, TypedDict
+
 from markdown_it import MarkdownIt
+from markdown_it.token import Token
 
 from .markdown_tables import normalize_gfm_tables
+
+
+class _ListFrame(TypedDict):
+    type: Literal["ordered", "bullet"]
+    index: int
+
 
 MDV2_SPECIAL_CHARS = set("\\_*[]()~`>#+-=|{}.!")
 MDV2_LINK_ESCAPE = set("\\)")
@@ -57,7 +66,7 @@ def render_markdown_to_mdv2(text: str) -> str:
     text = normalize_gfm_tables(text)
     tokens = _MD.parse(text)
 
-    def render_inline_table_plain(children) -> str:
+    def render_inline_table_plain(children: list[Token]) -> str:
         out: list[str] = []
         for tok in children:
             if tok.type == "text" or tok.type == "code_inline":
@@ -68,7 +77,7 @@ def render_markdown_to_mdv2(text: str) -> str:
                 out.append(tok.content)
         return "".join(out)
 
-    def render_inline_plain(children) -> str:
+    def render_inline_plain(children: list[Token]) -> str:
         out: list[str] = []
         for tok in children:
             if tok.type == "text" or tok.type == "code_inline":
@@ -77,7 +86,7 @@ def render_markdown_to_mdv2(text: str) -> str:
                 out.append("\n")
         return "".join(out)
 
-    def render_inline(children) -> str:
+    def render_inline(children: list[Token]) -> str:
         out: list[str] = []
         i = 0
         while i < len(children):
@@ -99,11 +108,11 @@ def render_markdown_to_mdv2(text: str) -> str:
                 href = ""
                 if tok.attrs:
                     if isinstance(tok.attrs, dict):
-                        href = tok.attrs.get("href", "")
+                        href = str(tok.attrs.get("href", ""))
                     else:
                         for key, val in tok.attrs:
                             if key == "href":
-                                href = val
+                                href = str(val)
                                 break
                 inner_tokens = []
                 i += 1
@@ -122,11 +131,11 @@ def render_markdown_to_mdv2(text: str) -> str:
                 alt = tok.content or ""
                 if tok.attrs:
                     if isinstance(tok.attrs, dict):
-                        href = tok.attrs.get("src", "")
+                        href = str(tok.attrs.get("src", ""))
                     else:
                         for key, val in tok.attrs:
                             if key == "src":
-                                href = val
+                                href = str(val)
                                 break
                 # MarkdownV2 has no image entity, so an image degrades to plain
                 # text. Escape it as text: escape_md_v2_link_url only covers the
@@ -142,7 +151,7 @@ def render_markdown_to_mdv2(text: str) -> str:
         return "".join(out)
 
     out: list[str] = []
-    list_stack: list[dict] = []
+    list_stack: list[_ListFrame] = []
     pending_prefix: str | None = None
     blockquote_level = 0
     in_heading = False

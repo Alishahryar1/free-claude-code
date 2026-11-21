@@ -15,7 +15,7 @@ VALIDATOR = Path(__file__).resolve().parents[2] / "scripts/validate_release.py"
 
 
 @pytest.fixture
-def release(tmp_path):
+def release(tmp_path: Path):
     repo = tmp_path / "project"
     repo.mkdir()
     git(repo, "init")
@@ -61,7 +61,7 @@ def release(tmp_path):
     return repo, wheel, sdist
 
 
-def validate(release, tmp_path):
+def validate(release: tuple[Path, dict[str, str], dict[str, str]], tmp_path: Path):
     repo, wheel, sdist = release
     dist = tmp_path / "built"
     dist.mkdir()
@@ -86,7 +86,9 @@ def validate(release, tmp_path):
     )
 
 
-def test_complete_release_passes(release, tmp_path):
+def test_complete_release_passes(
+    release: tuple[Path, dict[str, str], dict[str, str]], tmp_path: Path
+):
     result = validate(release, tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -103,14 +105,19 @@ def test_complete_release_passes(release, tmp_path):
         "assets/macos/fcc-desktop-x86_64",
     ],
 )
-def test_missing_wheel_or_sdist_content_fails(release, tmp_path, archive, suffix):
+def test_missing_wheel_or_sdist_content_fails(
+    release: tuple[Path, dict[str, str], dict[str, str]],
+    tmp_path: Path,
+    archive: int,
+    suffix: str,
+):
     if archive == 2:
         suffix = {
             "scripts/fcc-update.cmd": "scripts/update/fcc-update.cmd",
             "entry_points.txt": "pyproject.toml",
             "METADATA": "PKG-INFO",
         }.get(suffix, suffix)
-    entries = release[archive]
+    entries = release[1] if archive == 1 else release[2]
     missing = next(name for name in entries if name.endswith(suffix))
     del entries[missing]
     result = validate(release, tmp_path)
@@ -118,7 +125,9 @@ def test_missing_wheel_or_sdist_content_fails(release, tmp_path, archive, suffix
     assert "missing" in result.stdout.lower()
 
 
-def test_wrong_version_or_entrypoint_fails(release, tmp_path):
+def test_wrong_version_or_entrypoint_fails(
+    release: tuple[Path, dict[str, str], dict[str, str]], tmp_path: Path
+):
     release[1]["free_claude_code-1.2.3.dist-info/entry_points.txt"] = (
         "[console_scripts]\nfcc-server=wrong:command\n"
     )
@@ -127,7 +136,9 @@ def test_wrong_version_or_entrypoint_fails(release, tmp_path):
     assert "entry" in result.stdout.lower()
 
 
-def test_mismatched_metadata_fails(release, tmp_path):
+def test_mismatched_metadata_fails(
+    release: tuple[Path, dict[str, str], dict[str, str]], tmp_path: Path
+):
     release[2]["free_claude_code-1.2.3/PKG-INFO"] = (
         "Name: free-claude-code\nVersion: 0.1.0\n"
     )
@@ -136,7 +147,9 @@ def test_mismatched_metadata_fails(release, tmp_path):
     assert "metadata" in result.stdout.lower()
 
 
-def test_mismatched_native_templates_fail(release, tmp_path):
+def test_mismatched_native_templates_fail(
+    release: tuple[Path, dict[str, str], dict[str, str]], tmp_path: Path
+):
     release[1]["free_claude_code/assets/macos/fcc-desktop-arm64"] = "different"
     result = validate(release, tmp_path)
     assert result.returncode != 0
@@ -146,7 +159,9 @@ def test_mismatched_native_templates_fail(release, tmp_path):
 @pytest.mark.parametrize(
     "name", ["scripts/macos/launcher.m", "scripts/build_macos_launcher.py"]
 )
-def test_native_sources_required_in_sdist(release, tmp_path, name):
+def test_native_sources_required_in_sdist(
+    release: tuple[Path, dict[str, str], dict[str, str]], tmp_path: Path, name: str
+):
     del release[2][f"free_claude_code-1.2.3/{name}"]
     result = validate(release, tmp_path)
     assert result.returncode != 0

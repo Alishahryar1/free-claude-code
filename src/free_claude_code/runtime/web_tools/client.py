@@ -27,6 +27,7 @@ from .constants import (
     _WEB_TOOL_HTTP_HEADERS,
 )
 from .egress import (
+    StreamAddress,
     get_validated_stream_addrinfos_for_egress,
 )
 from .parsers import HTMLTextParser, SearchResultParser
@@ -68,13 +69,13 @@ _NAME_RESOLVE_FLAGS = socket.NI_NUMERICHOST | socket.NI_NUMERICSERV
 
 
 def getaddrinfo_rows_to_resolve_results(
-    host: str, addrinfos: list[tuple]
+    host: str, addrinfos: list[StreamAddress]
 ) -> list[ResolveResult]:
     """Map :func:`socket.getaddrinfo` rows to aiohttp :class:`ResolveResult` (ThreadedResolver logic)."""
     out: list[ResolveResult] = []
     for family, _type, proto, _canon, sockaddr in addrinfos:
         if family == socket.AF_INET6:
-            if len(sockaddr) < 3:
+            if len(sockaddr) != 4:
                 continue
             if sockaddr[3]:
                 resolved_host, port = socket.getnameinfo(sockaddr, _NAME_RESOLVE_FLAGS)

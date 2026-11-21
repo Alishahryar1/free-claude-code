@@ -9,6 +9,7 @@ from free_claude_code.providers.google_openai import (
     GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR,
     GoogleOpenAIProvider,
 )
+from free_claude_code.providers.google_openai.provider import GoogleChatBehavior
 from free_claude_code.providers.history_replay import replay_origin
 from free_claude_code.providers.vertex.client import _PROFILE
 from tests.providers.request_factory import make_messages_request
@@ -21,7 +22,7 @@ from tests.providers.support import (
 )
 
 
-def make_request(**overrides):
+def make_request(**overrides: object):
     return make_messages_request("models/gemini-3.1-flash-lite", **overrides)
 
 
@@ -34,7 +35,9 @@ def gemini_provider():
     )
 
 
-def test_build_request_body_preserves_tool_call_extra_content(gemini_provider):
+def test_build_request_body_preserves_tool_call_extra_content(
+    gemini_provider: GoogleOpenAIProvider,
+):
     req = make_request(
         system=None,
         messages=[
@@ -74,13 +77,15 @@ def test_build_request_body_preserves_tool_call_extra_content(gemini_provider):
     }
 
 
-def cache_origin(provider):
+def cache_origin(provider: GoogleOpenAIProvider):
     return replay_origin(
         "VERTEX", "chat", make_request().model, client=provider._client
     )
 
 
-def test_build_request_body_uses_cached_tool_call_signature(gemini_provider):
+def test_build_request_body_uses_cached_tool_call_signature(
+    gemini_provider: GoogleOpenAIProvider,
+):
     gemini_provider._behavior.record_tool_call_extra_content(
         "function-call-1",
         {"google": {"thought_signature": "sig-from-cache"}},
@@ -127,7 +132,7 @@ def test_build_request_body_uses_cached_tool_call_signature(gemini_provider):
 
 
 def test_build_request_body_adds_current_turn_fallback_signature(
-    gemini_provider,
+    gemini_provider: GoogleOpenAIProvider,
 ):
     req = make_request(
         system=None,
@@ -182,7 +187,7 @@ def test_build_request_body_adds_current_turn_fallback_signature(
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_text(gemini_provider):
+async def test_stream_messages_text(gemini_provider: GoogleOpenAIProvider):
     req = make_request(thinking={"type": "enabled"})
 
     mock_chunk = MagicMock()
@@ -231,7 +236,9 @@ async def test_stream_messages_text(gemini_provider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_preserves_tool_call_extra_content(gemini_provider):
+async def test_stream_messages_preserves_tool_call_extra_content(
+    gemini_provider: GoogleOpenAIProvider,
+):
     req = make_request()
 
     mock_tc = MagicMock()
@@ -277,6 +284,7 @@ async def test_stream_messages_preserves_tool_call_extra_content(gemini_provider
     assert any(
         '"extra_content"' in event and "sig-stream" in event for event in tool_starts
     )
+    assert isinstance(gemini_provider._behavior, GoogleChatBehavior)
     assert gemini_provider._behavior._tool_call_extra_content_by_id[
         (cache_origin(gemini_provider), "function-call-1")
     ] == {"google": {"thought_signature": "sig-stream"}}
@@ -284,7 +292,7 @@ async def test_stream_messages_preserves_tool_call_extra_content(gemini_provider
 
 @pytest.mark.asyncio
 async def test_colliding_stream_tool_id_rekeys_cached_thought_signature(
-    gemini_provider,
+    gemini_provider: GoogleOpenAIProvider,
 ):
     """Gemini metadata follows the public ID returned to the client."""
     history = [
@@ -359,6 +367,7 @@ async def test_colliding_stream_tool_id_rekeys_cached_thought_signature(
     [start] = starts
     public_id = start["id"]
     assert public_id != "function-call-1"
+    assert isinstance(gemini_provider._behavior, GoogleChatBehavior)
     assert gemini_provider._behavior._tool_call_extra_content_by_id[
         (cache_origin(gemini_provider), public_id)
     ] == {"google": {"thought_signature": "sig-stream"}}
@@ -405,7 +414,7 @@ async def test_colliding_stream_tool_id_rekeys_cached_thought_signature(
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_reasoning_content(gemini_provider):
+async def test_stream_messages_reasoning_content(gemini_provider: GoogleOpenAIProvider):
     req = make_request()
 
     mock_chunk = MagicMock()
@@ -441,7 +450,7 @@ async def test_stream_messages_reasoning_content(gemini_provider):
 
 
 @pytest.mark.asyncio
-async def test_cleanup(gemini_provider):
+async def test_cleanup(gemini_provider: GoogleOpenAIProvider):
     gemini_provider._client = AsyncMock()
 
     await gemini_provider.cleanup()

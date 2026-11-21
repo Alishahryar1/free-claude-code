@@ -1,8 +1,10 @@
 import pytest
 
 from free_claude_code.application.code_sessions import CodeValidationError
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.runtime.codex_protocol import CodexProtocol, NativePrompt
+from tests.assertions import require_present
+from tests.wire_payload import object_payload
 
 
 def test_history_projection_does_not_retain_transcript_buffers():
@@ -69,7 +71,7 @@ def test_terminal_turn_releases_only_its_thread_buffers():
 
 
 @pytest.mark.parametrize("status", ["completed", "failed", "interrupted"])
-def test_errors_keep_partial_output_until_terminal_event(status):
+def test_errors_keep_partial_output_until_terminal_event(status: str):
     protocol = CodexProtocol("g")
     identity = {"threadId": "thread", "turnId": "turn", "itemId": "command"}
     protocol.notification(
@@ -154,7 +156,7 @@ def test_unknown_item_notifications_do_not_allocate_buffers():
     ],
 )
 def test_auto_review_has_own_identity_and_preserves_native_action_and_rationale(
-    status, label
+    status: str, label: str
 ):
     protocol = CodexProtocol("generation")
     payload: JsonObject = {
@@ -210,7 +212,7 @@ def test_native_guardian_warning_is_a_notice_without_a_turn_id():
     assert event.message == "Review is unavailable"
 
 
-def notification(protocol, method, **extra):
+def notification(protocol: CodexProtocol, method: str, **extra: JsonValue):
     return protocol.notification(
         method, {"threadId": "thread", "turnId": "turn", "itemId": "item", **extra}
     )
@@ -237,7 +239,7 @@ def test_context_usage_projects_the_latest_active_context_not_cumulative_usage()
     "value",
     [None, True, False, -1, 1.5, "12", [], {}],
 )
-def test_context_usage_ignores_invalid_active_context_totals(value):
+def test_context_usage_ignores_invalid_active_context_totals(value: JsonValue):
     assert (
         notification(
             CodexProtocol("generation"),
@@ -284,9 +286,22 @@ def test_reasoning_keeps_summary_and_content_indices_and_original_completion():
             "opaque": "keep",
         },
     )
-    assert event.item.text == "First\n\nSecond\n\nAvailable reasoning"
-    assert event.item.raw["item"]["opaque"] == "keep"
-    assert event.item.raw["stream"]["summary"] == {"0": "First", "1": "Second"}
+    assert (
+        require_present(require_present(event).item).text
+        == "First\n\nSecond\n\nAvailable reasoning"
+    )
+    assert (
+        object_payload(require_present(require_present(event).item).raw["item"])[
+            "opaque"
+        ]
+        == "keep"
+    )
+    assert object_payload(require_present(require_present(event).item).raw["stream"])[
+        "summary"
+    ] == {
+        "0": "First",
+        "1": "Second",
+    }
 
 
 def test_text_final_replaces_partial_without_losing_source_metadata():
@@ -303,19 +318,21 @@ def test_text_final_replaces_partial_without_losing_source_metadata():
             "questions": [{"title": "Continue?"}],
         },
     )
-    assert event.item.text == "Hello"
-    assert event.item.raw["item"]["questions"] == [{"title": "Continue?"}]
-    assert event.item.complete
+    assert require_present(require_present(event).item).text == "Hello"
+    assert object_payload(require_present(require_present(event).item).raw["item"])[
+        "questions"
+    ] == [{"title": "Continue?"}]
+    assert require_present(require_present(event).item).complete
 
 
 def test_retryable_error_does_not_turn_into_completion():
     event = notification(
         CodexProtocol("generation"), "error", error={"message": "retry"}, willRetry=True
     )
-    assert event.kind == "error"
-    assert event.message == "retry"
-    assert event.will_retry is True
-    assert event.error_details == {"message": "retry"}
+    assert require_present(event).kind == "error"
+    assert require_present(event).message == "retry"
+    assert require_present(event).will_retry is True
+    assert require_present(event).error_details == {"message": "retry"}
 
 
 def test_command_completion_keeps_output_and_exit_code():
@@ -333,9 +350,9 @@ def test_command_completion_keeps_output_and_exit_code():
             "exitCode": 1,
         },
     )
-    assert "output" in event.item.detail
-    assert "1" in event.item.detail
-    assert event.item.title == "pytest"
+    assert "output" in require_present(require_present(event).item).detail
+    assert "1" in require_present(require_present(event).item).detail
+    assert require_present(require_present(event).item).title == "pytest"
 
 
 def test_approval_can_only_select_exact_native_offered_decisions():
@@ -478,7 +495,7 @@ def test_native_form_rejects_invalid_documented_string_format():
 
 @pytest.mark.parametrize("choices,supported", [(["one", "two"], True), ([1, 2], False)])
 def test_multiselect_projection_matches_the_negotiated_string_contract(
-    choices, supported
+    choices: list[int] | list[str], supported: bool
 ):
     prompt = NativePrompt(
         "mcpServer/elicitation/request",

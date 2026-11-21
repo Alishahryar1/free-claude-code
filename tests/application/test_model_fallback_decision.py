@@ -151,7 +151,14 @@ CLEAN = SourceRecoverySnapshot()
         ),
     ],
 )
-def test_next_step(failure, released, prefix, seed, has_next, expected):
+def test_next_step(
+    failure: CandidateFailure,
+    released: bool,
+    prefix: DeliveredPrefix | None,
+    seed: ContinuationSeed | None,
+    has_next: bool,
+    expected: Fail | Fallback | Handoff,
+):
     assert (
         next_step(
             failure,

@@ -12,7 +12,7 @@ from tests.scripts.test_version_policy import commit, git, write
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def load(name):
+def load(name: str):
     return yaml.safe_load(
         (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
     )
@@ -128,7 +128,7 @@ def test_ci_checks_out_the_event_merge_commit_from_the_base_repository():
 
 
 @pytest.mark.parametrize("conflicting_tag", [False, True])
-def test_ci_tag_fetch_uses_only_canonical_tags(tmp_path, conflicting_tag):
+def test_ci_tag_fetch_uses_only_canonical_tags(tmp_path: Path, conflicting_tag: bool):
     upstream = tmp_path / "upstream.git"
     upstream.mkdir()
     git(upstream, "init", "-b", "main")

@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from typing import override
 
 import httpx
 import pytest
@@ -13,10 +15,12 @@ from free_claude_code.api.response_streams import (
     openai_responses_sse_streaming_response,
 )
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_delivery import (
     StreamDeliveryState,
     bind_stream_delivery,
 )
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
 from tests.api.test_response_streams import _json_error, _serve
 from tests.providers.test_anthropic_messages_transport import (
@@ -31,7 +35,7 @@ from tests.providers.test_provider_admission import _controller, _open, _status_
 from tests.providers.test_request_recovery_transitions import Wire
 
 
-async def _response(source, wire):
+async def _response(source: AsyncIterator[StreamOutput], wire: str):
     options = {"pre_start_error_response": _json_error, "request_id": "stopped"}
     return await (
         anthropic_sse_streaming_response(
@@ -43,18 +47,27 @@ async def _response(source, wire):
 
 
 @asynccontextmanager
-async def _messages_path(route, respond, *, max_attempts=3):
+async def _messages_path(
+    route: str,
+    respond: Callable[[int], tuple[int, Wire | JsonObject | list[JsonObject]]],
+    *,
+    max_attempts: int = 3,
+):
     bodies = []
     wires = []
     admission = _controller(max_attempts=max_attempts, max_concurrency=2)
 
-    def reply(request):
+    def reply(request: httpx.Request):
         bodies.append(json.loads(request.content))
         status, payload = respond(len(bodies))
         wire = (
             payload
             if isinstance(payload, Wire)
-            else Wire(_sse(*payload) if status == 200 else json.dumps(payload).encode())
+            else Wire(
+                _sse(*payload)
+                if isinstance(payload, list)
+                else json.dumps(payload).encode()
+            )
         )
         wires.append(wire)
         return httpx.Response(
@@ -91,13 +104,13 @@ async def _messages_path(route, respond, *, max_attempts=3):
     "max_attempts,probe", [(3, False), (1, False), (3, True), (2, True)]
 )
 async def test_stopped_first_messages_event_releases_admission(
-    route, terminal, max_attempts, probe
+    route: str, terminal: str, max_attempts: int, probe: bool
 ):
-    stopped = {"type": terminal}
+    stopped: JsonObject = {"type": terminal}
     if terminal == "message_delta":
         stopped["delta"] = {"stop_reason": "end_turn"}
 
-    def respond(ordinal):
+    def respond(ordinal: int) -> tuple[int, JsonObject | list[JsonObject]]:
         if probe and ordinal == 1:
             return 503, {"error": {"type": "overloaded_error", "message": "busy"}}
         return 200, [stopped] if ordinal == 1 + probe else _events()
@@ -123,8 +136,8 @@ async def test_stopped_first_messages_event_releases_admission(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ["native", "messages", "responses"])
-async def test_unstopped_first_messages_event_still_retries(route):
-    def respond(ordinal):
+async def test_unstopped_first_messages_event_still_retries(route: str):
+    def respond(ordinal: int) -> tuple[int, JsonObject | list[JsonObject]]:
         return 200, (
             [{"type": "message_delta", "delta": {"stop_reason": None}}]
             if ordinal == 1
@@ -145,8 +158,10 @@ async def test_unstopped_first_messages_event_still_retries(route):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("terminal", ["response.completed", "response.incomplete"])
-async def test_stopped_first_responses_event_releases_admission(wire, terminal):
-    event = {
+async def test_stopped_first_responses_event_releases_admission(
+    wire: str, terminal: str
+):
+    event: JsonObject = {
         "type": terminal,
         "response": {"status": terminal.split(".")[1], "output": []},
     }
@@ -155,7 +170,7 @@ async def test_stopped_first_responses_event_releases_admission(wire, terminal):
         lambda bodies: (200, [event] if len(bodies) == 1 else _events_for("responses")),
     ) as (send, bodies, transport):
 
-        def adapter(kind, payload):
+        def adapter(kind: object, payload: JsonObject):
             if len(bodies) == 1:
                 raise RetryableProviderProtocolError(
                     "terminal adapter rejected snapshot"
@@ -185,10 +200,11 @@ async def test_stopped_first_responses_event_releases_admission(wire, terminal):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ["native", "messages", "responses"])
-async def test_stopped_messages_cannot_close_another_executions_recovery(route):
+async def test_stopped_messages_cannot_close_another_executions_recovery(route: str):
     leader = None
 
     class ConcurrentWire(Wire):
+        @override
         async def __aiter__(self):
             assert leader is not None
             await leader.fail(_status_error(503))
@@ -196,9 +212,10 @@ async def test_stopped_messages_cannot_close_another_executions_recovery(route):
             async for chunk in super().__aiter__():
                 yield chunk
 
-    async with _messages_path(
-        route, lambda _: (200, ConcurrentWire(_sse({"type": "message_stop"})))
-    ) as (source, _bodies, _wires, admission):
+    def callback(_: object):
+        return (200, ConcurrentWire(_sse({"type": "message_stop"})))
+
+    async with _messages_path(route, callback) as (source, _bodies, _wires, admission):
         with bind_stream_delivery(StreamDeliveryState()):
             other = admission.start_execution(model="native")
         leader = await _open(other)

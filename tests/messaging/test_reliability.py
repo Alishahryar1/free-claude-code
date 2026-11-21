@@ -22,7 +22,7 @@ def telegram_platform():
 
 
 @pytest.mark.asyncio
-async def test_telegram_retry_on_network_error(telegram_platform):
+async def test_telegram_retry_on_network_error(telegram_platform: TelegramRuntime):
     mock_bot = AsyncMock()
     mock_msg = MagicMock()
     mock_msg.message_id = 999
@@ -47,7 +47,7 @@ async def test_telegram_retry_on_network_error(telegram_platform):
 
 
 @pytest.mark.asyncio
-async def test_telegram_retry_on_retry_after(telegram_platform):
+async def test_telegram_retry_on_retry_after(telegram_platform: TelegramRuntime):
     mock_bot = AsyncMock()
     mock_msg = MagicMock()
     mock_msg.message_id = 1000
@@ -67,7 +67,7 @@ async def test_telegram_retry_on_retry_after(telegram_platform):
 
 
 @pytest.mark.asyncio
-async def test_telegram_no_retry_on_bad_request(telegram_platform):
+async def test_telegram_no_retry_on_bad_request(telegram_platform: TelegramRuntime):
     mock_bot = AsyncMock()
 
     # Fail with generic TelegramError (should not retry unless specific conditions met)

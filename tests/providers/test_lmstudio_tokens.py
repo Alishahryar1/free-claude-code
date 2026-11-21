@@ -2,11 +2,11 @@
 
 import pytest
 
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.providers.lmstudio import tokens
 
 
-def estimate(body):
+def estimate(body: JsonObject):
     return tokens.estimate_prepared_input_tokens(body, budget=10**9)
 
 
@@ -21,11 +21,11 @@ def test_text_parts_and_string_content_have_the_same_cost():
     ["text", "reasoning", "arguments", "result", "tool_schema", "response_schema"],
 )
 def test_large_tails_are_counted_with_bounded_tokenizer_and_json_work(
-    monkeypatch, field
+    monkeypatch: pytest.MonkeyPatch, field: str
 ):
     visited = []
 
-    def count(text):
+    def count(text: str):
         assert len(text) <= 16384
         visited.append(text)
         return len(text)
@@ -33,11 +33,11 @@ def test_large_tails_are_counted_with_bounded_tokenizer_and_json_work(
     monkeypatch.setattr(tokens, "estimate_text_tokens", count)
     dumps = tokens.json.dumps
 
-    def bounded_dumps(value, **kwargs):
+    def bounded_dumps(value: JsonValue, *, ensure_ascii: bool = True):
         assert not isinstance(value, (dict, list))
         if isinstance(value, str):
             assert len(value) <= 16384
-        return dumps(value, **kwargs)
+        return dumps(value, ensure_ascii=ensure_ascii)
 
     monkeypatch.setattr(tokens.json, "dumps", bounded_dumps)
     text = 'a\\"\n' * 400000 + "TAIL-MUST-SURVIVE"
@@ -69,7 +69,7 @@ def test_large_tails_are_counted_with_bounded_tokenizer_and_json_work(
     assert any("TAIL-MUST-SURVIVE" in value for value in visited)
 
 
-def test_counting_stops_once_budget_is_exceeded(monkeypatch):
+def test_counting_stops_once_budget_is_exceeded(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(tokens, "estimate_text_tokens", len)
     body = {"messages": [{"content": "x" * 40000}], "tools": object()}
     assert tokens.estimate_prepared_input_tokens(body, budget=10) > 10
@@ -108,8 +108,10 @@ def test_carriers_metadata_and_generation_controls_are_not_model_text():
     ],
     ids=["url", "small_inline", "large_inline"],
 )
-def test_image_cost_uses_size_without_tokenizing_pixels(monkeypatch, url, cost):
-    def no_pixels(text):
+def test_image_cost_uses_size_without_tokenizing_pixels(
+    monkeypatch: pytest.MonkeyPatch, url: str, cost: int
+):
+    def no_pixels(text: str):
         assert "AAAA" not in text
         return 0
 

@@ -1,4 +1,6 @@
 import sys
+from pathlib import Path
+from typing import BinaryIO
 
 import pytest
 
@@ -8,13 +10,16 @@ from free_claude_code.core import interprocess_lock
 @pytest.mark.parametrize("stage", ["acquire", "wait"])
 @pytest.mark.parametrize("error_type", [PermissionError, KeyboardInterrupt])
 def test_failed_acquisition_closes_handle_and_allows_retry(
-    tmp_path, monkeypatch, stage, error_type
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    error_type: type[Exception],
 ):
     lock = interprocess_lock.InterprocessFileLock(tmp_path / "lock")
     opened = []
     failure = error_type("acquisition interrupted")
 
-    def try_lock(handle):
+    def try_lock(handle: BinaryIO):
         opened.append(handle)
         if stage == "acquire":
             raise failure
@@ -39,7 +44,7 @@ def test_failed_acquisition_closes_handle_and_allows_retry(
 
 
 def test_empty_file_locked_by_another_handle_is_normal_contention(
-    tmp_path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     if sys.platform == "win32":
         import msvcrt
@@ -49,7 +54,7 @@ def test_empty_file_locked_by_another_handle_is_normal_contention(
         opened = []
         try_lock = interprocess_lock._try_lock
 
-        def capture(handle):
+        def capture(handle: BinaryIO):
             opened.append(handle)
             return try_lock(handle)
 

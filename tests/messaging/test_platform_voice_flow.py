@@ -1,6 +1,7 @@
 import asyncio
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -14,8 +15,9 @@ from free_claude_code.messaging.platforms.voice_flow import (
     is_audio_metadata,
 )
 from free_claude_code.messaging.trees.runtime import MessageTree
-from free_claude_code.messaging.voice import Transcriber
+from free_claude_code.messaging.voice import PendingVoiceClaim, Transcriber
 from free_claude_code.messaging.workflow import MessagingWorkflow
+from tests.fixture_types import IncomingMessageFactory
 
 VOICE_SCOPE = MessageScope(platform="telegram", chat_id="chat")
 
@@ -53,8 +55,8 @@ def _flow(*, enabled: bool = True) -> tuple[VoiceNoteFlow, MockTranscriber]:
 
 def _request(
     *,
-    download_to=None,
-    reply_text=None,
+    download_to: Callable[[Path], Awaitable[None]] | None = None,
+    reply_text: AsyncMock | None = None,
     message_id: str = "voice",
 ) -> VoiceNoteRequest:
     async def default_download_to(path: Path) -> None:
@@ -317,10 +319,10 @@ async def test_voice_flow_cancel_during_transcription_suppresses_late_failure() 
 
 @pytest.mark.asyncio
 async def test_reply_stop_status_survives_late_transcription_success(
-    mock_platform,
-    mock_cli_manager,
-    mock_session_store,
-    incoming_message_factory,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    mock_session_store: AsyncMock,
+    incoming_message_factory: IncomingMessageFactory,
 ) -> None:
     flow, transcriber = _flow()
     workflow = MessagingWorkflow(
@@ -455,10 +457,10 @@ async def test_voice_flow_cancel_during_handoff_suppresses_late_handler_error() 
 async def test_reply_command_cancels_voice_at_tree_admission_commit(
     command: str,
     monkeypatch: pytest.MonkeyPatch,
-    mock_platform,
-    mock_cli_manager,
-    mock_session_store,
-    incoming_message_factory,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    mock_session_store: AsyncMock,
+    incoming_message_factory: IncomingMessageFactory,
 ) -> None:
     flow, _transcriber = _flow()
     workflow = MessagingWorkflow(
@@ -526,10 +528,10 @@ async def test_reply_command_cancels_voice_at_tree_admission_commit(
 @pytest.mark.parametrize("command", ["/stop", "/clear"])
 async def test_global_command_rejects_transcription_that_finishes_late(
     command: str,
-    mock_platform,
-    mock_cli_manager,
-    mock_session_store,
-    incoming_message_factory,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    mock_session_store: AsyncMock,
+    incoming_message_factory: IncomingMessageFactory,
 ) -> None:
     flow, transcriber = _flow()
     workflow = MessagingWorkflow(
@@ -580,9 +582,9 @@ async def test_global_command_rejects_transcription_that_finishes_late(
 @pytest.mark.parametrize("command", ["/stop", "/clear"])
 async def test_transcribed_global_command_does_not_cancel_its_own_handoff(
     command: str,
-    mock_platform,
-    mock_cli_manager,
-    mock_session_store,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    mock_session_store: AsyncMock,
 ) -> None:
     flow, transcriber = _flow()
     transcriber.run.return_value = command
@@ -712,7 +714,7 @@ async def test_voice_flow_repeated_cancellation_cannot_interrupt_cleanup(
 
     original_discard = flow._pending_voice.discard
 
-    async def delayed_discard(claim) -> bool:
+    async def delayed_discard(claim: PendingVoiceClaim) -> bool:
         cleanup_started.set()
         await release_cleanup.wait()
         return await original_discard(claim)
@@ -878,7 +880,7 @@ async def test_voice_flow_handler_failure_cleans_pending_without_deleting_status
 
 @pytest.mark.asyncio
 async def test_voice_flow_rejects_oversized_audio_before_transcription(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         "free_claude_code.messaging.platforms.voice_flow.MAX_AUDIO_SIZE_BYTES",

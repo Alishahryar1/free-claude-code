@@ -6,8 +6,8 @@ structured traces.
 """
 
 import json
-from collections.abc import Iterator
-from typing import Any
+from collections.abc import AsyncIterator, Callable, Iterator
+from typing import Any, override
 
 import httpx
 import httpx2
@@ -16,10 +16,12 @@ from loguru import logger
 
 from free_claude_code.config.provider_catalog import GEMINI_DEFAULT_BASE
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_delivery import (
     StreamDeliveryState,
     bind_stream_delivery,
 )
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.trace import TRACE_PAYLOAD_BINDING
 from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.gemini import GeminiProvider
@@ -39,6 +41,7 @@ class _TimedOut(httpx.AsyncByteStream, httpx2.AsyncByteStream):
     def __init__(self, module: Any) -> None:
         self._module = module
 
+    @override
     async def __aiter__(self):
         raise self._module.ReadTimeout("upstream went quiet")
         yield b""
@@ -71,7 +74,9 @@ def _outcomes(traces: list[dict[str, Any]]) -> list[tuple[str, str]]:
     ]
 
 
-def _gemini(reply, *, max_attempts: int) -> GeminiProvider:
+def _gemini(
+    reply: Callable[[httpx.Request], httpx.Response], *, max_attempts: int
+) -> GeminiProvider:
     return GeminiProvider(
         make_provider_config(api_key="key", base_url=GEMINI_DEFAULT_BASE),
         admission=immediate_admission(max_attempts=max_attempts),
@@ -87,7 +92,7 @@ def _gemini_payloads(*payloads: dict[str, Any]) -> httpx.Response:
     )
 
 
-async def _failure(stream) -> ExecutionFailure:
+async def _failure(stream: AsyncIterator[StreamOutput]) -> ExecutionFailure:
     with pytest.raises(ExecutionFailure) as caught:
         _ = [frame async for chunk in stream for frame in chunk.frames]
     return caught.value
@@ -111,11 +116,11 @@ async def _drain_gemini(provider: GeminiProvider) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 async def test_continuation_failure_before_first_event_reaches_admission(
-    protocol, traces
+    protocol: str, traces: list[JsonObject]
 ):
     module = httpx if protocol == "messages" else httpx2
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events(protocol, "Hello ", complete=False)
         if len(bodies) == 2:
@@ -136,8 +141,10 @@ async def test_continuation_failure_before_first_event_reaches_admission(
 
 
 @pytest.mark.asyncio
-async def test_messages_stop_rejected_before_acceptance_accepts_the_attempt(traces):
-    def reply(bodies):
+async def test_messages_stop_rejected_before_acceptance_accepts_the_attempt(
+    traces: list[JsonObject],
+):
+    def reply(bodies: object):
         return 200, [
             {
                 "type": "message_delta",
@@ -157,10 +164,12 @@ async def test_messages_stop_rejected_before_acceptance_accepts_the_attempt(trac
 
 
 @pytest.mark.asyncio
-async def test_gemini_stop_rejected_before_acceptance_accepts_the_attempt(traces):
+async def test_gemini_stop_rejected_before_acceptance_accepts_the_attempt(
+    traces: list[JsonObject],
+):
     calls = 0
 
-    def reply(request):
+    def reply(request: object):
         nonlocal calls
         calls += 1
         return _gemini_payloads(
@@ -195,10 +204,10 @@ class _RefreshingEndpoint:
 
 
 @pytest.mark.asyncio
-async def test_gemini_inband_authentication_failure_refreshes_once(traces):
+async def test_gemini_inband_authentication_failure_refreshes_once(traces: object):
     keys: list[str] = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         keys.append(request.headers["x-goog-api-key"])
         if len(keys) == 1:
             return _gemini_payloads({"error": {"code": 401, "message": "expired"}})
@@ -266,10 +275,12 @@ _SHARED_SHAPE = {
         ("responses", _SHARED_SHAPE),
     ],
 )
-async def test_exhausted_undelivered_stream_traces(protocol, shape, traces):
+async def test_exhausted_undelivered_stream_traces(
+    protocol: str, shape: JsonObject, traces: list[JsonObject]
+):
     module = httpx if protocol == "messages" else httpx2
 
-    def reply(bodies):
+    def reply(bodies: object):
         return 200, _TimedOut(module)
 
     async with _harness(protocol, reply, max_attempts=2) as (send, bodies, _):
@@ -280,10 +291,10 @@ async def test_exhausted_undelivered_stream_traces(protocol, shape, traces):
 
 
 @pytest.mark.asyncio
-async def test_gemini_exhausted_undelivered_stream_traces(traces):
+async def test_gemini_exhausted_undelivered_stream_traces(traces: list[JsonObject]):
     calls = 0
 
-    def reply(request):
+    def reply(request: object):
         nonlocal calls
         calls += 1
         return httpx.Response(

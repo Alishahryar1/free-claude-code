@@ -9,6 +9,7 @@ import pytest
 from free_claude_code.config.provider_catalog import GEMINI_DEFAULT_BASE
 from free_claude_code.core.gemini.models import ThinkingConfig
 from free_claude_code.core.gemini.native_request import apply_reasoning
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.gemini import GeminiProvider
 from tests.providers.support import immediate_admission, make_provider_config
@@ -21,10 +22,12 @@ from tests.providers.test_gemini import _collect, _request, _sse
     "model", ["models/gemini-2.5-flash", "models/gemini-3.5-flash-lite", "arbitrary"]
 )
 @pytest.mark.parametrize("effort", list(ReasoningEffort))
-async def test_fcc_effort_uses_shared_budget_on_every_ingress(wire, model, effort):
+async def test_fcc_effort_uses_shared_budget_on_every_ingress(
+    wire: str, model: str, effort: ReasoningEffort
+):
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         bodies.append(json.loads(request.content))
         return _sse([{"text": "answer"}])
 
@@ -67,7 +70,7 @@ async def test_fcc_effort_uses_shared_budget_on_every_ingress(wire, model, effor
 )
 @pytest.mark.parametrize("visible", [False, True])
 def test_native_client_computation_and_visibility_are_preserved(
-    model, control, visible
+    model: str, control: JsonObject, visible: bool
 ):
     thinking = {"includeThoughts": visible, **control}
     body = {
@@ -83,10 +86,12 @@ def test_native_client_computation_and_visibility_are_preserved(
 @pytest.mark.parametrize(
     "flag, capability", [(False, "none"), (True, "unknown"), (None, "unknown")]
 )
-async def test_discovery_capability_drives_classifier_allowance(flag, capability):
+async def test_discovery_capability_drives_classifier_allowance(
+    flag: bool | None, capability: str
+):
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         if request.method == "GET":
             return httpx.Response(
                 200,

@@ -15,6 +15,7 @@ import pytest
 from free_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.core.stream_delivery import (
     StreamDeliveryState,
@@ -41,7 +42,7 @@ _VOCABULARY = "`reasoning_effort` value `high` must be one of `none` or `default
 
 
 def _ok() -> httpx2.Response:
-    chunks = [
+    chunks: list[JsonObject] = [
         {"role": "assistant", "content": "ok"},
         {},
     ]

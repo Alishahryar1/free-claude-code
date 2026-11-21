@@ -3,7 +3,7 @@
 import json
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, override
 
 import openai
 
@@ -59,21 +59,24 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         super().__init__(_PROFILE)
 
     @property
+    @override
     def reasoning_off_fields(self) -> tuple[tuple[str, ...], ...]:
         return (("reasoning_effort",),)
 
+    @override
     def build_messages_body(
         self,
         request: MessagesRequest,
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Internal helper for tests and shared building."""
         return build_nim_request_body(
             request,
             reasoning=reasoning,
         )
 
+    @override
     def finalize_chat_body(
         self,
         body: dict[str, Any],
@@ -84,15 +87,20 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         apply_nim_request_options(body, reasoning)
         return body
 
+    @override
     def prepare_create_body(self, body: dict[str, Any]) -> dict[str, Any]:
         """Strip private request metadata before calling NVIDIA NIM."""
         return body_without_nim_tool_argument_aliases(body)
 
+    @override
     def tool_argument_aliases(self, body: dict[str, Any]) -> dict[str, dict[str, str]]:
         """Return NIM tool argument aliases captured while building this request."""
         return nim_tool_argument_aliases_from_body(body)
 
-    def retry_request_body(self, error: Exception, body: dict) -> Proposal | None:
+    @override
+    def retry_request_body(
+        self, error: Exception, body: dict[str, Any]
+    ) -> Proposal | None:
         """Retry once with a downgraded body when NIM rejects a known field."""
         status_code = getattr(error, "status_code", None)
         bad_request_like = isinstance(error, openai.BadRequestError) or (
@@ -116,6 +124,7 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
 
         return None
 
+    @override
     def failure_override(self, error: Exception) -> ExecutionFailure | None:
         """Classify NVIDIA-specific 400/500 responses by their actual semantics."""
         if not isinstance(error, openai.BadRequestError | openai.InternalServerError):
@@ -150,6 +159,7 @@ class NvidiaNimProvider(OpenAIChatProvider):
             history_cache=history_cache,
         )
 
+    @override
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
         """Filter known unavailable and non-chat models from hosted discovery."""
         infos = await super().list_model_infos()

@@ -3,6 +3,7 @@
 import importlib
 import json
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 from urllib.error import URLError
 
@@ -55,7 +56,7 @@ def test_launch_default_is_server_selection_not_first_row_or_local_settings(
         ],
     }
 
-    def inspect(command, env):
+    def inspect(command: list[str], env: Mapping[str, str]):
         if name == "agy":
             assert command[command.index("--model") + 1] == selected
         elif name in {"aider", "muse"}:
@@ -177,7 +178,7 @@ def test_codex_cli_catalog_is_private_and_does_not_replace_external_catalog(
     stable.write_text('{"external":"unchanged"}')
     private_paths: list[Path] = []
 
-    def inspect(command, env):
+    def inspect(command: list[str], env: object):
         settings = tomllib.loads(
             "\n".join(
                 command[index + 1] for index, arg in enumerate(command) if arg == "-c"

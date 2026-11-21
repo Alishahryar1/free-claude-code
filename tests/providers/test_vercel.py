@@ -9,6 +9,8 @@ import pytest
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import VERCEL_AI_GATEWAY_DEFAULT_BASE
 from free_claude_code.core.model_capabilities import ModelInputModality
+from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     SDKStreamDouble,
@@ -19,7 +21,7 @@ from tests.providers.support import (
 )
 
 
-def make_request(**overrides):
+def make_request(**overrides: object):
     return make_messages_request("openai/gpt-5.5", **overrides)
 
 
@@ -32,7 +34,7 @@ def vercel_config():
 
 
 @pytest.fixture
-def vercel_provider(vercel_config):
+def vercel_provider(vercel_config: ProviderConfig):
     return profiled_provider(
         "vercel",
         vercel_config,
@@ -44,7 +46,7 @@ def test_default_base_url_constant():
     assert VERCEL_AI_GATEWAY_DEFAULT_BASE == "https://ai-gateway.vercel.sh/v1"
 
 
-def test_init_uses_default_base_url_and_api_key(vercel_config):
+def test_init_uses_default_base_url_and_api_key(vercel_config: ProviderConfig):
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
@@ -59,7 +61,7 @@ def test_init_uses_default_base_url_and_api_key(vercel_config):
     mock_openai.assert_called_once()
 
 
-def test_init_strips_trailing_slash(vercel_config):
+def test_init_strips_trailing_slash(vercel_config: ProviderConfig):
     config = replace(vercel_config, base_url=f"{VERCEL_AI_GATEWAY_DEFAULT_BASE}/")
 
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
@@ -74,28 +76,33 @@ def test_init_strips_trailing_slash(vercel_config):
 
 @pytest.mark.asyncio
 async def test_model_catalog_extracts_modalities_and_exhaustive_reasoning_support(
-    vercel_provider,
+    monkeypatch: pytest.MonkeyPatch,
+    vercel_provider: OpenAIChatProvider,
 ) -> None:
-    vercel_provider._client.models.list = AsyncMock(
-        return_value=SimpleNamespace(
-            data=[
-                {
-                    "id": "vision-reasoning",
-                    "modalities": {"input": ["text", "image"]},
-                    "supported_parameters": ["tools", "reasoning"],
-                },
-                {
-                    "id": "text-only",
-                    "modalities": {"input": ["text"]},
-                    "supported_parameters": ["tools"],
-                },
-                {
-                    "id": "malformed-optional",
-                    "modalities": {"input": "text"},
-                    "supported_parameters": "reasoning",
-                },
-            ]
-        )
+    monkeypatch.setattr(
+        vercel_provider._client.models,
+        "list",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                data=[
+                    {
+                        "id": "vision-reasoning",
+                        "modalities": {"input": ["text", "image"]},
+                        "supported_parameters": ["tools", "reasoning"],
+                    },
+                    {
+                        "id": "text-only",
+                        "modalities": {"input": ["text"]},
+                        "supported_parameters": ["tools"],
+                    },
+                    {
+                        "id": "malformed-optional",
+                        "modalities": {"input": "text"},
+                        "supported_parameters": "reasoning",
+                    },
+                ]
+            )
+        ),
     )
 
     assert await vercel_provider.list_model_infos() == frozenset(
@@ -117,7 +124,7 @@ async def test_model_catalog_extracts_modalities_and_exhaustive_reasoning_suppor
     )
 
 
-def test_build_request_body_keeps_max_tokens(vercel_provider):
+def test_build_request_body_keeps_max_tokens(vercel_provider: OpenAIChatProvider):
     with patch(
         "free_claude_code.providers.openai_chat.request_policy.build_base_request_body"
     ) as mock_convert:
@@ -134,7 +141,9 @@ def test_build_request_body_keeps_max_tokens(vercel_provider):
     assert "max_completion_tokens" not in body
 
 
-def test_build_request_body_preserves_caller_extra_body(vercel_provider):
+def test_build_request_body_preserves_caller_extra_body(
+    vercel_provider: OpenAIChatProvider,
+):
     req = make_request(extra_body={"providerOptions": {"openai": {"reasoning": "low"}}})
 
     body = vercel_provider._chat._build_request_body(req)
@@ -143,7 +152,7 @@ def test_build_request_body_preserves_caller_extra_body(vercel_provider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_text(vercel_provider):
+async def test_stream_messages_text(vercel_provider: OpenAIChatProvider):
     mock_chunk = MagicMock()
     mock_chunk.choices = [
         MagicMock(
@@ -177,7 +186,7 @@ async def test_stream_messages_text(vercel_provider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_reasoning_content(vercel_provider):
+async def test_stream_messages_reasoning_content(vercel_provider: OpenAIChatProvider):
     mock_chunk = MagicMock()
     mock_chunk.choices = [
         MagicMock(
@@ -212,7 +221,7 @@ async def test_stream_messages_reasoning_content(vercel_provider):
 
 
 @pytest.mark.asyncio
-async def test_cleanup(vercel_provider):
+async def test_cleanup(vercel_provider: OpenAIChatProvider):
     vercel_provider._client = AsyncMock()
 
     await vercel_provider.cleanup()

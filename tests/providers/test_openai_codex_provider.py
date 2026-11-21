@@ -1,7 +1,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, override
 from unittest.mock import patch
 
 import httpx
@@ -41,10 +41,12 @@ class _FakeAuth(OpenAIAuthManager):
         self.recovery_calls = 0
         self.current_token = "access_1"
 
+    @override
     async def access(self, *, force_refresh: bool = False) -> OpenAIAccess:
         self.access_calls += 1
         return OpenAIAccess(self.current_token, "account_1", False)
 
+    @override
     async def recover_unauthorized(self, rejected_token: str) -> OpenAIAccess:
         assert rejected_token == self.current_token
         self.recovery_calls += 1
@@ -66,6 +68,7 @@ class _CloseTrackingResponse(httpx2.Response):
         self.close_calls = 0
         self._close_error = close_error
 
+    @override
     async def aclose(self) -> None:
         self.close_calls += 1
         await super().aclose()
@@ -77,6 +80,7 @@ class _StaticAsyncBody(httpx2.AsyncByteStream):
     def __init__(self, body: bytes) -> None:
         self._body = body
 
+    @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
         yield self._body
 
@@ -86,6 +90,7 @@ class _CloseAwareAuth(_FakeAuth):
         super().__init__()
         self._responses = responses
 
+    @override
     async def recover_unauthorized(self, rejected_token: str) -> OpenAIAccess:
         assert self._responses[-1].is_closed
         return await super().recover_unauthorized(rejected_token)
@@ -812,23 +817,27 @@ async def test_concurrent_credentials_keep_request_identity_and_pool_ownership()
     None
 ):
     class ConcurrentAuth(_FakeAuth):
+        @override
         async def access(self, *, force_refresh: bool = False) -> OpenAIAccess:
             self.access_calls += 1
             return OpenAIAccess(
                 f"access_{self.access_calls}", f"account_{self.access_calls}", False
             )
 
+        @override
         async def recover_unauthorized(self, rejected_token: str) -> OpenAIAccess:
             assert rejected_token == "access_1"
             self.recovery_calls += 1
             return OpenAIAccess("access_3", "account_3", True)
 
+        @override
         async def close(self) -> None:
             raise AssertionError("Provider must not close the runtime-owned account")
 
     class Pool(httpx2.MockTransport):
         closes = 0
 
+        @override
         async def aclose(self) -> None:
             self.closes += 1
             await super().aclose()
@@ -955,6 +964,7 @@ async def test_disconnected_account_never_opens_or_refreshes_a_request(
     operation: str,
 ) -> None:
     class DisconnectedAuth(_FakeAuth):
+        @override
         async def access(self, *, force_refresh: bool = False) -> OpenAIAccess:
             self.access_calls += 1
             raise OpenAIReconnectRequired("Reconnect in Admin.")
@@ -1048,6 +1058,7 @@ async def test_model_discovery_re_request_is_a_second_admitted_attempt() -> None
 @pytest.mark.asyncio
 async def test_auth_refresh_failure_does_not_repeat_rejected_provider_call() -> None:
     class FailingRecoveryAuth(_FakeAuth):
+        @override
         async def recover_unauthorized(self, rejected_token: str) -> OpenAIAccess:
             assert rejected_token == self.current_token
             self.recovery_calls += 1

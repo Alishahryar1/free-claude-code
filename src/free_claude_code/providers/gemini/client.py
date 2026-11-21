@@ -1,7 +1,7 @@
 """Google AI Studio provider using native GenerateContent and model discovery."""
 
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from typing import Any, override
 from uuid import uuid4
 
 import httpx
@@ -222,6 +222,7 @@ class GeminiProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_chat(
         self,
         request: ChatRequest,
@@ -254,6 +255,7 @@ class GeminiProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_gemini(
         self,
         request: GeminiRequest,

@@ -751,7 +751,7 @@ def _permission_settings(mode: CodeMode, defaults: JsonObject) -> JsonObject:
     )
     sandbox = object_value(defaults.get("sandbox"))
     if (
-        not isinstance(policy, str | dict)
+        not isinstance(policy, (str, dict))
         or not policy
         or not reviewer
         or (not profile and not sandbox.get("type"))

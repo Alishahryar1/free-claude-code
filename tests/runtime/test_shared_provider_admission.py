@@ -87,7 +87,7 @@ async def test_replacement_cannot_bypass_existing_protection(protection: str) ->
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
-async def test_limits_publish_only_with_successful_settings(outcome):
+async def test_limits_publish_only_with_successful_settings(outcome: str):
     settings = Settings(provider_rate_limit=1000, provider_max_concurrency=1)
     manager = ProviderRuntimeManager(settings, runtime_factory=RuntimeFactory())
     controller = manager._admission_registry.get("nvidia_nim")
@@ -335,7 +335,7 @@ async def test_history_cache_survives_settings_and_key_replacement_but_clears_on
 @pytest.mark.parametrize(
     "kind", ["anthropic", "openai_chat", "openai_responses", "anthropic_messages"]
 )
-async def test_exceptional_factories_retain_history_cache_across_replacement(kind):
+async def test_exceptional_factories_retain_history_cache_across_replacement(kind: str):
     from free_claude_code.core.history_replay import HistoryMode
     from tests.config.test_custom_providers import definition
 

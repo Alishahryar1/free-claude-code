@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from free_claude_code.cli.launchers.catalog_http import fetch_proxy_model_catalog
+from tests.cli.conftest import LaunchCapture
 from tests.cli.test_launcher_workflow import launch
 
 
@@ -80,7 +81,7 @@ def test_fetch_proxy_models_rejects_non_object_json() -> None:
 
 @pytest.mark.parametrize("harness", ["codex", "opencode", "aider"])
 def test_native_launch_uses_current_catalog_without_waiting_for_more_models(
-    launch_capture, harness
+    launch_capture: LaunchCapture, harness: str
 ):
     launch_capture.catalog = {
         "default_model_id": "nvidia_nim/configured",

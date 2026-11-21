@@ -172,10 +172,15 @@ def test_replays_reasoning_content_with_tool_history(
 
 @pytest.mark.asyncio
 async def test_model_catalog_returns_bare_ids(
+    monkeypatch: pytest.MonkeyPatch,
     experiential_provider: OpenAIChatProvider,
 ) -> None:
-    experiential_provider._client.get = AsyncMock(
-        return_value={"data": [{"id": "dots-3-note-preview-free"}, {"id": _MODEL}]}
+    monkeypatch.setattr(
+        experiential_provider._client,
+        "get",
+        AsyncMock(
+            return_value={"data": [{"id": "dots-3-note-preview-free"}, {"id": _MODEL}]}
+        ),
     )
 
     assert await experiential_provider.list_model_infos() == frozenset(
@@ -185,9 +190,12 @@ async def test_model_catalog_returns_bare_ids(
 
 @pytest.mark.asyncio
 async def test_model_catalog_rejects_missing_id(
+    monkeypatch: pytest.MonkeyPatch,
     experiential_provider: OpenAIChatProvider,
 ) -> None:
-    experiential_provider._client.get = AsyncMock(return_value={"data": [{}]})
+    monkeypatch.setattr(
+        experiential_provider._client, "get", AsyncMock(return_value={"data": [{}]})
+    )
 
     with pytest.raises(ModelListResponseError, match="include id"):
         await experiential_provider.list_model_infos()
@@ -195,9 +203,12 @@ async def test_model_catalog_rejects_missing_id(
 
 @pytest.mark.asyncio
 async def test_model_catalog_rejects_empty_catalog(
+    monkeypatch: pytest.MonkeyPatch,
     experiential_provider: OpenAIChatProvider,
 ) -> None:
-    experiential_provider._client.get = AsyncMock(return_value={"data": []})
+    monkeypatch.setattr(
+        experiential_provider._client, "get", AsyncMock(return_value={"data": []})
+    )
 
     with pytest.raises(ModelListResponseError, match="did not include any model ids"):
         await experiential_provider.list_model_infos()

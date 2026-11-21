@@ -463,7 +463,8 @@ class SQLiteCodeStore:
         self, cursor: tuple[int, str] | None, limit: int, query: str = ""
     ) -> CodePage:
         def operation(connection: sqlite3.Connection) -> CodePage:
-            clauses, parameters = [], []
+            clauses: list[str] = []
+            parameters: list[str | int] = []
             if query.strip():
                 clauses.append(
                     "(instr(title_search, ?) > 0 OR instr(cwd_search, ?) > 0)"

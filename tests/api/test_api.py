@@ -1,12 +1,17 @@
+from typing import override
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi.applications import FastAPI
 from fastapi.testclient import TestClient
+from httpx import Response
 
 from free_claude_code.config.constants import DEFAULT_MODEL
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import ReasoningReplayMode
+from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
@@ -32,7 +37,9 @@ from tests.providers.support import immediate_admission, make_provider_config
         ),
     ],
 )
-def test_retired_model_ingress_calls_replacement(client, stream, prefix, ref, upstream):
+def test_retired_model_ingress_calls_replacement(
+    client: TestClient, stream: bool, prefix: str, ref: str, upstream: str
+):
     original = f"{prefix}{ref}"
     _stream_messages_calls.clear()
     response = client.post(
@@ -62,10 +69,10 @@ def app():
 mock_provider = MagicMock(spec=NvidiaNimProvider)
 
 # Track stream_messages calls for test_model_mapping
-_stream_messages_calls: list = []
+_stream_messages_calls: list[tuple[tuple[MessagesRequest, ...], dict[str, object]]] = []
 
 
-async def _mock_stream_messages(*args, **kwargs):
+async def _mock_stream_messages(*args: MessagesRequest, **kwargs: object):
     """Minimal async generator for streaming tests."""
     _stream_messages_calls.append((args, kwargs))
     yield StreamOutput(
@@ -80,7 +87,7 @@ async def _mock_stream_messages(*args, **kwargs):
     )
 
 
-async def _mock_pre_start_rate_limit(*args, **kwargs):
+async def _mock_pre_start_rate_limit(*args: MessagesRequest, **kwargs: object):
     """Provider stream that fails before any downstream-visible SSE chunk."""
     _stream_messages_calls.append((args, kwargs))
     raise ExecutionFailure(
@@ -92,14 +99,14 @@ async def _mock_pre_start_rate_limit(*args, **kwargs):
     yield StreamOutput(("unreachable",))
 
 
-async def _mock_empty_stream(*args, **kwargs):
+async def _mock_empty_stream(*args: MessagesRequest, **kwargs: object):
     """Provider stream that completes without a protocol frame."""
     _stream_messages_calls.append((args, kwargs))
     if False:
         yield StreamOutput(("unreachable",))
 
 
-def _invalid_request_error(response):
+def _invalid_request_error(response: Response):
     assert response.status_code == 400
     payload = response.json()
     assert payload["type"] == "error"
@@ -108,7 +115,7 @@ def _invalid_request_error(response):
     return payload["error"]
 
 
-def _terminal_json_error(response, *, status_code: int):
+def _terminal_json_error(response: Response, *, status_code: int):
     assert response.status_code == status_code
     assert response.headers["content-type"].startswith("application/json")
     assert response.headers["x-should-retry"] == "false"
@@ -122,7 +129,7 @@ mock_provider.stream_messages = _mock_stream_messages
 
 
 @pytest.fixture
-def client(app):
+def client(app: FastAPI):
     """HTTP client with provider resolution stubbed; patch only for this file."""
     with (
         patch(
@@ -362,10 +369,12 @@ def test_create_message_pre_start_provider_error_returns_terminal_json(
     ids=["text", "clear-at"],
 )
 @pytest.mark.parametrize("leading", [True, False], ids=["leading", "mid"])
-def test_system_role_messages_are_rejected(client: TestClient, system_turn, leading):
+def test_system_role_messages_are_rejected(
+    client: TestClient, system_turn: JsonObject, leading: bool
+):
     """System prompts belong in ``system``; Claude Code retries without the turn."""
     _stream_messages_calls.clear()
-    messages = [{"role": "user", "content": "Hi"}]
+    messages: list[JsonObject] = [{"role": "user", "content": "Hi"}]
     messages.insert(0 if leading else 1, system_turn)
     if not leading:
         messages.append({"role": "user", "content": "again"})
@@ -500,7 +509,7 @@ def test_provider_execution_errors_preserve_status_and_type(
         "stream": True,
     }
 
-    def _raise_provider_error(*args, **kwargs):
+    def _raise_provider_error(*args: object, **kwargs: object):
         raise failure
 
     try:
@@ -537,7 +546,7 @@ def test_empty_provider_stream_returns_terminal_json(client: TestClient):
 def test_generic_stream_exception_returns_terminal_json(client: TestClient):
     """Unexpected provider execution failures return detailed terminal JSON."""
 
-    def _raise_runtime(*args, **kwargs):
+    def _raise_runtime(*args: object, **kwargs: object):
         raise RuntimeError("unexpected crash")
 
     mock_provider.stream_messages = _raise_runtime
@@ -566,7 +575,7 @@ def test_generic_stream_exception_with_status_code_returns_terminal_json(
             super().__init__(msg)
             self.status_code = status_code
 
-    def _raise_with_status(*args, **kwargs):
+    def _raise_with_status(*args: object, **kwargs: object):
         raise ExceptionWithStatus("bad gateway", 502)
 
     mock_provider.stream_messages = _raise_with_status
@@ -591,10 +600,11 @@ def test_generic_stream_exception_empty_message_returns_non_empty_error(
     """Exceptions with empty __str__ still return a readable HTTP detail."""
 
     class SilentError(RuntimeError):
+        @override
         def __str__(self):
             return ""
 
-    def _raise_silent(*args, **kwargs):
+    def _raise_silent(*args: object, **kwargs: object):
         raise SilentError()
 
     mock_provider.stream_messages = _raise_silent
@@ -624,7 +634,7 @@ def test_count_tokens_endpoint(client: TestClient):
     assert response.headers["request-id"].startswith("req_")
 
 
-def test_stop_endpoint_no_workflow_no_cli_503(app, client: TestClient):
+def test_stop_endpoint_no_workflow_no_cli_503(app: FastAPI, client: TestClient):
     """POST /stop without messaging workflow or cli_manager returns 503."""
     # Ensure no messaging workflow or cli_manager on app state
     if hasattr(app.state, "messaging_workflow"):

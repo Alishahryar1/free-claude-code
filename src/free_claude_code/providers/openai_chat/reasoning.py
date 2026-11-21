@@ -25,7 +25,9 @@ class ReasoningEncoder(Protocol):
 class NoReasoning:
     """Leave reasoning computation entirely to the upstream provider."""
 
-    off_field = None
+    @property
+    def off_field(self) -> None:
+        return None
 
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
         return
@@ -148,7 +150,9 @@ class LlamaCppReasoning:
 class SplitReasoningOutput:
     """Request separate reasoning output where compute is not controllable."""
 
-    off_field = None
+    @property
+    def off_field(self) -> None:
+        return None
 
     def encode(self, body: dict[str, Any], policy: ReasoningPolicy) -> None:
         _extra_body(body)["reasoning_split"] = True

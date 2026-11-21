@@ -36,7 +36,7 @@ _OMITTED_DOCUMENT_BLOCK = {"type": "text", "text": _OMITTED_DOCUMENT_TEXT}
 
 def build_deepseek_request_body(
     request_data: MessagesRequest, *, reasoning: ReasoningPolicy
-) -> dict:
+) -> dict[str, Any]:
     """Build a DeepSeek Chat Completions body from an Anthropic request."""
     logger.debug(
         "DEEPSEEK_REQUEST: chat build model={} msgs={}",

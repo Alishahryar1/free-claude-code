@@ -23,7 +23,7 @@ def object_value(value: object) -> JsonObject:
 
 
 def array_value(value: object) -> list[JsonValue]:
-    return list(value) if isinstance(value, list | tuple) else []
+    return list(value) if isinstance(value, (list, tuple)) else []
 
 
 def string_value(value: object) -> str:

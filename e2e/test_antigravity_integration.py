@@ -1,10 +1,10 @@
 """The remaining integrations work without Antigravity's former card/scripts."""
 
-from playwright.sync_api import expect
+from playwright.sync_api import Page, expect
 
 
 def test_antigravity_card_is_removed_without_breaking_other_integrations(
-    page, admin_base_url
+    page: Page, admin_base_url: str
 ):
     errors = []
     page.on("pageerror", lambda error: errors.append(error))

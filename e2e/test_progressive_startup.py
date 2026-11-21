@@ -1,5 +1,7 @@
+from pathlib import Path
+
 import pytest
-from playwright.sync_api import expect
+from playwright.sync_api import Page, Route, expect
 
 from e2e.provider_support import api_key_input, close_provider, open_provider
 from e2e.test_code_sessions import create_session
@@ -9,12 +11,12 @@ from e2e.test_code_sessions import create_session
     "admin_base_url", [{"NVIDIA_NIM_API_KEY": "e2e-nim-key"}], indirect=True
 )
 def test_discovery_error_is_visible_in_provider_card_and_refresh_result(
-    page, admin_base_url
+    page: Page, admin_base_url: str
 ):
     proxy_message = "The network proxy rejected or failed the connection. Check your proxy settings."
     http_message = "The model-list request returned HTTP 403."
 
-    def status(route):
+    def status(route: Route):
         data = route.fetch().json()
         data["startup"]["providers"]["nvidia_nim"] = "failed"
         data["startup"]["provider_errors"] = {"nvidia_nim": proxy_message}
@@ -42,7 +44,9 @@ def test_discovery_error_is_visible_in_provider_card_and_refresh_result(
     expect(card).to_contain_text(http_message)
 
 
-def test_provider_and_messaging_progress_preserve_settings(page, admin_base_url):
+def test_provider_and_messaging_progress_preserve_settings(
+    page: Page, admin_base_url: str
+):
     starting = True
     provider_tests = []
     page.on(
@@ -54,7 +58,7 @@ def test_provider_and_messaging_progress_preserve_settings(page, admin_base_url)
         ),
     )
 
-    def status(route):
+    def status(route: Route):
         data = route.fetch().json()
         data["startup"]["providers"]["open_router"] = (
             "starting" if starting else "ready"
@@ -101,11 +105,11 @@ def test_provider_and_messaging_progress_preserve_settings(page, admin_base_url)
 
 
 def test_codex_connect_waits_for_catalog_and_recovers_from_publication_error(
-    page, admin_base_url
+    page: Page, admin_base_url: str
 ):
     phase = "starting"
 
-    def status(route):
+    def status(route: Route):
         data = route.fetch().json()
         data["startup"]["catalog_file"] = phase
         route.fulfill(json=data)
@@ -137,11 +141,11 @@ def test_codex_connect_waits_for_catalog_and_recovers_from_publication_error(
 
 
 def test_initial_code_catalog_wait_keeps_history_and_draft(
-    page, admin_base_url, tmp_path
+    page: Page, admin_base_url: str, tmp_path: Path
 ):
     starting = True
 
-    def bootstrap(route):
+    def bootstrap(route: Route):
         data = route.fetch().json()
         if starting:
             data["models"] = []
@@ -149,7 +153,7 @@ def test_initial_code_catalog_wait_keeps_history_and_draft(
             data["startup"]["providers"]["provider"] = "starting"
         route.fulfill(json=data)
 
-    def status(route):
+    def status(route: Route):
         data = route.fetch().json()
         if starting:
             data["startup"]["catalog"] = "starting"
@@ -172,7 +176,7 @@ def test_initial_code_catalog_wait_keeps_history_and_draft(
 
 
 def test_failed_catalog_refresh_preserves_synchronized_session(
-    page, admin_base_url, tmp_path
+    page: Page, admin_base_url: str, tmp_path: Path
 ):
     page.add_init_script("""{
       const Feed = window.EventSource;
@@ -197,7 +201,7 @@ def test_failed_catalog_refresh_preserves_synchronized_session(
 
 
 def test_code_catalog_cannot_roll_back_after_a_newer_startup_status(
-    page, admin_base_url, tmp_path
+    page: Page, admin_base_url: str, tmp_path: Path
 ):
     create_session(page, admin_base_url, tmp_path)
     composer = page.locator("#codeComposer")
@@ -227,7 +231,7 @@ def test_code_catalog_cannot_roll_back_after_a_newer_startup_status(
 
 
 def test_code_catalog_coalesces_notifications_and_catches_up_to_latest_version(
-    page, admin_base_url, tmp_path
+    page: Page, admin_base_url: str, tmp_path: Path
 ):
     create_session(page, admin_base_url, tmp_path)
     page.wait_for_function("!state.startupRequest && !state.startupTimer")
@@ -248,7 +252,7 @@ def test_code_catalog_coalesces_notifications_and_catches_up_to_latest_version(
     pending = []
     calls = 0
 
-    def bootstrap(route):
+    def bootstrap(route: Route):
         nonlocal calls
         calls += 1
         if calls == 1:

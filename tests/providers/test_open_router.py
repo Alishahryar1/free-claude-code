@@ -1,12 +1,14 @@
 """Tests for the OpenRouter OpenAI-chat provider."""
 
 import json
+from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx2
 import openai
 import pytest
+from openai.types.chat import ChatCompletionChunk
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
@@ -18,6 +20,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     thinking_content,
 )
 from free_claude_code.core.failures import FailureKind
+from free_claude_code.core.json_types import JsonValue
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.providers.failure_reporting import finalize_provider_failure
 from free_claude_code.providers.open_router import OpenRouterProvider
@@ -41,7 +44,7 @@ def image_routing_error_body():
     }
 
 
-def routing_error(body, status=404):
+def routing_error(body: JsonValue, status: int = 404):
     return openai.APIStatusError(
         "OpenRouter routing failed",
         response=httpx2.Response(
@@ -59,7 +62,7 @@ def routing_error(body, status=404):
     "message", ["No endpoints found that support image input", "Image routing rejected"]
 )
 def test_image_routing_failure_explains_unsupported_input(
-    open_router_provider, wrapped, message
+    open_router_provider: OpenRouterProvider, wrapped: bool, message: str
 ):
     body = {**image_routing_error_body(), "message": message}
     error = routing_error({"error": body} if wrapped else body)
@@ -107,7 +110,9 @@ def test_image_routing_failure_explains_unsupported_input(
         None,
     ],
 )
-def test_unrelated_routing_errors_keep_shared_policy(open_router_provider, body):
+def test_unrelated_routing_errors_keep_shared_policy(
+    open_router_provider: OpenRouterProvider, body: JsonValue
+):
     error = routing_error(body)
     behavior = open_router_provider._chat._behavior
     assert behavior.failure_override(error) is None
@@ -124,7 +129,7 @@ def test_unrelated_routing_errors_keep_shared_policy(open_router_provider, body)
 
 @pytest.mark.parametrize("status", [400, 401, 403, 429, 500, 200])
 def test_image_metadata_does_not_override_other_http_status(
-    open_router_provider, status
+    open_router_provider: OpenRouterProvider, status: int
 ):
     assert (
         open_router_provider._chat._behavior.failure_override(
@@ -134,8 +139,8 @@ def test_image_metadata_does_not_override_other_http_status(
     )
 
 
-class AsyncStream(SDKStreamDouble):
-    def __init__(self, chunks):
+class AsyncStream(SDKStreamDouble[ChatCompletionChunk]):
+    def __init__(self, chunks: list[ChatCompletionChunk]):
         self._chunks = chunks
         self.closed = False
         super().__init__(self._iter(), close=self.aclose)
@@ -148,7 +153,7 @@ class AsyncStream(SDKStreamDouble):
         self.closed = True
 
 
-def make_request(**overrides):
+def make_request(**overrides: object):
     return make_messages_request("moonshotai/kimi-k2.6:free", **overrides)
 
 
@@ -167,7 +172,7 @@ def _chunk(
     *,
     content: str | None = None,
     reasoning_content: str | None = None,
-    reasoning_details: list[dict] | None = None,
+    reasoning_details: Sequence[Mapping[str, JsonValue]] | None = None,
     finish_reason: str | None = None,
 ):
     delta = SimpleNamespace(
@@ -181,13 +186,15 @@ def _chunk(
     return sdk_chat_chunk(SimpleNamespace(choices=[choice], usage=None))
 
 
-def test_init_uses_openai_chat_provider(open_router_provider):
+def test_init_uses_openai_chat_provider(open_router_provider: OpenRouterProvider):
     assert isinstance(open_router_provider, OpenAIChatProvider)
     assert open_router_provider._api_key == "test_openrouter_key"
     assert open_router_provider._base_url == "https://openrouter.ai/api/v1"
 
 
-def test_build_request_body_uses_openai_chat_shape(open_router_provider):
+def test_build_request_body_uses_openai_chat_shape(
+    open_router_provider: OpenRouterProvider,
+):
     body = open_router_provider._chat._build_request_body(make_request())
 
     assert body["model"] == "moonshotai/kimi-k2.6:free"
@@ -200,14 +207,16 @@ def test_build_request_body_uses_openai_chat_shape(open_router_provider):
     assert "extra_body" not in body
 
 
-def test_build_request_body_default_max_tokens(open_router_provider):
+def test_build_request_body_default_max_tokens(
+    open_router_provider: OpenRouterProvider,
+):
     body = open_router_provider._chat._build_request_body(make_request(max_tokens=None))
 
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 
 
 def test_openrouter_extra_body_rejects_overriding_reserved_fields(
-    open_router_provider,
+    open_router_provider: OpenRouterProvider,
 ):
     with pytest.raises(InvalidRequestError, match="model"):
         open_router_provider._chat._build_request_body(
@@ -215,7 +224,9 @@ def test_openrouter_extra_body_rejects_overriding_reserved_fields(
         )
 
 
-def test_openrouter_extra_body_allows_provider_keys(open_router_provider):
+def test_openrouter_extra_body_allows_provider_keys(
+    open_router_provider: OpenRouterProvider,
+):
     body = open_router_provider._chat._build_request_body(
         make_request(extra_body={"transforms": ["no-web"], "plugins": []}),
         reasoning=REASONING_OFF,
@@ -229,7 +240,7 @@ def test_openrouter_extra_body_allows_provider_keys(open_router_provider):
 
 
 def test_build_request_body_disables_reasoning_when_client_disables_it(
-    open_router_provider,
+    open_router_provider: OpenRouterProvider,
 ):
     request = make_request(thinking={"type": "disabled"})
     body = open_router_provider._chat._build_request_body(
@@ -240,7 +251,7 @@ def test_build_request_body_disables_reasoning_when_client_disables_it(
 
 
 def test_build_request_body_maps_thinking_budget_to_reasoning_max_tokens(
-    open_router_provider,
+    open_router_provider: OpenRouterProvider,
 ):
     request = make_request(thinking={"type": "enabled", "budget_tokens": 4096})
     body = open_router_provider._chat._build_request_body(
@@ -251,7 +262,7 @@ def test_build_request_body_maps_thinking_budget_to_reasoning_max_tokens(
 
 
 def test_build_request_body_replays_openrouter_reasoning_details(
-    open_router_provider,
+    open_router_provider: OpenRouterProvider,
 ):
     detail = {"type": "reasoning.encrypted", "data": "opaque"}
     request = MessagesRequest.model_validate(
@@ -281,7 +292,9 @@ def test_build_request_body_replays_openrouter_reasoning_details(
     assert assistant["reasoning_details"] == [detail]
 
 
-def test_reasoning_details_skip_neutral_tool_turn_boundary(open_router_provider):
+def test_reasoning_details_skip_neutral_tool_turn_boundary(
+    open_router_provider: OpenRouterProvider,
+):
     first_detail = {"type": "reasoning.encrypted", "data": "first"}
     second_detail = {"type": "reasoning.encrypted", "data": "second"}
     request = MessagesRequest.model_validate(
@@ -341,7 +354,7 @@ def test_reasoning_details_skip_neutral_tool_turn_boundary(open_router_provider)
 
 
 def test_reasoning_details_preserve_redacted_only_assistant_after_tool(
-    open_router_provider,
+    open_router_provider: OpenRouterProvider,
 ):
     first_detail = {"type": "reasoning.encrypted", "data": "first"}
     second_detail = {"type": "reasoning.encrypted", "data": "second"}
@@ -406,7 +419,9 @@ def test_reasoning_details_preserve_redacted_only_assistant_after_tool(
 
 
 @pytest.mark.asyncio
-async def test_stream_maps_reasoning_content_and_details(open_router_provider):
+async def test_stream_maps_reasoning_content_and_details(
+    open_router_provider: OpenRouterProvider,
+):
     redacted = {"type": "reasoning.encrypted", "data": "opaque"}
     stream = AsyncStream(
         [
@@ -444,29 +459,36 @@ async def test_stream_maps_reasoning_content_and_details(open_router_provider):
 
 @pytest.mark.asyncio
 async def test_model_infos_filter_tool_models_and_thinking_metadata(
-    open_router_provider,
+    monkeypatch: pytest.MonkeyPatch,
+    open_router_provider: OpenRouterProvider,
 ):
-    open_router_provider._client.models.list = AsyncMock(
-        return_value=SimpleNamespace(
-            data=[
-                SimpleNamespace(
-                    id="tool-model",
-                    supported_parameters=["tools", "reasoning"],
-                    architecture=SimpleNamespace(input_modalities=["text", "image"]),
-                    context_length=262144,
-                    top_provider=SimpleNamespace(
-                        context_length=999999,
-                        max_completion_tokens=32768,
+    monkeypatch.setattr(
+        open_router_provider._client.models,
+        "list",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                data=[
+                    SimpleNamespace(
+                        id="tool-model",
+                        supported_parameters=["tools", "reasoning"],
+                        architecture=SimpleNamespace(
+                            input_modalities=["text", "image"]
+                        ),
+                        context_length=262144,
+                        top_provider=SimpleNamespace(
+                            context_length=999999,
+                            max_completion_tokens=32768,
+                        ),
                     ),
-                ),
-                SimpleNamespace(
-                    id="tool-model-with-malformed-capabilities",
-                    supported_parameters=["tools", 7],
-                    architecture=SimpleNamespace(input_modalities=["text"]),
-                ),
-                SimpleNamespace(id="plain-model", supported_parameters=[]),
-            ]
-        )
+                    SimpleNamespace(
+                        id="tool-model-with-malformed-capabilities",
+                        supported_parameters=["tools", 7],
+                        architecture=SimpleNamespace(input_modalities=["text"]),
+                    ),
+                    SimpleNamespace(id="plain-model", supported_parameters=[]),
+                ]
+            )
+        ),
     )
 
     infos = await open_router_provider.list_model_infos()
@@ -491,7 +513,7 @@ async def test_model_infos_filter_tool_models_and_thinking_metadata(
 
 
 @pytest.mark.asyncio
-async def test_cleanup_closes_openai_client(open_router_provider):
+async def test_cleanup_closes_openai_client(open_router_provider: OpenRouterProvider):
     open_router_provider._client = MagicMock()
     open_router_provider._client.close = AsyncMock()
 

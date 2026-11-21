@@ -2,16 +2,20 @@
 
 import asyncio
 import json
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from typing import override
 
 import httpx2
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.history_replay import ReplayOrigin, decode_replay
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses.chat_request import (
     build_responses_chat_request,
 )
@@ -44,7 +48,7 @@ from tests.providers.test_history_transports import (
 from tests.wire_payload import array_payload, object_array, object_payload
 
 
-def _chunks(deltas):
+def _chunks(deltas: Sequence[tuple[Mapping[str, JsonValue], str | None]]):
     return [
         {
             "id": "chat_native_reasoning",
@@ -60,7 +64,9 @@ def _chunks(deltas):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("thinking", ["", "Plan."])
-async def test_plain_reasoning_emits_no_artificial_replay_state(wire, thinking):
+async def test_plain_reasoning_emits_no_artificial_replay_state(
+    wire: str, thinking: str
+):
     upstream = _chunks(
         [
             ({"reasoning_content": thinking}, None),
@@ -104,7 +110,7 @@ async def test_plain_reasoning_emits_no_artificial_replay_state(wire, thinking):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_late_opaque_metadata_finishes_before_answer(wire):
+async def test_late_opaque_metadata_finishes_before_answer(wire: str):
     upstream = _chunks(
         [
             (
@@ -172,7 +178,9 @@ async def test_late_opaque_metadata_finishes_before_answer(wire):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["messages", "responses"])
-async def test_native_reasoning_is_forwarded_without_replacement(protocol):
+async def test_native_reasoning_is_forwarded_without_replacement(
+    protocol: WireProtocol,
+):
     async with _harness(protocol) as (send, _, _):
         saved = await _saved_reply(
             send(protocol, [{"role": "user", "content": "hello"}]), protocol
@@ -185,7 +193,7 @@ async def test_native_reasoning_is_forwarded_without_replacement(protocol):
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("signature_first", [False, True])
 async def test_google_message_signature_round_trips_in_its_native_field(
-    wire, signature_first
+    wire: WireProtocol, signature_first: bool
 ):
     upstream = _chunks(
         [
@@ -244,7 +252,7 @@ async def test_google_message_signature_round_trips_in_its_native_field(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("provider_kind", ["google", "structured"])
 async def test_interrupted_opaque_only_state_keeps_hidden_retry_eligible(
-    wire, provider_kind
+    wire: WireProtocol, provider_kind: str
 ):
     delta = (
         {"extra_content": {"google": {"thought_signature": "abandoned-signature"}}}
@@ -262,6 +270,7 @@ async def test_interrupted_opaque_only_state_keeps_hidden_retry_eligible(
     first = _chunks([(delta, None)])
 
     class Cutoff(httpx2.AsyncByteStream):
+        @override
         async def __aiter__(self):
             yield ("data: " + json.dumps(first[0]) + "\n\n").encode()
             await asyncio.sleep(0.9)
@@ -348,7 +357,7 @@ async def test_responses_late_cipher_preserves_thinking_and_final_answer():
     }
     terminal = original[-1]
     array_payload(object_payload(terminal["response"])["output"]).append(message)
-    upstream = [
+    upstream: list[JsonObject] = [
         *original[:3],
         {
             "type": "response.output_item.added",
@@ -431,7 +440,7 @@ async def test_responses_retains_distinct_summary_and_full_reasoning():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_hiding_readable_thinking_preserves_opaque_replay_state(wire):
+async def test_hiding_readable_thinking_preserves_opaque_replay_state(wire: str):
     upstream = _chunks(
         [
             (
@@ -557,7 +566,9 @@ def test_existing_responses_tool_delta_does_not_close_final_text():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_unrecognized_detail_data_is_not_a_reasoning_signature(wire):
+async def test_unrecognized_detail_data_is_not_a_reasoning_signature(
+    wire: WireProtocol,
+):
     upstream = _chunks(
         [
             (
@@ -584,7 +595,9 @@ async def test_unrecognized_detail_data_is_not_a_reasoning_signature(wire):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_fragmented_summary_and_distinct_full_thought_replay_once(wire):
+async def test_fragmented_summary_and_distinct_full_thought_replay_once(
+    wire: WireProtocol,
+):
     upstream = _chunks(
         [
             (
@@ -640,6 +653,7 @@ async def test_hidden_readable_only_cutoff_retries_without_delivered_content():
     )
 
     class Cutoff(httpx2.AsyncByteStream):
+        @override
         async def __aiter__(self):
             yield ("data: " + json.dumps(first[0]) + "\n\n").encode()
             await asyncio.sleep(0.9)
@@ -664,7 +678,9 @@ async def test_hidden_readable_only_cutoff_retries_without_delivered_content():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("answer_before_done", [False, True])
-async def test_completed_full_reasoning_survives_streamed_summary(answer_before_done):
+async def test_completed_full_reasoning_survives_streamed_summary(
+    answer_before_done: bool,
+):
     upstream = deepcopy(_events_for("responses"))
     object_payload(upstream[3]["item"])["content"] = [
         {"type": "reasoning_text", "text": "Distinct full thought."}
@@ -732,7 +748,7 @@ async def test_completed_full_reasoning_survives_streamed_summary(answer_before_
 
 
 @pytest.mark.parametrize("summary", [False, True])
-def test_responses_seeded_reasoning_and_fragments_are_completed_once(summary):
+def test_responses_seeded_reasoning_and_fragments_are_completed_once(summary: bool):
     stream = ResponsesProviderStream(
         origin=ReplayOrigin("test", "responses", "", "", "m"),
         message_id="msg_test",

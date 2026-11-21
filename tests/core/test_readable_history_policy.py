@@ -13,6 +13,7 @@ from free_claude_code.core.history_replay import (
     encode_replay,
     prepare_history,
 )
+from free_claude_code.core.json_types import JsonValue
 
 
 def origin(protocol: HistoryProtocol = "chat"):
@@ -54,7 +55,7 @@ def test_default_all_retains_old_reasoning_and_adds_empty_assistant_fields():
 
 
 @pytest.mark.parametrize("field", ["reasoning_content", "reasoning"])
-def test_empty_placeholder_uses_destination_native_field(field):
+def test_empty_placeholder_uses_destination_native_field(field: str):
     result = prepare_history(
         {"messages": [{"role": "assistant", "content": "Answer"}]},
         origin(),
@@ -67,7 +68,7 @@ def test_empty_placeholder_uses_destination_native_field(field):
 @pytest.mark.parametrize("explicit_empty", [False, True])
 @pytest.mark.parametrize("mode", list(HistoryMode))
 def test_discarded_protected_history_does_not_remove_included_empty_slot(
-    field, explicit_empty, mode
+    field: str, explicit_empty: bool, mode: HistoryMode
 ):
     carrier = encode_replay(
         ReplayRecord(
@@ -104,7 +105,7 @@ def test_discarded_protected_history_does_not_remove_included_empty_slot(
 @pytest.mark.parametrize("explicit_empty", [False, True])
 @pytest.mark.parametrize("mode", list(HistoryMode))
 def test_retained_native_details_preserve_explicit_empty_without_inventing_it(
-    explicit_empty, mode
+    explicit_empty: bool, mode: HistoryMode
 ):
     details = [{"type": "reasoning.encrypted", "data": "opaque"}]
     source = {
@@ -152,7 +153,7 @@ def test_user_and_tool_result_messages_never_get_placeholders():
         ("none", [None, None, None, None]),
     ],
 )
-def test_three_scope_definitions_preserve_source(mode, expected):
+def test_three_scope_definitions_preserve_source(mode: str, expected: JsonValue):
     from free_claude_code.core.history_replay import HistoryMode
 
     body = history()
@@ -169,7 +170,7 @@ def test_three_scope_definitions_preserve_source(mode, expected):
 
 
 @pytest.mark.parametrize("mixed", [False, True])
-def test_messages_tool_result_envelopes_only_start_user_turn_when_mixed(mixed):
+def test_messages_tool_result_envelopes_only_start_user_turn_when_mixed(mixed: bool):
     from free_claude_code.core.history_replay import HistoryMode
 
     content = [
@@ -214,7 +215,7 @@ def test_current_without_user_includes_existing_assistant():
 
 
 @pytest.mark.parametrize("mode", ["all", "current", "none"])
-def test_native_records_stay_exact_in_all_modes(mode):
+def test_native_records_stay_exact_in_all_modes(mode: str):
     from free_claude_code.core.history_replay import HistoryMode
 
     native = {

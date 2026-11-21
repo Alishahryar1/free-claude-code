@@ -6,7 +6,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Literal
+from typing import Literal, override
 
 from free_claude_code.core.json_types import JsonObject
 
@@ -208,19 +208,31 @@ def dsh_provider(scenario: DshProvider) -> Generator[str]:
             events = [
                 {
                     "type": "response.created",
-                    "response": {**response, "status": "in_progress", "output": []},
+                    "response": {
+                        **response,
+                        "status": "in_progress",
+                        "output": list[JsonObject](),
+                    },
                 },
                 {
                     "type": "response.output_item.added",
                     "output_index": 0,
-                    "item": {**message, "status": "in_progress", "content": []},
+                    "item": {
+                        **message,
+                        "status": "in_progress",
+                        "content": list[JsonObject](),
+                    },
                 },
                 {
                     "type": "response.content_part.added",
                     "item_id": "msg_fixture",
                     "output_index": 0,
                     "content_index": 0,
-                    "part": {"type": "output_text", "text": "", "annotations": []},
+                    "part": {
+                        "type": "output_text",
+                        "text": "",
+                        "annotations": list[JsonObject](),
+                    },
                 },
                 {
                     "type": "response.output_text.delta",
@@ -277,6 +289,7 @@ def dsh_provider(scenario: DshProvider) -> Generator[str]:
             self.wfile.write(body)
             self.close_connection = True
 
+        @override
         def log_message(self, format: str, *args: object) -> None:
             return
 

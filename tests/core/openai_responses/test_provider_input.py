@@ -3,6 +3,7 @@ import json
 import pytest
 
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses.errors import ResponsesConversionError
 from free_claude_code.core.openai_responses.provider_input import (
     build_responses_provider_request,
@@ -252,7 +253,9 @@ def test_responses_provider_request_preserves_rich_tool_output_order() -> None:
         {"type": "file", "file_id": "file_1"},
     ),
 )
-def test_responses_provider_request_rejects_unportable_tool_image(source) -> None:
+def test_responses_provider_request_rejects_unportable_tool_image(
+    source: JsonObject,
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "gpt-test",

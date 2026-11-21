@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.history_replay import (
     HistoryMode,
     HistoryReplayError,
@@ -14,6 +15,7 @@ from free_claude_code.core.history_replay import (
     encode_replay,
     prepare_history,
 )
+from free_claude_code.core.json_types import JsonObject
 
 ORIGIN = ReplayOrigin(
     "gemini",
@@ -42,8 +44,8 @@ def test_native_signature_record_round_trip_keeps_every_part():
 
 
 @pytest.mark.parametrize("mode", list(HistoryMode))
-def test_native_signature_parts_survive_history_projection(mode):
-    body = {
+def test_native_signature_parts_survive_history_projection(mode: HistoryMode):
+    body: JsonObject = {
         "model": "models/model",
         "contents": [
             {
@@ -141,7 +143,9 @@ def test_native_record_does_not_cross_credentials():
 
 
 @pytest.mark.parametrize("protocol", ["messages", "responses", "chat"])
-def test_native_gemini_protected_state_is_not_degraded_on_foreign_egress(protocol):
+def test_native_gemini_protected_state_is_not_degraded_on_foreign_egress(
+    protocol: WireProtocol,
+):
     carrier = encode_replay(
         ReplayRecord(
             ORIGIN,
@@ -180,7 +184,7 @@ def test_native_gemini_protected_state_is_not_degraded_on_foreign_egress(protoco
 
 
 @pytest.mark.parametrize("added", [False, True])
-def test_native_signed_call_accepts_only_declared_default_additions(added):
+def test_native_signed_call_accepts_only_declared_default_additions(added: bool):
     native: dict[str, Any] = {
         "role": "model",
         "parts": [

@@ -5,7 +5,9 @@ import pytest
 
 
 @pytest.mark.parametrize("platform", ["linux", "darwin"])
-def test_other_platforms_do_not_load_windows_ui(monkeypatch, platform):
+def test_other_platforms_do_not_load_windows_ui(
+    monkeypatch: pytest.MonkeyPatch, platform: str
+):
     from free_claude_code.core import windows_dpi
 
     def load_windows(*_args, **_kwargs):
@@ -18,7 +20,7 @@ def test_other_platforms_do_not_load_windows_ui(monkeypatch, platform):
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows DPI APIs")
 @pytest.mark.parametrize("preset", ["none", "system", "per-monitor"])
-def test_native_windows_use_scaling_and_respect_existing_awareness(preset):
+def test_native_windows_use_scaling_and_respect_existing_awareness(preset: str):
     # DPI awareness is process-wide and can only be set once. Each case needs
     # its own process so other tests and the test runner keep their own mode.
     result = subprocess.run(

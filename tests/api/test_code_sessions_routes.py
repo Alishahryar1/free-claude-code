@@ -1,19 +1,22 @@
 import asyncio
 import uuid
+from pathlib import Path
 
 import httpx
 import pytest
 import pytest_asyncio
+from fastapi import FastAPI
 
 from free_claude_code.application.code_sessions import CodeService
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
 from tests.api.support import create_test_app
 from tests.code_sessions_support import CodexPackets, FakeHarness, close_code_database
+from tests.fixture_types import DatabaseFactory
 
 
 @pytest_asyncio.fixture
-async def code_api(database_factory, tmp_path):
+async def code_api(database_factory: DatabaseFactory, tmp_path: Path):
     harness = FakeHarness()
     code = CodeService(
         SQLiteCodeStore(database_factory(tmp_path / "code.db", tmp_path / "code.lock")),
@@ -32,7 +35,9 @@ async def code_api(database_factory, tmp_path):
         await app.state.services.admin.close()
 
 
-async def create_session(code_api):
+async def create_session(
+    code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
+):
     client, _, _, folder, _ = code_api
     response = await client.post(
         "/admin/api/code/sessions",
@@ -43,7 +48,9 @@ async def create_session(code_api):
 
 
 @pytest.mark.asyncio
-async def test_detail_exposes_child_review_liveness_without_native_source(code_api):
+async def test_detail_exposes_child_review_liveness_without_native_source(
+    code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
+):
     client, code, harness, _, _ = code_api
     session = await create_session(code_api)
     path = f"/admin/api/code/sessions/{session['id']}"
@@ -72,7 +79,9 @@ async def test_detail_exposes_child_review_liveness_without_native_source(code_a
 
 
 @pytest.mark.asyncio
-async def test_mode_is_saved_but_native_defaults_stay_private(code_api):
+async def test_mode_is_saved_but_native_defaults_stay_private(
+    code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
+):
     client, code, harness, _, _ = code_api
     harness.configurations["other/vendor/model"] = "other"
     session = await create_session(code_api)
@@ -117,7 +126,9 @@ async def test_mode_is_saved_but_native_defaults_stay_private(code_api):
 
 
 @pytest.mark.asyncio
-async def test_code_library_has_one_harness_and_no_native_work_on_open(code_api):
+async def test_code_library_has_one_harness_and_no_native_work_on_open(
+    code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
+):
     client, _, harness, _, _ = code_api
     bootstrap = await client.get("/admin/api/code/bootstrap")
     assert bootstrap.json()["harnesses"] == [{"id": "codex", "name": "Codex"}]
@@ -133,7 +144,7 @@ async def test_code_library_has_one_harness_and_no_native_work_on_open(code_api)
 
 @pytest.mark.asyncio
 async def test_context_usage_and_raw_provider_capacity_are_public_session_state(
-    code_api,
+    code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
 ):
     client, code, harness, _, _ = code_api
     harness.context_windows[harness.model] = 100_000
@@ -162,7 +173,9 @@ async def test_context_usage_and_raw_provider_capacity_are_public_session_state(
 
 
 @pytest.mark.asyncio
-async def test_http_send_competition_and_safe_item_projection(code_api):
+async def test_http_send_competition_and_safe_item_projection(
+    code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
+):
     client, code, harness, _, _ = code_api
     session = await create_session(code_api)
     path = f"/admin/api/code/sessions/{session['id']}"
@@ -195,7 +208,9 @@ async def test_http_send_competition_and_safe_item_projection(code_api):
 
 
 @pytest.mark.asyncio
-async def test_code_commands_reject_unplanned_fields_and_other_harnesses(code_api):
+async def test_code_commands_reject_unplanned_fields_and_other_harnesses(
+    code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
+):
     client, code, _, folder, _ = code_api
     response = await client.post(
         "/admin/api/code/sessions",
@@ -220,7 +235,10 @@ async def test_code_commands_reject_unplanned_fields_and_other_harnesses(code_ap
 @pytest.mark.parametrize(
     "headers", [{"host": "remote.example"}, {"origin": "https://remote.example"}]
 )
-async def test_code_routes_share_admin_access_boundary(code_api, headers):
+async def test_code_routes_share_admin_access_boundary(
+    code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
+    headers: dict[str, str],
+):
     client, _, harness, _, _ = code_api
     for path in (
         "/admin/code",
@@ -236,13 +254,15 @@ async def test_code_routes_share_admin_access_boundary(code_api, headers):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancelled", [False, True])
 async def test_folder_selection_only_returns_to_requesting_form(
-    code_api, monkeypatch, cancelled
+    code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
+    monkeypatch: pytest.MonkeyPatch,
+    cancelled: bool,
 ):
     client, _, harness, folder, app = code_api
     selected = None if cancelled else str(folder)
     hints = []
 
-    async def pick(initial_path):
+    async def pick(initial_path: str):
         hints.append(initial_path)
         return selected
 
@@ -259,7 +279,10 @@ async def test_folder_selection_only_returns_to_requesting_form(
 
 
 @pytest.mark.asyncio
-async def test_folder_picker_errors_use_admin_detail(code_api, monkeypatch):
+async def test_folder_picker_errors_use_admin_detail(
+    code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
+    monkeypatch: pytest.MonkeyPatch,
+):
     client, _, _, _, app = code_api
 
     async def pick(_initial_path):
@@ -273,7 +296,8 @@ async def test_folder_picker_errors_use_admin_detail(code_api, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_folder_picker_only_opens_on_an_authorized_explicit_post(
-    code_api, monkeypatch
+    code_api: tuple[httpx.AsyncClient, CodeService, FakeHarness, Path, FastAPI],
+    monkeypatch: pytest.MonkeyPatch,
 ):
     client, _, _, _, app = code_api
 

@@ -1,5 +1,6 @@
 """Tests for the local and Cloud Ollama OpenAI-compatible providers."""
 
+from collections.abc import Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -143,7 +144,9 @@ def test_cloud_build_request_body_replays_thinking_in_ollama_reasoning_field() -
 
 
 @pytest.mark.parametrize("provider", [_provider, _cloud_provider])
-def test_replay_is_independent_of_disabled_current_turn_reasoning(provider) -> None:
+def test_replay_is_independent_of_disabled_current_turn_reasoning(
+    provider: Callable[[], OpenAIChatProvider],
+) -> None:
     request = make_messages_request(
         OLLAMA_CLOUD_MODEL,
         messages=[

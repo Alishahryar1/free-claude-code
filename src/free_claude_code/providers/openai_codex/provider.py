@@ -5,7 +5,7 @@ import sys
 import uuid
 from collections.abc import AsyncIterator, Mapping
 from importlib.metadata import PackageNotFoundError, version
-from typing import Any
+from typing import Any, override
 
 import httpx2
 from openai import AsyncOpenAI
@@ -211,6 +211,7 @@ class OpenAICodexProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_chat(
         self,
         request: ChatRequest,
@@ -233,6 +234,7 @@ class OpenAICodexProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_gemini(
         self,
         request: GeminiRequest,

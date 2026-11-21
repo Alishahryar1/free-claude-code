@@ -2,6 +2,7 @@
 
 import json
 import time
+from collections.abc import Mapping
 from copy import deepcopy
 from unittest.mock import patch
 
@@ -20,7 +21,7 @@ from free_claude_code.core.history_replay import (
     ReplayRecord,
     encode_replay,
 )
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.history_replay import replay_origin
 from free_claude_code.providers.recovery_policy import RecoveryTiming
@@ -32,9 +33,10 @@ from tests.providers.test_lmstudio import (
     metadata_response,
     provider_with_http,
 )
+from tests.wire_payload import object_payload
 
 
-def replay_request(wire, record):
+def replay_request(wire: str, record: ReplayRecord):
     carrier = encode_replay(record)
     if wire == "gemini":
         return gemini_request(
@@ -80,10 +82,12 @@ def replay_request(wire, record):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses", "gemini"])
 @pytest.mark.parametrize("source", ["same", "foreign", "opaque"])
-async def test_budget_counts_readable_projection_but_not_opaque_carriers(wire, source):
+async def test_budget_counts_readable_projection_but_not_opaque_carriers(
+    wire: str, source: str
+):
     sent = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         if request.method == "GET":
             return metadata_response(1024)
         sent.append(json.loads(request.content))
@@ -125,10 +129,11 @@ async def test_budget_counts_readable_projection_but_not_opaque_carriers(wire, s
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses", "gemini"])
-async def test_correction_revalidates_the_exact_prepared_body(wire):
-    sent, inspected = [], []
+async def test_correction_revalidates_the_exact_prepared_body(wire: str):
+    sent: list[JsonObject] = []
+    inspected: list[JsonObject] = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         if request.method == "GET":
             return metadata_response()
         sent.append(json.loads(request.content))
@@ -143,8 +148,8 @@ async def test_correction_revalidates_the_exact_prepared_body(wire):
         original_check = provider._chat._validate_prepared_body
         assert original_check is not None
 
-        async def validate(body):
-            before = deepcopy(body)
+        async def validate(body: Mapping[str, JsonValue]):
+            before = deepcopy(dict(body))
             await original_check(body)
             assert body == before
             inspected.append(before)
@@ -161,16 +166,18 @@ async def test_correction_revalidates_the_exact_prepared_body(wire):
     for checked, actual in zip(inspected, sent, strict=True):
         assert checked["messages"] == actual["messages"]
         assert checked["tools"] == actual["tools"]
-        assert not {"messages", "tools"}.intersection(checked.get("extra_body", {}))
+        assert not {"messages", "tools"}.intersection(
+            object_payload(checked.get("extra_body", {}))
+        )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses", "gemini"])
-async def test_local_rejection_abandons_probe_without_upstream_rejection(wire):
+async def test_local_rejection_abandons_probe_without_upstream_rejection(wire: str):
     inference = 0
     checks = 0
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         nonlocal inference
         if request.method == "GET":
             return metadata_response()
@@ -186,7 +193,7 @@ async def test_local_rejection_abandons_probe_without_upstream_rejection(wire):
         original_check = provider._chat._validate_prepared_body
         assert original_check is not None
 
-        async def validate(body):
+        async def validate(body: Mapping[str, JsonValue]):
             nonlocal checks
             checks += 1
             if checks == 2:
@@ -222,7 +229,7 @@ async def test_internal_continuation_is_rechecked_before_another_inference():
     inference = 0
     checked = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         nonlocal inference
         if request.method == "GET":
             return metadata_response(1024)
@@ -233,8 +240,8 @@ async def test_internal_continuation_is_rechecked_before_another_inference():
         original_check = provider._chat._validate_prepared_body
         assert original_check is not None
 
-        async def validate(body):
-            checked.append(deepcopy(body))
+        async def validate(body: Mapping[str, JsonValue]):
+            checked.append(deepcopy(dict(body)))
             await original_check(body)
 
         provider._chat._validate_prepared_body = validate
@@ -259,21 +266,22 @@ async def test_internal_continuation_is_rechecked_before_another_inference():
 @pytest.mark.parametrize("wire", ["messages", "responses", "gemini"])
 @pytest.mark.parametrize("tool_result", [False, True])
 async def test_direct_and_tool_result_images_are_counted_once(
-    wire, tool_result, monkeypatch
+    wire: str, tool_result: bool, monkeypatch: pytest.MonkeyPatch
 ):
     from free_claude_code.providers.lmstudio import tokens
 
     data = "A" * 900000
-    sizes, sent = [], []
+    sizes: list[int] = []
+    sent: list[httpx2.Request] = []
     original_cost = tokens.estimate_image_tokens
 
-    def image_cost(size):
+    def image_cost(size: int):
         sizes.append(size)
         return original_cost(size)
 
     monkeypatch.setattr(tokens, "estimate_image_tokens", image_cost)
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         if request.method == "GET":
             return metadata_response(200)
         sent.append(request)

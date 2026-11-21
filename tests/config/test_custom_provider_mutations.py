@@ -1,5 +1,7 @@
 import json
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -11,11 +13,15 @@ from free_claude_code.config.loader import (
     ManagedConfigSnapshot,
     compose_settings_snapshot,
 )
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.runtime.diagnostics import settings_report
 from tests.config.credential_support import credential_edit
+from tests.wire_payload import object_payload
 
 
-def snapshot(values=None, process=None):
+def snapshot(
+    values: Mapping[str, str] | None = None, process: dict[str, str] | None = None
+):
     values, process = values or {}, process or {}
     result = compose_settings_snapshot(values, process)
     return ManagedConfigSnapshot(
@@ -23,7 +29,13 @@ def snapshot(values=None, process=None):
     )
 
 
-def mutate(state, action, provider_id=None, values=None, routes=None):
+def mutate(
+    state: ManagedConfigSnapshot,
+    action: Literal["create", "delete", "update"],
+    provider_id: str | None = None,
+    values: JsonObject | None = None,
+    routes: dict[str, str | None] | None = None,
+):
     values = dict(values or {})
     if "api_key" in values:
         public = load_config_response(state, revision_key=b"test-revision-key")
@@ -40,7 +52,9 @@ def mutate(state, action, provider_id=None, values=None, routes=None):
         projection = (
             existing["api_keys"] if existing else {"revision": None, "entries": []}
         )
-        values["api_keys"] = credential_edit(projection, values.pop("api_key"))
+        values["api_keys"] = credential_edit(
+            object_payload(projection), values.pop("api_key")
+        )
     return prepare_admin_update(
         routes or {},
         state,
@@ -112,7 +126,7 @@ def test_deletion_requires_reassignment_and_is_idempotent():
 
 
 @pytest.mark.parametrize("process_owned", [False, True])
-def test_deletion_recognizes_structured_fallback_references(process_owned):
+def test_deletion_recognizes_structured_fallback_references(process_owned: bool):
     state, provider_id = created()
     entries = [{"model": f"{provider_id}/one", "reasoning": "low"}]
     value = json.dumps(entries)

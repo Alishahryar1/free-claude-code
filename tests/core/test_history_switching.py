@@ -1,6 +1,7 @@
 """Regressions for history loss when changing upstream providers."""
 
 import json
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any, cast
 
@@ -14,6 +15,7 @@ from free_claude_code.core.history_replay import (
     ReplayOrigin,
     prepare_history,
 )
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses.chat_request import (
     build_responses_chat_request,
 )
@@ -30,7 +32,7 @@ from tests.providers.support import (
 from tests.wire_payload import object_array, object_payload
 
 
-def _chat(items):
+def _chat(items: Sequence[Mapping[str, JsonValue]]):
     messages = build_responses_chat_request(
         OpenAIResponsesRequest(model="synthetic", input=items),
         reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
@@ -40,7 +42,7 @@ def _chat(items):
     return object_array(messages)
 
 
-def _reasoning(text, opaque):
+def _reasoning(text: str, opaque: str):
     return {
         "type": "reasoning",
         "content": [{"type": "reasoning_text", "text": text}],
@@ -48,7 +50,7 @@ def _reasoning(text, opaque):
     }
 
 
-def _call(call_id, arguments="{}"):
+def _call(call_id: str, arguments: str = "{}"):
     return {
         "type": "function_call",
         "call_id": call_id,
@@ -193,12 +195,12 @@ def test_deepseek_tools_require_reasoning_on_earlier_plain_assistant_turns():
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-def test_deepseek_off_to_on_preserves_effort_and_all_available_history(wire):
+def test_deepseek_off_to_on_preserves_effort_and_all_available_history(wire: str):
     provider = DeepSeekProvider(
         make_provider_config(api_key="synthetic", base_url="https://example.invalid"),
         admission=immediate_admission(),
     )
-    function = {"type": "object", "properties": {}}
+    function: JsonObject = {"type": "object", "properties": {}}
     if wire == "messages":
         request = MessagesRequest.model_validate(
             {
@@ -404,7 +406,7 @@ def test_completed_native_hosted_tools_become_readable_chat_history():
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-def test_malformed_carrier_fails_startup_before_inference(wire):
+def test_malformed_carrier_fails_startup_before_inference(wire: str):
     from free_claude_code.application.errors import InvalidRequestError
 
     provider = OpenRouterProvider(
@@ -446,7 +448,7 @@ def test_malformed_carrier_fails_startup_before_inference(wire):
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-def test_destination_without_native_reasoning_keeps_readable_context(wire):
+def test_destination_without_native_reasoning_keeps_readable_context(wire: str):
     if wire == "responses":
         body = build_responses_chat_request(
             OpenAIResponsesRequest(

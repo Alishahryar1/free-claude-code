@@ -1,5 +1,16 @@
+from typing import Protocol
+
 import pytest
-from playwright.sync_api import expect
+from playwright.sync_api import Locator, Page, Route, expect
+
+
+class ObserveNotice(Protocol):
+    def __call__(
+        self, phase: str, changed: bool = False, instance: str = "first"
+    ) -> None: ...
+
+
+type Notice = tuple[str, Locator, Locator, ObserveNotice]
 
 
 @pytest.fixture(
@@ -16,19 +27,19 @@ from playwright.sync_api import expect
         ("dsh-desktop", "openDshDesktopIntegration", "dshDesktopIntegrationMessage"),
     ]
 )
-def notice(page, admin_base_url, request):
+def notice(page: Page, admin_base_url: str, request: pytest.FixtureRequest) -> Notice:
     integration, button_id, message_id = request.param
     progress = {"state": "ready", "changed": True, "message": None}
     server = {"instance_id": "first"}
 
-    def startup(route):
+    def startup(route: Route):
         response = route.fetch()
         payload = response.json()
         payload["instance_id"] = server["instance_id"]
         payload["startup"]["integrations"][integration] = dict(progress)
         route.fulfill(response=response, json=payload)
 
-    def status(route):
+    def status(route: Route):
         route.fulfill(
             json={
                 "connected": True,
@@ -46,7 +57,7 @@ def notice(page, admin_base_url, request):
     # Initial page readiness can exceed five seconds on shared Windows runners.
     expect(button).to_have_text("Disconnect", timeout=10_000)
 
-    def observe(phase, changed=False, instance="first"):
+    def observe(phase: str, changed: bool = False, instance: str = "first"):
         progress.update(
             state=phase,
             changed=changed,
@@ -62,7 +73,7 @@ def notice(page, admin_base_url, request):
     return integration, button, message, observe
 
 
-def test_notices_require_a_live_changed_completion(page, notice):
+def test_notices_require_a_live_changed_completion(page: Page, notice: Notice):
     integration, button, message, observe = notice
     expect(message).to_be_hidden()
     observe("starting")
@@ -96,13 +107,13 @@ def test_notices_require_a_live_changed_completion(page, notice):
     expect(message).not_to_have_text("Update failed")
 
 
-def test_settled_poll_after_mutation_preserves_next_action(page, notice):
+def test_settled_poll_after_mutation_preserves_next_action(page: Page, notice: Notice):
     integration, button, message, observe = notice
     observe("ready")
     page.wait_for_function("!state.startupRequest && state.startupTimer === null")
     unexpected_reads = []
 
-    def fail_status(route):
+    def fail_status(route: Route):
         unexpected_reads.append(route.request)
         route.fulfill(status=503, json={"detail": "Status unavailable"})
 
@@ -142,7 +153,9 @@ def test_settled_poll_after_mutation_preserves_next_action(page, notice):
     expect(message).to_be_hidden()
 
 
-def test_missed_starting_state_still_reconciles_failure_and_recovery(page, notice):
+def test_missed_starting_state_still_reconciles_failure_and_recovery(
+    page: Page, notice: Notice
+):
     integration, button, message, observe = notice
     expect(message).to_be_hidden()
     observe("failed")
@@ -163,13 +176,13 @@ def test_missed_starting_state_still_reconciles_failure_and_recovery(page, notic
 
 @pytest.mark.parametrize("revisit_while_busy", [False, True])
 def test_busy_status_recovery_preserves_notice_without_replaying_it(
-    page, notice, revisit_while_busy
+    page: Page, notice: Notice, revisit_while_busy: bool
 ):
     integration, button, message, observe = notice
     observe("starting")
     pending = []
 
-    def hold_status(route):
+    def hold_status(route: Route):
         pending.append(route)
         page.evaluate("window.integrationStatusIntercepted = true")
 
@@ -216,7 +229,7 @@ def test_busy_status_recovery_preserves_notice_without_replaying_it(
     expect(message).to_be_hidden()
 
 
-def test_new_server_and_off_page_completions_stay_quiet(page, notice):
+def test_new_server_and_off_page_completions_stay_quiet(page: Page, notice: Notice):
     _, button, message, observe = notice
     observe("starting")
     observe("ready", changed=True, instance="second")
@@ -230,11 +243,11 @@ def test_new_server_and_off_page_completions_stay_quiet(page, notice):
     expect(message).to_be_hidden()
 
 
-def test_missed_transition_during_status_read_is_reconciled(page, notice):
+def test_missed_transition_during_status_read_is_reconciled(page: Page, notice: Notice):
     integration, button, message, observe = notice
     pending = []
 
-    def hold_status(route):
+    def hold_status(route: Route):
         pending.append(route)
 
     pattern = f"**/admin/api/integrations/{integration}"

@@ -21,7 +21,7 @@ from free_claude_code.providers.openai_chat.stream_output import (
 
 
 @pytest.fixture(params=["messages", "responses"])
-def output(request) -> ChatStreamOutput:
+def output(request: pytest.FixtureRequest) -> ChatStreamOutput:
     if request.param == "messages":
         return AnthropicChatStreamOutput(
             message_id="msg_test", model="test-model", input_tokens=1
@@ -56,7 +56,11 @@ def _argument_deltas(frames: list[str]) -> list[str]:
         "",
     ],
 )
-def test_tool_arguments_stream_without_name_specific_rewrites(output, name, arguments):
+def test_tool_arguments_stream_without_name_specific_rewrites(
+    output: AnthropicChatStreamOutput | ResponsesChatStreamOutput,
+    name: str,
+    arguments: str,
+):
     frames = output.start_events()
     frames.extend(
         output.emit_complete_tool(0, CompletedToolCall("call_task", name, arguments))
@@ -76,7 +80,9 @@ def test_tool_arguments_stream_without_name_specific_rewrites(output, name, argu
     assert "".join(_argument_deltas(frames)) == arguments
 
 
-def test_task_argument_aliases_are_restored_recursively(output):
+def test_task_argument_aliases_are_restored_recursively(
+    output: AnthropicChatStreamOutput | ResponsesChatStreamOutput,
+):
     arguments = restore_tool_argument_aliases(
         '{"run_in_background":true,"wire_prompt":"inspect","nested":[{"wire_prompt":"child"}]}',
         {"wire_prompt": "prompt"},

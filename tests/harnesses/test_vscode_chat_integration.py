@@ -2,6 +2,7 @@ import json
 import os
 import stat
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -14,7 +15,7 @@ MODEL = CatalogModel("nim/model", "nim/model", "NIM Model", None)
 native_config_path = vscode.config_path
 
 
-def test_connect_refresh_disconnect_preserves_other_groups_and_options(tmp_path):
+def test_connect_refresh_disconnect_preserves_other_groups_and_options(tmp_path: Path):
     path = tmp_path / "chatLanguageModels.json"
     other = {"name": "Other", "vendor": "customendpoint", "apiKey": "other"}
     path.write_text(json.dumps([other]))
@@ -42,7 +43,7 @@ def test_connect_refresh_disconnect_preserves_other_groups_and_options(tmp_path)
     assert not vscode.configure(path, URL, "new", (MODEL,), only_existing=True)
 
 
-def test_missing_file_read_refresh_disconnect_never_creates_it(tmp_path):
+def test_missing_file_read_refresh_disconnect_never_creates_it(tmp_path: Path):
     path = tmp_path / "missing/chatLanguageModels.json"
     assert vscode.status(path) == {
         "connected": False,
@@ -56,7 +57,7 @@ def test_missing_file_read_refresh_disconnect_never_creates_it(tmp_path):
 @pytest.mark.parametrize(
     "source", ["{bad", "{}", "[1]", '[{"x":NaN}]', '[{"x":1,"x":2}]']
 )
-def test_invalid_document_is_never_overwritten(tmp_path, source):
+def test_invalid_document_is_never_overwritten(tmp_path: Path, source: str):
     path = tmp_path / "models.json"
     path.write_text(source)
     for operation in (
@@ -69,7 +70,7 @@ def test_invalid_document_is_never_overwritten(tmp_path, source):
         assert path.read_text() == source
 
 
-def test_conflict_does_not_claim_an_unmarked_group(tmp_path):
+def test_conflict_does_not_claim_an_unmarked_group(tmp_path: Path):
     path = tmp_path / "models.json"
     source = '[{"name":"Free Claude Code","vendor":"customendpoint"}]'
     path.write_text(source)
@@ -79,7 +80,7 @@ def test_conflict_does_not_claim_an_unmarked_group(tmp_path):
     assert not vscode.status(path)["connected"]
 
 
-def test_duplicate_markers_fail_but_disconnect_recovers_name_collision(tmp_path):
+def test_duplicate_markers_fail_but_disconnect_recovers_name_collision(tmp_path: Path):
     path = tmp_path / "models.json"
     vscode.configure(path, URL, "secret", (MODEL,))
     owned = json.loads(path.read_text())[0]
@@ -106,7 +107,9 @@ def test_duplicate_markers_fail_but_disconnect_recovers_name_collision(tmp_path)
         (1, 0, (118080, 81920)),
     ],
 )
-def test_token_allocation_and_capabilities(context, output, expected):
+def test_token_allocation_and_capabilities(
+    context: int | None, output: int | None, expected: tuple[int, int]
+):
     model = replace(MODEL, context_window_tokens=context, max_output_tokens=output)
     entry = vscode.model_entry(model, URL)
     assert (entry["maxInputTokens"], entry["maxOutputTokens"]) == expected
@@ -122,7 +125,7 @@ def test_token_allocation_and_capabilities(context, output, expected):
     )
 
 
-def test_comment_input_and_order_are_preserved_semantically(tmp_path):
+def test_comment_input_and_order_are_preserved_semantically(tmp_path: Path):
     path = tmp_path / "models.json"
     path.write_text('[/* comment */ {"vendor":"other", "name":"Other",},]')
     second = replace(MODEL, wire_slug="custom/z", display_name="Custom Z")
@@ -134,7 +137,7 @@ def test_comment_input_and_order_are_preserved_semantically(tmp_path):
 
 
 @pytest.mark.parametrize("support", [True, None, False])
-def test_native_effort_capability(support):
+def test_native_effort_capability(support: bool | None):
     entry = vscode.model_entry(replace(MODEL, supports_reasoning=support), URL)
     if support is False:
         assert "supportsReasoningEffort" not in entry
@@ -152,7 +155,7 @@ def test_native_effort_capability(support):
 
 
 def test_refresh_preserves_native_preferences_and_replaces_generated_capabilities(
-    tmp_path,
+    tmp_path: Path,
 ):
     path = tmp_path / "models.json"
     removed = replace(MODEL, wire_slug="nim/removed")
@@ -173,7 +176,7 @@ def test_refresh_preserves_native_preferences_and_replaces_generated_capabilitie
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file permissions")
 @pytest.mark.parametrize("already_connected", [False, True])
 def test_connect_and_unchanged_refresh_make_existing_file_private(
-    tmp_path, already_connected
+    tmp_path: Path, already_connected: bool
 ):
     path = tmp_path / "models.json"
     path.write_text("[]")
@@ -199,7 +202,13 @@ def test_connect_and_unchanged_refresh_make_existing_file_private(
         ),
     ],
 )
-def test_native_config_paths(tmp_path, monkeypatch, platform, env, tail):
+def test_native_config_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    env: str | None,
+    tail: str,
+):
     from free_claude_code.harnesses import claude_integration
 
     monkeypatch.setattr(claude_integration.sys, "platform", platform)
@@ -222,7 +231,7 @@ def test_native_config_paths(tmp_path, monkeypatch, platform, env, tail):
     ],
 )
 def test_native_effort_uses_shared_routing_and_provider_encoders(
-    effort, preference, no_thinking, expected
+    effort: str | None, preference: str, no_thinking: bool, expected: str | None
 ):
     from free_claude_code.application.routing import ModelRouter
     from free_claude_code.config.settings import Settings
@@ -271,7 +280,7 @@ def test_native_effort_uses_shared_routing_and_provider_encoders(
 
 
 def test_unchanged_permission_repair_failure_is_not_reported_as_success(
-    tmp_path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     path = tmp_path / "models.json"
     vscode.configure(path, URL, "secret", (MODEL,))

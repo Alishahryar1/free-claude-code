@@ -1,21 +1,26 @@
 import asyncio
+from collections.abc import Sequence
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.messaging.models import MessageScope
 from free_claude_code.messaging.trees import MessageState
 from free_claude_code.messaging.workflow import MessagingWorkflow
+from tests.fixture_types import IncomingMessageFactory
 
 _SCOPE = MessageScope(platform="telegram", chat_id="chat_1")
 
 
 @pytest.fixture
-def handler_integration(mock_platform, mock_cli_manager, mock_session_store):
+def handler_integration(
+    mock_platform: MagicMock, mock_cli_manager: MagicMock, mock_session_store: AsyncMock
+):
     return MessagingWorkflow(mock_platform, mock_cli_manager, mock_session_store)
 
 
-async def _events(events):
+async def _events(events: Sequence[JsonObject]):
     for event in events:
         yield event
 
@@ -30,10 +35,10 @@ async def _wait_for_idle(handler: MessagingWorkflow) -> None:
 
 @pytest.mark.asyncio
 async def test_full_conversation_flow_single_user(
-    handler_integration,
-    mock_platform,
-    mock_cli_manager,
-    incoming_message_factory,
+    handler_integration: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
 ) -> None:
     mock_platform.queue_send_message = AsyncMock(side_effect=["s1", "s2"])
     root_session = MagicMock()
@@ -92,10 +97,10 @@ async def test_full_conversation_flow_single_user(
 
 @pytest.mark.asyncio
 async def test_error_propagation_chain(
-    handler_integration,
-    mock_platform,
-    mock_cli_manager,
-    incoming_message_factory,
+    handler_integration: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
 ) -> None:
     started = asyncio.Event()
     release_error = asyncio.Event()
@@ -132,10 +137,10 @@ async def test_error_propagation_chain(
 
 @pytest.mark.asyncio
 async def test_different_trees_process_independently(
-    handler_integration,
-    mock_platform,
-    mock_cli_manager,
-    incoming_message_factory,
+    handler_integration: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
 ) -> None:
     session_one = MagicMock()
     session_one.start_task.return_value = _events([{"type": "exit", "code": 0}])

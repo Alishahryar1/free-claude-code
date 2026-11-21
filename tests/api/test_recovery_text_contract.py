@@ -9,10 +9,11 @@ import pytest
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.anthropic_messages.transport import (
@@ -41,7 +42,7 @@ class Answer(BaseModel):
     value: int
 
 
-def output_format(kind):
+def output_format(kind: str):
     if kind != "json_schema":
         return {"type": kind}
     return {
@@ -56,10 +57,14 @@ def responses_stream(
     transport: AnthropicMessagesTransport
     | OpenAIChatProvider
     | OpenAIResponsesTransport,
-    **fields,
+    **fields: JsonValue,
 ):
-    request = OpenAIResponsesRequest(
-        model="requested", input="Return value 1", **fields
+    request = OpenAIResponsesRequest.model_validate(
+        {
+            "model": "requested",
+            "input": "Return value 1",
+            **fields,
+        }
     )
     reasoning = ReasoningPolicy.provider_default()
     if isinstance(transport, AnthropicMessagesTransport):
@@ -79,7 +84,7 @@ def responses_stream(
     )
 
 
-async def consume_structured(raw, *, failed):
+async def consume_structured(raw: str, *, failed: bool):
     http = httpx2.AsyncClient(
         transport=httpx2.MockTransport(
             lambda _: httpx2.Response(
@@ -119,9 +124,9 @@ async def consume_structured(raw, *, failed):
 )
 @pytest.mark.parametrize("stage", ["healthy", "hidden_retry", "delivered_failure"])
 async def test_structured_request_keeps_healthy_output_and_failure_policy(
-    protocol, kind, stage
+    protocol: str, kind: str, stage: str
 ):
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]) -> tuple[int, JsonValue]:
         if len(bodies) == 1 and stage == "hidden_retry":
             return 200, []
         interrupted = len(bodies) == 1 and stage == "delivered_failure"
@@ -160,7 +165,7 @@ async def test_structured_request_keeps_healthy_output_and_failure_policy(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages"])
-async def test_explicit_plain_text_format_can_continue(protocol):
+async def test_explicit_plain_text_format_can_continue(protocol: str):
     async with _harness(
         protocol,
         lambda bodies: (
@@ -185,8 +190,8 @@ async def test_explicit_plain_text_format_can_continue(protocol):
 @pytest.mark.parametrize(
     "path", ["native_messages", "translated_messages", "chat_extra"]
 )
-async def test_messages_structured_request_does_not_resume_partial_json(path):
-    bodies = []
+async def test_messages_structured_request_does_not_resume_partial_json(path: str):
+    bodies: list[JsonObject] = []
     body: JsonObject = {
         "model": "requested",
         "messages": [{"role": "user", "content": "Return value 1"}],
@@ -208,7 +213,7 @@ async def test_messages_structured_request_does_not_resume_partial_json(path):
         body["output_config"] = {"format": schema}
     if path == "native_messages":
 
-        def reply(request):
+        def reply(request: httpx.Request):
             bodies.append(json.loads(request.content))
             return httpx.Response(
                 200,
@@ -258,7 +263,7 @@ async def test_messages_structured_request_does_not_resume_partial_json(path):
     assert events[-1].event == "error"
 
 
-def scored_events(text, location, *, value=True):
+def scored_events(text: str, location: str, *, value: JsonValue = True):
     events = [deepcopy(event) for event in text_events("responses", text)]
     scores = (
         [
@@ -296,8 +301,10 @@ def scored_events(text, location, *, value=True):
         for location in ("delta", "text_done", "part", "item", "terminal")
     ],
 )
-async def test_preserved_logprobs_prevent_text_reconstruction(location, continuing):
-    def reply(bodies):
+async def test_preserved_logprobs_prevent_text_reconstruction(
+    location: str, continuing: bool
+):
+    def reply(bodies: list[JsonObject]):
         if continuing and len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
         events = scored_events("Hello world." if continuing else "Hello ", location)
@@ -333,7 +340,7 @@ async def test_preserved_logprobs_prevent_text_reconstruction(location, continui
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("value", [None, []])
-async def test_empty_logprobs_do_not_block_recovery(value):
+async def test_empty_logprobs_do_not_block_recovery(value: JsonValue):
     async with _harness(
         "responses",
         lambda bodies: (
@@ -368,8 +375,8 @@ async def test_healthy_logprob_payloads_are_preserved():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("continuing", [False, True])
-async def test_echoed_structured_format_prevents_reconstruction(continuing):
-    def reply(bodies):
+async def test_echoed_structured_format_prevents_reconstruction(continuing: bool):
+    def reply(bodies: list[JsonObject]):
         events = text_events(
             "responses",
             "Hello " if len(bodies) == 1 else "world.",
@@ -394,7 +401,7 @@ async def test_echoed_structured_format_prevents_reconstruction(continuing):
 @pytest.mark.parametrize("constraint", ["structured", "logprobs"])
 @pytest.mark.parametrize("later_reasoning", [False, True])
 async def test_complete_calls_do_not_bypass_unsupported_text_guard(
-    constraint, later_reasoning
+    constraint: str, later_reasoning: bool
 ):
     prefix = text_events("responses", '{"value":', complete=False)
     if constraint == "logprobs":
@@ -428,9 +435,9 @@ async def test_complete_calls_do_not_bypass_unsupported_text_guard(
     [("responses", "messages"), ("chat", "messages"), ("chat", "responses")],
 )
 async def test_metadata_already_omitted_by_projection_does_not_block_recovery(
-    protocol, wire
+    protocol: str, wire: WireProtocol
 ):
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if protocol == "responses":
             events = scored_events("Hello " if len(bodies) == 1 else "world.", "all")
             return 200, events[:4] if len(bodies) == 1 else events
@@ -459,8 +466,10 @@ async def test_metadata_already_omitted_by_projection_does_not_block_recovery(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("constraint", ["structured", "logprobs"])
-async def test_failed_snapshot_keeps_its_error_category_with_text_metadata(constraint):
-    def reply(bodies):
+async def test_failed_snapshot_keeps_its_error_category_with_text_metadata(
+    constraint: str,
+):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
         failed = scored_events("unused", "terminal")[-1]

@@ -4,6 +4,8 @@ import asyncio
 import time
 from collections import deque
 from collections.abc import Callable
+from types import TracebackType
+from typing import Literal
 
 
 class StrictSlidingWindowLimiter:
@@ -68,5 +70,10 @@ class StrictSlidingWindowLimiter:
         await self.acquire()
         return self
 
-    async def __aexit__(self, exc_type, exc, tb) -> bool:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> Literal[False]:
         return False

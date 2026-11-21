@@ -1,6 +1,7 @@
 """Direct Gemini presentation of the shared Chat stream assembler."""
 
 from copy import deepcopy
+from typing import override
 
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.gemini.replay import CallReplay
@@ -37,6 +38,7 @@ class GeminiChatStreamOutput(ChatStreamOutput):
         )
         self._tool_names = tool_names
 
+    @override
     def capture_reasoning_record(
         self,
         native: JsonObject,

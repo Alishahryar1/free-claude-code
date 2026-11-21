@@ -32,10 +32,10 @@ from tests.providers.test_opencode import (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_executor_converts_chat_request_once(wire):
+async def test_executor_converts_chat_request_once(wire: str):
     generation_calls = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         generation_calls.append(request)
         return _success()
 
@@ -56,8 +56,12 @@ async def test_executor_converts_chat_request_once(wire):
             admission=immediate_admission(),
             client=client,
         )
+
+        def resolve_provider(_: str, _api_key_number: int):
+            return provider
+
         executor = ProviderExecutor(
-            AsyncMock(side_effect=lambda _, _api_key_number: provider),
+            AsyncMock(side_effect=resolve_provider),
         )
         builder_name = (
             "_build_request_body"
@@ -85,7 +89,9 @@ async def test_executor_converts_chat_request_once(wire):
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("egress", ["chat", "responses"])
 @pytest.mark.parametrize("warm", [False, True])
-async def test_executor_converts_selected_opencode_route_once(wire, egress, warm):
+async def test_executor_converts_selected_opencode_route_once(
+    wire: str, egress: str, warm: bool
+):
     provider, generation, catalog = _provider_with_wire_transports(_catalog_payload())
     transport = provider._chat if egress == "chat" else provider._responses
     builders = {
@@ -110,8 +116,12 @@ async def test_executor_converts_selected_opencode_route_once(wire, egress, warm
         if warm:
             await provider.list_model_infos()
         with patch.object(transport, name, wraps=getattr(transport, name)) as build:
+
+            def resolve_provider(_: str, _api_key_number: int):
+                return provider
+
             executor = ProviderExecutor(
-                AsyncMock(side_effect=lambda _, _api_key_number: provider),
+                AsyncMock(side_effect=resolve_provider),
             )
             stream = getattr(executor, f"stream_{wire}")(
                 routed, raw_log_payload=dict, request_id="opencode-conversion-once"
@@ -127,10 +137,10 @@ async def test_executor_converts_selected_opencode_route_once(wire, egress, warm
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_executor_converts_subscription_request_once(wire):
+async def test_executor_converts_subscription_request_once(wire: str):
     generation = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         generation.append(request)
         return httpx2.Response(
             200,
@@ -151,8 +161,12 @@ async def test_executor_converts_subscription_request_once(wire):
         with patch.object(
             provider._responses, name, wraps=getattr(provider._responses, name)
         ) as build:
+
+            def resolve_provider(_: str, _api_key_number: int):
+                return provider
+
             executor = ProviderExecutor(
-                AsyncMock(side_effect=lambda _, _api_key_number: provider),
+                AsyncMock(side_effect=resolve_provider),
             )
             stream = getattr(executor, f"stream_{wire}")(
                 routed, raw_log_payload=dict, request_id="subscription-conversion-once"

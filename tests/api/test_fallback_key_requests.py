@@ -9,7 +9,9 @@ from fastapi.testclient import TestClient
 
 from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.admission import ProviderAdmissionController
+from free_claude_code.providers.admission_capacity import ProviderCapacityLimiter
 from tests.api.support import create_test_app
 from tests.api.test_delivered_stream_recovery import text_events
 from tests.providers.test_anthropic_messages_transport import _sse
@@ -19,17 +21,39 @@ CUSTOM_ID = "custom_" + "d" * 32
 
 
 @pytest.fixture(params=[403, 429], ids=["permission-rejection", "rate-limit"])
-def upstream(monkeypatch, request):
+def upstream(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
     calls = []
     failure_status = request.param
     build = ProviderAdmissionController.__init__
 
-    def fast_backoff(self, **kwargs):
-        build(self, **kwargs, base_delay=0.1, max_delay=0.1, jitter=0.0)
+    def fast_backoff(
+        self: ProviderAdmissionController,
+        *,
+        provider_name: str,
+        rate_limit: int = 40,
+        rate_window: float = 60.0,
+        max_concurrency: int = 5,
+        max_attempts: int = PROVIDER_MAX_ATTEMPTS_DEFAULT,
+        capacity: ProviderCapacityLimiter | None = None,
+    ) -> None:
+        build(
+            self,
+            provider_name=provider_name,
+            rate_limit=rate_limit,
+            rate_window=rate_window,
+            max_concurrency=max_concurrency,
+            max_attempts=max_attempts,
+            base_delay=0.1,
+            max_delay=0.1,
+            jitter=0.0,
+            capacity=capacity,
+        )
 
     monkeypatch.setattr(ProviderAdmissionController, "__init__", fast_backoff)
 
-    def payload(request):
+    def payload(
+        request: httpx.Request | httpx2.Request,
+    ) -> tuple[int, JsonObject | bytes]:
         if request.method == "GET":
             return 200, {"id": "same-model", "data": []}
         token = request.headers.get("x-api-key") or request.headers.get(
@@ -61,31 +85,33 @@ def upstream(monkeypatch, request):
         )
         return 200, raw
 
-    def response(request, library):
+    def response[T: (httpx.Response, httpx2.Response)](
+        request: httpx.Request | httpx2.Request, response_type: type[T]
+    ) -> T:
         status, value = payload(request)
         if isinstance(value, dict):
-            return library.Response(status, json=value)
-        return library.Response(
+            return response_type(status, json=value)
+        return response_type(
             status, headers={"content-type": "text/event-stream"}, content=value
         )
 
-    init = httpx.AsyncClient.__init__
-    init2 = httpx2.AsyncClient.__init__
+    native_transport = httpx.MockTransport(
+        lambda request: response(request, httpx.Response)
+    )
+    sdk_transport = httpx2.MockTransport(
+        lambda request: response(request, httpx2.Response)
+    )
 
-    def local_http(self, *args, **kwargs):
-        kwargs["transport"] = httpx.MockTransport(
-            lambda request: response(request, httpx)
-        )
-        init(self, *args, **kwargs)
+    def native_transport_for_url(client: httpx.AsyncClient, url: httpx.URL):
+        return native_transport
 
-    def local_http2(self, *args, **kwargs):
-        kwargs["transport"] = httpx2.MockTransport(
-            lambda request: response(request, httpx2)
-        )
-        init2(self, *args, **kwargs)
+    def sdk_transport_for_url(client: httpx2.AsyncClient, url: httpx2.URL):
+        return sdk_transport
 
-    monkeypatch.setattr(httpx.AsyncClient, "__init__", local_http)
-    monkeypatch.setattr(httpx2.AsyncClient, "__init__", local_http2)
+    monkeypatch.setattr(
+        httpx.AsyncClient, "_transport_for_url", native_transport_for_url
+    )
+    monkeypatch.setattr(httpx2.AsyncClient, "_transport_for_url", sdk_transport_for_url)
     return calls, failure_status
 
 
@@ -102,7 +128,10 @@ def upstream(monkeypatch, request):
     ],
 )
 def test_fallback_sequence_uses_each_rows_selected_key(
-    upstream, provider, api_format, wire
+    upstream: tuple[list[tuple[str, JsonObject]], int],
+    provider: str,
+    api_format: str,
+    wire: str,
 ):
     calls, failure_status = upstream
     model = f"{provider}/same-model"

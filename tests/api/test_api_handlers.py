@@ -1,6 +1,6 @@
 import json
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from typing import Any, override
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -133,9 +133,13 @@ def _trace_events(trace_mock: MagicMock, event: str) -> list[dict[str, Any]]:
 @pytest.mark.asyncio
 async def test_messages_handler_passes_routed_request_and_stream_metadata() -> None:
     provider = FakeProvider()
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return provider
+
     handler = MessagesHandler(
         Settings(),
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
@@ -167,6 +171,7 @@ async def test_messages_handler_startup_invalid_request_stays_http_error(
     max_tokens: int,
 ) -> None:
     class RejectStartupProvider(FakeProvider):
+        @override
         def stream_messages(
             self,
             request: MessagesRequest,
@@ -179,9 +184,13 @@ async def test_messages_handler_startup_invalid_request_stays_http_error(
             raise InvalidRequestError("bad tool shape")
 
     provider = RejectStartupProvider()
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return provider
+
     handler = MessagesHandler(
         Settings(),
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
@@ -287,9 +296,13 @@ async def test_messages_handler_forwards_utility_requests(
             format_sse_event("message_stop", {"type": "message_stop"}),
         ]
     )
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return provider
+
     handler = MessagesHandler(
         Settings(),
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
@@ -366,9 +379,13 @@ async def test_messages_handler_returns_error_json_for_stream_false_sse_error() 
             )
         ]
     )
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return provider
+
     handler = MessagesHandler(
         Settings(),
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
@@ -437,9 +454,13 @@ async def test_messages_handler_discards_partial_stream_false_output_on_error() 
             ),
         ]
     )
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return provider
+
     handler = MessagesHandler(
         Settings(),
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
@@ -465,6 +486,7 @@ async def test_messages_handler_discards_partial_stream_false_output_on_error() 
 @pytest.mark.asyncio
 async def test_messages_handler_stream_false_provider_exception_keeps_status() -> None:
     class FailingProvider(FakeProvider):
+        @override
         async def stream_messages(
             self,
             request: Any,
@@ -495,9 +517,13 @@ async def test_messages_handler_stream_false_provider_exception_keeps_status() -
             yield StreamOutput(("unreachable",))
 
     provider = FailingProvider()
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return provider
+
     handler = MessagesHandler(
         Settings(),
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
@@ -532,9 +558,13 @@ async def test_messages_handler_normalizes_safety_classifier_policy(
     classifier_stop_sequence: str,
 ) -> None:
     provider = FakeProvider()
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return provider
+
     handler = MessagesHandler(
         Settings(),
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
@@ -576,9 +606,13 @@ async def test_messages_handler_normalizes_safety_classifier_policy(
 @pytest.mark.asyncio
 async def test_messages_handler_preserves_thinking_for_non_classifier() -> None:
     provider = FakeProvider()
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return provider
+
     handler = MessagesHandler(
         Settings(),
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
@@ -618,9 +652,13 @@ async def test_messages_handler_preserves_thinking_for_non_classifier() -> None:
 @pytest.mark.asyncio
 async def test_messages_handler_tolerates_required_thinking_for_classifier() -> None:
     provider = FakeProvider()
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return provider
+
     handler = MessagesHandler(
         Settings(),
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
@@ -661,9 +699,13 @@ async def test_messages_handler_prefers_no_thinking_without_classifier_stop_hint
     None
 ):
     provider = FakeProvider()
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return provider
+
     handler = MessagesHandler(
         Settings(),
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         web_tools=StubWebToolsClient(),
     )
     request = MessagesRequest(
@@ -699,9 +741,13 @@ async def test_messages_handler_prefers_no_thinking_without_classifier_stop_hint
 @pytest.mark.asyncio
 async def test_messages_handler_preserves_unowned_classifier_stop_sequences() -> None:
     provider = FakeProvider()
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return provider
+
     handler = MessagesHandler(
         Settings(),
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         web_tools=StubWebToolsClient(),
     )
     original_stops = ["custom", "</severity>", "custom", "</severity>", "tail"]
@@ -731,9 +777,13 @@ async def test_messages_handler_preserves_unowned_classifier_stop_sequences() ->
 @pytest.mark.asyncio
 async def test_responses_handler_forwards_quota_prompt() -> None:
     provider = FakeProvider()
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return provider
+
     handler = ResponsesHandler(
         Settings(),
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
     )
 
     response = await handler.create(
@@ -752,9 +802,13 @@ async def test_responses_handler_forwards_quota_prompt() -> None:
 @pytest.mark.asyncio
 async def test_responses_handler_does_not_apply_safety_classifier_policy() -> None:
     provider = FakeProvider()
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return provider
+
     handler = ResponsesHandler(
         Settings(),
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
     )
 
     with patch("free_claude_code.api.handlers.messages.trace_event") as trace_mock:

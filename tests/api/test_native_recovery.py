@@ -2,11 +2,13 @@
 
 import asyncio
 import json
+from typing import override
 from unittest.mock import patch
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from starlette.types import Message
 
 from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
@@ -33,11 +35,11 @@ from tests.providers.test_anthropic_provider import native_body, provider
 )
 @pytest.mark.asyncio
 async def test_native_fallback_tries_other_model_during_primary_cooldown(
-    stream, status, retry_after, max_attempts
+    stream: bool, status: int, retry_after: str, max_attempts: int
 ):
     calls = []
 
-    def handle(request):
+    def handle(request: httpx.Request):
         model = json.loads(request.content)["model"]
         calls.append(model)
         if model == "primary":
@@ -109,7 +111,7 @@ def test_only_leading_pings_then_all_candidates_fail_returns_json_error():
     calls = []
     wires = []
 
-    def handle(request):
+    def handle(request: httpx.Request):
         calls.append(json.loads(request.content)["model"])
         wire = Wire(
             [
@@ -149,13 +151,16 @@ def test_only_leading_pings_then_all_candidates_fail_returns_json_error():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("disconnect", [False, True])
-async def test_leading_ping_timeout_or_disconnect_releases_all_resources(disconnect):
+async def test_leading_ping_timeout_or_disconnect_releases_all_resources(
+    disconnect: bool,
+):
     entered = asyncio.Event()
     calls = []
 
     class Pings(httpx.AsyncByteStream):
         closed = False
 
+        @override
         async def __aiter__(self):
             entered.set()
             yield _sse({"type": "ping"})
@@ -163,12 +168,13 @@ async def test_leading_ping_timeout_or_disconnect_releases_all_resources(disconn
                 await asyncio.Event().wait()
             raise httpx.ReadTimeout("No message started")
 
+        @override
         async def aclose(self):
             self.closed = True
 
     wires = []
 
-    def handle(request):
+    def handle(request: httpx.Request):
         calls.append(request)
         wire = Pings()
         wires.append(wire)
@@ -211,7 +217,7 @@ async def test_leading_ping_timeout_or_disconnect_releases_all_resources(disconn
                 await entered.wait()
                 return {"type": "http.disconnect"}
 
-            async def send(message):
+            async def send(message: Message):
                 sent.append(message)
 
             await asyncio.wait_for(app(scope, receive, send), 2)
@@ -262,7 +268,7 @@ def test_count_generate_and_continue_native_tool_history_with_recovery():
     events[1]["content_block"] = result_block
     del events[2]
 
-    def handle(request):
+    def handle(request: httpx.Request):
         body = json.loads(request.content)
         sent.append(body)
         if len(sent) == 1:

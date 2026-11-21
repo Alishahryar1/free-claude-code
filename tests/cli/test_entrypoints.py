@@ -308,21 +308,28 @@ def test_serve_supervisor_restarts_when_app_requests_restart() -> None:
         return app
 
     class FakeServer:
-        def __init__(self, config, *, begin_shutdown, on_started, close_runtime):
+        def __init__(
+            self,
+            config: SimpleNamespace,
+            *,
+            begin_shutdown: object,
+            on_started: Callable[[], None],
+            close_runtime: object,
+        ):
             self.config = config
             self.on_started = on_started
             self.started = True
             self.should_exit = False
             servers.append(self)
 
-        def run(self, sockets=None):
+        def run(self, sockets: object = None):
             self.on_started()
             if len(servers) == 1:
                 restart_callbacks[-1]()
                 assert self.should_exit is True
                 self.config.app.runtime.is_closed = True
 
-    def fake_config(app, **kwargs):
+    def fake_config(app: SimpleNamespace, **kwargs: object):
         return SimpleNamespace(app=app, kwargs=kwargs)
 
     with (
@@ -368,19 +375,26 @@ def test_serve_supervisor_refuses_restart_after_incomplete_shutdown() -> None:
         )
 
     class FakeServer:
-        def __init__(self, config, *, begin_shutdown, on_started, close_runtime):
+        def __init__(
+            self,
+            config: SimpleNamespace,
+            *,
+            begin_shutdown: object,
+            on_started: Callable[[], None],
+            close_runtime: object,
+        ):
             self.config = config
             self.on_started = on_started
             self.started = True
             self.should_exit = False
             servers.append(self)
 
-        def run(self, sockets=None):
+        def run(self, sockets: object = None):
             self.on_started()
             restart_callbacks[-1]()
             assert self.should_exit is True
 
-    def fake_config(app, **kwargs):
+    def fake_config(app: SimpleNamespace, **kwargs: object):
         return SimpleNamespace(app=app, kwargs=kwargs)
 
     with (

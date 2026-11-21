@@ -19,6 +19,7 @@ from free_claude_code.providers.google_openai.thought_signatures import (
     GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR,
 )
 from free_claude_code.providers.history_replay import replay_origin
+from free_claude_code.providers.openai_chat.transport import OpenAIChatTransport
 from tests.providers.test_gemini_review_regressions import (
     CALL,
     GOOGLE_PROFILE,
@@ -28,7 +29,7 @@ from tests.providers.test_gemini_review_regressions import (
 from tests.providers.test_gemini_transport import chat_response, collect, gemini_request
 
 
-def history_request(wire, *, model="model", replay=False):
+def history_request(wire: str, *, model: str = "model", replay: bool = False):
     if wire == "gemini":
         contents: list[dict[str, Any]] = [
             {"role": "user", "parts": [{"text": "hello"}]}
@@ -111,11 +112,13 @@ def history_request(wire, *, model="model", replay=False):
     )
 
 
-async def consume(adapter, wire, **kwargs):
+async def consume(
+    adapter: OpenAIChatTransport, wire: str, model: str = "model", replay: bool = False
+):
     return [
         event
         async for event in getattr(adapter, f"stream_{wire}")(
-            history_request(wire, **kwargs)
+            history_request(wire, model=model, replay=replay)
         )
     ]
 
@@ -125,10 +128,12 @@ async def consume(adapter, wire, **kwargs):
 @pytest.mark.parametrize(
     "change", ["none", "model", "credential", "endpoint", "client"]
 )
-async def test_cache_restoration_uses_actual_connection_for_every_ingress(wire, change):
+async def test_cache_restoration_uses_actual_connection_for_every_ingress(
+    wire: str, change: str
+):
     sent = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         sent.append(json.loads(request.content))
         return chat_response(
             [
@@ -186,7 +191,7 @@ async def test_renewable_callback_is_resolved_once_per_attempt_and_pins_provenan
         resolutions += 1
         return f"synthetic-{resolutions}"
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         sent.append(request.headers["authorization"])
         return chat_response(
             [
@@ -234,7 +239,7 @@ async def test_renewable_callback_is_resolved_once_per_attempt_and_pins_provenan
 @pytest.mark.asyncio
 async def test_endpoint_snapshot_precedes_renewable_callback():
     class Endpoint:
-        async def endpoint(self, *, force_refresh=False):
+        async def endpoint(self, *, force_refresh: object = False):
             return HttpEndpoint(
                 "https://endpoint.invalid/v1", {}, "endpoint-key", "stable-account"
             )
@@ -244,7 +249,7 @@ async def test_endpoint_snapshot_precedes_renewable_callback():
 
     requests = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         requests.append(request)
         return chat_response([{"content": "answer"}])
 
@@ -296,7 +301,7 @@ async def test_concurrent_attempts_record_their_own_origin():
     barrier = asyncio.Event()
     arrivals = 0
 
-    async def reply(request):
+    async def reply(request: httpx2.Request):
         nonlocal arrivals
         arrivals += 1
         if arrivals == 2:
@@ -357,7 +362,7 @@ async def test_buffered_recovery_metadata_uses_replacement_credentials():
         resolutions += 1
         return f"key-{resolutions}"
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         requests.append(request.headers["authorization"])
         if len(requests) == 1:
             return chat_response(

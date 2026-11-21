@@ -1,5 +1,6 @@
 """OpenRouter accounting traverses the SDK and public/private destination paths."""
 
+from collections.abc import AsyncIterator
 from copy import deepcopy
 
 import pytest
@@ -8,17 +9,23 @@ from free_claude_code.api.response_streams import (
     ManagedStreamingResponse,
     gemini_sse_streaming_response,
 )
-from free_claude_code.application.response_collection import collect_response
+from free_claude_code.application.response_collection import (
+    WireProtocol,
+    collect_response,
+)
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.chat_completions.response import ChatResponseAccumulator
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.stream_output import StreamOutput
+from free_claude_code.providers.open_router.client import OpenRouterProvider
 from tests.api.test_native_tool_wire_contract import public_frames
 from tests.core.test_chat_accounting_trailers import accounting, terminal
 from tests.core.test_chat_tool_buffer import call, event
-from tests.providers.test_history_transports import _harness
+from tests.providers.test_history_transports import _harness, _Send
 from tests.wire_payload import object_array, object_payload
 
 
@@ -50,7 +57,7 @@ def source_events(tools: bool) -> list[JsonObject]:
     ]
 
 
-def destination_stream(wire, send, provider):
+def destination_stream(wire: WireProtocol, send: _Send, provider: OpenRouterProvider):
     schema = {"type": "object", "properties": {"path": {"type": "string"}}}
     if wire == "chat":
         return provider.stream_chat(
@@ -92,13 +99,13 @@ def destination_stream(wire, send, provider):
     return send(wire, [{"role": "user", "content": "hello"}], tools=tools)
 
 
-async def consume(body, wire, public):
+async def consume(body: AsyncIterator[StreamOutput], wire: WireProtocol, public: bool):
     if not public:
         return await collect_response(body, protocol=wire)
     if wire != "gemini":
         return await public_frames(body, wire)
 
-    def fail(error):
+    def fail(error: BaseException):
         raise error
 
     response = await gemini_sse_streaming_response(
@@ -116,7 +123,7 @@ async def consume(body, wire, public):
 @pytest.mark.parametrize("public", [False, True])
 @pytest.mark.parametrize("tools", [False, True])
 async def test_accounting_retains_usage_and_exactly_once_completion(
-    wire, public, tools
+    wire: WireProtocol, public: bool, tools: bool
 ):
     events = source_events(tools)
     # Repeated accounting must not reseal calls or add usage totals.
@@ -135,6 +142,7 @@ async def test_accounting_retains_usage_and_exactly_once_completion(
                     completed.extend(packet.completed_calls)
                     yield packet
             finally:
+                assert isinstance(stream, AsyncCloseable)
                 await stream.aclose()
 
         frames = await consume(observe(), wire, public)
@@ -229,7 +237,7 @@ async def test_accounting_retains_usage_and_exactly_once_completion(
 @pytest.mark.parametrize("public", [False, True])
 @pytest.mark.parametrize("failure", ["content", "error"])
 async def test_late_semantic_output_is_not_accounting_or_another_generation(
-    wire, public, failure
+    wire: WireProtocol, public: bool, failure: str
 ):
     events = source_events(True)
     if failure == "content":

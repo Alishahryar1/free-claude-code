@@ -9,35 +9,44 @@ from free_claude_code.core.anthropic import (
     build_base_request_body,
 )
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_chat import (
     is_synthetic_chat_tool_turn_boundary,
 )
+from tests.wire_payload import array_payload, object_array, object_payload
 
 # --- Mock Classes ---
 
 
 class MockMessage:
-    def __init__(self, role, content, reasoning_content=None):
+    def __init__(
+        self,
+        role: str,
+        content: list[MockBlock] | str,
+        reasoning_content: str | None = None,
+    ):
         self.role = role
         self.content = content
         self.reasoning_content = reasoning_content
 
 
 class MockBlock:
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         for k, v in kwargs.items():
             setattr(self, k, v)
         self._data = kwargs
 
-    def model_dump(self, **kwargs):
+    def model_dump(self, **kwargs: object):
         return dict(self._data)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: JsonValue = None):
         return self._data.get(key, default)
 
 
 class MockTool:
-    def __init__(self, name, description, input_schema=None):
+    def __init__(
+        self, name: str, description: str | None, input_schema: JsonObject | None = None
+    ):
         self.name = name
         self.description = description
         self.input_schema = input_schema
@@ -125,7 +134,7 @@ def test_convert_tool_without_input_schema_uses_empty_object_schema():
         ),
     ],
 )
-def test_convert_tool_choice(tool_choice, expected):
+def test_convert_tool_choice(tool_choice: JsonObject, expected: JsonValue):
     result = AnthropicToOpenAIConverter.convert_tool_choice(tool_choice)
     assert result == expected
 
@@ -451,7 +460,7 @@ def test_convert_assistant_tool_use_replays_empty_reasoning_content():
 def _convert_tool_turn(
     assistant_content: list[MockBlock],
     reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.REASONING_CONTENT,
-) -> list[dict]:
+) -> list[JsonObject]:
     tool_ids = [
         block.get("id")
         for block in assistant_content
@@ -483,7 +492,10 @@ def test_convert_assistant_tool_use_without_thinking_defers_placeholder():
 
     assert result[0]["content"] == ""
     assert "reasoning_content" not in result[0]
-    assert result[0]["tool_calls"][0]["id"] == "call_missing"
+    assert (
+        object_payload(array_payload(result[0]["tool_calls"])[0])["id"]
+        == "call_missing"
+    )
 
 
 def test_convert_parallel_tool_use_without_thinking_defers_placeholder():
@@ -495,7 +507,10 @@ def test_convert_parallel_tool_use_without_thinking_defers_placeholder():
     )
 
     assert "reasoning_content" not in result[0]
-    assert [tool_call["id"] for tool_call in result[0]["tool_calls"]] == [
+    assert [
+        object_payload(tool_call)["id"]
+        for tool_call in object_array(result[0]["tool_calls"])
+    ] == [
         "call_1",
         "call_2",
     ]
@@ -635,7 +650,7 @@ def test_convert_assistant_tool_use_preserves_extra_content():
 def test_convert_assistant_message_empty_content():
     # Verify that empty content becomes a single space (NIM requirement)
     # if no tool calls are present.
-    content = []
+    content: list[MockBlock] = []
     messages = [MockMessage("assistant", content)]
     result = AnthropicToOpenAIConverter.convert_messages(messages)
     assert result[0]["content"] == " "
@@ -735,7 +750,9 @@ def test_input_not_dict():
     ],
     ids=["string", "list_text", "none", "empty_string", "empty_list"],
 )
-def test_convert_system_prompt_parametrized(system_input, expected):
+def test_convert_system_prompt_parametrized(
+    system_input: list[MockBlock] | str | None, expected: JsonObject | None
+):
     """Parametrized system prompt conversion covering edge cases."""
     result = AnthropicToOpenAIConverter.convert_system_prompt(system_input)
     assert result == expected
@@ -751,7 +768,9 @@ def test_convert_system_prompt_parametrized(system_input, expected):
     ],
     ids=["simple_string", "empty_string", "list_blocks", "empty_text_block"],
 )
-def test_convert_user_message_parametrized(content, expected_content):
+def test_convert_user_message_parametrized(
+    content: list[MockBlock] | str, expected_content: str
+):
     """Parametrized user message conversion."""
     messages = [MockMessage("user", content)]
     result = AnthropicToOpenAIConverter.convert_messages(messages)
@@ -892,7 +911,7 @@ def test_assistant_redacted_thinking_omitted_from_openai_chat():
         ),
     ],
 )
-def test_convert_user_message_image_sources(source, expected_url):
+def test_convert_user_message_image_sources(source: JsonObject, expected_url: str):
     messages = [MockMessage("user", [MockBlock(type="image", source=source)])]
 
     result = AnthropicToOpenAIConverter.convert_messages(messages)
@@ -912,7 +931,7 @@ def test_convert_user_message_image_sources(source, expected_url):
         "  aG\tVs\r\nbG8=  ",
     ),
 )
-def test_convert_user_message_canonicalizes_equivalent_base64(data):
+def test_convert_user_message_canonicalizes_equivalent_base64(data: str):
     messages = [
         MockMessage(
             "user",
@@ -1138,7 +1157,7 @@ def test_convert_image_tool_result_precedes_following_user_text():
         {"type": "file", "file_id": "file_1"},
     ),
 )
-def test_convert_image_tool_result_rejects_unportable_source_safely(source):
+def test_convert_image_tool_result_rejects_unportable_source_safely(source: JsonObject):
     messages = [
         MockMessage(
             "assistant",
@@ -1257,7 +1276,9 @@ def test_convert_user_image_before_tool_result_preserves_message_order():
         ({}, "cannot cross"),
     ],
 )
-def test_convert_user_message_rejects_unconvertible_image_sources(source, error):
+def test_convert_user_message_rejects_unconvertible_image_sources(
+    source: JsonObject, error: str
+):
     messages = [MockMessage("user", [MockBlock(type="image", source=source)])]
 
     with pytest.raises(OpenAIConversionError, match=error):
@@ -1301,7 +1322,7 @@ def test_convert_assistant_text_after_tool_use_inserts_after_tool_results():
     assert result[2] == {"role": "assistant", "content": "Post-tool commentary"}
 
 
-def _completed_single_tool_turn(*, user_text=None):
+def _completed_single_tool_turn(*, user_text: str | None = None):
     result_blocks = [
         MockBlock(
             type="tool_result",
@@ -1772,10 +1793,11 @@ def test_openai_build_rejects_unknown_top_level_extras() -> None:
     ],
 )
 def test_convert_hosted_tool_history_preserves_results_and_rejects_active_calls(
-    content,
+    content: list[MockBlock] | str,
 ) -> None:
     messages = [MockMessage("assistant", content)]
-    if content[0].type == "server_tool_use":
+    assert isinstance(content, list)
+    if content[0].get("type") == "server_tool_use":
         with pytest.raises(OpenAIConversionError, match="active server tool"):
             AnthropicToOpenAIConverter.convert_messages(messages)
     else:

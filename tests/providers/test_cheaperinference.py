@@ -172,27 +172,32 @@ def test_replays_reasoning_content_with_tool_history(
 
 @pytest.mark.asyncio
 async def test_model_catalog_keeps_text_models_with_token_limits(
+    monkeypatch: pytest.MonkeyPatch,
     cheaperinference_provider: OpenAIChatProvider,
 ) -> None:
-    cheaperinference_provider._client.get = AsyncMock(
-        return_value={
-            "data": [
-                {
-                    "id": _MODEL,
-                    "type": "text",
-                    "context_length": 400_000,
-                    "max_output_tokens": 128_000,
-                },
-                {
-                    "id": "claude-sonnet-5",
-                    "type": "text",
-                    "context_length": 1_000_000,
-                    "max_output_tokens": 64_000,
-                },
-                {"id": "image-model", "type": "image"},
-                {"id": "video-model", "type": "video"},
-            ]
-        }
+    monkeypatch.setattr(
+        cheaperinference_provider._client,
+        "get",
+        AsyncMock(
+            return_value={
+                "data": [
+                    {
+                        "id": _MODEL,
+                        "type": "text",
+                        "context_length": 400_000,
+                        "max_output_tokens": 128_000,
+                    },
+                    {
+                        "id": "claude-sonnet-5",
+                        "type": "text",
+                        "context_length": 1_000_000,
+                        "max_output_tokens": 64_000,
+                    },
+                    {"id": "image-model", "type": "image"},
+                    {"id": "video-model", "type": "video"},
+                ]
+            }
+        ),
     )
 
     assert await cheaperinference_provider.list_model_infos() == frozenset(
@@ -213,10 +218,13 @@ async def test_model_catalog_keeps_text_models_with_token_limits(
 
 @pytest.mark.asyncio
 async def test_model_catalog_rejects_missing_id(
+    monkeypatch: pytest.MonkeyPatch,
     cheaperinference_provider: OpenAIChatProvider,
 ) -> None:
-    cheaperinference_provider._client.get = AsyncMock(
-        return_value={"data": [{"type": "text"}]}
+    monkeypatch.setattr(
+        cheaperinference_provider._client,
+        "get",
+        AsyncMock(return_value={"data": [{"type": "text"}]}),
     )
 
     with pytest.raises(ModelListResponseError, match="include id"):
@@ -225,9 +233,12 @@ async def test_model_catalog_rejects_missing_id(
 
 @pytest.mark.asyncio
 async def test_model_catalog_rejects_empty_catalog(
+    monkeypatch: pytest.MonkeyPatch,
     cheaperinference_provider: OpenAIChatProvider,
 ) -> None:
-    cheaperinference_provider._client.get = AsyncMock(return_value={"data": []})
+    monkeypatch.setattr(
+        cheaperinference_provider._client, "get", AsyncMock(return_value={"data": []})
+    )
 
     with pytest.raises(ModelListResponseError, match="did not include any model ids"):
         await cheaperinference_provider.list_model_infos()

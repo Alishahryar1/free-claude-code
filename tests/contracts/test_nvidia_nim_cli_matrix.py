@@ -3,6 +3,8 @@ import subprocess
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 from free_claude_code.config.settings import Settings
 from smoke.lib.claude_cli_matrix import (
     ClaudeCliRun,
@@ -37,7 +39,7 @@ def _smoke_config(tmp_path: Path) -> SmokeConfig:
 
 
 def test_nvidia_nim_cli_matrix_report_shape_and_redaction(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("NVIDIA_NIM_API_KEY", "secret-nim-key")
     run = ClaudeCliRun(
@@ -81,7 +83,7 @@ def test_nvidia_nim_cli_matrix_report_shape_and_redaction(
 
 
 def test_cli_matrix_normalizes_missing_captured_output(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def fake_run_captured_text(
         command: list[str],
@@ -131,7 +133,7 @@ def test_cli_matrix_normalizes_missing_captured_output(
 
 
 def test_openrouter_free_cli_matrix_report_shape_and_redaction(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "secret-openrouter-key")
     run = ClaudeCliRun(

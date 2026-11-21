@@ -1,10 +1,12 @@
 """Tests for the Kilo.ai OpenAI-chat provider."""
 
 import json
+from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from openai.types.chat import ChatCompletionChunk
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
@@ -16,8 +18,10 @@ from free_claude_code.core.anthropic.stream_contracts import (
     text_content,
     thinking_content,
 )
+from free_claude_code.core.json_types import JsonValue
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.kilo import KiloProvider
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
@@ -39,15 +43,15 @@ def kilo_config():
 
 
 @pytest.fixture
-def kilo_provider(kilo_config):
+def kilo_provider(kilo_config: ProviderConfig):
     return KiloProvider(
         kilo_config,
         admission=immediate_admission(provider_name="kilo"),
     )
 
 
-class AsyncStream(SDKStreamDouble):
-    def __init__(self, chunks):
+class AsyncStream(SDKStreamDouble[ChatCompletionChunk]):
+    def __init__(self, chunks: list[ChatCompletionChunk]):
         self._chunks = chunks
         self.closed = False
         super().__init__(self._iter(), close=self.aclose)
@@ -64,7 +68,7 @@ def _chunk(
     *,
     content: str | None = None,
     reasoning: str | None = None,
-    reasoning_details: list[dict] | None = None,
+    reasoning_details: Sequence[Mapping[str, JsonValue]] | None = None,
     finish_reason: str | None = None,
 ):
     delta = SimpleNamespace(
@@ -82,7 +86,7 @@ def test_default_base_url():
     assert KILO_DEFAULT_BASE == "https://api.kilo.ai/api/gateway"
 
 
-def test_init_uses_specialized_openai_chat_provider(kilo_provider):
+def test_init_uses_specialized_openai_chat_provider(kilo_provider: KiloProvider):
     assert isinstance(kilo_provider, KiloProvider)
     assert isinstance(kilo_provider, OpenAIChatProvider)
     assert kilo_provider._api_key == "test_kilo_key"
@@ -90,7 +94,7 @@ def test_init_uses_specialized_openai_chat_provider(kilo_provider):
     assert kilo_provider._provider_name == "KILO"
 
 
-def test_build_request_body_openai_shape(kilo_provider):
+def test_build_request_body_openai_shape(kilo_provider: KiloProvider):
     request = MessagesRequest.model_validate(
         {
             "model": "anthropic/claude-sonnet-4.5",
@@ -108,7 +112,7 @@ def test_build_request_body_openai_shape(kilo_provider):
     assert body["max_tokens"] == 100
 
 
-def test_build_request_body_forwards_caller_extra_body(kilo_provider):
+def test_build_request_body_forwards_caller_extra_body(kilo_provider: KiloProvider):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -135,7 +139,9 @@ def test_build_request_body_forwards_caller_extra_body(kilo_provider):
         "reasoning",
     ],
 )
-def test_extra_body_cannot_override_canonical_request_fields(kilo_provider, field):
+def test_extra_body_cannot_override_canonical_request_fields(
+    kilo_provider: KiloProvider, field: str
+):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -150,7 +156,7 @@ def test_extra_body_cannot_override_canonical_request_fields(kilo_provider, fiel
         )
 
 
-def test_build_request_body_sends_reasoning_object(kilo_provider):
+def test_build_request_body_sends_reasoning_object(kilo_provider: KiloProvider):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -166,7 +172,7 @@ def test_build_request_body_sends_reasoning_object(kilo_provider):
     assert body.get("extra_body", {}).get("reasoning") is not None
 
 
-def test_build_request_body_sends_reasoning_disabled(kilo_provider):
+def test_build_request_body_sends_reasoning_disabled(kilo_provider: KiloProvider):
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -183,7 +189,7 @@ def test_build_request_body_sends_reasoning_disabled(kilo_provider):
 
 
 def test_build_request_body_replays_opaque_reasoning_details_on_tool_turn(
-    kilo_provider,
+    kilo_provider: KiloProvider,
 ):
     detail = {
         "type": "reasoning.opaque",
@@ -249,8 +255,8 @@ def test_build_request_body_replays_opaque_reasoning_details_on_tool_turn(
     ids=["same-delta", "cross-delta"],
 )
 async def test_stream_uses_reasoning_field_without_duplicating_plain_details(
-    kilo_provider,
-    reasoning_chunks,
+    kilo_provider: KiloProvider,
+    reasoning_chunks: list[ChatCompletionChunk],
 ):
     encrypted = {"type": "reasoning.encrypted", "data": "opaque"}
     stream = AsyncStream(
@@ -314,7 +320,7 @@ async def test_stream_uses_reasoning_field_without_duplicating_plain_details(
 
 @pytest.mark.asyncio
 async def test_stream_restarts_reasoning_reconciliation_after_early_retry(
-    kilo_provider,
+    kilo_provider: KiloProvider,
 ):
     abandoned = AsyncStream([_chunk(reasoning="discarded ")])
     recovered = AsyncStream(
@@ -351,7 +357,7 @@ async def test_stream_restarts_reasoning_reconciliation_after_early_retry(
 
 @pytest.mark.asyncio
 async def test_stream_hides_readable_reasoning_and_preserves_opaque_when_disabled(
-    kilo_provider,
+    kilo_provider: KiloProvider,
 ):
     stream = AsyncStream(
         [
@@ -401,8 +407,11 @@ async def test_stream_hides_readable_reasoning_and_preserves_opaque_when_disable
 
 
 @pytest.mark.asyncio
-async def test_model_list_filters_to_chat_tool_models_with_capabilities(kilo_provider):
-    kilo_provider._client.models.list = AsyncMock(
+async def test_model_list_filters_to_chat_tool_models_with_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+    kilo_provider: KiloProvider,
+):
+    mock_list = AsyncMock(
         return_value=SimpleNamespace(
             data=[
                 {
@@ -452,6 +461,7 @@ async def test_model_list_filters_to_chat_tool_models_with_capabilities(kilo_pro
             ]
         )
     )
+    monkeypatch.setattr(kilo_provider._client.models, "list", mock_list)
 
     assert await kilo_provider.list_model_infos() == frozenset(
         {
@@ -476,7 +486,7 @@ async def test_model_list_filters_to_chat_tool_models_with_capabilities(kilo_pro
         }
     )
 
-    kilo_provider._client.models.list.assert_awaited_once_with()
+    mock_list.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio
@@ -487,15 +497,21 @@ async def test_model_list_filters_to_chat_tool_models_with_capabilities(kilo_pro
         SimpleNamespace(data=[SimpleNamespace(id="", supported_parameters=["tools"])]),
     ],
 )
-async def test_model_list_rejects_malformed_payload(kilo_provider, payload):
-    kilo_provider._client.models.list = AsyncMock(return_value=payload)
+async def test_model_list_rejects_malformed_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    kilo_provider: KiloProvider,
+    payload: SimpleNamespace,
+):
+    monkeypatch.setattr(
+        kilo_provider._client.models, "list", AsyncMock(return_value=payload)
+    )
 
     with pytest.raises(ModelListResponseError, match="KILO model-list"):
         await kilo_provider.list_model_infos()
 
 
 @pytest.mark.asyncio
-async def test_cleanup_closes_openai_client(kilo_provider):
+async def test_cleanup_closes_openai_client(kilo_provider: KiloProvider):
     kilo_provider._client = MagicMock()
     kilo_provider._client.close = AsyncMock()
 

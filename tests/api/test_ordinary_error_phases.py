@@ -50,7 +50,7 @@ def _settings(**updates: object) -> Settings:
 
 
 @pytest.mark.parametrize("mode", ["messages_stream", "messages_nonstream", "responses"])
-def test_conversion_error_returns_http_400_without_generation(mode):
+def test_conversion_error_returns_http_400_without_generation(mode: str):
     payload: JsonObject = {"model": "open_router/test-model"}
     if mode == "responses":
         payload["input"] = [

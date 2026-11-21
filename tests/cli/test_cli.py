@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.messaging.event_parser import parse_cli_event
+from tests.wire_payload import object_payload, string_payload
 
 # --- Existing Parser Tests ---
 
@@ -44,7 +46,7 @@ class TestCLIParser:
 
     def test_parse_multiple_content(self):
         """Test parsing mixed content (thinking + tools)."""
-        event = {
+        event: JsonObject = {
             "type": "assistant",
             "message": {
                 "content": [
@@ -324,7 +326,7 @@ class TestManagedClaudeSession:
             # Should have error event from stderr, then exit event
             assert len(events) == 2
             assert events[0]["type"] == "error"
-            assert events[0]["error"]["message"] == "Fatal error"
+            assert object_payload(events[0]["error"])["message"] == "Fatal error"
 
             assert events[1]["type"] == "exit"
             assert events[1]["code"] == 1
@@ -357,7 +359,9 @@ class TestManagedClaudeSession:
         assert mock_process.stderr.read.await_count >= 2
         err_events = [e for e in events if e.get("type") == "error"]
         assert len(err_events) == 1
-        assert "warning on stderr" in err_events[0]["error"]["message"]
+        assert "warning on stderr" in string_payload(
+            object_payload(err_events[0]["error"])["message"]
+        )
         assert events[-1]["type"] == "exit"
         assert events[-1]["code"] == 0
 

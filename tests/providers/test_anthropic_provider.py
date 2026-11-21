@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable, Coroutine
 
 import httpx
 import pytest
@@ -16,13 +17,17 @@ from tests.providers.support import (
 )
 
 
-def provider(handler, *, max_attempts=2, **kwargs):
+def provider(
+    handler: Callable[[httpx.Request], httpx.Response]
+    | Callable[[httpx.Request], Coroutine[None, None, httpx.Response]],
+    *,
+    max_attempts: int = 2,
+):
     return AnthropicProvider(
         make_provider_config("upstream-secret", "https://api.anthropic.com/v1"),
         workspace_id="wrkspc_test",
         admission=immediate_admission(max_attempts=max_attempts),
         transport=httpx.MockTransport(handler),
-        **kwargs,
     )
 
 
@@ -48,7 +53,7 @@ async def test_native_json_preserves_body_and_owns_auth():
     body = native_body()
     received = []
 
-    def handle(request):
+    def handle(request: httpx.Request):
         received.append(request)
         return httpx.Response(
             200,
@@ -99,7 +104,7 @@ async def test_native_json_preserves_body_and_owns_auth():
 @pytest.mark.asyncio
 async def test_native_sse_relays_unknown_tool_events_without_replay():
     calls = []
-    events = [
+    events: list[JsonObject] = [
         {"type": "message_start", "message": {"id": "m", "model": "claude-test"}},
         {
             "type": "content_block_start",
@@ -120,7 +125,7 @@ async def test_native_sse_relays_unknown_tool_events_without_replay():
         {"type": "error", "error": {"type": "overloaded_error", "message": "busy"}},
     ]
 
-    def handle(request):
+    def handle(request: httpx.Request):
         calls.append(request)
         return httpx.Response(
             200,
@@ -156,7 +161,7 @@ async def test_native_sse_relays_unknown_tool_events_without_replay():
 async def test_model_discovery_is_atomic_and_retains_thinking_types():
     fail = False
 
-    def handle(request):
+    def handle(request: httpx.Request):
         if "after_id" not in request.url.params:
             return httpx.Response(
                 200,

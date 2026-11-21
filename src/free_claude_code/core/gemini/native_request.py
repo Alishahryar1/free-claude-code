@@ -385,12 +385,16 @@ def messages_to_gemini(
                         "Parallel tool results must be consecutive"
                     )
                 value = block.get("content")
-                output = [] if isinstance(value, dict) else content_parts(value)
+                output_parts: list[dict[str, Any]] = (
+                    [] if isinstance(value, dict) else content_parts(value)
+                )
                 text = (
                     deepcopy(value)
                     if isinstance(value, dict)
                     else "\n".join(
-                        part["text"] for part in output if part.get("type") == "text"
+                        part["text"]
+                        for part in output_parts
+                        if part.get("type") == "text"
                     )
                 )
                 result: dict[str, Any] = {
@@ -400,10 +404,12 @@ def messages_to_gemini(
                 }
                 images = [
                     _image(portable_anthropic_image_url(part["source"]))
-                    for part in output
+                    for part in output_parts
                     if part.get("type") == "image"
                 ]
-                if any(part.get("type") not in {"image", "text"} for part in output):
+                if any(
+                    part.get("type") not in {"image", "text"} for part in output_parts
+                ):
                     raise GeminiConversionError("Unsupported tool result content")
                 if images:
                     result["parts"] = images

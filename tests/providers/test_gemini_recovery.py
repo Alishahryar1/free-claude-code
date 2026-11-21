@@ -16,12 +16,16 @@ from free_claude_code.api.response_streams import (
     gemini_sse_streaming_response,
 )
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.gemini.models import GeminiRequest
 from free_claude_code.core.gemini.replay import decode_bundle
 from free_claude_code.core.gemini.response import GeminiOutput, gemini_parts
 from free_claude_code.core.history_replay import readable_reasoning
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_output import completed_output
+from free_claude_code.providers.anthropic_messages.transport import (
+    AnthropicMessagesTransport,
+)
 from free_claude_code.providers.deepseek.client import _PROFILE, DeepSeekChatBehavior
 from tests.api.test_delivered_stream_recovery import text_events
 from tests.api.test_recovery_reasoning import followed_by_text, reasoning_events
@@ -51,12 +55,12 @@ from tests.wire_payload import object_array
 @pytest.mark.parametrize("suffix", ["", " Act"])
 @pytest.mark.parametrize("interrupt_again", [False, True])
 async def test_gemini_followup_replays_only_delivered_thinking_after_overlap(
-    field, closed, suffix, interrupt_again
+    field: str, closed: bool, suffix: str, interrupt_again: bool
 ):
     reasoning = reasoning_events(field=field, closed=closed)
     first = followed_by_text(reasoning[:-1] if closed else reasoning, "Hello ")
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         return 200, (
             first
             if len(bodies) == 1
@@ -71,7 +75,7 @@ async def test_gemini_followup_replays_only_delivered_thinking_after_overlap(
         "responses", reply, max_attempts=3 if interrupt_again else 2
     ) as (_, bodies, adapter):
 
-        async def send(request):
+        async def send(request: GeminiRequest):
             response = await gemini_sse_streaming_response(
                 adapter.stream_gemini(
                     request,
@@ -118,8 +122,8 @@ async def test_gemini_followup_replays_only_delivered_thinking_after_overlap(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native_first", [False, True])
-async def test_gemini_open_chat_group_survives_cutoff_and_overlap(native_first):
-    def reply(bodies):
+async def test_gemini_open_chat_group_survives_cutoff_and_overlap(native_first: bool):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) > 2:
             return 200, text_events("chat", "Next")
         thought = "Plan" if len(bodies) == 1 else "PlanAct"
@@ -205,11 +209,11 @@ async def test_gemini_open_chat_group_survives_cutoff_and_overlap(native_first):
 @pytest.mark.parametrize("visible", [False, True])
 @pytest.mark.parametrize("invisible_retry", [False, True])
 async def test_public_continuation_uses_delivered_thinking_without_native_copies(
-    visible, invisible_retry
+    visible: bool, invisible_retry: bool
 ):
     sent = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         sent.append(json.loads(request.content))
         first = len(sent) == 1
         if invisible_retry and len(sent) == 2:
@@ -270,7 +274,7 @@ async def test_public_continuation_uses_delivered_thinking_without_native_copies
 async def test_large_delivered_reasoning_prevents_unsafe_public_continuation():
     sent = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         sent.append(json.loads(request.content))
         return chat_response(
             [
@@ -315,8 +319,10 @@ async def test_large_delivered_reasoning_prevents_unsafe_public_continuation():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("visible", [False, True])
-async def test_public_continuation_retains_unencrypted_responses_reasoning(visible):
-    def reply(bodies):
+async def test_public_continuation_retains_unencrypted_responses_reasoning(
+    visible: bool,
+):
+    def reply(bodies: list[JsonObject]):
         first = len(bodies) == 1
         events = text_events(
             "responses",
@@ -374,7 +380,7 @@ async def test_public_continuation_retains_unencrypted_responses_reasoning(visib
 async def test_messages_success_keeps_completed_reasoning_replay_and_calls():
     requests = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         requests.append(request)
         events: list[JsonObject] = [
             *_events("x" * 70_000)[:4],
@@ -437,7 +443,9 @@ async def test_messages_success_keeps_completed_reasoning_replay_and_calls():
 
 
 @pytest.mark.asyncio
-async def test_responses_handoff_keeps_source_order_and_echo_ownership(monkeypatch):
+async def test_responses_handoff_keeps_source_order_and_echo_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+):
     first = {
         "type": "reasoning",
         "id": "rs_first",
@@ -505,7 +513,9 @@ async def test_responses_handoff_keeps_source_order_and_echo_ownership(monkeypat
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("stage", ["hidden", "portable", "structured", "retention"])
-async def test_gemini_recovery_uses_published_evidence(protocol, stage, monkeypatch):
+async def test_gemini_recovery_uses_published_evidence(
+    protocol: str, stage: str, monkeypatch: pytest.MonkeyPatch
+):
     prefix = (
         "x" * 1_100_000
         if stage == "retention"
@@ -514,7 +524,7 @@ async def test_gemini_recovery_uses_published_evidence(protocol, stage, monkeypa
         else "Hello world"
     )
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]) -> tuple[int, JsonValue]:
         if len(bodies) == 1 and stage == "hidden":
             return 200, []
         return 200, text_events(
@@ -523,11 +533,6 @@ async def test_gemini_recovery_uses_published_evidence(protocol, stage, monkeypa
             complete=len(bodies) > 1,
         )
 
-    options = (
-        {"endpoint_context": Endpoint()}
-        if protocol == "messages"
-        else {"input_tokens": 0}
-    )
     request = gemini_request(
         **(
             {
@@ -541,14 +546,24 @@ async def test_gemini_recovery_uses_published_evidence(protocol, stage, monkeypa
         )
     )
     async with _harness(protocol, reply, max_attempts=2) as (_, bodies, transport):
-        response = await gemini_sse_streaming_response(
-            transport.stream_gemini(
+        if isinstance(transport, AnthropicMessagesTransport):
+            stream = transport.stream_gemini(
                 request,
+                endpoint_context=Endpoint(),
                 request_id="recovery",
                 response_model="public",
                 reasoning=ReasoningPolicy.provider_default(),
-                **options,
-            ),
+            )
+        else:
+            stream = transport.stream_gemini(
+                request,
+                input_tokens=0,
+                request_id="recovery",
+                response_model="public",
+                reasoning=ReasoningPolicy.provider_default(),
+            )
+        response = await gemini_sse_streaming_response(
+            stream,
             request_id="recovery",
             pre_start_error_response=lambda error: JSONResponse(
                 status_code=502, content={"failure": str(error)}
@@ -581,7 +596,7 @@ async def test_gemini_recovery_uses_published_evidence(protocol, stage, monkeypa
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["prefetch", "text", "call"])
-async def test_gemini_cancel_closes_source_before_releasing_lease(phase):
+async def test_gemini_cancel_closes_source_before_releasing_lease(phase: str):
     entered, closed = asyncio.Event(), asyncio.Event()
     release = AsyncMock()
 
