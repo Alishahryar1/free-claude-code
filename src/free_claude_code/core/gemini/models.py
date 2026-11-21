@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 from ..anthropic.image_sources import portable_anthropic_image_url
@@ -141,6 +141,25 @@ class ThinkingConfig(GeminiModel):
         Literal["THINKING_LEVEL_UNSPECIFIED", "MINIMAL", "LOW", "MEDIUM", "HIGH"] | None
     ) = None
 
+    @field_validator("thinking_level", mode="before")
+    @classmethod
+    def normalize_thinking_level(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip().upper()
+        if not cleaned.startswith("THINKING_LEVEL_"):
+            cleaned = f"THINKING_LEVEL_{cleaned}"
+        if cleaned == "THINKING_LEVEL_UNSPECIFIED":
+            return "THINKING_LEVEL_UNSPECIFIED"
+        if cleaned in (
+            "THINKING_LEVEL_MINIMAL",
+            "THINKING_LEVEL_LOW",
+            "THINKING_LEVEL_MEDIUM",
+            "THINKING_LEVEL_HIGH",
+        ):
+            return cleaned.removeprefix("THINKING_LEVEL_")
+        return value
+
     @model_validator(mode="after")
     def one_control(self) -> Self:
         if self.thinking_budget is not None and self.thinking_level not in (
@@ -231,6 +250,7 @@ class GeminiRequest(GeminiModel):
     tools: list[Tool] = Field(default_factory=list)
     tool_config: ToolConfig = Field(default_factory=ToolConfig)
     generation_config: GenerationConfig = Field(default_factory=GenerationConfig)
+    session_id: str | None = None
 
     @model_validator(mode="after")
     def validate_request(self) -> Self:

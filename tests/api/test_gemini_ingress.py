@@ -298,3 +298,25 @@ def test_openai_model_list_is_unchanged_beside_the_gemini_route():
     assert response.json()["object"] == "list"
     assert "x-request-id" in response.headers
     assert not calls
+
+
+def test_gemini_endpoint_accepts_session_id_and_lowered_thinking_level():
+    provider, calls = fixture_provider()
+    app = create_test_app(Settings(MODEL="groq/backend"), providers={"groq": provider})
+    payload = {
+        "sessionId": "acp-session-789",
+        "contents": [{"role": "user", "parts": [{"text": "Hello ACP"}]}],
+        "generationConfig": {
+            "thinkingConfig": {
+                "thinkingLevel": "low",
+            }
+        },
+    }
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1beta/models/groq/model:generateContent", json=payload
+        )
+    assert response.status_code == 200, response.text
+    assert len(calls) == 1
+    assert calls[0][0].session_id == "acp-session-789"
+    assert calls[0][0].reasoning_policy().effort == "low"

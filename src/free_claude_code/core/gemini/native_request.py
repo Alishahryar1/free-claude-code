@@ -634,4 +634,9 @@ def responses_to_gemini(
 
 
 def native_gemini_body(request: GeminiRequest) -> JsonObject:
-    return request.model_dump(mode="json", by_alias=True, exclude_unset=True)
+    return request.model_dump(
+        mode="json",
+        by_alias=True,
+        exclude_unset=True,
+        exclude={"session_id"},
+    )
