@@ -167,7 +167,7 @@ def test_fallback_sequence_uses_each_rows_selected_key(
     provider: str,
     api_format: str,
     wire: str,
-):
+) -> None:
     calls, failure_status = upstream
     model = f"{provider}/same-model"
     custom = (

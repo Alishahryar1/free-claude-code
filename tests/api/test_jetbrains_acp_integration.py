@@ -36,7 +36,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         yield client
 
 
-def test_api_connect_failure_retry_disconnect_and_safe_status(client: TestClient):
+def test_api_connect_failure_retry_disconnect_and_safe_status(
+    client: TestClient,
+) -> None:
     status = client.get(ROOT)
     assert status.status_code == 200
     assert response_object(status)["connected"] is False
@@ -65,7 +67,7 @@ def test_api_connect_failure_retry_disconnect_and_safe_status(client: TestClient
 
 
 @pytest.mark.parametrize("action", ["", "/connect", "/disconnect", "/refresh"])
-def test_routes_reject_other_origins(client: TestClient, action: str):
+def test_routes_reject_other_origins(client: TestClient, action: str) -> None:
     response = client.request(
         "POST" if action else "GET",
         ROOT + action,

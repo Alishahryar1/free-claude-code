@@ -13,7 +13,7 @@ from free_claude_code.core.interprocess_lock import InterprocessFileLock
 @pytest.mark.parametrize("automatic", [False, True])
 def test_server_entrypoint_routes_logs_across_restarts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, automatic: bool
-):
+) -> None:
     user_home = tmp_path / "user-home"
     monkeypatch.setenv("HOME", str(user_home))
     monkeypatch.setenv("USERPROFILE", str(user_home))

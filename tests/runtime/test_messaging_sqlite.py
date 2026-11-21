@@ -59,7 +59,7 @@ async def storage(tmp_path: Path):
 
 async def test_tree_and_managed_messages_are_durable_and_scope_isolated(
     storage: SQLiteMessagingStore,
-):
+) -> None:
     first, second = tree(), tree("discord")
     await storage.commit_trees((first, second))
     for message in ("one", "two", "two", "three"):
@@ -77,7 +77,7 @@ async def test_tree_and_managed_messages_are_durable_and_scope_isolated(
 
 async def test_reference_collision_rolls_back_whole_write(
     storage: SQLiteMessagingStore,
-):
+) -> None:
     original = tree()
     await storage.commit_trees((original,))
     collision = tree(root="status-root")
@@ -92,7 +92,7 @@ async def test_reference_collision_rolls_back_whole_write(
 @pytest.mark.parametrize("damaged", [False, True])
 async def test_import_keeps_valid_data_and_never_replays_after_clear(
     storage: SQLiteMessagingStore, tmp_path: Path, damaged: bool
-):
+) -> None:
     source = tmp_path / "sessions.json"
     valid = tree()
     source.write_text(
@@ -115,7 +115,7 @@ async def test_import_keeps_valid_data_and_never_replays_after_clear(
 
 async def test_unreadable_json_does_not_block_new_conversations(
     storage: SQLiteMessagingStore, tmp_path: Path
-):
+) -> None:
     source = tmp_path / "sessions.json"
     source.write_text('{"conversation":')
     assert await import_legacy(storage.database, source)
@@ -127,7 +127,7 @@ async def test_unreadable_json_does_not_block_new_conversations(
 
 async def test_pending_import_keeps_restart_repair_information(
     storage: SQLiteMessagingStore, tmp_path: Path
-):
+) -> None:
     pending = tree()
     pending.nodes["root"]["state"] = "in_progress"
     source = tmp_path / "sessions.json"
@@ -142,7 +142,7 @@ def pending_to_legacy(snapshot: TreeSnapshot):
     return {"trees": {snapshot.root_id: snapshot.to_json()}}
 
 
-async def test_new_schema_preserves_foreign_keys(storage: SQLiteMessagingStore):
+async def test_new_schema_preserves_foreign_keys(storage: SQLiteMessagingStore) -> None:
     await storage.commit_trees((tree(),))
     with closing(sqlite3.connect(storage.database.path)) as connection:
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -150,7 +150,7 @@ async def test_new_schema_preserves_foreign_keys(storage: SQLiteMessagingStore):
 
 async def test_sqlite_prevents_deleting_a_root_without_its_tree(
     storage: SQLiteMessagingStore,
-):
+) -> None:
     original = tree()
     await storage.commit_trees((original,))
     with pytest.raises(sqlite3.IntegrityError):
@@ -166,7 +166,7 @@ async def test_sqlite_prevents_deleting_a_root_without_its_tree(
 @pytest.mark.parametrize("dictionary", [False, True])
 async def test_historical_formats_and_message_log_preserve_resume_and_order(
     storage: SQLiteMessagingStore, tmp_path: Path, wrapped: bool, dictionary: bool
-):
+) -> None:
     original = tree()
     legacy = original.to_json()
     del legacy["scope"]
@@ -195,7 +195,7 @@ async def test_historical_formats_and_message_log_preserve_resume_and_order(
 
 async def test_cleanup_failure_cannot_resurrect_cleared_history(
     storage: SQLiteMessagingStore, tmp_path: Path
-):
+) -> None:
     source = tmp_path / "sessions.json"
     original = tree()
     source.write_text(json.dumps(pending_to_legacy(original)))
@@ -210,7 +210,7 @@ async def test_cleanup_failure_cannot_resurrect_cleared_history(
 
 async def test_invalid_graph_and_invalid_log_entry_do_not_discard_good_records(
     storage: SQLiteMessagingStore, tmp_path: Path
-):
+) -> None:
     original, invalid = tree(), tree(root="bad")
     invalid.nodes["bad"]["parent_id"] = "missing"
     source = tmp_path / "sessions.json"
@@ -239,7 +239,7 @@ async def test_invalid_graph_and_invalid_log_entry_do_not_discard_good_records(
 
 async def test_failed_import_transaction_keeps_source_and_allows_retry(
     storage: SQLiteMessagingStore, tmp_path: Path
-):
+) -> None:
     from free_claude_code.runtime.messaging_sqlite import write_tree
 
     source = tmp_path / "sessions.json"
@@ -312,7 +312,7 @@ async def import_receipt(database: SQLiteDatabase):
 )
 async def test_import_rejects_storage_invalid_tree_without_reserving_references(
     storage: SQLiteMessagingStore, tmp_path: Path, field: str, value: str
-):
+) -> None:
     before, after = tree(root="before"), tree(root="after")
     invalid = tree(root=value if field == "root_id" else "bad").to_json()
     root: str = invalid["root_id"]
@@ -367,7 +367,7 @@ async def test_import_rejects_storage_invalid_tree_without_reserving_references(
 @pytest.mark.parametrize("value", ["\ud800", "\0kind"])
 async def test_import_message_storage_validation_and_successful_duplicate_ownership(
     storage: SQLiteMessagingStore, tmp_path: Path, field: str, value: str
-):
+) -> None:
     bad = {"message_id": "same", "direction": "in", "kind": "prompt", "ts": "old"}
     key = "telegram:chat"
     if field == "platform":
@@ -415,7 +415,7 @@ async def test_import_message_storage_validation_and_successful_duplicate_owners
 @pytest.mark.parametrize("last_invalid", [False, True])
 async def test_import_last_tree_identity_wins_even_when_unrecoverable(
     storage: SQLiteMessagingStore, tmp_path: Path, last_invalid: bool
-):
+) -> None:
     first, last = tree(), tree()
     last.nodes["root"]["session_id"] = "\ud800" if last_invalid else "last-session"
     source = tmp_path / "sessions.json"
@@ -430,7 +430,7 @@ async def test_import_last_tree_identity_wins_even_when_unrecoverable(
 
 async def test_partial_import_survives_reopen_and_clear_without_replay(
     storage: SQLiteMessagingStore, tmp_path: Path
-):
+) -> None:
     source = tmp_path / "sessions.json"
     source.write_text(
         json.dumps(
@@ -466,7 +466,7 @@ async def test_partial_import_survives_reopen_and_clear_without_replay(
 @pytest.mark.parametrize("failure_stage", ["receipt", "commit"])
 async def test_import_outer_failure_rolls_back_released_units(
     storage: SQLiteMessagingStore, tmp_path: Path, failure_stage: str
-):
+) -> None:
     source = tmp_path / "sessions.json"
     source.write_text(
         json.dumps(
@@ -550,7 +550,7 @@ async def test_import_outer_failure_rolls_back_released_units(
 @pytest.mark.parametrize("platform", ["none", "telegram"])
 async def test_startup_partial_import_preserves_links_scopes_and_code(
     storage: SQLiteMessagingStore, tmp_path: Path, platform: str
-):
+) -> None:
     from free_claude_code.application.code_sessions.models import CodeSession
     from free_claude_code.config.settings import Settings
     from free_claude_code.runtime.application import ApplicationRuntime
@@ -643,7 +643,7 @@ async def test_startup_partial_import_preserves_links_scopes_and_code(
 
 async def test_failed_admission_never_launches_harness_or_publishes_memory(
     storage: SQLiteMessagingStore,
-):
+) -> None:
     processor = AsyncMock()
     manager = TreeQueueManager(processor, store=storage)
     with (
@@ -661,7 +661,7 @@ async def test_failed_admission_never_launches_harness_or_publishes_memory(
 
 async def test_failed_clear_restores_runtime_prompts_queue_and_claim(
     storage: SQLiteMessagingStore,
-):
+) -> None:
     started, release = asyncio.Event(), asyncio.Event()
     prompts = []
 
@@ -709,7 +709,7 @@ async def test_failed_clear_restores_runtime_prompts_queue_and_claim(
 
 async def test_status_subtree_delete_preserves_prompt_sibling_branch(
     storage: SQLiteMessagingStore,
-):
+) -> None:
     original = tree()
     for node, reference in (("status-reply", "status-root"), ("prompt-reply", "root")):
         original.nodes[node] = {
@@ -734,7 +734,7 @@ async def test_status_subtree_delete_preserves_prompt_sibling_branch(
 
 async def test_failure_after_scope_delete_rolls_back_both_trees_and_message_log(
     storage: SQLiteMessagingStore,
-):
+) -> None:
     original = tree()
     await storage.commit_trees((original,))
     await storage.record_message_id("telegram", "chat", "tracked", "out", "notice")
@@ -752,7 +752,7 @@ async def test_failure_after_scope_delete_rolls_back_both_trees_and_message_log(
 
 async def test_code_close_does_not_release_shared_database(
     storage: SQLiteMessagingStore, tmp_path: Path
-):
+) -> None:
     code = SQLiteCodeStore(storage.database)
     await code.start()
     await code.close()
@@ -768,7 +768,7 @@ async def test_code_close_does_not_release_shared_database(
 
 async def test_cancellation_during_commit_preserves_memory_and_database_agreement(
     storage: SQLiteMessagingStore,
-):
+) -> None:
     entered, release = threading.Event(), threading.Event()
     execute = storage.database.execute
 
@@ -798,7 +798,7 @@ async def test_cancellation_during_commit_preserves_memory_and_database_agreemen
 
 async def test_restore_does_not_consume_inactive_platform_status_repairs(
     storage: SQLiteMessagingStore,
-):
+) -> None:
     telegram, discord = tree(), tree("discord")
     telegram.nodes["root"]["state"] = "in_progress"
     discord.nodes["root"]["state"] = "pending"
@@ -824,7 +824,7 @@ async def test_restore_does_not_consume_inactive_platform_status_repairs(
 @pytest.mark.parametrize("boundary", ["session", "terminal", "failure", "successor"])
 async def test_worker_write_failure_interrupts_queue_and_new_reply_recovers(
     storage: SQLiteMessagingStore, boundary: str
-):
+) -> None:
     started, release = asyncio.Event(), asyncio.Event()
     processed: list[str] = []
     interrupted: list[FailureResult] = []
@@ -887,7 +887,7 @@ async def test_worker_write_failure_interrupts_queue_and_new_reply_recovers(
 
 async def test_shutdown_drains_workers_even_when_interruption_cannot_be_saved(
     storage: SQLiteMessagingStore, mock_platform: MagicMock
-):
+) -> None:
     started, stopped = asyncio.Event(), asyncio.Event()
     cli = AsyncMock()
     workflow = MessagingWorkflow(mock_platform, cli, storage, platform_name="telegram")
@@ -935,7 +935,7 @@ async def test_shutdown_drains_workers_even_when_interruption_cannot_be_saved(
 
 async def test_persistent_failure_has_no_retries_and_failed_recovery_keeps_history(
     storage: SQLiteMessagingStore,
-):
+) -> None:
     started, release = asyncio.Event(), asyncio.Event()
     processed = []
     # An outbound failure must not prevent task retirement.
@@ -994,7 +994,7 @@ async def test_persistent_failure_has_no_retries_and_failed_recovery_keeps_histo
 
 async def test_gated_tree_can_be_cleared_and_replaced_before_old_cleanup_finishes(
     storage: SQLiteMessagingStore, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     monkeypatch.setattr(
         "free_claude_code.messaging.trees.manager.CANCEL_TASK_DRAIN_TIMEOUT_S", 0.01
     )

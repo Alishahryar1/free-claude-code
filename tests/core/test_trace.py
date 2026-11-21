@@ -109,7 +109,7 @@ def test_sanitize_masks_nested_api_key_strings() -> None:
     assert nested["text"] == "visible"
 
 
-def test_trace_redacts_credential_lists_and_all_catalog_aliases():
+def test_trace_redacts_credential_lists_and_all_catalog_aliases() -> None:
     from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
     from free_claude_code.core.trace import sanitize_trace_value
 

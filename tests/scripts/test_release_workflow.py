@@ -21,7 +21,7 @@ def load(name: str) -> Workflow:
     return read_workflow(ROOT / ".github/workflows" / name)
 
 
-def test_post_merge_serializes_and_limits_publish_permissions():
+def test_post_merge_serializes_and_limits_publish_permissions() -> None:
     config = load("post-merge.yml")
     assert config["concurrency"] == {
         "group": "post-merge-main",
@@ -62,7 +62,7 @@ def test_post_merge_serializes_and_limits_publish_permissions():
     assert "-m scripts.publish_release" in step["run"]
 
 
-def test_title_edits_only_trigger_the_separate_required_check():
+def test_title_edits_only_trigger_the_separate_required_check() -> None:
     policy = load("version-policy.yml")
     tests = load("tests.yml")
     policy_events = read_workflow_triggers(
@@ -99,7 +99,7 @@ def test_title_edits_only_trigger_the_separate_required_check():
     assert "title" not in check["env"]
 
 
-def test_all_project_setup_jobs_have_history_and_fetch_canonical_tags():
+def test_all_project_setup_jobs_have_history_and_fetch_canonical_tags() -> None:
     for filename in ("tests.yml", "version-policy.yml", "post-merge.yml"):
         for job in load(filename)["jobs"].values():
             if any(
@@ -117,7 +117,7 @@ def test_all_project_setup_jobs_have_history_and_fetch_canonical_tags():
     assert fetch["env"]["CI_REPOSITORY"] == "${{ github.repository }}"
 
 
-def test_ci_checks_out_the_event_merge_commit_from_the_base_repository():
+def test_ci_checks_out_the_event_merge_commit_from_the_base_repository() -> None:
     config = load("tests.yml")
     assert set(read_workflow_triggers(ROOT / ".github/workflows/tests.yml")) == {
         "pull_request"
@@ -137,7 +137,9 @@ def test_ci_checks_out_the_event_merge_commit_from_the_base_repository():
 
 
 @pytest.mark.parametrize("conflicting_tag", [False, True])
-def test_ci_tag_fetch_uses_only_canonical_tags(tmp_path: Path, conflicting_tag: bool):
+def test_ci_tag_fetch_uses_only_canonical_tags(
+    tmp_path: Path, conflicting_tag: bool
+) -> None:
     upstream = tmp_path / "upstream.git"
     upstream.mkdir()
     git(upstream, "init", "-b", "main")

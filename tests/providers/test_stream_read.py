@@ -15,7 +15,7 @@ def is_keepalive(event: Mapping[str, JsonValue]):
     return event.get("type") == "ping"
 
 
-async def test_heartbeats_do_not_renew_deadline():
+async def test_heartbeats_do_not_renew_deadline() -> None:
     reads = 0
 
     async def source():
@@ -35,7 +35,7 @@ async def test_heartbeats_do_not_renew_deadline():
 
 
 @pytest.mark.parametrize("timeout", [0, -1, 0.01])
-async def test_ready_heartbeat_flood_cannot_evade_timeout(timeout: float | int):
+async def test_ready_heartbeat_flood_cannot_evade_timeout(timeout: float | int) -> None:
     async def source():
         while True:
             yield {"type": "ping"}
@@ -50,7 +50,9 @@ async def test_ready_heartbeat_flood_cannot_evade_timeout(timeout: float | int):
         await iterator.aclose()
 
 
-async def test_each_real_event_gets_new_allowance_and_consumer_time_is_excluded():
+async def test_each_real_event_gets_new_allowance_and_consumer_time_is_excluded() -> (
+    None
+):
     events = [{"type": "started"}, {"usage": {"tokens": 0}}, {"opaque": "state"}]
 
     async def source():
@@ -79,7 +81,7 @@ async def test_each_real_event_gets_new_allowance_and_consumer_time_is_excluded(
     "event",
     [{}, {"choices": []}, {"usage": None}, {"type": "error"}, {"type": "completed"}],
 )
-async def test_non_heartbeat_events_are_not_reinterpreted(event: JsonObject):
+async def test_non_heartbeat_events_are_not_reinterpreted(event: JsonObject) -> None:
     async def source():
         yield event
 

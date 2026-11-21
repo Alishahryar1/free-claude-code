@@ -23,7 +23,7 @@ from tests.wire_payload import array_payload, decode_object, object_payload
 )
 def test_failed_signed_continuation_stops_and_releases_attempt(
     wire: str, failure: str, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     calls = []
     closed = []
 

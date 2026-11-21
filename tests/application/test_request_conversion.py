@@ -50,7 +50,7 @@ def _stream(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_executor_converts_chat_request_once(wire: str):
+async def test_executor_converts_chat_request_once(wire: str) -> None:
     generation_calls = []
 
     def reply(request: httpx2.Request):
@@ -111,7 +111,7 @@ async def test_executor_converts_chat_request_once(wire: str):
 @pytest.mark.parametrize("warm", [False, True])
 async def test_executor_converts_selected_opencode_route_once(
     wire: str, egress: str, warm: bool
-):
+) -> None:
     provider, generation, catalog = _provider_with_wire_transports(_catalog_payload())
     transport = provider._chat if egress == "chat" else provider._responses
     builders = {
@@ -163,7 +163,7 @@ async def test_executor_converts_selected_opencode_route_once(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_executor_converts_subscription_request_once(wire: str):
+async def test_executor_converts_subscription_request_once(wire: str) -> None:
     generation = []
 
     def reply(request: httpx2.Request):

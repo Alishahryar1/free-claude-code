@@ -60,7 +60,7 @@ def test_recovered_signed_answer_replays_exact_history(
     signature_shape: str,
     thinking: str | None,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     requests = []
     final_native = None
 
@@ -180,7 +180,7 @@ def test_recovered_signed_answer_replays_exact_history(
 @pytest.mark.parametrize("native_id", [False, True])
 def test_recovered_signed_tool_call_accepts_its_result(
     wire: str, native_id: bool, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     bodies = []
     call = {"name": "read", "args": {"path": "kept"}}
     if native_id:

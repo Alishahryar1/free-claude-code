@@ -50,7 +50,7 @@ def native_body(stream: bool = False) -> JsonObject:
 
 
 @pytest.mark.asyncio
-async def test_native_json_preserves_body_and_owns_auth():
+async def test_native_json_preserves_body_and_owns_auth() -> None:
     body = native_body()
     received = []
 
@@ -108,7 +108,7 @@ async def test_native_json_preserves_body_and_owns_auth():
 
 
 @pytest.mark.asyncio
-async def test_native_sse_relays_unknown_tool_events_without_replay():
+async def test_native_sse_relays_unknown_tool_events_without_replay() -> None:
     calls = []
     events: list[JsonObject] = [
         {"type": "message_start", "message": {"id": "m", "model": "claude-test"}},
@@ -164,7 +164,7 @@ async def test_native_sse_relays_unknown_tool_events_without_replay():
 
 
 @pytest.mark.asyncio
-async def test_model_discovery_is_atomic_and_retains_thinking_types():
+async def test_model_discovery_is_atomic_and_retains_thinking_types() -> None:
     fail = False
 
     def handle(request: httpx.Request):
@@ -211,7 +211,7 @@ async def test_model_discovery_is_atomic_and_retains_thinking_types():
         await p.cleanup()
 
 
-def test_anthropic_is_configuration_provider_with_native_messages():
+def test_anthropic_is_configuration_provider_with_native_messages() -> None:
     descriptor = PROVIDER_CATALOG["anthropic"]
     assert descriptor.credential_env == "ANTHROPIC_API_KEY"
     assert descriptor.native_messages_passthrough

@@ -66,7 +66,9 @@ def failed_response(text: str, label: str):
 
 
 @pytest.mark.asyncio
-async def test_final_native_failure_preserves_projected_error_output_usage_and_extensions():
+async def test_final_native_failure_preserves_projected_error_output_usage_and_extensions() -> (
+    None
+):
     source = failed_response("Partial text", "only")
     expected = deepcopy(source[-1])
     async with _harness("responses", lambda _: (200, source), max_attempts=1) as (
@@ -93,7 +95,7 @@ async def test_final_native_failure_preserves_projected_error_output_usage_and_e
 
 
 @pytest.mark.asyncio
-async def test_final_native_snapshot_cannot_release_a_withheld_call():
+async def test_final_native_snapshot_cannot_release_a_withheld_call() -> None:
     source = after_text("responses", partial_tool("responses"))
     final = failed_response("Before. ", "only")[-1]
     call = object_array(
@@ -128,7 +130,7 @@ async def test_final_native_snapshot_cannot_release_a_withheld_call():
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 async def test_zero_call_final_candidate_keeps_published_response_identity(
     protocol: str,
-):
+) -> None:
     admission = ProviderAdmissionController(
         provider_name="cooled",
         rate_limit=1000,
@@ -241,7 +243,7 @@ def failed_overlapping_calls():
 @pytest.mark.parametrize("hold_final_attempt", [False, True])
 async def test_failed_snapshot_preserves_independently_completed_call(
     monkeypatch: pytest.MonkeyPatch, same_candidate: bool, hold_final_attempt: bool
-):
+) -> None:
     async with (
         _harness(
             "responses",
@@ -274,7 +276,7 @@ async def test_failed_snapshot_preserves_independently_completed_call(
 
 
 @pytest.mark.asyncio
-async def test_last_model_error_keeps_combined_output_with_public_item_ids():
+async def test_last_model_error_keeps_combined_output_with_public_item_ids() -> None:
     first_events = failed_response("One ", "first")
     last_events = failed_response("two", "last")
     async with (
@@ -339,7 +341,7 @@ async def test_last_model_error_keeps_combined_output_with_public_item_ids():
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_fallback_timeout_before_its_first_frame_retains_prefix_and_closes(
     wire: WireProtocol,
-):
+) -> None:
     opened = []
     closed = []
 

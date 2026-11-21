@@ -121,7 +121,7 @@ async def _drain_gemini(provider: GeminiProvider) -> None:
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 async def test_continuation_failure_before_first_event_reaches_admission(
     protocol: str, traces: list[JsonObject]
-):
+) -> None:
     module = httpx if protocol == "messages" else httpx2
 
     def reply(bodies: list[JsonObject]):
@@ -147,7 +147,7 @@ async def test_continuation_failure_before_first_event_reaches_admission(
 @pytest.mark.asyncio
 async def test_messages_stop_rejected_before_acceptance_accepts_the_attempt(
     traces: list[JsonObject],
-):
+) -> None:
     def reply(bodies: object):
         return 200, [
             {
@@ -170,7 +170,7 @@ async def test_messages_stop_rejected_before_acceptance_accepts_the_attempt(
 @pytest.mark.asyncio
 async def test_gemini_stop_rejected_before_acceptance_accepts_the_attempt(
     traces: list[JsonObject],
-):
+) -> None:
     calls = 0
 
     def reply(request: object):
@@ -208,7 +208,9 @@ class _RefreshingEndpoint:
 
 
 @pytest.mark.asyncio
-async def test_gemini_inband_authentication_failure_refreshes_once(traces: object):
+async def test_gemini_inband_authentication_failure_refreshes_once(
+    traces: object,
+) -> None:
     keys: list[str] = []
 
     def reply(request: httpx.Request):
@@ -281,7 +283,7 @@ _SHARED_SHAPE = {
 )
 async def test_exhausted_undelivered_stream_traces(
     protocol: str, shape: JsonObject, traces: list[JsonObject]
-):
+) -> None:
     module = httpx if protocol == "messages" else httpx2
 
     def reply(bodies: object):
@@ -295,7 +297,9 @@ async def test_exhausted_undelivered_stream_traces(
 
 
 @pytest.mark.asyncio
-async def test_gemini_exhausted_undelivered_stream_traces(traces: list[JsonObject]):
+async def test_gemini_exhausted_undelivered_stream_traces(
+    traces: list[JsonObject],
+) -> None:
     calls = 0
 
     def reply(request: object):

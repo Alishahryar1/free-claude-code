@@ -176,7 +176,7 @@ async def test_nim_exclusions_apply_only_to_hosted_nim_discovery(
 
 
 @pytest.mark.asyncio
-async def test_super_migration_and_hosted_discovery_publish_ultra_catalog():
+async def test_super_migration_and_hosted_discovery_publish_ultra_catalog() -> None:
     old = "nvidia/nemotron-3-super-120b-a12b"
     new = "nvidia/nemotron-3-ultra-550b-a55b"
     config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)

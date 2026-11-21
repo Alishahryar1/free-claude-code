@@ -116,7 +116,7 @@ def _build(
 )
 def test_complete_request_still_requires_conversational_content(
     items: list[JsonObject],
-):
+) -> None:
     with pytest.raises(ResponsesConversionError):
         _build({"input": items})
 

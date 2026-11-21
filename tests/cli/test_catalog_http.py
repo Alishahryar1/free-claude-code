@@ -87,7 +87,7 @@ def test_fetch_proxy_models_rejects_non_object_json() -> None:
 @pytest.mark.parametrize("harness", ["codex", "opencode", "aider"])
 def test_native_launch_uses_current_catalog_without_waiting_for_more_models(
     launch_capture: LaunchCapture, harness: str
-):
+) -> None:
     launch_capture.catalog = {
         "default_model_id": "nvidia_nim/configured",
         "data": [

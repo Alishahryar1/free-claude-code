@@ -70,7 +70,7 @@ def manager_for(
 
 
 @pytest.mark.asyncio
-async def test_startup_discovers_unselected_locals_once_and_publishes_them():
+async def test_startup_discovers_unselected_locals_once_and_publishes_them() -> None:
     providers = {name: provider(name + "-model") for name in LOCAL_IDS}
     publisher = MagicMock()
     manager = manager_for(providers=providers, model_catalog_publisher=publisher)
@@ -96,7 +96,9 @@ async def test_startup_discovers_unselected_locals_once_and_publishes_them():
 
 
 @pytest.mark.asyncio
-async def test_cancelled_local_waiter_preserves_probe_and_refresh_recovers_inventory():
+async def test_cancelled_local_waiter_preserves_probe_and_refresh_recovers_inventory() -> (
+    None
+):
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def held():
@@ -133,7 +135,7 @@ async def test_cancelled_local_waiter_preserves_probe_and_refresh_recovers_inven
 
 
 @pytest.mark.asyncio
-async def test_shutdown_cancels_owned_local_probes_and_cleans_providers():
+async def test_shutdown_cancels_owned_local_probes_and_cleans_providers() -> None:
     started = set()
     cancelled = set()
     ready = asyncio.Event()
@@ -165,7 +167,7 @@ async def test_shutdown_cancels_owned_local_probes_and_cleans_providers():
 @pytest.mark.asyncio
 async def test_local_deadlines_are_parallel_and_do_not_block_other_provider_readiness(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     monkeypatch.setattr(
         provider_manager, "LOCAL_DISCOVERY_TIMEOUT_SECONDS", 0.05, raising=False
     )
@@ -215,7 +217,7 @@ async def test_local_deadlines_are_parallel_and_do_not_block_other_provider_read
 @pytest.mark.asyncio
 async def test_optional_absence_is_quiet_but_shared_manual_test_keeps_failure(
     failure: Exception, caplog: pytest.LogCaptureFixture
-):
+) -> None:
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def fail():
@@ -254,7 +256,7 @@ async def test_optional_absence_is_quiet_but_shared_manual_test_keeps_failure(
     ["managed_default", "process_default", "url", "proxy", "model", "fallback"],
 )
 @pytest.mark.asyncio
-async def test_explicit_local_configuration_reports_failure(intent: str):
+async def test_explicit_local_configuration_reports_failure(intent: str) -> None:
     default_url = Settings().ollama_base_url
     expected_provider = "lmstudio" if intent == "proxy" else "ollama"
     if intent == "managed_default":
@@ -304,7 +306,7 @@ async def test_explicit_local_configuration_reports_failure(intent: str):
 @pytest.mark.asyncio
 async def test_responding_or_broken_optional_provider_reports_real_errors(
     failure: Exception,
-):
+) -> None:
     providers = {
         name: provider(error=failure if name == "ollama" else ConnectionError())
         for name in LOCAL_IDS
@@ -336,7 +338,7 @@ async def test_responding_or_broken_optional_provider_reports_real_errors(
 @pytest.mark.asyncio
 async def test_local_endpoint_change_discards_old_inventory_on_failed_rediscovery(
     local_id: str, attr: str
-):
+) -> None:
     providers = {name: provider(error=ConnectionError()) for name in LOCAL_IDS}
     manager = manager_for(providers=providers)
     try:
@@ -357,7 +359,7 @@ async def test_local_endpoint_change_discards_old_inventory_on_failed_rediscover
 @pytest.mark.asyncio
 async def test_optional_timeout_releases_real_admission_and_keeps_recovery_logs_quiet(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-):
+) -> None:
     monkeypatch.setattr(provider_manager, "LOCAL_DISCOVERY_TIMEOUT_SECONDS", 0.05)
     controller = ProviderAdmissionController(
         provider_name="ollama",
@@ -416,7 +418,7 @@ async def test_optional_timeout_releases_real_admission_and_keeps_recovery_logs_
 @pytest.mark.asyncio
 async def test_local_deadline_preserves_actual_failure_during_admission_backoff(
     monkeypatch: pytest.MonkeyPatch, failure: Exception
-):
+) -> None:
     monkeypatch.setattr(provider_manager, "LOCAL_DISCOVERY_TIMEOUT_SECONDS", 0.05)
     controller = ProviderAdmissionController(
         provider_name="ollama",

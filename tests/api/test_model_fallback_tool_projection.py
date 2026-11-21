@@ -97,7 +97,7 @@ def interrupted_search(
 @pytest.mark.parametrize("status", [None, "completed", "incomplete"])
 async def test_failed_client_search_projection_preserves_model_fallback(
     monkeypatch: pytest.MonkeyPatch, release: bool, status: str | None
-):
+) -> None:
     async with (
         _harness(
             "responses",
@@ -121,7 +121,7 @@ async def test_failed_client_search_projection_preserves_model_fallback(
 @pytest.mark.parametrize("status", [None, "completed", "incomplete"])
 async def test_final_search_failure_keeps_native_error_metadata_and_valid_output(
     monkeypatch: pytest.MonkeyPatch, status: str | None
-):
+) -> None:
     source = []
 
     def failed(bodies: list[JsonObject]):
@@ -163,7 +163,7 @@ async def test_final_search_failure_keeps_native_error_metadata_and_valid_output
 async def test_invalid_successful_search_snapshot_still_fails_without_fallback(
     monkeypatch: pytest.MonkeyPatch,
     terminal: str,
-):
+) -> None:
     async with (
         _harness(
             "responses",

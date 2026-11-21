@@ -47,7 +47,7 @@ from tests.providers.test_openai_responses_transport import (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["chat", "responses"])
-async def test_sdk_reader_only_discards_identifiable_pings(kind: str):
+async def test_sdk_reader_only_discards_identifiable_pings(kind: str) -> None:
     payloads: list[JsonObject] = [
         {},
         {"choices": []},
@@ -319,7 +319,7 @@ async def test_sdk_body_lifetime(
     kind: Literal["chat", "mistral", "nim", "responses"],
     wire: Literal["messages", "responses"],
     termination: str,
-):
+) -> None:
     prefix, suffix = _chunks(kind, "x" * 70_000)
     body = ResponseBody(prefix if termination != "cancel" else b"", suffix)
     if termination == "complete":
@@ -372,7 +372,7 @@ async def test_sdk_body_lifetime(
 
 
 @pytest.mark.asyncio
-async def test_cancelled_normalizer_construction_cleanup_releases_admission():
+async def test_cancelled_normalizer_construction_cleanup_releases_admission() -> None:
     body = ResponseBody(block_close=True)
 
     def callback(request: object):
@@ -414,7 +414,7 @@ async def test_cancelled_normalizer_construction_cleanup_releases_admission():
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_cancelled_retry_cleanup_releases_recovery_ownership(
     wire: Literal["messages", "responses"],
-):
+) -> None:
     failed_body = ResponseBody(block_close=True)
     healthy_body = ResponseBody(*_chunks("chat", "recovered"))
     healthy_body.read_release.set()
@@ -465,7 +465,7 @@ async def test_cancelled_retry_cleanup_releases_recovery_ownership(
 
 
 @pytest.mark.asyncio
-async def test_mistral_cleanup_preserves_normalization_error():
+async def test_mistral_cleanup_preserves_normalization_error() -> None:
     body = ResponseBody(
         _chat_chunk("hello"), close_error=RuntimeError("cleanup secret-token")
     )
@@ -529,7 +529,7 @@ class _RejectingNormalizedStream:
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_normalization_failure_closes_response_before_retry(
     wire: Literal["messages", "responses"],
-):
+) -> None:
     body = ResponseBody(_chat_chunk("reject normalization"))
     requests = 0
 
@@ -577,7 +577,7 @@ async def test_normalization_failure_closes_response_before_retry(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_rejected_first_stopped_chunk_returns_error_and_releases_admission(
     wire: Literal["messages", "responses"],
-):
+) -> None:
     body = ResponseBody(_chat_chunk("reject normalization", finish_reason="length"))
     requests = 0
 
@@ -632,7 +632,7 @@ async def test_rejected_first_stopped_chunk_returns_error_and_releases_admission
 @pytest.mark.parametrize("reject_normalization", [False, True])
 async def test_sdk_observer_runs_before_normalization_without_owning_cleanup(
     reject_normalization: bool,
-):
+) -> None:
     text = "reject normalization" if reject_normalization else "hello"
     body = ResponseBody(_chat_chunk(text, finish_reason="stop"))
     seen: list[ChatCompletionChunk] = []
@@ -665,7 +665,7 @@ async def test_sdk_observer_runs_before_normalization_without_owning_cleanup(
 
 
 @pytest.mark.asyncio
-async def test_chunk_transform_runs_before_observer_and_returns_same_event():
+async def test_chunk_transform_runs_before_observer_and_returns_same_event() -> None:
     body = ResponseBody(_chat_chunk(0, finish_reason="stop"))
     seen = []
 
@@ -710,7 +710,7 @@ async def test_chunk_transform_runs_before_observer_and_returns_same_event():
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_chunk_transform_failure_releases_response_without_retry(
     wire: Literal["messages", "responses"],
-):
+) -> None:
     body = ResponseBody(_chat_chunk(True))
     requests = 0
 
@@ -736,7 +736,7 @@ async def test_chunk_transform_failure_releases_response_without_retry(
 
 
 @pytest.mark.asyncio
-async def test_normalizer_construction_failure_closes_response_before_retry():
+async def test_normalizer_construction_failure_closes_response_before_retry() -> None:
     bodies = [ResponseBody(), ResponseBody(*_chunks("chat", "recovered"))]
     bodies[1].read_release.set()
     remaining = iter(bodies)

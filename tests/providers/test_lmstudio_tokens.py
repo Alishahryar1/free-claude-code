@@ -12,7 +12,7 @@ def estimate(body: JsonObject):
     return tokens.estimate_prepared_input_tokens(body, budget=10**9)
 
 
-def test_text_parts_and_string_content_have_the_same_cost():
+def test_text_parts_and_string_content_have_the_same_cost() -> None:
     assert estimate({"messages": [{"content": "hello world"}]}) == estimate(
         {"messages": [{"content": [{"type": "text", "text": "hello world"}]}]}
     )
@@ -20,7 +20,9 @@ def test_text_parts_and_string_content_have_the_same_cost():
 
 @pytest.mark.parametrize("field", ["reasoning_details", "tool_calls"])
 @pytest.mark.parametrize("empty_records", [{}, "", []])
-def test_empty_history_collections_add_no_tokens(field: str, empty_records: JsonValue):
+def test_empty_history_collections_add_no_tokens(
+    field: str, empty_records: JsonValue
+) -> None:
     message: JsonObject = {"role": "assistant", "content": "hello"}
     baseline = estimate({"messages": [message]})
     message[field] = empty_records
@@ -34,7 +36,7 @@ def test_empty_history_collections_add_no_tokens(field: str, empty_records: Json
 )
 def test_large_tails_are_counted_with_bounded_tokenizer_and_json_work(
     monkeypatch: pytest.MonkeyPatch, field: str
-):
+) -> None:
     visited = []
 
     def count(text: str):
@@ -81,7 +83,9 @@ def test_large_tails_are_counted_with_bounded_tokenizer_and_json_work(
     assert any("TAIL-MUST-SURVIVE" in value for value in visited)
 
 
-def test_counting_stops_once_budget_is_exceeded(monkeypatch: pytest.MonkeyPatch):
+def test_counting_stops_once_budget_is_exceeded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(tokens, "estimate_text_tokens", len)
 
     class UnexpectedTools(list[JsonValue]):
@@ -98,7 +102,7 @@ def test_counting_stops_once_budget_is_exceeded(monkeypatch: pytest.MonkeyPatch)
     assert tokens.estimate_prepared_input_tokens(body, budget=10) > 10
 
 
-def test_carriers_metadata_and_generation_controls_are_not_model_text():
+def test_carriers_metadata_and_generation_controls_are_not_model_text() -> None:
     message: JsonObject = {
         "role": "assistant",
         "content": "answer",
@@ -133,7 +137,7 @@ def test_carriers_metadata_and_generation_controls_are_not_model_text():
 )
 def test_image_cost_uses_size_without_tokenizing_pixels(
     monkeypatch: pytest.MonkeyPatch, url: str, cost: int
-):
+) -> None:
     def no_pixels(text: str):
         assert "AAAA" not in text
         return 0

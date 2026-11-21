@@ -105,7 +105,9 @@ def openrouter():
 
 
 @pytest.mark.parametrize(("wire", "stream"), WIRES)
-def test_openrouter_image_rejection_is_retried_with_a_note(wire: str, stream: bool):
+def test_openrouter_image_rejection_is_retried_with_a_note(
+    wire: str, stream: bool
+) -> None:
     create = AsyncMock(
         side_effect=[
             routing_error(image_routing_error_body()),
@@ -124,7 +126,7 @@ def test_openrouter_image_rejection_is_retried_with_a_note(wire: str, stream: bo
 
 
 @pytest.mark.parametrize(("wire", "stream"), WIRES)
-def test_openrouter_unrelated_404_keeps_the_image(wire: str, stream: bool):
+def test_openrouter_unrelated_404_keeps_the_image(wire: str, stream: bool) -> None:
     body = {"code": 404, "message": "Model not found"}
     create = AsyncMock(side_effect=routing_error(body))
 

@@ -33,7 +33,7 @@ async def commit():
     pass
 
 
-async def test_runtime_constructs_one_custom_owner_lazily():
+async def test_runtime_constructs_one_custom_owner_lazily() -> None:
     runtime = ProviderRuntime(
         settings(model_ids=["manual"]),
         ProviderAdmissionRegistry(
@@ -51,7 +51,7 @@ async def test_runtime_constructs_one_custom_owner_lazily():
         await runtime.cleanup()
 
 
-async def test_manual_inventory_is_immediate_and_does_not_construct_client():
+async def test_manual_inventory_is_immediate_and_does_not_construct_client() -> None:
     factory = RuntimeFactory()
     manager = ProviderRuntimeManager(
         settings(model_ids=["manual"]), runtime_factory=factory
@@ -69,7 +69,7 @@ async def test_manual_inventory_is_immediate_and_does_not_construct_client():
         await manager.close()
 
 
-async def test_changed_endpoint_cannot_inherit_catalog_but_rename_can():
+async def test_changed_endpoint_cannot_inherit_catalog_but_rename_can() -> None:
     factory = RuntimeFactory()
     release = asyncio.Event()
 

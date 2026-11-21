@@ -941,7 +941,7 @@ async def test_late_in_flight_failure_keeps_exhausted_generation_outcome() -> No
 @pytest.mark.parametrize("hint", ["7", "60", "invalid", None])
 async def test_retry_after_within_ceiling_keeps_coordinated_backoff(
     hint: str | None, recovery_clock: RecoveryClock
-):
+) -> None:
     controller = _controller(max_attempts=2, base_delay=1, max_delay=60)
     execution = controller.start_execution()
     attempt = await _open(execution)
@@ -966,7 +966,7 @@ async def test_retry_after_within_ceiling_keeps_coordinated_backoff(
 @pytest.mark.asyncio
 async def test_long_http_date_stops_retry_and_reopens_at_deadline(
     recovery_clock: RecoveryClock,
-):
+) -> None:
     controller = _controller(max_delay=60)
     future = format_datetime(datetime.now(UTC) + timedelta(hours=1), usegmt=True)
     error = _status_error(503, retry_after=future)
@@ -1003,7 +1003,7 @@ async def test_long_http_date_stops_retry_and_reopens_at_deadline(
 @pytest.mark.parametrize("leader_wait", ["backoff", "capacity", "in_flight"])
 async def test_long_hint_supersedes_short_recovery_and_releases_waiters(
     leader_wait: str, recovery_clock: RecoveryClock
-):
+) -> None:
     controller = _controller(max_concurrency=3, base_delay=10, max_delay=60)
     leader = controller.start_execution(model="primary")
     first = await _open(leader)
@@ -1075,7 +1075,7 @@ async def test_long_hint_supersedes_short_recovery_and_releases_waiters(
 @pytest.mark.asyncio
 async def test_terminal_waiters_keep_captured_failure(
     elapsed: int, recovery_clock: RecoveryClock
-):
+) -> None:
     controller = _controller(base_delay=10, max_delay=60)
     queued_execution = controller.start_execution(model="primary")
     between_attempts = controller.start_execution(model="primary")
@@ -1152,7 +1152,7 @@ async def test_terminal_waiters_keep_captured_failure(
 @pytest.mark.asyncio
 async def test_terminal_episode_selects_late_attempt_failure(
     recovery_clock: RecoveryClock, late_budget: int, long_first: bool
-):
+) -> None:
     controller = _controller(max_attempts=2, max_delay=60)
     leader = controller.start_execution(model="primary")
     late = ProviderExecution(
@@ -1200,7 +1200,7 @@ async def test_terminal_episode_selects_late_attempt_failure(
 @pytest.mark.asyncio
 async def test_gate_rejection_stays_terminal_after_route_reopens(
     recovery_clock: RecoveryClock,
-):
+) -> None:
     controller = _controller(max_delay=60)
     source = await _open(controller.start_execution(model="primary"))
     try:
@@ -1227,7 +1227,9 @@ async def test_gate_rejection_stays_terminal_after_route_reopens(
 
 
 @pytest.mark.asyncio
-async def test_failed_scope_rechecks_retry_after_cleanup_and_releases_capacity_once():
+async def test_failed_scope_rechecks_retry_after_cleanup_and_releases_capacity_once() -> (
+    None
+):
     controller = _controller(max_concurrency=3, base_delay=2, max_delay=60)
     closing = asyncio.Event()
     release = asyncio.Event()

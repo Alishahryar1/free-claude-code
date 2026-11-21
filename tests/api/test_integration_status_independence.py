@@ -12,7 +12,7 @@ from tests.api.support import create_test_app, runtime_for_app
 @pytest.mark.asyncio
 async def test_integration_endpoints_finish_while_one_worker_is_held(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     app = create_test_app()
     runtime = runtime_for_app(app)
     entered, release = asyncio.Event(), threading.Event()

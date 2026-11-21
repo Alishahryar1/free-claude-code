@@ -68,7 +68,7 @@ def _delays(sleep: AsyncMock) -> list[float]:
 
 
 @pytest.mark.asyncio
-async def test_network_errors_back_off_then_succeed(sleeps: AsyncMock):
+async def test_network_errors_back_off_then_succeed(sleeps: AsyncMock) -> None:
     result, calls = await _run([TimedOut(), NetworkError("reset"), OK])
 
     assert result is OK
@@ -77,7 +77,7 @@ async def test_network_errors_back_off_then_succeed(sleeps: AsyncMock):
 
 
 @pytest.mark.asyncio
-async def test_network_errors_raise_after_three_attempts(sleeps: AsyncMock):
+async def test_network_errors_raise_after_three_attempts(sleeps: AsyncMock) -> None:
     error = NetworkError("reset")
     result, calls = await _run([error, error, error])
 
@@ -87,7 +87,7 @@ async def test_network_errors_raise_after_three_attempts(sleeps: AsyncMock):
 
 
 @pytest.mark.asyncio
-async def test_unparseable_markdown_is_resent_as_plain_text(sleeps: AsyncMock):
+async def test_unparseable_markdown_is_resent_as_plain_text(sleeps: AsyncMock) -> None:
     error = BadRequest("Can't parse entities: unsupported start tag")
     result, calls = await _run([error, OK], parse_mode="MarkdownV2")
 
@@ -97,7 +97,7 @@ async def test_unparseable_markdown_is_resent_as_plain_text(sleeps: AsyncMock):
 
 
 @pytest.mark.asyncio
-async def test_edit_of_a_missing_message_is_ignored(sleeps: AsyncMock):
+async def test_edit_of_a_missing_message_is_ignored(sleeps: AsyncMock) -> None:
     result, calls = await _run([BadRequest("Message to edit not found")])
 
     assert result is None
@@ -105,7 +105,7 @@ async def test_edit_of_a_missing_message_is_ignored(sleeps: AsyncMock):
 
 
 @pytest.mark.asyncio
-async def test_other_bad_requests_raise_at_once(sleeps: AsyncMock):
+async def test_other_bad_requests_raise_at_once(sleeps: AsyncMock) -> None:
     error = BadRequest("Chat not found")
     result, calls = await _run([error])
 
@@ -115,7 +115,7 @@ async def test_other_bad_requests_raise_at_once(sleeps: AsyncMock):
 
 
 @pytest.mark.asyncio
-async def test_unmodified_message_is_ignored(sleeps: AsyncMock):
+async def test_unmodified_message_is_ignored(sleeps: AsyncMock) -> None:
     result, calls = await _run(
         [BadRequest("Message is not modified: specified new message content")]
     )
@@ -125,7 +125,7 @@ async def test_unmodified_message_is_ignored(sleeps: AsyncMock):
 
 
 @pytest.mark.asyncio
-async def test_forbidden_delete_is_ignored(sleeps: AsyncMock):
+async def test_forbidden_delete_is_ignored(sleeps: AsyncMock) -> None:
     result, calls = await _run([Forbidden("Not enough rights to delete message")])
 
     assert result is None
@@ -133,7 +133,7 @@ async def test_forbidden_delete_is_ignored(sleeps: AsyncMock):
 
 
 @pytest.mark.asyncio
-async def test_known_errors_raise_when_suppression_is_off(sleeps: AsyncMock):
+async def test_known_errors_raise_when_suppression_is_off(sleeps: AsyncMock) -> None:
     error = Forbidden("Message can't be deleted for everyone")
     result, calls = await _run([error], suppress=False)
 
@@ -142,7 +142,7 @@ async def test_known_errors_raise_when_suppression_is_off(sleeps: AsyncMock):
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_waits_then_retries(sleeps: AsyncMock):
+async def test_rate_limit_waits_then_retries(sleeps: AsyncMock) -> None:
     result, calls = await _run([RetryAfter(5), OK])
 
     assert result is OK
@@ -151,7 +151,7 @@ async def test_rate_limit_waits_then_retries(sleeps: AsyncMock):
 
 
 @pytest.mark.asyncio
-async def test_rate_limits_share_the_three_call_budget(sleeps: AsyncMock):
+async def test_rate_limits_share_the_three_call_budget(sleeps: AsyncMock) -> None:
     result, calls = await _run([RetryAfter(5), RetryAfter(7), OK])
 
     assert result is OK
@@ -160,7 +160,7 @@ async def test_rate_limits_share_the_three_call_budget(sleeps: AsyncMock):
 
 
 @pytest.mark.asyncio
-async def test_third_rate_limit_hands_its_wait_to_the_queue(sleeps: AsyncMock):
+async def test_third_rate_limit_hands_its_wait_to_the_queue(sleeps: AsyncMock) -> None:
     third = RetryAfter(9)
     result, calls = await _run([RetryAfter(5), TimedOut(), third])
 
@@ -172,7 +172,7 @@ async def test_third_rate_limit_hands_its_wait_to_the_queue(sleeps: AsyncMock):
 
 
 @pytest.mark.asyncio
-async def test_failed_plain_resend_is_still_retried(sleeps: AsyncMock):
+async def test_failed_plain_resend_is_still_retried(sleeps: AsyncMock) -> None:
     from telegram.error import TelegramError
 
     result, calls = await _run(
@@ -186,7 +186,7 @@ async def test_failed_plain_resend_is_still_retried(sleeps: AsyncMock):
 
 
 @pytest.mark.asyncio
-async def test_unmodified_message_is_ignored_in_any_case(sleeps: AsyncMock):
+async def test_unmodified_message_is_ignored_in_any_case(sleeps: AsyncMock) -> None:
     result, calls = await _run([NetworkError("message is not modified")])
 
     assert result is None
@@ -212,7 +212,7 @@ async def _queue_pause(error: Exception) -> float:
 
 
 @pytest.mark.asyncio
-async def test_platform_rate_limit_pauses_the_queue_for_its_wait():
+async def test_platform_rate_limit_pauses_the_queue_for_its_wait() -> None:
     pause = await _queue_pause(PlatformRateLimited(5))
 
     assert 4 < pause <= 5
@@ -229,7 +229,7 @@ async def test_platform_rate_limit_pauses_the_queue_for_its_wait():
     ],
     ids=["wait-wording", "flood-wording", "raw-retry-after", "unrelated"],
 )
-async def test_other_errors_do_not_pause_the_queue(error: Exception):
+async def test_other_errors_do_not_pause_the_queue(error: Exception) -> None:
     assert await _queue_pause(error) == 0
 
 
@@ -260,7 +260,9 @@ def _bulk_messenger(bulk_outcomes: Sequence[TelegramError]):
 
 
 @pytest.mark.asyncio
-async def test_rate_limited_bulk_delete_hands_its_wait_to_the_queue(sleeps: AsyncMock):
+async def test_rate_limited_bulk_delete_hands_its_wait_to_the_queue(
+    sleeps: AsyncMock,
+) -> None:
     messenger, bot = _bulk_messenger([RetryAfter(5), RetryAfter(6), RetryAfter(7)])
 
     with pytest.raises(PlatformRateLimited) as raised:
@@ -272,7 +274,9 @@ async def test_rate_limited_bulk_delete_hands_its_wait_to_the_queue(sleeps: Asyn
 
 
 @pytest.mark.asyncio
-async def test_rejected_bulk_delete_falls_back_to_single_deletes(sleeps: AsyncMock):
+async def test_rejected_bulk_delete_falls_back_to_single_deletes(
+    sleeps: AsyncMock,
+) -> None:
     messenger, bot = _bulk_messenger([BadRequest("Method not available")])
 
     await messenger.delete_messages("1", ["10", "11"])

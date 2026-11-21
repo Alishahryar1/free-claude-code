@@ -30,7 +30,7 @@ def _ctx() -> RenderCtx:
     )
 
 
-def test_truncation_closes_code_blocks(handler: object):
+def test_truncation_closes_code_blocks(handler: object) -> None:
     """Verify that truncation correctly closes open code blocks."""
     t = TranscriptBuffer()
     t.apply(
@@ -53,7 +53,7 @@ def test_truncation_closes_code_blocks(handler: object):
     assert msg.endswith("```") or "✅ *Complete*" in msg.split("```")[-1]
 
 
-def test_truncation_preserves_status(handler: object):
+def test_truncation_preserves_status(handler: object) -> None:
     """Verify that status is still appended after truncation."""
     status = "READY_STATUS"
     t = TranscriptBuffer()
@@ -64,7 +64,7 @@ def test_truncation_preserves_status(handler: object):
     assert status in msg
 
 
-def test_empty_components_with_status(handler: object):
+def test_empty_components_with_status(handler: object) -> None:
     """Verify message building with just a status."""
     status = "Simple Status"
     t = TranscriptBuffer()
@@ -72,7 +72,7 @@ def test_empty_components_with_status(handler: object):
     assert msg == "\n\nSimple Status"
 
 
-def test_render_markdown_unclosed_markdown():
+def test_render_markdown_unclosed_markdown() -> None:
     """Malformed markdown (e.g. unclosed *) does not crash and produces acceptable output."""
     from free_claude_code.messaging.rendering.telegram_markdown import (
         render_markdown_to_mdv2,
@@ -84,7 +84,7 @@ def test_render_markdown_unclosed_markdown():
     assert "bold" in out
 
 
-def test_escape_md_v2_unicode_emoji():
+def test_escape_md_v2_unicode_emoji() -> None:
     """Unicode and emoji pass through correctly (no special char escaping needed)."""
     from free_claude_code.messaging.rendering.telegram_markdown import (
         escape_md_v2,

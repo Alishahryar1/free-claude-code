@@ -33,7 +33,7 @@ from smoke.product import test_provider_product_live as provider_smoke
 
 def test_isolated_smoke_client_uses_server_token_without_importing_legacy_config(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     original = paths.managed_env_path()
     atomic_write_managed_config({"ANTHROPIC_AUTH_TOKEN": "server-token"}, path=original)
     original_bytes = original.read_bytes()
@@ -64,7 +64,7 @@ def test_isolated_smoke_client_uses_server_token_without_importing_legacy_config
     assert legacy.read_bytes() == legacy_bytes
 
 
-def test_smoke_counts_access_records_once_in_mixed_logs():
+def test_smoke_counts_access_records_once_in_mixed_logs() -> None:
     access = '127.0.0.1:1234 - "POST /v1/responses HTTP/1.1" 200'
     record = json.dumps({"text": access + "\n", "record": {"message": access}})
     other_messages = (
@@ -81,7 +81,7 @@ def test_smoke_counts_access_records_once_in_mixed_logs():
     assert client_smoke._access_request_count(output, "POST", "/v1/responses") == 2
 
 
-def test_smoke_reads_native_trace_events_from_mixed_subprocess_output():
+def test_smoke_reads_native_trace_events_from_mixed_subprocess_output() -> None:
     output = (
         'INFO: server started\n{"type":"result"}\n'
         '{"text":"ordinary log record\\n","record":{"extra":{}}}\n'
@@ -283,7 +283,7 @@ def test_standalone_smoke_requests_identify_themselves_without_changing_auth(
 
 def test_provider_responses_smoke_sends_conversation_identity(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     captured = []
 
     class ResponsesStream(_FakeStreamResponse):
@@ -327,7 +327,7 @@ def test_provider_responses_smoke_sends_conversation_identity(
 
 def test_disconnect_smoke_reuses_identity_for_followup(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     captured = []
 
     def capture(*args: object, headers: Mapping[str, str], **kwargs: object):

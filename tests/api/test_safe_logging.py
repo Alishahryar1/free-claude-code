@@ -19,7 +19,7 @@ from tests.web_tools_support import StubWebToolsClient
 @pytest.mark.asyncio
 async def test_create_message_skips_full_payload_debug_log_by_default(
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     settings = Settings()
     assert settings.log_raw_api_payloads is False
     mock_provider = MagicMock()
@@ -55,7 +55,7 @@ async def test_create_message_skips_full_payload_debug_log_by_default(
 @pytest.mark.asyncio
 async def test_create_message_logs_full_payload_when_opt_in(
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     settings = Settings(log_raw_api_payloads=True)
     mock_provider = MagicMock()
 
@@ -90,7 +90,7 @@ async def test_create_message_logs_full_payload_when_opt_in(
     assert "visible" in payloads[0]
 
 
-def test_stream_ledger_default_debug_has_no_serialized_json_content():
+def test_stream_ledger_default_debug_has_no_serialized_json_content() -> None:
     with patch(
         "free_claude_code.core.anthropic.streaming.emitter.logger.debug"
     ) as mock_debug:
@@ -100,7 +100,7 @@ def test_stream_ledger_default_debug_has_no_serialized_json_content():
     assert mock_debug.call_count == 0
 
 
-def test_stream_ledger_raw_logging_includes_event_body_when_enabled():
+def test_stream_ledger_raw_logging_includes_event_body_when_enabled() -> None:
     with patch(
         "free_claude_code.core.anthropic.streaming.emitter.logger.debug"
     ) as mock_debug:
@@ -122,7 +122,9 @@ def _flatten_log_calls(mock_log: MagicMock) -> str:
 
 
 @pytest.mark.asyncio
-async def test_create_message_unexpected_error_default_logs_exclude_exception_text():
+async def test_create_message_unexpected_error_default_logs_exclude_exception_text() -> (
+    None
+):
     settings = Settings()
     assert settings.log_api_error_tracebacks is False
     secret = "upstream-secret-token-abc"
@@ -161,7 +163,9 @@ async def test_create_message_unexpected_error_default_logs_exclude_exception_te
 
 
 @pytest.mark.asyncio
-async def test_create_message_unexpected_error_terminal_json_ignores_status_code():
+async def test_create_message_unexpected_error_terminal_json_ignores_status_code() -> (
+    None
+):
     """Non-provider stream failures must not leak arbitrary HTTP status attributes."""
 
     class WeirdError(Exception):
@@ -199,7 +203,7 @@ async def test_create_message_unexpected_error_terminal_json_ignores_status_code
     assert '"message":"no"' in payload
 
 
-def test_parse_cli_event_error_logs_metadata_by_default():
+def test_parse_cli_event_error_logs_metadata_by_default() -> None:
     """CLI parser must not log raw error text unless LOG_RAW_CLI_DIAGNOSTICS is on."""
     from free_claude_code.messaging.event_parser import parse_cli_event
 
@@ -213,7 +217,7 @@ def test_parse_cli_event_error_logs_metadata_by_default():
     assert "message_chars" in flat
 
 
-def test_parse_cli_event_error_logs_text_when_log_raw_cli_enabled():
+def test_parse_cli_event_error_logs_text_when_log_raw_cli_enabled() -> None:
     from free_claude_code.messaging.event_parser import parse_cli_event
 
     secret = "visible-cli-parser-msg"
@@ -225,7 +229,7 @@ def test_parse_cli_event_error_logs_text_when_log_raw_cli_enabled():
     assert secret in flat
 
 
-def test_count_tokens_unexpected_error_default_logs_exclude_exception_text():
+def test_count_tokens_unexpected_error_default_logs_exclude_exception_text() -> None:
     settings = Settings()
     assert settings.log_api_error_tracebacks is False
     secret = "count-tokens-leak-xyz"

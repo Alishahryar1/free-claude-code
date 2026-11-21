@@ -22,7 +22,9 @@ from tests.wire_payload import decode_object
 
 
 @pytest.mark.parametrize("wire", ["messages", "chat", "responses", "gemini"])
-def test_fallback_into_gemini_and_followup(wire: str, monkeypatch: pytest.MonkeyPatch):
+def test_fallback_into_gemini_and_followup(
+    wire: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls = []
 
     def chat_reply(request: httpx2.Request):

@@ -68,7 +68,7 @@ def test_tool_arguments_stream_without_name_specific_rewrites(
     output: AnthropicChatStreamOutput | ResponsesChatStreamOutput,
     name: str,
     arguments: str,
-):
+) -> None:
     frames = output.start_events()
     frames.extend(
         output.emit_complete_tool(0, CompletedToolCall("call_task", name, arguments))
@@ -90,7 +90,7 @@ def test_tool_arguments_stream_without_name_specific_rewrites(
 
 def test_task_argument_aliases_are_restored_recursively(
     output: AnthropicChatStreamOutput | ResponsesChatStreamOutput,
-):
+) -> None:
     arguments = restore_tool_argument_aliases(
         '{"run_in_background":true,"wire_prompt":"inspect","nested":[{"wire_prompt":"child"}]}',
         {"wire_prompt": "prompt"},

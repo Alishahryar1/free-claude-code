@@ -114,7 +114,7 @@ class OutcomeProvider:
 @pytest.mark.parametrize("result", ["success", "pre_start", "exception", "wire_error"])
 def test_one_final_outcome_for_streamed_inference(
     outcomes: list[Record], wire_api: str, result: str
-):
+) -> None:
     payload: JsonObject = {"model": "nvidia_nim/test-model", "stream": True}
     if wire_api == "messages":
         payload.update(
@@ -157,7 +157,7 @@ def test_one_final_outcome_for_streamed_inference(
 
 def test_fallback_records_selected_provider_without_logging_failed_attempt(
     outcomes: list[Record],
-):
+) -> None:
     settings = Settings(
         model_fallbacks=[ModelFallback(model="open_router/fallback-model")]
     )
@@ -201,7 +201,9 @@ def test_fallback_records_selected_provider_without_logging_failed_attempt(
 
 
 @pytest.mark.parametrize("result", ["success", "exception", "wire_error"])
-def test_non_streaming_messages_have_one_outcome(outcomes: list[Record], result: str):
+def test_non_streaming_messages_have_one_outcome(
+    outcomes: list[Record], result: str
+) -> None:
     with (
         patch(
             "free_claude_code.api.routes.resolve_provider",
@@ -241,7 +243,7 @@ def test_non_streaming_messages_have_one_outcome(outcomes: list[Record], result:
 )
 def test_rejections_before_execution_are_recorded(
     outcomes: list[Record], payload: JsonObject, status: int, reason: str
-):
+) -> None:
     with TestClient(create_test_app(Settings())) as client:
         response = client.post("/v1/responses", json=payload)
     assert response.status_code == status
@@ -257,7 +259,7 @@ def test_rejections_before_execution_are_recorded(
 @pytest.mark.parametrize("stage", ["wait_before_start", "wait_after_start"])
 async def test_disconnect_logs_cancellation_after_cleanup(
     outcomes: list[Record], wire_api: str, stage: str
-):
+) -> None:
     provider = OutcomeProvider(stage)
     frames = asyncio.Queue()
     payload: JsonObject = {"model": "nvidia_nim/test-model", "stream": True}
@@ -307,7 +309,7 @@ async def test_disconnect_logs_cancellation_after_cleanup(
 )
 async def test_other_endpoints_do_not_emit_inference_outcomes(
     outcomes: list[Record], path: str, method: str
-):
+) -> None:
     async def app(scope: object, receive: object, send: Send):
         assert current_request_outcome.get() is None
         await send({"type": "http.response.start", "status": 200})
@@ -329,7 +331,7 @@ async def test_other_endpoints_do_not_emit_inference_outcomes(
 )
 async def test_delivery_outcomes_preserve_control_flow(
     outcomes: list[Record], ending: str
-):
+) -> None:
     async def app(scope: object, receive: Receive, send: Send):
         if ending == "exception":
             raise ValueError("private exception message")
@@ -378,7 +380,7 @@ async def test_delivery_outcomes_preserve_control_flow(
 @pytest.mark.parametrize("event_header", ["event: error\r\n", ""])
 async def test_wire_observation_preserves_split_utf8_body(
     outcomes: list[Record], event_header: str
-):
+) -> None:
     frame = (
         event_header
         + 'data: {"type":"error","error":{"type":"api_error","message":"☃"}}\r\n\r\n'
@@ -415,7 +417,9 @@ async def test_wire_observation_preserves_split_utf8_body(
 
 
 @pytest.mark.asyncio
-async def test_successful_named_events_skip_json_decoding(outcomes: list[Record]):
+async def test_successful_named_events_skip_json_decoding(
+    outcomes: list[Record],
+) -> None:
     frame = (
         b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"hello"}\n\n'
         b'event: response.completed\ndata: {"type":"response.completed","response":{"output":[]}}\n\n'
@@ -449,7 +453,9 @@ async def test_successful_named_events_skip_json_decoding(outcomes: list[Record]
 
 
 @pytest.mark.asyncio
-async def test_overlapping_requests_keep_separate_outcomes(outcomes: list[Record]):
+async def test_overlapping_requests_keep_separate_outcomes(
+    outcomes: list[Record],
+) -> None:
     ready = asyncio.Event()
     count = 0
 

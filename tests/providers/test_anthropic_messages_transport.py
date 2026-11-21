@@ -57,7 +57,7 @@ from tests.wire_payload import decode_object, int_payload, object_array, object_
 @pytest.mark.parametrize("cap", [None, 4096])
 async def test_tolerant_classifier_corrects_required_reasoning(
     stream_error: bool, error: JsonObject, cap: int | None
-):
+) -> None:
     bodies = []
 
     def handler(request: httpx.Request):
@@ -286,7 +286,7 @@ def _transport(
 )
 async def test_model_metadata_cannot_relax_declared_profile_cap(
     profile_cap: int, model_cap: int | None, expected: int
-):
+) -> None:
     bodies = []
 
     def reply(request: httpx.Request):

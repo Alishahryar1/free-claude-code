@@ -24,7 +24,7 @@ from free_claude_code.config.model_refs import ModelFallback, decode_model_fallb
 )
 def test_super_migration_persists_once_preserving_other_settings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, schema: str
-):
+) -> None:
     managed, _ = _paths(monkeypatch, tmp_path)
     managed.parent.mkdir(parents=True)
     old = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
@@ -57,7 +57,7 @@ def test_super_migration_persists_once_preserving_other_settings(
 
 def test_super_migration_imports_legacy_selection_without_editing_source(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     managed, legacy = _paths(monkeypatch, tmp_path)
     legacy.parent.mkdir(parents=True)
     original = "MODEL=nvidia_nim/nvidia/nemotron-3-super-120b-a12b\nNVIDIA_NIM_API_KEY=keep-secret\n"
@@ -72,7 +72,7 @@ def test_super_migration_imports_legacy_selection_without_editing_source(
 
 def test_super_migration_atomic_write_failure_preserves_managed_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     managed, _ = _paths(monkeypatch, tmp_path)
     managed.parent.mkdir(parents=True)
     original = (
@@ -93,7 +93,7 @@ def test_super_migration_atomic_write_failure_preserves_managed_file(
 @pytest.mark.parametrize("schema", ["", "FCC_CONFIG_SCHEMA=1\n"])
 def test_retired_models_repair_managed_config_once_preserving_unknowns(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, schema: str
-):
+) -> None:
     managed, _ = _paths(monkeypatch, tmp_path)
     managed.parent.mkdir(parents=True)
     managed.write_text(
@@ -126,7 +126,7 @@ def test_retired_models_repair_managed_config_once_preserving_unknowns(
 
 def test_retired_legacy_import_repairs_refs_without_importing_credentials(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     managed, legacy = _paths(monkeypatch, tmp_path)
     legacy.parent.mkdir(parents=True)
     original = "MODEL=github_models/old\nGITHUB_MODELS_TOKEN=old-secret\nGITHUB_MODELS_PROXY=http://secret@proxy.test\n"
@@ -139,7 +139,7 @@ def test_retired_legacy_import_repairs_refs_without_importing_credentials(
 
 def test_retirement_atomic_write_failure_preserves_managed_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     managed, _ = _paths(monkeypatch, tmp_path)
     managed.parent.mkdir(parents=True)
     original = b"FCC_CONFIG_SCHEMA=1\nMODEL=github_models/old\n"
@@ -389,7 +389,7 @@ def test_process_auth_flag_is_not_persisted(
 
 def test_fresh_install_ignores_process_token(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     managed, _ = _paths(monkeypatch, tmp_path)
     process = {"ANTHROPIC_AUTH_TOKEN": "process-secret"}
     consolidate_managed_config(process)

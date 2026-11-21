@@ -178,7 +178,7 @@ def text_only_upstream(requests: list[httpx2.Request], *, in_stream: bool):
 @pytest.mark.parametrize("wire", WIRES)
 def test_rejected_image_is_replaced_by_a_note_and_remembered(
     wire: str, in_stream: bool
-):
+) -> None:
     requests: list[httpx2.Request] = []
     provider, app = nim_app(text_only_upstream(requests, in_stream=in_stream))
     path, payload = image_request(wire)
@@ -198,7 +198,7 @@ def test_rejected_image_is_replaced_by_a_note_and_remembered(
     assert [note_sent(request) for request in requests] == [False, True, True]
 
 
-def test_a_model_that_accepts_images_still_receives_them():
+def test_a_model_that_accepts_images_still_receives_them() -> None:
     requests: list[httpx2.Request] = []
 
     def reply(request: httpx2.Request) -> httpx2.Response:
@@ -228,7 +228,7 @@ def test_a_model_that_accepts_images_still_receives_them():
 
 
 @pytest.mark.parametrize("in_stream", [True, False])
-def test_rejection_of_a_request_without_media_is_not_retried(in_stream: bool):
+def test_rejection_of_a_request_without_media_is_not_retried(in_stream: bool) -> None:
     requests: list[httpx2.Request] = []
 
     def reply(request: httpx2.Request) -> httpx2.Response:

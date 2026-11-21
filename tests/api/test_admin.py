@@ -67,12 +67,12 @@ def _local_client(app: FastAPI):
         f"/admin/assets/{package_version()}/chat_sessions.css",
     ),
 )
-def test_retired_chat_urls_are_not_served(path: str):
+def test_retired_chat_urls_are_not_served(path: str) -> None:
     client = _local_client(create_test_app())
     assert client.get(path).status_code == 404
 
 
-def test_admin_retains_code_without_chat_markup():
+def test_admin_retains_code_without_chat_markup() -> None:
     client = _local_client(create_test_app())
     response = client.get("/admin")
     assert response.status_code == 200
@@ -84,7 +84,7 @@ def test_admin_retains_code_without_chat_markup():
 
 def test_admin_retirement_preview_apply_and_runtime_agree(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -133,7 +133,7 @@ def test_admin_retirement_preview_apply_and_runtime_agree(
 
 def test_admin_super_migration_preview_apply_and_runtime_agree(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     old = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
@@ -240,7 +240,7 @@ def _catalog_proxy_env_keys() -> tuple[str, ...]:
 )
 def test_admin_page_is_loopback_only(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     app = create_test_app()
 
@@ -251,7 +251,7 @@ def test_admin_page_is_loopback_only(
 
 def test_admin_page_uses_installed_version(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     monkeypatch.setattr(
         "free_claude_code.api.admin_routes.package_version",
@@ -298,7 +298,7 @@ def test_admin_versioned_assets_serve_packaged_files(
     tmp_path: Path,
     filename: str,
     media_type: str,
-):
+) -> None:
     mimetypes.init()
     monkeypatch.setitem(mimetypes.types_map, Path(filename).suffix, "text/plain")
     asset_path = (
@@ -321,7 +321,7 @@ def test_admin_versioned_assets_serve_packaged_files(
 
 def test_admin_versioned_logo_reuses_packaged_app_icon(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     asset_path = (
         Path(__file__).resolve().parents[2]
         / "src"
@@ -354,7 +354,7 @@ def test_admin_versioned_logo_reuses_packaged_app_icon(
 )
 def test_admin_responses_are_never_cached(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     response = _local_client(create_test_app()).get(path)
 
@@ -390,7 +390,7 @@ def test_admin_http_errors_are_never_cached(
     path: str,
     client_host: str,
     expected_status: int,
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     client = TestClient(
         create_test_app(),
@@ -406,7 +406,7 @@ def test_admin_http_errors_are_never_cached(
 
 def test_admin_apply_payload_validation_errors_are_never_cached(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
 
     response = _local_client(create_test_app()).post(
@@ -421,7 +421,7 @@ def test_admin_apply_payload_validation_errors_are_never_cached(
 
 def test_admin_unexpected_errors_are_never_cached(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     client = TestClient(
         create_test_app(),
@@ -442,7 +442,7 @@ def test_admin_unexpected_errors_are_never_cached(
 
 def test_admin_cache_policy_does_not_match_similar_public_paths(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
 
     response = _local_client(create_test_app()).get("/administrator")
@@ -451,7 +451,7 @@ def test_admin_cache_policy_does_not_match_similar_public_paths(
     assert "cache-control" not in response.headers
 
 
-def test_admin_api_fetches_bypass_browser_cache():
+def test_admin_api_fetches_bypass_browser_cache() -> None:
     script = Path("src/free_claude_code/api/admin_static/admin.js").read_text(
         encoding="utf-8"
     )
@@ -528,7 +528,7 @@ class _FakeConnectedAccount:
 
 def test_admin_connected_account_routes_are_safe_loopback_only_and_uncached(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     account = _FakeConnectedAccount()
     app = create_test_app(connected_accounts={"openai": account})
@@ -574,7 +574,7 @@ def test_admin_login_uses_the_provider_default(
     provider_id: str,
     default_mode: str,
     payload: JsonObject,
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     account = _FakeConnectedAccount(provider_id)
     client = _local_client(
@@ -598,7 +598,7 @@ def test_admin_login_uses_the_provider_default(
 @pytest.mark.parametrize("mode", ["browser", "unrecognized"])
 def test_admin_rejects_unsupported_login_modes_before_starting(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     account = _FakeConnectedAccount("github_copilot")
     client = _local_client(
@@ -616,7 +616,7 @@ def test_admin_rejects_unsupported_login_modes_before_starting(
 
 def test_admin_connected_account_identity_modes_and_disconnect_are_independent(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     openai = _FakeConnectedAccount()
     copilot = _FakeConnectedAccount("github_copilot")
@@ -656,7 +656,7 @@ def test_admin_connected_account_identity_modes_and_disconnect_are_independent(
 
 def test_admin_openai_keeps_explicit_device_login(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     account = _FakeConnectedAccount()
     client = _local_client(create_test_app(connected_accounts={"openai": account}))
@@ -671,7 +671,7 @@ def test_admin_openai_keeps_explicit_device_login(
 
 def test_admin_rejects_auth_routes_for_non_connected_provider(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
 
     response = _local_client(create_test_app()).get(
@@ -683,7 +683,7 @@ def test_admin_rejects_auth_routes_for_non_connected_provider(
 
 def test_admin_page_no_longer_renders_generated_env_panel(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     app = create_test_app()
 
@@ -696,7 +696,7 @@ def test_admin_page_no_longer_renders_generated_env_panel(
 
 def test_admin_page_no_longer_renders_global_status_header(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     app = create_test_app()
 
@@ -708,7 +708,7 @@ def test_admin_page_no_longer_renders_global_status_header(
     assert "modelBadge" not in response.text
 
 
-def test_admin_static_no_longer_fetches_global_status_header():
+def test_admin_static_no_longer_fetches_global_status_header() -> None:
     script = Path("src/free_claude_code/api/admin_static/admin.js").read_text(
         encoding="utf-8"
     )
@@ -720,7 +720,7 @@ def test_admin_static_no_longer_fetches_global_status_header():
     assert "modelBadge" not in script
 
 
-def test_admin_static_hides_managed_source_label():
+def test_admin_static_hides_managed_source_label() -> None:
     script = Path("src/free_claude_code/api/admin_static/admin.js").read_text(
         encoding="utf-8"
     )
@@ -731,7 +731,7 @@ def test_admin_static_hides_managed_source_label():
     assert "sourceEl.textContent = source" in script
 
 
-def test_admin_static_places_reasoning_fields_in_model_config():
+def test_admin_static_places_reasoning_fields_in_model_config() -> None:
     script = Path("src/free_claude_code/api/admin_static/admin.js").read_text(
         encoding="utf-8"
     )
@@ -740,7 +740,7 @@ def test_admin_static_places_reasoning_fields_in_model_config():
     assert 'sections: ["models", "thinking", "web_tools"]' not in script
 
 
-def test_admin_static_model_combobox_owns_dropdown_and_search_behavior():
+def test_admin_static_model_combobox_owns_dropdown_and_search_behavior() -> None:
     script = Path("src/free_claude_code/api/admin_static/admin.js").read_text(
         encoding="utf-8"
     )
@@ -769,7 +769,9 @@ def test_admin_static_model_combobox_owns_dropdown_and_search_behavior():
     assert styles.count("background-image: var(--dropdown-chevron)") == 2
 
 
-def test_admin_static_model_combobox_preserves_custom_slugs_and_none_semantics():
+def test_admin_static_model_combobox_preserves_custom_slugs_and_none_semantics() -> (
+    None
+):
     script = Path("src/free_claude_code/api/admin_static/admin.js").read_text(
         encoding="utf-8"
     )
@@ -786,7 +788,7 @@ def test_admin_static_model_combobox_preserves_custom_slugs_and_none_semantics()
 
 def test_admin_config_masks_secrets_and_exposes_manifest(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -950,7 +952,7 @@ def test_admin_config_masks_secrets_and_exposes_manifest(
     } <= restart_required
 
 
-def test_admin_models_include_configured_and_cached_canonical_slugs():
+def test_admin_models_include_configured_and_cached_canonical_slugs() -> None:
     settings = Settings(
         model="nvidia_nim/configured-model",
         model_opus="open_router/anthropic/configured-opus",
@@ -984,7 +986,7 @@ def test_admin_models_include_configured_and_cached_canonical_slugs():
 
 def test_admin_model_refresh_returns_the_updated_canonical_catalog(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     settings = Settings(
         model="deepseek/deepseek-chat",
         deepseek_api_keys=normalize_api_keys("deepseek-key"),
@@ -1020,7 +1022,7 @@ def test_admin_model_refresh_returns_the_updated_canonical_catalog(
 
 def test_admin_model_refresh_reports_partial_provider_failures(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     settings = Settings(model="deepseek/deepseek-chat")
     app = create_test_app(settings)
     runtime = app_services(app).admin
@@ -1050,7 +1052,7 @@ def test_admin_model_refresh_reports_partial_provider_failures(
 
 def test_admin_config_preserves_managed_env_source_contract(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -1073,7 +1075,7 @@ def test_admin_config_preserves_managed_env_source_contract(
 
 def test_admin_apply_persists_open_browser_for_next_launch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1100,7 +1102,7 @@ def test_admin_apply_persists_open_browser_for_next_launch(
 
 def test_admin_apply_hot_publishes_ordered_model_fallbacks(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1141,7 +1143,7 @@ def test_admin_apply_hot_publishes_ordered_model_fallbacks(
 
 def test_admin_apply_null_removes_model_fallbacks(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -1167,7 +1169,7 @@ def test_admin_apply_null_removes_model_fallbacks(
 def test_admin_ignores_retired_progress_setting_without_writing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1192,7 +1194,7 @@ def test_admin_ignores_retired_progress_setting_without_writing(
 
 def test_admin_apply_masks_telegram_proxy_credentials(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1216,7 +1218,7 @@ def test_admin_apply_masks_telegram_proxy_credentials(
 
 def test_admin_apply_null_removes_optional_secret(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -1243,7 +1245,7 @@ def test_admin_apply_masked_or_blank_secret_is_unchanged(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     submitted: str,
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -1271,7 +1273,7 @@ def test_admin_apply_masked_or_blank_secret_is_unchanged(
 
 def test_admin_apply_rejects_bad_model_shape(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1294,7 +1296,7 @@ def test_admin_apply_rejects_bad_model_shape(
 
 def test_admin_apply_rejects_duplicate_model_fallbacks(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1321,7 +1323,7 @@ def test_admin_apply_rejects_invalid_catalog_provider_proxy(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     proxy_key: str,
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     invalid_proxy = "not-a-proxy://user:leaked-secret@proxy.example:8080"
@@ -1358,7 +1360,7 @@ def test_admin_apply_rejects_invalid_catalog_provider_proxy(
 )
 def test_admin_apply_accepts_httpx_provider_proxy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, proxy: str
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
 
@@ -1385,7 +1387,7 @@ def test_admin_apply_accepts_httpx_provider_proxy(
 )
 def test_admin_apply_rejects_unusable_provider_proxy(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, proxy: str
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
 
@@ -1409,7 +1411,7 @@ def test_admin_apply_rejects_unusable_provider_proxy(
 def test_admin_apply_rejects_invalid_provider_proxy_without_side_effects(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -1445,7 +1447,7 @@ def test_admin_apply_rejects_invalid_provider_proxy_without_side_effects(
 def test_admin_apply_validates_retained_proxy_and_allows_removal(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -1483,7 +1485,7 @@ def test_admin_apply_preserves_valid_stored_proxy_secret(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     submitted: str,
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -1509,7 +1511,7 @@ def test_admin_apply_preserves_valid_stored_proxy_secret(
 
 def test_admin_apply_writes_complete_managed_env_and_masks_preview(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1549,7 +1551,7 @@ def test_admin_apply_writes_complete_managed_env_and_masks_preview(
 
 def test_admin_apply_writes_fireworks_key_and_masks_preview(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1579,7 +1581,7 @@ def test_admin_apply_writes_fireworks_key_and_masks_preview(
 
 def test_admin_apply_writes_gemini_key_and_masks_preview(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1607,7 +1609,7 @@ def test_admin_apply_writes_gemini_key_and_masks_preview(
 
 def test_admin_apply_writes_groq_key_and_masks_preview(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1635,7 +1637,7 @@ def test_admin_apply_writes_groq_key_and_masks_preview(
 
 def test_admin_apply_writes_sambanova_key_and_masks_preview(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1665,7 +1667,7 @@ def test_admin_apply_writes_sambanova_key_and_masks_preview(
 
 def test_admin_apply_writes_cerebras_key_and_masks_preview(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1695,7 +1697,7 @@ def test_admin_apply_writes_cerebras_key_and_masks_preview(
 
 def test_admin_apply_writes_bedrock_region_config_and_masks_key(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1727,7 +1729,7 @@ def test_admin_apply_writes_bedrock_region_config_and_masks_key(
 
 def test_admin_apply_writes_cloudflare_fields_and_masks_preview(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1760,7 +1762,7 @@ def test_admin_apply_writes_cloudflare_fields_and_masks_preview(
 
 def test_admin_apply_writes_huggingface_key_and_masks_preview(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1801,7 +1803,7 @@ def test_admin_key_change_requires_restart_for_active_voice_backend(
     tmp_path: Path,
     device: str,
     credential_key: str,
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -1856,7 +1858,7 @@ def test_admin_constructor_captured_setting_requires_restart(
     key: str,
     initial: str,
     updated: str,
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -1884,7 +1886,7 @@ def test_admin_constructor_captured_setting_requires_restart(
 
 def test_admin_apply_writes_cohere_key_and_masks_preview(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1914,7 +1916,7 @@ def test_admin_apply_writes_cohere_key_and_masks_preview(
 
 def test_admin_apply_replaces_retired_model_and_ignores_retired_credential(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -1942,7 +1944,7 @@ def test_admin_apply_replaces_retired_model_and_ignores_retired_credential(
 
 def test_admin_apply_preserves_hidden_diagnostics_and_smoke_values(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -1977,7 +1979,7 @@ def test_admin_apply_preserves_hidden_diagnostics_and_smoke_values(
 
 def test_admin_apply_preserves_unrecognized_managed_zai_base_url(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -2011,7 +2013,7 @@ def test_admin_apply_preserves_unrecognized_managed_zai_base_url(
 
 def test_admin_apply_preserves_unrecognized_managed_assignments(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -2047,7 +2049,7 @@ def test_admin_apply_preserves_unrecognized_managed_assignments(
 @pytest.mark.parametrize("already_saved", [True, False])
 def test_admin_ignores_retired_request_settings_and_preserves_saved_values(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, already_saved: bool
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     retired = {
@@ -2096,7 +2098,7 @@ def test_admin_ignores_retired_request_settings_and_preserves_saved_values(
 
 def test_admin_apply_restart_required_reports_automatic_restart(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     callbacks: list[str] = []
@@ -2130,7 +2132,9 @@ def test_admin_apply_restart_required_reports_automatic_restart(
 
 
 @pytest.mark.parametrize("origin", ["http://127.0.0.1:8082", "http://localhost:9090"])
-def test_admin_restart_status_can_be_read_from_another_local_address(origin: str):
+def test_admin_restart_status_can_be_read_from_another_local_address(
+    origin: str,
+) -> None:
     app = create_test_app()
     response = _local_client(app).get("/admin/api/status", headers={"Origin": origin})
     assert response.status_code == 200
@@ -2145,7 +2149,7 @@ def test_admin_restart_status_can_be_read_from_another_local_address(origin: str
     assert stopping["instance_id"] == initial["instance_id"]
 
 
-def test_admin_restart_status_does_not_allow_a_remote_web_origin():
+def test_admin_restart_status_does_not_allow_a_remote_web_origin() -> None:
     response = _local_client(create_test_app()).get(
         "/admin/api/status", headers={"Origin": "https://example.com"}
     )
@@ -2155,7 +2159,7 @@ def test_admin_restart_status_does_not_allow_a_remote_web_origin():
 
 def test_admin_apply_restart_required_reports_manual_fallback(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -2180,7 +2184,7 @@ def test_admin_apply_restart_required_reports_manual_fallback(
 
 def test_restart_signal_failure_reports_saved_config_and_manual_restart(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
 
@@ -2220,7 +2224,7 @@ def test_pending_restart_survives_later_apply(
     tmp_path: Path,
     followup: JsonObject,
     signal_recovers: bool,
-):
+) -> None:
     from unittest.mock import MagicMock
 
     from free_claude_code.config.loader import ManagedConfigStore
@@ -2262,7 +2266,7 @@ def test_pending_restart_survives_later_apply(
 
 def test_reverting_pending_restart_restores_hot_apply(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     from unittest.mock import MagicMock
 
     from free_claude_code.config.loader import ManagedConfigStore
@@ -2297,7 +2301,7 @@ def test_reverting_pending_restart_restores_hot_apply(
 
 def test_admin_process_env_values_are_locked_and_not_written(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     monkeypatch.setenv("MODEL", "open_router/process-model")
@@ -2325,7 +2329,7 @@ def test_admin_process_env_values_are_locked_and_not_written(
 
 def test_admin_process_model_fallbacks_are_locked_and_not_written(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     monkeypatch.setenv("MODEL_FALLBACKS", "open_router/process-model")
@@ -2353,7 +2357,7 @@ def test_admin_process_model_fallbacks_are_locked_and_not_written(
 
 def test_admin_never_reads_arbitrary_current_directory_env(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     monkeypatch.chdir(tmp_path)
@@ -2389,7 +2393,7 @@ def test_admin_never_reads_arbitrary_current_directory_env(
 
 def test_admin_migration_removes_blank_required_managed_values(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -2418,7 +2422,7 @@ def test_admin_migration_removes_blank_required_managed_values(
 
 def test_admin_migrates_empty_auth_token_to_explicit_disabled_state(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -2456,7 +2460,7 @@ def test_admin_apply_rejects_missing_required_value_without_writing(
     tmp_path: Path,
     submitted: str | None,
     message: str,
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     env_file = tmp_path / ".fcc" / ".env"
@@ -2483,7 +2487,7 @@ def test_admin_apply_rejects_missing_required_value_without_writing(
 
 def test_admin_apply_preserves_false_and_numeric_zero(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -2509,7 +2513,7 @@ def test_admin_apply_preserves_false_and_numeric_zero(
 @pytest.mark.parametrize("provider_id", ["lmstudio", "llamacpp", "ollama"])
 def test_admin_local_provider_status_reports_reachable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, provider_id: str
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -2539,7 +2543,7 @@ def test_admin_local_provider_status_reports_reachable(
 
 def test_admin_local_provider_status_checks_only_requested_provider(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -2571,7 +2575,7 @@ def test_admin_local_provider_status_checks_only_requested_provider(
 
 def test_admin_config_exposes_structured_provider_configuration_targets(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
 
@@ -2597,7 +2601,7 @@ def test_admin_config_exposes_structured_provider_configuration_targets(
 
 def test_admin_local_provider_failure_does_not_return_exception_text(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_test_app()
@@ -2646,7 +2650,7 @@ def test_admin_local_provider_failure_does_not_return_exception_text(
 )
 def test_admin_provider_test_route_preserves_runtime_result(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, result: JsonObject
-):
+) -> None:
     _set_home(monkeypatch, tmp_path)
     app = create_test_app()
     runtime = runtime_for_app(app)
@@ -2661,7 +2665,7 @@ def test_admin_provider_test_route_preserves_runtime_result(
     assert response.json() == result
 
 
-def test_admin_provider_test_exposes_completed_attempt_failure():
+def test_admin_provider_test_exposes_completed_attempt_failure() -> None:
     app = create_test_app()
     manager = provider_manager_for_app(app)
     message = "The model-list request returned HTTP 403."
@@ -2681,7 +2685,7 @@ def test_admin_provider_test_exposes_completed_attempt_failure():
     }
 
 
-def test_admin_launch_url_uses_loopback_for_wildcard_host():
+def test_admin_launch_url_uses_loopback_for_wildcard_host() -> None:
     settings = Settings.model_construct(host="0.0.0.0", port=8082)
 
     assert local_admin_url(settings) == "http://127.0.0.1:8082/admin"

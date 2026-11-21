@@ -284,7 +284,7 @@ def _partial(protocol: str, text: str = ""):
 @pytest.mark.parametrize("stopped,public", [(True, True), (False, True), (True, False)])
 async def test_hidden_normal_stop_prevents_request_corrections(
     protocol: str, wire: WireProtocol, failure_kind: str, stopped: bool, public: bool
-):
+) -> None:
     error = (
         {
             "type": "authentication_error",
@@ -393,7 +393,7 @@ async def test_hidden_normal_stop_prevents_request_corrections(
 @pytest.mark.parametrize("exhausted", [False, True])
 async def test_mixed_recovery_keeps_one_budget_and_correction_history(
     protocol: str, exhausted: bool
-):
+) -> None:
     def respond(ordinal: int):
         if ordinal == 1:
             return 401, {"type": "authentication_error", "message": "expired"}
@@ -447,7 +447,9 @@ async def test_mixed_recovery_keeps_one_budget_and_correction_history(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages"])
-async def test_refresh_allowance_survives_an_intervening_correction(protocol: str):
+async def test_refresh_allowance_survives_an_intervening_correction(
+    protocol: str,
+) -> None:
     def respond(ordinal: int):
         if ordinal == 2:
             return 400, _history_error(protocol)
@@ -468,7 +470,7 @@ async def test_refresh_allowance_survives_an_intervening_correction(protocol: st
 @pytest.mark.parametrize("refresh", [False, True])
 async def test_credential_resolution_preserves_admission_order(
     protocol: str, refresh: bool
-):
+) -> None:
     class FailingEndpoint(Endpoint):
         failed = False
 
@@ -506,7 +508,7 @@ async def test_credential_resolution_preserves_admission_order(
 @pytest.mark.parametrize("failure_kind", ["authentication", "reasoning"])
 async def test_committed_output_prevents_generation_corrections(
     protocol: str, failure_kind: str
-):
+) -> None:
     error = (
         {
             "type": "authentication_error",
@@ -544,7 +546,7 @@ async def test_committed_output_prevents_generation_corrections(
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages"])
 async def test_cancelled_forced_resolution_closes_attempt_and_releases_admission(
     protocol: str,
-):
+) -> None:
     entered = asyncio.Event()
     wires: list[Wire] = []
 
@@ -597,7 +599,7 @@ async def test_cancelled_forced_resolution_closes_attempt_and_releases_admission
 @pytest.mark.parametrize("failure_kind", ["authentication", "stream_usage"])
 async def test_committed_chat_continuation_has_separate_body_correction_scope(
     failure_kind: str,
-):
+) -> None:
     def respond(ordinal: int):
         if ordinal == 1:
             return 200, _partial("chat", "already visible " * 5000)

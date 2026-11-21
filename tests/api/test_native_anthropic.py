@@ -26,7 +26,9 @@ from tests.wire_payload import (
 
 
 @pytest.mark.parametrize("effort", ["inherit", "client", "off", "low", "high", "max"])
-def test_native_fallback_applies_selected_effort_after_passthrough_primary(effort: str):
+def test_native_fallback_applies_selected_effort_after_passthrough_primary(
+    effort: str,
+) -> None:
     sent = []
 
     def handle(request: httpx.Request):
@@ -78,7 +80,7 @@ def test_native_fallback_applies_selected_effort_after_passthrough_primary(effor
         assert object_payload(sent[1]["output_config"])["effort"] == effort
 
 
-def test_native_ingress_preserves_extensions_and_bypasses_local_processing():
+def test_native_ingress_preserves_extensions_and_bypasses_local_processing() -> None:
     sent = []
 
     def handle(request: httpx.Request):
@@ -124,7 +126,7 @@ def test_native_ingress_preserves_extensions_and_bypasses_local_processing():
     assert without_empty_reasoning(sent) == [{**body, "model": "claude-test"}]
 
 
-def test_native_ingress_forwards_system_turns_for_upstream_to_judge():
+def test_native_ingress_forwards_system_turns_for_upstream_to_judge() -> None:
     sent = []
 
     def handle(request: httpx.Request):
@@ -161,7 +163,7 @@ def test_native_ingress_forwards_system_turns_for_upstream_to_judge():
     )
 
 
-def test_native_fallback_excludes_compatibility_and_preserves_alias():
+def test_native_fallback_excludes_compatibility_and_preserves_alias() -> None:
     sent = []
 
     def handle(request: httpx.Request):
@@ -203,14 +205,14 @@ def test_native_fallback_excludes_compatibility_and_preserves_alias():
     assert sent[-1]["tools"] == body["tools"]
 
 
-def test_compatibility_ingress_still_rejects_unknown_blocks():
+def test_compatibility_ingress_still_rejects_unknown_blocks() -> None:
     app = create_test_app(Settings())
     with TestClient(app) as client:
         response = client.post("/v1/messages", json=native_body())
     assert response.status_code == 422
 
 
-def test_leading_pings_allow_exhausted_primary_to_reach_native_fallback():
+def test_leading_pings_allow_exhausted_primary_to_reach_native_fallback() -> None:
     from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
     from tests.providers.test_anthropic_messages_transport import Wire, _events, _sse
 
@@ -253,7 +255,7 @@ def test_leading_pings_allow_exhausted_primary_to_reach_native_fallback():
     assert all(wire.closed for wire in wires)
 
 
-def test_stream_failure_after_metadata_exhausts_then_uses_fallback():
+def test_stream_failure_after_metadata_exhausts_then_uses_fallback() -> None:
     from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
     from tests.providers.test_anthropic_messages_transport import _events, _sse
 
@@ -301,7 +303,7 @@ def test_stream_failure_after_metadata_exhausts_then_uses_fallback():
 @pytest.mark.parametrize("thinking", [False, True, None])
 def test_native_model_catalog_does_not_advertise_ignored_thinking_variant(
     view: str, thinking: bool | None
-):
+) -> None:
     from free_claude_code.application.model_metadata import ProviderModelInfo
     from free_claude_code.core.gateway_model_ids import decode_gateway_model_id
     from tests.api.support import provider_manager_for_app
@@ -324,7 +326,7 @@ def test_native_model_catalog_does_not_advertise_ignored_thinking_variant(
         assert rows["default_model_id"] == "anthropic/selected"
 
 
-def test_native_proxy_auth_remains_separate_from_upstream_key():
+def test_native_proxy_auth_remains_separate_from_upstream_key() -> None:
     calls = []
 
     def handle(request: httpx.Request):
@@ -355,7 +357,7 @@ def test_native_proxy_auth_remains_separate_from_upstream_key():
     assert calls[0].headers["Authorization"] == "Bearer upstream-secret"
 
 
-def test_compatibility_primary_keeps_conversion_when_anthropic_is_fallback():
+def test_compatibility_primary_keeps_conversion_when_anthropic_is_fallback() -> None:
     from tests.api.model_fallback_support import (
         ControlledFallbackProvider,
         execution_failure,

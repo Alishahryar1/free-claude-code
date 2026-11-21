@@ -435,7 +435,7 @@ def _automatic_search_service(
     )
 
 
-def test_web_server_tool_not_detected_when_tool_only_listed():
+def test_web_server_tool_not_detected_when_tool_only_listed() -> None:
     """Listing web_search without forcing it must not skip the upstream provider."""
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
@@ -447,7 +447,7 @@ def test_web_server_tool_not_detected_when_tool_only_listed():
     assert not is_web_server_tool_request(request)
 
 
-def test_web_server_tool_detected_when_tool_choice_forces_it():
+def test_web_server_tool_detected_when_tool_choice_forces_it() -> None:
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -459,7 +459,7 @@ def test_web_server_tool_detected_when_tool_choice_forces_it():
     assert is_web_server_tool_request(request)
 
 
-def test_web_server_tool_not_detected_when_forced_name_missing_from_tools():
+def test_web_server_tool_not_detected_when_forced_name_missing_from_tools() -> None:
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -708,7 +708,7 @@ def test_rejects_web_search_domain_wildcards_and_url_parts(domain: str) -> None:
 @pytest.mark.parametrize("provider_id", _PROVIDER_IDS)
 async def test_service_rejects_forced_server_tool_when_local_handler_is_disabled(
     provider_id: str,
-):
+) -> None:
     """Every provider needs FCC's local handler for forced server tools."""
     settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": False})
     assert settings.enable_web_server_tools is False
@@ -1960,16 +1960,16 @@ async def test_automatic_web_search_cancellation_closes_provider_stream() -> Non
         "http://169.254.169.254/latest/meta-data/",
     ],
 )
-def test_enforce_web_fetch_egress_blocks_internal_or_disallowed(url: str):
+def test_enforce_web_fetch_egress_blocks_internal_or_disallowed(url: str) -> None:
     with pytest.raises(WebFetchEgressViolation):
         enforce_web_fetch_egress(url, _STRICT_EGRESS)
 
 
-def test_enforce_web_fetch_egress_allows_global_literal_ip():
+def test_enforce_web_fetch_egress_allows_global_literal_ip() -> None:
     enforce_web_fetch_egress("http://8.8.8.8/", _STRICT_EGRESS)
 
 
-def test_enforce_web_fetch_egress_skips_private_checks_when_opted_in():
+def test_enforce_web_fetch_egress_skips_private_checks_when_opted_in() -> None:
     enforce_web_fetch_egress(
         "http://127.0.0.1/",
         WebFetchEgressPolicy(
@@ -2062,7 +2062,7 @@ def _aiohttp_client_session_patch(
 @pytest.mark.asyncio
 async def test_web_fetch_pins_validated_addresses_for_every_redirect(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     addresses = iter(["8.8.8.8", "1.1.1.1"])
     resolved_hosts = []
 
@@ -2118,7 +2118,7 @@ async def test_web_fetch_pins_validated_addresses_for_every_redirect(
 
 
 @pytest.mark.asyncio
-async def test_run_web_fetch_follows_redirect_when_each_hop_is_allowed():
+async def test_run_web_fetch_follows_redirect_when_each_hop_is_allowed() -> None:
     res_redirect = _aiohttp_response(
         302, url="http://8.8.8.8/start", location="/final", body=b""
     )
@@ -2139,7 +2139,7 @@ async def test_run_web_fetch_follows_redirect_when_each_hop_is_allowed():
 @pytest.mark.asyncio
 async def test_run_web_fetch_truncates_large_body_to_byte_cap(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     huge = b"x" * 5000
     res_ok = _aiohttp_response(200, url="http://8.8.8.8/big", body=huge)
     client_cm, _ = _aiohttp_client_session_patch(res_ok)
@@ -2157,7 +2157,7 @@ async def test_run_web_fetch_truncates_large_body_to_byte_cap(
 
 
 @pytest.mark.asyncio
-async def test_run_web_fetch_redirect_to_blocked_host_raises():
+async def test_run_web_fetch_redirect_to_blocked_host_raises() -> None:
     res_redirect = _aiohttp_response(
         302,
         url="http://8.8.8.8/start",
@@ -2178,7 +2178,7 @@ async def test_run_web_fetch_redirect_to_blocked_host_raises():
 
 
 @pytest.mark.asyncio
-async def test_run_web_fetch_redirect_without_location_raises():
+async def test_run_web_fetch_redirect_without_location_raises() -> None:
     res_bad = _aiohttp_response(302, url="http://8.8.8.8/here", body=b"")
     client_cm, _ = _aiohttp_client_session_patch(res_bad)
     with (
@@ -2192,7 +2192,7 @@ async def test_run_web_fetch_redirect_without_location_raises():
 
 
 @pytest.mark.asyncio
-async def test_run_web_fetch_excess_redirects_raises():
+async def test_run_web_fetch_excess_redirects_raises() -> None:
     res1 = _aiohttp_response(302, url="http://8.8.8.8/a", location="/b", body=b"")
     res2 = _aiohttp_response(302, url="http://8.8.8.8/b", location="/c", body=b"")
     client_cm, _ = _aiohttp_client_session_patch(res1, res2)
@@ -2210,7 +2210,9 @@ async def test_run_web_fetch_excess_redirects_raises():
 
 
 @pytest.mark.asyncio
-async def test_streams_web_search_server_tool_result(monkeypatch: pytest.MonkeyPatch):
+async def test_streams_web_search_server_tool_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def fake_search(
         self: HTTPWebToolsClient, query: str
     ) -> list[WebSearchResult]:
@@ -2283,7 +2285,7 @@ async def test_streams_web_search_server_tool_result(monkeypatch: pytest.MonkeyP
 @pytest.mark.asyncio
 async def test_service_streams_forced_web_search_by_default(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     async def fake_search(
         self: HTTPWebToolsClient, _query: str
     ) -> list[WebSearchResult]:
@@ -2334,7 +2336,7 @@ async def test_service_streams_forced_web_search_by_default(
 @pytest.mark.asyncio
 async def test_service_aggregates_forced_web_search_when_stream_false(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     async def fake_search(
         self: HTTPWebToolsClient, _query: str
     ) -> list[WebSearchResult]:
@@ -2394,7 +2396,7 @@ async def test_service_aggregates_forced_web_search_when_stream_false(
 @pytest.mark.asyncio
 async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     """Only the latest user message supplies the URL (not earlier transcript text)."""
     target = "https://new-only.example.com/page"
 
@@ -2437,7 +2439,7 @@ async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(
 @pytest.mark.asyncio
 async def test_service_aggregates_forced_web_fetch_when_stream_false(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     async def fake_fetch(
         self: HTTPWebToolsClient, url: str, *, egress: WebFetchEgressPolicy
     ) -> WebFetchResult:
@@ -2492,7 +2494,9 @@ async def test_service_aggregates_forced_web_fetch_when_stream_false(
 
 
 @pytest.mark.asyncio
-async def test_streams_web_fetch_server_tool_result(monkeypatch: pytest.MonkeyPatch):
+async def test_streams_web_fetch_server_tool_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def fake_fetch(
         self: HTTPWebToolsClient, url: str, *, egress: WebFetchEgressPolicy
     ) -> WebFetchResult:
@@ -2560,7 +2564,7 @@ async def test_streams_web_fetch_server_tool_result(monkeypatch: pytest.MonkeyPa
 @pytest.mark.asyncio
 async def test_streams_web_fetch_error_summary_generic_by_default(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     secret = "sensitive-upstream-token"
 
     async def boom(
@@ -2625,7 +2629,7 @@ async def test_streams_web_fetch_error_summary_generic_by_default(
 @pytest.mark.asyncio
 async def test_streams_web_fetch_error_summary_verbose_includes_exception_class(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     async def boom(
         self: object, _url: str, *, egress: WebFetchEgressPolicy
     ) -> WebFetchResult:
@@ -2655,7 +2659,7 @@ async def test_streams_web_fetch_error_summary_verbose_includes_exception_class(
 
 
 @pytest.mark.asyncio
-async def test_read_response_body_capped_truncates_single_oversized_chunk():
+async def test_read_response_body_capped_truncates_single_oversized_chunk() -> None:
     cap = 500
 
     async def aiter_bytes(chunk_size: object = None):
@@ -2670,7 +2674,9 @@ async def test_read_response_body_capped_truncates_single_oversized_chunk():
 
 
 @pytest.mark.asyncio
-async def test_drain_response_body_capped_stops_after_first_chunk_when_oversized():
+async def test_drain_response_body_capped_stops_after_first_chunk_when_oversized() -> (
+    None
+):
     cap = 300
     chunk_calls = {"n": 0}
 

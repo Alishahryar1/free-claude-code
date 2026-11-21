@@ -208,7 +208,7 @@ async def _probe(level: str, raw: bool) -> None:
 
 @pytest.mark.parametrize("level", ["INFO", "DEBUG", "NONE"])
 @pytest.mark.parametrize("raw", [False, True])
-def test_debug_payloads_are_built_only_when_enabled(level: str, raw: bool):
+def test_debug_payloads_are_built_only_when_enabled(level: str, raw: bool) -> None:
     result = subprocess.run(
         [
             sys.executable,

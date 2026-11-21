@@ -30,7 +30,7 @@ REJECTED = (400, {"type": "invalid_request_error", "message": "Rejected"})
 
 
 @pytest.mark.asyncio
-async def test_output_cap_is_learned_even_when_no_attempt_remains():
+async def test_output_cap_is_learned_even_when_no_attempt_remains() -> None:
     provider = GroqProvider(
         make_provider_config(api_key="key", base_url=GROQ_DEFAULT_BASE),
         admission=immediate_admission(max_attempts=1),
@@ -60,7 +60,9 @@ def _thoughts(body: JsonObject) -> tuple[bool, bool]:
 
 
 @pytest.mark.asyncio
-async def test_rejected_cached_history_mode_is_forgotten_even_when_no_attempt_remains():
+async def test_rejected_cached_history_mode_is_forgotten_even_when_no_attempt_remains() -> (
+    None
+):
     cache = HistoryModeCache()
 
     # Two rejections teach the cache that this upstream wants no thoughts.

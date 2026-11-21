@@ -32,7 +32,7 @@ def integration():
 
 def test_connect_disconnect_and_doctor_status(
     integration: tuple[TestClient, Path, ApplicationRuntime],
-):
+) -> None:
     from free_claude_code.runtime.diagnostics import integration_report
 
     client, path, runtime = integration
@@ -75,7 +75,7 @@ def test_local_admin_security(
     integration: tuple[TestClient, Path, ApplicationRuntime],
     action: str,
     headers: dict[str, str],
-):
+) -> None:
     client, path, _ = integration
     assert (
         client.request(
@@ -88,7 +88,7 @@ def test_local_admin_security(
 
 def test_bad_configuration_errors_do_not_leak_credentials(
     integration: tuple[TestClient, Path, ApplicationRuntime],
-):
+) -> None:
     client, path, _ = integration
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('{"integration-secret":bad}')
@@ -102,7 +102,7 @@ def test_bad_configuration_errors_do_not_leak_credentials(
 
 def test_pending_restart_and_shutdown_reject_writes(
     integration: tuple[TestClient, Path, ApplicationRuntime],
-):
+) -> None:
     client, path, runtime = integration
     runtime._pending_fields = ["PORT"]
     assert client.post(ROOT + "/connect").status_code == 503

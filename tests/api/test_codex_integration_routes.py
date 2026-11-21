@@ -28,7 +28,7 @@ def integration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def test_routes_inspect_connect_and_disconnect(
     integration: tuple[TestClient, Path, ApplicationRuntime],
-):
+) -> None:
     client, path, _ = integration
     response = client.get(ROOT)
     assert response.json() == {
@@ -58,7 +58,7 @@ def test_routes_inspect_connect_and_disconnect(
 @pytest.mark.parametrize("action", ["", "/connect", "/disconnect"])
 def test_invalid_file_returns_safe_uncached_error(
     integration: tuple[TestClient, Path, ApplicationRuntime], action: str
-):
+) -> None:
     client, path, _ = integration
     source = "[integration-secret"
     path.write_text(source)
@@ -78,7 +78,7 @@ def test_local_admin_security_applies(
     integration: tuple[TestClient, Path, ApplicationRuntime],
     action: str,
     headers: dict[str, str],
-):
+) -> None:
     client, path, _ = integration
     response = client.request(
         "GET" if not action else "POST", ROOT + action, headers=headers
@@ -89,7 +89,7 @@ def test_local_admin_security_applies(
 
 def test_remote_client_is_rejected(
     integration: tuple[TestClient, Path, ApplicationRuntime],
-):
+) -> None:
     client, path, _ = integration
     with TestClient(
         client.app, base_url="http://127.0.0.1", client=("192.0.2.1", 50000)
@@ -101,7 +101,7 @@ def test_remote_client_is_rejected(
 def test_io_failure_returns_safe_error(
     integration: tuple[TestClient, Path, ApplicationRuntime],
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     client, _, _ = integration
 
     def fail(*args: object):
@@ -116,7 +116,7 @@ def test_io_failure_returns_safe_error(
 
 def test_pending_restart_and_shutdown_do_not_write(
     integration: tuple[TestClient, Path, ApplicationRuntime],
-):
+) -> None:
     client, path, runtime = integration
     runtime._pending_fields = ["PORT"]
     assert client.post(f"{ROOT}/connect").status_code == 503

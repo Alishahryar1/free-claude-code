@@ -39,7 +39,7 @@ _ITPM_MESSAGE = (
 @pytest.mark.parametrize("message", [_ITPM_MESSAGE, "Token allowance exceeded"])
 def test_token_limit_failure_is_actionable_without_parsing_prose(
     wrapped: bool, message: str
-):
+) -> None:
     error = _status_error(detail=_detail(message), wrapped=wrapped)
     failure = finalize_provider_failure(
         error,
@@ -99,7 +99,7 @@ def _status_error(
         _status_error(detail="not JSON"),
     ],
 )
-def test_unrelated_or_ambiguous_errors_defer_to_shared_policy(error: Exception):
+def test_unrelated_or_ambiguous_errors_defer_to_shared_policy(error: Exception) -> None:
     assert GroqChatBehavior().failure_override(error) is None
 
 
@@ -183,7 +183,7 @@ def test_exact_tpm_rejection_corrects_only_completion_budget(wrapped: bool) -> N
 @pytest.mark.parametrize(
     "quota", ["input tokens per minute (ITPM)", "output tokens per minute (OTPM)"]
 )
-def test_separate_token_quotas_do_not_use_combined_tpm_arithmetic(quota: str):
+def test_separate_token_quotas_do_not_use_combined_tpm_arithmetic(quota: str) -> None:
     error = _status_error(detail=_detail(f"{quota}: Limit 8000, Requested 26206"))
     assert correct_tpm_completion_budget(error, _body()) is None
     failure = GroqChatBehavior().failure_override(error)

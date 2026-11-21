@@ -81,7 +81,7 @@ async def _retained_handle_probe(directory: str, cancel: bool):
 @pytest.mark.parametrize("cancel", [False, True])
 def test_picker_does_not_wait_for_inherited_output_handles(
     tmp_path: Path, cancel: bool
-):
+) -> None:
     script = (
         "import asyncio, runpy, sys; "
         "probe = runpy.run_path(sys.argv[1])['_retained_handle_probe']; "
@@ -181,7 +181,7 @@ async def _exec_identity_probe(directory: str, after_exec: bool):
 @pytest.mark.parametrize("after_exec", [False, True])
 def test_posix_exec_preserves_owned_pid_and_cancellation(
     tmp_path: Path, after_exec: bool
-):
+) -> None:
     script = (
         "import asyncio, runpy, sys; "
         "probe = runpy.run_path(sys.argv[1])['_exec_identity_probe']; "
@@ -205,7 +205,7 @@ def test_posix_exec_preserves_owned_pid_and_cancellation(
 @pytest.mark.parametrize("cancelled", [False, True])
 async def test_selection_and_cancellation_return_after_child_exit(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cancelled: bool
-):
+) -> None:
     path = None if cancelled else str(tmp_path / "project café with spaces")
     if sys.platform.startswith("linux") and cancelled:
         script = "import sys; sys.exit(1)"
@@ -231,7 +231,7 @@ async def test_selection_and_cancellation_return_after_child_exit(
 @pytest.mark.parametrize("spawn_fails", [False, True])
 async def test_spawn_and_result_failures_close_captures_before_unregister(
     monkeypatch: pytest.MonkeyPatch, spawn_fails: bool
-):
+) -> None:
     from free_claude_code.runtime import folder_picker
 
     picker = NativeFolderPicker()
@@ -268,7 +268,7 @@ async def test_spawn_and_result_failures_close_captures_before_unregister(
 @pytest.mark.asyncio
 async def test_selection_failure_racing_shutdown_is_reported_to_request(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     picker = NativeFolderPicker()
     started = asyncio.Event()
 
@@ -293,7 +293,7 @@ async def test_selection_failure_racing_shutdown_is_reported_to_request(
 @pytest.mark.parametrize("output", ['{"path": 42}', "{}", "not json", '{"path":""}'])
 async def test_invalid_child_result_gives_manual_entry_guidance(
     monkeypatch: pytest.MonkeyPatch, output: str
-):
+) -> None:
     child = DialogProcess(f"print({output!r})")
     picker = NativeFolderPicker()
     monkeypatch.setattr(picker, "_spawn", child.spawn)
@@ -306,7 +306,7 @@ async def test_invalid_child_result_gives_manual_entry_guidance(
 @pytest.mark.asyncio
 async def test_two_clicks_and_disconnect_during_spawn_keep_one_owned_child(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     child = DialogProcess("import threading\nthreading.Event().wait()")
     child.return_spawn.clear()
     picker = NativeFolderPicker()
@@ -331,7 +331,7 @@ async def test_two_clicks_and_disconnect_during_spawn_keep_one_owned_child(
 @pytest.mark.asyncio
 async def test_shutdown_closes_picker_and_rejects_new_clicks(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     child = DialogProcess("import threading\nthreading.Event().wait()")
     picker = NativeFolderPicker()
     monkeypatch.setattr(picker, "_spawn", child.spawn)
@@ -349,7 +349,7 @@ async def test_shutdown_closes_picker_and_rejects_new_clicks(
 @pytest.mark.asyncio
 async def test_interrupted_close_still_waits_for_child_cleanup(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     child = DialogProcess("import threading\nthreading.Event().wait()")
     child.return_spawn.clear()
     picker = NativeFolderPicker()

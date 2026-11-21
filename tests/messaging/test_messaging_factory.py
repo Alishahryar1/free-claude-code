@@ -12,7 +12,7 @@ from free_claude_code.messaging.platforms.ports import MessagingStartupNotice
 class TestCreateMessagingComponents:
     """Tests for create_messaging_components factory function."""
 
-    def test_telegram_with_token(self):
+    def test_telegram_with_token(self) -> None:
         """Create Telegram platform when bot_token is provided."""
         mock_runtime = MagicMock()
         mock_runtime.name = "telegram"
@@ -67,19 +67,19 @@ class TestCreateMessagingComponents:
             log_api_error_tracebacks=False,
         )
 
-    def test_telegram_without_token(self):
+    def test_telegram_without_token(self) -> None:
         """Return None when no bot_token for Telegram."""
         result = create_messaging_components("telegram")
         assert result is None
 
-    def test_telegram_empty_token(self):
+    def test_telegram_empty_token(self) -> None:
         """Return None when bot_token is empty string."""
         result = create_messaging_components(
             "telegram", MessagingPlatformOptions(telegram_bot_token="")
         )
         assert result is None
 
-    def test_discord_with_token(self):
+    def test_discord_with_token(self) -> None:
         """Create Discord platform when discord_bot_token is provided."""
         mock_runtime = MagicMock()
         mock_runtime.name = "discord"
@@ -129,12 +129,12 @@ class TestCreateMessagingComponents:
             log_api_error_tracebacks=False,
         )
 
-    def test_discord_without_token(self):
+    def test_discord_without_token(self) -> None:
         """Return None when no discord_bot_token for Discord."""
         result = create_messaging_components("discord")
         assert result is None
 
-    def test_discord_empty_token(self):
+    def test_discord_empty_token(self) -> None:
         """Return None when discord_bot_token is empty string."""
         result = create_messaging_components(
             "discord",
@@ -145,19 +145,19 @@ class TestCreateMessagingComponents:
         )
         assert result is None
 
-    def test_unknown_platform(self):
+    def test_unknown_platform(self) -> None:
         """Return None for unknown platform types."""
         result = create_messaging_components("slack")
         assert result is None
 
-    def test_unknown_platform_with_kwargs(self):
+    def test_unknown_platform_with_kwargs(self) -> None:
         """Return None for unknown platform even with kwargs."""
         result = create_messaging_components(
             "slack", MessagingPlatformOptions(telegram_bot_token="token")
         )
         assert result is None
 
-    def test_separate_factory_calls_construct_distinct_limiters(self):
+    def test_separate_factory_calls_construct_distinct_limiters(self) -> None:
         """Each selected platform runtime owns a new limiter instance."""
         runtime = MagicMock(name="runtime")
         runtime.name = "telegram"

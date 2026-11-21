@@ -74,41 +74,43 @@ def req() -> MessagesRequest:
 
 
 class TestSetIfNotNone:
-    def test_value_not_none_sets(self):
+    def test_value_not_none_sets(self) -> None:
         body = {}
         set_if_not_none(body, "key", "value")
         assert body["key"] == "value"
 
-    def test_value_none_skips(self):
+    def test_value_none_skips(self) -> None:
         body: JsonObject = {}
         set_if_not_none(body, "key", None)
         assert "key" not in body
 
 
 class TestSetExtra:
-    def test_key_in_extra_body_skips(self):
+    def test_key_in_extra_body_skips(self) -> None:
         extra: JsonObject = {"top_k": 42}
         _set_extra(extra, "top_k", 10)
         assert extra["top_k"] == 42
 
-    def test_value_none_skips(self):
+    def test_value_none_skips(self) -> None:
         extra = {}
         _set_extra(extra, "top_k", None)
         assert "top_k" not in extra
 
-    def test_value_equals_ignore_value_skips(self):
+    def test_value_equals_ignore_value_skips(self) -> None:
         extra = {}
         _set_extra(extra, "top_k", -1, ignore_value=-1)
         assert "top_k" not in extra
 
-    def test_value_set_when_valid(self):
+    def test_value_set_when_valid(self) -> None:
         extra = {}
         _set_extra(extra, "top_k", 10, ignore_value=-1)
         assert extra["top_k"] == 10
 
 
 class TestBuildRequestBody:
-    def test_absent_sampling_defaults_are_not_injected(self, req: MessagesRequest):
+    def test_absent_sampling_defaults_are_not_injected(
+        self, req: MessagesRequest
+    ) -> None:
         body = build_request_body(req, reasoning=REASONING_OFF)
 
         assert "temperature" not in body
@@ -116,7 +118,7 @@ class TestBuildRequestBody:
         assert "parallel_tool_calls" not in body
         assert "extra_body" not in body
 
-    def test_explicit_sampling_and_extras_survive(self, req: MessagesRequest):
+    def test_explicit_sampling_and_extras_survive(self, req: MessagesRequest) -> None:
         req.temperature = 0.3
         req.top_p = 1.0
         req.top_k = 15
@@ -133,7 +135,7 @@ class TestBuildRequestBody:
     @pytest.mark.parametrize("keep_custom", (False, True))
     def test_reasoning_extras_are_cleaned_without_mutating_request(
         self, req: MessagesRequest, keep_custom: bool
-    ):
+    ) -> None:
         template_kwargs: dict[str, Any] = {"thinking": True, "reasoning_budget": 100}
         if keep_custom:
             template_kwargs["custom"] = "value"
@@ -159,12 +161,12 @@ class TestBuildRequestBody:
     @pytest.mark.parametrize("effort", list(ReasoningEffort))
     def test_named_effort_passes_through(
         self, req: MessagesRequest, effort: ReasoningEffort
-    ):
+    ) -> None:
         body = build_request_body(req, reasoning=ReasoningPolicy(effort=effort))
         assert body["reasoning_effort"] == effort.value
         assert "chat_template_kwargs" not in object_payload(body.get("extra_body", {}))
 
-    def test_named_effort_replaces_client_reasoning_budgets(self):
+    def test_named_effort_replaces_client_reasoning_budgets(self) -> None:
         req = make_messages_request(
             model="test",
             thinking=None,
@@ -200,7 +202,7 @@ class TestBuildRequestBody:
     )
     def test_max_tokens_preserves_fcc_output_limit(
         self, req: MessagesRequest, requested: int | None, expected: int
-    ):
+    ) -> None:
         req.max_tokens = requested
         body = build_request_body(req, reasoning=REASONING_ON)
         assert body["max_tokens"] == expected
@@ -208,7 +210,7 @@ class TestBuildRequestBody:
     @pytest.mark.parametrize("client_top_p", (None, 0.0, 0.5, 0.95, 1.0))
     def test_top_p_preserves_client_value_or_omission(
         self, req: MessagesRequest, client_top_p: float | None
-    ):
+    ) -> None:
         req.top_p = client_top_p
 
         body = build_request_body(req, reasoning=REASONING_ON)
@@ -218,7 +220,7 @@ class TestBuildRequestBody:
         else:
             assert body["top_p"] == client_top_p
 
-    def test_include_stop_str_in_output_not_sent(self, req: MessagesRequest):
+    def test_include_stop_str_in_output_not_sent(self, req: MessagesRequest) -> None:
         body = build_request_body(req, reasoning=REASONING_ON)
         assert "include_stop_str_in_output" not in object_payload(
             body.get("extra_body", {})
@@ -226,7 +228,7 @@ class TestBuildRequestBody:
 
     def test_tool_schema_boolean_subschemas_are_removed_without_mutating_request(
         self, req: MessagesRequest
-    ):
+    ) -> None:
         tool_schema = {
             "type": "object",
             "properties": {
@@ -266,7 +268,7 @@ class TestBuildRequestBody:
 
     def test_grep_schema_type_parameter_is_aliased_without_mutating_request(
         self, req: MessagesRequest
-    ):
+    ) -> None:
         tool_schema = deepcopy(GREP_SCHEMA_FROM_SERVER_LOG)
         tool_schema["properties"]["_fcc_arg_type"] = {
             "type": "string",
@@ -320,7 +322,7 @@ class TestBuildRequestBody:
 
     def test_reported_long_tool_name_uses_generic_alias_after_nim_repairs(
         self, req: MessagesRequest
-    ):
+    ) -> None:
         """Issue #1307's 52nd tool is portable without losing NIM arg aliases."""
         long_name = "mcp__issue_1307__" + "x" * 85
         assert len(long_name) == 102
@@ -357,7 +359,9 @@ class TestBuildRequestBody:
         )
         assert req.model_dump() == snapshot
 
-    def test_safe_tool_schema_does_not_add_alias_metadata(self, req: MessagesRequest):
+    def test_safe_tool_schema_does_not_add_alias_metadata(
+        self, req: MessagesRequest
+    ) -> None:
         tool_schema = {
             "type": "object",
             "properties": {
@@ -386,7 +390,7 @@ class TestBuildRequestBody:
 
     def test_nested_schema_keyword_properties_are_aliased_without_mutating_request(
         self, req: MessagesRequest
-    ):
+    ) -> None:
         tool_schema = {
             "type": "object",
             "properties": {
@@ -430,7 +434,7 @@ class TestBuildRequestBody:
         assert aliases == {"_fcc_arg_type": "type"}
         assert tool_schema == original_schema
 
-    def test_private_alias_metadata_is_stripped_without_mutating_body(self):
+    def test_private_alias_metadata_is_stripped_without_mutating_body(self) -> None:
         body: JsonObject = {
             "model": "test",
             NIM_TOOL_ARGUMENT_ALIASES_KEY: {"Grep": {"_fcc_arg_A": "-A"}},
@@ -444,7 +448,7 @@ class TestBuildRequestBody:
             "Grep": {"_fcc_arg_A": "-A"}
         }
 
-    def test_reasoning_uses_named_effort(self):
+    def test_reasoning_uses_named_effort(self) -> None:
         req = make_messages_request(
             model="test",
             messages=[{"role": "user", "content": "hi"}],
@@ -466,7 +470,7 @@ class TestBuildRequestBody:
         assert "chat_template_kwargs" not in extra
         assert "reasoning_budget" not in extra
 
-    def test_canonicalization_removes_empty_client_reasoning_envelope(self):
+    def test_canonicalization_removes_empty_client_reasoning_envelope(self) -> None:
         req = make_messages_request(
             model="test",
             extra_body={
@@ -485,7 +489,7 @@ class TestBuildRequestBody:
 
         assert "chat_template_kwargs" not in object_payload(body.get("extra_body", {}))
 
-    def test_clone_body_without_chat_template(self):
+    def test_clone_body_without_chat_template(self) -> None:
         body = {
             "model": "test",
             "extra_body": {
@@ -512,7 +516,7 @@ class TestBuildRequestBody:
             "reasoning_budget": 100,
         }
 
-    def test_clone_body_without_chat_template_kwargs_only(self):
+    def test_clone_body_without_chat_template_kwargs_only(self) -> None:
         body = {
             "model": "test",
             "extra_body": {
@@ -532,12 +536,12 @@ class TestBuildRequestBody:
         assert "chat_template_kwargs" not in cloned["extra_body"]
         assert cloned["extra_body"]["ignore_eos"] is False
 
-    def test_clone_body_without_chat_template_returns_none_when_unchanged(self):
+    def test_clone_body_without_chat_template_returns_none_when_unchanged(self) -> None:
         body = {"model": "test", "extra_body": {"ignore_eos": False}}
 
         assert clone_body_without_chat_template(body) is None
 
-    def test_no_chat_template_kwargs_when_thinking_disabled(self):
+    def test_no_chat_template_kwargs_when_thinking_disabled(self) -> None:
         req = make_messages_request(
             model="test",
             messages=[{"role": "user", "content": "hi"}],
@@ -559,7 +563,7 @@ class TestBuildRequestBody:
         assert "chat_template_kwargs" not in extra
         assert "reasoning_budget" not in extra
 
-    def test_named_effort_preserves_unrelated_chat_template_kwargs(self):
+    def test_named_effort_preserves_unrelated_chat_template_kwargs(self) -> None:
         req = make_messages_request(
             model="test",
             messages=[{"role": "user", "content": "hi"}],
@@ -586,7 +590,7 @@ class TestBuildRequestBody:
             "custom": "value"
         }
 
-    def test_explicit_chat_template_is_preserved(self):
+    def test_explicit_chat_template_is_preserved(self) -> None:
         req = make_messages_request(
             model="mistralai/mixtral-8x7b-instruct-v0.1",
             messages=[{"role": "user", "content": "hi"}],
@@ -609,7 +613,7 @@ class TestBuildRequestBody:
         assert "chat_template_kwargs" not in extra
         assert object_payload(extra)["chat_template"] == "custom_template"
 
-    def test_no_reasoning_params_in_extra_body(self):
+    def test_no_reasoning_params_in_extra_body(self) -> None:
         req = make_messages_request(
             model="test",
             messages=[{"role": "user", "content": "hi"}],
@@ -638,7 +642,7 @@ class TestBuildRequestBody:
         assert body["reasoning_effort"] == "none"
         assert "chat_template_kwargs" not in extra
 
-    def test_budget_only_request_uses_enabled_named_effort(self):
+    def test_budget_only_request_uses_enabled_named_effort(self) -> None:
         req = make_messages_request(model="test", thinking=None)
 
         body = build_request_body(
@@ -650,7 +654,7 @@ class TestBuildRequestBody:
         assert "chat_template_kwargs" not in object_payload(body.get("extra_body", {}))
         assert "reasoning_budget" not in object_payload(body.get("extra_body", {}))
 
-    def test_assistant_thinking_blocks_removed_when_disabled(self):
+    def test_assistant_thinking_blocks_removed_when_disabled(self) -> None:
         req = make_messages_request(
             model="test",
             messages=[
@@ -680,7 +684,9 @@ class TestBuildRequestBody:
         )
         assert "answer" in string_payload(object_array(body["messages"])[0]["content"])
 
-    def test_assistant_thinking_replayed_as_reasoning_content_when_enabled(self):
+    def test_assistant_thinking_replayed_as_reasoning_content_when_enabled(
+        self,
+    ) -> None:
         req = make_messages_request(
             model="test",
             messages=[

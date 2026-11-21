@@ -63,7 +63,7 @@ def assert_unavailable_snapshot(events: list[SSEEvent]):
 @pytest.mark.parametrize("continuing", [False, True])
 async def test_retention_failure_does_not_claim_a_partial_final_snapshot(
     monkeypatch: pytest.MonkeyPatch, protocol: str, wire: WireProtocol, continuing: bool
-):
+) -> None:
     monkeypatch.setattr(
         "free_claude_code.core.delivered_response.RECOVERY_RETENTION_BYTES", 1200
     )
@@ -89,7 +89,7 @@ async def test_retention_failure_does_not_claim_a_partial_final_snapshot(
 @pytest.mark.parametrize("code", [None, "context_length_exceeded"])
 async def test_failed_frame_keeps_error_category_and_finishes_execution(
     monkeypatch: pytest.MonkeyPatch, limited: bool, code: str | None
-):
+) -> None:
     if limited:
         monkeypatch.setattr(
             "free_claude_code.core.delivered_response.RECOVERY_RETENTION_BYTES", 1200
@@ -162,7 +162,7 @@ async def test_failed_frame_keeps_error_category_and_finishes_execution(
 @pytest.mark.parametrize("candidate", ["", "New text."])
 async def test_production_cap_during_closures_does_not_count_as_new_output(
     candidate: str,
-):
+) -> None:
     # The production holdback releases this prefix by size before the disconnect.
     prefix = "A" * 400_000
 
@@ -189,7 +189,7 @@ async def test_production_cap_during_closures_does_not_count_as_new_output(
 @pytest.mark.asyncio
 async def test_cap_during_closures_does_not_turn_pure_echo_into_success(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     monkeypatch.setattr(
         "free_claude_code.core.delivered_response.RECOVERY_RETENTION_BYTES", 1200
     )
@@ -213,7 +213,7 @@ async def test_cap_during_closures_does_not_turn_pure_echo_into_success(
 @pytest.mark.asyncio
 async def test_cap_failure_formatting_does_not_reenter_a_failed_mapper(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     monkeypatch.setattr(
         "free_claude_code.core.delivered_response.RECOVERY_RETENTION_BYTES", 1200
     )
@@ -264,7 +264,7 @@ ANNOTATION = {
 @pytest.mark.parametrize("continuing", [False, True])
 async def test_annotated_part_blocks_continuation_before_its_item_snapshot(
     part_event: str, wire: WireProtocol, continuing: bool
-):
+) -> None:
     annotated_attempt = 2 if continuing else 1
 
     def reply(bodies: list[JsonObject]):
@@ -293,7 +293,7 @@ async def test_annotated_part_blocks_continuation_before_its_item_snapshot(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("annotated", [False, True])
-async def test_healthy_original_response_preserves_annotations(annotated: bool):
+async def test_healthy_original_response_preserves_annotations(annotated: bool) -> None:
     source = text_events("responses", "Cited ")
     if annotated:
         object_payload(source[2]["part"])["annotations"] = [ANNOTATION]

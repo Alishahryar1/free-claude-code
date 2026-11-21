@@ -43,7 +43,7 @@ def test_standard_json_does_not_use_json5(
     native_reader: tuple[Callable[[Path], JsonObject], bool],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     read, array = native_reader
     document = {"nested": {"value": 1}, "models": [{"id": str(i)} for i in range(999)]}
     expected = [document] if array else document
@@ -59,7 +59,7 @@ def test_standard_json_does_not_use_json5(
 
 def test_json5_native_syntax_still_works(
     native_reader: tuple[Callable[[Path], JsonObject], bool], tmp_path: Path
-):
+) -> None:
     read, array = native_reader
     path = tmp_path / "native.json"
     path.write_text(source_for("{/* comment */ nested: {'value': 1,},}", array))
@@ -85,7 +85,7 @@ def test_invalid_native_values_remain_errors(
     native_reader: tuple[Callable[[Path], JsonObject], bool],
     tmp_path: Path,
     source: str,
-):
+) -> None:
     read, array = native_reader
     path = tmp_path / "native.json"
     path.write_text(source_for(source, array))

@@ -136,7 +136,9 @@ def _sent(create: AsyncMock, index: int) -> JsonObject:
         "accepted options for reasoning_effort include default",
     ],
 )
-async def test_classifier_correction_does_not_change_later_requests(message: str):
+async def test_classifier_correction_does_not_change_later_requests(
+    message: str,
+) -> None:
     provider = _provider()
     sent = []
 

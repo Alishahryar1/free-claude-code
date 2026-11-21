@@ -96,7 +96,7 @@ def files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def test_lifecycle_preserves_other_agents_and_refreshes_owned_settings(
     files: tuple[Path, Path, Path],
-):
+) -> None:
     config, registry, systems = files
     node, script = install(registry, systems)
     original = registry.read_bytes()
@@ -178,7 +178,9 @@ def test_lifecycle_preserves_other_agents_and_refreshes_owned_settings(
     ]
 
 
-def test_missing_installation_never_creates_config(files: tuple[Path, Path, Path]):
+def test_missing_installation_never_creates_config(
+    files: tuple[Path, Path, Path],
+) -> None:
     config, _, _ = files
     assert not jb.refresh_connected(config, "http://localhost:8082", "token")
     with pytest.raises(jb.SetupError):
@@ -198,7 +200,7 @@ def test_missing_installation_never_creates_config(files: tuple[Path, Path, Path
 )
 def test_invalid_or_unowned_configuration_is_never_overwritten(
     files: tuple[Path, Path, Path], source: str
-):
+) -> None:
     config, _, _ = files
     config.write_text(source)
     for action in [None, True, False]:
@@ -209,7 +211,7 @@ def test_invalid_or_unowned_configuration_is_never_overwritten(
 
 def test_status_and_disconnect_do_not_discover_or_run_programs(
     files: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     config, registry, systems = files
     install(registry, systems)
     jb.configure(config, "http://localhost:8082", "token", True)
@@ -228,7 +230,7 @@ def test_status_and_disconnect_do_not_discover_or_run_programs(
 @pytest.mark.parametrize("fault", ["marker", "version", "escape", "engine", "node"])
 def test_unusable_installation_preserves_connected_entry(
     files: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch, fault: str
-):
+) -> None:
     config, registry, systems = files
     _, script = install(registry, systems)
     jb.configure(config, "http://localhost:8082", "token", True)
@@ -273,7 +275,7 @@ def test_platform_layout_and_launch(
     platform: str,
     data: str,
     cache: str,
-):
+) -> None:
     monkeypatch.setattr(jb, "sys", SimpleNamespace(platform=platform))
     monkeypatch.setattr(jb.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -293,7 +295,7 @@ def test_platform_layout_and_launch(
 
 def test_previous_ide_is_preferred_and_system_node_is_fallback(
     files: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     config, registry, systems = files
     node, script = install(registry, systems, ide="Z IDE")
     jb.configure(config, "http://localhost:8082", "token", True)
@@ -317,7 +319,7 @@ def test_previous_ide_is_preferred_and_system_node_is_fallback(
 
 def test_timed_out_node_leaves_config_unchanged(
     files: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     config, registry, systems = files
     install(registry, systems)
     write(config, {"agent_servers": {"Other": {"command": "other"}}})
@@ -335,7 +337,7 @@ def test_timed_out_node_leaves_config_unchanged(
 
 def test_failed_atomic_replace_preserves_existing_config(
     files: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     from free_claude_code.harnesses import config_file
 
     config, registry, systems = files

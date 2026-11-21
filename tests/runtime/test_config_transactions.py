@@ -19,7 +19,7 @@ from tests.runtime.test_application_runtime import TrackingFactory, _prepared, _
 @pytest.mark.parametrize("cancel_writer", [False, True])
 async def test_integration_write_finishes_before_configuration_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel_writer: bool
-):
+) -> None:
     factory = TrackingFactory()
     manager = ProviderRuntimeManager(
         _settings("nvidia_nim/old"), runtime_factory=factory
@@ -80,7 +80,7 @@ async def test_integration_write_finishes_before_configuration_publication(
 @pytest.mark.asyncio
 async def test_credential_validation_does_not_block_integrations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     manager = ProviderRuntimeManager(_settings("nvidia_nim/old"))
     configuration = AsyncMock(spec=ConfigurationService)
     configuration.prepare.return_value = _prepared(
@@ -110,7 +110,7 @@ async def test_credential_validation_does_not_block_integrations(
 @pytest.mark.asyncio
 async def test_awaitable_restart_callback_is_not_executed_under_apply_lock(
     tmp_path: Path,
-):
+) -> None:
     manager = ProviderRuntimeManager(_settings("nvidia_nim/old"))
     configuration = AsyncMock(spec=ConfigurationService)
     prepared = _prepared(
@@ -163,7 +163,7 @@ async def test_awaitable_restart_callback_is_not_executed_under_apply_lock(
 @pytest.mark.parametrize("fail", [False, True])
 async def test_cancelled_commit_settles_before_shutdown(
     tmp_path: Path, pending: tuple[str, ...], fail: bool
-):
+) -> None:
     factory = TrackingFactory()
     manager = ProviderRuntimeManager(
         _settings("nvidia_nim/old"), runtime_factory=factory
@@ -221,7 +221,7 @@ async def test_cancellation_at_finalization_handoff_prevents_persistence(
     restart_required: bool,
     cancel_during_apply: bool,
     previous_cancellation: bool,
-):
+) -> None:
     monkeypatch.delenv("MODEL", raising=False)
     monkeypatch.delenv("PORT", raising=False)
     store = ManagedConfigStore()
@@ -284,7 +284,9 @@ async def test_cancellation_at_finalization_handoff_prevents_persistence(
 
 
 @pytest.mark.asyncio
-async def test_cancellation_waiting_for_replacement_does_not_persist(tmp_path: Path):
+async def test_cancellation_waiting_for_replacement_does_not_persist(
+    tmp_path: Path,
+) -> None:
     manager = ProviderRuntimeManager(_settings("nvidia_nim/old"))
     configuration = AsyncMock(spec=ConfigurationService)
     configuration.prepare.return_value = _prepared(
@@ -311,7 +313,7 @@ async def test_cancellation_waiting_for_replacement_does_not_persist(tmp_path: P
 @pytest.mark.parametrize("shutdown", [False, True])
 async def test_worker_commit_retains_ownership_against_queued_apply(
     monkeypatch: pytest.MonkeyPatch, shutdown: bool
-):
+) -> None:
     monkeypatch.delenv("LOG_LEVEL", raising=False)
     store = ManagedConfigStore()
     store.initialize()

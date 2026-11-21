@@ -887,7 +887,9 @@ def test_shared_recovery_exhaustion_preserves_last_provider_failure() -> None:
 
 
 @pytest.mark.parametrize("deadline", [None, 1234.0])
-def test_recovery_rewrap_preserves_selected_cause_and_deadline(deadline: float | None):
+def test_recovery_rewrap_preserves_selected_cause_and_deadline(
+    deadline: float | None,
+) -> None:
     cause = RuntimeError("selected upstream error")
     first = ProviderRecoveryExhausted(cause, retry_not_before=deadline)
     copied = ProviderRecoveryExhausted(first)

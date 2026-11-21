@@ -25,7 +25,7 @@ from tests.wire_payload import object_array
 
 @pytest.mark.parametrize("padded", [False, True])
 @pytest.mark.parametrize("urlsafe", [False, True])
-def test_native_bytes_can_be_reencoded_by_clients(padded: bool, urlsafe: bool):
+def test_native_bytes_can_be_reencoded_by_clients(padded: bool, urlsafe: bool) -> None:
     record = recovered()
     raw = encode_replay(record).encode()
     encoded = (base64.urlsafe_b64encode if urlsafe else base64.b64encode)(raw).decode()
@@ -49,7 +49,7 @@ def test_native_bytes_can_be_reencoded_by_clients(padded: bool, urlsafe: bool):
 @pytest.mark.parametrize(
     "raw", [b"fcc:history:v1:invalid", b"fcc:history:v9:anything", b"fcc:history:\xff"]
 )
-def test_recognized_malformed_native_replay_is_rejected(raw: bytes):
+def test_recognized_malformed_native_replay_is_rejected(raw: bytes) -> None:
     with pytest.raises(HistoryReplayError):
         decode_gemini_replay(base64.b64encode(raw).decode())
 
@@ -62,13 +62,13 @@ def test_recognized_malformed_native_replay_is_rejected(raw: bytes):
         base64.b64encode(b"provider-owned bytes").decode(),
     ],
 )
-def test_non_fcc_signature_is_not_reinterpreted(value: str):
+def test_non_fcc_signature_is_not_reinterpreted(value: str) -> None:
     assert decode_gemini_replay(value) is None
 
 
 def test_final_wrapped_size_is_bounded_on_encode_and_decode(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     record = recovered()
     inner = encode_replay(record)
     wrapped = encode_gemini_replay(record)
@@ -84,7 +84,7 @@ def test_final_wrapped_size_is_bounded_on_encode_and_decode(
 
 
 @pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity", "1e9999"])
-def test_public_echo_rejects_nonrepresentable_numbers(number: str):
+def test_public_echo_rejects_nonrepresentable_numbers(number: str) -> None:
     seed = ContinuationSeed(
         "gemini",
         (
@@ -101,7 +101,7 @@ def test_public_echo_rejects_nonrepresentable_numbers(number: str):
 
 
 @pytest.mark.parametrize("edit", ["text", "origin", "draft"])
-def test_native_wrapper_preserves_provenance_and_echo_checks(edit: str):
+def test_native_wrapper_preserves_provenance_and_echo_checks(edit: str) -> None:
     record = recovered(echo=edit != "draft")
     body = request(record)
     object_array(object_array(body["contents"])[1]["parts"])[-1]["thoughtSignature"] = (

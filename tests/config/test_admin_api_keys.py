@@ -57,7 +57,7 @@ async def save_keys(service: ConfigurationService, values: list[str]):
 @pytest.mark.asyncio
 async def test_reorder_replace_and_clear_masked_keys_round_trip(
     service: ConfigurationService,
-):
+) -> None:
     await save_keys(service, ["private-first", "private-second", "private-third"])
     edit = await key_edit(
         service,
@@ -89,7 +89,7 @@ async def test_reorder_replace_and_clear_masked_keys_round_trip(
 @pytest.mark.asyncio
 async def test_stale_masked_reference_cannot_replace_another_saved_key(
     service: ConfigurationService,
-):
+) -> None:
     await save_keys(service, ["one", "two"])
     stale = await key_edit(service, "OPENAI_API_KEY", [{"retain": 1}])
     await save_keys(service, ["new-one", "new-two"])
@@ -102,7 +102,7 @@ async def test_stale_masked_reference_cannot_replace_another_saved_key(
 @pytest.mark.asyncio
 async def test_references_are_bound_to_owner_and_server_lifetime(
     service: ConfigurationService,
-):
+) -> None:
     edit = await key_edit(service, "OPENAI_API_KEY", [{"value": "one"}])
     with pytest.raises(ValueError, match="changed"):
         await service.prepare({"GROQ_API_KEY": edit}, service._store.read().settings)
@@ -116,7 +116,7 @@ async def test_references_are_bound_to_owner_and_server_lifetime(
 @pytest.mark.asyncio
 async def test_duplicate_retained_and_new_keys_highlights_both_rows(
     service: ConfigurationService,
-):
+) -> None:
     await save_keys(service, ["private-first"])
     edit = await key_edit(
         service,
@@ -148,7 +148,7 @@ async def test_duplicate_retained_and_new_keys_highlights_both_rows(
 )
 async def test_invalid_entries_do_not_change_managed_credentials(
     service: ConfigurationService, entry: JsonObject
-):
+) -> None:
     await save_keys(service, ["one"])
     edit = await key_edit(service, "OPENAI_API_KEY", [entry])
     before = service._store.path.read_bytes()
@@ -168,7 +168,7 @@ async def test_invalid_entries_do_not_change_managed_credentials(
 @pytest.mark.asyncio
 async def test_locked_lists_allow_check_submission_but_reject_mutation(
     service: ConfigurationService, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", '["one","two"]')
     edit = await key_edit(service, "OPENAI_API_KEY", [{"retain": 0}, {"retain": 1}])
     prepared = await service.prepare(
@@ -190,7 +190,7 @@ async def test_locked_lists_allow_check_submission_but_reject_mutation(
 @pytest.mark.asyncio
 async def test_commit_rejects_other_prepared_write_and_preserves_newer_settings(
     service: ConfigurationService,
-):
+) -> None:
     active = service._store.read().settings
     first = await service.prepare({"PORT": "8123"}, active)
     second = await service.prepare({"HOST": "localhost"}, active)
@@ -203,7 +203,7 @@ async def test_commit_rejects_other_prepared_write_and_preserves_newer_settings(
 @pytest.mark.asyncio
 async def test_commit_rejects_changed_process_ownership(
     service: ConfigurationService, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     await save_keys(service, ["managed"])
     edit = await key_edit(service, "OPENAI_API_KEY", [{"value": "replacement"}])
     prepared = await service.prepare(
@@ -217,7 +217,9 @@ async def test_commit_rejects_changed_process_ownership(
 
 
 @pytest.mark.asyncio
-async def test_custom_list_uses_same_masked_protocol(service: ConfigurationService):
+async def test_custom_list_uses_same_masked_protocol(
+    service: ConfigurationService,
+) -> None:
     mutation = CustomProviderMutation(
         action="create",
         values={
@@ -261,7 +263,7 @@ async def test_custom_list_uses_same_masked_protocol(service: ConfigurationServi
 )
 async def test_voice_restart_uses_first_key_and_ignores_tail_edits(
     service: ConfigurationService, device: str, key: str
-):
+) -> None:
     edit = await key_edit(
         service, key, [{"value": "voice-first"}, {"value": "voice-tail"}]
     )

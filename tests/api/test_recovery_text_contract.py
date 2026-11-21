@@ -130,7 +130,7 @@ async def consume_structured(raw: str, *, failed: bool):
 @pytest.mark.parametrize("stage", ["healthy", "hidden_retry", "delivered_failure"])
 async def test_structured_request_keeps_healthy_output_and_failure_policy(
     protocol: str, kind: str, stage: str
-):
+) -> None:
     def reply(bodies: list[JsonObject]) -> tuple[int, JsonValue]:
         if len(bodies) == 1 and stage == "hidden_retry":
             return 200, []
@@ -170,7 +170,7 @@ async def test_structured_request_keeps_healthy_output_and_failure_policy(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages"])
-async def test_explicit_plain_text_format_can_continue(protocol: str):
+async def test_explicit_plain_text_format_can_continue(protocol: str) -> None:
     async with _harness(
         protocol,
         lambda bodies: (
@@ -195,7 +195,9 @@ async def test_explicit_plain_text_format_can_continue(protocol: str):
 @pytest.mark.parametrize(
     "path", ["native_messages", "translated_messages", "chat_extra"]
 )
-async def test_messages_structured_request_does_not_resume_partial_json(path: str):
+async def test_messages_structured_request_does_not_resume_partial_json(
+    path: str,
+) -> None:
     bodies: list[JsonObject] = []
     body: JsonObject = {
         "model": "requested",
@@ -308,7 +310,7 @@ def scored_events(text: str, location: str, *, value: JsonValue = True):
 )
 async def test_preserved_logprobs_prevent_text_reconstruction(
     location: str, continuing: bool
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if continuing and len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
@@ -345,7 +347,7 @@ async def test_preserved_logprobs_prevent_text_reconstruction(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("value", [None, []])
-async def test_empty_logprobs_do_not_block_recovery(value: JsonValue):
+async def test_empty_logprobs_do_not_block_recovery(value: JsonValue) -> None:
     async with _harness(
         "responses",
         lambda bodies: (
@@ -364,7 +366,7 @@ async def test_empty_logprobs_do_not_block_recovery(value: JsonValue):
 
 
 @pytest.mark.asyncio
-async def test_healthy_logprob_payloads_are_preserved():
+async def test_healthy_logprob_payloads_are_preserved() -> None:
     source = scored_events("Hello world.", "all")
     async with _harness("responses", lambda _: (200, source)) as (send, bodies, _):
         raw = await delivered(
@@ -383,7 +385,9 @@ async def test_healthy_logprob_payloads_are_preserved():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("continuing", [False, True])
-async def test_echoed_structured_format_prevents_reconstruction(continuing: bool):
+async def test_echoed_structured_format_prevents_reconstruction(
+    continuing: bool,
+) -> None:
     def reply(bodies: list[JsonObject]):
         events = text_events(
             "responses",
@@ -410,7 +414,7 @@ async def test_echoed_structured_format_prevents_reconstruction(continuing: bool
 @pytest.mark.parametrize("later_reasoning", [False, True])
 async def test_complete_calls_do_not_bypass_unsupported_text_guard(
     constraint: str, later_reasoning: bool
-):
+) -> None:
     prefix = text_events("responses", '{"value":', complete=False)
     if constraint == "logprobs":
         prefix = scored_events("Hello ", "delta")[:4]
@@ -444,7 +448,7 @@ async def test_complete_calls_do_not_bypass_unsupported_text_guard(
 )
 async def test_metadata_already_omitted_by_projection_does_not_block_recovery(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if protocol == "responses":
             events = scored_events("Hello " if len(bodies) == 1 else "world.", "all")
@@ -476,7 +480,7 @@ async def test_metadata_already_omitted_by_projection_does_not_block_recovery(
 @pytest.mark.parametrize("constraint", ["structured", "logprobs"])
 async def test_failed_snapshot_keeps_its_error_category_with_text_metadata(
     constraint: str,
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)

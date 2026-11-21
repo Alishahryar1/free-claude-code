@@ -380,7 +380,7 @@ def _assert_error_not_in_text_deltas_after_tool(
 
 class TestStreamingExceptionHandling:
     @pytest.mark.asyncio
-    async def test_stream_normalization_failure_closes_raw_stream(self):
+    async def test_stream_normalization_failure_closes_raw_stream(self) -> None:
         provider = _make_provider()
         stream = ClosableAsyncStreamMock([])
 
@@ -404,7 +404,7 @@ class TestStreamingExceptionHandling:
     """Tests for error paths during stream_messages."""
 
     @pytest.mark.asyncio
-    async def test_pre_start_api_error_raises_provider_error(self):
+    async def test_pre_start_api_error_raises_provider_error(self) -> None:
         """Before holdback commit, provider failures raise for API-level non-200."""
         provider = _make_provider()
         request = _make_request()
@@ -459,7 +459,7 @@ class TestStreamingExceptionHandling:
         assert exc_info.value.retryable is False
 
     @pytest.mark.asyncio
-    async def test_read_timeout_with_empty_message_raises_fallback(self):
+    async def test_read_timeout_with_empty_message_raises_fallback(self) -> None:
         """ReadTimeout(TimeoutError()) should raise a non-empty timeout message."""
         provider = _make_provider()
         request = _make_request()
@@ -483,7 +483,7 @@ class TestStreamingExceptionHandling:
         assert "Request ID: req_timeout123" in error.message
 
     @pytest.mark.asyncio
-    async def test_error_after_precommit_partial_content_raises(self):
+    async def test_error_after_precommit_partial_content_raises(self) -> None:
         """Precommit partial text is discarded so the API can return non-200."""
         provider = _make_provider()
         request = _make_request()
@@ -504,7 +504,9 @@ class TestStreamingExceptionHandling:
         assert "Connection lost" in error.message
 
     @pytest.mark.asyncio
-    async def test_error_after_native_tool_call_keeps_tool_incomplete_and_raises(self):
+    async def test_error_after_native_tool_call_keeps_tool_incomplete_and_raises(
+        self,
+    ) -> None:
         """A failure never marks an unfinished tool complete for the API."""
         provider = _make_provider()
         request = _make_request()
@@ -536,7 +538,7 @@ class TestStreamingExceptionHandling:
         )
 
     @pytest.mark.asyncio
-    async def test_empty_response_gets_space(self):
+    async def test_empty_response_gets_space(self) -> None:
         """Empty response with no text/tools gets a single space text block."""
         provider = _make_provider()
         request = _make_request()
@@ -559,7 +561,7 @@ class TestStreamingExceptionHandling:
         assert "message_stop" in event_text
 
     @pytest.mark.asyncio
-    async def test_upstream_completion_tokens_null_emits_int_usage(self):
+    async def test_upstream_completion_tokens_null_emits_int_usage(self) -> None:
         """NIM/GLM may send usage.completion_tokens=null; final SSE must not use JSON null."""
         provider = _make_provider()
         request = _make_request()
@@ -593,7 +595,7 @@ class TestStreamingExceptionHandling:
         assert '"output_tokens": null' not in "".join(events)
 
     @pytest.mark.asyncio
-    async def test_reasoning_only_stream_emits_placeholder_text(self):
+    async def test_reasoning_only_stream_emits_placeholder_text(self) -> None:
         """When the model streams only ``reasoning_content`` (no ``content``), add text block.
 
         NIM / some templates may emit no main ``content``; a minimal text block matches
@@ -619,7 +621,7 @@ class TestStreamingExceptionHandling:
         assert "message_stop" in event_text
 
     @pytest.mark.asyncio
-    async def test_stream_with_thinking_content(self):
+    async def test_stream_with_thinking_content(self) -> None:
         """Thinking content via think tags is emitted as thinking blocks."""
         provider = _make_provider()
         request = _make_request()
@@ -644,7 +646,7 @@ class TestStreamingExceptionHandling:
         assert "answer" in event_text
 
     @pytest.mark.asyncio
-    async def test_stream_with_reasoning_content_field(self):
+    async def test_stream_with_reasoning_content_field(self) -> None:
         """reasoning_content delta field is emitted as thinking block."""
         provider = _make_provider()
         request = _make_request()
@@ -670,7 +672,9 @@ class TestStreamingExceptionHandling:
         assert "The answer" in event_text
 
     @pytest.mark.asyncio
-    async def test_stream_with_empty_reasoning_content_creates_no_thinking_block(self):
+    async def test_stream_with_empty_reasoning_content_creates_no_thinking_block(
+        self,
+    ) -> None:
         """Empty reasoning_content is stateful but must not emit visible thinking text."""
         provider = _make_provider()
         request = _make_request()
@@ -742,7 +746,7 @@ class TestStreamingExceptionHandling:
         wire: str,
         deltas: list[tuple[str | None, str | None]],
         expected: JsonValue,
-    ):
+    ) -> None:
         provider = profiled_provider(
             "qwencloud",
             make_provider_config(api_key="test", base_url="https://provider.invalid"),
@@ -825,7 +829,7 @@ class TestStreamingExceptionHandling:
             await provider.cleanup()
 
     @pytest.mark.asyncio
-    async def test_stream_with_reasoning_content_suppressed_when_disabled(self):
+    async def test_stream_with_reasoning_content_suppressed_when_disabled(self) -> None:
         """reasoning deltas are stripped while normal text still streams."""
         provider = _make_provider()
         request = _make_request()
@@ -852,7 +856,7 @@ class TestStreamingExceptionHandling:
         assert "The answer" in event_text
 
     @pytest.mark.asyncio
-    async def test_stream_with_upstream_405_mentions_provider_name(self):
+    async def test_stream_with_upstream_405_mentions_provider_name(self) -> None:
         """HTTP 405s are surfaced as upstream method/endpoint rejections."""
         provider = _make_provider()
         request = _make_request()
@@ -886,7 +890,7 @@ class TestStreamingExceptionHandling:
         assert "Request ID: REQ405" in stream_error.message
 
     @pytest.mark.asyncio
-    async def test_stream_with_openai_bad_request_surfaces_upstream_body(self):
+    async def test_stream_with_openai_bad_request_surfaces_upstream_body(self) -> None:
         """OpenAI SDK bodies should be raised so users can copy exact provider errors."""
         provider = _make_provider()
         request = _make_request()
@@ -924,7 +928,7 @@ class TestStreamingExceptionHandling:
         assert "Request ID: REQ_BODY" in stream_error.message
 
     @pytest.mark.asyncio
-    async def test_error_after_native_tool_call_failure_includes_body(self):
+    async def test_error_after_native_tool_call_failure_includes_body(self) -> None:
         """Detailed failure data survives without completing an unfinished tool."""
         provider = _make_provider()
         request = _make_request()
@@ -964,7 +968,7 @@ class TestStreamingExceptionHandling:
         _assert_error_not_in_text_deltas_after_tool(events, "bad after tool")
 
     @pytest.mark.asyncio
-    async def test_clean_eof_does_not_promote_json_to_tool_completion(self):
+    async def test_clean_eof_does_not_promote_json_to_tool_completion(self) -> None:
         """Valid JSON without a source finish remains an unfinished call."""
         provider = _make_provider()
         request = _make_request()
@@ -986,7 +990,9 @@ class TestStreamingExceptionHandling:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("finish_reason", ["tool_calls", "stop"])
-    async def test_legacy_tool_markup_remains_visible_text(self, finish_reason: str):
+    async def test_legacy_tool_markup_remains_visible_text(
+        self, finish_reason: str
+    ) -> None:
         """Legacy markup cannot manufacture executable tool calls."""
         provider = _make_provider()
         request = _make_request()
@@ -1040,7 +1046,7 @@ class TestStreamingExceptionHandling:
         )
 
     @pytest.mark.asyncio
-    async def test_function_tag_markup_remains_text_beside_reasoning(self):
+    async def test_function_tag_markup_remains_text_beside_reasoning(self) -> None:
         """Function-looking text stays visible after reasoning parsing."""
         provider = _make_provider()
         request = _make_request(
@@ -1120,7 +1126,7 @@ class TestStreamingExceptionHandling:
         )
 
     @pytest.mark.asyncio
-    async def test_native_tool_call_disables_function_tag_recovery(self):
+    async def test_native_tool_call_disables_function_tag_recovery(self) -> None:
         """Native structured calls win and release earlier candidate text in order."""
         provider = _make_provider()
         request = _make_request(
@@ -1174,7 +1180,9 @@ class TestStreamingExceptionHandling:
         assert [object_payload(block)["id"] for block in tool_starts] == ["call_native"]
 
     @pytest.mark.asyncio
-    async def test_rejected_function_tag_candidate_bypasses_legacy_heuristics(self):
+    async def test_rejected_function_tag_candidate_bypasses_legacy_heuristics(
+        self,
+    ) -> None:
         """Rejected reserved text is preserved without a second permissive parse."""
         provider = _make_provider()
         request = _make_request(
@@ -1226,7 +1234,7 @@ class TestStreamingExceptionHandling:
     @pytest.mark.parametrize("committed", [False, True])
     async def test_literal_markup_respects_connection_commit_boundary(
         self, committed: bool
-    ):
+    ) -> None:
         """Literal markup follows ordinary retry and continuation boundaries."""
         provider = _make_provider()
         request = _make_request(
@@ -1286,7 +1294,7 @@ class TestStreamingExceptionHandling:
         assert "tools" in mock_create.call_args_list[1].kwargs
 
     @pytest.mark.asyncio
-    async def test_precommit_retry_discards_abandoned_tool_id_candidate(self):
+    async def test_precommit_retry_discards_abandoned_tool_id_candidate(self) -> None:
         """An ID observed only by an invisible attempt cannot leak into its replay."""
         provider = _make_provider()
         request = _make_request()
@@ -1330,7 +1338,7 @@ class TestStreamingExceptionHandling:
         assert sum(event.event == "message_stop" for event in parsed) == 1
 
     @pytest.mark.asyncio
-    async def test_colliding_tool_id_round_trips_as_distinct_matched_pair(self):
+    async def test_colliding_tool_id_round_trips_as_distinct_matched_pair(self) -> None:
         """A repaired public ID stays paired when Claude replays the next turn."""
         provider = _make_provider()
         first_pair = [
@@ -1430,7 +1438,9 @@ class TestStreamingExceptionHandling:
         assert result_ids == ["Bash:0", public_id]
 
     @pytest.mark.asyncio
-    async def test_precommit_retry_emits_one_unduplicated_downstream_lifecycle(self):
+    async def test_precommit_retry_emits_one_unduplicated_downstream_lifecycle(
+        self,
+    ) -> None:
         """An abandoned attempt contributes no frame to the successful replay."""
         provider = _make_provider()
         request = _make_request()
@@ -1472,7 +1482,9 @@ class TestStreamingExceptionHandling:
         assert parsed[-1].event == "message_stop"
 
     @pytest.mark.asyncio
-    async def test_responses_precommit_retry_emits_one_unduplicated_lifecycle(self):
+    async def test_responses_precommit_retry_emits_one_unduplicated_lifecycle(
+        self,
+    ) -> None:
         """Responses output also discards every frame from an abandoned attempt."""
         provider = _make_provider()
         request = OpenAIResponsesRequest(model="test-model", input="hello")
@@ -1509,7 +1521,7 @@ class TestStreamingExceptionHandling:
         assert "response.failed" not in event_names
 
     @pytest.mark.asyncio
-    async def test_responses_cancellation_closes_upstream_without_retry(self):
+    async def test_responses_cancellation_closes_upstream_without_retry(self) -> None:
         provider = _make_provider()
         request = OpenAIResponsesRequest(model="test-model", input="hello")
         stream = BlockingClosableAsyncStreamMock()
@@ -1538,7 +1550,9 @@ class TestStreamingExceptionHandling:
         assert stream.close_calls == 1
 
     @pytest.mark.asyncio
-    async def test_precommit_retry_discards_abandoned_parser_and_usage_state(self):
+    async def test_precommit_retry_discards_abandoned_parser_and_usage_state(
+        self,
+    ) -> None:
         """A replay owns fresh parsers and terminal usage metadata."""
         provider = _make_provider()
         request = _make_request()
@@ -1584,7 +1598,7 @@ class TestStreamingExceptionHandling:
         assert sum(event.event == "message_stop" for event in parsed) == 1
 
     @pytest.mark.asyncio
-    async def test_create_correction_survives_later_precommit_retry(self):
+    async def test_create_correction_survives_later_precommit_retry(self) -> None:
         """A corrected request body outlives the replay-local stream state."""
         provider = _make_provider()
         request = _make_request()
@@ -1632,7 +1646,7 @@ class TestStreamingExceptionHandling:
         assert sum(event.event == "message_stop" for event in parsed) == 1
 
     @pytest.mark.asyncio
-    async def test_precommit_retry_discards_abandoned_tool_name_fragment(self):
+    async def test_precommit_retry_discards_abandoned_tool_name_fragment(self) -> None:
         """A retried alias fragment cannot prefix or duplicate the successful call."""
         provider = _make_provider()
         original = "mcp__retry_tool_name__" + "x" * 70
@@ -1692,7 +1706,7 @@ class TestStreamingExceptionHandling:
         assert sum(event.event == "message_stop" for event in parsed) == 1
 
     @pytest.mark.asyncio
-    async def test_private_replacements_share_one_generation_budget(self):
+    async def test_private_replacements_share_one_generation_budget(self) -> None:
         """Private drafts are replaced within the same bounded execution."""
         provider = _make_provider()
         request = _make_request()
@@ -1750,7 +1764,7 @@ class TestStreamingExceptionHandling:
         assert len({row["execution_id"] for row in starts}) == 1
 
     @pytest.mark.asyncio
-    async def test_disabled_thinking_recovery_discards_reasoning(self):
+    async def test_disabled_thinking_recovery_discards_reasoning(self) -> None:
         provider = _make_provider()
         request = _make_request()
         initial_stream = AsyncStreamMock([_make_chunk(content="hello")])
@@ -1784,7 +1798,7 @@ class TestStreamingExceptionHandling:
         )
 
     @pytest.mark.asyncio
-    async def test_context_exhaustion_during_recovery_remains_terminal(self):
+    async def test_context_exhaustion_during_recovery_remains_terminal(self) -> None:
         """A recovery request cannot turn context exhaustion into success."""
         original = ClosableAsyncStreamMock(
             [_make_chunk(content="partial" + ("x" * 70_000))]
@@ -1817,7 +1831,7 @@ class TestStreamingExceptionHandling:
         assert recovery.closed is True
 
     @pytest.mark.asyncio
-    async def test_context_error_opening_continuation_remains_terminal(self):
+    async def test_context_error_opening_continuation_remains_terminal(self) -> None:
         """A derived continuation's SDK context error replaces the cutoff."""
         original = ClosableAsyncStreamMock(
             [_make_chunk(content="partial" + ("x" * 70_000))]
@@ -1848,7 +1862,7 @@ class TestStreamingExceptionHandling:
         assert original.closed is True
 
     @pytest.mark.asyncio
-    async def test_primary_stream_closes_when_iteration_fails(self):
+    async def test_primary_stream_closes_when_iteration_fails(self) -> None:
         """OpenAI-chat main streams close after iterator failures."""
         provider = _make_provider()
         request = _make_request()
@@ -1869,7 +1883,7 @@ class TestStreamingExceptionHandling:
         assert "provider stream failed" in error.message.lower()
 
     @pytest.mark.asyncio
-    async def test_stream_rate_limit_uses_the_execution_retry_session(self):
+    async def test_stream_rate_limit_uses_the_execution_retry_session(self) -> None:
         """A create-time 429 consumes one attempt before a successful retry."""
         provider = _make_provider()
         request = _make_request()
@@ -1907,7 +1921,7 @@ class TestStreamChunkEdgeCases:
     """Tests for edge cases in stream chunk handling."""
 
     @pytest.mark.asyncio
-    async def test_stream_chunk_with_empty_choices_skipped(self):
+    async def test_stream_chunk_with_empty_choices_skipped(self) -> None:
         """Chunk with choices=[] is skipped without crashing."""
         provider = _make_provider()
         request = _make_request()
@@ -1932,7 +1946,7 @@ class TestStreamChunkEdgeCases:
         assert "message_stop" in event_text
 
     @pytest.mark.asyncio
-    async def test_stream_chunk_with_none_delta_handled(self):
+    async def test_stream_chunk_with_none_delta_handled(self) -> None:
         """Chunk with choice.delta=None is handled defensively."""
         provider = _make_provider()
         request = _make_request()
@@ -1959,7 +1973,7 @@ class TestStreamChunkEdgeCases:
         assert "message_stop" in event_text
 
     @pytest.mark.asyncio
-    async def test_stream_generator_cleanup_on_exception(self):
+    async def test_stream_generator_cleanup_on_exception(self) -> None:
         """When stream raises mid-iteration, message_stop still emitted."""
         provider = _make_provider()
         request = _make_request()

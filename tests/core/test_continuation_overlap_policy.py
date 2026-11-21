@@ -20,7 +20,7 @@ from tests.wire_payload import (
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-def test_empty_delta_stays_invisible_with_no_prior_answer_text(wire: str):
+def test_empty_delta_stays_invisible_with_no_prior_answer_text(wire: str) -> None:
     event = (
         {
             "type": "content_block_delta",
@@ -42,7 +42,7 @@ def test_empty_delta_stays_invisible_with_no_prior_answer_text(wire: str):
 @pytest.mark.parametrize("channel", ["text", "thinking", "summary"])
 def test_complete_prefix_match_releases_other_channels_before_item_closes(
     channel: Literal["text", "thinking"],
-):
+) -> None:
     kind = {
         "text": "response.output_text.delta",
         "thinking": "response.reasoning_text.delta",
@@ -113,7 +113,7 @@ def retained_parts(prefix: str, parts: list[str]):
 @pytest.mark.parametrize("separate_items", [False, True])
 def test_text_representation_preserves_each_source_part(
     prefix: str, parts: list[str], representation: str, separate_items: bool
-):
+) -> None:
     source = responses_parts(
         parts, representation=representation, separate_items=separate_items
     )
@@ -162,7 +162,7 @@ def test_text_representation_preserves_each_source_part(
                 )
 
 
-def test_pending_snapshots_are_idempotent_and_lifecycle_frames_keep_order():
+def test_pending_snapshots_are_idempotent_and_lifecycle_frames_keep_order() -> None:
     source = responses_parts(["He", "llo world."], representation="text_done")
     source.insert(4, deepcopy(source[3]))
     source.insert(5, {"type": "ping", "marker": "between repeated snapshots"})
@@ -184,7 +184,7 @@ def test_pending_snapshots_are_idempotent_and_lifecycle_frames_keep_order():
     ] == ["", "world."]
 
 
-def test_interleaved_parts_wait_for_the_earlier_open_part():
+def test_interleaved_parts_wait_for_the_earlier_open_part() -> None:
     source = responses_parts(["He", "llo world."], representation="text_done")
     earlier_done = source[3:5]
     later = source[5:8]
@@ -211,7 +211,7 @@ def test_interleaved_parts_wait_for_the_earlier_open_part():
 
 
 @pytest.mark.parametrize("change", ["prefix", "order", "insert"])
-def test_late_snapshot_cannot_rewrite_a_decided_prefix(change: str):
+def test_late_snapshot_cannot_rewrite_a_decided_prefix(change: str) -> None:
     source = responses_parts(
         ["He", "llo world."], representation="text_done", separate_items=True
     )
@@ -232,7 +232,7 @@ def test_late_snapshot_cannot_rewrite_a_decided_prefix(change: str):
         overlap.feed(terminal)
 
 
-def test_terminal_cannot_omit_pending_source_text():
+def test_terminal_cannot_omit_pending_source_text() -> None:
     source = responses_parts(["He"], representation="text_done")
     overlap = ContinuationOverlap("Hello ")
     for event in source[:-1]:
@@ -244,7 +244,7 @@ def test_terminal_cannot_omit_pending_source_text():
 
 def test_unresolved_frames_are_bounded_and_discarded_on_failure(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     monkeypatch.setattr(
         "free_claude_code.core.continuation_overlap.RECOVERY_RETENTION_BYTES", 1000
     )
@@ -261,7 +261,7 @@ def test_unresolved_frames_are_bounded_and_discarded_on_failure(
 
 def test_large_immediately_resolvable_snapshot_does_not_fill_the_pending_buffer(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     monkeypatch.setattr(
         "free_claude_code.core.continuation_overlap.RECOVERY_RETENTION_BYTES", 300
     )
@@ -282,7 +282,7 @@ def test_large_immediately_resolvable_snapshot_does_not_fill_the_pending_buffer(
 
 def test_resolved_overlap_does_not_retain_unaffected_later_items(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     monkeypatch.setattr(
         "free_claude_code.core.continuation_overlap.RECOVERY_RETENTION_BYTES", 400
     )
@@ -306,7 +306,7 @@ def test_resolved_overlap_does_not_retain_unaffected_later_items(
 @pytest.mark.parametrize(
     "surface", ["item_added", "part_added", "text_done", "part_done", "item_done"]
 )
-def test_snapshot_only_text_counts_as_new_public_progress_once(surface: str):
+def test_snapshot_only_text_counts_as_new_public_progress_once(surface: str) -> None:
     response = DeliveredResponse("responses")
     source = responses_parts(["Novel"], representation=surface)
     kind = {

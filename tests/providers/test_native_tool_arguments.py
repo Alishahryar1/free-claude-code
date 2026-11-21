@@ -129,7 +129,7 @@ def tool_events(protocol: str, arguments: str) -> list[JsonObject]:
 @pytest.mark.parametrize("arguments", ARGUMENTS)
 async def test_completed_native_arguments_are_transparent(
     protocol: str, wire: str, arguments: str
-):
+) -> None:
     async with _harness(
         protocol, lambda _: (200, tool_events(protocol, arguments))
     ) as (send, bodies, _):
@@ -192,7 +192,7 @@ async def test_completed_native_arguments_are_transparent(
 @pytest.mark.parametrize("arguments", ARGUMENTS)
 async def test_harness_tool_error_is_kept_in_next_request(
     protocol: str, arguments: str
-):
+) -> None:
     async with _harness(
         protocol, lambda _: (200, tool_events(protocol, arguments))
     ) as (send, bodies, _):
@@ -251,7 +251,7 @@ async def test_harness_tool_error_is_kept_in_next_request(
 @pytest.mark.parametrize("upstream_error", [False, True])
 async def test_nonstream_messages_requires_an_object_and_preserves_upstream_errors(
     arguments: str, upstream_error: bool
-):
+) -> None:
     error = {"type": "overloaded_error", "message": "Try again"}
 
     async def stream():
@@ -285,7 +285,7 @@ async def test_nonstream_messages_requires_an_object_and_preserves_upstream_erro
 )
 async def test_tool_looking_text_stays_literal_across_chunk_boundaries(
     wire: str, text: str
-):
+) -> None:
     template = _events_for("chat")[0]
     for split in range(len(text) + 1):
         events = [

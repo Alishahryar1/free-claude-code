@@ -64,7 +64,7 @@ async def session_for(code: tuple[CodeService, FakeHarness, Path]):
 @pytest.mark.asyncio
 async def test_history_pages_do_not_create_execution_owners(
     code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     service, harness, directory = code
     session = await service._store.create(
         CodeSession(id=new_id(), cwd=str(directory), model=harness.model)
@@ -111,7 +111,7 @@ async def test_history_pages_do_not_create_execution_owners(
 @pytest.mark.asyncio
 async def test_completed_turn_releases_bodies_but_keeps_connection(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -137,7 +137,7 @@ async def test_completed_turn_releases_bodies_but_keeps_connection(
 @pytest.mark.asyncio
 async def test_many_turns_release_history_and_preserve_prompt_receipts(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     previous_sequence = 0
@@ -190,7 +190,7 @@ async def test_many_turns_release_history_and_preserve_prompt_receipts(
 @pytest.mark.asyncio
 async def test_cold_history_gate_serializes_owner_creation_without_blocking_other_sessions(
     code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     service, harness, directory = code
     sessions = [
         await service._store.create(
@@ -241,7 +241,7 @@ async def test_cold_history_gate_serializes_owner_creation_without_blocking_othe
 @pytest.mark.asyncio
 async def test_execution_seed_resumes_sequence_without_hydrating_old_transcript(
     code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     service, harness, directory = code
     session = await service._store.create(
         CodeSession(id=new_id(), cwd=str(directory), model=harness.model)
@@ -273,7 +273,7 @@ async def test_execution_seed_resumes_sequence_without_hydrating_old_transcript(
 @pytest.mark.asyncio
 async def test_catalog_wait_releases_session_lock_and_revalidates_before_admission(
     code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     entered, release = asyncio.Event(), asyncio.Event()
@@ -338,7 +338,7 @@ async def test_child_lookup_pipe_failure_delivers_queued_close(
     failure: type[Exception],
     finished: bool,
     status: str,
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -387,7 +387,7 @@ async def test_child_lookup_pipe_failure_delivers_queued_close(
 @pytest.mark.asyncio
 async def test_pending_child_review_outside_page_keeps_its_run_and_history_cursor(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     first = await service.send(
@@ -438,7 +438,7 @@ async def test_pending_child_review_outside_page_keeps_its_run_and_history_curso
 @pytest.mark.parametrize("ownership", ["notification", "metadata"])
 async def test_owned_child_reviews_and_warnings_reach_saved_parent_transcript(
     code: tuple[CodeService, FakeHarness, Path], ownership: str
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -488,7 +488,7 @@ async def test_owned_child_reviews_and_warnings_reach_saved_parent_transcript(
 @pytest.mark.asyncio
 async def test_child_review_stays_with_first_entry_after_next_turn_begins(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     first = await service.send(
@@ -581,7 +581,7 @@ async def test_pending_child_review_becomes_unavailable_when_idle_connection_end
     database_factory: DatabaseFactory,
     code: tuple[CodeService, FakeHarness, Path],
     closure: str,
-):
+) -> None:
     service, harness, directory = code
     session = await session_for(code)
     await service.send(
@@ -633,7 +633,7 @@ async def test_pending_child_review_becomes_unavailable_when_idle_connection_end
 @pytest.mark.asyncio
 async def test_mode_is_captured_per_turn_and_does_not_recreate_native_process(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     modes = ["full_access", "config", "ask", "auto_review"]
@@ -666,7 +666,7 @@ async def test_mode_is_captured_per_turn_and_does_not_recreate_native_process(
 async def test_reobserved_child_review_publishes_liveness_on_new_native_connection(
     code: tuple[CodeService, FakeHarness, Path],
     pending_output: bool,
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -716,7 +716,7 @@ async def test_reobserved_child_review_publishes_liveness_on_new_native_connecti
 @pytest.mark.asyncio
 async def test_forced_interrupt_clears_pending_child_review_liveness(
     code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -746,7 +746,7 @@ async def test_forced_interrupt_clears_pending_child_review_liveness(
 @pytest.mark.asyncio
 async def test_mode_change_and_send_compete_for_one_revision(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     results = await asyncio.gather(
@@ -774,7 +774,7 @@ async def test_mode_change_and_send_compete_for_one_revision(
 @pytest.mark.parametrize("mode", [None, "plan", "never", {}, 1])
 async def test_invalid_mode_is_rejected_without_changing_session(
     code: tuple[CodeService, FakeHarness, Path], mode: JsonValue
-):
+) -> None:
     service, _, _ = code
     session = await session_for(code)
     with pytest.raises(CodeValidationError):
@@ -785,7 +785,7 @@ async def test_invalid_mode_is_rejected_without_changing_session(
 @pytest.mark.asyncio
 async def test_native_defaults_are_saved_before_input_and_preserved_on_resume(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     original: JsonObject = {"policy": "configured-original"}
@@ -820,7 +820,7 @@ async def test_native_defaults_are_saved_before_input_and_preserved_on_resume(
 @pytest.mark.asyncio
 async def test_failure_saving_native_defaults_never_submits_input(
     code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     save = service._store.save_progress
@@ -846,7 +846,7 @@ async def test_failure_saving_native_defaults_never_submits_input(
 @pytest.mark.asyncio
 async def test_native_reviews_and_notices_keep_identity_order_and_survive_restart(
     database_factory: DatabaseFactory, code: tuple[CodeService, FakeHarness, Path]
-):
+) -> None:
     service, harness, directory = code
     session = await session_for(code)
     await service.send(
@@ -929,7 +929,7 @@ async def test_native_reviews_and_notices_keep_identity_order_and_survive_restar
 @pytest.mark.asyncio
 async def test_selected_model_and_effort_are_session_settings_captured_on_send(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     harness.configurations["provider/other"] = "other"
     session = await session_for(code)
@@ -972,7 +972,7 @@ async def test_selected_model_and_effort_are_session_settings_captured_on_send(
 @pytest.mark.asyncio
 async def test_catalog_effort_removal_requires_choice_but_model_change_resolves_default(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     session = await service.update_settings(
@@ -998,7 +998,7 @@ async def test_catalog_effort_removal_requires_choice_but_model_change_resolves_
 @pytest.mark.asyncio
 async def test_failed_outcome_is_durable_once_after_partial_output_and_older_pagination(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     run = await service.send(
@@ -1046,7 +1046,7 @@ async def test_failed_outcome_is_durable_once_after_partial_output_and_older_pag
 @pytest.mark.asyncio
 async def test_retry_notice_does_not_finish_run_and_stale_error_is_ignored(
     database_factory: DatabaseFactory, code: tuple[CodeService, FakeHarness, Path]
-):
+) -> None:
     service, harness, directory = code
     session = await session_for(code)
     await service.send(
@@ -1114,7 +1114,7 @@ async def test_retry_notice_does_not_finish_run_and_stale_error_is_ignored(
 @pytest.mark.parametrize("client_id", [True, False])
 async def test_acknowledgement_loss_recovers_old_turn_before_newer_send(
     code: tuple[CodeService, FakeHarness, Path], client_id: bool
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     harness.start_gate.clear()
@@ -1159,7 +1159,7 @@ async def test_acknowledgement_loss_recovers_old_turn_before_newer_send(
 @pytest.mark.asyncio
 async def test_prompt_membership_and_deleted_subscription_are_authoritative(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -1185,7 +1185,7 @@ async def test_prompt_membership_and_deleted_subscription_are_authoritative(
 @pytest.mark.asyncio
 async def test_ambiguous_native_history_fails_recovery_without_resending_input(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     harness.start_gate.clear()
@@ -1219,7 +1219,7 @@ async def test_ambiguous_native_history_fails_recovery_without_resending_input(
 @pytest.mark.asyncio
 async def test_settings_and_send_compete_for_the_same_revision(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     outcomes = await asyncio.gather(
@@ -1248,7 +1248,7 @@ async def test_settings_and_send_compete_for_the_same_revision(
 @pytest.mark.asyncio
 async def test_old_service_epoch_cannot_admit_a_new_send_but_can_read_receipt(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     with pytest.raises(CodeConflictError, match="restarted"):
@@ -1268,7 +1268,7 @@ async def test_old_service_epoch_cannot_admit_a_new_send_but_can_read_receipt(
 @pytest.mark.asyncio
 async def test_poorer_native_history_keeps_captured_source_and_reasoning(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -1333,7 +1333,7 @@ async def test_poorer_native_history_keeps_captured_source_and_reasoning(
 @pytest.mark.asyncio
 async def test_storage_start_failure_is_isolated_to_code(
     database_factory: DatabaseFactory, tmp_path: Path
-):
+) -> None:
     class BrokenStore(SQLiteCodeStore):
         @override
         async def start(self):
@@ -1354,7 +1354,7 @@ async def test_storage_start_failure_is_isolated_to_code(
 @pytest.mark.asyncio
 async def test_shutdown_settles_run_when_native_interrupt_never_acknowledges(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -1375,7 +1375,7 @@ async def test_storage_failure_retires_native_work_even_with_pending_prompt(
     code: tuple[CodeService, FakeHarness, Path],
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     run = await service.send(
@@ -1414,7 +1414,7 @@ async def test_shutdown_storage_read_failure_logs_original_cause(
     code: tuple[CodeService, FakeHarness, Path],
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     run = await service.send(
@@ -1442,7 +1442,7 @@ async def test_delete_before_first_run_logs_only_terminal_storage_failure(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     conflict: bool,
-):
+) -> None:
     service, _, _ = code
     session = await session_for(code)
     error = (
@@ -1474,7 +1474,7 @@ async def test_delete_before_first_run_logs_only_terminal_storage_failure(
 @pytest.mark.asyncio
 async def test_same_send_id_in_two_sessions_has_independent_receipts(
     code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     service, harness, _ = code
     first, second = await session_for(code), await session_for(code)
     original = service._store.get_run
@@ -1526,7 +1526,7 @@ async def idle_native(code: tuple[CodeService, FakeHarness, Path]):
 @pytest.mark.asyncio
 async def test_deletion_fences_commands_and_repeated_delete_has_one_native_call(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, folder = code
     session = await idle_native(code)
     project = folder / "project.txt"
@@ -1551,7 +1551,7 @@ async def test_deletion_fences_commands_and_repeated_delete_has_one_native_call(
 @pytest.mark.asyncio
 async def test_lost_native_delete_ack_reconciles_without_repeating_delete(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await idle_native(code)
     harness.delete_before_error = True
@@ -1565,7 +1565,7 @@ async def test_lost_native_delete_ack_reconciles_without_repeating_delete(
 @pytest.mark.asyncio
 async def test_local_delete_commit_failure_keeps_fence_and_can_reconcile(
     code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     service, harness, _ = code
     session = await idle_native(code)
     original = service._store.delete
@@ -1597,7 +1597,7 @@ async def test_local_delete_commit_failure_keeps_fence_and_can_reconcile(
 @pytest.mark.asyncio
 async def test_late_old_native_events_cannot_claim_a_new_turn_before_ack(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await idle_native(code)
     connection = harness.connections[0]
@@ -1629,7 +1629,7 @@ async def test_late_old_native_events_cannot_claim_a_new_turn_before_ack(
 @pytest.mark.asyncio
 async def test_creation_identity_received_during_cleanup_is_saved(
     code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     original_close = FakeConnection.close
@@ -1661,7 +1661,7 @@ async def test_creation_identity_received_during_cleanup_is_saved(
 @pytest.mark.asyncio
 async def test_failed_stop_persistence_closes_work_without_waiting_for_more_output(
     code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     run = await service.send(
@@ -1686,7 +1686,7 @@ async def test_failed_stop_persistence_closes_work_without_waiting_for_more_outp
 @pytest.mark.asyncio
 async def test_create_is_lazy_and_retry_does_not_duplicate(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, directory = code
     session = await session_for(code)
     repeated = await service.create_session(session.id, str(directory))
@@ -1698,7 +1698,7 @@ async def test_create_is_lazy_and_retry_does_not_duplicate(
 @pytest.mark.asyncio
 async def test_competing_sends_admit_only_one_and_repeat_returns_receipt(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     command = new_id()
@@ -1737,7 +1737,7 @@ async def test_competing_sends_admit_only_one_and_repeat_returns_receipt(
 @pytest.mark.asyncio
 async def test_http_cancellation_does_not_cancel_native_creation(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     harness.creation_gate.clear()
@@ -1759,7 +1759,7 @@ async def test_http_cancellation_does_not_cancel_native_creation(
 @pytest.mark.asyncio
 async def test_stop_before_native_ack_targets_that_run_only(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     harness.start_gate.clear()
@@ -1791,7 +1791,7 @@ async def test_stop_before_native_ack_targets_that_run_only(
 @pytest.mark.asyncio
 async def test_stop_during_creation_prevents_native_submission(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     harness.creation_gate.clear()
@@ -1815,7 +1815,7 @@ async def test_stop_during_creation_prevents_native_submission(
 @pytest.mark.asyncio
 async def test_browser_observers_are_independent_of_work(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     first, _ = await service.subscribe()
@@ -1842,7 +1842,7 @@ async def test_browser_observers_are_independent_of_work(
 @pytest.mark.asyncio
 async def test_idle_delete_removes_both_histories_and_blocks_late_create(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, directory = code
     session = await session_for(code)
     await service.send(
@@ -1865,7 +1865,7 @@ async def test_idle_delete_removes_both_histories_and_blocks_late_create(
 @pytest.mark.asyncio
 async def test_restart_preserves_receipt_and_does_not_replay_input(
     database_factory: DatabaseFactory, tmp_path: Path
-):
+) -> None:
     harness = FakeHarness()
     database, lock = tmp_path / "code.db", tmp_path / "code.lock"
     first = CodeService(SQLiteCodeStore(database_factory(database, lock)), harness)
@@ -1895,7 +1895,7 @@ async def test_restart_preserves_receipt_and_does_not_replay_input(
 @pytest.mark.asyncio
 async def test_two_answers_claim_one_native_prompt(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -1923,7 +1923,7 @@ async def test_two_answers_claim_one_native_prompt(
 async def test_prompt_arrival_has_one_durable_position_despite_repeated_native_item(
     database_factory: DatabaseFactory,
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, directory = code
     session = await session_for(code)
     run = await service.send(
@@ -2020,7 +2020,7 @@ async def test_prompt_arrival_has_one_durable_position_despite_repeated_native_i
 @pytest.mark.asyncio
 async def test_active_prompt_outside_page_keeps_its_entry_run_and_older_cursor(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     run = await service.send(
@@ -2052,7 +2052,7 @@ async def test_active_prompt_outside_page_keeps_its_entry_run_and_older_cursor(
 @pytest.mark.asyncio
 async def test_prompt_during_thread_creation_has_a_saved_run_without_native_ids(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     harness.creation_gate.clear()
@@ -2077,7 +2077,7 @@ async def test_prompt_during_thread_creation_has_a_saved_run_without_native_ids(
 @pytest.mark.asyncio
 async def test_native_resolution_while_answer_is_waiting_never_resurrects_prompt(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -2100,7 +2100,7 @@ async def test_native_resolution_while_answer_is_waiting_never_resurrects_prompt
 @pytest.mark.asyncio
 async def test_streaming_does_not_invalidate_rename_revision(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -2121,7 +2121,7 @@ async def test_streaming_does_not_invalidate_rename_revision(
 @pytest.mark.asyncio
 async def test_context_usage_is_an_absolute_deduplicated_session_snapshot(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -2163,7 +2163,7 @@ async def test_context_usage_is_an_absolute_deduplicated_session_snapshot(
 @pytest.mark.asyncio
 async def test_context_usage_is_retained_across_model_changes(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     harness.configurations["provider/other"] = "other"
     session = await session_for(code)
@@ -2203,7 +2203,7 @@ async def test_context_usage_is_retained_across_model_changes(
 @pytest.mark.asyncio
 async def test_resumed_context_usage_is_accepted_after_the_next_run_is_admitted(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -2245,7 +2245,7 @@ async def test_resumed_context_usage_is_accepted_after_the_next_run_is_admitted(
 @pytest.mark.asyncio
 async def test_catalog_replacement_is_limited_to_selected_entry_and_session(
     code: tuple[CodeService, FakeHarness, Path],
-):
+) -> None:
     service, harness, _ = code
     harness.configurations["provider/other"] = "other-1"
     session = await session_for(code)
@@ -2289,7 +2289,7 @@ async def test_catalog_replacement_is_limited_to_selected_entry_and_session(
 @pytest.mark.asyncio
 async def test_cancelled_http_admission_still_commits_and_executes_once(
     database_factory: DatabaseFactory, tmp_path: Path
-):
+) -> None:
     committed = asyncio.Event()
     release = asyncio.Event()
 
@@ -2353,7 +2353,7 @@ async def test_buffer_staging_and_each_flush_preserve_commit_and_observer_order(
     monkeypatch: pytest.MonkeyPatch,
     flush_timer: tuple[asyncio.Event, asyncio.Event],
     trigger: str,
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -2423,7 +2423,7 @@ async def test_failed_terminal_bundle_retains_committed_records_and_staged_outpu
     code: tuple[CodeService, FakeHarness, Path],
     monkeypatch: pytest.MonkeyPatch,
     flush_timer: tuple[asyncio.Event, asyncio.Event],
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -2487,7 +2487,7 @@ async def test_review_liveness_flush_includes_pending_output_and_keeps_staging_v
     monkeypatch: pytest.MonkeyPatch,
     flush_timer: tuple[asyncio.Event, asyncio.Event],
     fail: bool,
-):
+) -> None:
     service, harness, _ = code
     session = await session_for(code)
     await service.send(
@@ -2564,7 +2564,7 @@ async def test_startup_reconciles_persisted_deletion_without_another_native_dele
     database_factory: DatabaseFactory,
     code: tuple[CodeService, FakeHarness, Path],
     native_exists: bool,
-):
+) -> None:
     service, harness, directory = code
     session = await idle_native(code)
     await service._store.save_progress(
@@ -2603,7 +2603,7 @@ async def test_missing_native_history_is_recreated_only_before_possible_input(
     database_factory: DatabaseFactory,
     code: tuple[CodeService, FakeHarness, Path],
     may_have_input: bool,
-):
+) -> None:
     service, harness, directory = code
     session = await session_for(code)
     await service._store.save_progress(
@@ -2647,7 +2647,7 @@ async def test_missing_native_history_is_recreated_only_before_possible_input(
 @pytest.mark.asyncio
 async def test_cancelled_close_waiter_does_not_cancel_owned_shutdown(
     code: tuple[CodeService, FakeHarness, Path], monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     service, harness, _ = code
     session = await idle_native(code)
     connection = harness.connections[0]

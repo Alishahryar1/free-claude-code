@@ -46,7 +46,7 @@ def edit(client: TestClient, key: str, entries: list[JsonObject]):
 
 def test_rejected_inactive_key_prevents_all_writes_and_checks_keep_row_identity(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     app = create_test_app()
     client = client_for(app)
     store = ManagedConfigStore()
@@ -92,7 +92,7 @@ def test_rejected_inactive_key_prevents_all_writes_and_checks_keep_row_identity(
 
 def test_stale_revision_returns_conflict_without_checking_or_writing(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     app = create_test_app()
     client = client_for(app)
     checks = AsyncMock(return_value=())
@@ -118,7 +118,7 @@ def test_stale_revision_returns_conflict_without_checking_or_writing(
 @pytest.mark.asyncio
 async def test_intervening_managed_write_during_probe_cannot_publish_or_overwrite(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     app = create_test_app()
     store = ManagedConfigStore()
     started, release = asyncio.Event(), asyncio.Event()
@@ -166,7 +166,7 @@ async def test_intervening_managed_write_during_probe_cannot_publish_or_overwrit
     await runtime_for_app(app).close()
 
 
-def test_malformed_custom_edit_does_not_echo_nested_credential_inputs():
+def test_malformed_custom_edit_does_not_echo_nested_credential_inputs() -> None:
     app = create_test_app()
     response = client_for(app).post(
         "/admin/api/config/apply",

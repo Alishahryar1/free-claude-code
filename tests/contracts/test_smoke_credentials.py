@@ -23,7 +23,7 @@ from smoke.product import test_codex_modes_product_live as codex_smoke
         }
     ),
 )
-def test_smoke_redaction_expands_every_catalog_credential_collection(key: str):
+def test_smoke_redaction_expands_every_catalog_credential_collection(key: str) -> None:
     first, second = "private-primary-key", "private-primary-key-with-suffix"
     encoded = json.dumps([first, second])
     message = f"{first}; {second}; {encoded}"
@@ -32,7 +32,7 @@ def test_smoke_redaction_expands_every_catalog_credential_collection(key: str):
     )
 
 
-def test_smoke_redaction_masks_decoded_escaped_and_unicode_keys():
+def test_smoke_redaction_masks_decoded_escaped_and_unicode_keys() -> None:
     encoded = json.dumps(['quoted-"secret"-key', "秘密-secret-key"])
     result = redacted(
         'Credentials quoted-"secret"-key and 秘密-secret-key',
@@ -43,7 +43,7 @@ def test_smoke_redaction_masks_decoded_escaped_and_unicode_keys():
     )
 
 
-def test_smoke_redaction_preserves_scalar_secret_handling():
+def test_smoke_redaction_preserves_scalar_secret_handling() -> None:
     assert (
         redacted(
             "Bearer scalar-provider-secret, bot scalar-bot-secret",
@@ -56,7 +56,7 @@ def test_smoke_redaction_preserves_scalar_secret_handling():
     )
 
 
-def test_smoke_redaction_does_not_fail_while_reporting_malformed_array_input():
+def test_smoke_redaction_does_not_fail_while_reporting_malformed_array_input() -> None:
     malformed = '["unfinished-private-key"'
     assert (
         redacted(f"Failed to parse {malformed}", {"OPENAI_API_KEY": malformed})
@@ -69,7 +69,7 @@ def test_smoke_redaction_does_not_fail_while_reporting_malformed_array_input():
 )
 def test_live_codex_smoke_exports_first_key_as_subprocess_text(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, credential: str
-):
+) -> None:
     monkeypatch.setenv("FCC_SMOKE_CODEX_FREE_MODEL", "open_router/synthetic/free:free")
 
     def replace_which(name: object):

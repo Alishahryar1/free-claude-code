@@ -70,7 +70,9 @@ def generated():
         "multiple_bundles",
     ],
 )
-def test_only_exact_single_bundle_echo_is_suppressed(protocol: WireProtocol, echo: str):
+def test_only_exact_single_bundle_echo_is_suppressed(
+    protocol: WireProtocol, echo: str
+) -> None:
     parts = generated()
     signature = parts[-1]["thoughtSignature"]
     assert isinstance(signature, str)
@@ -136,7 +138,7 @@ def test_only_exact_single_bundle_echo_is_suppressed(protocol: WireProtocol, ech
         {"reasoning": "a", "reasoning_content": "b", "reasoning_details": []},
     ],
 )
-def test_plain_native_chat_replay_round_trips(native: JsonObject):
+def test_plain_native_chat_replay_round_trips(native: JsonObject) -> None:
     record = ReplayRecord(ORIGIN, native)
     assert decode_replay(encode_replay(record)) == record
 
@@ -151,13 +153,15 @@ def test_plain_native_chat_replay_round_trips(native: JsonObject):
         {"reasoning_details": "bad", "reasoning_content": "good"},
     ],
 )
-def test_native_chat_replay_rejects_invalid_recognized_fields(native: JsonObject):
+def test_native_chat_replay_rejects_invalid_recognized_fields(
+    native: JsonObject,
+) -> None:
     with pytest.raises(HistoryReplayError):
         encode_replay(ReplayRecord(ORIGIN, native))
 
 
 @pytest.mark.parametrize("digest", [None, "bad", 17, "g" * 64])
-def test_bundle_rejects_invalid_echo_digest(digest: int | str | None):
+def test_bundle_rejects_invalid_echo_digest(digest: int | str | None) -> None:
     import base64
 
     from free_claude_code.core.gemini import GeminiConversionError
@@ -171,7 +175,7 @@ def test_bundle_rejects_invalid_echo_digest(digest: int | str | None):
         decode_bundle(invalid)
 
 
-def test_native_aggregate_alias_does_not_duplicate_structured_full_text():
+def test_native_aggregate_alias_does_not_duplicate_structured_full_text() -> None:
     native = {
         "reasoning_content": "firstsecond",
         "reasoning_details": [
@@ -188,7 +192,7 @@ def test_native_aggregate_alias_does_not_duplicate_structured_full_text():
 
 
 @pytest.mark.parametrize("native", [False, True])
-def test_echo_digest_requires_replay_coverage_of_all_thought_text(native: bool):
+def test_echo_digest_requires_replay_coverage_of_all_thought_text(native: bool) -> None:
     output = GeminiOutput("response", "model", include_thoughts=True)
     output.capture_call(
         CallReplay(ORIGIN, "call", {"google": {"thought_signature": "opaque"}})
@@ -240,7 +244,7 @@ def test_echo_digest_requires_replay_coverage_of_all_thought_text(native: bool):
 @pytest.mark.parametrize("placement", ["text", "standalone", "call"])
 def test_foreign_native_gemini_signature_fails_explicitly(
     protocol: str, placement: str
-):
+) -> None:
     from free_claude_code.core.gemini import GeminiConversionError
 
     part: JsonObject = {"thoughtSignature": "AP8="}

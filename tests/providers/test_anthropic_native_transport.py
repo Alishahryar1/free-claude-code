@@ -48,7 +48,7 @@ async def collect(
 
 
 @pytest.mark.asyncio
-async def test_native_omissions_helpers_controls_and_cookie_isolation():
+async def test_native_omissions_helpers_controls_and_cookie_isolation() -> None:
     received = []
 
     def handle(request: httpx.Request):
@@ -121,7 +121,7 @@ async def test_native_omissions_helpers_controls_and_cookie_isolation():
         {"stream": True},
     ],
 )
-async def test_helpers_cannot_override_transport_ownership(helper: JsonObject):
+async def test_helpers_cannot_override_transport_ownership(helper: JsonObject) -> None:
     def handle(request: object):
         raise AssertionError("Invalid helpers reached upstream")
 
@@ -134,7 +134,7 @@ async def test_helpers_cannot_override_transport_ownership(helper: JsonObject):
 
 
 @pytest.mark.asyncio
-async def test_hosted_tool_stream_preserves_signatures_usage_and_pause_turn():
+async def test_hosted_tool_stream_preserves_signatures_usage_and_pause_turn() -> None:
     events = _events(stop="pause_turn")
     content_block: JsonObject = {
         "type": "server_tool_use",
@@ -205,7 +205,7 @@ async def test_hosted_tool_stream_preserves_signatures_usage_and_pause_turn():
 @pytest.mark.parametrize("status", [401, 402, 403, 429, 529])
 async def test_http_failure_status_evidence_and_bounded_recovery(
     streaming: bool, status: int
-):
+) -> None:
     wires = []
 
     def handle(request: object):
@@ -246,7 +246,7 @@ async def test_http_failure_status_evidence_and_bounded_recovery(
 @pytest.mark.parametrize("streaming", [False, True])
 async def test_connection_recovery_before_output_closes_failed_response(
     streaming: bool,
-):
+) -> None:
     first = Wire([httpx.ReadError("connection closed")])
     second = Wire(
         [
@@ -276,7 +276,9 @@ async def test_connection_recovery_before_output_closes_failed_response(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_connect_timeout_before_acceptance_uses_admission_retry(streaming: bool):
+async def test_connect_timeout_before_acceptance_uses_admission_retry(
+    streaming: bool,
+) -> None:
     calls = 0
     success = Wire(
         [
@@ -310,7 +312,9 @@ async def test_connect_timeout_before_acceptance_uses_admission_retry(streaming:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["error", "connection", "eof"])
-async def test_leading_ping_does_not_accept_attempt_or_prevent_retry(failure: str):
+async def test_leading_ping_does_not_accept_attempt_or_prevent_retry(
+    failure: str,
+) -> None:
     tail = {
         "error": _sse({"type": "error", "error": {"type": "overloaded_error"}}),
         "connection": httpx.ReadError("connection lost"),
@@ -351,7 +355,7 @@ async def test_leading_ping_does_not_accept_attempt_or_prevent_retry(failure: st
 )
 async def test_malformed_or_incomplete_stream_after_output_never_replays(
     bad_tail: bytes,
-):
+) -> None:
     calls = []
     wire = Wire([_sse(_events()[0]), bad_tail])
 
@@ -377,7 +381,7 @@ async def test_malformed_or_incomplete_stream_after_output_never_replays(
 
 
 @pytest.mark.asyncio
-async def test_early_consumer_exit_releases_admission_and_response():
+async def test_early_consumer_exit_releases_admission_and_response() -> None:
     wire = Wire([_sse(*_events())])
 
     def callback(request: object):
@@ -399,7 +403,7 @@ async def test_early_consumer_exit_releases_admission_and_response():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_cancelled_read_closes_response_without_retry(streaming: bool):
+async def test_cancelled_read_closes_response_without_retry(streaming: bool) -> None:
     reading = asyncio.Event()
     closed = asyncio.Event()
     calls = []
@@ -435,7 +439,9 @@ async def test_cancelled_read_closes_response_without_retry(streaming: bool):
 
 
 @pytest.mark.asyncio
-async def test_native_history_restores_matching_fcc_carriers_and_rejects_foreign():
+async def test_native_history_restores_matching_fcc_carriers_and_rejects_foreign() -> (
+    None
+):
     received = []
 
     def handle(request: httpx.Request):

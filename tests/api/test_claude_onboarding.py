@@ -25,7 +25,7 @@ def onboarding():
 def test_passive_status_and_independent_completion(
     monkeypatch: pytest.MonkeyPatch,
     onboarding: tuple[TestClient, ApplicationRuntime, Path],
-):
+) -> None:
     client, runtime, path = onboarding
     mock_wait_for_model_catalog = AsyncMock(
         side_effect=AssertionError("No model discovery needed")
@@ -64,7 +64,7 @@ def test_passive_status_and_independent_completion(
 @pytest.mark.parametrize("action", ["", "/complete"])
 def test_invalid_onboarding_is_scoped_and_does_not_change_connection(
     onboarding: tuple[TestClient, ApplicationRuntime, Path], action: str
-):
+) -> None:
     client, _, path = onboarding
     assert client.post(f"{VSCODE}/connect").status_code == 200
     source = '{"onboarding-secret": invalid}'
@@ -86,7 +86,7 @@ def test_loopback_admin_guard(
     onboarding: tuple[TestClient, ApplicationRuntime, Path],
     action: str,
     headers: dict[str, str],
-):
+) -> None:
     client, _, path = onboarding
     assert (
         client.request(
@@ -99,7 +99,7 @@ def test_loopback_admin_guard(
 
 def test_remote_client_is_rejected(
     onboarding: tuple[TestClient, ApplicationRuntime, Path],
-):
+) -> None:
     client, _, path = onboarding
     with TestClient(
         client.app, base_url="http://127.0.0.1", client=("192.0.2.1", 50000)
@@ -111,7 +111,7 @@ def test_remote_client_is_rejected(
 
 def test_pending_restart_and_shutdown_do_not_write(
     onboarding: tuple[TestClient, ApplicationRuntime, Path],
-):
+) -> None:
     client, runtime, path = onboarding
     runtime._pending_fields = ["PORT"]
     assert client.post(f"{ROOT}/complete").status_code == 503
@@ -126,7 +126,7 @@ def test_io_failure_returns_safe_error(
     onboarding: tuple[TestClient, ApplicationRuntime, Path],
     monkeypatch: pytest.MonkeyPatch,
     action: str,
-):
+) -> None:
     client, _, path = onboarding
 
     def fail(*args: object):

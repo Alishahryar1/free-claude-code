@@ -52,7 +52,7 @@ def test_sdk_recovers_and_replays_native_generation(
     empty_terminal: bool,
     case: str,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     args = {
         "integer": {"amount": 9007199254740993},
         "fractional": {"amount": 1.5},
@@ -273,7 +273,7 @@ def test_sdk_recovers_and_replays_native_generation(
 @pytest.mark.parametrize("async_client", [False, True])
 async def test_sdk_chat_automatic_tool_result_preserves_recovered_history(
     async_client: bool, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     bodies = []
     executed = []
     signed = {

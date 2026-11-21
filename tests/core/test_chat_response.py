@@ -8,7 +8,9 @@ from free_claude_code.core.json_types import JsonObject, load_json_value
 from tests.wire_payload import array_payload, object_payload
 
 
-def test_native_chat_preserves_choices_unknown_fields_and_literal_thought_tags():
+def test_native_chat_preserves_choices_unknown_fields_and_literal_thought_tags() -> (
+    None
+):
     payload = {
         "id": "completion",
         "created": 1,
@@ -36,7 +38,7 @@ def test_native_chat_preserves_choices_unknown_fields_and_literal_thought_tags()
     assert relay.finish() == ["data: [DONE]\n\n"]
 
 
-def test_chat_json_keeps_late_usage_and_both_choices():
+def test_chat_json_keeps_late_usage_and_both_choices() -> None:
     accumulator = ChatResponseAccumulator()
     accumulator.feed(
         {
@@ -62,7 +64,7 @@ def test_chat_json_keeps_late_usage_and_both_choices():
     ]
 
 
-def test_native_gemini_json_preserves_metadata_and_late_usage():
+def test_native_gemini_json_preserves_metadata_and_late_usage() -> None:
     from free_claude_code.core.gemini.response import GeminiResponseAccumulator
 
     accumulator = GeminiResponseAccumulator()
@@ -84,7 +86,7 @@ def test_native_gemini_json_preserves_metadata_and_late_usage():
     assert accumulator.result()["usageMetadata"] == {"totalTokenCount": 12}
 
 
-def test_chat_logprobs_accumulate_after_null_and_survive_trailing_null():
+def test_chat_logprobs_accumulate_after_null_and_survive_trailing_null() -> None:
     accumulator = ChatResponseAccumulator()
     token: JsonObject = {
         "token": "hello",
@@ -111,7 +113,7 @@ def test_chat_logprobs_accumulate_after_null_and_survive_trailing_null():
     )["content"] == [token]
 
 
-def test_native_legacy_function_arguments_accumulate_without_replacement():
+def test_native_legacy_function_arguments_accumulate_without_replacement() -> None:
     accumulator = ChatResponseAccumulator()
     for call in [{"name": "read", "arguments": '{"pa'}, {"arguments": 'th":"kept"}'}]:
         accumulator.feed(
@@ -166,7 +168,7 @@ def test_native_legacy_function_arguments_accumulate_without_replacement():
 )
 def test_distinct_native_reasoning_records_keep_their_boundaries(
     details: list[JsonObject],
-):
+) -> None:
     accumulator = ChatResponseAccumulator()
     for detail in details:
         accumulator.feed(

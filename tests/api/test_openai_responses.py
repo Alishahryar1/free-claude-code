@@ -46,7 +46,7 @@ _UPSTREAM_MODEL = "test-model"
 _RESPONSE_ID = "resp_test"
 
 
-def test_responses_route_carries_generation_model_limit_to_messages_egress():
+def test_responses_route_carries_generation_model_limit_to_messages_egress() -> None:
     bodies = []
 
     def reply(request: httpx.Request):
@@ -156,7 +156,7 @@ def test_retired_response_id_uses_replacement(
     prefix: str,
     ref: str,
     upstream: str,
-):
+) -> None:
     client, provider = responses_client
     original = f"{prefix}{ref}"
     response = client.post("/v1/responses", json={"model": original, "input": "hello"})

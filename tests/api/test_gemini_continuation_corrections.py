@@ -21,7 +21,7 @@ def test_corrected_continuation_and_followup_preserve_actual_context(
     thinking_only: bool,
     interrupt_again: bool,
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     sent = []
     corrected = []
     completed_context = None
