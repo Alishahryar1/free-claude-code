@@ -418,19 +418,35 @@ def test_gemini_backed_chat_rejects_nonstring_tool_result_id():
     "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
 )
 @pytest.mark.parametrize("wire", ["chat", "gemini"])
-@pytest.mark.parametrize("index_case", ["output_index", "content_index", "unused"])
-def test_responses_text_translation_preserves_whole_valued_indexes(
-    wire: str, index_case: str
+@pytest.mark.parametrize(
+    ("index_case", "index_value"),
+    [
+        ("output_index", 0.0),
+        ("content_index", 0.0),
+        ("output_index", "0"),
+        ("content_index", "0"),
+        ("unused", None),
+        ("unused_summary_index", None),
+    ],
+)
+def test_responses_text_translation_preserves_provider_index_encodings(
+    wire: str, index_case: str, index_value: JsonValue
 ):
     events = text_events("responses", "Hello")
     if index_case == "unused":
         events[0]["output_index"] = None
         events[-1]["output_index"] = None
+    elif index_case == "unused_summary_index":
+        for event in events:
+            if event["type"] in {
+                "response.content_part.added",
+                "response.content_part.done",
+            }:
+                event["summary_index"] = None
     else:
-        delta = next(
-            event for event in events if event["type"] == "response.output_text.delta"
-        )
-        delta[index_case] = 0.0
+        for event in events:
+            if index_case in event:
+                event[index_case] = index_value
 
     def reply(_: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(

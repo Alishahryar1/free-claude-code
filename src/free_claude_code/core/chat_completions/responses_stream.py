@@ -142,10 +142,13 @@ class ChatResponsesStream:
             "response.reasoning_summary_part.added",
             "response.reasoning_summary_part.done",
         }:
+            field = self._text_field(event_type)
             return self._part(
                 index,
                 responses_event_index(
-                    data.get("summary_index", data.get("content_index", 0))
+                    data.get(
+                        "summary_index" if field == "summary" else "content_index", 0
+                    )
                 ),
                 json_object(data.get("part", {})),
             )

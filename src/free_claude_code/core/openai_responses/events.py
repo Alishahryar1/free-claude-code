@@ -24,6 +24,8 @@ def responses_event_index(value: JsonValue) -> int:
     """Read an integral position from a provider's Responses event."""
     if isinstance(value, float) and value.is_integer():
         return int(value)
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        return int(value)
     return json_index(value)
 
 
