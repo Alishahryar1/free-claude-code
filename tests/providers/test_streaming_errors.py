@@ -919,7 +919,7 @@ class TestStreamingExceptionHandling:
             )
 
         assert "Upstream provider NIM returned HTTP 400." in stream_error.message
-        assert "Category: BadRequest" in stream_error.message
+        assert "Category: invalid_request" in stream_error.message
         assert "Thinking mode does not support this tool_choice" in stream_error.message
         assert (
             '{"error":{"type":"BadRequest","message":"Thinking mode does not support this tool_choice"}}'

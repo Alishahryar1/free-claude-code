@@ -1,5 +1,8 @@
 """Protocol-neutral diagnostic redaction and detail contracts."""
 
+import json
+
+import pytest
 from httpx import ConnectError, HTTPStatusError, Request, Response
 
 from free_claude_code.core.diagnostics import (
@@ -150,3 +153,41 @@ def test_execution_failure_format_uses_semantic_category_and_request_id() -> Non
     assert '{"error":{"message":"bad field token=<redacted>"}}' in message
     assert "Request ID: req_diagnostic" in message
     assert "invalid_request_error" not in message
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {
+            "type": "about:blank",
+            "title": "Gone",
+            "status": 410,
+            "detail": "The model has reached its end of life.",
+        },
+        {"error": {"type": "ModelError", "message": "Model example is retired."}},
+        {"message": "Model example is unsupported."},
+    ],
+    ids=["problem-details", "provider-type", "model-words"],
+)
+def test_category_is_fcc_failure_kind_not_provider_label(
+    body: dict[str, object],
+) -> None:
+    response = Response(
+        410,
+        json=body,
+        request=Request("POST", "https://example.com/v1/chat/completions"),
+    )
+    error = HTTPStatusError("Gone", request=response.request, response=response)
+    failure = ExecutionFailure(
+        kind=FailureKind.UPSTREAM,
+        status_code=410,
+        message="Provider API request failed.",
+        retryable=False,
+    )
+
+    message = format_execution_failure_message(
+        failure, extract_upstream_error_detail(error), upstream_name="NIM"
+    )
+
+    assert "Category: upstream\n" in message
+    assert json.dumps(body, separators=(",", ":")) in message
