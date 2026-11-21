@@ -12,8 +12,8 @@ ERROR_DETAIL_DISPLAY_CAP_BYTES = 16_384
 _MAX_CAUSE_CHAIN_DEPTH = 4
 _UPSTREAM_BODY_ATTR = "_fcc_upstream_error_body"
 _UPSTREAM_BODY_TRUNCATED_ATTR = "_fcc_upstream_error_body_truncated"
-# RFC 9457 problem details use "about:blank" when the HTTP status is the only category.
-_NO_CATEGORY = frozenset({"", "about:blank"})
+# RFC 9457 problem details use this type when the HTTP status is the only category.
+_UNTYPED_PROBLEM = "about:blank"
 
 _SECRET_TEXT_REPLACEMENTS = (
     (
@@ -299,14 +299,14 @@ def _category_hint_from_body(body: Any, body_text: str | None) -> str | None:
             parsed = None
     if isinstance(parsed, dict):
         error = parsed.get("error")
-        if isinstance(error, dict):
+        items = (error, parsed) if isinstance(error, dict) else (parsed,)
+        for item in items:
             for key in ("type", "code"):
-                value = error.get(key)
-                if isinstance(value, str) and value.strip() not in _NO_CATEGORY:
-                    return value.strip()
-        for key in ("type", "code"):
-            value = parsed.get(key)
-            if isinstance(value, str) and value.strip() not in _NO_CATEGORY:
+                value = item.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    continue
+                if value.strip().lower() == _UNTYPED_PROBLEM:
+                    return None
                 return value.strip()
     if (
         body_text
