@@ -23,9 +23,6 @@ def trace_fallback_started(
     recovery_reason: str | None,
 ) -> None:
     fields: dict[str, object] = {
-        "stage": "execution",
-        "event": "free_claude_code.model_fallback.started",
-        "source": "application",
         "request_id": request_id,
         "wire_api": wire_api,
         "from_provider_model_ref": failed.provider_model_ref,
@@ -42,7 +39,12 @@ def trace_fallback_started(
     }
     if generation_id is not None:
         fields["generation_id"] = generation_id
-    trace_event(**fields)
+    trace_event(
+        stage="execution",
+        event="free_claude_code.model_fallback.started",
+        source="application",
+        **fields,
+    )
     logger.info(
         "Model fallback: request_id={} from={} to={} candidate={}/{} "
         "failure_kind={} status_code={}",
@@ -66,9 +68,6 @@ def trace_fallback_selected(
     candidate_count: int,
 ) -> None:
     fields: dict[str, object] = {
-        "stage": "execution",
-        "event": "free_claude_code.model_fallback.selected",
-        "source": "application",
         "request_id": request_id,
         "wire_api": wire_api,
         "selected_provider_model_ref": selected.provider_model_ref,
@@ -78,4 +77,9 @@ def trace_fallback_selected(
     }
     if generation_id is not None:
         fields["generation_id"] = generation_id
-    trace_event(**fields)
+    trace_event(
+        stage="execution",
+        event="free_claude_code.model_fallback.selected",
+        source="application",
+        **fields,
+    )

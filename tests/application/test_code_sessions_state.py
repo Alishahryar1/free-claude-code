@@ -63,12 +63,14 @@ def test_terminal_bundle_preserves_null_turn_prompt_and_requires_buffer_acknowle
         )
         state.apply_progress(progress)
     before = state.session, state.run, tuple(state.prompts.values())
+    assert state.run is not None
     item, changed = state.stage_item(
         ItemUpdate("turn", "answer", "text", text="partial"), state.run
     )
     assert changed
 
     finish = state.prepare_finish("completed")
+    assert finish is not None
     assert finish.items == (item,)
     assert len(finish.prompts) == 1 and finish.prompts[0].request_id == 1
     assert finish.prompts[0].status == "expired"
@@ -76,7 +78,7 @@ def test_terminal_bundle_preserves_null_turn_prompt_and_requires_buffer_acknowle
     assert state.pending_items == (item,)
 
     state.apply_progress(finish)
-    assert state.run.status == "completed" and not state.busy
+    assert state.run is not None and state.run.status == "completed" and not state.busy
     assert state.pending and state.pending_items == (item,)
     assert (
         next(
@@ -134,6 +136,7 @@ def test_recovery_updates_historical_run_without_replacing_current_run():
 
 def test_historical_merge_retains_transcript_identity_and_completed_content():
     base = running_state()
+    assert base.run is not None
     saved = CodeItem(
         id="entry",
         session_id=base.session.id,
@@ -172,12 +175,15 @@ def test_review_liveness_can_change_without_changing_its_item_or_run():
         "child-turn", "review", "subagent_auto_review", text="Reviewing"
     )
     item, changed = state.stage_review(update, "first")
+    assert item is not None and state.run is not None
     assert changed and item.run_id == state.run.id
     state.apply_progress(SessionProgress(state.session, items=state.pending_items))
     state.acknowledge_flush()
     assert state.clear_review_liveness()
 
-    state.apply_progress(state.prepare_finish("completed"))
+    finish = state.prepare_finish("completed")
+    assert finish is not None
+    state.apply_progress(finish)
     candidate, run, message = state.prepare_admission(
         "second", "next", state.session.model, None, "config"
     )
@@ -191,6 +197,7 @@ def test_review_liveness_can_change_without_changing_its_item_or_run():
 
 def test_only_new_turn_started_can_bind_an_unacknowledged_submission():
     base = running_state()
+    assert base.run is not None
     current = CodeRun(
         id="new",
         session_id=base.session.id,

@@ -19,6 +19,7 @@ from tests.api.test_hidden_stream_retries import delivered, partial_tool
 from tests.api.test_tool_call_buffer_transports import _tools
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 @pytest.mark.asyncio
@@ -92,7 +93,7 @@ async def test_reasoning_before_continuation_text_keeps_overlap_filter(
         if len(bodies) == 1:
             return 200, text_events("chat", "Hello ", complete=False)
         reasoning = text_events("chat", "", complete=False)[0]
-        reasoning["choices"][0]["delta"] = {
+        object_array(reasoning["choices"])[0]["delta"] = {
             "reasoning_content": "Continue the greeting."
         }
         return 200, [reasoning, *text_events("chat", candidate)]
@@ -122,8 +123,10 @@ def refusal_events(*, mixed=False):
     for event in refusal:
         event.update(output_index=0, content_index=position, item_id="msg_text")
     item = events[-2]["item"]
-    item["content"] = [*item["content"], part] if mixed else [part]
-    item["phase"] = "final_answer"
+    object_payload(item)["content"] = (
+        [*array_payload(object_payload(item)["content"]), part] if mixed else [part]
+    )
+    object_payload(item)["phase"] = "final_answer"
     return [
         {**event, "sequence_number": index}
         for index, event in enumerate([*prefix, *refusal, *events[-2:]])

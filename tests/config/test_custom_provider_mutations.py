@@ -64,7 +64,7 @@ def created():
             "model_ids": ["one"],
         },
     )
-    assert result.valid
+    assert result.valid and result.custom_provider_id is not None
     return snapshot(result.target_values), result.custom_provider_id
 
 
@@ -79,23 +79,29 @@ def test_mutations_preserve_other_providers_secrets_and_routing_identity():
     edited = mutate(
         state, "update", first, {"display_name": "Renamed", "api_key": "********"}
     )
-    assert edited.valid and len(edited.settings.custom_providers) == 2
+    assert edited.valid and edited.settings is not None
+    assert len(edited.settings.custom_providers) == 2
     original = edited.settings.custom_provider(first)
+    assert original is not None
     assert original.display_name == "Renamed"
     assert original.api_keys[0].get_secret_value() == "private-api-key"
     cleared = mutate(snapshot(edited.target_values), "update", first, {"api_key": None})
-    assert cleared.settings.custom_provider(first).api_keys == ()
+    assert cleared.settings is not None
+    updated = cleared.settings.custom_provider(first)
+    assert updated is not None
+    assert updated.api_keys == ()
 
 
 def test_deletion_requires_reassignment_and_is_idempotent():
     state, provider_id = created()
-    selected = snapshot(state.managed | {"MODEL": f"{provider_id}/one"})
+    selected = snapshot({**state.managed, "MODEL": f"{provider_id}/one"})
     rejected = mutate(selected, "delete", provider_id)
     assert not rejected.valid and "MODEL" in str(rejected.errors)
     removed = mutate(
         selected, "delete", provider_id, routes={"MODEL": state.settings.model}
     )
-    assert removed.valid and not removed.settings.custom_providers
+    assert removed.valid and removed.settings is not None
+    assert not removed.settings.custom_providers
     assert mutate(snapshot(removed.target_values), "delete", provider_id).valid
     assert not mutate(
         snapshot(removed.target_values),
@@ -111,7 +117,7 @@ def test_deletion_recognizes_structured_fallback_references(process_owned):
     entries = [{"model": f"{provider_id}/one", "reasoning": "low"}]
     value = json.dumps(entries)
     selected = snapshot(
-        state.managed | ({} if process_owned else {"MODEL_FALLBACKS": value}),
+        {**state.managed, **({} if process_owned else {"MODEL_FALLBACKS": value})},
         {"MODEL_FALLBACKS": value} if process_owned else {},
     )
     rejected = mutate(selected, "delete", provider_id)
@@ -120,7 +126,8 @@ def test_deletion_recognizes_structured_fallback_references(process_owned):
         reassigned = mutate(
             selected, "delete", provider_id, routes={"MODEL_FALLBACKS": None}
         )
-        assert reassigned.valid and not reassigned.settings.custom_providers
+        assert reassigned.valid and reassigned.settings is not None
+        assert not reassigned.settings.custom_providers
 
 
 def test_invalid_duplicate_or_locked_mutation_does_not_expose_keys():

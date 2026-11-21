@@ -35,7 +35,7 @@ def _observe_event(event: SSEEvent) -> None:
     error = payload.get("error")
     error = error if isinstance(error, dict) else payload
     reason = error.get("code") or error.get("type")
-    record_request_failure(reason if isinstance(reason, str) else str(kind))
+    record_request_failure(reason if isinstance(reason, str) else kind)
 
 
 class RequestOutcomeMiddleware:

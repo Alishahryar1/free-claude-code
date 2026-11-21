@@ -89,7 +89,7 @@ class PlatformOutbox:
     ) -> None:
         """Queue or immediately bulk-delete platform messages."""
         self._require_open()
-        ids_snapshot = tuple(str(message_id) for message_id in message_ids)
+        ids_snapshot = tuple(message_ids)
         if not ids_snapshot:
             return
 

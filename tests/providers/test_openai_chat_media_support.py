@@ -14,6 +14,7 @@ from free_claude_code.providers.openai_chat.media_support import (
     without_media,
 )
 from free_claude_code.providers.request_correction import Rejection
+from tests.wire_payload import array_payload
 
 VLLM = (
     "ValueError: Received multimodal data but multimodal processing is not "
@@ -119,7 +120,7 @@ def test_relocated_tool_images_keep_their_history_marker():
     assert stripped is not None
     message = stripped[0]["messages"][0]
     assert type(message) is ChatToolResultImages
-    assert message["content"][1] == {
+    assert array_payload(message["content"])[1] == {
         "type": "text",
         "text": omitted_media_note("image"),
     }

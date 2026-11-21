@@ -78,23 +78,23 @@ class SystemContent(_AnthropicBlockBase):
     text: str
 
 
+MessageContentBlock = (
+    ContentBlockText
+    | ContentBlockImage
+    | ContentBlockDocument
+    | ContentBlockToolUse
+    | ContentBlockToolResult
+    | ContentBlockThinking
+    | ContentBlockRedactedThinking
+    | ContentBlockServerToolUse
+    | ContentBlockWebSearchToolResult
+    | ContentBlockWebFetchToolResult
+)
+
+
 class Message(BaseModel):
     role: Literal["user", "assistant"]
-    content: (
-        str
-        | list[
-            ContentBlockText
-            | ContentBlockImage
-            | ContentBlockDocument
-            | ContentBlockToolUse
-            | ContentBlockToolResult
-            | ContentBlockThinking
-            | ContentBlockRedactedThinking
-            | ContentBlockServerToolUse
-            | ContentBlockWebSearchToolResult
-            | ContentBlockWebFetchToolResult
-        ]
-    )
+    content: str | list[MessageContentBlock]
     reasoning_content: str | None = None
 
 

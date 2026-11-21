@@ -81,6 +81,7 @@ def test_dsh_desktop_native_composition_e2e(
     )
 
     def composed() -> dict[str, object]:
+        assert node is not None
         result = subprocess.run(
             [
                 node,

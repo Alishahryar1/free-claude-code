@@ -236,7 +236,8 @@ class DeliveredResponse:
     def _new_snapshot_text(self, data: dict[str, Any]) -> bool:
         """Cumulative text is progress only when it adds published characters."""
         kind = data.get("type")
-        recorded = self.items.get(data.get("output_index"), {})
+        index = data.get("output_index")
+        recorded = self.items.get(index, {}) if index is not None else {}
         previous = recorded.get("content") or []
         if kind in {"response.output_item.added", "response.output_item.done"}:
             item = data.get("item", {})

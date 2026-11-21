@@ -181,6 +181,6 @@ async def test_close_rejects_all_later_work() -> None:
         outbox.fire_and_forget(late_task())
     await asyncio.sleep(0)
 
-    assert ran is False
+    assert not ran
     assert outbox._background_tasks == set()
     limiter.fire_and_forget.assert_not_called()

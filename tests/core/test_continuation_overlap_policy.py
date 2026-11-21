@@ -8,6 +8,7 @@ from free_claude_code.core.continuation_overlap import ContinuationOverlap
 from free_claude_code.core.delivered_response import DeliveredResponse
 from free_claude_code.core.failures import ExecutionFailure
 from tests.api.test_continuation_overlap import responses_parts
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
@@ -188,14 +189,14 @@ def test_late_snapshot_cannot_rewrite_a_decided_prefix(change):
     for event in source[:-1]:
         overlap.feed(event)
     terminal = source[-1]
-    items = terminal["response"]["output"]
+    items = array_payload(object_payload(terminal["response"])["output"])
     if change == "prefix":
-        items[0]["content"][0]["text"] = "Ha"
+        object_array(object_payload(items[0])["content"])[0]["text"] = "Ha"
     elif change == "order":
         items.reverse()
     else:
         extra = deepcopy(items[0])
-        extra["id"] = "msg_late"
+        object_payload(extra)["id"] = "msg_late"
         items.insert(0, extra)
     with pytest.raises(ExecutionFailure, match=r"observed .* prefix"):
         overlap.feed(terminal)
@@ -206,7 +207,7 @@ def test_terminal_cannot_omit_pending_source_text():
     overlap = ContinuationOverlap("Hello ")
     for event in source[:-1]:
         overlap.feed(event)
-    source[-1]["response"]["output"] = []
+    object_payload(source[-1]["response"])["output"] = []
     with pytest.raises(ExecutionFailure, match=r"observed .* prefix"):
         overlap.feed(source[-1])
 

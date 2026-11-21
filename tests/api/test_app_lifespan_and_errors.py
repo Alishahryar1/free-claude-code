@@ -5,7 +5,7 @@ from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from loguru import logger
 
@@ -95,6 +95,23 @@ async def test_runtime_startup_logs_admin_url_without_printed_server_banner(capl
     assert len(startup) == 1
     assert startup[0].extra["instance_id"] == runtime.instance_id
     assert startup[0].extra["fcc_version"] == package_version()
+
+
+@pytest.mark.parametrize(
+    "path", ["/v1/chat/completions", "/v1beta/models/test:generateContent"]
+)
+def test_generation_http_errors_convert_structured_details_to_text(path):
+    app = create_test_app(_settings())
+    detail = {"reason": "invalid request"}
+
+    @app.delete(path)
+    async def _raise_http_exception():
+        raise HTTPException(400, detail=detail)
+
+    response = TestClient(app).delete(path)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["message"] == str(detail)
 
 
 def test_create_app_application_error_handler_returns_anthropic_format():

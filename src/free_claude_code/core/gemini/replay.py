@@ -1,7 +1,6 @@
 """Stateless source-native state carried in Gemini's opaque signature field."""
 
 import base64
-import binascii
 import json
 import re
 from collections.abc import Iterable
@@ -41,7 +40,7 @@ class ReplayBundle:
 
 
 def encode_bundle(bundle: ReplayBundle) -> str:
-    payload = {
+    payload: JsonObject = {
         "response_id": bundle.response_id,
         "records": [encode_replay(record) for record in bundle.records],
         "calls": [asdict(call) for call in bundle.calls],
@@ -133,8 +132,6 @@ def decode_bundle(signature: str) -> ReplayBundle | None:
         ValueError,
         TypeError,
         KeyError,
-        binascii.Error,
-        UnicodeError,
         RecursionError,
     ) as error:
         raise GeminiConversionError(

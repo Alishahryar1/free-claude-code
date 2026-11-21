@@ -634,7 +634,7 @@ async def test_close_drains_messaging_before_transcriber_and_is_idempotent() -> 
     assert runtime._messaging._transcriber is None
     assert runtime._messaging._messaging_runtime is None
     assert runtime._messaging._messaging_workflow is None
-    assert runtime.is_closed is True
+    assert runtime.is_closed
 
 
 @pytest.mark.asyncio
@@ -693,7 +693,7 @@ async def test_close_retries_runtime_before_closing_later_resources() -> None:
     ]
     assert runtime._messaging._messaging_runtime is None
     assert runtime._messaging._transcriber is None
-    assert runtime._closed is True
+    assert runtime._closed
 
 
 @pytest.mark.asyncio
@@ -798,7 +798,7 @@ async def test_close_retries_workflow_close_before_closing_delivery() -> None:
         "workflow.close",
         "messaging.close",
     ]
-    assert runtime._closed is True
+    assert runtime._closed
 
 
 @pytest.mark.asyncio
@@ -910,7 +910,7 @@ async def test_cancelled_application_close_remains_retryable() -> None:
 
     assert transcriber.close_calls == 2
     assert runtime._messaging._transcriber is None
-    assert runtime._closed is True
+    assert runtime._closed
 
 
 @pytest.mark.asyncio
@@ -1113,7 +1113,7 @@ async def test_public_start_retains_persistently_unclean_partial_messaging_graph
         "messaging.close",
         "transcriber.close",
     ]
-    assert runtime.is_closed is True
+    assert runtime.is_closed
 
 
 @pytest.mark.asyncio

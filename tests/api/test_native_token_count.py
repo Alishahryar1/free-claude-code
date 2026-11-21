@@ -13,6 +13,7 @@ from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import get_token_count
 from tests.api.support import create_test_app, provider_manager_for_app
+from tests.wire_payload import object_array
 
 
 def count_body():
@@ -52,7 +53,7 @@ def test_native_count_accepts_and_estimates_opaque_payload_without_provider(fiel
     if field == "messages":
         expanded[field][0]["content"][1]["opaque"]["extra"] = extra
     else:
-        expanded[field][0]["extra"] = extra
+        object_array(expanded[field])[0]["extra"] = extra
     original = deepcopy(body)
     with (
         patch(

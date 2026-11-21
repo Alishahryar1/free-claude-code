@@ -131,7 +131,7 @@ async def aggregate_anthropic_sse_to_message(
                 if not isinstance(value, dict):
                     raise ValueError("Tool input must be an object.")
                 json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
-            except (ValueError, UnicodeError, RecursionError) as exc:
+            except (ValueError, RecursionError) as exc:
                 raise ExecutionFailure(
                     FailureKind.UPSTREAM,
                     502,

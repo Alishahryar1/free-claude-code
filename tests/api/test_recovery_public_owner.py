@@ -18,6 +18,7 @@ from tests.api.test_tool_call_buffer import _call, _frames, _response, _start
 from tests.api.test_tool_call_buffer_transports import _tools
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import array_payload, object_payload
 
 
 @pytest.mark.asyncio
@@ -64,9 +65,14 @@ async def test_continuation_preserves_call_completed_by_terminal_snapshot(
             for event in tool:
                 if "output_index" in event:
                     event["output_index"] = 1
-            tool[-1]["response"]["output"].insert(0, text[-2]["item"])
+            array_payload(object_payload(tool[-1]["response"])["output"]).insert(
+                0, text[-2]["item"]
+            )
+            start = text[:-1]
+        else:
+            start = tool[:1]
         events = [
-            *(text[:-1] if preceding_text else tool[:1]),
+            *start,
             *(
                 [e for e in tool[1:-1] if e["type"] != "response.output_item.done"]
                 if not snapshot_only
@@ -169,7 +175,7 @@ async def test_released_tool_packet_is_complete_before_upstream_resumes():
         packet = parse_sse_text(str(await anext(iterator)))
         assert packet[0].event == "response.output_item.added"
         assert packet[-1].event == "response.output_item.done"
-        assert states[0].prefix.has_calls
+        assert states[0].prefix is not None and states[0].prefix.has_calls
         assert resumed == []
         with pytest.raises(StopAsyncIteration):
             await anext(iterator)
@@ -264,7 +270,7 @@ async def test_final_only_native_state_is_checked_before_continuation_publicatio
             item.update(encrypted_content="opaque", summary=[])
         elif kind == "message":
             item.update(role="assistant", content=[{"type": "future_native_part"}])
-        events[-1]["response"]["output"] = [item]
+        object_payload(events[-1]["response"])["output"] = [item]
         return 200, [events[0], events[-1]]
 
     async with _harness("responses", reply, max_attempts=3) as (send, bodies, _):
@@ -287,7 +293,9 @@ async def test_filtered_snapshot_does_not_change_overlap_target_identity():
                 event["output_index"] = 1
         call = _call("responses", 0)[0]
         terminal = text[-1]
-        terminal["response"]["output"].insert(0, call[1]["item"])
+        array_payload(object_payload(terminal["response"])["output"]).insert(
+            0, call[1]["item"]
+        )
         events = [*text[:-1], {"type": call[0], **call[1]}, terminal]
         return 200, [{**event, "sequence_number": i} for i, event in enumerate(events)]
 

@@ -22,17 +22,18 @@ from tests.api.test_midstream_model_fallback import delivered_candidates
 from tests.api.test_tool_call_buffer_transports import _tools
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 def failed_response(text, label):
     events = text_events("responses", text)
     for event in events:
         if "response" in event:
-            event["response"]["id"] = f"resp_{label}"
+            object_payload(event["response"])["id"] = f"resp_{label}"
     final = events[-1]
     final["type"] = "response.failed"
     final["extension"] = {"candidate": label}
-    final["response"].update(
+    object_payload(final["response"]).update(
         status="failed",
         created_at=12.0,
         completed_at=34.0,
@@ -65,7 +66,7 @@ async def test_final_native_failure_preserves_projected_error_output_usage_and_e
     assert sum(event.event == "response.failed" for event in events) == 1
     assert final["extension"] == expected["extension"]
     for field in ("id", "output", "usage", "error", "metadata", "status"):
-        assert final["response"][field] == expected["response"][field]
+        assert final["response"][field] == object_payload(expected["response"])[field]
     assert final["response"]["model"] == "public-alias"
     assert type(final["response"]["created_at"]) is int
     assert type(final["response"]["completed_at"]) is int
@@ -76,11 +77,13 @@ async def test_final_native_failure_preserves_projected_error_output_usage_and_e
 async def test_final_native_snapshot_cannot_release_a_withheld_call():
     source = after_text("responses", partial_tool("responses"))
     final = failed_response("Before. ", "only")[-1]
-    call = tool_events("responses", '{"path":"unreleased"}')[-1]["response"]["output"][
-        0
-    ]
+    call = object_array(
+        object_payload(
+            tool_events("responses", '{"path":"unreleased"}')[-1]["response"]
+        )["output"]
+    )[0]
     call.update(id="fc_abandoned", call_id="call_abandoned", status="incomplete")
-    final["response"]["output"].append(call)
+    array_payload(object_payload(final["response"])["output"]).append(call)
     final["sequence_number"] = len(source)
     source.append(final)
     async with _harness("responses", lambda _: (200, source), max_attempts=1) as (
@@ -91,7 +94,10 @@ async def test_final_native_snapshot_cannot_release_a_withheld_call():
         raw = await delivered_candidates([send], "responses", tools=_tools("responses"))
     events = parse_sse_text(raw)
     assert "call_abandoned" not in raw and "unreleased" not in raw
-    assert events[-1].data["response"]["error"] == final["response"]["error"]
+    assert (
+        events[-1].data["response"]["error"]
+        == object_payload(final["response"])["error"]
+    )
     assert [item["type"] for item in events[-1].data["response"]["output"]] == [
         "message"
     ]
@@ -150,9 +156,9 @@ async def test_zero_call_final_candidate_keeps_published_response_identity(proto
 
 def failed_overlapping_calls():
     template = tool_events("responses", '{"path":"finished"}')
-    response = deepcopy(template[-1]["response"])
+    response = deepcopy(object_payload(template[-1]["response"]))
     finished = {
-        **response["output"][0],
+        **object_array(response["output"])[0],
         "id": "fc_finished",
         "call_id": "call_finished",
         "status": "completed",
@@ -257,7 +263,10 @@ async def test_last_model_error_keeps_combined_output_with_public_item_ids():
     final = events[-1].data
     assert final["response"]["id"] == "resp_first"
     assert final["response"]["created_at"] == events[0].data["response"]["created_at"]
-    assert final["response"]["error"] == last_events[-1]["response"]["error"]
+    assert (
+        object_payload(final["response"])["error"]
+        == object_payload(last_events[-1]["response"])["error"]
+    )
     assert final["response"]["metadata"] == {"candidate": "last"}
     assert final["extension"] == {"candidate": "last"}
     assert public_text(events, "responses") == "One two"

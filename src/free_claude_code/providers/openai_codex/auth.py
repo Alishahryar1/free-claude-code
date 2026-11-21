@@ -100,9 +100,12 @@ class _Credentials:
         if not isinstance(payload, dict):
             raise ValueError("credential document must be an object")
         required = ("access_token", "refresh_token", "id_token", "account_id")
-        values = {key: payload.get(key) for key in required}
-        if not all(isinstance(value, str) and value for value in values.values()):
-            raise ValueError("credential document is missing a token field")
+        values: dict[str, str] = {}
+        for key in required:
+            value = payload.get(key)
+            if not isinstance(value, str) or not value:
+                raise ValueError("credential document is missing a token field")
+            values[key] = value
         expires_at = payload.get("expires_at")
         if not isinstance(expires_at, int) or isinstance(expires_at, bool):
             raise ValueError("credential document is missing expires_at")
@@ -590,9 +593,13 @@ def _credentials_from_token_response(
         access_token = access_token or previous.access_token
         refresh_token = refresh_token or previous.refresh_token
         id_token = id_token or previous.id_token
-    if not all(
-        isinstance(value, str) and value
-        for value in (access_token, refresh_token, id_token)
+    if not (
+        isinstance(access_token, str)
+        and access_token
+        and isinstance(refresh_token, str)
+        and refresh_token
+        and isinstance(id_token, str)
+        and id_token
     ):
         raise OpenAILoginError("OpenAI token response is missing credentials.")
     return _Credentials.from_tokens(
@@ -607,7 +614,7 @@ def _jwt_claims(token: str) -> dict[str, Any]:
         encoded = token.split(".")[1]
         encoded += "=" * (-len(encoded) % 4)
         payload = json.loads(base64.urlsafe_b64decode(encoded))
-    except (IndexError, ValueError, json.JSONDecodeError) as exc:
+    except (IndexError, ValueError) as exc:
         raise OpenAILoginError("OpenAI returned an invalid identity token.") from exc
     if not isinstance(payload, dict):
         raise OpenAILoginError("OpenAI returned invalid identity claims.")

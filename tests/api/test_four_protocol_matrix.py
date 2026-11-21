@@ -24,6 +24,7 @@ from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_custom_provider import definition, provider
 from tests.providers.test_history_transports import _native
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import array_payload, int_payload, object_payload
 
 SCHEMA = {"type": "object", "properties": {"path": {"type": "string"}}}
 GEMINI_PARTS = [
@@ -105,7 +106,7 @@ def source_events(protocol):
         tail = deepcopy(events[1:])
         for event in tail:
             if "index" in event:
-                event["index"] += 1
+                event["index"] = int_payload(event["index"]) + 1
         return [
             events[0],
             {"type": "content_block_start", "index": 0, "content_block": native},
@@ -114,8 +115,8 @@ def source_events(protocol):
         ]
     for event in events:
         if "output_index" in event:
-            event["output_index"] += 1
-    events[-1]["response"]["output"].insert(0, native)
+            event["output_index"] = int_payload(event["output_index"]) + 1
+    array_payload(object_payload(events[-1]["response"])["output"]).insert(0, native)
     events.insert(
         1, {"type": "response.output_item.done", "output_index": 0, "item": native}
     )

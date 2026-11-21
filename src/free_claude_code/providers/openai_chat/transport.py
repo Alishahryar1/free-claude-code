@@ -1104,6 +1104,8 @@ class _OpenAIChatStreamRunner:
             operation_kind = ProviderOperationKind.CONTINUATION
         if not self._native_chat:
             request_stream_usage(body)
+        messages = body.get("messages")
+        tools = body.get("tools")
         return run_attempts(
             AttemptPlan(
                 body=body,
@@ -1130,8 +1132,8 @@ class _OpenAIChatStreamRunner:
                 gateway_model=self._response_model,
                 refreshable=self._endpoint,
                 sent_fields={
-                    "message_count": len(body.get("messages", [])),
-                    "tool_count": len(body.get("tools", [])),
+                    "message_count": len(messages) if isinstance(messages, list) else 0,
+                    "tool_count": len(tools) if isinstance(tools, list) else 0,
                 },
                 sent_payload=lambda: {"body": provider_chat_body_snapshot(body)},
             )

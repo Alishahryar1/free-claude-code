@@ -75,7 +75,7 @@ def validate_messages_json(body: JsonObject) -> None:
 
     try:
         json.dumps(body, ensure_ascii=False, allow_nan=False).encode("utf-8")
-    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise NativeMessagesError(
             "Messages request must be finite JSON encodable as UTF-8."
         ) from exc

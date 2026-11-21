@@ -10,6 +10,7 @@ import pytest
 from openai import AsyncOpenAI
 
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.opencode import create_opencode_provider
 from tests.api.support import create_test_app, provider_manager_for_app
 from tests.providers.support import immediate_admission, make_provider_config
@@ -104,7 +105,7 @@ async def wire_client(provider_id="opencode_zen", handler=None):
 
 
 def payload(ingress, provider_id, selector):
-    request = {"model": f"{provider_id}/{selector}", "stream": True}
+    request: JsonObject = {"model": f"{provider_id}/{selector}", "stream": True}
     if ingress == "responses":
         request["input"] = "hello"
     else:

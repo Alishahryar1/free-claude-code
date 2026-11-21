@@ -327,13 +327,13 @@ def test_one_unreadable_integration_does_not_hide_other_sections(monkeypatch):
 def test_native_version_probe_works_with_platform_command_shim(
     monkeypatch, tmp_path, banner, redirect
 ):
-    suffix = ".cmd" if sys.platform == "win32" else ""
-    binary = tmp_path / ("doctor-test-harness" + suffix)
-    binary.write_text(
-        ("@echo off\n" if suffix else "#!/bin/sh\n")
-        + banner
-        + f"echo 1.2.3{redirect}\n"
+    filename, header = (
+        ("doctor-test-harness.cmd", "@echo off\n")
+        if sys.platform == "win32"
+        else ("doctor-test-harness", "#!/bin/sh\n")
     )
+    binary = tmp_path / filename
+    binary.write_text(header + banner + f"echo 1.2.3{redirect}\n")
     binary.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     assert diagnostics.probe_harness("doctor-test-harness", ("--version",)) == {

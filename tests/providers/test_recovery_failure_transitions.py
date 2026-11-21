@@ -268,6 +268,7 @@ async def test_cooldown_over_an_open_episode_fails_only_an_idle_leader(
     source = await _attempt(other)
     await _fail(first, _status_error(503))
     generation = controller._episodes["m"].generation
+    probe = None
     if leader_in_flight:
         clock.value = 102.0
         probe = await _attempt(leader)
@@ -282,7 +283,7 @@ async def test_cooldown_over_an_open_episode_fails_only_an_idle_leader(
     assert episode.reports_cooldown
     assert episode.leader is None
     assert decision.error.retry_not_before == clock.value + 600
-    if leader_in_flight:
+    if probe is not None:
         assert leader.state is ProviderExecutionState.ACTIVE
         await probe.accept()
         await probe.aclose()

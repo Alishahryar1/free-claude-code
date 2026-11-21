@@ -98,7 +98,7 @@ def _openai_reject_native_only_top_level_fields(
         return
     raise OpenAIConversionError(
         "OpenAI chat conversion does not support these top-level request fields: "
-        f"{sorted(str(k) for k in extra)}. Remove the unsupported fields."
+        f"{sorted(extra)}. Remove the unsupported fields."
     )
 
 

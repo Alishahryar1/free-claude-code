@@ -41,7 +41,7 @@ class TranscriptBuffer:
         self._open_text_by_index: dict[int, TextSegment] = {}
         self._open_tools_by_index: dict[int, ToolCallSegment] = {}
         self._tool_name_by_id: dict[str, str] = {}
-        self._show_tool_results = bool(show_tool_results)
+        self._show_tool_results = show_tool_results
         self._subagents = SubagentState(debug=debug_subagent_stack)
 
     def apply(self, event: dict[str, Any]) -> None:

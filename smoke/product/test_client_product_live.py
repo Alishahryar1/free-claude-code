@@ -1676,7 +1676,7 @@ def _deliberately_failing_openai_provider() -> Generator[tuple[str, list[str]]]:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        port = int(server.server_address[1])
+        port = server.server_address[1]
         yield f"http://127.0.0.1:{port}/v1", provider_requests
     finally:
         server.shutdown()
@@ -1770,7 +1770,7 @@ def _successful_openai_provider(
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        port = int(server.server_address[1])
+        port = server.server_address[1]
         yield f"http://127.0.0.1:{port}/v1", provider_requests
     finally:
         server.shutdown()

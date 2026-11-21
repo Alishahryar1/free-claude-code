@@ -8,6 +8,7 @@ from tests.api.test_tool_call_buffer import _response
 from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import object_array, object_payload
 
 
 def _tools(wire):
@@ -57,12 +58,16 @@ async def test_real_transport_cutoff_cannot_complete_partial_tool(protocol, wire
     events = tool_events(protocol, "x")
     arguments = '{"path":"' + "x" * 70_000
     if protocol == "chat":
-        events[1]["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"] = (
-            arguments
-        )
+        object_payload(
+            object_array(
+                object_payload(object_array(events[1]["choices"])[0]["delta"])[
+                    "tool_calls"
+                ]
+            )[0]["function"]
+        )["arguments"] = arguments
         events = events[:-1]
     elif protocol == "messages":
-        events[2]["delta"]["partial_json"] = arguments
+        object_payload(events[2]["delta"])["partial_json"] = arguments
         events = events[:3]
     else:
         events[2]["delta"] = arguments

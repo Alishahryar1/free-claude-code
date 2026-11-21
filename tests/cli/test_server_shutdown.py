@@ -59,6 +59,7 @@ async def test_supervisor_drains_admin_event_feed_without_forced_cancellation(
     supervisor = commands.ServerSupervisor(console_logging=False)
     thread = threading.Thread(target=supervisor.run, daemon=True)
     thread.start()
+    new_status = None
     stream_error: Exception | None = None
     try:
         async with asyncio.timeout(5):
@@ -130,4 +131,5 @@ async def test_supervisor_drains_admin_event_feed_without_forced_cancellation(
     ]
     assert starts[0]["instance_id"] == old_instance
     if restart:
+        assert new_status is not None
         assert starts[1]["instance_id"] == new_status["instance_id"]

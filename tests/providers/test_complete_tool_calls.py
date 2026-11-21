@@ -17,6 +17,7 @@ from tests.api.test_tool_call_buffer import _response
 from tests.providers.test_chat_translated_transport import _tool_names
 from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import object_array, object_payload
 
 
 @pytest.mark.asyncio
@@ -104,9 +105,13 @@ async def test_incomplete_response_item_never_becomes_a_complete_message_tool():
             item["status"] = "incomplete"
     terminal = events[-1]
     terminal["type"] = "response.incomplete"
-    terminal["response"]["status"] = "incomplete"
-    terminal["response"]["incomplete_details"] = {"reason": "max_output_tokens"}
-    terminal["response"]["output"][0]["status"] = "incomplete"
+    object_payload(terminal["response"])["status"] = "incomplete"
+    object_payload(terminal["response"])["incomplete_details"] = {
+        "reason": "max_output_tokens"
+    }
+    object_array(object_payload(terminal["response"])["output"])[0]["status"] = (
+        "incomplete"
+    )
     async with _harness("responses", lambda _: (200, events), max_attempts=1) as (
         send,
         _,
@@ -128,11 +133,11 @@ async def test_incomplete_response_item_never_becomes_a_complete_message_tool():
 @pytest.mark.parametrize("wire", ["messages", "responses", "chat", "gemini"])
 async def test_completed_response_call_survives_an_earlier_unfinished_call(wire):
     original = tool_events("responses", "{}")
-    first = deepcopy(original[1]["item"])
+    first = deepcopy(object_payload(original[1]["item"]))
     first.update(
         id="fc_abandoned", call_id="call_abandoned", status="in_progress", arguments=""
     )
-    second = deepcopy(original[1]["item"])
+    second = deepcopy(object_payload(original[1]["item"]))
     second.update(
         id="fc_ready", call_id="call_ready", status="completed", arguments="{}"
     )
@@ -148,7 +153,7 @@ async def test_completed_response_call_survives_an_earlier_unfinished_call(wire)
         {
             "type": "response.failed",
             "response": {
-                **original[-1]["response"],
+                **object_payload(original[-1]["response"]),
                 "status": "failed",
                 "output": [first, second],
                 "error": {"code": "server_error", "message": "synthetic interruption"},

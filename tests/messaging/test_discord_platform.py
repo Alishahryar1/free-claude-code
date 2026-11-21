@@ -432,7 +432,7 @@ class TestDiscordRuntime:
             assert isinstance(result[0], RuntimeError)
             await asyncio.sleep(0)
 
-        assert platform.is_connected is False
+        assert not platform.is_connected
         await platform.quiesce()
         await platform.close()
 

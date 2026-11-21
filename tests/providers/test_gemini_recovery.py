@@ -42,6 +42,7 @@ from tests.providers.test_gemini_transport import (
     gemini_request,
 )
 from tests.providers.test_history_transports import _events_for, _harness
+from tests.wire_payload import object_array
 
 
 @pytest.mark.asyncio
@@ -108,7 +109,7 @@ async def test_gemini_followup_replays_only_delivered_thinking_after_overlap(
         )
     replayed = "".join(
         text
-        for item in bodies[-1]["input"]
+        for item in object_array(bodies[-1]["input"])
         if item.get("type") == "reasoning"
         for text, _ in readable_reasoning(item)
     )
@@ -187,7 +188,7 @@ async def test_gemini_open_chat_group_survives_cutoff_and_overlap(native_first):
         )
     replayed = "".join(
         text
-        for message in bodies[-1]["messages"]
+        for message in object_array(bodies[-1]["messages"])
         if message.get("role") == "assistant"
         for text, _ in readable_reasoning(
             {

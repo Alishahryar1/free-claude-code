@@ -27,6 +27,7 @@ from smoke.lib.skips import (
     skip_if_upstream_unavailable_events,
     skip_if_upstream_unavailable_exception,
 )
+from tests.wire_payload import object_array
 
 pytestmark = [pytest.mark.live, pytest.mark.smoke_target("providers")]
 
@@ -601,7 +602,7 @@ def _scenario_gemini_thought_signature_tool_continuation(
         assert any(
             part.get("thoughtSignature")
             for record in records
-            for part in record.native.get("parts", [])
+            for part in object_array(record.native.get("parts", []))
         ), "gemini tool turn did not preserve its native thought signature"
         second_payload = {
             "model": "claude-sonnet-4-5-20250929",

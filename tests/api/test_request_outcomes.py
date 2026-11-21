@@ -13,6 +13,7 @@ from free_claude_code.api.request_outcomes import RequestOutcomeMiddleware
 from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.request_outcomes import (
     current_request_outcome,
     record_request_route,
@@ -106,7 +107,7 @@ class OutcomeProvider:
 @pytest.mark.parametrize("wire_api", ["messages", "responses"])
 @pytest.mark.parametrize("result", ["success", "pre_start", "exception", "wire_error"])
 def test_one_final_outcome_for_streamed_inference(outcomes, wire_api, result):
-    payload = {"model": "nvidia_nim/test-model", "stream": True}
+    payload: JsonObject = {"model": "nvidia_nim/test-model", "stream": True}
     if wire_api == "messages":
         payload.update(
             max_tokens=64, messages=[{"role": "user", "content": "private input"}]
@@ -241,7 +242,7 @@ def test_rejections_before_execution_are_recorded(outcomes, payload, status, rea
 async def test_disconnect_logs_cancellation_after_cleanup(outcomes, wire_api, stage):
     provider = OutcomeProvider(stage)
     frames = asyncio.Queue()
-    payload = {"model": "nvidia_nim/test-model", "stream": True}
+    payload: JsonObject = {"model": "nvidia_nim/test-model", "stream": True}
     payload.update(
         {"messages": [{"role": "user", "content": "hello"}]}
         if wire_api == "messages"
@@ -441,6 +442,7 @@ async def test_overlapping_requests_keep_separate_outcomes(outcomes):
 
     async def receive():
         await asyncio.Event().wait()
+        return {"type": "http.disconnect"}
 
     async def send(message):
         pass

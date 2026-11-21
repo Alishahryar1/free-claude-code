@@ -10,18 +10,21 @@ from free_claude_code.core.chat_completions.tool_calls import (
     CompletedChatCall,
 )
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.tool_call_buffer import RetentionBudget, ToolBufferLimitError
 from tests.core.test_chat_tool_buffer import call, event
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
-def terminal(reason="stop", choice=0):
+def terminal(reason="stop", choice=0) -> JsonObject:
     result = event(content="", finish=reason, choice=choice)
-    result["choices"][0].update(native_finish_reason=reason)
-    result["choices"][0]["delta"]["role"] = "assistant"
+    choice_row = object_array(result["choices"])[0]
+    choice_row.update(native_finish_reason=reason)
+    object_payload(choice_row["delta"])["role"] = "assistant"
     return result
 
 
-def accounting(reason="stop", choice=0):
+def accounting(reason="stop", choice=0) -> JsonObject:
     return {
         **terminal(reason, choice),
         "usage": {
@@ -71,7 +74,7 @@ def test_empty_optional_fields_do_not_create_late_content(native, delta):
     buffer = ChatToolCallBuffer(native=native)
     buffer.feed(terminal())
     trailer = accounting()
-    trailer["choices"][0]["delta"] = delta
+    object_array(trailer["choices"])[0]["delta"] = delta
     assert frames(buffer.feed(trailer)) == [{**trailer, "choices": []}]
 
 
@@ -107,9 +110,11 @@ def test_accounting_does_not_hide_late_content_or_contradictions(native, change)
     buffer = ChatToolCallBuffer(native=native)
     buffer.feed(terminal())
     invalid = accounting()
-    invalid["choices"][0].update(change)
+    object_array(invalid["choices"])[0].update(change)
     # A valid active choice comes first: rejection must precede its state mutation.
-    invalid["choices"].insert(0, terminal(choice=1)["choices"][0])
+    array_payload(invalid["choices"]).insert(
+        0, array_payload(terminal(choice=1)["choices"])[0]
+    )
     with pytest.raises(ExecutionFailure):
         buffer.feed(invalid)
     assert frames(buffer.feed(terminal(choice=1)))
@@ -128,7 +133,9 @@ def test_empty_repeated_choice_requires_accounting(native, usage):
 def test_first_finish_with_usage_still_completes_a_call(native):
     buffer = ChatToolCallBuffer(native=native)
     first = accounting("tool_calls")
-    first["choices"][0]["delta"] = {"tool_calls": [call(0, "read", "{}", "a")]}
+    object_array(first["choices"])[0]["delta"] = {
+        "tool_calls": [call(0, "read", "{}", "a")]
+    }
     result = buffer.feed(first)
     if native:
         assert isinstance(result[0], CompletedChatBatch)
@@ -147,7 +154,9 @@ def test_mixed_accounting_and_active_tool_keeps_usage_and_source_order(native):
     buffer.feed(terminal())
     assert buffer.feed(event([call(0, "read", "{", "a")], choice=1)) == []
     mixed = accounting()
-    mixed["choices"].append(event([call(0, arguments="}")], choice=1)["choices"][0])
+    array_payload(mixed["choices"]).append(
+        array_payload(event([call(0, arguments="}")], choice=1)["choices"])[0]
+    )
     assert buffer.feed(mixed) == []
     result = buffer.feed(terminal("tool_calls", 1))
     output = frames(result)
@@ -186,7 +195,7 @@ def test_accounting_is_idempotent_but_finished_identity_retention_remains_bounde
 def test_retained_finish_markers_count_toward_byte_limit(native):
     buffer = ChatToolCallBuffer(native=native, budget=RetentionBudget(max_bytes=512))
     final = terminal()
-    final["choices"][0]["native_finish_reason"] = "x" * 600
+    object_array(final["choices"])[0]["native_finish_reason"] = "x" * 600
     with pytest.raises(ToolBufferLimitError):
         buffer.feed(final)
 
@@ -195,7 +204,9 @@ def test_retained_finish_markers_count_toward_byte_limit(native):
 def test_duplicate_choice_index_is_rejected_before_first_completion(native):
     buffer = ChatToolCallBuffer(native=native)
     invalid = terminal()
-    invalid["choices"].append(event(content="late")["choices"][0])
+    array_payload(invalid["choices"]).append(
+        array_payload(event(content="late")["choices"])[0]
+    )
     with pytest.raises(ExecutionFailure):
         buffer.feed(invalid)
     assert frames(buffer.feed(terminal()))

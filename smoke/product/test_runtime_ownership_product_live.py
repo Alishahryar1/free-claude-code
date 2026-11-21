@@ -34,7 +34,7 @@ class FakeOpenAIUpstream:
     def base_url(self) -> str:
         if self._server is None:
             raise RuntimeError("Fake upstream is not running")
-        port = int(self._server.server_address[1])
+        port = self._server.server_address[1]
         return f"http://127.0.0.1:{port}/v1"
 
     def __enter__(self) -> FakeOpenAIUpstream:

@@ -14,6 +14,7 @@ from tests.api.test_midstream_model_fallback import delivered_candidates
 from tests.api.test_response_streams import _json_error
 from tests.core.openai_responses.test_client_tool_discovery import SEARCH
 from tests.providers.test_history_transports import _harness
+from tests.wire_payload import array_payload, object_payload
 
 
 @pytest.fixture(autouse=True)
@@ -34,7 +35,7 @@ def interrupted_search(bodies, status, *, text="", terminal="failed"):
     events = text_events("responses", text, complete=False)
     if not text:
         events = events[:1]
-    response = deepcopy(text_events("responses", text)[-1]["response"])
+    response = deepcopy(object_payload(text_events("responses", text)[-1]["response"]))
     if not text:
         response["output"] = []
     call = {
@@ -66,7 +67,7 @@ def interrupted_search(bodies, status, *, text="", terminal="failed"):
                     **response,
                     "status": terminal,
                     "metadata": {"keep": "metadata"},
-                    "output": [*response["output"], call],
+                    "output": [*array_payload(response["output"]), call],
                     "error": {
                         "code": "server_error",
                         "message": "Native failure during client search",
@@ -134,8 +135,14 @@ async def test_final_search_failure_keeps_native_error_metadata_and_valid_output
         return
     assert final.data["extension"] == source[-1]["extension"]
     for field in ("error", "metadata", "usage"):
-        assert final.data["response"][field] == source[-1]["response"][field]
-    assert final.data["response"]["output"] == source[-1]["response"]["output"][:1]
+        assert (
+            final.data["response"][field]
+            == object_payload(source[-1]["response"])[field]
+        )
+    assert (
+        final.data["response"]["output"]
+        == array_payload(object_payload(source[-1]["response"])["output"])[:1]
+    )
     assert "call_abandoned" not in raw
 
 

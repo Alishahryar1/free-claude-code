@@ -1517,6 +1517,7 @@ async def test_shutdown_drains_construction_that_finishes_during_cancellation():
             await asyncio.Event().wait()
         except asyncio.CancelledError:
             return provider
+        raise AssertionError("Construction finished without cancellation")
 
     runtime = ProviderRuntime(
         _make_settings(),

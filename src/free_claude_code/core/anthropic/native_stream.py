@@ -56,7 +56,7 @@ class NativeMessagesStreamState:
             json.dumps(dict(payload), ensure_ascii=False, allow_nan=False).encode(
                 "utf-8"
             )
-        except (ValueError, UnicodeError, RecursionError) as exc:
+        except (ValueError, RecursionError) as exc:
             raise NativeMessagesError(
                 "Native Messages event is not representable JSON."
             ) from exc
