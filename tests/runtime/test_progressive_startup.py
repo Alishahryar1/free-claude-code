@@ -160,7 +160,7 @@ async def test_wait_timeout_does_not_cancel_initializer_and_settled_work_still_w
         assert not task.done()
         release.set()
         await task
-        assert await wait.wait(task) is True
+        assert await wait.wait(task)
     finally:
         release.set()
         await task

@@ -207,7 +207,7 @@ class MessageTreeGraph:
             if node_scope_from_snapshot(node_data) not in (None, snapshot.scope):
                 raise ValueError("Tree snapshot contains a cross-scope node")
             node = node_from_snapshot(node_data, snapshot.scope)
-            if str(snapshot_node_id) != node.node_id:
+            if snapshot_node_id != node.node_id:
                 raise ValueError("Tree snapshot node key does not match its node ID")
             if node.status_message_id == node.node_id:
                 raise ValueError("Prompt and status message IDs must be distinct")

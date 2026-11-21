@@ -133,14 +133,14 @@ class CodexProtocol:
             if not review_id:
                 return None
             review = object_value(params.get("review"))
-            status = string_value(review.get("status"))
+            review_status = string_value(review.get("status"))
             label = {
                 "inProgress": "Reviewing",
                 "approved": "Approved",
                 "denied": "Denied",
                 "timedOut": "Timed out",
                 "aborted": "Aborted",
-            }.get(status, status)
+            }.get(review_status, review_status)
             return HarnessEvent(
                 self.generation,
                 thread_id,

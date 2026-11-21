@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Literal, overload
 from unittest.mock import patch
 
 import httpx2
@@ -19,6 +21,7 @@ from free_claude_code.core.chat_completions.response import chat_failure
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
@@ -26,6 +29,7 @@ from free_claude_code.providers.admission import (
 from free_claude_code.providers.mistral import MistralProvider
 from free_claude_code.providers.mistral.reasoning import normalize_mistral_stream
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
+from free_claude_code.providers.openai_chat.provider import OpenAIChatProvider
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 from free_claude_code.providers.openai_stream import OpenAIStreamAdapter
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
@@ -75,16 +79,20 @@ async def test_sdk_reader_only_discards_identifiable_pings(kind):
             )
         ),
     ) as client:
-        stream = (
-            await client.chat.completions.create(
-                model="model", messages=[], stream=True
+        if kind == "chat":
+            adapter = OpenAIStreamAdapter(
+                await client.chat.completions.create(
+                    model="model", messages=[], stream=True
+                ),
+                read_timeout_s=1,
             )
-            if kind == "chat"
-            else await client.responses.create(
-                model="model", input="hello", stream=True
+        else:
+            adapter = OpenAIStreamAdapter(
+                await client.responses.create(
+                    model="model", input="hello", stream=True
+                ),
+                read_timeout_s=1,
             )
-        )
-        adapter = OpenAIStreamAdapter(stream, read_timeout_s=1)
         try:
             result = [event.model_dump(exclude_unset=True) async for event in adapter]
         finally:
@@ -148,8 +156,37 @@ def _response(body):
     )
 
 
+@overload
 @asynccontextmanager
-async def _harness(kind, handler):
+def _harness(
+    kind: Literal["chat", "mistral", "nim"],
+    handler,
+) -> AsyncGenerator[
+    tuple[OpenAIChatProvider, AsyncOpenAI, ProviderAdmissionController]
+]: ...
+
+
+@overload
+@asynccontextmanager
+def _harness(
+    kind: Literal["responses"],
+    handler,
+) -> AsyncGenerator[
+    tuple[OpenAIResponsesTransport, AsyncOpenAI, ProviderAdmissionController]
+]: ...
+
+
+@asynccontextmanager
+async def _harness(
+    kind: Literal["chat", "mistral", "nim", "responses"],
+    handler,
+) -> AsyncGenerator[
+    tuple[
+        OpenAIChatProvider | OpenAIResponsesTransport,
+        AsyncOpenAI,
+        ProviderAdmissionController,
+    ]
+]:
     client = AsyncOpenAI(
         api_key="test",
         base_url="https://provider.invalid/v1",
@@ -207,21 +244,31 @@ async def _harness(kind, handler):
         await client.close()
 
 
-def _public_stream(provider, wire):
-    kwargs = {}
+def _public_stream(
+    provider: OpenAIChatProvider | OpenAIResponsesTransport,
+    wire: Literal["messages", "responses"],
+) -> AsyncIterator[StreamOutput]:
     if isinstance(provider, OpenAIResponsesTransport):
-        kwargs = {
-            "input_tokens": 1,
-            "request_id": "lifecycle",
-            "response_model": "model",
-            "reasoning": DEFAULT_REASONING_POLICY,
-        }
-    request = (
-        make_messages_request("model")
-        if wire == "messages"
-        else OpenAIResponsesRequest(model="model", input="hello")
+        if wire == "messages":
+            return provider.stream_messages(
+                make_messages_request("model"),
+                input_tokens=1,
+                request_id="lifecycle",
+                response_model="model",
+                reasoning=DEFAULT_REASONING_POLICY,
+            )
+        return provider.stream_responses(
+            OpenAIResponsesRequest(model="model", input="hello"),
+            input_tokens=1,
+            request_id="lifecycle",
+            response_model="model",
+            reasoning=DEFAULT_REASONING_POLICY,
+        )
+    if wire == "messages":
+        return provider.stream_messages(make_messages_request("model"))
+    return provider.stream_responses(
+        OpenAIResponsesRequest(model="model", input="hello")
     )
-    return getattr(provider, f"stream_{wire}")(request, **kwargs)
 
 
 async def _assert_admission_available(admission):
@@ -257,7 +304,7 @@ async def test_sdk_body_lifetime(kind, wire, termination):
         task = None
         try:
             if termination == "cancel":
-                task = asyncio.create_task(anext(stream))
+                task = asyncio.ensure_future(anext(stream))
                 await asyncio.wait_for(body.read_started.wait(), timeout=2)
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):

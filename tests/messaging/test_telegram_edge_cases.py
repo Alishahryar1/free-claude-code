@@ -50,13 +50,14 @@ async def test_telegram_platform_quiesce_and_close_without_application():
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
-        platform = _telegram_runtime(bot_token="t")
+        limiter = _limiter_mock()
+        platform = _telegram_runtime(bot_token="t", limiter=limiter)
         platform._application = None
         platform._connected = True
         await platform.quiesce()
         await platform.close()
         assert platform.is_connected is False
-        platform._limiter.shutdown.assert_awaited_once_with()
+        limiter.shutdown.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio
@@ -64,7 +65,8 @@ async def test_telegram_close_cleans_up_partially_initialized_application():
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
-        platform = _telegram_runtime(bot_token="t")
+        limiter = _limiter_mock()
+        platform = _telegram_runtime(bot_token="t", limiter=limiter)
         platform._application = MagicMock()
         platform._application.running = False
         platform._application.updater.running = False
@@ -79,7 +81,7 @@ async def test_telegram_close_cleans_up_partially_initialized_application():
         platform._application.updater.stop.assert_not_awaited()
         platform._application.stop.assert_not_awaited()
         platform.outbound.close.assert_awaited_once_with()
-        platform._limiter.shutdown.assert_awaited_once_with()
+        limiter.shutdown.assert_awaited_once_with()
         platform._application.shutdown.assert_awaited_once_with()
 
 
@@ -402,7 +404,10 @@ async def test_telegram_start_retries_on_network_error(monkeypatch):
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
-        platform = _telegram_runtime(bot_token="token", allowed_user_id=None)
+        limiter = _limiter_mock()
+        platform = _telegram_runtime(
+            bot_token="token", allowed_user_id=None, limiter=limiter
+        )
 
         monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
@@ -418,7 +423,7 @@ async def test_telegram_start_retries_on_network_error(monkeypatch):
             assert platform.is_connected is True
             assert mock_app.initialize.await_count == 2
             mock_app.start.assert_awaited_once_with()
-            platform._limiter.start.assert_called_once_with()
+            limiter.start.assert_called_once_with()
 
 
 @pytest.mark.asyncio
@@ -428,7 +433,10 @@ async def test_telegram_polling_retry_does_not_restart_running_application(
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
-        platform = _telegram_runtime(bot_token="token", allowed_user_id=None)
+        limiter = _limiter_mock()
+        platform = _telegram_runtime(
+            bot_token="token", allowed_user_id=None, limiter=limiter
+        )
 
         monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
@@ -447,7 +455,7 @@ async def test_telegram_polling_retry_does_not_restart_running_application(
             mock_app.initialize.assert_awaited_once_with()
             mock_app.start.assert_awaited_once_with()
             assert mock_app.updater.start_polling.await_count == 2
-            platform._limiter.start.assert_called_once_with()
+            limiter.start.assert_called_once_with()
 
 
 @pytest.mark.asyncio

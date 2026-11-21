@@ -179,6 +179,7 @@ async def test_opaque_frame_closes_eligibility_and_preserves_payload_fields(payl
 
     output = await drained(source(), "responses")
     assert json.loads(output.split("data: ")[-1]) == {**payload, "sequence_number": 1}
+    assert seen[0] is not None
     assert seen[0].content_released
 
 

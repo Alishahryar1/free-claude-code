@@ -119,7 +119,7 @@ async def close_stream_input(
 
 def extract_claude_session_id_from_headers(headers: Mapping[str, str]) -> str | None:
     """Best-effort session id forwarded by Claude Code / SDK via HTTP."""
-    lowered = {str(k).lower(): v for k, v in headers.items() if isinstance(v, str)}
+    lowered = {k.lower(): v for k, v in headers.items() if isinstance(v, str)}
     for key in (
         "anthropic-session-id",
         "x-anthropic-session-id",

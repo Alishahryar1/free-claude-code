@@ -67,7 +67,7 @@ def _reply(wire: str, calls: list[Path], reasoning: bool):
             if reasoning
             else []
         )
-        output += (
+        output.extend(
             [
                 {
                     "type": "function_call",
@@ -119,7 +119,7 @@ def _reply(wire: str, calls: list[Path], reasoning: bool):
         if reasoning
         else []
     )
-    blocks += (
+    blocks.extend(
         [
             {
                 "type": "tool_use",
@@ -132,7 +132,7 @@ def _reply(wire: str, calls: list[Path], reasoning: bool):
         if calls
         else [{"type": "text", "text": _MARKER}]
     )
-    events = [
+    events: list[JsonObject] = [
         {
             "type": "message_start",
             "message": {

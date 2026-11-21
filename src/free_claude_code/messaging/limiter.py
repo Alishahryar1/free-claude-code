@@ -43,7 +43,7 @@ class MessagingRateLimiter:
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._active_futures: list[asyncio.Future[Any]] = []
         self._closed = False
-        self._paused_until = 0
+        self._paused_until = 0.0
 
         logger.info(
             f"MessagingRateLimiter initialized ({rate_limit} req / {rate_window}s with Task Compaction)"
@@ -274,45 +274,17 @@ class MessagingRateLimiter:
             dedup_key = f"task_{id(func)}_{asyncio.get_running_loop().time()}"
 
         async def _wrapped() -> None:
-            max_retries = 2
-            for attempt in range(max_retries + 1):
-                try:
-                    await self.enqueue(func, dedup_key)
-                    return
-                except Exception as e:
-                    error_msg = str(e).lower()
-                    # Only retry transient connectivity issues that might have slipped through
-                    # or occurred between platform checks.
-                    if attempt < max_retries and any(
-                        x in error_msg for x in ["connect", "timeout", "broken"]
-                    ):
-                        wait = 2**attempt
-                        if self._log_error_details:
-                            logger.warning(
-                                "Limiter fire_and_forget transient error (attempt {}): {}. Retrying in {}s...",
-                                attempt + 1,
-                                e,
-                                wait,
-                            )
-                        else:
-                            logger.warning(
-                                "Limiter fire_and_forget transient error (attempt {}): exc_type={}. Retrying in {}s...",
-                                attempt + 1,
-                                type(e).__name__,
-                                wait,
-                            )
-                        await asyncio.sleep(wait)
-                        continue
-
-                    logger.error(
-                        "Final error in fire_and_forget for key {}: {}",
-                        dedup_key,
-                        format_exception_for_log(
-                            e,
-                            log_full_message=self._log_error_details,
-                        ),
-                    )
-                    break
+            try:
+                await self.enqueue(func, dedup_key)
+            except Exception as e:
+                logger.error(
+                    "fire_and_forget failed for key {}: {}",
+                    dedup_key,
+                    format_exception_for_log(
+                        e,
+                        log_full_message=self._log_error_details,
+                    ),
+                )
 
         task = asyncio.create_task(_wrapped(), name=f"msg-limiter:{dedup_key}")
         self._background_tasks.add(task)

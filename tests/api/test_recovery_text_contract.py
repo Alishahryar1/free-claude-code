@@ -12,8 +12,16 @@ from pydantic import BaseModel, ConfigDict
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.providers.anthropic_messages.transport import (
+    AnthropicMessagesTransport,
+)
+from free_claude_code.providers.openai_chat.provider import OpenAIChatProvider
+from free_claude_code.providers.openai_responses.transport import (
+    OpenAIResponsesTransport,
+)
 from tests.api.test_delivered_stream_recovery import (
     assert_completed,
     public_text,
@@ -25,6 +33,7 @@ from tests.providers.test_anthropic_messages_transport import Endpoint, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import int_payload, object_array, object_payload, string_payload
 
 
 class Answer(BaseModel):
@@ -43,19 +52,30 @@ def output_format(kind):
     }
 
 
-def responses_stream(transport, protocol, **fields):
-    options = {
-        "response_model": "public-alias",
-        "request_id": "text-contract",
-        "reasoning": ReasoningPolicy.provider_default(),
-    }
-    if protocol == "messages":
-        options["endpoint_context"] = Endpoint()
-    else:
-        options["input_tokens"] = 0
+def responses_stream(
+    transport: AnthropicMessagesTransport
+    | OpenAIChatProvider
+    | OpenAIResponsesTransport,
+    **fields,
+):
+    request = OpenAIResponsesRequest(
+        model="requested", input="Return value 1", **fields
+    )
+    reasoning = ReasoningPolicy.provider_default()
+    if isinstance(transport, AnthropicMessagesTransport):
+        return transport.stream_responses(
+            request,
+            endpoint_context=Endpoint(),
+            response_model="public-alias",
+            request_id="text-contract",
+            reasoning=reasoning,
+        )
     return transport.stream_responses(
-        OpenAIResponsesRequest(model="requested", input="Return value 1", **fields),
-        **options,
+        request,
+        input_tokens=0,
+        response_model="public-alias",
+        request_id="text-contract",
+        reasoning=reasoning,
     )
 
 
@@ -114,7 +134,7 @@ async def test_structured_request_keeps_healthy_output_and_failure_policy(
 
     async with _harness(protocol, reply, max_attempts=3) as (_, bodies, transport):
         raw = await delivered(
-            responses_stream(transport, protocol, text={"format": output_format(kind)}),
+            responses_stream(transport, text={"format": output_format(kind)}),
             "responses",
         )
     events = parse_sse_text(raw)
@@ -153,7 +173,7 @@ async def test_explicit_plain_text_format_can_continue(protocol):
         ),
     ) as (_, bodies, transport):
         raw = await delivered(
-            responses_stream(transport, protocol, text={"format": {"type": "text"}}),
+            responses_stream(transport, text={"format": {"type": "text"}}),
             "responses",
         )
     assert len(bodies) == 2
@@ -167,7 +187,7 @@ async def test_explicit_plain_text_format_can_continue(protocol):
 )
 async def test_messages_structured_request_does_not_resume_partial_json(path):
     bodies = []
-    body = {
+    body: JsonObject = {
         "model": "requested",
         "messages": [{"role": "user", "content": "Return value 1"}],
         "max_tokens": 64,
@@ -213,21 +233,25 @@ async def test_messages_structured_request_does_not_resume_partial_json(path):
             lambda _: (200, text_events(protocol, '{"value":', complete=False)),
             max_attempts=2,
         ) as (_, bodies, transport):
-            options = {
-                "response_model": "public-alias",
-                "request_id": "text-contract",
-                "reasoning": ReasoningPolicy.provider_default(),
-            }
-            if protocol == "messages":
-                options["endpoint_context"] = Endpoint()
+            request = MessagesRequest.model_validate(body)
+            reasoning = ReasoningPolicy.provider_default()
+            if isinstance(transport, AnthropicMessagesTransport):
+                stream = transport.stream_messages(
+                    request,
+                    endpoint_context=Endpoint(),
+                    response_model="public-alias",
+                    request_id="text-contract",
+                    reasoning=reasoning,
+                )
             else:
-                options["input_tokens"] = 0
-            raw = await delivered(
-                transport.stream_messages(
-                    MessagesRequest.model_validate(body), **options
-                ),
-                "messages",
-            )
+                stream = transport.stream_messages(
+                    request,
+                    input_tokens=0,
+                    response_model="public-alias",
+                    request_id="text-contract",
+                    reasoning=reasoning,
+                )
+            raw = await delivered(stream, "messages")
     assert len(bodies) == 1
     events = parse_sse_text(raw)
     assert public_text(events, "messages") == '{"value":'
@@ -240,7 +264,7 @@ def scored_events(text, location, *, value=True):
         [
             {
                 "token": text,
-                "bytes": list(text.encode()),
+                "bytes": list(string_payload(text).encode()),
                 "logprob": -0.5,
                 "top_logprobs": [],
             }
@@ -252,12 +276,14 @@ def scored_events(text, location, *, value=True):
         "delta": events[3],
         "text_done": events[4],
         "part": events[5]["part"],
-        "item": events[6]["item"]["content"][0],
-        "terminal": events[7]["response"]["output"][0]["content"][0],
+        "item": object_array(object_payload(events[6]["item"])["content"])[0],
+        "terminal": object_array(
+            object_array(object_payload(events[7]["response"])["output"])[0]["content"]
+        )[0],
     }
     for key, target in targets.items():
         if location == "all" or location == key:
-            target["logprobs"] = deepcopy(scores)
+            object_payload(target)["logprobs"] = deepcopy(scores)
     return events
 
 
@@ -350,7 +376,9 @@ async def test_echoed_structured_format_prevents_reconstruction(continuing):
             complete=len(bodies) > 1,
         )
         if not continuing or len(bodies) > 1:
-            events[0]["response"]["text"] = {"format": output_format("json_schema")}
+            object_payload(events[0]["response"])["text"] = {
+                "format": output_format("json_schema")
+            }
         return 200, events
 
     async with _harness("responses", reply, max_attempts=3) as (send, bodies, _):
@@ -378,16 +406,16 @@ async def test_complete_calls_do_not_bypass_unsupported_text_guard(
         prefix += reasoning
     calls = deepcopy(tool_events("responses", '{"path":"file"}')[1:-1])
     for event in calls:
-        event["output_index"] += 2 if later_reasoning else 1
+        event["output_index"] = int_payload(event["output_index"]) + (
+            2 if later_reasoning else 1
+        )
     async with _harness(
         "responses", lambda _: (200, prefix + calls), max_attempts=1
     ) as (_, bodies, transport):
-        fields = {"tools": _tools("responses")}
+        fields: JsonObject = {"tools": _tools("responses")}
         if constraint == "structured":
             fields["text"] = {"format": output_format("json_schema")}
-        raw = await delivered(
-            responses_stream(transport, "responses", **fields), "responses"
-        )
+        raw = await delivered(responses_stream(transport, **fields), "responses")
     events = parse_sse_text(raw)
     assert len(bodies) == 1
     assert events[-1].event == "response.failed"
@@ -409,13 +437,13 @@ async def test_metadata_already_omitted_by_projection_does_not_block_recovery(
         events = text_events(
             "chat", "Hello " if len(bodies) == 1 else "world.", complete=len(bodies) > 1
         )
-        text = events[0]["choices"][0]["delta"]["content"]
-        events[0]["choices"][0]["logprobs"] = {
+        text = object_payload(object_array(events[0]["choices"])[0]["delta"])["content"]
+        object_array(events[0]["choices"])[0]["logprobs"] = {
             "content": [
                 {
                     "token": text,
                     "logprob": -0.5,
-                    "bytes": list(text.encode()),
+                    "bytes": list(string_payload(text).encode()),
                     "top_logprobs": [],
                 }
             ]

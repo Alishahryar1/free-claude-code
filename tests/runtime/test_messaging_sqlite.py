@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 import pytest_asyncio
 
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.messaging.models import IncomingMessage, MessageScope
 from free_claude_code.messaging.trees import MessagingStorageError, TreeQueueManager
 from free_claude_code.messaging.trees.snapshot import TreeSnapshot
@@ -152,8 +153,8 @@ async def test_historical_formats_and_message_log_preserve_resume_and_order(
     del legacy["scope"]
     legacy["nodes"]["root"]["incoming"] = {"platform": "telegram", "chat_id": "chat"}
     trees = {"old": legacy} if dictionary else [legacy]
-    conversation = {"trees": trees}
-    payload = {"conversation": conversation} if wrapped else conversation
+    conversation: JsonObject = {"trees": trees}
+    payload: JsonObject = {"conversation": conversation} if wrapped else conversation
     payload["message_log"] = {
         "telegram:chat": [
             {"message_id": value, "direction": "out", "kind": "notice"}

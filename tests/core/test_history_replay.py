@@ -9,6 +9,7 @@ import pytest
 from free_claude_code.core.history_replay import (
     AssociatedReplayRecord,
     HistoryMode,
+    HistoryProtocol,
     HistoryReplayError,
     ReplayOrigin,
     ReplayRecord,
@@ -17,15 +18,20 @@ from free_claude_code.core.history_replay import (
     prepare_history,
     resolve_messages_replay,
 )
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import object_array
 
 
 def _origin(
-    provider="a", protocol="responses", connection="connection-a", model="arbitrary"
+    provider="a",
+    protocol: HistoryProtocol = "responses",
+    connection="connection-a",
+    model="arbitrary",
 ):
     return ReplayOrigin(provider, protocol, "https://example.org/v1", connection, model)
 
 
-def _native():
+def _native() -> JsonObject:
     return {
         "type": "reasoning",
         "id": "rs_native:original",
@@ -111,7 +117,7 @@ def test_foreign_readable_reasoning_keeps_context_without_ciphertext(protocol):
     assert "fcc:" not in rendered
     assert all(
         item.get("role") not in {"system", "developer"}
-        for item in result.get("input", result.get("messages", []))
+        for item in object_array(result.get("input", result.get("messages", [])))
     )
 
 

@@ -293,20 +293,17 @@ class ApplicationRuntime:
             checks = await check_credentials(
                 prepared.settings, prepared.credential_submissions
             )
-            check_response: list[JsonObject] = [
-                {
+            check_response: list[JsonObject] = []
+            for check in checks:
+                entry: JsonObject = {
                     "key": check.key,
                     "index": check.index,
                     "status": check.status.value,
                     "message": check.message,
                 }
-                | (
-                    {"provider_id": check.provider_id}
-                    if check.provider_id is not None
-                    else {}
-                )
-                for check in checks
-            ]
+                if check.provider_id is not None:
+                    entry["provider_id"] = check.provider_id
+                check_response.append(entry)
             rejected = [
                 check for check in checks if check.status == CredentialStatus.REJECTED
             ]

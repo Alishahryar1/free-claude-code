@@ -7,6 +7,7 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
+from free_claude_code.core.json_types import JsonObject
 from tests.api.support import provider_manager_for_app
 from tests.api.test_delivered_stream_recovery import text_events
 from tests.api.test_four_protocol_matrix import (
@@ -14,6 +15,7 @@ from tests.api.test_four_protocol_matrix import (
     matrix_app,
     response_value,
 )
+from tests.wire_payload import object_array
 
 PAIRS = [(source, "chat") for source in ("chat", "messages", "responses", "gemini")] + [
     ("gemini", wire) for wire in ("messages", "responses", "gemini")
@@ -21,7 +23,10 @@ PAIRS = [(source, "chat") for source in ("chat", "messages", "responses", "gemin
 
 
 def native_text(text, complete):
-    candidate = {"index": 0, "content": {"role": "model", "parts": [{"text": text}]}}
+    candidate: JsonObject = {
+        "index": 0,
+        "content": {"role": "model", "parts": [{"text": text}]},
+    }
     if complete:
         candidate["finishReason"] = "STOP"
     return [
@@ -42,7 +47,7 @@ def test_truncated_text_continues_without_duplicate_output(source, wire, monkeyp
             else text_events(source, text, complete=len(bodies) > 1)
         )
         if source == "chat" and len(bodies) > 1:
-            events[0]["choices"][0]["finish_reason"] = "stop"
+            object_array(events[0]["choices"])[0]["finish_reason"] = "stop"
             events = events[:1]
         raw = "".join(
             (f"event: {event['type']}\n" if source == "messages" else "")

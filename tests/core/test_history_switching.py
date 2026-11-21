@@ -27,14 +27,17 @@ from tests.providers.support import (
     make_provider_config,
     without_empty_reasoning,
 )
+from tests.wire_payload import object_array, object_payload
 
 
 def _chat(items):
-    return build_responses_chat_request(
+    messages = build_responses_chat_request(
         OpenAIResponsesRequest(model="synthetic", input=items),
         reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
         structured_reasoning_details=True,
     ).body["messages"]
+    assert isinstance(messages, list)
+    return object_array(messages)
 
 
 def _reasoning(text, opaque):
@@ -97,7 +100,8 @@ def test_malformed_tool_call_keeps_its_reasoning_and_error_result():
         }
     ]
     assert [
-        (call["id"], call["function"]["arguments"]) for call in assistant["tool_calls"]
+        (call["id"], object_payload(call["function"])["arguments"])
+        for call in object_array(assistant["tool_calls"])
     ] == [("broken", "{"), ("valid", "{}")]
     assert [
         (message["tool_call_id"], message["content"])

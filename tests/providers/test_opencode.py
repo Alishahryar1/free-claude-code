@@ -939,7 +939,9 @@ async def test_discovered_custom_tools_survive_sdk_calls_and_replay(
 
     def upstream(request: httpx2.Request) -> httpx2.Response:
         body = json.loads(request.content)
-        for loaded in body["input"][:2]:
+        loaded_tools = body["input"][:2]
+        assert len(loaded_tools) == 2
+        for loaded in loaded_tools:
             if execution == "client":
                 assert loaded["type"] == "function_call_output"
                 tool = json.loads(loaded["output"])[0]
@@ -957,7 +959,7 @@ async def test_discovered_custom_tools_survive_sdk_calls_and_replay(
         body["input"] = without_empty_reasoning(body["input"])
         if len(body["input"]) > 2:
             assert body["input"][2]["type"] == "function_call"
-            assert body["input"][2]["name"] == tool["name"]
+            assert body["input"][2]["name"] == "editor__edit"
             assert "namespace" not in body["input"][2]
             assert json.loads(body["input"][2]["arguments"]) == {"input": "patch"}
             assert body["input"][3] == {
@@ -979,7 +981,7 @@ async def test_discovered_custom_tools_survive_sdk_calls_and_replay(
             "type": "function_call",
             "id": "edit_item",
             "call_id": "edit_one",
-            "name": tool["name"],
+            "name": "editor__edit",
             "arguments": '{"input":"patch"}',
             "status": "completed",
         }

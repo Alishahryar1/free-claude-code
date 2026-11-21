@@ -30,6 +30,7 @@ from tests.providers.test_history_transports import (
     _harness,
     _saved_reply,
 )
+from tests.wire_payload import object_array, object_payload
 
 
 @pytest.mark.asyncio
@@ -75,10 +76,14 @@ async def test_encrypted_only_reasoning_stays_with_its_answer():
             send("responses", [*saved, {"role": "user", "content": "next"}]),
             "responses",
         )
-    assistants = [msg for msg in bodies[-1]["messages"] if msg["role"] == "assistant"]
+    assistants = [
+        msg
+        for msg in object_array(bodies[-1]["messages"])
+        if object_payload(msg)["role"] == "assistant"
+    ]
     assert len(assistants) == 1
-    assert assistants[0]["content"] == "17"
-    assert assistants[0]["reasoning_details"] == [
+    assert object_payload(assistants[0])["content"] == "17"
+    assert object_payload(assistants[0])["reasoning_details"] == [
         {"type": "reasoning.encrypted", "data": "opaque"}
     ]
 
@@ -126,7 +131,7 @@ async def test_late_metadata_uses_open_indices_and_closes_final_text_last():
         await _saved_reply(
             send("messages", [*saved, {"role": "user", "content": "next"}]), "messages"
         )
-    assert bodies[-1]["messages"][0]["reasoning_details"] == [
+    assert object_array(bodies[-1]["messages"])[0]["reasoning_details"] == [
         {"type": "reasoning.text", "text": "Plan.", "signature": "firstsecond"}
     ]
 
@@ -417,5 +422,5 @@ async def test_first_metadata_after_text_does_not_invent_earlier_reasoning(wire)
     assert (
         saved[0]["type"] == "message"
         if wire == "responses"
-        else saved[0]["content"][0]["type"] == "text"
+        else object_array(saved[0]["content"])[0]["type"] == "text"
     )

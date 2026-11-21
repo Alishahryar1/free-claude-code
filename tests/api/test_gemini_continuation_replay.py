@@ -7,6 +7,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from free_claude_code.core.json_types import JsonObject
 from tests.api.support import provider_manager_for_app
 from tests.api.test_four_protocol_matrix import (
     ingress_request,
@@ -16,9 +17,9 @@ from tests.api.test_four_protocol_matrix import (
 )
 
 
-def native(text, finish=False):
+def native(text: str, finish: bool = False):
     parts = [{"text": text}]
-    candidate = {"index": 0, "content": {"role": "model", "parts": parts}}
+    candidate: JsonObject = {"index": 0, "content": {"role": "model", "parts": parts}}
     if finish:
         parts.append({"text": "", "thoughtSignature": "test-native-signature"})
         candidate["finishReason"] = "STOP"

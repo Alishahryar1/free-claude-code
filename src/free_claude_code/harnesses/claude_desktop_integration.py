@@ -222,7 +222,7 @@ def _load(root: Path) -> _Library:
                 or not isinstance(entry.get("name"), str)
             ):
                 raise ValueError("Invalid Desktop entry")
-            entry_id = cast(str, entry["id"])
+            entry_id = entry["id"]
             if not re.fullmatch(r"[a-f0-9-]{36}", entry_id) or entry_id in ids:
                 raise ValueError("Invalid or duplicate Desktop entry ID")
             if entry_id == FCC_ID and entry["name"] != "FCC":
@@ -280,7 +280,7 @@ def _fingerprint(token: str) -> str:
 def _remembered(token_path: Path, token: str) -> bool:
     try:
         return _read(token_path) == {"sha256": _fingerprint(token)}
-    except ValueError, UnicodeError:
+    except ValueError:
         return False
 
 
@@ -302,7 +302,7 @@ def _sealed_current(profile: JsonObject, token: str, token_path: Path) -> bool:
 
 def _current(library: _Library, values: JsonObject, token_path: Path) -> bool:
     profile = library.profile
-    return bool(
+    return (
         library.active
         and profile is not None
         and _owned(profile)
@@ -359,7 +359,7 @@ def _disconnect_intent(path: Path, root: Path) -> bool | None:
 def _empty_profile(path: Path) -> bool:
     try:
         return _read(path) == {}
-    except ValueError, UnicodeError:
+    except ValueError:
         # A user may change the neutral profile between a failure and retry.
         return False
 

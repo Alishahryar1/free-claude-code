@@ -120,7 +120,7 @@ def _completed_response(
     input_tokens: int = 8,
     cached_tokens: int = 3,
     output_tokens: int = 2,
-) -> dict[str, object]:
+) -> JsonObject:
     return {
         "id": "resp_test",
         "created_at": 0,

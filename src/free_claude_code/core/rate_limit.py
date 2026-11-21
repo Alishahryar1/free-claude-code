@@ -24,7 +24,7 @@ class StrictSlidingWindowLimiter:
         if rate_window <= 0:
             raise ValueError("rate_window must be > 0")
 
-        self._rate_limit = int(rate_limit)
+        self._rate_limit = rate_limit
         self._rate_window = float(rate_window)
         self._times: deque[float] = deque()
         self._lock = asyncio.Lock()

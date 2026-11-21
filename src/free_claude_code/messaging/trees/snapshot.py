@@ -62,7 +62,7 @@ class TreeSnapshot:
     def lookup_ids(self) -> set[str]:
         lookup_ids: set[str] = set()
         for node_key, node_data in self.nodes.items():
-            lookup_ids.add(str(node_key))
+            lookup_ids.add(node_key)
             if not isinstance(node_data, dict):
                 continue
             node_id = node_data.get("node_id")

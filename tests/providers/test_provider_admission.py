@@ -192,7 +192,8 @@ async def test_deterministic_correction_is_typed_and_final_at_exhaustion() -> No
     first = await _open(execution)
     assert await first.correct(error) is ProviderCorrectionAction.RETRY
     await first.aclose()
-    assert execution.state is ProviderExecutionState.ACTIVE
+    state_after_retry = execution.state
+    assert state_after_retry is ProviderExecutionState.ACTIVE
     assert execution.attempts_remaining == 1
 
     final = await _open(execution)
@@ -995,6 +996,7 @@ async def test_long_hint_supersedes_short_recovery_and_releases_waiters(
     await first.aclose()
     holder = None
     leader_task = None
+    probe = None
     if leader_wait == "capacity":
         holder = await _open(controller.start_execution(model="other"))
     if leader_wait != "backoff":
@@ -1027,7 +1029,7 @@ async def test_long_hint_supersedes_short_recovery_and_releases_waiters(
     assert isinstance(shorter.error, ProviderRecoveryExhausted)
     assert shorter.error.last_error is error
     assert shorter.error.retry_not_before == deadline
-    if leader_wait == "in_flight":
+    if probe is not None:
         await probe.accept()
         await probe.aclose()
 

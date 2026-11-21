@@ -125,7 +125,7 @@ async def _read_message(response: httpx.Response) -> JsonObject:
     try:
         message = response.json()
         validate_messages_json(message)
-    except (ValueError, NativeMessagesError) as error:
+    except ValueError as error:
         raise RetryableProviderProtocolError(
             "Messages upstream returned invalid JSON."
         ) from error

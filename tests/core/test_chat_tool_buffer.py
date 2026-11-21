@@ -8,11 +8,13 @@ from free_claude_code.core.chat_completions.tool_calls import (
     CompletedChatCall,
 )
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.tool_call_buffer import RetentionBudget, ToolBufferLimitError
+from tests.wire_payload import object_array, object_payload
 
 
-def event(calls=(), *, content=None, finish=None, choice=0):
-    delta = {"tool_calls": list(calls)} if calls else {}
+def event(calls=(), *, content=None, finish=None, choice=0) -> JsonObject:
+    delta: JsonObject = {"tool_calls": list(calls)} if calls else {}
     if content is not None:
         delta["content"] = content
     return {
@@ -84,10 +86,14 @@ def test_native_mixed_envelope_and_fragment_metadata_remain_associated():
         [call(4, "Re", '{"x":', "a"), call(2, "other", "{}", "b")], content="before"
     )
     first["extension"] = {"request": 1}
-    first["choices"][0]["logprobs"] = {"content": [{"token": "before"}]}
-    first["choices"][0]["delta"]["tool_calls"][0]["extension"] = "first"
+    object_array(first["choices"])[0]["logprobs"] = {"content": [{"token": "before"}]}
+    object_array(
+        object_payload(object_array(first["choices"])[0]["delta"])["tool_calls"]
+    )[0]["extension"] = "first"
     second = event([call(4, "ad", "1}")])
-    second["choices"][0]["delta"]["tool_calls"][0]["extension"] = "second"
+    object_array(
+        object_payload(object_array(second["choices"])[0]["delta"])["tool_calls"]
+    )[0]["extension"] = "second"
     assert buffer.feed(first) == []
     assert buffer.feed(second) == []
     result = buffer.feed(event(finish="tool_calls"))
@@ -95,7 +101,10 @@ def test_native_mixed_envelope_and_fragment_metadata_remain_associated():
     frames = result[0].frames
     assert frames[0]["extension"] == {"request": 1}
     assert "extension" not in frames[1]
-    assert frames[0]["choices"][0]["logprobs"] == first["choices"][0]["logprobs"]
+    assert (
+        frames[0]["choices"][0]["logprobs"]
+        == object_array(first["choices"])[0]["logprobs"]
+    )
     start = frames[0]["choices"][0]["delta"]["tool_calls"][0]
     tail = frames[1]["choices"][0]["delta"]["tool_calls"][0]
     assert start["function"]["name"] == "Read"
@@ -123,11 +132,14 @@ def test_native_standard_mixed_chunk_streams_text_before_its_pending_call():
     buffer = ChatToolCallBuffer(native=True)
     first = event([call(0, "read", "{}", "a")], content="before")
     first["usage"] = {"prompt_tokens": 3}
-    first["choices"][0]["logprobs"] = {"content": [{"token": "before"}]}
+    object_array(first["choices"])[0]["logprobs"] = {"content": [{"token": "before"}]}
     early = buffer.feed(first)
     assert len(early) == 1 and isinstance(early[0], dict)
     assert early[0]["choices"][0]["delta"] == {"content": "before"}
-    assert early[0]["choices"][0]["logprobs"] == first["choices"][0]["logprobs"]
+    assert (
+        early[0]["choices"][0]["logprobs"]
+        == object_array(first["choices"])[0]["logprobs"]
+    )
     assert early[0]["usage"] == first["usage"]
     completed = buffer.feed(event(finish="tool_calls"))
     assert len(completed) == 1 and isinstance(completed[0], CompletedChatBatch)

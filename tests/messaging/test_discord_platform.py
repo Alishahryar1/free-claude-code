@@ -432,7 +432,7 @@ class TestDiscordRuntime:
             assert isinstance(result[0], RuntimeError)
             await asyncio.sleep(0)
 
-        assert platform.is_connected is False
+        assert not platform.is_connected
         await platform.quiesce()
         await platform.close()
 
@@ -596,3 +596,138 @@ class TestDiscordRuntime:
                 await quiesce_task
 
         await platform.close()
+
+
+@pytest.fixture
+def discord_sleeps(monkeypatch):
+    sleep = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    return sleep
+
+
+def _messenger(channel: MagicMock):
+    import discord as discord_pkg
+
+    from free_claude_code.messaging.platforms.discord_io import DiscordMessenger
+
+    client = MagicMock()
+    client.get_channel = MagicMock(return_value=channel)
+    return DiscordMessenger(
+        get_client=lambda: client,
+        get_discord=lambda: discord_pkg,
+        limiter=_limiter_mock(),
+    )
+
+
+def _http_exception(status: int):
+    import discord as discord_pkg
+
+    response = MagicMock()
+    response.status = status
+    response.reason = "error"
+    return discord_pkg.HTTPException(response, "rejected")
+
+
+class TestDiscordDeliveryRetry:
+    """Network failures discord.py does not retry are retried by the messenger."""
+
+    @pytest.mark.asyncio
+    async def test_edit_is_delivered_after_a_linux_connection_reset(
+        self, discord_sleeps
+    ):
+        import aiohttp
+
+        msg = AsyncMock()
+        msg.edit = AsyncMock(
+            side_effect=[aiohttp.ClientOSError(104, "Connection reset by peer"), None]
+        )
+        channel = AsyncMock()
+        channel.fetch_message = AsyncMock(return_value=msg)
+
+        await _messenger(channel).edit_message("123", "456", "Stopped.")
+
+        assert msg.edit.await_count == 2
+        msg.edit.assert_awaited_with(content="Stopped.")
+
+    @pytest.mark.asyncio
+    async def test_send_is_retried_with_the_same_nonce(self, discord_sleeps):
+        import aiohttp
+
+        sent = MagicMock()
+        sent.id = 999
+        channel = AsyncMock()
+        channel.send = AsyncMock(side_effect=[aiohttp.ServerDisconnectedError(), sent])
+
+        msg_id = await _messenger(channel).send_message("123", "Hello")
+
+        assert msg_id == "999"
+        nonces = [call.kwargs.get("nonce") for call in channel.send.await_args_list]
+        assert len(nonces) == 2
+        assert nonces[0]
+        assert nonces[0] == nonces[1]
+
+    @pytest.mark.asyncio
+    async def test_rejected_edit_is_not_retried(self, discord_sleeps):
+        msg = AsyncMock()
+        msg.edit = AsyncMock(side_effect=_http_exception(400))
+        channel = AsyncMock()
+        channel.fetch_message = AsyncMock(return_value=msg)
+
+        with pytest.raises(Exception, match="rejected"):
+            await _messenger(channel).edit_message("123", "456", "text")
+
+        assert msg.edit.await_count == 1
+        discord_sleeps.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_network_failures_stop_after_the_attempt_budget(self, discord_sleeps):
+        import aiohttp
+
+        from free_claude_code.messaging.delivery_failures import MAX_ATTEMPTS
+
+        msg = AsyncMock()
+        msg.edit = AsyncMock(
+            side_effect=aiohttp.ClientOSError(104, "Connection reset by peer")
+        )
+        channel = AsyncMock()
+        channel.fetch_message = AsyncMock(return_value=msg)
+
+        with pytest.raises(aiohttp.ClientOSError):
+            await _messenger(channel).edit_message("123", "456", "text")
+
+        assert msg.edit.await_count == MAX_ATTEMPTS
+
+    @pytest.mark.asyncio
+    async def test_edit_is_delivered_after_a_truncated_response(self, discord_sleeps):
+        import aiohttp
+
+        msg = AsyncMock()
+        channel = AsyncMock()
+        channel.fetch_message = AsyncMock(
+            side_effect=[
+                aiohttp.ClientPayloadError("Response payload is not completed"),
+                msg,
+            ]
+        )
+
+        await _messenger(channel).edit_message("123", "456", "Stopped.")
+
+        assert channel.fetch_message.await_count == 2
+        msg.edit.assert_awaited_once_with(content="Stopped.")
+
+    @pytest.mark.asyncio
+    async def test_certificate_failure_is_not_retried(self, discord_sleeps):
+        import aiohttp
+
+        channel = AsyncMock()
+        channel.send = AsyncMock(
+            side_effect=aiohttp.ClientConnectorCertificateError(
+                MagicMock(), Exception("hostname mismatch")
+            )
+        )
+
+        with pytest.raises(aiohttp.ClientConnectorCertificateError):
+            await _messenger(channel).send_message("123", "Hello")
+
+        assert channel.send.await_count == 1
+        discord_sleeps.assert_not_awaited()

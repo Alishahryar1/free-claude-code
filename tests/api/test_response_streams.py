@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
+from starlette.responses import Response
 from starlette.types import Message, Scope
 
 from free_claude_code.api.request_ids import RequestCorrelationMiddleware
@@ -88,7 +89,7 @@ def _http_scope() -> Scope:
 
 
 async def _serve(
-    response: StreamingResponse,
+    response: Response,
     *,
     send: Any | None = None,
 ) -> list[Message]:

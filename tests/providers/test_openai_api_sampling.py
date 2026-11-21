@@ -3,7 +3,7 @@
 import asyncio
 import json
 from copy import deepcopy
-from typing import Any
+from typing import Any, Literal, overload
 
 import httpx2
 import pytest
@@ -33,7 +33,21 @@ from tests.providers.test_openai_responses_transport import (
 )
 
 
-def _request(ingress: str, model: str = "future-model"):
+@overload
+def _request(
+    ingress: Literal["messages"], model: str = "future-model"
+) -> MessagesRequest: ...
+
+
+@overload
+def _request(
+    ingress: Literal["responses"], model: str = "future-model"
+) -> OpenAIResponsesRequest: ...
+
+
+def _request(
+    ingress: Literal["messages", "responses"], model: str = "future-model"
+) -> MessagesRequest | OpenAIResponsesRequest:
     sampling = {"model": model, "temperature": 0.5, "top_p": 0.8}
     if ingress == "messages":
         return MessagesRequest.model_validate(
@@ -72,18 +86,19 @@ def _rejection(param: str, *, default_only: bool = False) -> dict[str, Any]:
 def _failure(error: Any, surface: str = "http", status: int = 400):
     if surface == "http":
         return httpx2.Response(status, json={"error": error})
+    event_type = "response.failed" if surface == "failed" else "error"
     if surface == "flat":
-        payload = {**error, "type": "error", "sequence_number": 0}
+        payload = {**error, "type": event_type, "sequence_number": 0}
     elif surface == "failed":
         payload = {
-            "type": "response.failed",
+            "type": event_type,
             "response": {"id": "resp_rejected", "error": error},
         }
     else:
-        payload = {"type": "error", "error": error}
+        payload = {"type": event_type, "error": error}
     return httpx2.Response(
         200,
-        text=_sse((payload["type"], payload)),
+        text=_sse((event_type, payload)),
         headers={"content-type": "text/event-stream"},
     )
 

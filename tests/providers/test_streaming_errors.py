@@ -220,8 +220,10 @@ def _make_usage_chunk(*, prompt_tokens: int, completion_tokens: int):
         created=0,
         model="test-model",
         choices=[],
-        usage=CompletionUsage.model_construct(
-            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
+        usage=CompletionUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
         ),
     )
 
@@ -1438,7 +1440,7 @@ class TestStreamingExceptionHandling:
             new_callable=AsyncMock,
             return_value=stream,
         ) as create:
-            task = asyncio.create_task(
+            task = asyncio.ensure_future(
                 anext(
                     provider.stream_responses(
                         request,

@@ -501,8 +501,8 @@ class MessageTree:
     async def message_ids_for_chat(self, platform: str, chat_id: str) -> set[str]:
         """Copy every prompt and FCC status belonging to one platform chat."""
         async with self._lock:
-            if self.identity.scope.platform != str(platform) or (
-                self.identity.scope.chat_id != str(chat_id)
+            if self.identity.scope.platform != platform or (
+                self.identity.scope.chat_id != chat_id
             ):
                 return set()
             return self._graph.all_reference_ids()

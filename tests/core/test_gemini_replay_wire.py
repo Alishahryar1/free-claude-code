@@ -20,6 +20,7 @@ from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from tests.core.test_gemini_continuation_records import recovered, request
 from tests.core.test_native_gemini_history import ORIGIN
+from tests.wire_payload import object_array
 
 
 @pytest.mark.parametrize("padded", [False, True])
@@ -32,8 +33,11 @@ def test_native_bytes_can_be_reencoded_by_clients(padded, urlsafe):
         encoded = encoded.rstrip("=")
     assert decode_gemini_replay(encoded) == record
     body = request(record)
-    body["contents"][1]["parts"][-1]["thoughtSignature"] = encoded
+    object_array(object_array(body["contents"])[1]["parts"])[-1]["thoughtSignature"] = (
+        encoded
+    )
     restored = prepare_history(body, ORIGIN)
+    assert record.continuation is not None
     assert restored["contents"] == [
         body["contents"][0],
         *record.continuation.context,
@@ -98,10 +102,12 @@ def test_public_echo_rejects_nonrepresentable_numbers(number):
 def test_native_wrapper_preserves_provenance_and_echo_checks(edit):
     record = recovered(echo=edit != "draft")
     body = request(record)
-    body["contents"][1]["parts"][-1]["thoughtSignature"] = encode_gemini_replay(record)
+    object_array(object_array(body["contents"])[1]["parts"])[-1]["thoughtSignature"] = (
+        encode_gemini_replay(record)
+    )
     origin = ORIGIN
     if edit == "text":
-        body["contents"][1]["parts"][0]["text"] = "edited"
+        object_array(object_array(body["contents"])[1]["parts"])[0]["text"] = "edited"
     elif edit == "origin":
         origin = replace(origin, connection="other")
     with pytest.raises(HistoryReplayError):

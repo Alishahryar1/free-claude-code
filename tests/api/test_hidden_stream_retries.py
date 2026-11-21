@@ -28,17 +28,22 @@ from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _events_for, _harness, _native
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import object_array, object_payload, string_payload
 
 
 def partial_tool(protocol):
     events = tool_events(protocol, '{"path":"old"}')
     events = events[:2] if protocol == "chat" else events[:3]
     if protocol == "chat":
-        events[1]["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"] = (
-            '{"path":"abandoned'
-        )
+        object_payload(
+            object_array(
+                object_payload(object_array(events[1]["choices"])[0]["delta"])[
+                    "tool_calls"
+                ]
+            )[0]["function"]
+        )["arguments"] = '{"path":"abandoned'
     elif protocol == "messages":
-        events[2]["delta"]["partial_json"] = '{"path":"abandoned'
+        object_payload(events[2]["delta"])["partial_json"] = '{"path":"abandoned'
     else:
         events[2]["delta"] = '{"path":"abandoned'
     return json.loads(
@@ -154,7 +159,7 @@ async def test_raw_native_unicode_metadata_keeps_hidden_retry_eligible(separator
     abandoned[0]["message"]["extension"] = "a" + separator + "b"
     first = Wire([_sse(*abandoned)])
     winner = tool_events("messages", '{"path":"winning"}')
-    winner[0]["message"]["extension"] = "winner" + separator + "b"
+    object_payload(winner[0]["message"])["extension"] = "winner" + separator + "b"
     second = Wire([_sse(*winner)])
     bodies = []
 
@@ -225,11 +230,11 @@ def failing_normalizer(monkeypatch):
 
 def _rejected_terminal(reason):
     first = deepcopy(_events_for("chat")[0])
-    first["choices"][0]["delta"] = {"role": "assistant"}
-    first["choices"][0]["finish_reason"] = None
+    object_array(first["choices"])[0]["delta"] = {"role": "assistant"}
+    object_array(first["choices"])[0]["finish_reason"] = None
     stopped = deepcopy(first)
-    stopped["choices"][0]["delta"] = {"content": "reject normalization"}
-    stopped["choices"][0]["finish_reason"] = reason
+    object_array(stopped["choices"])[0]["delta"] = {"content": "reject normalization"}
+    object_array(stopped["choices"])[0]["finish_reason"] = reason
     return [first, stopped]
 
 
@@ -623,7 +628,7 @@ async def test_normal_chat_finish_survives_later_parser_failure(
 
     monkeypatch.setattr(_ChatStreamPresenter, "feed", rejected_terminal)
     terminal = tool_events("chat", "")[-1]
-    terminal["choices"][0]["finish_reason"] = reason
+    object_array(terminal["choices"])[0]["finish_reason"] = reason
     async with _harness("chat", lambda _: (200, [*partial_tool("chat"), terminal])) as (
         send,
         bodies,
@@ -700,8 +705,8 @@ async def test_raw_native_retry_uses_winning_initial_usage_and_final_overrides(
         "output_tokens": 0,
     }
     winner = tool_events("messages", '{"path":"winning"}')
-    winner[0]["message"]["id"] = "msg_winning"
-    winner[0]["message"]["usage"] = {
+    object_payload(winner[0]["message"])["id"] = "msg_winning"
+    object_payload(winner[0]["message"])["usage"] = {
         "input_tokens": 0,
         "cache_read_input_tokens": 70,
         "cache_creation_input_tokens": 0,
@@ -709,7 +714,9 @@ async def test_raw_native_retry_uses_winning_initial_usage_and_final_overrides(
         "winning_extension": {"note": "a\u2028b", "counts": [0, None]},
     }
     if cache_details != "missing":
-        winner[0]["message"]["usage"]["cache_creation"] = (
+        object_payload(object_payload(winner[0]["message"])["usage"])[
+            "cache_creation"
+        ] = (
             None
             if cache_details == "null"
             else {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0}
@@ -736,7 +743,10 @@ async def test_raw_native_retry_uses_winning_initial_usage_and_final_overrides(
         assert len(bodies) == 3 and bodies[0] == bodies[1] == bodies[2]
         events = parse_sse_text(result)
         assert events[0].data["message"]["id"] == "msg_winning"
-        assert events[0].data["message"]["usage"] == winner[0]["message"]["usage"]
+        assert (
+            events[0].data["message"]["usage"]
+            == object_payload(winner[0]["message"])["usage"]
+        )
         assert events[-2].data["usage"] == winner[-2]["usage"]
 
         async def emitted():
@@ -745,7 +755,7 @@ async def test_raw_native_retry_uses_winning_initial_usage_and_final_overrides(
         message, error, complete = await aggregate_anthropic_sse_to_message(emitted())
         assert complete and error is None
         assert message["usage"] == {
-            **winner[0]["message"]["usage"],
+            **object_payload(object_payload(winner[0]["message"])["usage"]),
             **winner[-2]["usage"],
         }
         assert "abandoned_extension" not in result
@@ -835,5 +845,5 @@ async def test_hidden_retry_keeps_correction_and_uses_its_remaining_budget():
         )
     assert len(bodies) == 3
     assert bodies[0] != bodies[1] and bodies[1] == bodies[2]
-    assert ":" not in bodies[1]["input"][0]["id"]
+    assert ":" not in string_payload(object_array(bodies[1]["input"])[0]["id"])
     assert_winning_tool(result, "responses")

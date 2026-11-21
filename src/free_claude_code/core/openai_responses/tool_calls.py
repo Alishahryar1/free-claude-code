@@ -62,7 +62,11 @@ class ResponsesToolCallBuffer:
         item = data.get("item")
         item = item if isinstance(item, dict) else {}
         index = data.get("output_index")
-        item_id = item.get("id") or data.get("item_id") or self._indices.get(index)
+        item_id = (
+            item.get("id")
+            or data.get("item_id")
+            or (self._indices.get(index) if index is not None else None)
+        )
         if (
             isinstance(item_id, str)
             and (item_id in self._items or item_id in self._fingerprints)

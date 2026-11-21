@@ -1,4 +1,4 @@
-import os
+import sys
 
 import pytest
 
@@ -41,34 +41,34 @@ def test_failed_acquisition_closes_handle_and_allows_retry(
 def test_empty_file_locked_by_another_handle_is_normal_contention(
     tmp_path, monkeypatch
 ):
-    if os.name != "nt":
-        pytest.skip("Windows byte-range locking")
+    if sys.platform == "win32":
+        import msvcrt
 
-    import msvcrt
+        path = tmp_path / "lock"
+        contender = interprocess_lock.InterprocessFileLock(path)
+        opened = []
+        try_lock = interprocess_lock._try_lock
 
-    path = tmp_path / "lock"
-    contender = interprocess_lock.InterprocessFileLock(path)
-    opened = []
-    try_lock = interprocess_lock._try_lock
+        def capture(handle):
+            opened.append(handle)
+            return try_lock(handle)
 
-    def capture(handle):
-        opened.append(handle)
-        return try_lock(handle)
-
-    monkeypatch.setattr(interprocess_lock, "_try_lock", capture)
-    with path.open("a+b") as holder:
-        # Windows supports locks beyond EOF. Hold byte zero without writing it.
-        msvcrt.locking(holder.fileno(), msvcrt.LK_NBLCK, 1)
+        monkeypatch.setattr(interprocess_lock, "_try_lock", capture)
+        with path.open("a+b") as holder:
+            # Windows supports locks beyond EOF. Hold byte zero without writing it.
+            msvcrt.locking(holder.fileno(), msvcrt.LK_NBLCK, 1)
+            try:
+                assert contender.acquire() is False
+                assert opened[0].closed
+            finally:
+                msvcrt.locking(holder.fileno(), msvcrt.LK_UNLCK, 1)
+                contender.release()
+                for handle in opened:
+                    handle.close()
         try:
-            assert contender.acquire() is False
-            assert opened[0].closed
+            assert contender.acquire()
+            assert path.stat().st_size == 0
         finally:
-            msvcrt.locking(holder.fileno(), msvcrt.LK_UNLCK, 1)
             contender.release()
-            for handle in opened:
-                handle.close()
-    try:
-        assert contender.acquire()
-        assert path.stat().st_size == 0
-    finally:
-        contender.release()
+    else:
+        pytest.skip("Windows byte-range locking")

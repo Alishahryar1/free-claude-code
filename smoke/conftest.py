@@ -51,9 +51,7 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
         return
     if _REPORT is None:
         return
-    markers = sorted(
-        str(name) for name in report.keywords if str(name).startswith("smoke_")
-    )
+    markers = sorted(name for name in report.keywords if name.startswith("smoke_"))
     detail = "" if report.longrepr is None else str(report.longrepr)
     _REPORT.add(
         nodeid=report.nodeid,

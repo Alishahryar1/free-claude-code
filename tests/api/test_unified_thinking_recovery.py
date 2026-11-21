@@ -22,6 +22,7 @@ from tests.api.test_response_streams import _serve
 from tests.api.test_tool_call_buffer import _response
 from tests.api.test_tool_call_buffer_transports import _tools
 from tests.providers.test_history_transports import _chat_reasoning_events, _harness
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 def history():
@@ -144,7 +145,9 @@ def completed_thinking_and_text(field, suffix=""):
     for event in text:
         if "output_index" in event:
             event["output_index"] = 1
-    text[-1]["response"]["output"].insert(0, reasoning[-1]["response"]["output"][0])
+    array_payload(object_payload(text[-1]["response"])["output"]).insert(
+        0, array_payload(object_payload(reasoning[-1]["response"])["output"])[0]
+    )
     return [*reasoning[:-1], *text[1:]]
 
 
@@ -273,7 +276,9 @@ async def test_interleaved_thinking_continuation_keeps_new_part_and_answer(
         for event in tail:
             if "output_index" in event:
                 event["output_index"] = 1
-        tail[-1]["response"]["output"].insert(0, deepcopy(item))
+        array_payload(object_payload(tail[-1]["response"])["output"]).insert(
+            0, deepcopy(item)
+        )
         events.extend(tail[1:] if complete else tail[1:-1])
         return [
             {**event, "sequence_number": sequence}
@@ -367,7 +372,7 @@ async def test_followup_does_not_restore_thinking_removed_by_overlap(
         await delivered(send(wire, [*saved, {"role": "user", "content": "Next"}]), wire)
     replayed = "".join(
         text
-        for item in bodies[-1]["input"]
+        for item in object_array(bodies[-1]["input"])
         if item.get("type") == "reasoning"
         for text, _ in readable_reasoning(item)
     )
@@ -418,7 +423,7 @@ async def test_late_summary_alias_replays_only_thinking_delivered_after_overlap(
         await delivered(send(wire, [*saved, {"role": "user", "content": "Next"}]), wire)
     replayed = [
         part
-        for message in bodies[-1]["messages"]
+        for message in object_array(bodies[-1]["messages"])
         for part in readable_reasoning(message)
     ]
     assert "".join(text for text, _ in replayed).replace("\n", "") == "PlanAct"
@@ -550,7 +555,7 @@ async def test_equal_late_alias_records_held_by_tool_gate_keep_independent_range
         )
     replayed = [
         part
-        for message in bodies[-1]["messages"]
+        for message in object_array(bodies[-1]["messages"])
         for part in readable_reasoning(message)
     ]
     assert "".join(text for text, _ in replayed).replace("\n", "") == "PlanPlan"

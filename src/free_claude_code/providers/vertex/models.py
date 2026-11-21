@@ -1,7 +1,7 @@
 """Vertex publisher-model response parsing."""
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, TypeGuard
 
 from free_claude_code.providers.model_listing import ModelListResponseError
 
@@ -42,7 +42,7 @@ def _openai_model_id(resource_name: str) -> str:
     return f"{parts[1]}/{parts[3]}"
 
 
-def _is_sequence(value: Any) -> bool:
+def _is_sequence(value: object) -> TypeGuard[Sequence[object]]:
     return isinstance(value, Sequence) and not isinstance(
         value, str | bytes | bytearray
     )

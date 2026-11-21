@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
 from free_claude_code.providers.request_correction import RequestCorrector
@@ -29,9 +30,11 @@ from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import array_payload, int_payload, object_array, object_payload
 
 
-def text_events(protocol, text, *, complete=True):
+def text_events(protocol: str, text: str, *, complete: bool = True) -> list[JsonObject]:
+    events: list[JsonObject]
     if protocol == "chat":
         template = _events_for(protocol)[0]
         events = [
@@ -77,13 +80,14 @@ def text_events(protocol, text, *, complete=True):
                 ]
             )
         return events
-    response = deepcopy(_events_for(protocol)[-1]["response"])
-    item = {
+    response = deepcopy(object_payload(_events_for(protocol)[-1]["response"]))
+    text_part: JsonObject = {"type": "output_text", "text": text, "annotations": []}
+    item: JsonObject = {
         "id": "msg_text",
         "type": "message",
         "role": "assistant",
         "status": "completed",
-        "content": [{"type": "output_text", "text": text, "annotations": []}],
+        "content": [text_part],
     }
     response["output"] = [item]
     events = [
@@ -126,7 +130,7 @@ def text_events(protocol, text, *, complete=True):
                     "output_index": 0,
                     "item_id": "msg_text",
                     "content_index": 0,
-                    "part": item["content"][0],
+                    "part": text_part,
                 },
                 {"type": "response.output_item.done", "output_index": 0, "item": item},
                 {"type": "response.completed", "response": response},
@@ -396,10 +400,14 @@ async def test_partial_overlap_across_single_character_chunks(
         events = text_events(protocol, candidate)
         expanded = []
         for event in events:
-            if protocol == "chat" and event["choices"][0]["delta"].get("content"):
+            if protocol == "chat" and object_payload(
+                object_array(event["choices"])[0]["delta"]
+            ).get("content"):
                 for character in candidate:
                     chunk = deepcopy(event)
-                    chunk["choices"][0]["delta"]["content"] = character
+                    object_payload(object_array(chunk["choices"])[0]["delta"])[
+                        "content"
+                    ] = character
                     expanded.append(chunk)
             elif event.get("type") == "content_block_delta":
                 expanded.extend(
@@ -635,7 +643,7 @@ async def test_completed_signed_thinking_and_call_can_finish_without_regeneratio
     calls = tool_events("messages", '{"path":"kept"}')[1:]
     for event in calls:
         if "index" in event:
-            event["index"] += 1
+            event["index"] = int_payload(event["index"]) + 1
     async with _harness(
         "messages", lambda _: (200, events + calls), max_attempts=1
     ) as (send, bodies, _):
@@ -697,7 +705,7 @@ def test_http_recovery_then_real_harness_tool_result_has_no_private_history():
         assert len(calls) == 1
         call = {**calls[0], "input": {"path": "winning"}}
         history = [
-            *body["messages"],
+            *array_payload(body["messages"]),
             {
                 "role": "assistant",
                 "content": [{"type": "text", "text": "Before. "}, call],
@@ -731,7 +739,7 @@ def test_http_recovery_then_real_harness_tool_result_has_no_private_history():
 async def test_readable_thinking_retries_or_continues_into_text(wire, structured):
     first = text_events("chat", "", complete=False)
     thought = "Look at the request first."
-    first[0]["choices"][0]["delta"] = {"reasoning_content": thought}
+    object_array(first[0]["choices"])[0]["delta"] = {"reasoning_content": thought}
     async with _harness(
         "chat",
         lambda bodies: (
@@ -839,7 +847,7 @@ async def test_seeded_text_start_participates_in_overlap_filter(wire):
         if len(bodies) == 1:
             return 200, text_events("messages", "The answer is", complete=False)
         events = text_events("messages", " 42")
-        events[1]["content_block"]["text"] = "answer is"
+        object_payload(events[1]["content_block"])["text"] = "answer is"
         return 200, events
 
     async with _harness("messages", reply, max_attempts=2) as (send, _, _):

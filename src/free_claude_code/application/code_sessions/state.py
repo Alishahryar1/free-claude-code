@@ -352,7 +352,7 @@ class SessionState:
 
     def matches_turn(self, event: HarnessEvent, *, known_turn: bool) -> bool:
         run = self._run
-        return bool(
+        return (
             run is not None
             and self.busy
             and run.submission_started
@@ -487,7 +487,7 @@ class SessionState:
             raw=raw,
             complete=update.complete or bool(existing and existing.complete),
         )
-        if item == existing:
+        if existing is not None and item == existing:
             return existing, False
         self._items[item.id] = item
         self._dirty.add(item.id)

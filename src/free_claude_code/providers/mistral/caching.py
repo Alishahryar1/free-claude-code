@@ -34,9 +34,7 @@ MISTRAL_SESSION_HEADER_NAMES: tuple[str, ...] = (
 def extract_mistral_affinity_key(headers: Mapping[str, str]) -> str | None:
     """Return the first non-empty session header value, case-insensitive."""
     lowered = {
-        str(name).lower(): value
-        for name, value in headers.items()
-        if isinstance(value, str)
+        name.lower(): value for name, value in headers.items() if isinstance(value, str)
     }
     for name in MISTRAL_SESSION_HEADER_NAMES:
         value = lowered.get(name)

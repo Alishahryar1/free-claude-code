@@ -16,7 +16,13 @@ from free_claude_code.core.history_replay import (
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_output import StreamOutput
+from free_claude_code.providers.anthropic_messages.transport import (
+    AnthropicMessagesTransport,
+)
 from free_claude_code.providers.continuation import SourceRecoveryState
+from free_claude_code.providers.openai_responses.transport import (
+    OpenAIResponsesTransport,
+)
 from tests.providers.test_anthropic_messages_transport import Endpoint
 from tests.providers.test_gemini_transport import collect, gemini_request
 from tests.providers.test_history_transports import (
@@ -25,23 +31,26 @@ from tests.providers.test_history_transports import (
     _harness,
     _saved_reply,
 )
+from tests.wire_payload import object_array, object_payload, string_payload
 
 
 def unsigned_events(protocol):
     events = deepcopy(_events_for(protocol))
     if protocol == "chat":
-        events[0]["choices"][0]["delta"] = {
+        object_array(events[0]["choices"])[0]["delta"] = {
             "reasoning_content": "Find 17.",
             "reasoning_details": [
                 {"type": "reasoning.summary", "summary": "Find 17.", "index": 0}
             ],
         }
     elif protocol == "messages":
-        events[1]["content_block"].pop("signature")
+        object_payload(events[1]["content_block"]).pop("signature")
     else:
         for event in events:
-            items = [event["item"]] if "item" in event else []
-            items += event.get("response", {}).get("output", [])
+            items = [object_payload(event["item"])] if "item" in event else []
+            items += object_array(
+                object_payload(event.get("response", {})).get("output", [])
+            )
             for item in items:
                 item.pop("encrypted_content", None)
     return events
@@ -57,22 +66,26 @@ async def test_unsigned_thinking_has_only_client_native_history(protocol, wire):
         provider,
     ):
         if wire == "gemini":
-            options = {"reasoning": ReasoningPolicy.on()}
-            if protocol == "messages":
-                options["endpoint_context"] = Endpoint()
-                options["reasoning"] = ReasoningPolicy.provider_default()
-            elif protocol == "responses":
-                options.update(
-                    input_tokens=0, request_id="unsigned", response_model="public"
-                )
-            value, chunks = await collect(
-                provider.stream_gemini(
-                    gemini_request(
-                        generationConfig={"thinkingConfig": {"includeThoughts": True}}
-                    ),
-                    **options,
-                )
+            request = gemini_request(
+                generationConfig={"thinkingConfig": {"includeThoughts": True}}
             )
+            if isinstance(provider, AnthropicMessagesTransport):
+                stream = provider.stream_gemini(
+                    request,
+                    endpoint_context=Endpoint(),
+                    reasoning=ReasoningPolicy.provider_default(),
+                )
+            elif isinstance(provider, OpenAIResponsesTransport):
+                stream = provider.stream_gemini(
+                    request,
+                    input_tokens=0,
+                    request_id="unsigned",
+                    response_model="public",
+                    reasoning=ReasoningPolicy.on(),
+                )
+            else:
+                stream = provider.stream_gemini(request, reasoning=ReasoningPolicy.on())
+            value, chunks = await collect(stream)
             parts = value["candidates"][0]["content"]["parts"]
             assert (
                 "".join(p.get("text", "") for p in parts if p.get("thought"))
@@ -80,7 +93,7 @@ async def test_unsigned_thinking_has_only_client_native_history(protocol, wire):
             )
             assert all("thoughtSignature" not in part for part in parts)
         else:
-            chunks = [
+            chunks: list[str] = [
                 frame
                 async for chunk in send(wire, [{"role": "user", "content": "hello"}])
                 for frame in chunk.frames
@@ -92,10 +105,14 @@ async def test_unsigned_thinking_has_only_client_native_history(protocol, wire):
 
             saved = await _saved_reply(replay(), wire)
             if wire == "messages":
-                blocks = saved[0]["content"]
-                assert "".join(b.get("thinking", "") for b in blocks) == "Find 17."
+                blocks = object_array(saved[0]["content"])
+                assert (
+                    "".join(string_payload(b.get("thinking", "")) for b in blocks)
+                    == "Find 17."
+                )
                 assert all(
-                    not b.get("signature") and b["type"] != "redacted_thinking"
+                    not b.get("signature")
+                    and object_payload(b)["type"] != "redacted_thinking"
                     for b in blocks
                 )
             else:
@@ -230,11 +247,11 @@ async def test_parsed_thinking_is_not_owned_by_native_signature(
                 send(wire, [*saved, {"role": "user", "content": "next"}]), wire
             )
     assert len(bodies) == 2
-    messages = bodies[-1]["messages"]
+    messages = object_array(bodies[-1]["messages"])
     signed = [
         item
         for message in messages
-        for item in message.get("reasoning_details", [])
+        for item in object_array(message.get("reasoning_details", []))
         if item.get("signature") == "signed-native"
     ]
     assert [(item["text"], item["signature"]) for item in signed] == [
@@ -242,7 +259,10 @@ async def test_parsed_thinking_is_not_owned_by_native_signature(
     ]
     assert signed == [detail]
     assert (
-        "".join(message.get("reasoning_content", "") for message in messages) == parsed
+        "".join(
+            string_payload(message.get("reasoning_content", "")) for message in messages
+        )
+        == parsed
     )
 
 
@@ -269,7 +289,7 @@ async def test_owned_thinking_and_answer_stream_before_late_signature(wire):
             }
         ]
     )
-    chunks = []
+    chunks: list[str] = []
     delivered = asyncio.Event()
 
     class Gated(httpx2.AsyncByteStream):
@@ -380,7 +400,7 @@ async def test_gemini_protected_owners_survive_reused_indices_and_client_echo(ec
                 reasoning=ReasoningPolicy.on(),
             )
         )
-    assistant = bodies[-1]["messages"][0]
+    assistant = object_array(bodies[-1]["messages"])[0]
     assert assistant["reasoning_details"] == [first, second]
     assert assistant.get("reasoning_content", "") == (
         "" if echo == "cli" else "Unsigned.Ordinary.Tail."

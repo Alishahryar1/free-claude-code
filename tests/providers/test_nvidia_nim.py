@@ -2,6 +2,7 @@ import json
 from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
+from typing import Literal, overload
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import openai
@@ -13,6 +14,7 @@ from free_claude_code.config.constants import (
     PROVIDER_MAX_ATTEMPTS_DEFAULT,
 )
 from free_claude_code.config.provider_catalog import NVIDIA_NIM_DEFAULT_BASE
+from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.history_replay import (
@@ -39,6 +41,7 @@ from tests.providers.support import (
 )
 from tests.providers.test_history_transports import _events_for, _harness, _saved_reply
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import object_array, object_payload, string_payload
 
 
 def message(role, content):
@@ -66,7 +69,23 @@ def _alias_provider():
     )
 
 
-def _alias_request(wire="messages", *, reasoning_history=False):
+@overload
+def _alias_request(
+    wire: Literal["messages"] = "messages", *, reasoning_history: bool = False
+) -> MessagesRequest: ...
+
+
+@overload
+def _alias_request(
+    wire: Literal["responses"], *, reasoning_history: bool = False
+) -> OpenAIResponsesRequest: ...
+
+
+def _alias_request(
+    wire: Literal["messages", "responses"] = "messages",
+    *,
+    reasoning_history: bool = False,
+) -> MessagesRequest | OpenAIResponsesRequest:
     schema = {
         "type": "object",
         "properties": {"pattern": {"type": "string"}, "type": {"type": "string"}},
@@ -174,6 +193,7 @@ def _alias_events():
 async def test_argument_aliases_survive_request_corrections(wire, correction):
     request = _alias_request(wire, reasoning_history=correction == "reasoning_content")
     if correction == "chat_template":
+        assert isinstance(request, MessagesRequest)
         request.extra_body = {"chat_template": "custom_template"}
     original = deepcopy(request.model_dump())
 
@@ -187,28 +207,32 @@ async def test_argument_aliases_survive_request_corrections(wire, correction):
         bodies,
         provider,
     ):
+        reasoning = ReasoningPolicy.on(budget_tokens=4096)
         stream = (
-            provider.stream_messages
-            if wire == "messages"
-            else provider.stream_responses
+            provider.stream_messages(request, reasoning=reasoning)
+            if isinstance(request, MessagesRequest)
+            else provider.stream_responses(request, reasoning=reasoning)
         )
-        saved = await _saved_reply(
-            stream(request, reasoning=ReasoningPolicy.on(budget_tokens=4096)), wire
-        )
+        saved = await _saved_reply(stream, wire)
     if wire == "messages":
         call = next(
-            block for block in saved[0]["content"] if block["type"] == "tool_use"
+            block
+            for block in object_array(saved[0]["content"])
+            if block["type"] == "tool_use"
         )
         assert call["input"] == {"pattern": "needle", "type": "py"}
         assert call["id"] == "call_grep"
     else:
         call = next(item for item in saved if item["type"] == "function_call")
-        assert json.loads(call["arguments"]) == {"pattern": "needle", "type": "py"}
+        assert json.loads(string_payload(call["arguments"])) == {
+            "pattern": "needle",
+            "type": "py",
+        }
         assert call["call_id"] == "call_grep"
     assert len(bodies) == (2 if correction else 1)
     assert all(NIM_TOOL_ARGUMENT_ALIASES_KEY not in body for body in bodies)
     if correction == "reasoning_content":
-        assert "reasoning_content" not in bodies[-1]["messages"][0]
+        assert "reasoning_content" not in object_array(bodies[-1]["messages"])[0]
         assert "Need the tool." not in json.dumps(bodies[-1])
     assert request.model_dump() == original
 
@@ -252,7 +276,11 @@ async def test_argument_aliases_survive_shared_history_correction(early_sse):
         provider,
     ):
         saved = await _saved_reply(provider.stream_messages(request), "messages")
-    call = next(block for block in saved[0]["content"] if block["type"] == "tool_use")
+    call = next(
+        block
+        for block in object_array(saved[0]["content"])
+        if block["type"] == "tool_use"
+    )
     assert call["input"] == {"pattern": "needle", "type": "py"}
     assert len(bodies) == 2
     assert "opaque-original" not in json.dumps(bodies[-1])
@@ -536,6 +564,7 @@ async def test_build_request_body_omits_reasoning_when_request_disables_thinking
         admission=immediate_admission(),
     )
     req = make_request()
+    assert req.thinking is not None
     req.thinking.enabled = False
     body = provider._chat._build_request_body(req)
 
@@ -986,24 +1015,26 @@ async def test_minimax_markup_is_not_a_tool_call(wire, model, parts, with_tools,
         )
     assert len(bodies) == 1
     if wire == "messages":
-        blocks = saved[0]["content"]
-        assert not any(block["type"] == "tool_use" for block in blocks)
-        reasoning = "".join(block.get("thinking", "") for block in blocks)
+        blocks = object_array(saved[0]["content"])
+        assert not any(object_payload(block)["type"] == "tool_use" for block in blocks)
+        reasoning = "".join(
+            string_payload(block.get("thinking", "")) for block in blocks
+        )
     else:
         assert not any(item["type"] == "function_call" for item in saved)
         blocks = [
             block
             for item in saved
             if item["type"] == "message"
-            for block in item["content"]
+            for block in object_array(item["content"])
         ]
         reasoning = "".join(
-            block["text"]
+            string_payload(block["text"])
             for item in saved
             if item["type"] == "reasoning"
-            for block in item.get("content", [])
+            for block in object_array(item.get("content", []))
         )
-    text = "".join(block.get("text", "") for block in blocks)
+    text = "".join(string_payload(block.get("text", "")) for block in blocks)
     assert text == ("".join(parts) if field == "content" else "Visible answer.")
     if field == "reasoning_content":
         assert reasoning == "".join(parts)

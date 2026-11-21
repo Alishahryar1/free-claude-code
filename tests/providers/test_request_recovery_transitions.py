@@ -27,6 +27,9 @@ from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
 )
+from free_claude_code.providers.anthropic_messages.transport import (
+    AnthropicMessagesTransport,
+)
 from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.openai_chat import (
     NamedEffortReasoning,
@@ -43,6 +46,7 @@ from tests.providers.test_anthropic_messages_transport import (
     _transport as messages_transport,
 )
 from tests.providers.test_history_transports import _events_for
+from tests.wire_payload import array_payload
 
 
 class Endpoint:
@@ -85,10 +89,9 @@ async def _transport(protocol, responder, *, endpoint=None):
         jitter=0,
     )
 
-    def handler(request):
-        bodies.append(json.loads(request.content))
+    def scripted_reply(request_content: bytes):
+        bodies.append(json.loads(request_content))
         status, payload = responder(len(bodies))
-        module = httpx if protocol == "messages" else httpx2
         if status == 200:
             content = "".join(
                 (f"event: {event['type']}\n" if protocol == "messages" else "")
@@ -101,15 +104,21 @@ async def _transport(protocol, responder, *, endpoint=None):
             content_type = "application/json"
         wire = Wire(content.encode())
         wires.append(wire)
-        return module.Response(
-            status, headers={"content-type": content_type}, stream=wire
-        )
+        return status, {"content-type": content_type}, wire
+
+    def messages_reply(request: httpx.Request) -> httpx.Response:
+        status, headers, wire = scripted_reply(request.content)
+        return httpx.Response(status, headers=headers, stream=wire)
+
+    def openai_reply(request: httpx2.Request) -> httpx2.Response:
+        status, headers, wire = scripted_reply(request.content)
+        return httpx2.Response(status, headers=headers, stream=wire)
 
     if protocol == "messages":
-        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = httpx.AsyncClient(transport=httpx.MockTransport(messages_reply))
         provider = messages_transport(client, admission)
     else:
-        pool = httpx2.MockTransport(handler)
+        pool = httpx2.MockTransport(openai_reply)
         client = AsyncOpenAI(
             api_key="unused",
             max_retries=0,
@@ -221,7 +230,7 @@ def _partial(protocol, text=""):
             )
         return events
     chunk = deepcopy(_events_for("chat")[-1])
-    chunk["choices"][0] = {
+    array_payload(chunk["choices"])[0] = {
         "index": 0,
         "delta": {"content": text} if text else {"role": "assistant"},
         "finish_reason": None,
@@ -278,6 +287,9 @@ async def test_hidden_normal_stop_prevents_request_corrections(
         if wire == "messages":
             source = _stream(provider, endpoint, _request(protocol))
         else:
+            assert isinstance(
+                provider, (AnthropicMessagesTransport, OpenAIChatProvider)
+            )
             source = provider.stream_responses(
                 OpenAIResponsesRequest(model="upstream", input="continue"),
                 endpoint_context=endpoint,

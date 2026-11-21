@@ -27,6 +27,7 @@ from free_claude_code.core.history_replay import (
     prepare_history,
     readable_reasoning,
 )
+from free_claude_code.core.json_types import JsonObject
 from tests.core.test_gemini_requests import build, request
 
 ORIGIN = ReplayOrigin("provider", "chat", "https://source.invalid", "account", "model")
@@ -65,6 +66,7 @@ def generated():
 def test_only_exact_single_bundle_echo_is_suppressed(protocol, echo):
     parts = generated()
     signature = parts[-1]["thoughtSignature"]
+    assert isinstance(signature, str)
     bundle = decode_bundle(signature)
     assert bundle is not None
     assert bundle.thought_echo_sha256
@@ -224,12 +226,12 @@ def test_echo_digest_requires_replay_coverage_of_all_thought_text(native):
 def test_foreign_native_gemini_signature_fails_explicitly(protocol, placement):
     from free_claude_code.core.gemini import GeminiConversionError
 
-    part = {"thoughtSignature": "AP8="}
+    part: JsonObject = {"thoughtSignature": "AP8="}
     if placement == "text":
         part["text"] = "signed text"
     elif placement == "call":
         part["functionCall"] = {"id": "call", "name": "read", "args": {}}
-    contents = [{"role": "model", "parts": [part]}]
+    contents: list[JsonObject] = [{"role": "model", "parts": [part]}]
     if placement == "call":
         contents.append(
             {

@@ -25,6 +25,7 @@ from free_claude_code.config.env_migrations import (
 )
 from free_claude_code.config.paths import FCC_DATABASE_FILENAME
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
+from free_claude_code.core.json_types import JsonObject
 from smoke.lib.child_process import run_captured_text
 from smoke.lib.config import SmokeConfig
 from smoke.lib.e2e import SmokeServerDriver
@@ -173,7 +174,7 @@ def _canned_provider(
                     )
                     assert spawn_name is not None, list(functions)
                     properties = functions[spawn_name]["parameters"]["properties"]
-                    arguments = {
+                    arguments: JsonObject = {
                         "message": "FCC_CHILD_REVIEW_WORK: Execute the disposable local smoke command, then finish."
                     }
                     if "task_name" in properties:
@@ -192,7 +193,7 @@ def _canned_provider(
                         if tool["type"] == "function"
                     ]
                     assert "exec_command" in names, names
-                    arguments = {
+                    arguments: JsonObject = {
                         "cmd": state["command"],
                         "max_output_tokens": 1000,
                     }

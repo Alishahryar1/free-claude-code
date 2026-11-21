@@ -18,6 +18,7 @@ from tests.providers.support import assistant_history_text, without_empty_reason
 from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _events_for, _harness, _saved_reply
+from tests.wire_payload import array_payload, object_array
 
 
 @pytest.mark.asyncio
@@ -92,7 +93,7 @@ async def test_real_provider_whitespace_is_continuation_output(protocol, wire):
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_readable_reasoning_continuation_succeeds_without_padding(wire):
     reasoning = text_events("chat", "")
-    reasoning[0]["choices"][0]["delta"] = {
+    object_array(reasoning[0]["choices"])[0]["delta"] = {
         "reasoning_content": "Consider the greeting."
     }
     async with _harness(
@@ -215,11 +216,14 @@ async def test_removed_history_row_stays_removed_after_another_interruption():
         result = await delivered(send("responses", history), "responses")
 
     assert len(bodies) == 4
-    assert len(bodies[2]["input"]) == len(bodies[1]["input"]) - 1
-    before_history = bodies[2]["input"][:-2]
-    assert bodies[3]["input"][: len(before_history)] == before_history
     assert (
-        assistant_history_text(bodies[3]["input"][len(before_history) :])
+        len(object_array(bodies[2]["input"]))
+        == len(object_array(bodies[1]["input"])) - 1
+    )
+    before_history = array_payload(bodies[2]["input"])[:-2]
+    assert array_payload(bodies[3]["input"])[: len(before_history)] == before_history
+    assert (
+        assistant_history_text(array_payload(bodies[3]["input"])[len(before_history) :])
         == "Hello world "
     )
     assert_completed(parse_sse_text(result), "responses")

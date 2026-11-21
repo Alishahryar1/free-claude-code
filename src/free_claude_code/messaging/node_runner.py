@@ -187,7 +187,7 @@ class MessagingNodeRunner:
                     chat_id=chat_id,
                     node_id=node_id,
                     status_message_id=status_msg_id,
-                    session_handle=str(session_or_temp_id),
+                    session_handle=session_or_temp_id,
                     parent_resume_session_id=parent_session_id,
                     fork_requested=bool(parent_session_id),
                 )

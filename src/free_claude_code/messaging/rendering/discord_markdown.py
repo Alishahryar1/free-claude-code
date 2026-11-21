@@ -240,7 +240,7 @@ def render_markdown_to_discord(text: str) -> str:
                     cell_parts = []
                 elif tt == "tr_close" and in_row:
                     rows.append(current_row)
-                    row_is_header.append(bool(current_row_header))
+                    row_is_header.append(current_row_header)
                     in_row = False
                 elif tt == "table_close":
                     break

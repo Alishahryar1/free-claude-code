@@ -227,20 +227,41 @@ class TestMessagingRateLimiter:
             await future2
 
     @pytest.mark.asyncio
-    async def test_fire_and_forget_failure_logged(self, caplog):
-        """fire_and_forget with failing task logs error and does not re-raise."""
+    async def test_fire_and_forget_failure_logged(self, caplog, monkeypatch):
+        """fire_and_forget logs its own failure and does not re-raise."""
         limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
 
-        async def fail_task():
-            raise ValueError("fire_and_forget failed")
+        async def failing_enqueue(func, dedup_key=None):
+            raise ValueError("secret upstream detail")
 
-        limiter.fire_and_forget(fail_task, dedup_key="fire_fail")
+        async def task():
+            return None
+
+        # Fail before the worker sees the task, so only fire_and_forget can log.
+        monkeypatch.setattr(limiter, "enqueue", failing_enqueue)
+        limiter.fire_and_forget(task, dedup_key="fire_fail")
         await asyncio.wait_for(asyncio.gather(*limiter._background_tasks), timeout=2.0)
 
+        errors = [r.message for r in caplog.records if r.levelname == "ERROR"]
+        assert any("fire_fail" in m and "ValueError" in m for m in errors)
         joined = " ".join(str(r.message) for r in caplog.records)
-        assert "Final error in fire_and_forget for key fire_fail" in joined
-        assert "ValueError" in joined
-        assert "fire_and_forget failed" not in joined
+        assert "secret upstream detail" not in joined
+
+    @pytest.mark.asyncio
+    async def test_fire_and_forget_runs_failed_task_once(self):
+        """A failed background task is not replayed; platform adapters own retries."""
+        limiter = self.create_limiter(rate_limit=10, rate_window=1.0)
+        calls = 0
+
+        async def fail_task():
+            nonlocal calls
+            calls += 1
+            raise ConnectionError("connect failed")
+
+        limiter.fire_and_forget(fail_task, dedup_key="edit:1:2")
+        await asyncio.wait_for(asyncio.gather(*limiter._background_tasks), timeout=5.0)
+
+        assert calls == 1
 
     @pytest.mark.asyncio
     async def test_shutdown_settles_active_queued_and_background_work(self):
