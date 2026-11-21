@@ -1,11 +1,15 @@
 """Numbered fallback credentials reach actual HTTP requests across transports."""
 
 import json
+from collections.abc import Awaitable, Callable, Mapping
+from pathlib import Path
+from typing import Unpack
 
 import httpx
 import httpx2
 import pytest
 from fastapi.testclient import TestClient
+from typing_extensions import TypedDict
 
 from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.config.settings import Settings
@@ -20,8 +24,23 @@ KEYS = ["synthetic-first", "synthetic-second", "synthetic-third"]
 CUSTOM_ID = "custom_" + "d" * 32
 
 
+class _NativeClientOptions(TypedDict, total=False, closed=True):
+    timeout: httpx.Timeout
+    follow_redirects: bool
+    event_hooks: Mapping[str, list[Callable[[httpx.Request], Awaitable[None]]]]
+
+
+class _SDKClientOptions(TypedDict, total=False, closed=True):
+    timeout: httpx2.Timeout | float | None
+    follow_redirects: bool
+    limits: httpx2.Limits
+
+
 @pytest.fixture(params=[403, 429], ids=["permission-rejection", "rate-limit"])
-def upstream(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
+def upstream(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, tmp_path: Path
+):
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "missing-ca.pem"))
     calls = []
     failure_status = request.param
     build = ProviderAdmissionController.__init__
@@ -102,16 +121,30 @@ def upstream(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
         lambda request: response(request, httpx2.Response)
     )
 
-    def native_transport_for_url(client: httpx.AsyncClient, url: httpx.URL):
-        return native_transport
+    native_init = httpx.AsyncClient.__init__
+    sdk_init = httpx2.AsyncClient.__init__
 
-    def sdk_transport_for_url(client: httpx2.AsyncClient, url: httpx2.URL):
-        return sdk_transport
+    # Inject the mocks before the clients can load TLS settings or mount proxies.
+    def init_native_client(
+        client: httpx.AsyncClient,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+        proxy: str | httpx.URL | httpx.Proxy | None = None,
+        **options: Unpack[_NativeClientOptions],
+    ) -> None:
+        native_init(client, transport=native_transport, **options)
 
-    monkeypatch.setattr(
-        httpx.AsyncClient, "_transport_for_url", native_transport_for_url
-    )
-    monkeypatch.setattr(httpx2.AsyncClient, "_transport_for_url", sdk_transport_for_url)
+    def init_sdk_client(
+        client: httpx2.AsyncClient,
+        *,
+        transport: httpx2.AsyncBaseTransport | None = None,
+        proxy: str | httpx2.URL | httpx2.Proxy | None = None,
+        **options: Unpack[_SDKClientOptions],
+    ) -> None:
+        sdk_init(client, transport=sdk_transport, **options)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", init_native_client)
+    monkeypatch.setattr(httpx2.AsyncClient, "__init__", init_sdk_client)
     return calls, failure_status
 
 

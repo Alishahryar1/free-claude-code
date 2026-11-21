@@ -21,8 +21,20 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatTransport,
 )
 from tests.providers.request_factory import make_messages_request
+from tests.providers.support import capture_openai_chat_wire_body
 
 pytestmark = pytest.mark.asyncio
+
+
+async def test_capture_rejects_stream_in_prepared_body():
+    with pytest.raises(TypeError, match="stream"):
+        await capture_openai_chat_wire_body(
+            {
+                "model": "model",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": False,
+            }
+        )
 
 
 def _transport(client: AsyncOpenAI) -> OpenAIChatTransport:

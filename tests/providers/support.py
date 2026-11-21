@@ -155,6 +155,9 @@ class PreparedChatRequest(CompletionCreateParamsStreaming, closed=True):
 
 async def capture_openai_chat_wire_body(body: JsonObject) -> JsonObject:
     """Return the JSON body serialized by the OpenAI chat client."""
+    if "stream" in body:
+        raise TypeError("Prepared chat body already contains stream")
+
     captured: list[JsonObject] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:

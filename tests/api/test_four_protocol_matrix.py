@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from typing import Never
 from unittest.mock import patch
 
 import httpx
@@ -147,6 +148,12 @@ def matrix_app(
     max_attempts: int = 2,
     model_fallbacks: list[ModelFallback] | None = None,
 ):
+    if protocol in {"gemini", "messages"}:
+        if native_reply is None:
+            raise ValueError(f"{protocol} requires native_reply")
+    elif sdk_reply is None:
+        raise ValueError(f"{protocol} requires sdk_reply")
+
     async def native_handler(request: httpx.Request) -> httpx.Response:
         assert native_reply is not None
         return await mock_response(native_reply(request), httpx.Response)
@@ -199,6 +206,26 @@ def matrix_app(
             MODEL=f"{provider_id}/backend", custom_providers=(configured,)
         )
     return create_test_app(settings, providers={provider_id: instance})
+
+
+@pytest.mark.parametrize(
+    ("protocol", "required"),
+    [
+        ("gemini", "native_reply"),
+        ("messages", "native_reply"),
+        ("chat", "sdk_reply"),
+        ("responses", "sdk_reply"),
+    ],
+)
+def test_matrix_requires_the_handler_for_its_protocol(protocol: str, required: str):
+    def unexpected_request(request: httpx.Request | httpx2.Request) -> Never:
+        raise AssertionError("A mismatched handler was invoked")
+
+    with pytest.raises(ValueError, match=required):
+        if required == "native_reply":
+            matrix_app(protocol, sdk_reply=unexpected_request)
+        else:
+            matrix_app(protocol, native_reply=unexpected_request)
 
 
 def ingress_request(
