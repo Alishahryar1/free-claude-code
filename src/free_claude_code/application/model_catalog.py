@@ -5,6 +5,10 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from free_claude_code.config.constants import DEFAULT_MODEL_CONTEXT_TOKENS
+from free_claude_code.config.model_choices import (
+    is_current_model_choice,
+    model_choice_order,
+)
 from free_claude_code.config.model_refs import (
     configured_chat_model_refs,
     split_provider_model_ref,
@@ -49,9 +53,9 @@ def context_window_for_client(model: CatalogModel) -> int:
     )
 
 
-def model_order_key(provider_model_ref: str) -> tuple[str, str, str, str]:
+def model_order_key(provider_model_ref: str) -> tuple[str, tuple[str, int], str, str]:
     provider, model = split_provider_model_ref(provider_model_ref)
-    return provider.casefold(), model.casefold(), provider, model
+    return provider.casefold(), model_choice_order(provider, model), provider, model
 
 
 def read_model_catalog(
@@ -65,7 +69,10 @@ def read_model_catalog(
             ref.model_ref, runtime.cached_model_info(ref.provider_id, ref.model_id)
         )
     for info in runtime.cached_prefixed_model_infos():
-        if info.model_id not in models:
+        provider_id, model_id = split_provider_model_ref(info.model_id)
+        if info.model_id not in models and is_current_model_choice(
+            provider_id, model_id
+        ):
             models[info.model_id] = _catalog_model(info.model_id, info)
     for ref, model in tuple(models.items()):
         provider_id, model_id = split_provider_model_ref(ref)
@@ -82,7 +89,7 @@ def read_model_catalog(
         name = definition.display_name if definition else provider_id
         return (
             name.casefold(),
-            model_id.casefold(),
+            model_choice_order(provider_id, model_id),
             name,
             model_id,
             model.provider_model_ref,

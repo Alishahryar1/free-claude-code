@@ -563,6 +563,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_url="https://platform.minimax.io/user-center/basic-information/interface-key",
         credential_attr="minimax_api_keys",
         default_base_url=MINIMAX_DEFAULT_BASE,
+        base_url_attr="minimax_base_url",
         proxy_attr="minimax_proxy",
     ),
     "cerebras": ProviderDescriptor(
