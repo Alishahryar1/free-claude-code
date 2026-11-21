@@ -166,7 +166,7 @@ async def test_translated_gemini_stream_accepts_compatible_token_counts(
 @pytest.mark.parametrize("interleaved", [False, True])
 async def test_all_ingresses_use_native_gemini_and_replay_signed_parts(
     wire: str, interleaved: bool
-):
+) -> None:
     bodies = []
     parts = [
         {"text": "typed thought", "thought": True},
@@ -245,7 +245,7 @@ async def test_all_ingresses_use_native_gemini_and_replay_signed_parts(
 @pytest.mark.parametrize("native_id", [None, "google-call"])
 async def test_native_signed_tool_round_trip_keeps_original_parts_and_ids(
     wire: str, native_id: str | None
-):
+) -> None:
     parts = [
         {"text": "inspect the tool", "thought": True},
         {
@@ -355,7 +355,7 @@ async def test_native_signed_tool_round_trip_keeps_original_parts_and_ids(
 )
 async def test_prefer_off_uses_normal_allowance_without_unavailable_disable_control(
     model: str,
-):
+) -> None:
     bodies = []
 
     def reply(request: httpx.Request):
@@ -391,7 +391,9 @@ async def test_prefer_off_uses_normal_allowance_without_unavailable_disable_cont
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses", "chat"])
-async def test_explicit_off_hides_native_thoughts_but_keeps_signed_replay(wire: str):
+async def test_explicit_off_hides_native_thoughts_but_keeps_signed_replay(
+    wire: str,
+) -> None:
     provider = GeminiProvider(
         make_provider_config(api_key="key", base_url=GEMINI_DEFAULT_BASE),
         admission=immediate_admission(),
@@ -418,7 +420,7 @@ async def test_explicit_off_hides_native_thoughts_but_keeps_signed_replay(wire: 
 
 
 @pytest.mark.asyncio
-async def test_explicit_off_rejection_does_not_relax_caller_control():
+async def test_explicit_off_rejection_does_not_relax_caller_control() -> None:
     from free_claude_code.core.failures import ExecutionFailure
 
     bodies = []
@@ -469,7 +471,7 @@ async def test_native_model_discovery_follows_pages_and_keeps_native_names(
     output_limit: JsonValue,
     expected_input: int | None,
     expected_output: int | None,
-):
+) -> None:
     urls = []
 
     def reply(request: httpx.Request):
@@ -541,7 +543,7 @@ async def test_native_model_discovery_follows_pages_and_keeps_native_names(
 )
 async def test_native_reasoning_uses_one_computation_control(
     reasoning: ReasoningPolicy, expected: JsonObject
-):
+) -> None:
     bodies: list[dict[str, Any]] = []
 
     def reply(request: httpx.Request):
@@ -564,7 +566,7 @@ async def test_native_reasoning_uses_one_computation_control(
 
 
 @pytest.mark.asyncio
-async def test_native_empty_signed_part_does_not_emit_empty_text_block():
+async def test_native_empty_signed_part_does_not_emit_empty_text_block() -> None:
     provider = GeminiProvider(
         make_provider_config(api_key="key", base_url=GEMINI_DEFAULT_BASE),
         admission=immediate_admission(),
@@ -605,7 +607,7 @@ async def test_native_empty_signed_part_does_not_emit_empty_text_block():
 @pytest.mark.parametrize("code", [400, 429, 503])
 async def test_native_inband_error_preserves_retry_semantics_without_history_probes(
     code: int,
-):
+) -> None:
     from free_claude_code.core.failures import ExecutionFailure
 
     bodies = []
@@ -650,7 +652,7 @@ async def test_native_inband_error_preserves_retry_semantics_without_history_pro
 
 
 @pytest.mark.asyncio
-async def test_native_history_modes_share_attempt_budget_and_restore_source():
+async def test_native_history_modes_share_attempt_budget_and_restore_source() -> None:
     bodies = []
 
     def reply(request: httpx.Request):

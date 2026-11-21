@@ -44,7 +44,7 @@ def model_metadata(
 @pytest.mark.parametrize("effort", ["off", "low", "medium", "high", "xhigh", "max"])
 async def test_native_override_replaces_controls_and_preserves_extensions(
     adaptive: bool, effort: str
-):
+) -> None:
     received = []
     lookups = []
 
@@ -135,7 +135,7 @@ async def test_native_override_replaces_controls_and_preserves_extensions(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", ["unknown", "unsupported_effort", "small_output"])
-async def test_native_override_uses_existing_capability_validation(case: str):
+async def test_native_override_uses_existing_capability_validation(case: str) -> None:
     sent = []
 
     def handle(request: httpx.Request):
@@ -168,7 +168,7 @@ async def test_native_override_uses_existing_capability_validation(case: str):
 
 
 @pytest.mark.asyncio
-async def test_native_inherit_preserves_unknown_controls_without_metadata():
+async def test_native_inherit_preserves_unknown_controls_without_metadata() -> None:
     sent = []
 
     def handle(request: httpx.Request):

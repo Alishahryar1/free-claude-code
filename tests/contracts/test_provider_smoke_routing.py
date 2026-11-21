@@ -13,7 +13,9 @@ from smoke.product.test_provider_product_live import _server_for_provider
 from tests.assertions import require_present
 
 
-def test_provider_smoke_isolates_tiers_and_reasoning(monkeypatch: pytest.MonkeyPatch):
+def test_provider_smoke_isolates_tiers_and_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     for tier in ("FABLE", "OPUS", "SONNET", "HAIKU"):
         monkeypatch.setenv(f"MODEL_{tier}", "groq/wrong-model")
         monkeypatch.setenv(f"REASONING_{tier}", "off")

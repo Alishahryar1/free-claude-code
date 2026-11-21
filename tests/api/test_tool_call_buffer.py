@@ -168,7 +168,7 @@ async def _response(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_complete_packet_is_released_before_response_terminal(wire: str):
+async def test_complete_packet_is_released_before_response_terminal(wire: str) -> None:
     continue_stream = asyncio.Event()
     closed = []
 
@@ -204,7 +204,7 @@ async def test_complete_packet_is_released_before_response_terminal(wire: str):
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_late_packet_projection_failure_releases_no_call(
     wire: str, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     original = PublicResponseStream._finalize_frame
 
     def fail_on_call_delta(self: PublicResponseStream, frame: str):
@@ -235,7 +235,7 @@ async def test_late_packet_projection_failure_releases_no_call(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_wire_stop_alone_is_not_source_completion_evidence(wire: str):
+async def test_wire_stop_alone_is_not_source_completion_evidence(wire: str) -> None:
     async def body():
         yield StreamOutput(tuple(_frames(wire, [_start(wire)])))
         yield StreamOutput(tuple(_frames(wire, _call(wire))))

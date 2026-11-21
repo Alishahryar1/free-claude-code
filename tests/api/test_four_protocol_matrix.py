@@ -58,7 +58,7 @@ GEMINI_PARTS = [
 @pytest.mark.parametrize("tool_type", [None, "custom", "web_search_20250305"])
 def test_messages_custom_tool_type_is_translated_to_native_gemini(
     tool_type: str | None,
-):
+) -> None:
     from tests.providers.test_gemini import _sse
 
     bodies = []
@@ -221,7 +221,9 @@ def matrix_app(
         ("responses", "sdk_reply"),
     ],
 )
-def test_matrix_requires_the_handler_for_its_protocol(protocol: str, required: str):
+def test_matrix_requires_the_handler_for_its_protocol(
+    protocol: str, required: str
+) -> None:
     def unexpected_request(request: httpx.Request | httpx2.Request) -> Never:
         raise AssertionError("A mismatched handler was invoked")
 
@@ -317,7 +319,9 @@ def response_value(response: httpx.Response, wire: str, streaming: bool):
         {"format": {"type": "json_schema", "schema": "invalid"}},
     ],
 )
-def test_gemini_rejects_invalid_responses_text_controls(text_controls: JsonValue):
+def test_gemini_rejects_invalid_responses_text_controls(
+    text_controls: JsonValue,
+) -> None:
     def unexpected_request(_: httpx.Request) -> Never:
         raise AssertionError("Invalid text controls must be rejected before inference")
 
@@ -348,7 +352,7 @@ def test_gemini_rejects_invalid_responses_text_controls(text_controls: JsonValue
 )
 def test_gemini_preserves_valid_responses_text_controls(
     text_controls: JsonValue, expected_config: JsonObject
-):
+) -> None:
     from tests.providers.test_gemini import _sse
 
     sent: list[JsonObject] = []
@@ -375,7 +379,7 @@ def test_gemini_preserves_valid_responses_text_controls(
 @pytest.mark.parametrize("finish_reason", ["STOP", 1, 1.0])
 def test_gemini_tool_call_survives_compatible_candidate_fields(
     streaming: bool, finish_reason: str | int | float
-):
+) -> None:
     events = source_events("gemini")
     candidate = object_array(events[0]["candidates"])[0]
     candidate["index"] = 0.0
@@ -403,7 +407,7 @@ def test_gemini_tool_call_survives_compatible_candidate_fields(
     )
 
 
-def test_gemini_backed_chat_rejects_nonstring_tool_result_id():
+def test_gemini_backed_chat_rejects_nonstring_tool_result_id() -> None:
     def unexpected_request(_: httpx.Request) -> Never:
         raise AssertionError("Invalid tool history reached the upstream provider")
 
@@ -442,7 +446,7 @@ def test_gemini_backed_chat_rejects_nonstring_tool_result_id():
 )
 def test_responses_text_translation_preserves_provider_index_encodings(
     wire: str, index_case: str, index_value: JsonValue
-):
+) -> None:
     events = text_events("responses", "Hello")
     if index_case == "unused":
         events[0]["output_index"] = None
@@ -494,7 +498,7 @@ def test_responses_text_translation_preserves_provider_index_encodings(
 @pytest.mark.parametrize("empty_output", [{}, ""])
 def test_native_responses_preserves_lifecycle_with_empty_output(
     snapshot: str, empty_output: JsonValue
-):
+) -> None:
     events = text_events("responses", "Hello")
     if snapshot == "response.failed":
         events[-1]["type"] = snapshot
@@ -537,7 +541,9 @@ def test_native_responses_preserves_lifecycle_with_empty_output(
 
 @pytest.mark.parametrize("wire", ["chat", "gemini", "messages", "responses"])
 @pytest.mark.parametrize("empty_parts", [{}, ""])
-def test_gemini_finishes_with_empty_provider_parts(wire: str, empty_parts: JsonValue):
+def test_gemini_finishes_with_empty_provider_parts(
+    wire: str, empty_parts: JsonValue
+) -> None:
     events = [
         {
             "candidates": [
@@ -577,7 +583,9 @@ def test_gemini_finishes_with_empty_provider_parts(wire: str, empty_parts: JsonV
 @pytest.mark.parametrize(
     "event_type", ["message_start", "message_delta", "message_stop"]
 )
-def test_messages_lifecycle_ignores_unused_block_index(wire: str, event_type: str):
+def test_messages_lifecycle_ignores_unused_block_index(
+    wire: str, event_type: str
+) -> None:
     events = text_events("messages", "Hello")
     event = next(event for event in events if event["type"] == event_type)
     event["index"] = None
@@ -693,7 +701,7 @@ def reply_history(value: JsonObject, wire: str):
 )
 def test_all_sixteen_paths_replay_native_state_and_tool_results(
     protocol: str, wire: str, streaming: bool
-):
+) -> None:
     bodies = []
 
     def reply(request: httpx.Request | httpx2.Request):

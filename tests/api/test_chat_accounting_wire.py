@@ -129,7 +129,7 @@ async def consume(body: AsyncIterator[StreamOutput], wire: WireProtocol, public:
 @pytest.mark.parametrize("tools", [False, True])
 async def test_accounting_retains_usage_and_exactly_once_completion(
     wire: WireProtocol, public: bool, tools: bool
-):
+) -> None:
     events = source_events(tools)
     # Repeated accounting must not reseal calls or add usage totals.
     events.append(deepcopy(events[-1]))
@@ -274,7 +274,7 @@ async def test_accounting_retains_usage_and_exactly_once_completion(
 @pytest.mark.parametrize("failure", ["content", "error"])
 async def test_late_semantic_output_is_not_accounting_or_another_generation(
     wire: WireProtocol, public: bool, failure: str
-):
+) -> None:
     events = source_events(True)
     if failure == "content":
         object_payload(object_array(events[-1]["choices"])[0]["delta"])["content"] = (

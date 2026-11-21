@@ -9,7 +9,7 @@ def event(kind: str, **data: JsonValue) -> tuple[str, JsonObject]:
     return kind, {"type": kind, **data}
 
 
-def test_stopped_tool_waits_for_successful_message_reason():
+def test_stopped_tool_waits_for_successful_message_reason() -> None:
     buffer = MessagesToolCallBuffer()
     start = event(
         "content_block_start",
@@ -29,7 +29,7 @@ def test_stopped_tool_waits_for_successful_message_reason():
 
 
 @pytest.mark.parametrize("reason", ["max_tokens", "refusal", "pause_turn"])
-def test_truncation_discards_stopped_tool_and_releases_later_text(reason: str):
+def test_truncation_discards_stopped_tool_and_releases_later_text(reason: str) -> None:
     buffer = MessagesToolCallBuffer()
     buffer.feed(
         *event(
@@ -47,7 +47,7 @@ def test_truncation_discards_stopped_tool_and_releases_later_text(reason: str):
     assert buffer.feed(*terminal) == [(text,), (terminal,)]
 
 
-def test_failure_does_not_promote_stopped_tool():
+def test_failure_does_not_promote_stopped_tool() -> None:
     buffer = MessagesToolCallBuffer()
     buffer.feed(
         *event(
@@ -60,7 +60,7 @@ def test_failure_does_not_promote_stopped_tool():
     assert buffer.abandon() == []
 
 
-def test_confirmed_tool_cannot_emit_late_argument_fragments():
+def test_confirmed_tool_cannot_emit_late_argument_fragments() -> None:
     buffer = MessagesToolCallBuffer()
     buffer.feed(
         *event(
@@ -81,7 +81,7 @@ def test_confirmed_tool_cannot_emit_late_argument_fragments():
         )
 
 
-def test_confirmed_messages_tools_cannot_share_an_execution_id():
+def test_confirmed_messages_tools_cannot_share_an_execution_id() -> None:
     buffer = MessagesToolCallBuffer()
     for index in (0, 1):
         buffer.feed(
@@ -101,7 +101,7 @@ def test_confirmed_messages_tools_cannot_share_an_execution_id():
         buffer.feed(*event("message_delta", delta={"stop_reason": "tool_use"}))
 
 
-def test_native_messages_index_bookkeeping_has_a_fixed_record_bound():
+def test_native_messages_index_bookkeeping_has_a_fixed_record_bound() -> None:
     from free_claude_code.core.anthropic.native_stream import MessagesBlockIndexMap
     from free_claude_code.core.tool_call_buffer import (
         MAX_PENDING_RECORDS,

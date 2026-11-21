@@ -106,7 +106,7 @@ async def _messages_path(
 )
 async def test_stopped_first_messages_event_releases_admission(
     route: str, terminal: str, max_attempts: int, probe: bool
-):
+) -> None:
     stopped: JsonObject = {"type": terminal}
     if terminal == "message_delta":
         stopped["delta"] = {"stop_reason": "end_turn"}
@@ -137,7 +137,7 @@ async def test_stopped_first_messages_event_releases_admission(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ["native", "messages", "responses"])
-async def test_unstopped_first_messages_event_still_retries(route: str):
+async def test_unstopped_first_messages_event_still_retries(route: str) -> None:
     def respond(ordinal: int) -> tuple[int, JsonObject | list[JsonObject]]:
         return 200, (
             [{"type": "message_delta", "delta": {"stop_reason": None}}]
@@ -161,7 +161,7 @@ async def test_unstopped_first_messages_event_still_retries(route: str):
 @pytest.mark.parametrize("terminal", ["response.completed", "response.incomplete"])
 async def test_stopped_first_responses_event_releases_admission(
     wire: str, terminal: str
-):
+) -> None:
     event: JsonObject = {
         "type": terminal,
         "response": {"status": terminal.split(".")[1], "output": []},
@@ -201,7 +201,9 @@ async def test_stopped_first_responses_event_releases_admission(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ["native", "messages", "responses"])
-async def test_stopped_messages_cannot_close_another_executions_recovery(route: str):
+async def test_stopped_messages_cannot_close_another_executions_recovery(
+    route: str,
+) -> None:
     leader = None
 
     class ConcurrentWire(Wire):

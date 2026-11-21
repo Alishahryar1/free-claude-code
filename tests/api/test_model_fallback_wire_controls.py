@@ -52,7 +52,7 @@ from tests.wire_payload import (
 @pytest.mark.parametrize("effort", FALLBACK_REASONING_PREFERENCES)
 async def test_classifier_fallback_keeps_manual_thinking_compatible(
     effort: ReasoningPreference,
-):
+) -> None:
     captured = []
 
     def reply(request: httpx.Request):
@@ -107,7 +107,7 @@ async def test_classifier_fallback_keeps_manual_thinking_compatible(
 @pytest.mark.parametrize("effort", ["off", "low", "high", "max"])
 async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
     wire_api: WireProtocol, egress: str, effort: str
-):
+) -> None:
     captured = []
 
     def reply(request: httpx2.Request):
@@ -215,7 +215,7 @@ async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
 @pytest.mark.parametrize("wire_api", ["messages", "responses"])
 async def test_candidate_efforts_survive_retry_and_continuation(
     monkeypatch: pytest.MonkeyPatch, wire_api: WireProtocol
-):
+) -> None:
     bodies = []
     attempts = {"primary": 0, "low": 0, "inherited": 0}
 

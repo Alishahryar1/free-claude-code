@@ -20,7 +20,7 @@ from tests.wire_payload import array_payload, object_payload, response_object
 @pytest.mark.parametrize("source", ["managed", "process", "both"])
 def test_retired_url_cannot_override_cloud_endpoint(
     provider_id: str, retired_key: str, source: str
-):
+) -> None:
     descriptor = PROVIDER_CATALOG[provider_id]
     assert descriptor.credential_env is not None
     managed = {descriptor.credential_env: "test-key"}
@@ -35,7 +35,7 @@ def test_retired_url_cannot_override_cloud_endpoint(
     assert config.api_key == "test-key"
 
 
-def test_admin_exposes_only_resource_region_and_local_base_urls():
+def test_admin_exposes_only_resource_region_and_local_base_urls() -> None:
     with TestClient(
         create_test_app(), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)
     ) as client:

@@ -37,7 +37,7 @@ def native_text(text: str, complete: bool):
 @pytest.mark.parametrize(("source", "wire"), PAIRS)
 def test_truncated_text_continues_without_duplicate_output(
     source: str, wire: str, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     bodies = []
 
     def reply(request: httpx.Request | httpx2.Request):
@@ -96,7 +96,9 @@ def test_truncated_text_continues_without_duplicate_output(
         {"role": "user", "content": [{"type": "input_text"}]},
     ],
 )
-def test_malformed_responses_history_is_rejected_before_native_gemini(item: JsonObject):
+def test_malformed_responses_history_is_rejected_before_native_gemini(
+    item: JsonObject,
+) -> None:
     calls = []
 
     def reply(request: httpx.Request):
@@ -161,7 +163,7 @@ def test_malformed_responses_history_is_rejected_before_native_gemini(item: Json
 )
 def test_unsupported_native_gemini_controls_fail_before_inference(
     path: str, body: JsonObject
-):
+) -> None:
     calls = []
 
     def reply(request: httpx.Request):
@@ -183,7 +185,7 @@ def test_unsupported_native_gemini_controls_fail_before_inference(
 )
 def test_native_gemini_structured_output_never_continues_partial_json(
     config: JsonObject, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     bodies = []
 
     def reply(request: httpx.Request):

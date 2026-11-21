@@ -23,7 +23,7 @@ from tests.wire_payload import object_payload, response_object, string_payload
 @pytest.mark.parametrize("quota", ["itpm", "tpm"])
 def test_groq_quota_failure_reaches_clients_after_correction(
     wire: str, stream: bool, quota: str
-):
+) -> None:
     provider = _provider()
     error = (
         _status_error(detail=_detail(_ITPM_MESSAGE))

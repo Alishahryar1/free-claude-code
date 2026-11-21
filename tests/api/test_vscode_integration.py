@@ -37,7 +37,7 @@ def integration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def test_routes_read_actual_file_connect_and_disconnect(
     integration: tuple[TestClient, Path, ApplicationRuntime],
-):
+) -> None:
     client, path, _ = integration
     assert response_object(client.get(ROOT))["connected"] is False
     response = client.post(f"{ROOT}/connect")
@@ -69,7 +69,7 @@ def test_routes_read_actual_file_connect_and_disconnect(
 )
 def test_connection_status_ignores_global_onboarding(
     integration: tuple[TestClient, Path, ApplicationRuntime], source: str | None
-):
+) -> None:
     client, path, _ = integration
     assert client.post(f"{ROOT}/connect").status_code == 200
     state_path = path.parent / ".claude.json"
@@ -89,7 +89,7 @@ def test_connection_status_ignores_global_onboarding(
 @pytest.mark.parametrize("field", ["vscode_settings", "claude_state"])
 def test_status_reports_resolved_file_paths_without_creating_files(
     integration: tuple[TestClient, Path, ApplicationRuntime], field: str
-):
+) -> None:
     client, path, _ = integration
     state_path = path.parent / ".claude.json"
     result = client.get(ROOT)
@@ -117,7 +117,7 @@ def test_status_reports_resolved_file_paths_without_creating_files(
 @pytest.mark.parametrize("target", ["settings", "state"])
 def test_invalid_file_returns_safe_uncached_error(
     integration: tuple[TestClient, Path, ApplicationRuntime], action: str, target: str
-):
+) -> None:
     client, path, _ = integration
     source = '{"integration-secret": malformed}'
     if target == "state":
@@ -141,7 +141,7 @@ def test_local_admin_security_applies(
     integration: tuple[TestClient, Path, ApplicationRuntime],
     action: str,
     headers: dict[str, str],
-):
+) -> None:
     client, path, _ = integration
     response = client.request(
         "GET" if not action else "POST", ROOT + action, headers=headers
@@ -152,7 +152,7 @@ def test_local_admin_security_applies(
 
 def test_remote_client_is_rejected(
     integration: tuple[TestClient, Path, ApplicationRuntime],
-):
+) -> None:
     client, path, _ = integration
     with TestClient(
         client.app, base_url="http://127.0.0.1", client=("192.0.2.1", 50000)
@@ -164,7 +164,7 @@ def test_remote_client_is_rejected(
 def test_io_failure_returns_safe_error(
     integration: tuple[TestClient, Path, ApplicationRuntime],
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     client, _, _ = integration
 
     def fail(*args: object):
@@ -181,7 +181,7 @@ def test_connect_partial_write_is_retryable(
     integration: tuple[TestClient, Path, ApplicationRuntime],
     monkeypatch: pytest.MonkeyPatch,
     failed_file: str,
-):
+) -> None:
     client, path, _ = integration
     state = claude_onboarding.state_path()
     path.write_text('{"keep":true}')
@@ -206,7 +206,7 @@ def test_connect_partial_write_is_retryable(
 
 def test_invalid_vscode_preflight_does_not_complete_onboarding(
     integration: tuple[TestClient, Path, ApplicationRuntime],
-):
+) -> None:
     client, path, _ = integration
     path.write_text('{"claudeCode.environmentVariables":{}}')
     state = claude_onboarding.state_path()
@@ -218,7 +218,7 @@ def test_invalid_vscode_preflight_does_not_complete_onboarding(
 def test_connection_status_does_not_resolve_global_state(
     integration: tuple[TestClient, Path, ApplicationRuntime],
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     client, _, _ = integration
     assert client.post(f"{ROOT}/connect").status_code == 200
     state = claude_onboarding.state_path()
@@ -238,7 +238,7 @@ def test_connection_status_does_not_resolve_global_state(
 
 def test_pending_restart_and_shutdown_do_not_write(
     integration: tuple[TestClient, Path, ApplicationRuntime],
-):
+) -> None:
     client, path, runtime = integration
     runtime._pending_fields = ["PORT"]
     assert client.post(f"{ROOT}/connect").status_code == 503

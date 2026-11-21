@@ -8,7 +8,7 @@ from tests.api.support import create_test_app
 
 
 @pytest.mark.asyncio
-async def test_local_provider_results_complete_independently():
+async def test_local_provider_results_complete_independently() -> None:
     app = create_test_app()
     entered, release = asyncio.Event(), asyncio.Event()
 
@@ -43,7 +43,7 @@ async def test_local_provider_results_complete_independently():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider_id", ["openai", "unknown"])
-async def test_nonlocal_provider_status_is_rejected(provider_id: str):
+async def test_nonlocal_provider_status_is_rejected(provider_id: str) -> None:
     app = create_test_app()
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 50000)),

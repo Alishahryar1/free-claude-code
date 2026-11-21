@@ -218,7 +218,7 @@ def completion_response():
     )
 
 
-def test_init(lmstudio_config: ProviderConfig):
+def test_init(lmstudio_config: ProviderConfig) -> None:
     """Test provider initialization."""
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
@@ -230,7 +230,7 @@ def test_init(lmstudio_config: ProviderConfig):
         mock_openai.assert_called_once()
 
 
-def test_default_base_url_constant():
+def test_default_base_url_constant() -> None:
     assert LMSTUDIO_DEFAULT_BASE == "http://localhost:1234/v1"
 
 
@@ -238,7 +238,7 @@ def test_default_base_url_constant():
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_context_metadata_wait_keeps_event_loop_responsive(
     lmstudio_provider: LMStudioProvider, wire: str
-):
+) -> None:
     events = []
     loop = asyncio.get_running_loop()
     response = httpx.Response(
@@ -278,7 +278,7 @@ async def test_context_metadata_wait_keeps_event_loop_responsive(
     assert events == ["peer ran", "metadata returned"]
 
 
-def test_build_request_body_basic(lmstudio_provider: LMStudioProvider):
+def test_build_request_body_basic(lmstudio_provider: LMStudioProvider) -> None:
     req = make_request()
     body = lmstudio_provider._chat._build_request_body(req)
 
@@ -288,7 +288,7 @@ def test_build_request_body_basic(lmstudio_provider: LMStudioProvider):
 
 def test_adaptive_client_reasoning_uses_documented_named_effort(
     lmstudio_provider: LMStudioProvider,
-):
+) -> None:
     req = make_request()
 
     body = lmstudio_provider._chat._build_request_body(req, reasoning=REASONING_ON)
@@ -299,7 +299,7 @@ def test_adaptive_client_reasoning_uses_documented_named_effort(
 
 def test_exact_client_budget_is_not_derived_from_output_tokens(
     lmstudio_provider: LMStudioProvider,
-):
+) -> None:
     req = make_request(max_tokens=8192)
 
     body = lmstudio_provider._chat._build_request_body(
@@ -317,7 +317,7 @@ def test_exact_client_budget_is_not_derived_from_output_tokens(
 
 def test_build_request_body_never_replays_prior_thinking(
     lmstudio_provider: LMStudioProvider,
-):
+) -> None:
     """Retain prior thinking as ordinary context without a reasoning role."""
     req = make_request(
         messages=[
@@ -347,7 +347,7 @@ def test_build_request_body_never_replays_prior_thinking(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_startup_builds_before_context_budget_and_preserves_policy(
     lmstudio_provider: LMStudioProvider, wire: str
-):
+) -> None:
     request = input_request(wire)
     calls: list[tuple[str, ReasoningPolicy | JsonObject]] = []
     name = (
@@ -405,7 +405,7 @@ async def test_startup_builds_before_context_budget_and_preserves_policy(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 def test_startup_conversion_failure_skips_context_budget(
     lmstudio_provider: LMStudioProvider, wire: str
-):
+) -> None:
     request = input_request(wire)
     conversion_error = InvalidRequestError("invalid request conversion")
 
@@ -429,7 +429,7 @@ def test_startup_conversion_failure_skips_context_budget(
 @pytest.mark.parametrize("wire", ["messages", "responses", "gemini"])
 async def test_context_rejection_releases_admission_without_generation(
     lmstudio_provider: LMStudioProvider, wire: str
-):
+) -> None:
     request = input_request(wire)
     with (
         patch.object(
@@ -456,7 +456,7 @@ async def test_context_rejection_releases_admission_without_generation(
 @pytest.mark.parametrize("wire", ["messages", "responses", "gemini"])
 async def test_continuation_prefix_counts_before_generation(
     lmstudio_provider: LMStudioProvider, wire: str
-):
+) -> None:
     request = input_request(wire)
     original = request.model_dump(mode="json")
     with (
@@ -494,7 +494,7 @@ async def test_continuation_prefix_counts_before_generation(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_cancelling_primary_context_validation_closes_lookup(
     wire: str,
-):
+) -> None:
     body = GatedBody()
     requests = []
 
@@ -535,7 +535,7 @@ async def test_cancelling_primary_context_validation_closes_lookup(
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_text(lmstudio_provider: LMStudioProvider):
+async def test_stream_messages_text(lmstudio_provider: LMStudioProvider) -> None:
     """Text content deltas are emitted through the shared OpenAI-chat provider."""
     req = make_request()
 
@@ -572,7 +572,7 @@ async def test_stream_messages_text(lmstudio_provider: LMStudioProvider):
 @pytest.mark.asyncio
 async def test_stream_messages_passes_exact_reasoning_budget_via_extra_body(
     lmstudio_provider: LMStudioProvider,
-):
+) -> None:
     req = make_request()
     policy = ReasoningPolicy.on(
         effort=ReasoningEffort.HIGH,
@@ -614,7 +614,7 @@ async def test_stream_messages_passes_exact_reasoning_budget_via_extra_body(
 
 
 @pytest.mark.asyncio
-async def test_cleanup(lmstudio_provider: LMStudioProvider):
+async def test_cleanup(lmstudio_provider: LMStudioProvider) -> None:
     assert not lmstudio_provider._client.is_closed()
     await lmstudio_provider.cleanup()
     assert lmstudio_provider._client.is_closed()
@@ -627,7 +627,7 @@ async def test_cleanup(lmstudio_provider: LMStudioProvider):
 @pytest.mark.asyncio
 async def test_validate_context_budget_noop_when_context_length_unknown(
     lmstudio_provider: LMStudioProvider,
-):
+) -> None:
     """No LM Studio /api/v0/models data available -> validation is a no-op (fail open)."""
     with patch.object(
         lmstudio_provider, "_loaded_context_length", new=AsyncMock(return_value=None)
@@ -639,7 +639,7 @@ async def test_validate_context_budget_noop_when_context_length_unknown(
 @pytest.mark.parametrize("words", [1, 80_000])
 async def test_validate_context_budget_allows_request_under_budget(
     lmstudio_provider: LMStudioProvider, words: int
-):
+) -> None:
     with patch.object(
         lmstudio_provider, "_loaded_context_length", new=AsyncMock(return_value=100_000)
     ):
@@ -651,7 +651,7 @@ async def test_validate_context_budget_allows_request_under_budget(
 @pytest.mark.asyncio
 async def test_validate_context_budget_rejects_request_over_90_percent(
     lmstudio_provider: LMStudioProvider,
-):
+) -> None:
     with (
         patch.object(
             lmstudio_provider,
@@ -674,7 +674,7 @@ async def test_validate_context_budget_rejects_request_over_90_percent(
 @pytest.mark.asyncio
 async def test_loaded_context_length_reads_max_across_loaded_models(
     lmstudio_provider: LMStudioProvider,
-):
+) -> None:
     response = MagicMock()
     response.raise_for_status = MagicMock()
     response.json.return_value = {
@@ -697,7 +697,7 @@ async def test_loaded_context_length_reads_max_across_loaded_models(
 @pytest.mark.asyncio
 async def test_loaded_context_length_fails_open_on_error(
     lmstudio_provider: LMStudioProvider,
-):
+) -> None:
     with patch.object(
         lmstudio_provider._client,
         "get",
@@ -709,7 +709,7 @@ async def test_loaded_context_length_fails_open_on_error(
 @pytest.mark.asyncio
 async def test_loaded_context_length_is_cached_within_ttl(
     lmstudio_provider: LMStudioProvider,
-):
+) -> None:
     response = MagicMock()
     response.raise_for_status = MagicMock()
     response.json.return_value = {
@@ -740,7 +740,7 @@ async def test_loaded_context_length_is_cached_within_ttl(
 @pytest.mark.parametrize("content_type", [None, "text/plain"])
 async def test_metadata_http_policy_preserves_the_generation_client(
     provider_url: str, metadata_url: str, content_type: str | None
-):
+) -> None:
     requests = []
 
     def handler(request: httpx2.Request):
@@ -792,7 +792,7 @@ async def test_metadata_http_policy_preserves_the_generation_client(
 )
 async def test_metadata_failure_is_cached_without_retry_and_allows_generation(
     failure: str,
-):
+) -> None:
     requests = []
 
     def handler(request: httpx2.Request):
@@ -832,7 +832,7 @@ async def test_metadata_failure_is_cached_without_retry_and_allows_generation(
 @pytest.mark.asyncio
 async def test_context_cache_expires_from_lookup_completion(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     from types import SimpleNamespace
 
     now = 0.0
@@ -858,7 +858,7 @@ async def test_context_cache_expires_from_lookup_completion(
 
 
 @pytest.mark.asyncio
-async def test_concurrent_requests_share_lookup_but_validate_their_own_prompt():
+async def test_concurrent_requests_share_lookup_but_validate_their_own_prompt() -> None:
     body = GatedBody()
     calls = 0
 
@@ -894,7 +894,7 @@ async def test_concurrent_requests_share_lookup_but_validate_their_own_prompt():
 @pytest.mark.parametrize("cancel_owner", [False, True])
 async def test_cancelled_context_lookup_does_not_poison_other_requests(
     cancel_owner: bool,
-):
+) -> None:
     body = GatedBody()
     calls = 0
 
@@ -931,7 +931,7 @@ async def test_cancelled_context_lookup_does_not_poison_other_requests(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_request_cancellation_while_waiting_for_cache_leaves_refresh_running(
     wire: str,
-):
+) -> None:
     body = GatedBody()
     calls = 0
 
@@ -963,7 +963,7 @@ async def test_request_cancellation_while_waiting_for_cache_leaves_refresh_runni
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_closing_validated_stream_closes_upstream_and_releases_admission(
     wire: str,
-):
+) -> None:
     # Cross the transport's 64 KiB holdback before closing a publicly started stream.
     body = GatedBody(
         prefix=completion_chunk(finish_reason=None, content="hello " * 12_000),
@@ -1011,7 +1011,7 @@ async def test_closing_validated_stream_closes_upstream_and_releases_admission(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_context_rejection_before_first_event_allows_fallback(wire: str):
+async def test_context_rejection_before_first_event_allows_fallback(wire: str) -> None:
     requests = []
 
     def handler(request: httpx2.Request):
@@ -1043,7 +1043,7 @@ async def test_context_rejection_before_first_event_allows_fallback(wire: str):
 
 
 @pytest.mark.asyncio
-async def test_context_cache_belongs_to_each_provider_instance():
+async def test_context_cache_belongs_to_each_provider_instance() -> None:
     def callback(request: object):
         return metadata_response(4096)
 

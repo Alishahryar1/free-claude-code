@@ -17,7 +17,7 @@ _KEEP_ALL_THINKING_EDIT = {
 }
 
 
-def test_raw_signed_thinking_keeps_readable_context_outside_opaque_item():
+def test_raw_signed_thinking_keeps_readable_context_outside_opaque_item() -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",

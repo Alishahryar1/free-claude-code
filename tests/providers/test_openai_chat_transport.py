@@ -29,7 +29,7 @@ from tests.wire_payload import object_payload, string_payload
 pytestmark = pytest.mark.asyncio
 
 
-async def test_capture_rejects_stream_in_prepared_body():
+async def test_capture_rejects_stream_in_prepared_body() -> None:
     with pytest.raises(TypeError, match="stream"):
         await capture_openai_chat_wire_body(
             {
@@ -170,7 +170,7 @@ async def test_error_shaped_model_text_is_not_a_protocol_error() -> None:
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_borrowed_client_remains_usable_after_failed_and_successful_turns(
     wire: str,
-):
+) -> None:
     calls = 0
 
     def reply(request: httpx2.Request) -> httpx2.Response:
@@ -199,7 +199,9 @@ async def test_borrowed_client_remains_usable_after_failed_and_successful_turns(
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_cancelled_turn_closes_its_stream_and_releases_admission(wire: str):
+async def test_cancelled_turn_closes_its_stream_and_releases_admission(
+    wire: str,
+) -> None:
     reading = asyncio.Event()
     closed = asyncio.Event()
 

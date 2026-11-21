@@ -14,7 +14,7 @@ def test_failed_acquisition_closes_handle_and_allows_retry(
     monkeypatch: pytest.MonkeyPatch,
     stage: str,
     error_type: type[Exception],
-):
+) -> None:
     lock = interprocess_lock.InterprocessFileLock(tmp_path / "lock")
     opened = []
     failure = error_type("acquisition interrupted")
@@ -45,7 +45,7 @@ def test_failed_acquisition_closes_handle_and_allows_retry(
 
 def test_empty_file_locked_by_another_handle_is_normal_contention(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     if sys.platform == "win32":
         import msvcrt
 

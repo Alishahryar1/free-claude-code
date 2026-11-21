@@ -131,7 +131,7 @@ def _first_then_ok(first: httpx2.Response) -> Reply:
 
 
 @pytest.mark.asyncio
-async def test_output_cap_is_clamped_and_learned_for_the_next_request():
+async def test_output_cap_is_clamped_and_learned_for_the_next_request() -> None:
     bodies: list[JsonObject] = []
     provider = _groq(
         _first_then_ok(_rejected(_CAP, param="max_completion_tokens")), bodies
@@ -146,7 +146,7 @@ async def test_output_cap_is_clamped_and_learned_for_the_next_request():
 
 
 @pytest.mark.asyncio
-async def test_stream_usage_rejection_drops_only_the_usage_option():
+async def test_stream_usage_rejection_drops_only_the_usage_option() -> None:
     bodies: list[JsonObject] = []
     provider = _groq(_first_then_ok(_rejected(_USAGE)), bodies)
     try:
@@ -161,7 +161,7 @@ async def test_stream_usage_rejection_drops_only_the_usage_option():
 
 
 @pytest.mark.asyncio
-async def test_provider_correction_adjusts_the_rejected_field():
+async def test_provider_correction_adjusts_the_rejected_field() -> None:
     bodies: list[JsonObject] = []
     provider = _groq(_first_then_ok(_rejected(_VOCABULARY)), bodies)
     try:
@@ -173,7 +173,7 @@ async def test_provider_correction_adjusts_the_rejected_field():
 
 
 @pytest.mark.asyncio
-async def test_late_provider_correction_runs_after_the_standard_ones():
+async def test_late_provider_correction_runs_after_the_standard_ones() -> None:
     bodies: list[JsonObject] = []
     provider = _groq(
         _first_then_ok(
@@ -193,7 +193,7 @@ async def test_late_provider_correction_runs_after_the_standard_ones():
 
 
 @pytest.mark.asyncio
-async def test_each_correction_is_applied_at_most_once():
+async def test_each_correction_is_applied_at_most_once() -> None:
     bodies: list[JsonObject] = []
     provider = _groq(lambda bodies: _rejected(_USAGE), bodies)
     try:
@@ -207,7 +207,7 @@ async def test_each_correction_is_applied_at_most_once():
 
 
 @pytest.mark.asyncio
-async def test_unrelated_rejection_is_not_corrected():
+async def test_unrelated_rejection_is_not_corrected() -> None:
     bodies: list[JsonObject] = []
     provider = _groq(
         lambda bodies: _rejected("messages: invalid role 'wizard'"), bodies
@@ -222,7 +222,7 @@ async def test_unrelated_rejection_is_not_corrected():
 
 
 @pytest.mark.asyncio
-async def test_in_stream_rejection_without_a_status_is_not_corrected():
+async def test_in_stream_rejection_without_a_status_is_not_corrected() -> None:
     # The SDK raises an in-stream error without an HTTP status, which none of
     # the Chat corrections accept as a validation rejection.
     bodies: list[JsonObject] = []

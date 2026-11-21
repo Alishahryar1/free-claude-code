@@ -44,7 +44,7 @@ from tests.wire_payload import (
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_distinct_native_reasoning_survives_structured_summary(
     wire: WireProtocol,
-):
+) -> None:
     events = _chat_reasoning_events(
         [
             {
@@ -72,7 +72,7 @@ async def test_distinct_native_reasoning_survives_structured_summary(
 
 
 @pytest.mark.asyncio
-async def test_encrypted_only_reasoning_stays_with_its_answer():
+async def test_encrypted_only_reasoning_stays_with_its_answer() -> None:
     details = [{"type": "reasoning.encrypted", "data": "opaque", "index": 0}]
     events = _chat_reasoning_events([{"reasoning_details": details}])
     async with _harness("chat", lambda _: (200, events)) as (send, bodies, _):
@@ -98,7 +98,7 @@ async def test_encrypted_only_reasoning_stays_with_its_answer():
 
 
 @pytest.mark.asyncio
-async def test_late_metadata_uses_open_indices_and_closes_final_text_last():
+async def test_late_metadata_uses_open_indices_and_closes_final_text_last() -> None:
     events = _chat_reasoning_events(
         [
             {
@@ -150,7 +150,7 @@ async def test_late_metadata_uses_open_indices_and_closes_final_text_last():
 @pytest.mark.parametrize("readable", [False, True])
 async def test_legacy_associated_messages_replay_into_every_transport(
     destination: str, readable: bool
-):
+) -> None:
     first: JsonObject = {
         "reasoning_details": [
             {"type": "reasoning.encrypted", "data": "first", "index": 0}
@@ -209,7 +209,7 @@ def _messages_writer():
     return output, reasoning
 
 
-def test_native_thinking_streams_before_late_structured_alias():
+def test_native_thinking_streams_before_late_structured_alias() -> None:
     output, reasoning = _messages_writer()
     early = list(reasoning.events({}, output, native_reasoning="Plan."))
     parsed = parse_sse_text("".join(early))
@@ -278,7 +278,7 @@ def _assert_indexed(events: list[SSEEvent]):
 @pytest.mark.parametrize(
     "terminal", ["normal", "length", "failure", "tool", "continuation"]
 )
-def test_immediate_text_and_late_replay_survive_every_exit(terminal: str):
+def test_immediate_text_and_late_replay_survive_every_exit(terminal: str) -> None:
     output, reasoning = _messages_writer()
     frames = output.start_events() + _readable(reasoning, output)
     frames += output.ensure_text_block()
@@ -337,7 +337,7 @@ def test_immediate_text_and_late_replay_survive_every_exit(terminal: str):
     assert "fcc:history" not in "".join(frames)
 
 
-def test_request_copy_preserves_routing_and_does_not_join_across_messages():
+def test_request_copy_preserves_routing_and_does_not_join_across_messages() -> None:
     origin = ReplayOrigin("test", "chat", "endpoint", "account", "model")
     native: JsonObject = {
         "reasoning_content": "Plan.",
@@ -380,7 +380,7 @@ def test_request_copy_preserves_routing_and_does_not_join_across_messages():
 @pytest.mark.parametrize("committed", [False, True])
 async def test_private_replacement_discards_prior_reasoning_for_any_draft_size(
     wire: WireProtocol, committed: bool
-):
+) -> None:
     prefix = "x" * 66000 if committed else "partial"
     first = _chat_reasoning_events(
         [
@@ -421,7 +421,7 @@ async def test_private_replacement_discards_prior_reasoning_for_any_draft_size(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_first_metadata_after_text_does_not_invent_earlier_reasoning(
     wire: WireProtocol,
-):
+) -> None:
     events = _chat_reasoning_events(
         [
             {"content": "Earlier answer."},

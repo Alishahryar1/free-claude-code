@@ -42,7 +42,7 @@ def _native() -> JsonObject:
     }
 
 
-def test_response_history_roundtrip_across_providers_and_restart():
+def test_response_history_roundtrip_across_providers_and_restart() -> None:
     native = _native()
     item = {
         **native,
@@ -72,7 +72,7 @@ def test_response_history_roundtrip_across_providers_and_restart():
 @pytest.mark.parametrize("protocol", ["responses", "messages", "chat"])
 def test_foreign_readable_reasoning_keeps_context_without_ciphertext(
     protocol: WireProtocol,
-):
+) -> None:
     native: JsonObject = {
         **_native(),
         "summary": [{"type": "summary_text", "text": "Search for the value."}],
@@ -137,7 +137,9 @@ def test_foreign_readable_reasoning_keeps_context_without_ciphertext(
         {"type": "redacted_thinking", "data": "hidden"},
     ],
 )
-def test_messages_native_blocks_are_exact_after_carrier_replay(block: JsonObject):
+def test_messages_native_blocks_are_exact_after_carrier_replay(
+    block: JsonObject,
+) -> None:
     origin = _origin(protocol="messages")
     carrier = encode_replay(ReplayRecord(origin, block))
     public = (
@@ -150,7 +152,7 @@ def test_messages_native_blocks_are_exact_after_carrier_replay(block: JsonObject
     assert result["messages"][0]["content"] == [block]
 
 
-def test_native_replay_connection_is_scoped_but_model_name_is_not_a_rule():
+def test_native_replay_connection_is_scoped_but_model_name_is_not_a_rule() -> None:
     item = {
         **_native(),
         "encrypted_content": encode_replay(ReplayRecord(_origin(), _native())),
@@ -163,7 +165,7 @@ def test_native_replay_connection_is_scoped_but_model_name_is_not_a_rule():
     ]
 
 
-def test_codec_rejects_malformed_and_nonfinite_payloads():
+def test_codec_rejects_malformed_and_nonfinite_payloads() -> None:
     with pytest.raises(HistoryReplayError):
         decode_replay("fcc:history:v1:broken")
     with pytest.raises(HistoryReplayError):
@@ -172,13 +174,15 @@ def test_codec_rejects_malformed_and_nonfinite_payloads():
         )
 
 
-def test_legacy_naked_opaque_history_is_tried_unchanged():
+def test_legacy_naked_opaque_history_is_tried_unchanged() -> None:
     saved = {"input": [_native()]}
     assert prepare_history(saved, _origin("other")) == saved
 
 
 @pytest.mark.parametrize("native_text", ["Full reasoning.", "Short summary."])
-def test_legacy_chat_replay_materializes_all_readable_thinking_once(native_text: str):
+def test_legacy_chat_replay_materializes_all_readable_thinking_once(
+    native_text: str,
+) -> None:
     native: JsonObject = {
         "reasoning_content": native_text,
         "reasoning_details": [
@@ -212,7 +216,9 @@ def test_legacy_chat_replay_materializes_all_readable_thinking_once(native_text:
     "thinking",
     ["  Read first.\nThen edit.  ", "[Earlier reasoning]\nOriginal text.", ""],
 )
-def test_plain_reasoning_context_preserves_original_text_and_history(thinking: str):
+def test_plain_reasoning_context_preserves_original_text_and_history(
+    thinking: str,
+) -> None:
     body = {
         "messages": [
             {"role": "assistant", "content": "Answer.", "reasoning_content": thinking},
@@ -252,7 +258,7 @@ def _associated(
 
 
 @pytest.mark.parametrize("readable", [False, True])
-def test_late_replay_replaces_snapshot_at_original_position(readable: bool):
+def test_late_replay_replaces_snapshot_at_original_position(readable: bool) -> None:
     anchor = (
         {
             "type": "thinking",
@@ -289,7 +295,9 @@ def test_late_replay_replaces_snapshot_at_original_position(readable: bool):
 
 
 @pytest.mark.parametrize("part", ["anchor", "final"])
-def test_unpaired_replay_preserves_available_data(part: Literal["anchor", "final"]):
+def test_unpaired_replay_preserves_available_data(
+    part: Literal["anchor", "final"],
+) -> None:
     resolved = resolve_messages_replay(
         [{"type": "redacted_thinking", "data": _associated(part, "available")}]
     )
@@ -314,7 +322,7 @@ def test_unpaired_replay_preserves_available_data(part: Literal["anchor", "final
         "final_in_thinking",
     ],
 )
-def test_conflicting_replay_associations_are_rejected(case: str):
+def test_conflicting_replay_associations_are_rejected(case: str) -> None:
     anchor = {
         "type": "thinking",
         "thinking": "plan",
@@ -341,7 +349,7 @@ def test_conflicting_replay_associations_are_rejected(case: str):
         resolve_messages_replay(blocks)
 
 
-def test_unrelated_native_and_older_replay_blocks_are_unchanged():
+def test_unrelated_native_and_older_replay_blocks_are_unchanged() -> None:
     blocks = [
         {"type": "thinking", "thinking": "native", "signature": "upstream-signature"},
         {

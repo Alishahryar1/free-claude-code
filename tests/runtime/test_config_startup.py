@@ -18,7 +18,7 @@ from tests.runtime.test_application_runtime import _settings
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
 @pytest.mark.parametrize("fail", [False, True])
-async def test_shutdown_drains_initialization_worker(cancel: bool, fail: bool):
+async def test_shutdown_drains_initialization_worker(cancel: bool, fail: bool) -> None:
     loop = asyncio.get_running_loop()
     previous_handler = loop.get_exception_handler()
     unhandled_errors = []
@@ -95,7 +95,7 @@ async def test_shutdown_drains_initialization_worker(cancel: bool, fail: bool):
 
 
 @pytest.mark.asyncio
-async def test_closed_runtime_cannot_start_another_configuration_writer():
+async def test_closed_runtime_cannot_start_another_configuration_writer() -> None:
     store = ManagedConfigStore()
     runtime = ApplicationRuntime(
         ProviderRuntimeManager(_settings("nvidia_nim/old")),

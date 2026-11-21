@@ -9,7 +9,7 @@ from free_claude_code.core.tool_call_buffer import (
 )
 
 
-def test_parallel_ready_prefix_preserves_source_order():
+def test_parallel_ready_prefix_preserves_source_order() -> None:
     buffer = OrderedToolCallBuffer[str]()
     buffer.reserve("a", "A")
     buffer.append("text")
@@ -22,7 +22,7 @@ def test_parallel_ready_prefix_preserves_source_order():
     assert buffer.budget.records == 0
 
 
-def test_failure_discards_only_unfinished_slots():
+def test_failure_discards_only_unfinished_slots() -> None:
     buffer = OrderedToolCallBuffer[str]()
     buffer.reserve("a", "unfinished")
     buffer.append("text")
@@ -32,7 +32,7 @@ def test_failure_discards_only_unfinished_slots():
     assert list(buffer.drain()) == ["text", "B"]
 
 
-def test_pending_payload_and_record_limits_never_release_fragments():
+def test_pending_payload_and_record_limits_never_release_fragments() -> None:
     budget = RetentionBudget(max_bytes=4, max_records=2)
     buffer = OrderedToolCallBuffer[str](budget)
     buffer.reserve("a", "A", size=2)
@@ -48,7 +48,7 @@ def test_pending_payload_and_record_limits_never_release_fragments():
         buffer.grow("a", 0)
 
 
-def test_drain_does_not_retain_completed_payloads():
+def test_drain_does_not_retain_completed_payloads() -> None:
     buffer = OrderedToolCallBuffer[str]()
     for index in range(20):
         buffer.reserve(index, "call", size=10)

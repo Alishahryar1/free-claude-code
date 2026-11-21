@@ -50,7 +50,7 @@ def test_local_tool_event_order_linked_results_and_usage(
     expected_end: JsonObject,
     tool_name: str,
     failed: bool,
-):
+) -> None:
     context = ServerToolResponseContext(
         message_id="msg_local",
         tool_id="srvtoolu_local",

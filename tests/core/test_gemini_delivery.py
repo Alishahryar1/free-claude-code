@@ -18,7 +18,7 @@ def event(*parts: JsonObject, finish: str | None = None) -> JsonObject:
     return {"responseId": "old", "modelVersion": "public", "candidates": [candidate]}
 
 
-def test_delivered_gemini_text_and_complete_calls_have_native_evidence():
+def test_delivered_gemini_text_and_complete_calls_have_native_evidence() -> None:
     delivered = DeliveredResponse("gemini")
     delivered.observe(event({"text": "answer"}, {"text": "thought", "thought": True}))
     delivered.observe(event({"functionCall": {"id": "a", "name": "read", "args": {}}}))
@@ -37,7 +37,7 @@ def test_delivered_gemini_text_and_complete_calls_have_native_evidence():
     )
 
 
-def test_gemini_continuation_removes_overlap_without_fabricating_usage():
+def test_gemini_continuation_removes_overlap_without_fabricating_usage() -> None:
     delivered = DeliveredResponse("gemini")
     delivered.observe(event({"text": "Hello world"}))
     continuation = ContinuationStream(delivered)
@@ -51,7 +51,7 @@ def test_gemini_continuation_removes_overlap_without_fabricating_usage():
     assert "usageMetadata" not in terminal
 
 
-def test_gemini_json_aggregation_preserves_thoughts_and_late_signature():
+def test_gemini_json_aggregation_preserves_thoughts_and_late_signature() -> None:
     aggregate = GeminiResponseAccumulator()
     aggregate.feed(event({"text": "a"}))
     aggregate.feed(event({"text": "b"}))

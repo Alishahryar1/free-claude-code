@@ -92,7 +92,7 @@ def _exercise_server_logging(
 @pytest.mark.parametrize("level", ["INFO", "WARNING"])
 def test_server_logs_reach_file_once_per_start(
     tmp_path: Path, console: bool, level: str, without_streams: bool
-):
+) -> None:
     path = tmp_path / "server.log"
     result = subprocess.run(
         [

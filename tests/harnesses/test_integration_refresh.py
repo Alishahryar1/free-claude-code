@@ -33,7 +33,7 @@ base_url = "https://example.com/v1"
 @pytest.mark.parametrize(
     "source", [None, '{"hasCompletedOnboarding":false}', "{invalid"]
 )
-def test_refresh_ignores_global_onboarding(tmp_path: Path, source: str | None):
+def test_refresh_ignores_global_onboarding(tmp_path: Path, source: str | None) -> None:
     settings, state = tmp_path / "settings.json", tmp_path / ".claude.json"
     settings.write_text(json.dumps(OLD_CLAUDE))
     if source is not None:
@@ -45,7 +45,9 @@ def test_refresh_ignores_global_onboarding(tmp_path: Path, source: str | None):
         assert state.read_text() == source
 
 
-def test_refresh_upgrades_original_claude_directly_and_only_once(tmp_path: Path):
+def test_refresh_upgrades_original_claude_directly_and_only_once(
+    tmp_path: Path,
+) -> None:
     settings, state = tmp_path / "settings.json", tmp_path / ".claude.json"
     settings.write_text(json.dumps(OLD_CLAUDE))
     state.write_text('{"theme":"dark"}')
@@ -68,7 +70,9 @@ def test_refresh_upgrades_original_claude_directly_and_only_once(tmp_path: Path)
 
 
 @pytest.mark.parametrize("change", ["missing", "disconnected", "url", "token"])
-def test_refresh_does_not_claim_unrecognized_claude(tmp_path: Path, change: str):
+def test_refresh_does_not_claim_unrecognized_claude(
+    tmp_path: Path, change: str
+) -> None:
     settings, state = tmp_path / "settings.json", tmp_path / ".claude.json"
     document = decode_object(json.dumps(OLD_CLAUDE))
     if change == "disconnected":
@@ -91,7 +95,7 @@ def test_refresh_does_not_claim_unrecognized_claude(tmp_path: Path, change: str)
 
 def test_refresh_claude_retry_finishes_partial_write(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     settings, state = tmp_path / "settings.json", tmp_path / ".claude.json"
     settings.write_text(json.dumps(OLD_CLAUDE))
     before = settings.read_bytes()
@@ -112,7 +116,9 @@ def test_refresh_claude_retry_finishes_partial_write(
     assert claude_integration.configure(settings, URL, TOKEN)["connected"] is True
 
 
-def test_refresh_codex_merges_latest_settings_without_changing_model(tmp_path: Path):
+def test_refresh_codex_merges_latest_settings_without_changing_model(
+    tmp_path: Path,
+) -> None:
     path, catalog = tmp_path / "config.toml", tmp_path / "catalog.json"
     path.write_text(OLD_CODEX)
     assert codex_integration.recognizes_connection(path, URL) is True
@@ -143,7 +149,7 @@ def test_refresh_codex_merges_latest_settings_without_changing_model(tmp_path: P
 )
 def test_refresh_codex_leaves_unrecognized_settings_alone(
     tmp_path: Path, source: str | None
-):
+) -> None:
     path = tmp_path / "config.toml"
     if source is not None:
         path.write_text(source)
@@ -159,7 +165,7 @@ def test_refresh_codex_leaves_unrecognized_settings_alone(
 @pytest.mark.parametrize("integration", ["claude", "codex"])
 def test_refresh_rejects_malformed_input_without_writing(
     tmp_path: Path, integration: str
-):
+) -> None:
     path = tmp_path / "settings"
     path.write_text("{invalid")
     with pytest.raises(ValueError):

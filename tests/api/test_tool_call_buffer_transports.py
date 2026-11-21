@@ -31,7 +31,7 @@ def _tools(wire: str) -> list[JsonObject]:
 @pytest.mark.parametrize("arguments", ['{"path":"x"}', '{"path":', "null"])
 async def test_real_transport_arguments_reach_http_unchanged(
     protocol: str, wire: str, arguments: str
-):
+) -> None:
     async with _harness(
         protocol, lambda _: (200, tool_events(protocol, arguments))
     ) as (send, bodies, _):
@@ -65,7 +65,7 @@ async def test_real_transport_arguments_reach_http_unchanged(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_real_transport_cutoff_cannot_complete_partial_tool(
     protocol: str, wire: str
-):
+) -> None:
     events = tool_events(protocol, "x")
     arguments = '{"path":"' + "x" * 70_000
     if protocol == "chat":
@@ -164,7 +164,9 @@ async def test_real_transport_cutoff_cannot_complete_partial_tool(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_native_signed_thinking_interleaves_with_parallel_tool_calls(wire: str):
+async def test_native_signed_thinking_interleaves_with_parallel_tool_calls(
+    wire: str,
+) -> None:
     events: list[JsonObject] = [
         tool_events("messages", "x")[0],
         {

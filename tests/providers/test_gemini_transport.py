@@ -144,7 +144,7 @@ async def collect(stream: AsyncIterator[StreamOutput]):
 
 
 @pytest.mark.asyncio
-async def test_chat_gemini_stream_preserves_text_identity_and_reported_usage():
+async def test_chat_gemini_stream_preserves_text_identity_and_reported_usage() -> None:
     sent = []
 
     def reply(request: httpx2.Request):
@@ -184,7 +184,9 @@ async def test_chat_gemini_stream_preserves_text_identity_and_reported_usage():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("arguments", ["{", "[]", "null"])
-async def test_chat_gemini_never_releases_invalid_executable_arguments(arguments: str):
+async def test_chat_gemini_never_releases_invalid_executable_arguments(
+    arguments: str,
+) -> None:
     def reply(request: object):
         return chat_response(
             [
@@ -215,7 +217,7 @@ async def test_chat_gemini_never_releases_invalid_executable_arguments(arguments
 
 
 @pytest.mark.asyncio
-async def test_messages_gemini_text_and_native_thinking_replay():
+async def test_messages_gemini_text_and_native_thinking_replay() -> None:
     sent = []
 
     def reply(request: httpx.Request):
@@ -266,7 +268,7 @@ async def test_messages_gemini_text_and_native_thinking_replay():
 
 
 @pytest.mark.asyncio
-async def test_responses_gemini_text_complete_call_and_late_reasoning_replay():
+async def test_responses_gemini_text_complete_call_and_late_reasoning_replay() -> None:
     sent = []
     reasoning = {
         "id": "rs_one",
@@ -356,7 +358,7 @@ async def test_responses_gemini_text_complete_call_and_late_reasoning_replay():
 @pytest.mark.parametrize("first_only_at_terminal", [False, True])
 async def test_responses_gemini_replay_uses_output_order_not_completion_order(
     terminal: str, visible: bool, first_only_at_terminal: bool
-):
+) -> None:
     first = {
         "type": "reasoning",
         "id": "rs_first",
@@ -453,7 +455,7 @@ async def test_responses_gemini_replay_uses_output_order_not_completion_order(
 )
 async def test_responses_gemini_usage_accounts_for_terminal_only_reasoning(
     visible: bool, kind: str, breakdown: int | None, expected: JsonObject
-):
+) -> None:
     item = {
         "type": "reasoning",
         "id": "rs_terminal",
@@ -497,7 +499,7 @@ async def test_responses_gemini_usage_accounts_for_terminal_only_reasoning(
 @pytest.mark.parametrize("same_connection", [False, True])
 async def test_google_replay_survives_client_replacement_and_preserves_edited_args(
     tool_call: bool, same_connection: bool
-):
+) -> None:
     sent = []
     opaque = {"google": {"thought_signature": "native-signed-bytes"}}
 
@@ -609,7 +611,7 @@ async def test_google_replay_survives_client_replacement_and_preserves_edited_ar
 )
 async def test_fragmented_tools_require_object_json_without_schema_coercion(
     protocol: str, arguments: str
-):
+) -> None:
     request = gemini_request(
         tools=[
             {
@@ -656,7 +658,7 @@ async def test_fragmented_tools_require_object_json_without_schema_coercion(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
-async def test_unknown_upstream_function_is_rejected(protocol: str):
+async def test_unknown_upstream_function_is_rejected(protocol: str) -> None:
     async with _harness(
         protocol, lambda _: (200, tool_events(protocol, "{}")), max_attempts=1
     ) as (_, bodies, transport):

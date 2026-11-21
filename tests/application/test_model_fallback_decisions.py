@@ -171,7 +171,7 @@ async def _run(
 
 
 @pytest.mark.asyncio
-async def test_first_candidate_success_never_falls_back():
+async def test_first_candidate_success_never_falls_back() -> None:
     outcome = await _run(ok("a"), ok("b"))
 
     assert outcome == Outcome(opened=[(0, None)], frames=["a"])
@@ -179,7 +179,9 @@ async def test_first_candidate_success_never_falls_back():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("retryable", [True, False])
-async def test_failure_without_context_before_any_delivery_restarts(retryable: bool):
+async def test_failure_without_context_before_any_delivery_restarts(
+    retryable: bool,
+) -> None:
     outcome = await _run(
         open_fails(_failure(NO_CONTEXT, status=400, retryable=retryable)), ok("b")
     )
@@ -193,7 +195,7 @@ async def test_failure_without_context_before_any_delivery_restarts(retryable: b
 
 
 @pytest.mark.asyncio
-async def test_hidden_output_restarts_from_scratch():
+async def test_hidden_output_restarts_from_scratch() -> None:
     outcome = await _run(
         fails_after("a", failure=_failure(CLEAN), release=False), ok("b")
     )
@@ -207,7 +209,7 @@ async def test_hidden_output_restarts_from_scratch():
 
 
 @pytest.mark.asyncio
-async def test_released_output_continues_from_the_delivered_prefix():
+async def test_released_output_continues_from_the_delivered_prefix() -> None:
     outcome = await _run(fails_after("a", failure=_failure(CLEAN)), ok("b"))
 
     assert outcome == Outcome(
@@ -220,7 +222,7 @@ async def test_released_output_continues_from_the_delivered_prefix():
 
 
 @pytest.mark.asyncio
-async def test_each_continuation_carries_the_latest_prefix():
+async def test_each_continuation_carries_the_latest_prefix() -> None:
     outcome = await _run(
         fails_after("a", failure=_failure(CLEAN)),
         fails_after("b", failure=_failure(CLEAN)),
@@ -233,7 +235,7 @@ async def test_each_continuation_carries_the_latest_prefix():
 
 
 @pytest.mark.asyncio
-async def test_released_tool_calls_hand_off_instead_of_falling_back():
+async def test_released_tool_calls_hand_off_instead_of_falling_back() -> None:
     outcome = await _run(
         fails_after("a", failure=_failure(CLEAN)), ok("b"), prefix_calls=True
     )
@@ -260,7 +262,7 @@ async def test_released_tool_calls_hand_off_instead_of_falling_back():
 )
 async def test_unsafe_transitions_raise_without_falling_back(
     source: SourceRecoverySnapshot, release: bool
-):
+) -> None:
     outcome = await _run(
         fails_after("a", failure=_failure(source), release=release), ok("b")
     )
@@ -271,14 +273,14 @@ async def test_unsafe_transitions_raise_without_falling_back(
 
 
 @pytest.mark.asyncio
-async def test_failure_without_context_after_own_delivery_raises():
+async def test_failure_without_context_after_own_delivery_raises() -> None:
     outcome = await _run(fails_after("a", failure=_failure(NO_CONTEXT)), ok("b"))
 
     assert outcome == Outcome(opened=[(0, None)], frames=["a"], raised=502)
 
 
 @pytest.mark.asyncio
-async def test_last_candidate_failure_raises():
+async def test_last_candidate_failure_raises() -> None:
     outcome = await _run(
         fails_after("a", failure=_failure(CLEAN)),
         open_fails(_failure(NO_CONTEXT, status=503)),
@@ -290,7 +292,7 @@ async def test_last_candidate_failure_raises():
 
 
 @pytest.mark.asyncio
-async def test_silent_continuation_failure_without_context_keeps_the_seed():
+async def test_silent_continuation_failure_without_context_keeps_the_seed() -> None:
     # Candidate 1 continues from "a", then fails before producing anything and
     # without stream context. The "a" seed is still valid for candidate 2.
     outcome = await _run(
@@ -312,7 +314,7 @@ async def test_silent_continuation_failure_without_context_keeps_the_seed():
 
 
 @pytest.mark.asyncio
-async def test_continuation_failure_without_context_after_own_output_raises():
+async def test_continuation_failure_without_context_after_own_output_raises() -> None:
     outcome = await _run(
         fails_after("a", failure=_failure(CLEAN)),
         fails_after("b", failure=_failure(NO_CONTEXT, status=429)),
@@ -325,7 +327,7 @@ async def test_continuation_failure_without_context_after_own_output_raises():
 
 
 @pytest.mark.asyncio
-async def test_lmstudio_budget_rejection_of_a_continuation_keeps_the_seed():
+async def test_lmstudio_budget_rejection_of_a_continuation_keeps_the_seed() -> None:
     # LM Studio checks the prepared body against its loaded context before
     # sending. A continuation body carries the delivered prefix, so it can fail
     # that check locally, without stream context, before producing anything.
@@ -393,7 +395,7 @@ async def test_lmstudio_budget_rejection_of_a_continuation_keeps_the_seed():
 
 
 @pytest.mark.asyncio
-async def test_prefix_is_read_only_for_failures_with_stream_evidence():
+async def test_prefix_is_read_only_for_failures_with_stream_evidence() -> None:
     reads: list[str] = []
     outcome = await _run(
         fails_after("a", failure=_failure(CLEAN)),

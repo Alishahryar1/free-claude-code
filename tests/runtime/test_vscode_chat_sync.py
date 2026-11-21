@@ -79,7 +79,7 @@ async def settle(runtime: ApplicationRuntime):
 @pytest.mark.asyncio
 async def test_catalog_updates_connected_file_and_disconnect_stays_removed(
     runtime: ApplicationRuntime,
-):
+) -> None:
     await runtime.connect_vscode_chat()
     await settle(runtime)
     path = vscode.config_path()
@@ -104,7 +104,7 @@ async def test_catalog_updates_connected_file_and_disconnect_stays_removed(
 @pytest.mark.asyncio
 async def test_update_arriving_during_write_is_not_lost(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     await runtime.connect_vscode_chat()
     await settle(runtime)
     entered, release = asyncio.Event(), threading.Event()
@@ -152,7 +152,7 @@ async def test_update_arriving_during_write_is_not_lost(
 @pytest.mark.asyncio
 async def test_bad_file_does_not_fail_catalog_and_disconnect_needs_no_catalog(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     await settle(runtime)
     path = vscode.config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -172,7 +172,9 @@ async def test_bad_file_does_not_fail_catalog_and_disconnect_needs_no_catalog(
 
 
 @pytest.mark.asyncio
-async def test_disconnected_startup_does_not_create_file(runtime: ApplicationRuntime):
+async def test_disconnected_startup_does_not_create_file(
+    runtime: ApplicationRuntime,
+) -> None:
     await settle(runtime)
     assert not vscode.config_path().exists()
 
@@ -181,7 +183,7 @@ async def test_disconnected_startup_does_not_create_file(runtime: ApplicationRun
 @pytest.mark.parametrize("runtime", [True], indirect=True)
 async def test_startup_refreshes_owned_group_and_only_writes_once(
     runtime: ApplicationRuntime,
-):
+) -> None:
     await settle(runtime)
     path = vscode.config_path()
     assert (
@@ -199,7 +201,7 @@ async def test_startup_refreshes_owned_group_and_only_writes_once(
 @pytest.mark.asyncio
 async def test_disconnect_while_refresh_waits_for_ownership_never_reconnects(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     await runtime.connect_vscode_chat()
     await settle(runtime)
     entered, release = pause_next_write(
@@ -218,7 +220,7 @@ async def test_disconnect_while_refresh_waits_for_ownership_never_reconnects(
 @pytest.mark.asyncio
 async def test_replaced_generation_cannot_publish_old_url_or_token(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     await runtime.connect_vscode_chat()
     await settle(runtime)
     entered, release = pause_next_write(
@@ -251,7 +253,7 @@ async def test_replaced_generation_cannot_publish_old_url_or_token(
 @pytest.mark.asyncio
 async def test_codex_publication_failure_does_not_block_vscode(
     runtime: ApplicationRuntime,
-):
+) -> None:
     await runtime.connect_vscode_chat()
     await settle(runtime)
     publisher = MagicMock()

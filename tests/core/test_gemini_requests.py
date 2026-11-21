@@ -47,7 +47,9 @@ def build(value: GeminiRequest, protocol: str):
 
 
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
-def test_direct_builders_preserve_parallel_tool_history_and_schema(protocol: str):
+def test_direct_builders_preserve_parallel_tool_history_and_schema(
+    protocol: str,
+) -> None:
     source = request(
         tools=[
             {
@@ -131,7 +133,7 @@ def test_direct_builders_preserve_parallel_tool_history_and_schema(protocol: str
     )
 
 
-def test_protocol_aliases_and_nulls_do_not_rewrite_arbitrary_json():
+def test_protocol_aliases_and_nulls_do_not_rewrite_arbitrary_json() -> None:
     value = request(
         generation_config={
             "temperature": 0,
@@ -156,18 +158,20 @@ def test_protocol_aliases_and_nulls_do_not_rewrite_arbitrary_json():
         ("responseLogprobs", True),
     ],
 )
-def test_unsupported_generation_fields_are_explicit(field: str, value: JsonValue):
+def test_unsupported_generation_fields_are_explicit(
+    field: str, value: JsonValue
+) -> None:
     with pytest.raises(ValidationError):
         request(generationConfig={field: value})
 
 
 @pytest.mark.parametrize("protocol", ["messages", "responses"])
-def test_destination_does_not_silently_drop_sampling_controls(protocol: str):
+def test_destination_does_not_silently_drop_sampling_controls(protocol: str) -> None:
     with pytest.raises(GeminiConversionError, match="seed"):
         build(request(generationConfig={"seed": 42}), protocol)
 
 
-def test_duplicate_named_calls_without_result_ids_are_not_guessed():
+def test_duplicate_named_calls_without_result_ids_are_not_guessed() -> None:
     value = request(
         contents=[
             {
@@ -194,7 +198,7 @@ def test_duplicate_named_calls_without_result_ids_are_not_guessed():
         build_gemini_chat_request(value)
 
 
-def test_gemini_schema_is_normalized_without_weakening_nullable_constraints():
+def test_gemini_schema_is_normalized_without_weakening_nullable_constraints() -> None:
     value = request(
         generationConfig={
             "responseMimeType": "application/json",
@@ -219,7 +223,7 @@ def test_gemini_schema_is_normalized_without_weakening_nullable_constraints():
     }
 
 
-def test_call_replay_preserves_metadata_only_for_the_selected_connection():
+def test_call_replay_preserves_metadata_only_for_the_selected_connection() -> None:
     origin = ReplayOrigin(
         "google", "chat", "https://example.test", "connection-one", "model"
     )
@@ -275,7 +279,7 @@ def test_call_replay_preserves_metadata_only_for_the_selected_connection():
         decode_bundle(base64.b64encode(b"fcc:gemini-replay:v1:{}").decode())
 
 
-def test_gemini_schema_proto_names_and_string_integers_preserve_constraints():
+def test_gemini_schema_proto_names_and_string_integers_preserve_constraints() -> None:
     assert json_schema(
         {
             "type": "OBJECT",
@@ -293,7 +297,7 @@ def test_gemini_schema_proto_names_and_string_integers_preserve_constraints():
     }
 
 
-def test_conflicting_echoed_replay_bundles_are_not_silently_deduplicated():
+def test_conflicting_echoed_replay_bundles_are_not_silently_deduplicated() -> None:
     origin = ReplayOrigin("test", "responses", "endpoint", "account", "model")
     first = ReplayBundle(
         "same",

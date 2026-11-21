@@ -123,7 +123,7 @@ def assert_winning_tool(result: str, wire: WireProtocol):
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_hidden_tool_cutoff_retries_identical_generation(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         return 200, (
             partial_tool(protocol)
@@ -142,7 +142,7 @@ async def test_hidden_tool_cutoff_retries_identical_generation(
 
 
 @pytest.mark.asyncio
-async def test_raw_native_messages_hidden_cutoff_retries_and_closes_first():
+async def test_raw_native_messages_hidden_cutoff_retries_and_closes_first() -> None:
     bodies = []
     first = Wire([_sse(*partial_tool("messages"))])
     second = Wire([_sse(*tool_events("messages", '{"path":"winning"}'))])
@@ -173,7 +173,9 @@ async def test_raw_native_messages_hidden_cutoff_retries_and_closes_first():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("separator", ["-", "\u2028", "\u2029", "\x85"])
-async def test_raw_native_unicode_metadata_keeps_hidden_retry_eligible(separator: str):
+async def test_raw_native_unicode_metadata_keeps_hidden_retry_eligible(
+    separator: str,
+) -> None:
     abandoned = partial_tool("messages")
     abandoned[0]["message"]["extension"] = "a" + separator + "b"
     first = Wire([_sse(*abandoned)])
@@ -272,7 +274,7 @@ def _rejected_terminal(reason: str | None):
 @pytest.mark.parametrize("reason", ["stop", "length", "tool_calls", "content_filter"])
 async def test_normal_chat_stop_survives_normalization_failure(
     wire: WireProtocol, reason: str, failing_normalizer: object
-):
+) -> None:
     async with _harness(
         "chat",
         lambda bodies: (
@@ -298,7 +300,7 @@ async def test_normal_chat_stop_survives_normalization_failure(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_unstopped_normalization_failure_can_retry(
     wire: WireProtocol, failing_normalizer: object
-):
+) -> None:
     async with _harness(
         "chat",
         lambda bodies: (
@@ -321,7 +323,7 @@ async def test_unstopped_normalization_failure_can_retry(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_replacement_stop_prevents_third_generation(
     wire: WireProtocol, failing_normalizer: object
-):
+) -> None:
     async with _harness(
         "chat",
         lambda bodies: (
@@ -346,7 +348,7 @@ async def test_replacement_stop_prevents_third_generation(
 @pytest.mark.asyncio
 async def test_concurrent_normalized_requests_keep_stop_evidence_independent(
     failing_normalizer: object,
-):
+) -> None:
     attempts = {"stopped": 0, "retry": 0}
 
     def reply(bodies: list[JsonObject]):
@@ -383,7 +385,7 @@ async def test_concurrent_normalized_requests_keep_stop_evidence_independent(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_raw_stop_survives_normalization_and_later_null_and_empty_choices(
     wire: WireProtocol, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     def replace_normalize_stream(
         self: object, stream: OpenAIStreamAdapter[ChatCompletionChunk], body: object
     ):
@@ -455,7 +457,7 @@ def overlapping_tools(protocol: str):
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_complete_call_held_by_partial_call_restarts_on_last_attempt(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     async with _harness(
         protocol,
         lambda bodies: (
@@ -479,7 +481,7 @@ async def test_complete_call_held_by_partial_call_restarts_on_last_attempt(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_hidden_failures_exhaust_one_budget_without_salvage(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     async with _harness(
         protocol,
         lambda _: (200, overlapping_tools(protocol)),
@@ -500,7 +502,7 @@ async def test_hidden_failures_exhaust_one_budget_without_salvage(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_replacement_rejection_before_frames_uses_public_empty_envelope(
     protocol: str, wire: WireProtocol
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         return (
             (200, overlapping_tools(protocol))
@@ -533,7 +535,7 @@ async def test_replacement_rejection_before_frames_uses_public_empty_envelope(
 @pytest.mark.parametrize("retryable", [True, False])
 async def test_typed_upstream_failure_qualifies_before_wire_error(
     protocol: str, wire: WireProtocol, retryable: bool
-):
+) -> None:
     failure = (
         {
             "type": "error",
@@ -582,7 +584,7 @@ async def test_typed_upstream_failure_qualifies_before_wire_error(
 @pytest.mark.parametrize("terminal", ["response.completed", "response.incomplete"])
 async def test_normal_responses_stop_prevents_retry_when_adapter_raises(
     wire: WireProtocol, terminal: str
-):
+) -> None:
     events: list[JsonObject] = [
         *partial_tool("responses"),
         {
@@ -618,7 +620,7 @@ async def test_normal_responses_stop_prevents_retry_when_adapter_raises(
 @pytest.mark.parametrize("stop", ["end_turn", "max_tokens", "refusal", "pause_turn"])
 async def test_messages_normal_stop_with_open_hidden_block_cannot_retry(
     wire: WireProtocol, stop: str
-):
+) -> None:
     events = [
         *partial_tool("messages"),
         {
@@ -638,7 +640,7 @@ async def test_messages_normal_stop_with_open_hidden_block_cannot_retry(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_thinking_behind_abandoned_tool_drains_before_recovery(
     wire: WireProtocol,
-):
+) -> None:
     events = overlapping_tools("messages")
     events += [
         {
@@ -676,7 +678,7 @@ async def test_thinking_behind_abandoned_tool_drains_before_recovery(
 @pytest.mark.parametrize("reason", ["stop", "length", "tool_calls", "content_filter"])
 async def test_normal_chat_finish_survives_later_parser_failure(
     wire: WireProtocol, reason: str, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     feed = _ChatStreamPresenter.feed
 
     def rejected_terminal(self: _ChatStreamPresenter, chunk: ChatCompletionChunk):
@@ -706,7 +708,7 @@ async def test_normal_chat_finish_survives_later_parser_failure(
 @pytest.mark.parametrize(
     "kind", ["text", "thinking", "server_tool_use", "future_block"]
 )
-async def test_raw_native_published_activity_prevents_clean_retry(kind: str):
+async def test_raw_native_published_activity_prevents_clean_retry(kind: str) -> None:
     events = partial_tool("messages")
     events.insert(
         1,
@@ -749,7 +751,7 @@ async def test_raw_native_published_activity_prevents_clean_retry(kind: str):
 @pytest.mark.parametrize("cache_details", ["missing", "null", "zero", "partial"])
 async def test_raw_native_retry_uses_winning_initial_usage_and_final_overrides(
     cache_details: str,
-):
+) -> None:
     first = partial_tool("messages")
     first[0]["message"]["usage"] = {
         "input_tokens": 1,
@@ -825,7 +827,7 @@ async def test_raw_native_retry_uses_winning_initial_usage_and_final_overrides(
 @pytest.mark.parametrize("before_first_read", [False, True])
 async def test_raw_native_cancellation_closes_once_without_replacement(
     before_first_read: bool,
-):
+) -> None:
     reading = asyncio.Event()
     calls = []
     releases = []
@@ -882,7 +884,7 @@ async def test_raw_native_cancellation_closes_once_without_replacement(
 
 
 @pytest.mark.asyncio
-async def test_hidden_retry_keeps_correction_and_uses_its_remaining_budget():
+async def test_hidden_retry_keeps_correction_and_uses_its_remaining_budget() -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 400, {

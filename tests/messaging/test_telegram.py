@@ -54,7 +54,7 @@ def telegram_platform():
         return platform
 
 
-def test_telegram_platform_init_no_token():
+def test_telegram_platform_init_no_token() -> None:
     with patch.dict("os.environ", {}, clear=True):
         platform = _telegram_runtime(bot_token=None)
         assert platform.bot_token is None
@@ -63,7 +63,7 @@ def test_telegram_platform_init_no_token():
 @pytest.mark.asyncio
 async def test_telegram_platform_start_success(
     monkeypatch: pytest.MonkeyPatch, telegram_platform: TelegramRuntime
-):
+) -> None:
     mock_send_message = AsyncMock()
     monkeypatch.setattr(telegram_platform.outbound, "send_message", mock_send_message)
     with patch("telegram.ext.Application.builder") as mock_builder:
@@ -86,7 +86,7 @@ async def test_telegram_platform_start_success(
 
 
 @pytest.mark.asyncio
-async def test_telegram_platform_start_with_proxy():
+async def test_telegram_platform_start_with_proxy() -> None:
     limiter = _limiter_mock()
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
@@ -133,7 +133,7 @@ async def test_telegram_platform_start_with_proxy():
 @pytest.mark.asyncio
 async def test_telegram_platform_send_message_success(
     telegram_platform: TelegramRuntime,
-):
+) -> None:
     mock_bot = AsyncMock()
     mock_msg = MagicMock()
     mock_msg.message_id = 999
@@ -156,7 +156,7 @@ async def test_telegram_platform_send_message_success(
 @pytest.mark.asyncio
 async def test_telegram_platform_edit_message_success(
     telegram_platform: TelegramRuntime,
-):
+) -> None:
     mock_bot = AsyncMock()
     telegram_platform._application = MagicMock()
     telegram_platform._application.bot = mock_bot
@@ -171,7 +171,7 @@ async def test_telegram_platform_edit_message_success(
 @pytest.mark.asyncio
 async def test_telegram_platform_delete_messages_uses_batch_api(
     telegram_platform: TelegramRuntime,
-):
+) -> None:
     mock_bot = AsyncMock()
     telegram_platform._application = MagicMock()
     telegram_platform._application.bot = mock_bot
@@ -188,7 +188,7 @@ async def test_telegram_platform_delete_messages_uses_batch_api(
 @pytest.mark.asyncio
 async def test_telegram_platform_delete_messages_chunks_batch_api(
     telegram_platform: TelegramRuntime,
-):
+) -> None:
     mock_bot = AsyncMock()
     telegram_platform._application = MagicMock()
     telegram_platform._application.bot = mock_bot
@@ -210,7 +210,7 @@ async def test_telegram_platform_delete_messages_chunks_batch_api(
 @pytest.mark.asyncio
 async def test_telegram_platform_delete_messages_falls_back_without_batch(
     telegram_platform: TelegramRuntime,
-):
+) -> None:
     class BotWithoutBatch:
         def __init__(self) -> None:
             self.delete_message = AsyncMock()
@@ -234,7 +234,7 @@ async def test_telegram_platform_delete_messages_falls_back_without_batch(
 @pytest.mark.asyncio
 async def test_telegram_platform_delete_messages_falls_back_after_batch_failure(
     telegram_platform: TelegramRuntime,
-):
+) -> None:
     mock_bot = AsyncMock()
     mock_bot.delete_messages.side_effect = RuntimeError("bulk failed")
     telegram_platform._application = MagicMock()
@@ -259,7 +259,7 @@ async def test_telegram_platform_delete_messages_falls_back_after_batch_failure(
 @pytest.mark.asyncio
 async def test_telegram_platform_delete_messages_falls_back_after_swallowed_error(
     telegram_platform: TelegramRuntime,
-):
+) -> None:
     mock_bot = AsyncMock()
     mock_bot.delete_messages.side_effect = TelegramError("message can't be deleted")
     telegram_platform._application = MagicMock()
@@ -284,7 +284,7 @@ async def test_telegram_platform_delete_messages_falls_back_after_swallowed_erro
 @pytest.mark.asyncio
 async def test_telegram_platform_single_delete_still_swallows_known_error(
     telegram_platform: TelegramRuntime,
-):
+) -> None:
     mock_bot = AsyncMock()
     mock_bot.delete_message.side_effect = TelegramError("message can't be deleted")
     telegram_platform._application = MagicMock()
@@ -301,7 +301,7 @@ async def test_telegram_platform_single_delete_still_swallows_known_error(
 @pytest.mark.asyncio
 async def test_telegram_platform_queue_send_message(
     monkeypatch: pytest.MonkeyPatch, telegram_platform: TelegramRuntime
-):
+) -> None:
     mock_limiter = telegram_platform._limiter
     mock_enqueue = AsyncMock(return_value="message")
     monkeypatch.setattr(mock_limiter, "enqueue", mock_enqueue)
@@ -314,7 +314,9 @@ async def test_telegram_platform_queue_send_message(
 
 
 @pytest.mark.asyncio
-async def test_on_telegram_message_authorized(telegram_platform: TelegramRuntime):
+async def test_on_telegram_message_authorized(
+    telegram_platform: TelegramRuntime,
+) -> None:
     handler = AsyncMock()
     telegram_platform.on_message(handler)
 
@@ -335,7 +337,9 @@ async def test_on_telegram_message_authorized(telegram_platform: TelegramRuntime
 
 
 @pytest.mark.asyncio
-async def test_on_telegram_message_unauthorized(telegram_platform: TelegramRuntime):
+async def test_on_telegram_message_unauthorized(
+    telegram_platform: TelegramRuntime,
+) -> None:
     handler = AsyncMock()
     telegram_platform.on_message(handler)
 

@@ -39,7 +39,7 @@ async def test_continuation_timeout_retains_delivered_output(
     protocol: str,
     wire: WireProtocol,
     metadata_first: bool,
-):
+) -> None:
     module = httpx if protocol == "messages" else httpx2
     closed = []
 
@@ -135,7 +135,7 @@ async def test_continuation_timeout_retains_delivered_output(
 @pytest.mark.parametrize("handoff", [False, True])
 async def test_pending_recovery_failure_does_not_require_successful_closures(
     handoff: bool,
-):
+) -> None:
     prefix = (
         tool_events("responses", '{"path":"x"}')[:-1]
         if handoff
@@ -176,7 +176,7 @@ async def test_pending_recovery_failure_does_not_require_successful_closures(
 
 
 @pytest.mark.asyncio
-async def test_cancellation_during_pending_continuation_emits_no_failure():
+async def test_cancellation_during_pending_continuation_emits_no_failure() -> None:
     closed = []
     events = []
 

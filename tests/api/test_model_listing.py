@@ -58,7 +58,7 @@ def _cache_models(app: FastAPI, provider_id: str, *model_ids: str) -> None:
 @pytest.mark.parametrize("overrides", [False, True])
 def test_claude_shortcuts_are_exactly_four_current_versions_and_route_by_tier(
     view: str, overrides: bool
-):
+) -> None:
     expected = {
         "claude-fable-5-2": "Claude Fable 5.2",
         "claude-opus-5-5": "Claude Opus 5.5",
@@ -90,7 +90,7 @@ def test_claude_shortcuts_are_exactly_four_current_versions_and_route_by_tier(
 
 
 @pytest.mark.parametrize("view", ["messages", "responses"])
-def test_context_fallback_round_trip_preserves_reported_capabilities(view: str):
+def test_context_fallback_round_trip_preserves_reported_capabilities(view: str) -> None:
     from free_claude_code.application.model_catalog import read_model_catalog
     from free_claude_code.cli.launchers.catalog_http import model_catalog_from_response
     from free_claude_code.cli.launchers.opencode_config import build_opencode_config
@@ -132,7 +132,9 @@ def test_context_fallback_round_trip_preserves_reported_capabilities(view: str):
 
 
 @pytest.mark.parametrize("view", ["messages", "responses"])
-def test_sorted_catalog_retains_an_explicit_no_thinking_server_default(view: str):
+def test_sorted_catalog_retains_an_explicit_no_thinking_server_default(
+    view: str,
+) -> None:
     settings = _settings(
         model="open_router/Zulu",
         model_opus=None,
@@ -169,7 +171,9 @@ def test_sorted_catalog_retains_an_explicit_no_thinking_server_default(view: str
     )
 
 
-def test_models_list_includes_configured_refs_cached_provider_models_and_aliases():
+def test_models_list_includes_configured_refs_cached_provider_models_and_aliases() -> (
+    None
+):
     app = create_test_app(_settings())
     _cache_models(app, "deepseek", "deepseek-chat")
     _cache_models(
@@ -219,7 +223,7 @@ def test_models_list_includes_configured_refs_cached_provider_models_and_aliases
     )
 
 
-def test_claude_models_use_custom_provider_display_name_without_changing_ids():
+def test_claude_models_use_custom_provider_display_name_without_changing_ids() -> None:
     provider_id = "custom_f526dba2aa0a472f9c506ba236056d57"
     model_ref = f"{provider_id}/deepseek-v4.1-flash"
     definition = CustomProviderDefinition(
@@ -258,7 +262,7 @@ def test_claude_models_use_custom_provider_display_name_without_changing_ids():
     ] == ("Phoenix/deepseek-plain (no thinking)")
 
 
-def test_models_list_uses_thinking_metadata_for_cached_models():
+def test_models_list_uses_thinking_metadata_for_cached_models() -> None:
     app = create_test_app(_settings(model_opus=None))
     manager = provider_manager_for_app(app)
     _cache_models(app, "deepseek", "deepseek-chat")
@@ -283,7 +287,7 @@ def test_models_list_uses_thinking_metadata_for_cached_models():
     assert "claude-3-freecc-no-thinking/open_router/plain-model" in ids
 
 
-def test_models_list_uses_cached_metadata_for_configured_refs():
+def test_models_list_uses_cached_metadata_for_configured_refs() -> None:
     app = create_test_app(
         _settings(
             model="open_router/plain-model",
@@ -306,7 +310,7 @@ def test_models_list_uses_cached_metadata_for_configured_refs():
     assert ids[-1] == "claude-3-freecc-no-thinking/open_router/plain-model"
 
 
-def test_models_list_includes_cached_wafer_models():
+def test_models_list_includes_cached_wafer_models() -> None:
     app = create_test_app(
         _settings(
             model="wafer/DeepSeek-V4-Pro",
@@ -328,7 +332,7 @@ def test_models_list_includes_cached_wafer_models():
     assert "claude-3-freecc-no-thinking/wafer/MiniMax-M2.7" in ids
 
 
-def test_models_list_includes_fallback_refs_without_cached_discovery():
+def test_models_list_includes_fallback_refs_without_cached_discovery() -> None:
     app = create_test_app(
         _settings(
             model_opus=None,
@@ -348,7 +352,7 @@ def test_models_list_includes_fallback_refs_without_cached_discovery():
     assert "claude-3-freecc-no-thinking/wafer/DeepSeek-V4-Pro" in ids
 
 
-def test_models_list_works_with_empty_discovery_catalog():
+def test_models_list_works_with_empty_discovery_catalog() -> None:
     app = create_test_app(_settings())
 
     response = TestClient(app).get("/v1/models")
@@ -368,7 +372,7 @@ def test_models_list_works_with_empty_discovery_catalog():
     assert "claude-sonnet-5-5" in ids
 
 
-def test_direct_model_views_exclude_claude_aliases_and_duplicate_variants():
+def test_direct_model_views_exclude_claude_aliases_and_duplicate_variants() -> None:
     app = create_test_app(_settings(model_opus=None, model_haiku=None))
     manager = provider_manager_for_app(app)
     manager.cache_model_infos(
@@ -424,7 +428,7 @@ def test_direct_model_views_exclude_claude_aliases_and_duplicate_variants():
     assert "reasoningEfforts" not in object_payload(plain)
 
 
-def test_direct_model_views_serialize_known_capabilities_and_omit_unknowns():
+def test_direct_model_views_serialize_known_capabilities_and_omit_unknowns() -> None:
     app = create_test_app(_settings(model_opus=None, model_haiku=None))
     provider_manager_for_app(app).cache_model_infos(
         "open_router",
@@ -513,7 +517,7 @@ def test_direct_model_views_serialize_known_capabilities_and_omit_unknowns():
     )
 
 
-def test_claude_model_view_does_not_expose_capability_fields():
+def test_claude_model_view_does_not_expose_capability_fields() -> None:
     app = create_test_app(_settings(model_opus=None, model_haiku=None))
     provider_manager_for_app(app).cache_model_infos(
         "open_router",
@@ -541,7 +545,7 @@ def test_claude_model_view_does_not_expose_capability_fields():
     )
 
 
-def test_muse_model_catalog_marks_every_routable_model_visible():
+def test_muse_model_catalog_marks_every_routable_model_visible() -> None:
     app = create_test_app(_settings(model_opus=None, model_haiku=None))
     manager = provider_manager_for_app(app)
     manager.cache_model_infos(
@@ -583,7 +587,7 @@ def test_muse_model_catalog_marks_every_routable_model_visible():
     ]
 
 
-def test_muse_catalog_uses_native_metadata_for_known_limits_and_reasoning():
+def test_muse_catalog_uses_native_metadata_for_known_limits_and_reasoning() -> None:
     app = create_test_app(_settings(model_opus=None, model_haiku=None))
     provider_manager_for_app(app).cache_model_infos(
         "open_router",
@@ -644,7 +648,7 @@ def test_muse_limits_are_complete_without_changing_reported_capabilities(
     output_tokens: int | None,
     expected_context: int,
     expected_output: int,
-):
+) -> None:
     from free_claude_code.application.model_catalog import read_model_catalog
 
     app = create_test_app(_settings(model_opus=None, model_haiku=None))
@@ -682,7 +686,7 @@ def test_muse_limits_are_complete_without_changing_reported_capabilities(
     assert before.models[0].max_output_tokens == output_tokens
 
 
-def test_unknown_model_view_is_rejected():
+def test_unknown_model_view_is_rejected() -> None:
     response = TestClient(create_test_app(_settings())).get("/v1/models?view=other")
 
     assert response.status_code == 422
@@ -691,7 +695,7 @@ def test_unknown_model_view_is_rejected():
 @pytest.mark.parametrize("view", ["messages", "responses"])
 def test_real_json_catalog_agrees_with_application_identity_and_known_metadata(
     view: str,
-):
+) -> None:
     from free_claude_code.application.model_catalog import read_model_catalog
     from free_claude_code.cli.launchers.catalog_http import model_catalog_from_response
 

@@ -54,7 +54,7 @@ def assert_cooldown(response: httpx.Response, detail: str, seconds: int = 3600) 
 @pytest.mark.asyncio
 async def test_active_request_keeps_failure_through_response_close(
     cooldown_clock: SimpleNamespace,
-):
+) -> None:
     calls = 0
     first_entered = asyncio.Event()
     both_entered = asyncio.Event()
@@ -112,7 +112,7 @@ async def test_active_request_keeps_failure_through_response_close(
 @pytest.mark.asyncio
 async def test_cooldown_during_retry_cleanup_reaches_wire(
     cooldown_clock: SimpleNamespace, translated: bool
-):
+) -> None:
     calls = 0
     leader_entered = asyncio.Event()
     follower_entered = asyncio.Event()
@@ -198,7 +198,7 @@ async def test_cooldown_during_retry_cleanup_reaches_wire(
 @pytest.mark.asyncio
 async def test_owned_client_close_preserves_captured_failure(
     api_format: str, cooldown_clock: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     first_entered = asyncio.Event()
     both_entered = asyncio.Event()
     closing = asyncio.Event()
@@ -264,7 +264,7 @@ async def test_owned_client_close_preserves_captured_failure(
 @pytest.mark.asyncio
 async def test_ordinary_terminal_failure_survives_cooldown_promotion(
     cooldown_clock: SimpleNamespace,
-):
+) -> None:
     leader_entered, late_entered, all_entered = (asyncio.Event() for _ in range(3))
     leader_done, late_closing, release_late = (asyncio.Event() for _ in range(3))
     calls = 0

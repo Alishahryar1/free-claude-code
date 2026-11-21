@@ -40,7 +40,7 @@ def _settings():
 
 
 @pytest.mark.asyncio
-async def test_http_and_admin_serve_while_selected_catalog_is_held():
+async def test_http_and_admin_serve_while_selected_catalog_is_held() -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     provider = MagicMock(spec=BaseProvider)
 
@@ -94,7 +94,7 @@ async def test_http_and_admin_serve_while_selected_catalog_is_held():
 
 
 @pytest.mark.asyncio
-async def test_independent_provider_and_cancelled_waiter_share_initialization():
+async def test_independent_provider_and_cancelled_waiter_share_initialization() -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     slow, fast = MagicMock(spec=BaseProvider), MagicMock(spec=BaseProvider)
 
@@ -152,7 +152,9 @@ async def test_independent_provider_and_cancelled_waiter_share_initialization():
 
 
 @pytest.mark.asyncio
-async def test_wait_timeout_does_not_cancel_initializer_and_settled_work_still_works():
+async def test_wait_timeout_does_not_cancel_initializer_and_settled_work_still_works() -> (
+    None
+):
     release = asyncio.Event()
     task = asyncio.create_task(release.wait())
     wait = InitializationWait(0.01)
@@ -170,7 +172,9 @@ async def test_wait_timeout_does_not_cancel_initializer_and_settled_work_still_w
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("refresh", [False, True])
-async def test_failed_discovery_construction_recovers_in_same_generation(refresh: bool):
+async def test_failed_discovery_construction_recovers_in_same_generation(
+    refresh: bool,
+) -> None:
     provider = MagicMock(spec=BaseProvider)
     provider.list_model_infos = AsyncMock(
         return_value=frozenset({ProviderModelInfo("one")})
@@ -217,7 +221,7 @@ async def test_failed_discovery_construction_recovers_in_same_generation(refresh
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_recovery_wait_uses_remaining_budget_without_orphaning_waiter(
     monkeypatch: pytest.MonkeyPatch, cancel: bool
-):
+) -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     provider = MagicMock(spec=BaseProvider)
     attempts = 0
@@ -281,7 +285,7 @@ async def test_recovery_wait_uses_remaining_budget_without_orphaning_waiter(
 
 
 @pytest.mark.asyncio
-async def test_cancellation_drains_the_actual_worker():
+async def test_cancellation_drains_the_actual_worker() -> None:
     entered, release = threading.Event(), threading.Event()
 
     def worker():
@@ -301,7 +305,7 @@ async def test_cancellation_drains_the_actual_worker():
 
 
 @pytest.mark.asyncio
-async def test_late_retired_discovery_cannot_replace_current_metadata():
+async def test_late_retired_discovery_cannot_replace_current_metadata() -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     providers = []
 
@@ -363,7 +367,7 @@ async def test_late_retired_discovery_cannot_replace_current_metadata():
 @pytest.mark.asyncio
 async def test_catalog_publication_exposes_configured_models_before_discovery(
     tmp_path: Path,
-):
+) -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     path = tmp_path / "catalog.json"
     path.write_text("prior complete catalog", encoding="utf-8")
@@ -415,7 +419,9 @@ async def test_catalog_publication_exposes_configured_models_before_discovery(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("retained_request", [False, True])
-async def test_catalog_wait_follows_replacement(tmp_path: Path, retained_request: bool):
+async def test_catalog_wait_follows_replacement(
+    tmp_path: Path, retained_request: bool
+) -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     count = 0
 
@@ -487,7 +493,7 @@ async def test_catalog_wait_follows_replacement(tmp_path: Path, retained_request
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_catalog_waiter_exit_preserves_shared_discovery(
     monkeypatch: pytest.MonkeyPatch, cancel: bool
-):
+) -> None:
     existing_tasks = asyncio.all_tasks()
     entered, release = asyncio.Event(), asyncio.Event()
     provider = MagicMock(spec=BaseProvider)

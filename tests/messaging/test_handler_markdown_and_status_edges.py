@@ -72,11 +72,11 @@ def _decision(*, position: int | None = None) -> QueueDecision:
     )
 
 
-def test_render_markdown_to_mdv2_empty_returns_empty():
+def test_render_markdown_to_mdv2_empty_returns_empty() -> None:
     assert render_markdown_to_mdv2("") == ""
 
 
-def test_render_markdown_to_mdv2_covers_common_structures():
+def test_render_markdown_to_mdv2_covers_common_structures() -> None:
     md = (
         "# Heading\n\n"
         "Text with *em* and **strong** and ~~strike~~ and `code`.\n\n"
@@ -102,7 +102,7 @@ def test_render_markdown_to_mdv2_covers_common_structures():
     assert "```" in out
 
 
-def test_render_markdown_to_mdv2_escapes_image_fallback_as_plain_text():
+def test_render_markdown_to_mdv2_escapes_image_fallback_as_plain_text() -> None:
     out = render_markdown_to_mdv2("![alt](http://x.com/a_b.png)")
 
     assert out == escape_md_v2("alt (http://x.com/a_b.png)")
@@ -112,7 +112,7 @@ def test_render_markdown_to_mdv2_escapes_image_fallback_as_plain_text():
     assert "_" not in out.replace("\\_", "")
 
 
-def test_render_markdown_to_mdv2_escapes_image_without_alt_text():
+def test_render_markdown_to_mdv2_escapes_image_without_alt_text() -> None:
     out = render_markdown_to_mdv2("![](http://x.com/a-b.png)")
 
     assert out == escape_md_v2("http://x.com/a-b.png")
@@ -120,13 +120,13 @@ def test_render_markdown_to_mdv2_escapes_image_without_alt_text():
     assert "-" not in out.replace("\\-", "")
 
 
-def test_render_markdown_to_mdv2_escapes_image_embedded_in_text():
+def test_render_markdown_to_mdv2_escapes_image_embedded_in_text() -> None:
     out = render_markdown_to_mdv2("see ![d](https://e.com/d-1.png) here")
 
     assert escape_md_v2("d (https://e.com/d-1.png)") in out
 
 
-def test_render_markdown_to_mdv2_renders_table_as_code_block():
+def test_render_markdown_to_mdv2_renders_table_as_code_block() -> None:
     md = "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\nAfter.\n"
     out = render_markdown_to_mdv2(md)
     assert "```" in out
@@ -136,7 +136,7 @@ def test_render_markdown_to_mdv2_renders_table_as_code_block():
     assert "After" in out
 
 
-def test_render_markdown_to_mdv2_table_without_blank_line_still_renders():
+def test_render_markdown_to_mdv2_table_without_blank_line_still_renders() -> None:
     md = "Here's a table:\n| a | b |\n|---|---|\n| 1 | 2 |\n"
     out = render_markdown_to_mdv2(md)
     assert "Here's a table" in out
@@ -145,7 +145,9 @@ def test_render_markdown_to_mdv2_table_without_blank_line_still_renders():
     assert "| ---" in out
 
 
-def test_render_markdown_to_mdv2_table_escapes_backticks_and_backslashes_in_cells():
+def test_render_markdown_to_mdv2_table_escapes_backticks_and_backslashes_in_cells() -> (
+    None
+):
     md = "| a | b |\n|---|---|\n| \\\\ | `` ` `` |\n"
     out = render_markdown_to_mdv2(md)
     assert "```" in out
@@ -154,7 +156,7 @@ def test_render_markdown_to_mdv2_table_escapes_backticks_and_backslashes_in_cell
     assert "\\`" in out  # rendered cell backtick is escaped
 
 
-def test_render_markdown_to_mdv2_table_inside_list_keeps_bullet_prefix():
+def test_render_markdown_to_mdv2_table_inside_list_keeps_bullet_prefix() -> None:
     md = "-\n  | a | b |\n  |---|---|\n  | 1 | 2 |\n"
     out = render_markdown_to_mdv2(md)
     assert "```" in out
@@ -162,7 +164,7 @@ def test_render_markdown_to_mdv2_table_inside_list_keeps_bullet_prefix():
     assert out.find("\\-") < out.find("```")
 
 
-def test_get_initial_status_branches():
+def test_get_initial_status_branches() -> None:
     platform = MagicMock()
     cli_manager = MagicMock()
     session_store = MagicMock()
@@ -194,7 +196,7 @@ def test_get_initial_status_branches():
 
 
 @pytest.mark.asyncio
-async def test_update_queue_positions_renders_immutable_queue_entries():
+async def test_update_queue_positions_renders_immutable_queue_entries() -> None:
     platform = MagicMock()
     platform.queue_edit_message = AsyncMock()
     platform.fire_and_forget = MagicMock(side_effect=_discard_coroutine)
@@ -223,7 +225,9 @@ async def test_update_queue_positions_renders_immutable_queue_entries():
 
 
 @pytest.mark.asyncio
-async def test_node_runner_process_node_session_limit_marks_error_and_updates_ui():
+async def test_node_runner_process_node_session_limit_marks_error_and_updates_ui() -> (
+    None
+):
     platform = MagicMock()
     platform.queue_edit_message = AsyncMock()
     platform.fire_and_forget = MagicMock(side_effect=_discard_coroutine)
@@ -254,7 +258,7 @@ async def test_node_runner_process_node_session_limit_marks_error_and_updates_ui
 
 
 @pytest.mark.asyncio
-async def test_node_runner_cancellation_marks_error_and_saves_tree():
+async def test_node_runner_cancellation_marks_error_and_saves_tree() -> None:
     platform = MagicMock()
     platform.queue_edit_message = AsyncMock()
     platform.fire_and_forget = MagicMock(side_effect=_discard_coroutine)
@@ -294,7 +298,7 @@ async def test_node_runner_cancellation_marks_error_and_saves_tree():
 
 
 @pytest.mark.asyncio
-async def test_stop_all_tasks_saves_tree_for_cancelled_nodes():
+async def test_stop_all_tasks_saves_tree_for_cancelled_nodes() -> None:
     platform = MagicMock()
     platform.queue_edit_message = AsyncMock()
     platform.fire_and_forget = MagicMock(side_effect=_discard_coroutine)
@@ -340,7 +344,7 @@ async def test_stop_all_tasks_saves_tree_for_cancelled_nodes():
 
 
 @pytest.mark.asyncio
-async def test_handle_message_unresolved_reply_is_admitted_as_new():
+async def test_handle_message_unresolved_reply_is_admitted_as_new() -> None:
     platform = MagicMock()
     platform.queue_send_message = AsyncMock(return_value="status_1")
     platform.queue_edit_message = AsyncMock()
@@ -378,7 +382,7 @@ async def test_handle_message_unresolved_reply_is_admitted_as_new():
 
 
 @pytest.mark.asyncio
-async def test_update_ui_handles_transcript_render_exception():
+async def test_update_ui_handles_transcript_render_exception() -> None:
     """When transcript.render raises, update_ui catches and does not crash."""
     platform = MagicMock()
     platform.queue_edit_message = AsyncMock()
@@ -428,7 +432,7 @@ async def test_update_ui_handles_transcript_render_exception():
 
 
 @pytest.mark.asyncio
-async def test_handle_message_incoming_text_none_safe():
+async def test_handle_message_incoming_text_none_safe() -> None:
     """handle_message does not crash when incoming.text is None (e.g. malformed adapter)."""
     platform = MagicMock()
     platform.queue_send_message = AsyncMock(return_value="status_1")
@@ -462,7 +466,7 @@ async def test_handle_message_incoming_text_none_safe():
 
 
 @pytest.mark.asyncio
-async def test_process_parsed_event_malformed_content_continues():
+async def test_process_parsed_event_malformed_content_continues() -> None:
     """Malformed/unknown parsed event does not crash process_parsed_cli_event."""
     platform = MagicMock()
     platform.queue_edit_message = AsyncMock()
@@ -495,7 +499,7 @@ async def test_process_parsed_event_malformed_content_continues():
 
 
 @pytest.mark.asyncio
-async def test_process_parsed_event_failed_complete_does_not_mark_success():
+async def test_process_parsed_event_failed_complete_does_not_mark_success() -> None:
     """Failed terminal events are not rendered as successful completion."""
     platform = MagicMock()
     platform.queue_edit_message = AsyncMock()
@@ -537,7 +541,7 @@ async def test_process_parsed_event_failed_complete_does_not_mark_success():
 @pytest.mark.parametrize("save_fails", [False, True])
 async def test_terminal_status_waits_for_its_durable_outcome(
     event: JsonObject, save_fails: bool
-):
+) -> None:
     from free_claude_code.messaging.trees import MessagingStorageError
 
     entered, release = asyncio.Event(), asyncio.Event()
@@ -578,7 +582,7 @@ async def test_terminal_status_waits_for_its_durable_outcome(
 
 
 @pytest.mark.asyncio
-async def test_handler_update_ui_edit_failure_does_not_crash():
+async def test_handler_update_ui_edit_failure_does_not_crash() -> None:
     """When queue_edit_message raises during streaming, node_runner.process_node continues and completes."""
     platform = MagicMock()
     platform.queue_edit_message = AsyncMock(

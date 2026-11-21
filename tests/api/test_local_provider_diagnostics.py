@@ -65,7 +65,7 @@ def test_local_probe_reports_the_requested_endpoint_and_elapsed_time(
     env_key: str,
     provider_url: str,
     probe_path: str,
-):
+) -> None:
     monkeypatch.setenv(env_key, provider_url)
 
     def callback(_: object):
@@ -91,7 +91,7 @@ def test_local_probe_reports_the_requested_endpoint_and_elapsed_time(
 @pytest.mark.parametrize("status_code", (200, 204, 302, 401, 404, 429, 503))
 def test_local_probe_preserves_http_status_without_returning_response_content(
     local_probe: LocalProbe, status_code: int
-):
+) -> None:
     private = "private-response-credential-marker"
 
     def callback(_: object):
@@ -127,7 +127,7 @@ def test_local_probe_preserves_http_status_without_returning_response_content(
 )
 def test_local_probe_returns_safe_failure_categories(
     local_probe: LocalProbe, failure: type[Exception], error_type: str
-):
+) -> None:
     private = "CREDENTIAL[unrecognized-format-987654321]"
 
     def fail(_request):
@@ -148,7 +148,9 @@ def test_local_probe_returns_safe_failure_categories(
 
 
 @pytest.mark.parametrize("provider_url", ("", " \t "))
-def test_missing_local_url_has_no_network_probe_or_elapsed_time(provider_url: str):
+def test_missing_local_url_has_no_network_probe_or_elapsed_time(
+    provider_url: str,
+) -> None:
     app = create_test_app()
     runtime = runtime_for_app(app)
     values = {
@@ -177,7 +179,7 @@ def test_missing_local_url_has_no_network_probe_or_elapsed_time(provider_url: st
     clock.assert_not_called()
 
 
-def test_remote_admin_cannot_trigger_a_local_provider_probe():
+def test_remote_admin_cannot_trigger_a_local_provider_probe() -> None:
     with patch.object(admin_routes.httpx, "AsyncClient") as client:
         response = TestClient(
             create_test_app(),

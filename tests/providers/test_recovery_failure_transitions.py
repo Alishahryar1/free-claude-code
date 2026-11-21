@@ -71,7 +71,7 @@ async def _fail(attempt: ProviderAttempt, error: HTTPStatusError):
 @pytest.mark.asyncio
 async def test_first_failure_opens_an_episode_led_by_the_failing_execution(
     clock: _Clock,
-):
+) -> None:
     controller = _controller()
     execution = controller.start_execution(model="m")
     error = _status_error(503)
@@ -95,7 +95,7 @@ async def test_first_failure_opens_an_episode_led_by_the_failing_execution(
 @pytest.mark.asyncio
 async def test_failed_probe_schedules_the_next_probe_with_more_backoff(
     clock: _Clock,
-):
+) -> None:
     controller = _controller()
     execution = controller.start_execution(model="m")
     await _fail(await _attempt(execution), _status_error(503))
@@ -118,7 +118,7 @@ async def test_failed_probe_schedules_the_next_probe_with_more_backoff(
 
 
 @pytest.mark.asyncio
-async def test_failure_outside_the_probe_waits_for_the_leader(clock: _Clock):
+async def test_failure_outside_the_probe_waits_for_the_leader(clock: _Clock) -> None:
     controller = _controller()
     leader = controller.start_execution(model="m")
     follower = controller.start_execution(model="m")
@@ -139,7 +139,7 @@ async def test_failure_outside_the_probe_waits_for_the_leader(clock: _Clock):
 @pytest.mark.asyncio
 async def test_last_attempt_without_an_episode_opens_an_exhausted_one(
     clock: _Clock,
-):
+) -> None:
     controller = _controller(max_attempts=1)
     execution = controller.start_execution(model="m", request_id="req")
     error = _status_error(503)
@@ -164,7 +164,7 @@ async def test_last_attempt_without_an_episode_opens_an_exhausted_one(
 @pytest.mark.asyncio
 async def test_last_probe_exhausts_the_episode_and_fails_its_waiters(
     clock: _Clock,
-):
+) -> None:
     controller = _controller(max_attempts=2)
     leader = controller.start_execution(model="m")
     follower = controller.start_execution(model="m")
@@ -194,7 +194,7 @@ async def test_last_probe_exhausts_the_episode_and_fails_its_waiters(
 @pytest.mark.asyncio
 async def test_last_attempt_outside_the_probe_leaves_the_episode_alone(
     clock: _Clock,
-):
+) -> None:
     controller = _controller(max_attempts=1)
     leader = controller.start_execution(model="m")
     other = controller.start_execution(model="m")
@@ -222,7 +222,7 @@ async def test_last_attempt_outside_the_probe_leaves_the_episode_alone(
 @pytest.mark.asyncio
 async def test_failure_after_the_episode_closed_takes_the_episode_failure(
     clock: _Clock,
-):
+) -> None:
     controller = _controller(max_attempts=2)
     leader = controller.start_execution(model="m")
     stale = controller.start_execution(model="m")
@@ -243,7 +243,7 @@ async def test_failure_after_the_episode_closed_takes_the_episode_failure(
 
 
 @pytest.mark.asyncio
-async def test_long_retry_after_starts_a_reported_cooldown(clock: _Clock):
+async def test_long_retry_after_starts_a_reported_cooldown(clock: _Clock) -> None:
     controller = _controller()
     execution = controller.start_execution(model="m", request_id="req")
     error = _status_error(429, retry_after="3600")
@@ -266,7 +266,7 @@ async def test_long_retry_after_starts_a_reported_cooldown(clock: _Clock):
 
 
 @pytest.mark.asyncio
-async def test_retry_after_at_the_ceiling_still_backs_off(clock: _Clock):
+async def test_retry_after_at_the_ceiling_still_backs_off(clock: _Clock) -> None:
     controller = _controller()
     execution = controller.start_execution(model="m")
 
@@ -283,7 +283,7 @@ async def test_retry_after_at_the_ceiling_still_backs_off(clock: _Clock):
 @pytest.mark.parametrize("leader_in_flight", [False, True])
 async def test_cooldown_over_an_open_episode_fails_only_an_idle_leader(
     clock: _Clock, leader_in_flight: bool
-):
+) -> None:
     controller = _controller()
     leader = controller.start_execution(model="m")
     other = controller.start_execution(model="m")
@@ -317,7 +317,7 @@ async def test_cooldown_over_an_open_episode_fails_only_an_idle_leader(
 
 
 @pytest.mark.asyncio
-async def test_longer_cooldown_extends_an_earlier_one(clock: _Clock):
+async def test_longer_cooldown_extends_an_earlier_one(clock: _Clock) -> None:
     controller = _controller()
     first = await _attempt(controller.start_execution(model="m"))
     second = await _attempt(controller.start_execution(model="m"))
@@ -335,7 +335,7 @@ async def test_longer_cooldown_extends_an_earlier_one(clock: _Clock):
 
 
 @pytest.mark.asyncio
-async def test_shorter_cooldown_takes_the_covering_one(clock: _Clock):
+async def test_shorter_cooldown_takes_the_covering_one(clock: _Clock) -> None:
     controller = _controller()
     first = await _attempt(controller.start_execution(model="m"))
     second = await _attempt(controller.start_execution(model="m"))
@@ -354,7 +354,7 @@ async def test_shorter_cooldown_takes_the_covering_one(clock: _Clock):
 @pytest.mark.asyncio
 async def test_cooldown_inside_an_exhausted_window_reports_that_window(
     clock: _Clock, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     controller = ProviderAdmissionController(
         provider_name="TEST",
         max_attempts=1,
@@ -388,7 +388,7 @@ async def test_cooldown_inside_an_exhausted_window_reports_that_window(
 
 
 @pytest.mark.asyncio
-async def test_transitions_finish_without_yielding(clock: _Clock):
+async def test_transitions_finish_without_yielding(clock: _Clock) -> None:
     controller = _controller()
     execution = controller.start_execution(model="m")
     attempt = await _attempt(execution)

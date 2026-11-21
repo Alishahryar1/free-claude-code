@@ -27,7 +27,7 @@ from tests.wire_payload import (
 @pytest.mark.parametrize("streaming", [False, True])
 def test_chat_http_dispatch_preserves_controls_credentials_and_public_model(
     wire: str, streaming: bool
-):
+) -> None:
     sent = []
 
     def reply(request: httpx.Request | httpx2.Request):
@@ -115,7 +115,7 @@ def test_chat_http_dispatch_preserves_controls_credentials_and_public_model(
 )
 def test_chat_function_strictness_survives_upstream_translation(
     wire: str, strict: JsonObject
-):
+) -> None:
     sent = []
 
     def reply(request: httpx2.Request):
@@ -162,7 +162,7 @@ def test_chat_function_strictness_survives_upstream_translation(
         ]
 
 
-def test_chat_validation_and_auth_errors_use_openai_shape():
+def test_chat_validation_and_auth_errors_use_openai_shape() -> None:
     app = create_test_app(
         Settings(PROXY_AUTH_ENABLED=True, proxy_auth_token="ingress-key")
     )
@@ -186,7 +186,7 @@ def test_chat_validation_and_auth_errors_use_openai_shape():
 @pytest.mark.parametrize("with_tool", [False, True])
 def test_native_chat_null_tool_delta_preserves_text_and_later_calls(
     streaming: bool, with_tool: bool
-):
+) -> None:
     from tests.api.test_four_protocol_matrix import matrix_app, response_value
 
     call = {
@@ -276,7 +276,9 @@ def test_native_chat_null_tool_delta_preserves_text_and_later_calls(
         {"messages": [{"role": "assistant", "reasoning_details": ["bad"]}]},
     ],
 )
-def test_chat_malformed_fields_fail_before_provider_execution(changes: JsonObject):
+def test_chat_malformed_fields_fail_before_provider_execution(
+    changes: JsonObject,
+) -> None:
     app = create_test_app(Settings())
     with TestClient(app) as client:
         response = client.post(
@@ -326,7 +328,7 @@ def test_chat_malformed_fields_fail_before_provider_execution(changes: JsonObjec
 )
 def test_native_chat_nullable_fields_accumulate_later_values(
     streaming: bool, field: str, updates: list[JsonValue], expected: JsonValue
-):
+) -> None:
     from tests.api.test_four_protocol_matrix import matrix_app, response_value
 
     def reply(_):
@@ -377,7 +379,7 @@ def test_native_chat_nullable_fields_accumulate_later_values(
     "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
 )
 @pytest.mark.parametrize("choices", [[], {}])
-def test_native_chat_usage_trailer_completes_stream(choices: JsonValue):
+def test_native_chat_usage_trailer_completes_stream(choices: JsonValue) -> None:
     from tests.api.test_four_protocol_matrix import matrix_app
     from tests.providers.test_openai_chat_transport import _success
 
@@ -411,7 +413,7 @@ def test_native_chat_usage_trailer_completes_stream(choices: JsonValue):
 @pytest.mark.parametrize("metadata_first", [False, True])
 def test_native_chat_keeps_metadata_only_chunks(
     choices: JsonValue, metadata_first: bool
-):
+) -> None:
     from tests.api.test_four_protocol_matrix import matrix_app
 
     envelope = {
@@ -466,7 +468,7 @@ def test_native_chat_keeps_metadata_only_chunks(
 @pytest.mark.parametrize("empty_array", [{}, ""])
 def test_native_chat_preserves_text_with_empty_delta_arrays(
     streaming: bool, empty_array: JsonValue
-):
+) -> None:
     from tests.api.test_delivered_stream_recovery import text_events
     from tests.api.test_four_protocol_matrix import matrix_app, response_value
 
@@ -499,7 +501,9 @@ def test_native_chat_preserves_text_with_empty_delta_arrays(
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-def test_native_custom_tool_fragments_survive_public_chat_response(streaming: bool):
+def test_native_custom_tool_fragments_survive_public_chat_response(
+    streaming: bool,
+) -> None:
     from tests.api.test_four_protocol_matrix import matrix_app, response_value
 
     chunks = [

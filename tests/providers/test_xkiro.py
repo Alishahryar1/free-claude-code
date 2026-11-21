@@ -265,7 +265,7 @@ async def test_model_catalog_uses_documented_url_and_bearer_auth() -> None:
 async def test_full_catalog_retains_tiers_and_maps_capabilities(
     monkeypatch: pytest.MonkeyPatch,
     xkiro_provider: OpenAIChatProvider,
-):
+) -> None:
     monkeypatch.setattr(
         xkiro_provider._client,
         "get",
@@ -318,7 +318,7 @@ async def test_full_catalog_retains_tiers_and_maps_capabilities(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 def test_image_and_named_effort_translation(
     xkiro_provider: OpenAIChatProvider, wire: str
-):
+) -> None:
     image = "https://example.test/image.png"
     if wire == "messages":
         request = _request(
@@ -363,7 +363,7 @@ def test_image_and_named_effort_translation(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_chat_stream_preserves_reasoning_tools_and_usage(wire: str):
+async def test_chat_stream_preserves_reasoning_tools_and_usage(wire: str) -> None:
     requests = []
     chunks: list[JsonObject] = [
         {"choices": [{"index": 0, "delta": {"reasoning_content": "Inspecting."}}]},

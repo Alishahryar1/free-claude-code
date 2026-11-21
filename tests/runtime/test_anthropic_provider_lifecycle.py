@@ -16,7 +16,7 @@ from tests.providers.test_anthropic_discovery import metadata
 
 
 @pytest.mark.asyncio
-async def test_workspace_replacement_retires_http_and_capabilities_with_lease():
+async def test_workspace_replacement_retires_http_and_capabilities_with_lease() -> None:
     owners = []
     requests = []
 

@@ -134,7 +134,7 @@ async def consume(
 )
 async def test_cache_restoration_uses_actual_connection_for_every_ingress(
     wire: str, change: str
-):
+) -> None:
     sent = []
 
     def reply(request: httpx2.Request):
@@ -199,7 +199,9 @@ async def test_cache_restoration_uses_actual_connection_for_every_ingress(
 
 
 @pytest.mark.asyncio
-async def test_renewable_callback_is_resolved_once_per_attempt_and_pins_provenance():
+async def test_renewable_callback_is_resolved_once_per_attempt_and_pins_provenance() -> (
+    None
+):
     resolutions = 0
     sent = []
 
@@ -254,7 +256,7 @@ async def test_renewable_callback_is_resolved_once_per_attempt_and_pins_provenan
 
 
 @pytest.mark.asyncio
-async def test_endpoint_snapshot_precedes_renewable_callback():
+async def test_endpoint_snapshot_precedes_renewable_callback() -> None:
     class Endpoint:
         async def endpoint(self, *, force_refresh: object = False):
             return HttpEndpoint(
@@ -290,7 +292,7 @@ async def test_endpoint_snapshot_precedes_renewable_callback():
     assert requests[0].url.host == "endpoint.invalid"
 
 
-def test_global_cache_bound_and_native_metadata_precedence():
+def test_global_cache_bound_and_native_metadata_precedence() -> None:
     behavior = GoogleChatBehavior(GOOGLE_PROFILE)
     source = ReplayOrigin(
         GOOGLE_PROFILE.provider_name, "chat", "endpoint", "account", "model"
@@ -314,7 +316,7 @@ def test_global_cache_bound_and_native_metadata_precedence():
 
 
 @pytest.mark.asyncio
-async def test_concurrent_attempts_record_their_own_origin():
+async def test_concurrent_attempts_record_their_own_origin() -> None:
     barrier = asyncio.Event()
     arrivals = 0
 
@@ -370,7 +372,7 @@ async def test_concurrent_attempts_record_their_own_origin():
 
 
 @pytest.mark.asyncio
-async def test_buffered_recovery_metadata_uses_replacement_credentials():
+async def test_buffered_recovery_metadata_uses_replacement_credentials() -> None:
     resolutions = 0
     requests = []
 

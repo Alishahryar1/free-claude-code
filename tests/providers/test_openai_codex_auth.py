@@ -58,7 +58,7 @@ def _credential_document(*, expires_at: int) -> dict[str, object]:
 
 def test_saved_connection_inspection_has_no_client_or_write_side_effects(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+) -> None:
     path = tmp_path / "openai.json"
     monkeypatch.setattr(openai_auth, "openai_auth_path", lambda: path)
 

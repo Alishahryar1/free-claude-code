@@ -25,7 +25,9 @@ from tests.wire_payload import (
 
 @pytest.mark.parametrize("wire", ["messages", "gemini", "responses"])
 @pytest.mark.parametrize("parts", [["Plan", " then act"], ["Pl", "an then act"]])
-def test_thinking_overlap_retains_only_new_characters(wire: str, parts: list[str]):
+def test_thinking_overlap_retains_only_new_characters(
+    wire: str, parts: list[str]
+) -> None:
     source: list[dict[str, Any]]
     overlap = ContinuationOverlap("Plan", channel="thinking")
     if wire == "messages":
@@ -115,7 +117,7 @@ def test_thinking_overlap_retains_only_new_characters(wire: str, parts: list[str
     assert source == before
 
 
-def test_thinking_overlap_preserves_independent_equal_parts():
+def test_thinking_overlap_preserves_independent_equal_parts() -> None:
     overlap = ContinuationOverlap("Plan", channel="thinking")
     full = {
         "type": "response.reasoning_text.delta",
@@ -136,7 +138,7 @@ def test_thinking_overlap_preserves_independent_equal_parts():
     assert result[0]["delta"] == "Plan more"
 
 
-def test_summary_replay_can_be_followed_by_independent_full_text_in_same_item():
+def test_summary_replay_can_be_followed_by_independent_full_text_in_same_item() -> None:
     overlap = ContinuationOverlap("Plan", channel="thinking")
     assert (
         overlap.feed(
@@ -195,7 +197,7 @@ def reasoning_part(field: str, index: int, text: str, *, done: bool = False):
 @pytest.mark.parametrize("terminal", ["response.completed", "response.incomplete"])
 def test_replayed_thinking_accepts_later_parts_in_either_array(
     summary_first: bool, new_summary_first: bool, terminal: str
-):
+) -> None:
     overlap = ContinuationOverlap("PlanAct", channel="thinking")
     prefix = [("content", "Plan"), ("summary", "Act")]
     if summary_first:
@@ -239,7 +241,9 @@ def test_replayed_thinking_accepts_later_parts_in_either_array(
 
 @pytest.mark.parametrize("field", ["content", "summary"])
 @pytest.mark.parametrize("change", ["changed", "missing", "inserted", "earlier-item"])
-def test_interleaved_thinking_still_rejects_rewritten_prefix(field: str, change: str):
+def test_interleaved_thinking_still_rejects_rewritten_prefix(
+    field: str, change: str
+) -> None:
     overlap = ContinuationOverlap("PlanAct", channel="thinking")
     for source, text in [("content", "Plan"), ("summary", "Act")]:
         overlap.feed(reasoning_part(source, 0, text))
@@ -268,7 +272,7 @@ def test_interleaved_thinking_still_rejects_rewritten_prefix(field: str, change:
 @pytest.mark.parametrize("snapshot", [False, True])
 def test_new_thinking_part_cannot_precede_a_later_matched_item(
     field: str, snapshot: bool
-):
+) -> None:
     overlap = ContinuationOverlap("PlanAct", channel="thinking")
     for index, text in enumerate(("Plan", "Act")):
         identity = {"item_id": f"rs_{index}", "output_index": index}
@@ -307,7 +311,9 @@ def test_new_thinking_part_cannot_precede_a_later_matched_item(
 
 
 @pytest.mark.parametrize("summary", [False, True])
-def test_completed_scalar_alias_can_be_repeated_as_its_native_summary(summary: bool):
+def test_completed_scalar_alias_can_be_repeated_as_its_native_summary(
+    summary: bool,
+) -> None:
     delivered = DeliveredResponse("responses")
     carrier = encode_replay(
         AssociatedReplayRecord(

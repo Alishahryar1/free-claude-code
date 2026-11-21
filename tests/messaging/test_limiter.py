@@ -35,7 +35,7 @@ class TestMessagingRateLimiter:
             await limiter.shutdown(timeout=0.1)
 
     @pytest.mark.asyncio
-    async def test_instances_are_independent(self):
+    async def test_instances_are_independent(self) -> None:
         """Each messaging runtime receives independent limiter state."""
         limiter1 = self.create_limiter(rate_limit=1, rate_window=0.5)
         limiter2 = self.create_limiter(rate_limit=99, rate_window=99.0)
@@ -54,7 +54,7 @@ class TestMessagingRateLimiter:
         assert await limiter2.enqueue(succeed) == "still running"
 
     @pytest.mark.asyncio
-    async def test_start_is_required_and_shutdown_is_idempotent(self):
+    async def test_start_is_required_and_shutdown_is_idempotent(self) -> None:
         limiter = MessagingRateLimiter(rate_limit=1, rate_window=1.0)
 
         async def succeed() -> str:
@@ -73,7 +73,7 @@ class TestMessagingRateLimiter:
             await limiter.enqueue(succeed)
 
     @pytest.mark.asyncio
-    async def test_compaction(self):
+    async def test_compaction(self) -> None:
         """Queued edits with the same key deliver only the latest content."""
         limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
 
@@ -93,7 +93,7 @@ class TestMessagingRateLimiter:
         assert edits == [("msg1", "update_4")]
 
     @pytest.mark.asyncio
-    async def test_compaction_and_futures_resolution(self):
+    async def test_compaction_and_futures_resolution(self) -> None:
         """
         Verify that even when compacted, all futures resolve to the result of the LAST execution.
         Logic ported from verify_limiter_v2.py
@@ -125,7 +125,7 @@ class TestMessagingRateLimiter:
         assert call_counts[msg_id] <= 2, f"Too many actual calls: {call_counts[msg_id]}"
 
     @pytest.mark.asyncio
-    async def test_platform_rate_limit_pauses_the_worker(self):
+    async def test_platform_rate_limit_pauses_the_worker(self) -> None:
         """A platform rate limit holds later work for its retry_after."""
         limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
         call_count = 0
@@ -155,7 +155,7 @@ class TestMessagingRateLimiter:
         assert call_count == 2
 
     @pytest.mark.asyncio
-    async def test_flood_wording_alone_does_not_pause(self):
+    async def test_flood_wording_alone_does_not_pause(self) -> None:
         """Only a typed platform rate limit pauses; error text does not."""
         limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
 
@@ -168,7 +168,7 @@ class TestMessagingRateLimiter:
         assert limiter._paused_until == 0
 
     @pytest.mark.asyncio
-    async def test_non_flood_exception_no_pause(self):
+    async def test_non_flood_exception_no_pause(self) -> None:
         """Non-flood exception doesn't trigger pause."""
         limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
 
@@ -182,7 +182,7 @@ class TestMessagingRateLimiter:
         assert limiter._paused_until == 0
 
     @pytest.mark.asyncio
-    async def test_proactive_strict_sliding_window(self):
+    async def test_proactive_strict_sliding_window(self) -> None:
         """
         Proactive limiter should enforce a strict sliding window:
         for any i, t[i+rate_limit] - t[i] >= rate_window (within tolerance).
@@ -210,7 +210,7 @@ class TestMessagingRateLimiter:
             )
 
     @pytest.mark.asyncio
-    async def test_compaction_last_task_fails_all_futures_get_exception(self):
+    async def test_compaction_last_task_fails_all_futures_get_exception(self) -> None:
         """When compacted task's last func fails, all futures get the exception."""
         limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
 
@@ -231,7 +231,7 @@ class TestMessagingRateLimiter:
     @pytest.mark.asyncio
     async def test_fire_and_forget_failure_logged(
         self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
-    ):
+    ) -> None:
         """fire_and_forget logs its own failure and does not re-raise."""
         limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
 
@@ -252,7 +252,7 @@ class TestMessagingRateLimiter:
         assert "secret upstream detail" not in joined
 
     @pytest.mark.asyncio
-    async def test_fire_and_forget_runs_failed_task_once(self):
+    async def test_fire_and_forget_runs_failed_task_once(self) -> None:
         """A failed background task is not replayed; platform adapters own retries."""
         limiter = self.create_limiter(rate_limit=10, rate_window=1.0)
         calls = 0
@@ -268,7 +268,7 @@ class TestMessagingRateLimiter:
         assert calls == 1
 
     @pytest.mark.asyncio
-    async def test_shutdown_settles_active_queued_and_background_work(self):
+    async def test_shutdown_settles_active_queued_and_background_work(self) -> None:
         limiter = self.create_limiter(rate_limit=1, rate_window=60.0)
         active_started = asyncio.Event()
         never_finish = asyncio.Event()
@@ -300,7 +300,7 @@ class TestMessagingRateLimiter:
         assert not limiter._queue_list
 
     @pytest.mark.asyncio
-    async def test_enqueue_cannot_enter_after_shutdown_begins(self):
+    async def test_enqueue_cannot_enter_after_shutdown_begins(self) -> None:
         limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
         await limiter._condition.acquire()
 
@@ -322,7 +322,7 @@ class TestMessagingRateLimiter:
             await enqueue_task
 
     @pytest.mark.asyncio
-    async def test_shutdown_preserves_external_cancellation(self):
+    async def test_shutdown_preserves_external_cancellation(self) -> None:
         limiter = self.create_limiter(rate_limit=1, rate_window=1.0)
         release = asyncio.Event()
 
@@ -348,7 +348,7 @@ class TestMessagingRateLimiter:
             await shutdown_task
 
     @pytest.mark.asyncio
-    async def test_cancelled_shutdown_retries_queued_future_settlement(self):
+    async def test_cancelled_shutdown_retries_queued_future_settlement(self) -> None:
         limiter = self.create_limiter(rate_limit=1, rate_window=60.0)
         active_started = asyncio.Event()
         never_finish = asyncio.Event()
@@ -390,7 +390,7 @@ class TestMessagingRateLimiter:
         assert limiter._worker_task is None
 
     @pytest.mark.asyncio
-    async def test_cancelled_operation_does_not_stop_owned_worker(self):
+    async def test_cancelled_operation_does_not_stop_owned_worker(self) -> None:
         limiter = self.create_limiter(rate_limit=2, rate_window=1.0)
 
         async def cancelled_operation() -> None:

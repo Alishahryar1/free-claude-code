@@ -24,7 +24,7 @@ def client(app: FastAPI):
     return TestClient(app)
 
 
-def test_create_message_empty_messages_returns_400(client: TestClient):
+def test_create_message_empty_messages_returns_400(client: TestClient) -> None:
     """POST /v1/messages with messages: [] returns 400 invalid_request_error."""
     payload: JsonObject = {
         "model": "claude-3-sonnet",
@@ -41,7 +41,7 @@ def test_create_message_empty_messages_returns_400(client: TestClient):
     )
 
 
-def test_count_tokens_empty_messages_returns_400(client: TestClient):
+def test_count_tokens_empty_messages_returns_400(client: TestClient) -> None:
     """POST /v1/messages/count_tokens with messages: [] matches messages validation."""
     payload: JsonObject = {"model": "claude-3-sonnet", "messages": []}
     response = client.post("/v1/messages/count_tokens", json=payload)
@@ -54,7 +54,7 @@ def test_count_tokens_empty_messages_returns_400(client: TestClient):
     )
 
 
-def test_count_tokens_endpoint(client: TestClient):
+def test_count_tokens_endpoint(client: TestClient) -> None:
     payload = {
         "model": "claude-3-sonnet",
         "messages": [{"role": "user", "content": "hello"}],
@@ -80,7 +80,7 @@ def test_count_tokens_endpoint(client: TestClient):
 )
 def test_count_tokens_retired_model_uses_replacement(
     prefix: str, ref: str, target: str
-):
+) -> None:
     test_app = create_test_app(
         Settings(MODEL="groq/default", MODEL_OPUS="deepseek/opus")
     )
@@ -106,7 +106,7 @@ def test_count_tokens_retired_model_uses_replacement(
     assert routed["gateway_model"] == f"{prefix}{ref}"
 
 
-def test_count_tokens_error_returns_500(client: TestClient):
+def test_count_tokens_error_returns_500(client: TestClient) -> None:
     """When get_token_count raises, count_tokens returns 500."""
     payload = {
         "model": "claude-3-sonnet",
@@ -123,7 +123,7 @@ def test_count_tokens_error_returns_500(client: TestClient):
     assert "token error" in response.json()["detail"]
 
 
-def test_stop_cli_with_messaging_workflow(app: FastAPI, client: TestClient):
+def test_stop_cli_with_messaging_workflow(app: FastAPI, client: TestClient) -> None:
     session_control = MagicMock()
     session_control.stop_all = AsyncMock(return_value=StopResult(cancelled_count=3))
     services = app_services(app)
@@ -141,7 +141,7 @@ def test_stop_cli_with_messaging_workflow(app: FastAPI, client: TestClient):
     session_control.stop_all.assert_awaited_once()
 
 
-def test_stop_cli_fallback_to_manager(app: FastAPI, client: TestClient):
+def test_stop_cli_fallback_to_manager(app: FastAPI, client: TestClient) -> None:
     session_control = MagicMock()
     session_control.stop_all = AsyncMock(return_value=StopResult(source="cli_manager"))
     services = app_services(app)

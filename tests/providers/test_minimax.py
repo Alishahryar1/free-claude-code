@@ -73,11 +73,11 @@ def _chunk(
     )
 
 
-def test_default_base_url():
+def test_default_base_url() -> None:
     assert MINIMAX_DEFAULT_BASE == "https://api.minimax.io/v1"
 
 
-def test_init_uses_openai_chat_provider(minimax_provider: OpenAIChatProvider):
+def test_init_uses_openai_chat_provider(minimax_provider: OpenAIChatProvider) -> None:
     assert isinstance(minimax_provider, OpenAIChatProvider)
     assert minimax_provider._api_key == "test-minimax-key"
     assert minimax_provider._base_url == MINIMAX_DEFAULT_BASE
@@ -86,7 +86,7 @@ def test_init_uses_openai_chat_provider(minimax_provider: OpenAIChatProvider):
 
 def test_build_request_body_requests_split_output_and_max_completion_tokens(
     minimax_provider: OpenAIChatProvider,
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "MiniMax-M3",
@@ -120,7 +120,7 @@ def test_build_request_body_requests_split_output_and_max_completion_tokens(
 
 def test_build_request_body_does_not_invent_unsupported_compute_control(
     minimax_provider: OpenAIChatProvider,
-):
+) -> None:
     request = MessagesRequest(
         model="MiniMax-M3",
         messages=[Message(role="user", content="Hello")],
@@ -135,7 +135,7 @@ def test_build_request_body_does_not_invent_unsupported_compute_control(
 async def test_lists_models_from_openai_models_endpoint(
     monkeypatch: pytest.MonkeyPatch,
     minimax_provider: OpenAIChatProvider,
-):
+) -> None:
     monkeypatch.setattr(
         minimax_provider._client.models,
         "list",
@@ -155,7 +155,9 @@ async def test_lists_models_from_openai_models_endpoint(
 
 
 @pytest.mark.asyncio
-async def test_stream_preserves_reasoning_content(minimax_provider: OpenAIChatProvider):
+async def test_stream_preserves_reasoning_content(
+    minimax_provider: OpenAIChatProvider,
+) -> None:
     request = MessagesRequest(
         model="MiniMax-M3",
         messages=[Message(role="user", content="hi")],
@@ -188,7 +190,9 @@ async def test_stream_preserves_reasoning_content(minimax_provider: OpenAIChatPr
 
 
 @pytest.mark.asyncio
-async def test_cleanup_closes_openai_client(minimax_provider: OpenAIChatProvider):
+async def test_cleanup_closes_openai_client(
+    minimax_provider: OpenAIChatProvider,
+) -> None:
     minimax_provider._client = MagicMock()
     minimax_provider._client.close = AsyncMock()
 

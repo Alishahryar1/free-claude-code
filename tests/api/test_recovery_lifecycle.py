@@ -28,7 +28,7 @@ from tests.wire_payload import array_payload, object_array, object_payload
 @pytest.mark.asyncio
 async def test_partial_closure_with_delayed_source_frames(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     original_transport = httpx2.MockTransport
 
     class PacedStream(httpx2.AsyncByteStream):
@@ -94,7 +94,7 @@ async def test_partial_closure_with_delayed_source_frames(
 )
 async def test_reasoning_before_continuation_text_keeps_overlap_filter(
     wire: WireProtocol, candidate: str, expected: str
-):
+) -> None:
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("chat", "Hello ", complete=False)
@@ -144,7 +144,7 @@ def refusal_events(*, mixed: bool = False):
 @pytest.mark.parametrize("limited", [False, True])
 async def test_continuation_preserves_refusal_and_completed_metadata(
     monkeypatch: pytest.MonkeyPatch, mixed: bool, limited: bool
-):
+) -> None:
     if limited:
         monkeypatch.setattr(
             "free_claude_code.core.delivered_response.RECOVERY_RETENTION_BYTES", 600
@@ -180,7 +180,7 @@ async def test_continuation_preserves_refusal_and_completed_metadata(
 
 
 @pytest.mark.asyncio
-async def test_published_refusal_interruption_does_not_generate_again():
+async def test_published_refusal_interruption_does_not_generate_again() -> None:
     async with _harness(
         "responses",
         lambda bodies: (
@@ -209,7 +209,7 @@ async def test_published_refusal_interruption_does_not_generate_again():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cut", [4, 5, 6, 7])
-async def test_recovery_emits_only_missing_text_completion_stages(cut: int):
+async def test_recovery_emits_only_missing_text_completion_stages(cut: int) -> None:
     async with _harness(
         "responses",
         lambda bodies: (
@@ -248,7 +248,7 @@ async def test_recovery_emits_only_missing_text_completion_stages(cut: int):
 @pytest.mark.parametrize("cut", [4, 5, 6])
 async def test_handoff_snapshot_matches_published_closures(
     monkeypatch: pytest.MonkeyPatch, limited: bool, continued: bool, cut: int
-):
+) -> None:
     if limited:
         original = DeliveredResponse.closing_events
 

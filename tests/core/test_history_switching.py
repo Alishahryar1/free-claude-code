@@ -59,7 +59,7 @@ def _call(call_id: str, arguments: str = "{}"):
     }
 
 
-def test_grouped_tool_calls_keep_both_reasoning_records():
+def test_grouped_tool_calls_keep_both_reasoning_records() -> None:
     messages = _chat(
         [
             {"role": "user", "content": "look up both"},
@@ -78,7 +78,7 @@ def test_grouped_tool_calls_keep_both_reasoning_records():
     ]
 
 
-def test_malformed_tool_call_keeps_its_reasoning_and_error_result():
+def test_malformed_tool_call_keeps_its_reasoning_and_error_result() -> None:
     messages = _chat(
         [
             {"role": "user", "content": "continue"},
@@ -112,7 +112,7 @@ def test_malformed_tool_call_keeps_its_reasoning_and_error_result():
     ] == [("broken", "Invalid JSON"), ("valid", "17")]
 
 
-def test_completed_hosted_tool_history_remains_readable():
+def test_completed_hosted_tool_history_remains_readable() -> None:
     messages = _chat(
         [
             {"role": "user", "content": "find the sample"},
@@ -140,7 +140,7 @@ def test_completed_hosted_tool_history_remains_readable():
     )
 
 
-def test_opaque_details_stay_with_the_assistant_that_produced_them():
+def test_opaque_details_stay_with_the_assistant_that_produced_them() -> None:
     provider = OpenRouterProvider(
         make_provider_config(api_key="synthetic", base_url="https://example.org/v1"),
         admission=immediate_admission(),
@@ -177,7 +177,7 @@ def test_opaque_details_stay_with_the_assistant_that_produced_them():
     assert request.model_dump() == original
 
 
-def test_deepseek_tools_require_reasoning_on_earlier_plain_assistant_turns():
+def test_deepseek_tools_require_reasoning_on_earlier_plain_assistant_turns() -> None:
     body: dict[str, Any] = {
         "messages": [
             {"role": "user", "content": "hello"},
@@ -197,7 +197,9 @@ def test_deepseek_tools_require_reasoning_on_earlier_plain_assistant_turns():
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-def test_deepseek_off_to_on_preserves_effort_and_all_available_history(wire: str):
+def test_deepseek_off_to_on_preserves_effort_and_all_available_history(
+    wire: str,
+) -> None:
     provider = DeepSeekProvider(
         make_provider_config(api_key="synthetic", base_url="https://example.invalid"),
         admission=immediate_admission(),
@@ -287,7 +289,7 @@ def test_deepseek_off_to_on_preserves_effort_and_all_available_history(wire: str
     assert request.model_dump() == original
 
 
-def test_summary_uses_the_destination_readable_thinking_field():
+def test_summary_uses_the_destination_readable_thinking_field() -> None:
     messages = _chat(
         [
             {"role": "user", "content": "first"},
@@ -305,7 +307,7 @@ def test_summary_uses_the_destination_readable_thinking_field():
     assert "reasoning_details" not in messages[1]
 
 
-def test_image_tool_result_does_not_start_a_new_user_turn():
+def test_image_tool_result_does_not_start_a_new_user_turn() -> None:
     messages = _chat(
         [
             {"role": "user", "content": "look"},
@@ -333,7 +335,7 @@ def test_image_tool_result_does_not_start_a_new_user_turn():
     )
 
 
-def test_messages_interleaved_reasoning_belongs_to_the_tool_group():
+def test_messages_interleaved_reasoning_belongs_to_the_tool_group() -> None:
     provider = OpenRouterProvider(
         make_provider_config(api_key="synthetic", base_url="https://example.org/v1"),
         admission=immediate_admission(),
@@ -385,7 +387,7 @@ def test_messages_interleaved_reasoning_belongs_to_the_tool_group():
     )
 
 
-def test_completed_native_hosted_tools_become_readable_chat_history():
+def test_completed_native_hosted_tools_become_readable_chat_history() -> None:
     provider = OpenRouterProvider(
         make_provider_config(api_key="synthetic", base_url="https://example.org/v1"),
         admission=immediate_admission(),
@@ -423,7 +425,7 @@ def test_completed_native_hosted_tools_become_readable_chat_history():
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-def test_malformed_carrier_fails_startup_before_inference(wire: str):
+def test_malformed_carrier_fails_startup_before_inference(wire: str) -> None:
     from free_claude_code.application.errors import InvalidRequestError
 
     provider = OpenRouterProvider(
@@ -465,7 +467,7 @@ def test_malformed_carrier_fails_startup_before_inference(wire: str):
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-def test_destination_without_native_reasoning_keeps_readable_context(wire: str):
+def test_destination_without_native_reasoning_keeps_readable_context(wire: str) -> None:
     if wire == "responses":
         body = build_responses_chat_request(
             OpenAIResponsesRequest(

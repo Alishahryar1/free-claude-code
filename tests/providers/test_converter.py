@@ -60,13 +60,13 @@ class MockTool:
 # --- System Prompt Tests ---
 
 
-def test_convert_system_prompt_str():
+def test_convert_system_prompt_str() -> None:
     system = "You are a helpful assistant."
     result = AnthropicToOpenAIConverter.convert_system_prompt(system)
     assert result == {"role": "system", "content": system}
 
 
-def test_convert_system_prompt_list_text():
+def test_convert_system_prompt_list_text() -> None:
     system = [
         MockBlock(type="text", text="Part 1"),
         MockBlock(type="text", text="Part 2"),
@@ -75,14 +75,14 @@ def test_convert_system_prompt_list_text():
     assert result == {"role": "system", "content": "Part 1\n\nPart 2"}
 
 
-def test_convert_system_prompt_none():
+def test_convert_system_prompt_none() -> None:
     assert AnthropicToOpenAIConverter.convert_system_prompt(None) is None
 
 
 # --- Tool Conversion Tests ---
 
 
-def test_convert_tools():
+def test_convert_tools() -> None:
     tools = [
         MockTool(
             "get_weather",
@@ -106,7 +106,7 @@ def test_convert_tools():
     assert result[1]["function"]["description"] == ""  # Check default empty string
 
 
-def test_convert_tool_without_input_schema_uses_empty_object_schema():
+def test_convert_tool_without_input_schema_uses_empty_object_schema() -> None:
     tools = [MockTool("web_search", None)]
 
     result = AnthropicToOpenAIConverter.convert_tools(tools)
@@ -139,12 +139,12 @@ def test_convert_tool_without_input_schema_uses_empty_object_schema():
         ),
     ],
 )
-def test_convert_tool_choice(tool_choice: JsonObject, expected: JsonValue):
+def test_convert_tool_choice(tool_choice: JsonObject, expected: JsonValue) -> None:
     result = AnthropicToOpenAIConverter.convert_tool_choice(tool_choice)
     assert result == expected
 
 
-def test_openai_build_materializes_auto_tool_choice_when_tools_are_declared():
+def test_openai_build_materializes_auto_tool_choice_when_tools_are_declared() -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "model",
@@ -168,7 +168,7 @@ def test_openai_build_materializes_auto_tool_choice_when_tools_are_declared():
     assert body["tool_choice"] == "auto"
 
 
-def test_openai_build_omits_tool_choice_when_tools_are_absent():
+def test_openai_build_omits_tool_choice_when_tools_are_absent() -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "model",
@@ -185,14 +185,14 @@ def test_openai_build_omits_tool_choice_when_tools_are_absent():
 # --- Message Conversion Tests: User ---
 
 
-def test_convert_user_message_str():
+def test_convert_user_message_str() -> None:
     messages = [MockMessage("user", "Hello world")]
     result = AnthropicToOpenAIConverter.convert_messages(messages)
     assert len(result) == 1
     assert result[0] == {"role": "user", "content": "Hello world"}
 
 
-def test_convert_user_message_list_text():
+def test_convert_user_message_list_text() -> None:
     content = [
         MockBlock(type="text", text="Hello"),
         MockBlock(type="text", text="World"),
@@ -203,7 +203,7 @@ def test_convert_user_message_list_text():
     assert result[0] == {"role": "user", "content": "Hello\nWorld"}
 
 
-def test_convert_user_message_tool_result_str():
+def test_convert_user_message_tool_result_str() -> None:
     content = [
         MockBlock(type="tool_result", tool_use_id="tool_123", content="Result data")
     ]
@@ -217,7 +217,7 @@ def test_convert_user_message_tool_result_str():
     }
 
 
-def test_convert_user_message_tool_result_list():
+def test_convert_user_message_tool_result_list() -> None:
     # Tool result content as a list of text blocks
     tool_content = [
         {"type": "text", "text": "Line 1"},
@@ -234,7 +234,7 @@ def test_convert_user_message_tool_result_list():
     assert result[0]["content"] == "Line 1\nLine 2"
 
 
-def test_convert_user_message_mixed_text_and_tool_result():
+def test_convert_user_message_mixed_text_and_tool_result() -> None:
     # Note: Anthropic/OpenAI mapping usually separates these, but the converter handles lists
     # User text usually comes before tool results in a turn, or after.
     # The converter splits them into separate messages if they are different roles?
@@ -255,21 +255,21 @@ def test_convert_user_message_mixed_text_and_tool_result():
 # --- Message Conversion Tests: Assistant ---
 
 
-def test_convert_assistant_message_text_only():
+def test_convert_assistant_message_text_only() -> None:
     messages = [MockMessage("assistant", "I am ready.")]
     result = AnthropicToOpenAIConverter.convert_messages(messages)
     assert len(result) == 1
     assert result[0] == {"role": "assistant", "content": "I am ready."}
 
 
-def test_convert_assistant_message_blocks_text():
+def test_convert_assistant_message_blocks_text() -> None:
     content = [MockBlock(type="text", text="Part A")]
     messages = [MockMessage("assistant", content)]
     result = AnthropicToOpenAIConverter.convert_messages(messages)
     assert result[0] == {"role": "assistant", "content": "Part A"}
 
 
-def test_convert_assistant_message_thinking():
+def test_convert_assistant_message_thinking() -> None:
     content = [
         MockBlock(type="thinking", thinking="I need to calculate this."),
         MockBlock(type="text", text="The answer is 4."),
@@ -282,7 +282,7 @@ def test_convert_assistant_message_thinking():
     assert result[0]["reasoning_content"] == "I need to calculate this."
 
 
-def test_convert_assistant_message_thinking_replays_reasoning_content():
+def test_convert_assistant_message_thinking_replays_reasoning_content() -> None:
     """Top-level reasoning replay avoids duplicating thinking into content."""
     content = [
         MockBlock(type="thinking", thinking="I need to calculate this."),
@@ -299,7 +299,7 @@ def test_convert_assistant_message_thinking_replays_reasoning_content():
     assert "<think>" not in result[0]["content"]
 
 
-def test_convert_assistant_message_thinking_replays_reasoning():
+def test_convert_assistant_message_thinking_replays_reasoning() -> None:
     content = [
         MockBlock(type="thinking", thinking="I need to calculate this."),
         MockBlock(type="text", text="The answer is 4."),
@@ -319,7 +319,7 @@ def test_convert_assistant_message_thinking_replays_reasoning():
     ]
 
 
-def test_convert_assistant_top_level_reasoning_content_is_preserved():
+def test_convert_assistant_top_level_reasoning_content_is_preserved() -> None:
     messages = [
         MockMessage(
             "assistant",
@@ -340,7 +340,7 @@ def test_convert_assistant_top_level_reasoning_content_is_preserved():
     ]
 
 
-def test_convert_assistant_empty_top_level_reasoning_content_is_preserved():
+def test_convert_assistant_empty_top_level_reasoning_content_is_preserved() -> None:
     messages = [MockMessage("assistant", "The answer is 4.", reasoning_content="")]
 
     result = AnthropicToOpenAIConverter.convert_messages(
@@ -356,7 +356,7 @@ def test_convert_assistant_empty_top_level_reasoning_content_is_preserved():
     ]
 
 
-def test_convert_assistant_thinking_tool_use_replays_top_level_reasoning():
+def test_convert_assistant_thinking_tool_use_replays_top_level_reasoning() -> None:
     content = [
         MockBlock(type="thinking", thinking="I should call the tool."),
         MockBlock(
@@ -390,7 +390,7 @@ def test_convert_assistant_thinking_tool_use_replays_top_level_reasoning():
     assert result[0]["tool_calls"][0]["id"] == "call_reasoning"
 
 
-def test_convert_assistant_tool_use_replays_ollama_reasoning_field():
+def test_convert_assistant_tool_use_replays_ollama_reasoning_field() -> None:
     messages = [
         MockMessage(
             "assistant",
@@ -414,7 +414,7 @@ def test_convert_assistant_tool_use_replays_ollama_reasoning_field():
     assert result[0]["tool_calls"][0]["id"] == "call_1"
 
 
-def test_convert_assistant_empty_thinking_replays_empty_reasoning_content():
+def test_convert_assistant_empty_thinking_replays_empty_reasoning_content() -> None:
     content = [
         MockBlock(type="thinking", thinking=""),
         MockBlock(type="text", text="The answer is 4."),
@@ -434,7 +434,7 @@ def test_convert_assistant_empty_thinking_replays_empty_reasoning_content():
     ]
 
 
-def test_convert_assistant_tool_use_replays_empty_reasoning_content():
+def test_convert_assistant_tool_use_replays_empty_reasoning_content() -> None:
     content = [
         MockBlock(type="thinking", thinking=""),
         MockBlock(type="tool_use", id="call_empty", name="Read", input={}),
@@ -490,7 +490,7 @@ def _convert_tool_turn(
     )
 
 
-def test_convert_assistant_tool_use_without_thinking_defers_placeholder():
+def test_convert_assistant_tool_use_without_thinking_defers_placeholder() -> None:
     result = _convert_tool_turn(
         [MockBlock(type="tool_use", id="call_missing", name="Read", input={})]
     )
@@ -503,7 +503,7 @@ def test_convert_assistant_tool_use_without_thinking_defers_placeholder():
     )
 
 
-def test_convert_parallel_tool_use_without_thinking_defers_placeholder():
+def test_convert_parallel_tool_use_without_thinking_defers_placeholder() -> None:
     result = _convert_tool_turn(
         [
             MockBlock(type="tool_use", id="call_1", name="Read", input={}),
@@ -521,7 +521,9 @@ def test_convert_parallel_tool_use_without_thinking_defers_placeholder():
     ]
 
 
-def test_convert_redacted_thinking_tool_use_preserves_native_data_without_placeholder():
+def test_convert_redacted_thinking_tool_use_preserves_native_data_without_placeholder() -> (
+    None
+):
     result = _convert_tool_turn(
         [
             MockBlock(type="redacted_thinking", data="opaque-secret"),
@@ -535,7 +537,7 @@ def test_convert_redacted_thinking_tool_use_preserves_native_data_without_placeh
     ]
 
 
-def test_convert_text_only_assistant_without_thinking_omits_reasoning_content():
+def test_convert_text_only_assistant_without_thinking_omits_reasoning_content() -> None:
     result = AnthropicToOpenAIConverter.convert_messages(
         [MockMessage("assistant", "Visible answer")],
         reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
@@ -562,7 +564,7 @@ def test_convert_tool_use_without_thinking_does_not_change_other_replay_modes(
     assert "reasoning_content" not in result[0]
 
 
-def test_convert_assistant_message_thinking_uses_native_field():
+def test_convert_assistant_message_thinking_uses_native_field() -> None:
     content = [
         MockBlock(type="thinking", thinking="I need to calculate this."),
         MockBlock(type="text", text="The answer is 4."),
@@ -579,7 +581,7 @@ def test_convert_assistant_message_thinking_uses_native_field():
     assert result[0]["content"] == "The answer is 4."
 
 
-def test_convert_assistant_top_level_reasoning_uses_native_field():
+def test_convert_assistant_top_level_reasoning_uses_native_field() -> None:
     messages = [
         MockMessage(
             "assistant",
@@ -600,7 +602,7 @@ def test_convert_assistant_top_level_reasoning_uses_native_field():
     ]
 
 
-def test_convert_assistant_message_tool_use():
+def test_convert_assistant_message_tool_use() -> None:
     content = [
         MockBlock(type="text", text="I will call the tool."),
         MockBlock(
@@ -631,7 +633,7 @@ def test_convert_assistant_message_tool_use():
     ) == {"query": "python"}
 
 
-def test_convert_assistant_tool_use_preserves_extra_content():
+def test_convert_assistant_tool_use_preserves_extra_content() -> None:
     content = [
         MockBlock(
             type="tool_use",
@@ -655,7 +657,7 @@ def test_convert_assistant_tool_use_preserves_extra_content():
     }
 
 
-def test_convert_assistant_message_empty_content():
+def test_convert_assistant_message_empty_content() -> None:
     # Verify that empty content becomes a single space (NIM requirement)
     # if no tool calls are present.
     content: list[MockBlock] = []
@@ -664,7 +666,7 @@ def test_convert_assistant_message_empty_content():
     assert result[0]["content"] == " "
 
 
-def test_convert_assistant_message_tool_use_no_text():
+def test_convert_assistant_message_tool_use_no_text() -> None:
     # If tool usage exists, content can be empty string?
     # Logic: if not content_str and not tool_calls: content_str = " "
     # So if tool_calls exist, content_str can be empty string?
@@ -688,7 +690,7 @@ def test_convert_assistant_message_tool_use_no_text():
     assert len(tool_calls) == 1
 
 
-def test_convert_mixed_blocks_and_types_and_roles():
+def test_convert_mixed_blocks_and_types_and_roles() -> None:
     # comprehensive flow
     messages = [
         MockMessage("user", "Start"),
@@ -718,7 +720,7 @@ def test_convert_mixed_blocks_and_types_and_roles():
 # --- Edge Cases ---
 
 
-def test_get_block_attr_defaults():
+def test_get_block_attr_defaults() -> None:
     # Test helper directly
     from free_claude_code.core.anthropic import get_block_attr
 
@@ -726,7 +728,7 @@ def test_get_block_attr_defaults():
     assert get_block_attr(object(), "missing", "default") == "default"
 
 
-def test_input_not_dict():
+def test_input_not_dict() -> None:
     # Tool input might not be a dict (e.g. malformed or string)
     content = [MockBlock(type="tool_use", id="call_x", name="f", input="some_string")]
     messages = [
@@ -761,7 +763,7 @@ def test_input_not_dict():
 )
 def test_convert_system_prompt_parametrized(
     system_input: list[MockBlock] | str | None, expected: JsonObject | None
-):
+) -> None:
     """Parametrized system prompt conversion covering edge cases."""
     result = AnthropicToOpenAIConverter.convert_system_prompt(system_input)
     assert result == expected
@@ -779,7 +781,7 @@ def test_convert_system_prompt_parametrized(
 )
 def test_convert_user_message_parametrized(
     content: list[MockBlock] | str, expected_content: str
-):
+) -> None:
     """Parametrized user message conversion."""
     messages = [MockMessage("user", content)]
     result = AnthropicToOpenAIConverter.convert_messages(messages)
@@ -787,7 +789,7 @@ def test_convert_user_message_parametrized(
     assert result[0]["content"] == expected_content
 
 
-def test_convert_assistant_message_unknown_block_type():
+def test_convert_assistant_message_unknown_block_type() -> None:
     """Unknown block types should be silently skipped."""
     content = [
         MockBlock(type="unknown_type", data="something"),
@@ -799,7 +801,7 @@ def test_convert_assistant_message_unknown_block_type():
     assert "visible" in result[0]["content"]
 
 
-def test_convert_tool_use_none_input():
+def test_convert_tool_use_none_input() -> None:
     """Tool use with None input should not crash."""
     content = [MockBlock(type="tool_use", id="call_n", name="test", input=None)]
     messages = [
@@ -814,7 +816,7 @@ def test_convert_tool_use_none_input():
     assert "tool_calls" in result[0]
 
 
-def test_convert_assistant_interleaved_order_preserved():
+def test_convert_assistant_interleaved_order_preserved() -> None:
     """Interleaved thinking, text, tool_use should preserve thinking+text order in content.
 
     Bug: Current implementation collects all thinking, then all text, then tool_calls.
@@ -845,7 +847,7 @@ def test_convert_assistant_interleaved_order_preserved():
     assert len(tool_calls) == 1
 
 
-def test_convert_user_message_text_before_tool_result_order():
+def test_convert_user_message_text_before_tool_result_order() -> None:
     """User message with text then tool_result should preserve order: user text first, then tool.
 
     Bug: Current implementation emits tool_result immediately, then user text at end.
@@ -866,7 +868,7 @@ def test_convert_user_message_text_before_tool_result_order():
     assert result[1]["tool_call_id"] == "t1"
 
 
-def test_convert_multiple_tool_results():
+def test_convert_multiple_tool_results() -> None:
     """Multiple tool results in a single user message."""
     content = [
         MockBlock(type="tool_result", tool_use_id="t1", content="Result 1"),
@@ -879,7 +881,7 @@ def test_convert_multiple_tool_results():
     assert result[1]["tool_call_id"] == "t2"
 
 
-def test_convert_user_message_tool_result_dict_as_json():
+def test_convert_user_message_tool_result_dict_as_json() -> None:
     content = [
         MockBlock(
             type="tool_result",
@@ -893,7 +895,7 @@ def test_convert_user_message_tool_result_dict_as_json():
     assert result[0]["content"] == '{"ok": true, "count": 2}'
 
 
-def test_assistant_redacted_thinking_omitted_from_openai_chat():
+def test_assistant_redacted_thinking_omitted_from_openai_chat() -> None:
     """Opaque redacted_thinking is not materialized as content or reasoning_content."""
     content = [
         MockBlock(type="redacted_thinking", data="secret-opaque"),
@@ -921,7 +923,9 @@ def test_assistant_redacted_thinking_omitted_from_openai_chat():
         ),
     ],
 )
-def test_convert_user_message_image_sources(source: JsonObject, expected_url: str):
+def test_convert_user_message_image_sources(
+    source: JsonObject, expected_url: str
+) -> None:
     messages = [MockMessage("user", [MockBlock(type="image", source=source)])]
 
     result = AnthropicToOpenAIConverter.convert_messages(messages)
@@ -941,7 +945,7 @@ def test_convert_user_message_image_sources(source: JsonObject, expected_url: st
         "  aG\tVs\r\nbG8=  ",
     ),
 )
-def test_convert_user_message_canonicalizes_equivalent_base64(data: str):
+def test_convert_user_message_canonicalizes_equivalent_base64(data: str) -> None:
     messages = [
         MockMessage(
             "user",
@@ -965,7 +969,7 @@ def test_convert_user_message_canonicalizes_equivalent_base64(data: str):
     )
 
 
-def test_convert_image_tool_result_to_schema_valid_chat_history():
+def test_convert_image_tool_result_to_schema_valid_chat_history() -> None:
     image_url = "https://images.example.test/tool.png"
     messages = [
         MockMessage(
@@ -1013,7 +1017,7 @@ def test_convert_image_tool_result_to_schema_valid_chat_history():
     assert image_url not in result[1]["content"]
 
 
-def test_convert_mixed_image_tool_result_preserves_part_order_once():
+def test_convert_mixed_image_tool_result_preserves_part_order_once() -> None:
     image_url = "data:image/png;base64,aGVsbG8="
     messages = [
         MockMessage(
@@ -1065,7 +1069,7 @@ def test_convert_mixed_image_tool_result_preserves_part_order_once():
     )
 
 
-def test_convert_parallel_image_tool_results_closes_all_tools_before_images():
+def test_convert_parallel_image_tool_results_closes_all_tools_before_images() -> None:
     messages = [
         MockMessage(
             "assistant",
@@ -1128,7 +1132,7 @@ def test_convert_parallel_image_tool_results_closes_all_tools_before_images():
     ]
 
 
-def test_convert_image_tool_result_precedes_following_user_text():
+def test_convert_image_tool_result_precedes_following_user_text() -> None:
     messages = [
         MockMessage(
             "assistant",
@@ -1167,7 +1171,9 @@ def test_convert_image_tool_result_precedes_following_user_text():
         {"type": "file", "file_id": "file_1"},
     ),
 )
-def test_convert_image_tool_result_rejects_unportable_source_safely(source: JsonObject):
+def test_convert_image_tool_result_rejects_unportable_source_safely(
+    source: JsonObject,
+) -> None:
     messages = [
         MockMessage(
             "assistant",
@@ -1191,7 +1197,7 @@ def test_convert_image_tool_result_rejects_unportable_source_safely(source: Json
     assert "SECRET_BAD" not in str(exc_info.value)
 
 
-def test_convert_user_message_preserves_interleaved_image_text_order():
+def test_convert_user_message_preserves_interleaved_image_text_order() -> None:
     messages = [
         MockMessage(
             "user",
@@ -1238,7 +1244,7 @@ def test_convert_user_message_preserves_interleaved_image_text_order():
     ]
 
 
-def test_convert_user_image_before_tool_result_preserves_message_order():
+def test_convert_user_image_before_tool_result_preserves_message_order() -> None:
     messages = [
         MockMessage(
             "user",
@@ -1288,14 +1294,14 @@ def test_convert_user_image_before_tool_result_preserves_message_order():
 )
 def test_convert_user_message_rejects_unconvertible_image_sources(
     source: JsonObject, error: str
-):
+) -> None:
     messages = [MockMessage("user", [MockBlock(type="image", source=source)])]
 
     with pytest.raises(OpenAIConversionError, match=error):
         AnthropicToOpenAIConverter.convert_messages(messages)
 
 
-def test_convert_assistant_text_after_tool_use_requires_matching_tool_result():
+def test_convert_assistant_text_after_tool_use_requires_matching_tool_result() -> None:
     """Dangling post-tool assistant text cannot be replayed as valid OpenAI chat."""
     content = [
         MockBlock(type="tool_use", id="call_z", name="Read", input={}),
@@ -1306,7 +1312,7 @@ def test_convert_assistant_text_after_tool_use_requires_matching_tool_result():
         AnthropicToOpenAIConverter.convert_messages(messages)
 
 
-def test_convert_assistant_text_after_tool_use_inserts_after_tool_results():
+def test_convert_assistant_text_after_tool_use_inserts_after_tool_results() -> None:
     messages = [
         MockMessage(
             "assistant",
@@ -1351,7 +1357,9 @@ def _completed_single_tool_turn(*, user_text: str | None = None):
     ]
 
 
-def test_unrelated_user_text_before_tool_result_is_buffered_after_closed_tool_turn():
+def test_unrelated_user_text_before_tool_result_is_buffered_after_closed_tool_turn() -> (
+    None
+):
     messages = [
         MockMessage(
             "assistant",
@@ -1384,7 +1392,7 @@ def test_unrelated_user_text_before_tool_result_is_buffered_after_closed_tool_tu
     assert result[3]["content"] == "Please also summarize it."
 
 
-def test_user_after_completed_tool_result_gets_neutral_assistant_boundary():
+def test_user_after_completed_tool_result_gets_neutral_assistant_boundary() -> None:
     messages = [
         MockMessage("user", "Read the file."),
         *_completed_single_tool_turn(),
@@ -1409,7 +1417,7 @@ def test_user_after_completed_tool_result_gets_neutral_assistant_boundary():
     assert result[4]["content"] == "Please summarize it."
 
 
-def test_user_text_beside_tool_result_follows_neutral_assistant_boundary():
+def test_user_text_beside_tool_result_follows_neutral_assistant_boundary() -> None:
     messages = _completed_single_tool_turn(user_text="Please summarize it.")
 
     result = AnthropicToOpenAIConverter.convert_messages(messages)
@@ -1424,7 +1432,7 @@ def test_user_text_beside_tool_result_follows_neutral_assistant_boundary():
     assert result[3]["content"] == "Please summarize it."
 
 
-def test_multiple_tool_results_get_one_assistant_boundary_before_user():
+def test_multiple_tool_results_get_one_assistant_boundary_before_user() -> None:
     messages = [
         MockMessage(
             "assistant",
@@ -1468,7 +1476,7 @@ def test_multiple_tool_results_get_one_assistant_boundary_before_user():
     assert result[4]["content"] == "Compare both results."
 
 
-def test_terminal_tool_result_does_not_get_assistant_boundary():
+def test_terminal_tool_result_does_not_get_assistant_boundary() -> None:
     messages = _completed_single_tool_turn()
 
     result = AnthropicToOpenAIConverter.convert_messages(messages)
@@ -1476,7 +1484,7 @@ def test_terminal_tool_result_does_not_get_assistant_boundary():
     assert [message["role"] for message in result] == ["assistant", "tool"]
 
 
-def test_existing_assistant_completion_prevents_extra_tool_turn_boundary():
+def test_existing_assistant_completion_prevents_extra_tool_turn_boundary() -> None:
     messages = [
         *_completed_single_tool_turn(),
         MockMessage("assistant", "The file contains useful information."),
@@ -1494,7 +1502,9 @@ def test_existing_assistant_completion_prevents_extra_tool_turn_boundary():
     assert result[2]["content"] == "The file contains useful information."
 
 
-def test_unrelated_assistant_text_before_tool_result_is_buffered_until_after_tool_result():
+def test_unrelated_assistant_text_before_tool_result_is_buffered_until_after_tool_result() -> (
+    None
+):
     messages = [
         MockMessage(
             "assistant",
@@ -1525,7 +1535,7 @@ def test_unrelated_assistant_text_before_tool_result_is_buffered_until_after_too
     assert result[2]["content"] == "Waiting for the result."
 
 
-def test_user_text_in_tool_result_message_is_replayed_after_tool_sequence():
+def test_user_text_in_tool_result_message_is_replayed_after_tool_sequence() -> None:
     messages = [
         MockMessage(
             "assistant",
@@ -1560,7 +1570,9 @@ def test_user_text_in_tool_result_message_is_replayed_after_tool_sequence():
     assert result[3]["content"] == "Use this result too."
 
 
-def test_nested_pending_tool_use_waits_for_its_own_tool_result_before_deferred_text():
+def test_nested_pending_tool_use_waits_for_its_own_tool_result_before_deferred_text() -> (
+    None
+):
     messages = [
         MockMessage(
             "assistant",
@@ -1599,7 +1611,7 @@ def test_nested_pending_tool_use_waits_for_its_own_tool_result_before_deferred_t
     assert result[4]["content"] == "Post-call-b commentary"
 
 
-def test_nested_pending_uses_early_nested_tool_result_after_outer_result():
+def test_nested_pending_uses_early_nested_tool_result_after_outer_result() -> None:
     messages = [
         MockMessage(
             "assistant",
@@ -1637,7 +1649,7 @@ def test_nested_pending_uses_early_nested_tool_result_after_outer_result():
     assert result[4]["content"] == "Post-call-b commentary"
 
 
-def test_multi_tool_turn_waits_for_all_results_before_deferred_text():
+def test_multi_tool_turn_waits_for_all_results_before_deferred_text() -> None:
     messages = [
         MockMessage(
             "assistant",
@@ -1671,7 +1683,9 @@ def test_multi_tool_turn_waits_for_all_results_before_deferred_text():
     assert result[3]["content"] == "Both tools are done."
 
 
-def test_nested_pending_buffers_user_text_until_all_prior_tool_sequences_complete():
+def test_nested_pending_buffers_user_text_until_all_prior_tool_sequences_complete() -> (
+    None
+):
     messages = [
         MockMessage(
             "assistant",

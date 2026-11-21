@@ -61,7 +61,7 @@ def test_next_step(row: Row, expected: NextStep) -> None:
 @pytest.mark.parametrize("attempts", [0, 1])
 def test_restart_requires_undelivered_retryable_unstopped_stream(
     released: bool | None, normal_stop: bool, retryable: bool, attempts: int
-):
+) -> None:
     assert can_restart(
         content_released=released,
         retryable=retryable,

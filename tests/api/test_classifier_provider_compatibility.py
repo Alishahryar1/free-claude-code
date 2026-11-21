@@ -112,7 +112,7 @@ def classifier_request():
 @pytest.mark.parametrize("rejection", [None, "mandatory", "field", "unrelated"])
 async def test_native_gemini_classifier_preserves_reasoning_preparation(
     capability: str, off: bool, limit: int | None, rejection: str | None
-):
+) -> None:
     bodies = []
 
     def reply(request: native_httpx.Request):
@@ -213,7 +213,7 @@ async def test_native_gemini_classifier_preserves_reasoning_preparation(
 )
 async def test_openrouter_numeric_sse_rejection_uses_classifier_correction(
     error: JsonObject, corrects: bool
-):
+) -> None:
     bodies = []
 
     def upstream(request: httpx.Request):
@@ -292,7 +292,7 @@ async def test_openrouter_numeric_sse_rejection_uses_classifier_correction(
 )
 async def test_classifier_mandatory_reasoning_still_returns_verdict(
     reject_off: bool | str, stream: bool, fallback_effort: ReasoningPreference | None
-):
+) -> None:
     provider = OpenRouterProvider(
         make_provider_config(api_key="test", base_url="https://openrouter.test/v1"),
         admission=immediate_admission(),
@@ -404,7 +404,7 @@ async def test_classifier_mandatory_reasoning_still_returns_verdict(
 )
 async def test_handler_uses_cached_capabilities_for_the_selected_provider(
     capability: str, off: bool, limit: int
-):
+) -> None:
     provider = OpenRouterProvider(
         make_provider_config("test", "https://provider.invalid/v1"),
         admission=immediate_admission(),

@@ -40,7 +40,7 @@ def codestral_provider(codestral_config: ProviderConfig):
     )
 
 
-def test_init(codestral_config: ProviderConfig):
+def test_init(codestral_config: ProviderConfig) -> None:
     """Test provider initialization."""
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
@@ -55,11 +55,11 @@ def test_init(codestral_config: ProviderConfig):
         mock_openai.assert_called_once()
 
 
-def test_default_base_url():
+def test_default_base_url() -> None:
     assert CODESTRAL_DEFAULT_BASE == "https://codestral.mistral.ai/v1"
 
 
-def test_build_request_body_basic(codestral_provider: OpenAIChatProvider):
+def test_build_request_body_basic(codestral_provider: OpenAIChatProvider) -> None:
     """Basic request body conversion works for Codestral."""
     req = make_request()
     body = codestral_provider._chat._build_request_body(req)
@@ -68,7 +68,7 @@ def test_build_request_body_basic(codestral_provider: OpenAIChatProvider):
     assert object_payload(array_payload(body["messages"])[0])["role"] == "system"
 
 
-def test_build_request_body_global_disable_blocks_reasoning_mapping():
+def test_build_request_body_global_disable_blocks_reasoning_mapping() -> None:
     """Global disable disables reasoning replay in the converter."""
     provider = profiled_provider(
         "mistral_codestral",
@@ -91,7 +91,7 @@ def test_build_request_body_global_disable_blocks_reasoning_mapping():
 async def test_model_catalog_extracts_exact_input_modalities(
     monkeypatch: pytest.MonkeyPatch,
     codestral_provider: OpenAIChatProvider,
-):
+) -> None:
     monkeypatch.setattr(
         codestral_provider._client.models,
         "list",
@@ -147,7 +147,7 @@ async def test_model_catalog_degrades_incomplete_capabilities_to_unknown(
     monkeypatch: pytest.MonkeyPatch,
     codestral_provider: OpenAIChatProvider,
     capabilities: JsonObject | None,
-):
+) -> None:
     model: JsonObject = {"id": "model"}
     if capabilities is not None:
         model["capabilities"] = capabilities
@@ -163,7 +163,7 @@ async def test_model_catalog_degrades_incomplete_capabilities_to_unknown(
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_text(codestral_provider: OpenAIChatProvider):
+async def test_stream_messages_text(codestral_provider: OpenAIChatProvider) -> None:
     """Text content deltas are emitted as text blocks."""
     req = make_request()
 
@@ -202,7 +202,7 @@ async def test_stream_messages_text(codestral_provider: OpenAIChatProvider):
 @pytest.mark.asyncio
 async def test_stream_messages_reasoning_content(
     codestral_provider: OpenAIChatProvider,
-):
+) -> None:
     """reasoning_content deltas are emitted as thinking blocks."""
     req = make_request()
 
@@ -239,7 +239,7 @@ async def test_stream_messages_reasoning_content(
 
 
 @pytest.mark.asyncio
-async def test_cleanup(codestral_provider: OpenAIChatProvider):
+async def test_cleanup(codestral_provider: OpenAIChatProvider) -> None:
     """cleanup closes the OpenAI client."""
     codestral_provider._client = AsyncMock()
 

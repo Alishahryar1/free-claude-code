@@ -125,7 +125,7 @@ def test_bug_forms_require_description_and_post_install_diagnostics() -> None:
 )
 def test_report_parser_uses_the_correct_form_section(
     body: str, valid: bool, version: str | None
-):
+) -> None:
     result = _parse_report(body)
     assert result["valid"] is valid
     assert result.get("reportedVersion") == version
@@ -145,7 +145,7 @@ def _parse_report(body: str) -> JsonObject:
 
 def test_plain_doctor_report_can_be_collapsed_without_changing_its_data(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-):
+) -> None:
     from free_claude_code.cli import doctor
 
     copied: list[str] = []
@@ -185,7 +185,7 @@ def _collapse_report(body: str) -> str:
 @pytest.mark.parametrize("fenced", [False, True])
 def test_collapsing_only_changes_doctor_section_and_is_idempotent(
     newline: str, fenced: bool
-):
+) -> None:
     report = '{"version":"1.2.3","model":"$&```</details>"}'
     content = f"```json\n{report}\n```" if fenced else report
     before = "### Describe the issue\n\nMy description and ![image](https://example.com/image.png)\n\n### FCC doctor output\n\n"
@@ -208,7 +208,7 @@ def test_collapsing_only_changes_doctor_section_and_is_idempotent(
         '### FCC doctor output\n\n{"version":"1.2.3"}\n\n### FCC doctor output\n\n{"version":"1.2.3"}',
     ],
 )
-def test_collapsing_leaves_other_or_invalid_reports_untouched(body: str):
+def test_collapsing_leaves_other_or_invalid_reports_untouched(body: str) -> None:
     assert _collapse_report(body) == body
 
 
@@ -320,7 +320,7 @@ def test_workflow_owns_one_idempotent_triage_state() -> None:
         ("v1.2.3.4", None),
     ],
 )
-def test_release_tags_are_exact_stable_versions(tag: str, expected: str | None):
+def test_release_tags_are_exact_stable_versions(tag: str, expected: str | None) -> None:
     pattern = _workflow_pattern("releaseVersionPattern")
     match = re.fullmatch(pattern, tag)
     assert (match[1] if match else None) == expected
@@ -475,7 +475,7 @@ process.stdout.write(JSON.stringify({ calls, comments }));
 @pytest.mark.parametrize("status,should_fail", [(404, False), (500, True)])
 def test_release_lookup_distinguishes_no_release_from_failure(
     status: int, should_fail: bool
-):
+) -> None:
     source = f"return (async () => {{\n{_workflow_script()}\n}})();"
     harness = """
 const run = new Function("github", "context", __SOURCE__);
@@ -516,7 +516,7 @@ process.stdout.write(JSON.stringify({failed, deleted}));
 )
 def test_development_versions_are_accepted_without_stable_release_comparison(
     value: str,
-):
+) -> None:
     assert _reported_version(f"free-claude-code {value}") == value
     source = f"return (async () => {{\n{_workflow_script()}\n}})();"
     harness = """
@@ -557,5 +557,5 @@ process.stdout.write(JSON.stringify(calls));
         "6.2.67.dev1+g123 and 6.2.66",
     ],
 )
-def test_invalid_or_ambiguous_development_versions_are_rejected(value: str):
+def test_invalid_or_ambiguous_development_versions_are_rejected(value: str) -> None:
     assert _reported_version(value) is None

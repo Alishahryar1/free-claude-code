@@ -279,7 +279,7 @@ def _client_for(
 @pytest.mark.parametrize("partial", [False, True])
 def test_retired_progress_value_does_not_interrupt_slow_response(
     path: str, partial: bool, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     closed = []
 
     class SlowStream(httpx2.AsyncByteStream):

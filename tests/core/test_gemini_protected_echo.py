@@ -43,7 +43,7 @@ ORIGIN = ReplayOrigin("provider", "chat", "https://source.invalid", "account", "
 @pytest.mark.parametrize("thought", ["Same", "🧠é"])
 def test_mixed_equal_thoughts_keep_only_protected_echo_exemption(
     protocol: WireProtocol, visible: bool, edited: bool, thought: str
-):
+) -> None:
     output = GeminiOutput("response", "model", include_thoughts=visible)
     native: JsonObject = {
         "reasoning_details": [
@@ -113,7 +113,7 @@ def test_mixed_equal_thoughts_keep_only_protected_echo_exemption(
 )
 def test_malformed_protected_ranges_are_rejected(
     ranges: tuple[tuple[int, int, int], ...],
-):
+) -> None:
     record = ReplayRecord(
         ORIGIN,
         {
@@ -134,7 +134,7 @@ def test_malformed_protected_ranges_are_rejected(
         decode_bundle(signature)
 
 
-def test_protected_ranges_cannot_exceed_verified_visible_text():
+def test_protected_ranges_cannot_exceed_verified_visible_text() -> None:
     record = ReplayRecord(
         ORIGIN,
         {
@@ -168,7 +168,7 @@ def test_protected_ranges_cannot_exceed_verified_visible_text():
 
 def test_protected_pending_metadata_is_bounded_at_capture(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     monkeypatch.setattr(
         "free_claude_code.core.gemini.response.RECOVERY_RETENTION_BYTES", 100
     )
@@ -188,7 +188,7 @@ def test_protected_pending_metadata_is_bounded_at_capture(
 
 def test_required_call_metadata_is_bounded_before_finish(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     monkeypatch.setattr(
         "free_claude_code.core.gemini.response.RECOVERY_RETENTION_BYTES", 100
     )
@@ -199,7 +199,7 @@ def test_required_call_metadata_is_bounded_before_finish(
         )
 
 
-def test_signature_only_record_does_not_claim_independent_readable_text():
+def test_signature_only_record_does_not_claim_independent_readable_text() -> None:
     output = GeminiOutput("response", "model", include_thoughts=True)
     output.part({"thought": True, "text": "Ordinary"}, source=0)
     output.capture(

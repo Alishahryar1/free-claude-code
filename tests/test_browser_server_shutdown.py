@@ -14,7 +14,7 @@ from e2e.code_support import CodeControl
 
 def test_completed_server_needs_no_diagnostics(
     tmp_path: Path, request: pytest.FixtureRequest, capfd: pytest.CaptureFixture[str]
-):
+) -> None:
     thread = threading.Thread(target=lambda: None)
     thread.start()
     thread.join()
@@ -27,7 +27,7 @@ def test_slow_server_finishes_after_diagnostic_threshold(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
     capfd: pytest.CaptureFixture[str],
-):
+) -> None:
     control = CodeControl(tmp_path)
     ready = threading.Event()
     gate = None
@@ -79,7 +79,7 @@ def test_slow_server_finishes_after_diagnostic_threshold(
 @pytest.mark.parametrize("extra_failure", [False, True])
 def test_shutdown_timeout_stops_later_tests(
     tmp_path: Path, workers: str, extra_failure: bool
-):
+) -> None:
     (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
     (tmp_path / "test_shutdown.py").write_text(
         dedent(f"""

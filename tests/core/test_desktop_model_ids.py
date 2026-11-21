@@ -16,7 +16,9 @@ from free_claude_code.core.gateway_model_ids import (
     ],
 )
 @pytest.mark.parametrize("no_thinking", [False, True])
-def test_desktop_ids_roundtrip_without_vendor_fragments(ref: str, no_thinking: bool):
+def test_desktop_ids_roundtrip_without_vendor_fragments(
+    ref: str, no_thinking: bool
+) -> None:
     wire = desktop_model_id(ref, no_thinking=no_thinking)
     assert wire.startswith("claude-")
     assert not any(part in wire for part in ("gpt", "qwen", "nemotron", "openai"))
@@ -31,6 +33,6 @@ def test_desktop_ids_roundtrip_without_vendor_fragments(ref: str, no_thinking: b
     "suffix", ["", "ff", "not-hex", "123", "6E", "6162", "2f78", "782f", "61 2f62"]
 )
 @pytest.mark.parametrize("prefix", ["claude-fcc/", "claude-3-fcc/"])
-def test_malformed_reserved_ids_do_not_fall_through(prefix: str, suffix: str):
+def test_malformed_reserved_ids_do_not_fall_through(prefix: str, suffix: str) -> None:
     with pytest.raises(ValueError):
         decode_gateway_model_id(prefix + suffix)

@@ -40,7 +40,7 @@ def _telegram_runtime(
     )
 
 
-def test_telegram_platform_init_raises_when_dependency_missing():
+def test_telegram_platform_init_raises_when_dependency_missing() -> None:
     with (
         patch(
             "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", False
@@ -51,7 +51,7 @@ def test_telegram_platform_init_raises_when_dependency_missing():
 
 
 @pytest.mark.asyncio
-async def test_telegram_platform_start_requires_token():
+async def test_telegram_platform_start_requires_token() -> None:
     with (
         patch.dict("os.environ", {}, clear=True),
         patch("free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True),
@@ -62,7 +62,7 @@ async def test_telegram_platform_start_requires_token():
 
 
 @pytest.mark.asyncio
-async def test_telegram_platform_quiesce_and_close_without_application():
+async def test_telegram_platform_quiesce_and_close_without_application() -> None:
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
@@ -79,7 +79,7 @@ async def test_telegram_platform_quiesce_and_close_without_application():
 @pytest.mark.asyncio
 async def test_telegram_close_cleans_up_partially_initialized_application(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
@@ -107,7 +107,7 @@ async def test_telegram_close_cleans_up_partially_initialized_application(
 @pytest.mark.asyncio
 async def test_telegram_two_phase_lifecycle_drains_before_delivery_close(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
@@ -158,7 +158,7 @@ async def test_telegram_two_phase_lifecycle_drains_before_delivery_close(
 )
 async def test_telegram_quiesce_attempts_all_steps_after_failure(
     monkeypatch: pytest.MonkeyPatch, failing_step: str
-):
+) -> None:
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
@@ -209,7 +209,7 @@ async def test_telegram_quiesce_attempts_all_steps_after_failure(
 )
 async def test_telegram_close_attempts_all_steps_after_failure(
     monkeypatch: pytest.MonkeyPatch, failing_step: str
-):
+) -> None:
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
@@ -251,7 +251,9 @@ async def test_telegram_close_attempts_all_steps_after_failure(
 
 
 @pytest.mark.asyncio
-async def test_with_retry_returns_none_when_message_not_modified_network_error():
+async def test_with_retry_returns_none_when_message_not_modified_network_error() -> (
+    None
+):
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
@@ -266,7 +268,7 @@ async def test_with_retry_returns_none_when_message_not_modified_network_error()
 @pytest.mark.asyncio
 async def test_with_retry_retries_network_error_then_succeeds(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
@@ -287,7 +289,9 @@ async def test_with_retry_retries_network_error_then_succeeds(
 
 
 @pytest.mark.asyncio
-async def test_with_retry_honors_retry_after_timedelta(monkeypatch: pytest.MonkeyPatch):
+async def test_with_retry_honors_retry_after_timedelta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
@@ -308,7 +312,7 @@ async def test_with_retry_honors_retry_after_timedelta(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_with_retry_drops_parse_mode_on_markdown_entity_error():
+async def test_with_retry_drops_parse_mode_on_markdown_entity_error() -> None:
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
@@ -327,7 +331,7 @@ async def test_with_retry_drops_parse_mode_on_markdown_entity_error():
 
 
 @pytest.mark.asyncio
-async def test_with_retry_can_raise_known_message_errors_for_bulk_fallback():
+async def test_with_retry_can_raise_known_message_errors_for_bulk_fallback() -> None:
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
@@ -346,7 +350,7 @@ async def test_with_retry_can_raise_known_message_errors_for_bulk_fallback():
 @pytest.mark.asyncio
 async def test_queue_send_message_uses_required_limiter(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
@@ -375,7 +379,7 @@ async def test_queue_send_message_uses_required_limiter(
 @pytest.mark.asyncio
 async def test_queue_edit_message_uses_required_limiter(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
@@ -398,7 +402,7 @@ async def test_queue_edit_message_uses_required_limiter(
 
 def test_fire_and_forget_non_coroutine_uses_ensure_future(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
@@ -412,7 +416,7 @@ def test_fire_and_forget_non_coroutine_uses_ensure_future(
 
 
 @pytest.mark.asyncio
-async def test_on_start_command_replies_and_forwards():
+async def test_on_start_command_replies_and_forwards() -> None:
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
@@ -429,7 +433,7 @@ async def test_on_start_command_replies_and_forwards():
 
 
 @pytest.mark.asyncio
-async def test_on_telegram_message_handler_error_sends_error_message():
+async def test_on_telegram_message_handler_error_sends_error_message() -> None:
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
@@ -455,7 +459,9 @@ async def test_on_telegram_message_handler_error_sends_error_message():
 
 
 @pytest.mark.asyncio
-async def test_telegram_start_retries_on_network_error(monkeypatch: pytest.MonkeyPatch):
+async def test_telegram_start_retries_on_network_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
@@ -484,7 +490,7 @@ async def test_telegram_start_retries_on_network_error(monkeypatch: pytest.Monke
 @pytest.mark.asyncio
 async def test_telegram_polling_retry_does_not_restart_running_application(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
     ):
@@ -514,7 +520,7 @@ async def test_telegram_polling_retry_does_not_restart_running_application(
 
 
 @pytest.mark.asyncio
-async def test_edit_message_with_text_exceeding_4096_raises():
+async def test_edit_message_with_text_exceeding_4096_raises() -> None:
     """edit_message with text > 4096 raises TelegramError (BadRequest)."""
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
@@ -531,7 +537,7 @@ async def test_edit_message_with_text_exceeding_4096_raises():
 
 
 @pytest.mark.asyncio
-async def test_edit_message_empty_string():
+async def test_edit_message_empty_string() -> None:
     """edit_message with empty string - Telegram accepts (no-op edit)."""
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
@@ -548,7 +554,7 @@ async def test_edit_message_empty_string():
 
 
 @pytest.mark.asyncio
-async def test_send_message_empty_string():
+async def test_send_message_empty_string() -> None:
     """send_message with empty string - Telegram may reject; we pass through."""
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
@@ -566,7 +572,7 @@ async def test_send_message_empty_string():
 
 
 @pytest.mark.asyncio
-async def test_on_telegram_message_non_text_update_ignored():
+async def test_on_telegram_message_non_text_update_ignored() -> None:
     """Update with message.photo but no text returns early without calling handler."""
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
@@ -588,7 +594,7 @@ async def test_on_telegram_message_non_text_update_ignored():
 
 
 @pytest.mark.asyncio
-async def test_with_retry_message_not_found_returns_none():
+async def test_with_retry_message_not_found_returns_none() -> None:
     """'message to edit not found' returns None without retry."""
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True

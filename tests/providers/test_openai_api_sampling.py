@@ -122,7 +122,7 @@ def _success():
 )
 async def test_supported_sampling_is_never_removed_proactively(
     ingress: Literal["messages", "responses"], model: str, reasoning: ReasoningPolicy
-):
+) -> None:
     bodies = []
 
     def handler(request: httpx2.Request):
@@ -149,7 +149,7 @@ async def test_only_explicitly_rejected_sampling_is_removed(
     surface: str,
     param: str,
     default_only: bool,
-):
+) -> None:
     bodies = []
 
     def handler(request: httpx2.Request):
@@ -180,7 +180,7 @@ async def test_only_explicitly_rejected_sampling_is_removed(
 @pytest.mark.parametrize("concurrent", [False, True])
 async def test_two_rejections_are_request_local(
     ingress: Literal["messages", "responses"], order: tuple[str, ...], concurrent: bool
-):
+) -> None:
     bodies = []
     both_started = asyncio.Event()
 
@@ -239,7 +239,9 @@ async def test_two_rejections_are_request_local(
         "Unsupported parameter: temperature",
     ],
 )
-async def test_ambiguous_or_unrelated_validation_is_not_corrected(error: JsonValue):
+async def test_ambiguous_or_unrelated_validation_is_not_corrected(
+    error: JsonValue,
+) -> None:
     bodies = []
 
     def handler(request: httpx2.Request):
@@ -260,7 +262,9 @@ async def test_ambiguous_or_unrelated_validation_is_not_corrected(error: JsonVal
 @pytest.mark.parametrize(
     "status, attempts", [(401, 1), (403, 1), (422, 1), (429, 2), (500, 2)]
 )
-async def test_other_http_failures_do_not_remove_sampling(status: int, attempts: int):
+async def test_other_http_failures_do_not_remove_sampling(
+    status: int, attempts: int
+) -> None:
     bodies = []
 
     def handler(request: httpx2.Request):
@@ -280,7 +284,9 @@ async def test_other_http_failures_do_not_remove_sampling(status: int, attempts:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reasoning_first", [False, True])
-async def test_reasoning_and_sampling_corrections_compose(reasoning_first: bool):
+async def test_reasoning_and_sampling_corrections_compose(
+    reasoning_first: bool,
+) -> None:
     reasoning_error = {
         "code": "unsupported_value",
         "param": "reasoning.effort",
@@ -317,7 +323,7 @@ async def test_reasoning_and_sampling_corrections_compose(reasoning_first: bool)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("budget", [1, 2, 3])
-async def test_sampling_corrections_share_the_attempt_budget(budget: int):
+async def test_sampling_corrections_share_the_attempt_budget(budget: int) -> None:
     bodies = []
 
     def handler(request: httpx2.Request):
@@ -342,7 +348,7 @@ async def test_sampling_corrections_share_the_attempt_budget(budget: int):
 
 
 @pytest.mark.asyncio
-async def test_rejection_of_an_already_removed_field_stops_correction():
+async def test_rejection_of_an_already_removed_field_stops_correction() -> None:
     bodies = []
 
     def handler(request: httpx2.Request):
@@ -363,7 +369,7 @@ async def test_rejection_of_an_already_removed_field_stops_correction():
 @pytest.mark.parametrize("history_first", [False, True])
 async def test_history_and_sampling_corrections_preserve_each_other(
     history_first: bool,
-):
+) -> None:
     history_error = {
         "code": "invalid_encrypted_content",
         "param": "input[0].encrypted_content",
@@ -421,7 +427,7 @@ async def test_history_and_sampling_corrections_preserve_each_other(
 @pytest.mark.parametrize("committed", [False, True])
 async def test_sampling_correction_respects_stream_commitment(
     ingress: Literal["messages", "responses"], committed: bool
-):
+) -> None:
     bodies = []
     partial = "x" * 70_000 if committed else "discarded"
 
@@ -477,7 +483,7 @@ async def test_sampling_correction_respects_stream_commitment(
 
 
 @pytest.mark.asyncio
-async def test_stream_failure_without_a_parameter_is_not_guessed():
+async def test_stream_failure_without_a_parameter_is_not_guessed() -> None:
     calls = 0
 
     def handler(_request):
@@ -495,7 +501,7 @@ async def test_stream_failure_without_a_parameter_is_not_guessed():
 
 
 @pytest.mark.asyncio
-async def test_shared_transport_does_not_apply_openai_api_sampling_correction():
+async def test_shared_transport_does_not_apply_openai_api_sampling_correction() -> None:
     bodies = []
 
     def handler(request: httpx2.Request):

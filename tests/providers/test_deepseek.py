@@ -57,11 +57,11 @@ def deepseek_provider(deepseek_config: ProviderConfig):
     return DeepSeekProvider(deepseek_config, admission=immediate_admission())
 
 
-def test_default_base_url_alias():
+def test_default_base_url_alias() -> None:
     assert DEEPSEEK_DEFAULT_BASE == "https://api.deepseek.com"
 
 
-def test_init(deepseek_config: ProviderConfig):
+def test_init(deepseek_config: ProviderConfig) -> None:
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_client:
@@ -73,7 +73,7 @@ def test_init(deepseek_config: ProviderConfig):
 
 def test_responses_request_uses_deepseek_chat_policy(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     request = OpenAIResponsesRequest.model_validate(
         {
             "model": "deepseek-chat",
@@ -116,7 +116,7 @@ def test_responses_request_uses_deepseek_chat_policy(
 
 def test_responses_tool_history_keeps_deepseek_replayable_reasoning(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     request = OpenAIResponsesRequest.model_validate(
         {
             "model": "deepseek-chat",
@@ -263,7 +263,9 @@ def test_maps_only_complete_consistent_cache_usage(
     assert deepseek_provider._behavior.cached_input_tokens(usage) == responses_cached
 
 
-def test_build_request_body_openai_chat_shape(deepseek_provider: DeepSeekProvider):
+def test_build_request_body_openai_chat_shape(
+    deepseek_provider: DeepSeekProvider,
+) -> None:
     request = MessagesRequest(
         model="deepseek-v4-pro",
         max_tokens=100,
@@ -282,7 +284,9 @@ def test_build_request_body_openai_chat_shape(deepseek_provider: DeepSeekProvide
     assert "stream_options" not in body
 
 
-def test_build_request_body_default_max_tokens(deepseek_provider: DeepSeekProvider):
+def test_build_request_body_default_max_tokens(
+    deepseek_provider: DeepSeekProvider,
+) -> None:
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="x")],
@@ -293,7 +297,9 @@ def test_build_request_body_default_max_tokens(deepseek_provider: DeepSeekProvid
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 
 
-def test_build_request_body_thinking_enabled(deepseek_provider: DeepSeekProvider):
+def test_build_request_body_thinking_enabled(
+    deepseek_provider: DeepSeekProvider,
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -309,7 +315,7 @@ def test_build_request_body_thinking_enabled(deepseek_provider: DeepSeekProvider
 
 def test_build_request_body_tool_list_keeps_thinking(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -340,7 +346,7 @@ def test_build_request_body_tool_list_keeps_thinking(
 
 def test_build_request_body_tool_choice_keeps_thinking(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -361,7 +367,7 @@ def test_build_request_body_tool_choice_keeps_thinking(
 
 def test_build_request_body_forced_tool_choice_downgrades_to_auto(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -386,7 +392,7 @@ def test_build_request_body_forced_tool_choice_downgrades_to_auto(
     assert body["tool_choice"] == "auto"
 
 
-def test_build_request_body_encodes_reasoning_off():
+def test_build_request_body_encodes_reasoning_off() -> None:
     provider = DeepSeekProvider(
         make_provider_config(
             api_key="k",
@@ -406,7 +412,9 @@ def test_build_request_body_encodes_reasoning_off():
     assert "stream_options" not in body
 
 
-def test_non_tool_thinking_survives_conversion(deepseek_provider: DeepSeekProvider):
+def test_non_tool_thinking_survives_conversion(
+    deepseek_provider: DeepSeekProvider,
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -437,7 +445,7 @@ def test_non_tool_thinking_survives_conversion(deepseek_provider: DeepSeekProvid
 
 def test_redacted_thinking_is_kept_until_destination_preparation(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -463,7 +471,7 @@ def test_redacted_thinking_is_kept_until_destination_preparation(
 
 def test_tool_history_with_replayable_thinking_preserves_thinking(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -539,7 +547,7 @@ def test_tool_history_with_replayable_thinking_preserves_thinking(
 
 def test_tool_history_with_unsigned_thinking_preserves_thinking(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -584,7 +592,7 @@ def test_tool_history_with_unsigned_thinking_preserves_thinking(
 
 def test_tool_history_without_thinking_keeps_selected_effort(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -662,7 +670,7 @@ def test_tool_history_without_thinking_keeps_selected_effort(
 
 def test_tool_history_with_empty_thinking_preserves_reasoning_state(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -714,7 +722,7 @@ def test_tool_history_with_empty_thinking_preserves_reasoning_state(
 
 def test_tool_history_with_empty_top_level_reasoning_preserves_reasoning_state(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -764,7 +772,7 @@ def test_tool_history_with_empty_top_level_reasoning_preserves_reasoning_state(
     )
 
 
-def test_thinking_off_preserves_historical_reasoning():
+def test_thinking_off_preserves_historical_reasoning() -> None:
     provider = DeepSeekProvider(
         make_provider_config(
             api_key="k",
@@ -793,7 +801,7 @@ def test_thinking_off_preserves_historical_reasoning():
     )
 
 
-def test_thinking_off_still_replays_required_tool_reasoning():
+def test_thinking_off_still_replays_required_tool_reasoning() -> None:
     provider = DeepSeekProvider(
         make_provider_config(
             api_key="k",
@@ -840,7 +848,7 @@ def test_thinking_off_still_replays_required_tool_reasoning():
     )
 
 
-def test_passthrough_tool_use_and_result(deepseek_provider: DeepSeekProvider):
+def test_passthrough_tool_use_and_result(deepseek_provider: DeepSeekProvider) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -913,7 +921,7 @@ def test_forwards_user_image_for_any_model(
     model: str,
     source: JsonObject,
     expected_url: str,
-):
+) -> None:
     request = MessagesRequest(
         model=model,
         messages=[
@@ -935,7 +943,7 @@ def test_forwards_user_image_for_any_model(
     ]
 
 
-def test_vision_model_strips_user_document():
+def test_vision_model_strips_user_document() -> None:
     """Vision models still omit documents; conversion has no document parts."""
     request = MessagesRequest(
         model="deepseek-v4-flash-vision-exp",
@@ -984,7 +992,7 @@ def test_vision_model_strips_user_document():
     assert "image" not in lowered
 
 
-def test_startup_rejects_mcp_servers():
+def test_startup_rejects_mcp_servers() -> None:
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="x")],
@@ -1001,7 +1009,7 @@ def test_startup_rejects_mcp_servers():
         provider.stream_messages(request)
 
 
-def test_startup_rejects_listed_server_tools_in_tools_list():
+def test_startup_rejects_listed_server_tools_in_tools_list() -> None:
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="x")],
@@ -1018,7 +1026,7 @@ def test_startup_rejects_listed_server_tools_in_tools_list():
         provider.stream_messages(request)
 
 
-def test_startup_preserves_completed_server_tool_history():
+def test_startup_preserves_completed_server_tool_history() -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1058,7 +1066,7 @@ def test_startup_preserves_completed_server_tool_history():
 
 def test_non_tool_top_level_reasoning_survives_conversion(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     request = MessagesRequest(
         model="m",
         messages=[
@@ -1079,7 +1087,9 @@ def test_non_tool_top_level_reasoning_survives_conversion(
     }
 
 
-def test_tool_call_top_level_reasoning_is_replayed(deepseek_provider: DeepSeekProvider):
+def test_tool_call_top_level_reasoning_is_replayed(
+    deepseek_provider: DeepSeekProvider,
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1123,7 +1133,7 @@ def test_tool_call_top_level_reasoning_is_replayed(deepseek_provider: DeepSeekPr
 @pytest.mark.asyncio
 async def test_wire_messages_keep_prefix_and_effort_when_old_reasoning_is_absent(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     prefix_messages = [
         {"role": "user", "content": "first"},
         {
@@ -1223,7 +1233,7 @@ async def test_wire_messages_keep_prefix_and_effort_when_old_reasoning_is_absent
 @pytest.mark.asyncio
 async def test_stream_uses_chat_completions_and_maps_cache_usage(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="hi")],
@@ -1299,7 +1309,7 @@ async def test_stream_uses_chat_completions_and_maps_cache_usage(
 @pytest.mark.asyncio
 async def test_responses_stream_maps_deepseek_cache_usage(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     request = OpenAIResponsesRequest(model="m", input="hi")
 
     async def fake_stream():
@@ -1370,7 +1380,7 @@ async def test_responses_stream_maps_deepseek_cache_usage(
 
 def test_preserves_extra_body_for_openai_chat_request(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     raw = {
         "model": "m",
         "max_tokens": 3,
@@ -1384,7 +1394,7 @@ def test_preserves_extra_body_for_openai_chat_request(
 
 def test_normalizes_tool_result_content_array_to_string(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     """Test that tool_result content arrays are normalized to strings for DeepSeek API."""
     request = MessagesRequest.model_validate(
         {
@@ -1429,7 +1439,9 @@ def test_normalizes_tool_result_content_array_to_string(
     assert "file2.txt" in string_payload(object_payload(tool_result)["content"])
 
 
-def test_strips_document_blocks_for_deepseek(deepseek_provider: DeepSeekProvider):
+def test_strips_document_blocks_for_deepseek(
+    deepseek_provider: DeepSeekProvider,
+) -> None:
     """Document blocks (e.g. PDFs from Claude Code) are stripped since DeepSeek can't process them."""
     request = MessagesRequest.model_validate(
         {
@@ -1465,7 +1477,9 @@ def test_strips_document_blocks_for_deepseek(deepseek_provider: DeepSeekProvider
     }
 
 
-def test_preserves_user_image_and_text_order(deepseek_provider: DeepSeekProvider):
+def test_preserves_user_image_and_text_order(
+    deepseek_provider: DeepSeekProvider,
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1510,7 +1524,7 @@ def test_preserves_user_image_and_text_order(deepseek_provider: DeepSeekProvider
 
 def test_normalizes_tool_result_content_dict_to_string(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     """Test that tool_result content dicts are normalized to JSON strings."""
     request = MessagesRequest.model_validate(
         {
@@ -1555,7 +1569,7 @@ def test_normalizes_tool_result_content_dict_to_string(
 @pytest.mark.parametrize("model", ["deepseek-flash", "deepseek-v4-flash-vision-exp"])
 def test_preserves_image_and_text_inside_tool_result(
     deepseek_provider: DeepSeekProvider, model: str
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": model,
@@ -1624,7 +1638,7 @@ def test_preserves_image_and_text_inside_tool_result(
 
 def test_image_only_tool_result_reaches_user_content(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1699,7 +1713,7 @@ def test_image_only_tool_result_reaches_user_content(
 def test_document_or_empty_tool_result_keeps_placeholder(
     deepseek_provider: DeepSeekProvider,
     tool_content: list[JsonObject],
-):
+) -> None:
     """Document-only and empty tool results retain their omission marker."""
     request = MessagesRequest.model_validate(
         {
@@ -1753,7 +1767,7 @@ def test_document_or_empty_tool_result_keeps_placeholder(
 
 def test_document_only_message_replaced_with_placeholder(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     """A top-level document-only message remains non-empty after stripping."""
     request = MessagesRequest.model_validate(
         {
@@ -1783,7 +1797,7 @@ def test_document_only_message_replaced_with_placeholder(
 
 def test_warns_when_stripping_document_blocks(
     deepseek_provider: DeepSeekProvider, caplog: pytest.LogCaptureFixture
-):
+) -> None:
     """A warning identifies documents omitted from user and tool content."""
     request = MessagesRequest.model_validate(
         {
@@ -1866,7 +1880,7 @@ def test_no_warning_when_no_documents(
     deepseek_provider: DeepSeekProvider,
     caplog: pytest.LogCaptureFixture,
     content: list[JsonObject] | str,
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1884,7 +1898,7 @@ def test_no_warning_when_no_documents(
 
 def test_parallel_tool_results_close_before_image_content(
     deepseek_provider: DeepSeekProvider,
-):
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "deepseek-flash",
@@ -1955,7 +1969,7 @@ def test_parallel_tool_results_close_before_image_content(
 @pytest.mark.parametrize("inside_tool_result", [False, True])
 def test_mixed_attachment_content_omits_only_document(
     deepseek_provider: DeepSeekProvider, inside_tool_result: bool
-):
+) -> None:
     content = [
         {
             "type": "image",
@@ -2020,7 +2034,7 @@ def test_mixed_attachment_content_omits_only_document(
 )
 def test_rejects_unportable_image_without_exposing_source(
     deepseek_provider: DeepSeekProvider, source: JsonObject, error: str
-):
+) -> None:
     request = MessagesRequest(
         model="deepseek-flash",
         messages=[
@@ -2036,7 +2050,9 @@ def test_rejects_unportable_image_without_exposing_source(
     assert "private_" not in str(exc_info.value)
 
 
-def test_shared_conversion_rejects_assistant_image(deepseek_provider: DeepSeekProvider):
+def test_shared_conversion_rejects_assistant_image(
+    deepseek_provider: DeepSeekProvider,
+) -> None:
     image = {
         "type": "image",
         "source": {"type": "url", "url": "https://images.example.test/shot.png"},
@@ -2056,7 +2072,7 @@ def test_shared_conversion_rejects_assistant_image(deepseek_provider: DeepSeekPr
 @pytest.mark.parametrize("wire_api", ["messages", "responses"])
 async def test_upstream_image_rejection_replaces_image_with_a_note(
     deepseek_provider: DeepSeekProvider, wire_api: str
-):
+) -> None:
     if wire_api == "messages":
         request = MessagesRequest(
             model="deepseek-flash",

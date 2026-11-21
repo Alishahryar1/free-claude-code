@@ -8,7 +8,7 @@ from tests.providers.test_history_transports import _harness
 
 
 @pytest.mark.asyncio
-async def test_direct_chat_preserves_native_request_and_stream_through_sdk():
+async def test_direct_chat_preserves_native_request_and_stream_through_sdk() -> None:
     request = {
         "model": "native",
         "messages": [

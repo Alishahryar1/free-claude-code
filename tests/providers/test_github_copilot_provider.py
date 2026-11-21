@@ -85,7 +85,7 @@ from tests.wire_payload import (
 @pytest.mark.parametrize("seeded", [False, True])
 async def test_conversion_runs_once_under_current_account_lease(
     tmp_path: Path, egress: CopilotEgress, responses: bool, seeded: bool
-):
+) -> None:
     harness = Harness(tmp_path, egress)
     cls, name = {
         (CopilotEgress.CHAT, False): (OpenAIChatTransport, "_build_request_body"),
@@ -347,7 +347,7 @@ class Harness:
 @pytest.mark.parametrize("supports_off", [False, True])
 async def test_classifier_uses_current_lease_controls_and_clears_raw_hints(
     tmp_path: Path, egress: CopilotEgress, supports_off: bool
-):
+) -> None:
     harness = Harness(tmp_path, egress)
     current = harness.runtime.available[0]
     efforts = ("none", "high") if supports_off else ("high",)

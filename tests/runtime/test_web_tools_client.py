@@ -39,7 +39,7 @@ def _httpx_clients(
 @pytest.mark.asyncio
 async def test_search_request_parsing_limit_and_client_closure(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     def handle(request: httpx.Request):
         assert str(request.url).startswith("https://lite.duckduckgo.com/lite/")
         assert request.url.params["q"] == "query & details"
@@ -64,7 +64,7 @@ async def test_search_request_parsing_limit_and_client_closure(
 @pytest.mark.parametrize("cancel_during_body", [False, True])
 async def test_search_cancellation_closes_client_and_open_response(
     monkeypatch: pytest.MonkeyPatch, cancel_during_body: bool
-):
+) -> None:
     entered = asyncio.Event()
 
     class Body(httpx.AsyncByteStream):
@@ -106,7 +106,7 @@ async def test_search_cancellation_closes_client_and_open_response(
 @pytest.mark.asyncio
 async def test_fetch_cancellation_closes_response_session_and_connector(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     from contextlib import asynccontextmanager
     from types import SimpleNamespace
 
@@ -222,7 +222,7 @@ async def test_fetch_charset_and_content_type_handling(
     body: bytes,
     expected_title: str,
     expected_data: str,
-):
+) -> None:
     from contextlib import asynccontextmanager
     from types import SimpleNamespace
 
@@ -278,5 +278,5 @@ async def test_fetch_charset_and_content_type_handling(
         ("invalid\x00null", "utf-8"),
     ],
 )
-def test_text_encoding(charset: str | None, expected: str):
+def test_text_encoding(charset: str | None, expected: str) -> None:
     assert web_client._text_encoding(charset) == expected

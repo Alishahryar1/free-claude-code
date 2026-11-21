@@ -63,7 +63,7 @@ CALL = {
 @pytest.mark.parametrize("field", ["reasoning_content", "reasoning"])
 async def test_plain_reasoning_survives_gemini_round_trip(
     visible: bool, with_call: bool, field: Literal["reasoning_content", "reasoning"]
-):
+) -> None:
     sent = []
 
     def reply(request: httpx2.Request):
@@ -133,7 +133,7 @@ async def test_plain_reasoning_survives_gemini_round_trip(
 
 
 @pytest.mark.asyncio
-async def test_google_signature_cache_does_not_cross_credentials():
+async def test_google_signature_cache_does_not_cross_credentials() -> None:
     sent = []
     call = {
         **CALL,
@@ -181,7 +181,7 @@ async def test_google_signature_cache_does_not_cross_credentials():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["replay", "image"])
-async def test_lmstudio_counts_projected_replay_and_images(kind: str):
+async def test_lmstudio_counts_projected_replay_and_images(kind: str) -> None:
     sent = []
 
     def reply(request: httpx2.Request):

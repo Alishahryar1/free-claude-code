@@ -15,7 +15,7 @@ from smoke.product import test_codex_modes_product_live as smoke
 @pytest.mark.parametrize("database_exists", [False, True])
 def test_child_review_smoke_reads_canonical_database_without_creating_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, database_exists: bool
-):
+) -> None:
     home = tmp_path / "home/.fcc"
     home.mkdir(parents=True)
     (home / "code").mkdir()

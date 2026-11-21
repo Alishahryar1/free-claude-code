@@ -43,7 +43,7 @@ def kimi_code_provider() -> OpenAIChatProvider:
 
 def test_init_uses_subscription_endpoint_and_identifies_fcc(
     kimi_code_provider: OpenAIChatProvider,
-):
+) -> None:
     assert kimi_code_provider._api_key == "test-subscription-key"
     assert kimi_code_provider._base_url == "https://api.kimi.com/coding/v1"
     assert kimi_code_provider._provider_name == "KIMI_CODE"
@@ -54,7 +54,7 @@ def test_init_uses_subscription_endpoint_and_identifies_fcc(
 
 def test_explicit_output_limit_uses_max_completion_tokens(
     kimi_code_provider: OpenAIChatProvider,
-):
+) -> None:
     request = _request(max_tokens=32_768)
 
     body = kimi_code_provider._chat._build_request_body(
@@ -67,7 +67,7 @@ def test_explicit_output_limit_uses_max_completion_tokens(
 
 def test_omitted_output_limit_preserves_kimi_default(
     kimi_code_provider: OpenAIChatProvider,
-):
+) -> None:
     request = _request()
 
     body = kimi_code_provider._chat._build_request_body(
@@ -106,7 +106,7 @@ def test_named_reasoning_effort_uses_kimi_vocabulary(
 
 def test_enabled_reasoning_without_named_effort_uses_max(
     kimi_code_provider: OpenAIChatProvider,
-):
+) -> None:
     request = _request(thinking={"type": "enabled", "budget_tokens": 4_096})
 
     body = kimi_code_provider._chat._build_request_body(
@@ -116,7 +116,7 @@ def test_enabled_reasoning_without_named_effort_uses_max(
     assert body["reasoning_effort"] == "max"
 
 
-def test_disabled_reasoning_uses_none(kimi_code_provider: OpenAIChatProvider):
+def test_disabled_reasoning_uses_none(kimi_code_provider: OpenAIChatProvider) -> None:
     request = _request(thinking={"type": "disabled"})
 
     body = kimi_code_provider._chat._build_request_body(
@@ -128,7 +128,7 @@ def test_disabled_reasoning_uses_none(kimi_code_provider: OpenAIChatProvider):
 
 def test_reasoning_history_uses_reasoning_content(
     kimi_code_provider: OpenAIChatProvider,
-):
+) -> None:
     request = _request(
         messages=[
             {
@@ -151,7 +151,7 @@ def test_reasoning_history_uses_reasoning_content(
     assert object_payload(assistant)["content"] == "I found the relevant file."
 
 
-def test_caller_extra_body_is_rejected(kimi_code_provider: OpenAIChatProvider):
+def test_caller_extra_body_is_rejected(kimi_code_provider: OpenAIChatProvider) -> None:
     request = _request(extra_body={"thinking": {"type": "enabled"}})
 
     with pytest.raises(InvalidRequestError, match="Kimi Code Chat Completions"):
@@ -164,7 +164,7 @@ def test_caller_extra_body_is_rejected(kimi_code_provider: OpenAIChatProvider):
 async def test_model_list_uses_subscription_models_endpoint(
     monkeypatch: pytest.MonkeyPatch,
     kimi_code_provider: OpenAIChatProvider,
-):
+) -> None:
     mock_list = AsyncMock(
         return_value=SimpleNamespace(
             data=[

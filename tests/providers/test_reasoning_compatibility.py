@@ -27,7 +27,7 @@ from tests.providers.request_factory import make_messages_request
 )
 def test_prepare_uses_explicit_capability_and_available_encoding(
     capability: str, can_disable: bool, control: str, limit: int
-):
+) -> None:
     request = make_messages_request(
         "arbitrary",
         max_tokens=64,
@@ -56,7 +56,7 @@ def test_prepare_uses_explicit_capability_and_available_encoding(
 )
 def test_normal_allowance_preserves_larger_limits_or_omission(
     requested: int, normal: int | None, expected: int | None
-):
+) -> None:
     request = make_messages_request("route", max_tokens=requested)
     prepared, _ = prepare_messages_reasoning(
         request,
@@ -96,7 +96,7 @@ def test_normal_allowance_preserves_larger_limits_or_omission(
 )
 def test_correction_requires_rejection_of_the_sent_control(
     message: str, param: str | None, correct: bool
-):
+) -> None:
     body = {
         "model": "route",
         "messages": [{"role": "user", "content": "classify"}],
@@ -126,7 +126,9 @@ def test_correction_requires_rejection_of_the_sent_control(
 
 
 @pytest.mark.parametrize("sent", [{}, {"reasoning_effort": "high"}])
-def test_correction_requires_the_off_control_to_have_reached_the_wire(sent: JsonObject):
+def test_correction_requires_the_off_control_to_have_reached_the_wire(
+    sent: JsonObject,
+) -> None:
     error = BadRequestError(
         "Reasoning cannot be disabled",
         response=httpx2.Response(
@@ -141,7 +143,7 @@ def test_correction_requires_the_off_control_to_have_reached_the_wire(sent: Json
     )
 
 
-def test_correction_removes_both_template_controls_preserving_other_options():
+def test_correction_removes_both_template_controls_preserving_other_options() -> None:
     error = BadRequestError(
         "Thinking cannot be disabled",
         response=httpx2.Response(

@@ -38,7 +38,7 @@ def runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def test_runtime_uses_venv_executable_and_interpreter_architecture(
     runtime: tuple[Path, Path, dict[str, int | str | None]],
-):
+) -> None:
     executable, library, _variables = runtime
     settings, architecture = macos_app.runtime_settings()
     assert settings == {
@@ -51,7 +51,7 @@ def test_runtime_uses_venv_executable_and_interpreter_architecture(
 
 def test_runtime_keeps_symlinked_venv_identity(
     runtime: tuple[Path, Path, dict[str, int | str | None]],
-):
+) -> None:
     executable, library, _variables = runtime
     base_executable = library.parent / "python"
     executable.rename(base_executable)
@@ -63,7 +63,7 @@ def test_runtime_keeps_symlinked_venv_identity(
 
 def test_unsupported_interpreter_architecture_is_rejected(
     runtime: object, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     monkeypatch.setattr(macos_app.platform, "machine", lambda: "armv7l")
     with pytest.raises(ValueError, match="architecture"):
         macos_app.runtime_settings()
@@ -72,7 +72,7 @@ def test_unsupported_interpreter_architecture_is_rejected(
 @pytest.mark.parametrize("variable", ["Py_GIL_DISABLED", "Py_DEBUG"])
 def test_unsupported_runtime_build_is_rejected(
     runtime: tuple[Path, Path, dict[str, int | str | None]], variable: str
-):
+) -> None:
     runtime[2][variable] = 1
     with pytest.raises(ValueError, match="release"):
         macos_app.runtime_settings()
@@ -80,7 +80,7 @@ def test_unsupported_runtime_build_is_rejected(
 
 def test_missing_runtime_library_is_rejected(
     runtime: tuple[Path, Path, dict[str, int | str | None]],
-):
+) -> None:
     runtime[1].unlink()
     with pytest.raises(ValueError, match="library"):
         macos_app.runtime_settings()
@@ -88,7 +88,7 @@ def test_missing_runtime_library_is_rejected(
 
 def test_wrong_python_version_is_rejected(
     runtime: object, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     monkeypatch.setattr(macos_app.platform, "python_version", lambda: "3.15.0")
     with pytest.raises(ValueError, match="version"):
         macos_app.runtime_settings()
@@ -126,7 +126,7 @@ def installer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runtime: object):
 def test_complete_bundle_is_signed_before_publication(
     installer: tuple[Path, Path, list[list[str]]],
     runtime: tuple[Path, Path, dict[str, int | str | None]],
-):
+) -> None:
     home, _resources, calls = installer
     app = macos_app.install()
     assert app == home / "Applications/Free Claude Code.app"
@@ -159,7 +159,7 @@ def test_upgrade_replaces_legacy_owned_bundle_and_updates_runtime(
     installer: tuple[Path, Path, list[list[str]]],
     runtime: tuple[Path, Path, dict[str, int | str | None]],
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     home, _resources, _calls = installer
     app = owned_app(home)
     macos_app.install()
@@ -179,7 +179,7 @@ def test_failure_preserves_existing_app(
     installer: tuple[Path, Path, list[list[str]]],
     monkeypatch: pytest.MonkeyPatch,
     failure: str,
-):
+) -> None:
     home, resources, _calls = installer
     app = owned_app(home)
     if failure == "sign":
@@ -205,7 +205,9 @@ def test_failure_preserves_existing_app(
     assert list(app.parent.iterdir()) == [app]
 
 
-def test_unowned_app_is_preserved(installer: tuple[Path, Path, list[list[str]]]):
+def test_unowned_app_is_preserved(
+    installer: tuple[Path, Path, list[list[str]]],
+) -> None:
     home, _resources, calls = installer
     app = home / "Applications/Free Claude Code.app"
     app.mkdir(parents=True)
@@ -216,7 +218,7 @@ def test_unowned_app_is_preserved(installer: tuple[Path, Path, list[list[str]]])
 
 def test_failed_restore_keeps_backup_for_recovery(
     installer: tuple[Path, Path, list[list[str]]], monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     home, _resources, _calls = installer
     app = owned_app(home)
     rename = Path.rename
@@ -236,7 +238,7 @@ def test_failed_restore_keeps_backup_for_recovery(
 
 def test_app_symlink_is_not_treated_as_owned(
     installer: tuple[Path, Path, list[list[str]]],
-):
+) -> None:
     home, _resources, _calls = installer
     app = owned_app(home)
     real = app.with_name("Other.app")
@@ -249,7 +251,7 @@ def test_app_symlink_is_not_treated_as_owned(
 
 def test_unrelated_desktop_item_is_preserved(
     installer: tuple[Path, Path, list[list[str]]],
-):
+) -> None:
     home, _resources, _calls = installer
     desktop = home / "Desktop"
     desktop.mkdir()

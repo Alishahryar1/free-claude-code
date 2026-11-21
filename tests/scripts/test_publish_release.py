@@ -17,7 +17,7 @@ from tests.scripts.test_version_policy import commit, git, write
 @pytest.mark.parametrize(
     "kind,expected", [("patch", "6.2.67"), ("minor", "6.3.0"), ("major", "7.0.0")]
 )
-def test_one_increment(kind: str, expected: str):
+def test_one_increment(kind: str, expected: str) -> None:
     assert next_version("6.2.66", kind) == expected
 
 
@@ -186,7 +186,9 @@ class FakeRemote:
         return publishing.Publisher("owner/repo")
 
 
-def test_nonrelease_never_allocates_or_builds(releases: tuple[Path, FakeRemote]):
+def test_nonrelease_never_allocates_or_builds(
+    releases: tuple[Path, FakeRemote],
+) -> None:
     _, remote = releases
     head = remote.advance("Explain usage", "README.md")
     remote.publisher().publish(head)
@@ -196,7 +198,7 @@ def test_nonrelease_never_allocates_or_builds(releases: tuple[Path, FakeRemote])
 
 def test_native_preparation_uses_release_commit_despite_dirty_current_checkout(
     releases: tuple[Path, FakeRemote],
-):
+) -> None:
     repo, remote = releases
     head = remote.advance()
     write(
@@ -211,7 +213,7 @@ def test_native_preparation_uses_release_commit_despite_dirty_current_checkout(
 
 def test_historical_release_without_native_builder_can_resume(
     releases: tuple[Path, FakeRemote],
-):
+) -> None:
     repo, remote = releases
     git(repo, "rm", "scripts/build_macos_launcher.py")
     head = remote.advance()
@@ -228,7 +230,7 @@ def test_stale_release_list_does_not_block_staging(
     releases: tuple[Path, FakeRemote],
     monkeypatch: pytest.MonkeyPatch,
     existing_draft: bool,
-):
+) -> None:
     _, remote = releases
     head = remote.advance()
     if existing_draft:
@@ -253,7 +255,7 @@ def test_stale_release_list_does_not_block_staging(
 @pytest.mark.parametrize("failure", ["stage", "publish", "finalize"])
 def test_retries_keep_version_and_published_bytes(
     releases: tuple[Path, FakeRemote], failure: str
-):
+) -> None:
     repo, remote = releases
     head = remote.advance()
     remote.fail = failure
@@ -274,7 +276,7 @@ def test_retries_keep_version_and_published_bytes(
 
 def test_later_commit_waits_even_if_previous_failed_before_tag(
     releases: tuple[Path, FakeRemote],
-):
+) -> None:
     _, remote = releases
     first = remote.advance()
     second = remote.advance("minor: Second")
@@ -287,7 +289,7 @@ def test_later_commit_waits_even_if_previous_failed_before_tag(
 
 def test_later_commit_waits_for_draft_and_old_retry_is_noop(
     releases: tuple[Path, FakeRemote],
-):
+) -> None:
     _, remote = releases
     first = remote.advance()
     remote.fail = "publish"
@@ -305,7 +307,7 @@ def test_later_commit_waits_for_draft_and_old_retry_is_noop(
 
 def test_publish_after_withdrawn_draft_and_reject_its_retry(
     releases: tuple[Path, FakeRemote], monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     repo, remote = releases
     withdrawn = remote.advance("patch: Withdrawn change")
     git(repo, "tag", "v1.2.4", withdrawn)
@@ -333,7 +335,7 @@ def test_publish_after_withdrawn_draft_and_reject_its_retry(
 
 def test_tag_collision_and_extra_target_tag_are_rejected(
     releases: tuple[Path, FakeRemote],
-):
+) -> None:
     repo, remote = releases
     head = remote.advance()
     git(repo, "tag", "v1.2.4", "v1.2.3")
@@ -345,7 +347,7 @@ def test_tag_collision_and_extra_target_tag_are_rejected(
         remote.publisher().publish(head)
 
 
-def test_target_must_be_main_ancestor(releases: tuple[Path, FakeRemote]):
+def test_target_must_be_main_ancestor(releases: tuple[Path, FakeRemote]) -> None:
     repo, remote = releases
     git(repo, "checkout", "-b", "other")
     write(repo, "src/other.py", "other")
@@ -354,14 +356,18 @@ def test_target_must_be_main_ancestor(releases: tuple[Path, FakeRemote]):
         remote.publisher().publish(head)
 
 
-def test_malformed_or_bypassed_title_cannot_publish(releases: tuple[Path, FakeRemote]):
+def test_malformed_or_bypassed_title_cannot_publish(
+    releases: tuple[Path, FakeRemote],
+) -> None:
     _, remote = releases
     head = remote.advance("Oops")
     with pytest.raises(ValueError, match="require"):
         remote.publisher().publish(head)
 
 
-def test_reserved_tag_and_missing_draft_can_resume(releases: tuple[Path, FakeRemote]):
+def test_reserved_tag_and_missing_draft_can_resume(
+    releases: tuple[Path, FakeRemote],
+) -> None:
     repo, remote = releases
     head = remote.advance()
     git(repo, "tag", "v1.2.4", head)
@@ -372,7 +378,7 @@ def test_reserved_tag_and_missing_draft_can_resume(releases: tuple[Path, FakeRem
 
 def test_staged_bytes_are_verified_before_any_retry_upload(
     releases: tuple[Path, FakeRemote],
-):
+) -> None:
     _, remote = releases
     head = remote.advance()
     remote.fail = "publish"
@@ -388,7 +394,7 @@ def test_staged_bytes_are_verified_before_any_retry_upload(
 
 def test_no_release_does_not_wait_for_an_unfinished_release(
     releases: tuple[Path, FakeRemote],
-):
+) -> None:
     _, remote = releases
     first = remote.advance()
     remote.fail = "publish"

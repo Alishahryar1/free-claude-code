@@ -121,7 +121,7 @@ def _responses_events(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["summary", "content"])
-async def test_native_reasoning_parts_are_saved_and_replayed_once(field: str):
+async def test_native_reasoning_parts_are_saved_and_replayed_once(field: str) -> None:
     upstream = _responses_events(["First part.", "Second part."], field=field)
     async with _harness("responses", lambda _: (200, upstream)) as (send, bodies, _):
         saved = await _saved_reply(
@@ -137,7 +137,7 @@ async def test_native_reasoning_parts_are_saved_and_replayed_once(field: str):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["summary", "content"])
-async def test_completed_only_reasoning_keeps_final_answer_open(field: str):
+async def test_completed_only_reasoning_keeps_final_answer_open(field: str) -> None:
     upstream = _responses_events(
         ["Completed thought."],
         field=field,
@@ -167,7 +167,9 @@ async def test_completed_only_reasoning_keeps_final_answer_open(field: str):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_chat_secondary_reasoning_prefix_is_not_repeated(wire: WireProtocol):
+async def test_chat_secondary_reasoning_prefix_is_not_repeated(
+    wire: WireProtocol,
+) -> None:
     upstream = _chunks(
         [
             (
@@ -200,7 +202,7 @@ async def test_chat_secondary_reasoning_prefix_is_not_repeated(wire: WireProtoco
 
 
 @pytest.mark.asyncio
-async def test_independent_native_items_keep_their_own_text_and_signature():
+async def test_independent_native_items_keep_their_own_text_and_signature() -> None:
     upstream = _responses_events(
         ["Alpha."], field="content", signature="cipher-a", late=True
     )
@@ -255,7 +257,7 @@ async def test_independent_native_items_keep_their_own_text_and_signature():
 
 
 @pytest.mark.asyncio
-async def test_native_signed_empty_thinking_keeps_its_block_kind():
+async def test_native_signed_empty_thinking_keeps_its_block_kind() -> None:
     upstream = _responses_events(
         [""], field="content", streamed=False, signature="empty-signed"
     )
@@ -278,7 +280,7 @@ async def test_native_signed_empty_thinking_keeps_its_block_kind():
 @pytest.mark.parametrize("native_alias", [False, True])
 async def test_chat_signed_details_keep_their_own_text_on_replay(
     wire: WireProtocol, fragmented: bool, native_alias: bool
-):
+) -> None:
     deltas: list[tuple[JsonObject, str | None]]
     if fragmented:
         deltas: list[tuple[JsonObject, str | None]] = [
@@ -396,7 +398,9 @@ async def test_chat_signed_details_keep_their_own_text_on_replay(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_chat_explicit_signed_empty_text_retains_its_kind(wire: WireProtocol):
+async def test_chat_explicit_signed_empty_text_retains_its_kind(
+    wire: WireProtocol,
+) -> None:
     upstream = _chunks(
         [
             (
@@ -454,7 +458,7 @@ async def test_chat_explicit_signed_empty_text_retains_its_kind(wire: WireProtoc
 @pytest.mark.parametrize("fragmented", [False, True])
 async def test_native_first_alias_preserves_later_signed_details(
     wire: WireProtocol, after_answer: bool, fragmented: bool
-):
+) -> None:
     details = [
         {
             "type": "reasoning.text",
@@ -515,7 +519,9 @@ async def test_native_first_alias_preserves_later_signed_details(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_identical_signed_details_keep_independent_ownership(wire: WireProtocol):
+async def test_identical_signed_details_keep_independent_ownership(
+    wire: WireProtocol,
+) -> None:
     upstream = _chunks(
         [
             ({"reasoning_content": "Same.Same."}, None),
@@ -555,7 +561,7 @@ async def test_identical_signed_details_keep_independent_ownership(wire: WirePro
 
 
 @pytest.mark.parametrize("typed", [False, True])
-def test_first_readable_representation_streams_without_waiting(typed: bool):
+def test_first_readable_representation_streams_without_waiting(typed: bool) -> None:
     output = AnthropicChatStreamOutput(
         message_id="msg_test", model="test", input_tokens=1
     )

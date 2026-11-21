@@ -86,7 +86,7 @@ def replay_request(wire: str, record: ReplayRecord):
 @pytest.mark.parametrize("source", ["same", "foreign", "opaque"])
 async def test_budget_counts_readable_projection_but_not_opaque_carriers(
     wire: str, source: str
-):
+) -> None:
     sent = []
 
     def reply(request: httpx2.Request):
@@ -131,7 +131,7 @@ async def test_budget_counts_readable_projection_but_not_opaque_carriers(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses", "gemini"])
-async def test_correction_revalidates_the_exact_prepared_body(wire: str):
+async def test_correction_revalidates_the_exact_prepared_body(wire: str) -> None:
     sent: list[JsonObject] = []
     inspected: list[JsonObject] = []
 
@@ -175,7 +175,9 @@ async def test_correction_revalidates_the_exact_prepared_body(wire: str):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses", "gemini"])
-async def test_local_rejection_abandons_probe_without_upstream_rejection(wire: str):
+async def test_local_rejection_abandons_probe_without_upstream_rejection(
+    wire: str,
+) -> None:
     inference = 0
     checks = 0
 
@@ -227,7 +229,7 @@ async def test_local_rejection_abandons_probe_without_upstream_rejection(wire: s
 
 
 @pytest.mark.asyncio
-async def test_internal_continuation_is_rechecked_before_another_inference():
+async def test_internal_continuation_is_rechecked_before_another_inference() -> None:
     inference = 0
     checked = []
 
@@ -269,7 +271,7 @@ async def test_internal_continuation_is_rechecked_before_another_inference():
 @pytest.mark.parametrize("tool_result", [False, True])
 async def test_direct_and_tool_result_images_are_counted_once(
     wire: str, tool_result: bool, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     from free_claude_code.providers.lmstudio import tokens
 
     data = "A" * 900000

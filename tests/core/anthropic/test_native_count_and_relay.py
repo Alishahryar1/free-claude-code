@@ -22,7 +22,7 @@ from free_claude_code.core.json_types import JsonObject
         {"type": "ping", "extra": "\ud800"},
     ],
 )
-def test_suppressed_leading_ping_still_validates_envelope(block: JsonObject):
+def test_suppressed_leading_ping_still_validates_envelope(block: JsonObject) -> None:
     relay = NativeMessagesPassthrough("alias")
     with pytest.raises(NativeMessagesError):
         relay.feed("ping", block)
@@ -30,7 +30,7 @@ def test_suppressed_leading_ping_still_validates_envelope(block: JsonObject):
 
 
 @pytest.mark.parametrize("in_tool", [False, True])
-def test_native_count_retains_existing_text_and_image_estimation(in_tool: bool):
+def test_native_count_retains_existing_text_and_image_estimation(in_tool: bool) -> None:
     image = {
         "type": "image",
         "source": {"type": "base64", "media_type": "image/png", "data": "A" * 300_000},

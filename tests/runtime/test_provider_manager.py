@@ -95,7 +95,9 @@ def _settings(model: str) -> Settings:
 
 
 @pytest.mark.asyncio
-async def test_discovery_error_follows_attempt_and_generation_without_losing_cache():
+async def test_discovery_error_follows_attempt_and_generation_without_losing_cache() -> (
+    None
+):
     factory = RuntimeFactory()
     settings = _settings("nvidia_nim/one")
     manager = ProviderRuntimeManager(settings, runtime_factory=factory)
@@ -170,7 +172,9 @@ async def test_startup_generation_lease_and_shutdown_close_exactly_once() -> Non
 
 
 @pytest.mark.asyncio
-async def test_custom_tail_edit_preserves_metadata_and_first_key_change_evicts_it():
+async def test_custom_tail_edit_preserves_metadata_and_first_key_change_evicts_it() -> (
+    None
+):
     provider_id = "custom_" + "c" * 32
     definition = {
         "provider_id": provider_id,
