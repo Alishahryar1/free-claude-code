@@ -145,7 +145,7 @@ def extract_upstream_error_detail(exc: Exception) -> UpstreamErrorDetail:
         body_text=body_text,
         exception_text=exception_text,
         cause_chain_text=_exception_cause_chain_text(exc),
-        category_hint=_category_hint_from_body(raw_body, body_text),
+        category_hint=_category_hint_from_body(raw_body),
         body_truncated=body_truncated,
     )
 
@@ -181,7 +181,7 @@ def format_execution_failure_message(
     else:
         lines = [f"Upstream provider {upstream_name} returned an error."]
 
-    lines.append(f"Category: {detail.category_hint or failure.kind.value}")
+    lines.append(f"Category: {failure.kind.value}")
     if stable_message and stable_message != lines[0]:
         lines.append(f"Mapped message: {stable_message}")
     lines.extend(("", "Upstream error:"))
@@ -289,7 +289,7 @@ def _exception_cause_chain_text(exc: BaseException) -> str | None:
     return text
 
 
-def _category_hint_from_body(body: object, body_text: str | None) -> str | None:
+def _category_hint_from_body(body: object) -> str | None:
     parsed = body
     if isinstance(parsed, bytes):
         parsed = parsed.decode("utf-8", errors="replace")
@@ -309,12 +309,6 @@ def _category_hint_from_body(body: object, body_text: str | None) -> str | None:
             value = parsed.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
-    if (
-        body_text
-        and "model" in body_text.lower()
-        and "unsupported" in body_text.lower()
-    ):
-        return "upstream_model_error"
     return None
 
 
