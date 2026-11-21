@@ -8,15 +8,15 @@ import sys
 from pathlib import Path
 
 import pytest
-import yaml
 
 from scripts.ci_shards import shard_count
+from tests.workflow_payload import Workflow, read_workflow
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def workflow():
-    return yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())
+def workflow() -> Workflow:
+    return read_workflow(ROOT / ".github/workflows/tests.yml")
 
 
 @pytest.mark.parametrize("suite", ["pytest", "playwright"])
@@ -124,6 +124,7 @@ def test_browser_artifacts_identify_each_shard_and_run_attempt():
         if step.get("name") == "Upload Playwright failure artifacts"
     )
     name = upload["with"]["name"]
+    assert isinstance(name, str)
     for field in (
         "runner.os",
         "runner.arch",
@@ -197,7 +198,10 @@ def test_timing_shards_share_the_frozen_input_and_upload_only_after_success(suit
     assert (
         "if" not in record and "if" not in upload
     )  # Actions' default success() guard.
-    assert "${{ github.run_attempt }}" in upload["with"]["name"]
+    artifact_name = upload["with"]["name"]
+    assert (
+        isinstance(artifact_name, str) and "${{ github.run_attempt }}" in artifact_name
+    )
     assert upload["with"]["retention-days"] == 30
     assert upload["with"]["if-no-files-found"] == "error"
 

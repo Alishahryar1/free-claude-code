@@ -455,7 +455,8 @@ async def test_overlapping_requests_keep_separate_outcomes(outcomes: list[Record
 
     async def app(scope: Scope, receive: object, send: Send):
         nonlocal count
-        name = scope["query_string"].decode()
+        query_string: bytes = scope["query_string"]
+        name = query_string.decode()
         record_request_route(name, f"{name}-model")
         count += 1
         if count == 2:

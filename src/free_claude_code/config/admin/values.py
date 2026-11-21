@@ -76,9 +76,8 @@ def load_value_state(snapshot: ManagedConfigSnapshot) -> ValueState:
     state: ValueState = {}
     for field in FIELDS:
         if field.settings_attr is not None:
-            value = normalize_for_env(
-                getattr(snapshot.settings, field.settings_attr), key=field.key
-            )
+            setting: object = getattr(snapshot.settings, field.settings_attr)
+            value = normalize_for_env(setting, key=field.key)
             source = snapshot.sources[field.settings_attr].value
         elif field.key in snapshot.process:
             value = snapshot.process[field.key].strip() or None
@@ -109,7 +108,7 @@ def load_config_response(
             assert field.settings_attr is not None
             value = credential_projection(
                 field.key,
-                getattr(snapshot.settings, field.settings_attr),
+                snapshot.settings.credential_keys(field.settings_attr),
                 source,
                 revision_key,
             )

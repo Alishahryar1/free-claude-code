@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tomllib
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -291,26 +292,38 @@ def test_serve_supervisor_restarts_when_app_requests_restart() -> None:
     servers: list[object] = []
     restart_callbacks: list[Callable[[], None]] = []
 
-    apps: list[SimpleNamespace] = []
+    @dataclass
+    class FakeRuntime:
+        instance_id: str
+        is_closed: bool = False
+        close: AsyncMock = field(default_factory=lambda: AsyncMock(return_value=True))
+
+        def begin_shutdown(self) -> None:
+            pass
+
+        def http_started(self) -> None:
+            pass
+
+    @dataclass
+    class FakeApp:
+        runtime: FakeRuntime
+
+    @dataclass
+    class FakeConfig:
+        app: FakeApp
+
+    apps: list[FakeApp] = []
 
     def build_asgi_app(_settings: Settings, restart_callback: Callable[[], None]):
         restart_callbacks.append(restart_callback)
-        app = SimpleNamespace(
-            runtime=SimpleNamespace(
-                instance_id=f"instance-{len(apps)}",
-                is_closed=False,
-                begin_shutdown=lambda: None,
-                http_started=lambda: None,
-                close=AsyncMock(return_value=True),
-            )
-        )
+        app = FakeApp(runtime=FakeRuntime(instance_id=f"instance-{len(apps)}"))
         apps.append(app)
         return app
 
     class FakeServer:
         def __init__(
             self,
-            config: SimpleNamespace,
+            config: FakeConfig,
             *,
             begin_shutdown: object,
             on_started: Callable[[], None],
@@ -329,8 +342,8 @@ def test_serve_supervisor_restarts_when_app_requests_restart() -> None:
                 assert self.should_exit is True
                 self.config.app.runtime.is_closed = True
 
-    def fake_config(app: SimpleNamespace, **kwargs: object):
-        return SimpleNamespace(app=app, kwargs=kwargs)
+    def fake_config(app: FakeApp, **kwargs: object):
+        return FakeConfig(app)
 
     with (
         patch.object(commands, "get_settings", get_settings),

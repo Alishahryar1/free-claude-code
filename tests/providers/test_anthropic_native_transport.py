@@ -15,13 +15,14 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.history_replay import ReplayRecord, encode_replay
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.providers.anthropic.provider import AnthropicProvider
 from free_claude_code.providers.history_replay import replay_origin
 from tests.providers.test_anthropic_messages_transport import Wire, _events, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
+from tests.wire_payload import decode_object, object_array, object_payload
 
 
 async def collect(
@@ -90,7 +91,7 @@ async def test_native_omissions_helpers_controls_and_cookie_isolation():
             },
         )
         await collect(p)
-        sent = json.loads(received[0].content)
+        sent = decode_object(received[0].content)
         assert "stream" not in sent and "max_tokens" not in sent
         assert "original_model" not in sent and "resolved_provider_model" not in sent
         assert "betas" not in sent and "extra_body" not in sent
@@ -191,8 +192,8 @@ async def test_hosted_tool_stream_preserves_signatures_usage_and_pause_turn():
         output = parse_sse_text(
             "".join(await collect(p, native_body(True), response_model="alias"))
         )
-        expected = json.loads(json.dumps(events))
-        expected[0]["message"]["model"] = "alias"
+        expected = load_json_value(json.dumps(events))
+        object_payload(object_array(expected)[0]["message"])["model"] = "alias"
         assert [event.data for event in output] == expected
         assert wire.closed
     finally:
@@ -438,7 +439,7 @@ async def test_native_history_restores_matching_fcc_carriers_and_rejects_foreign
     received = []
 
     def handle(request: httpx.Request):
-        received.append(json.loads(request.content))
+        received.append(decode_object(request.content))
         return httpx.Response(
             200, json={"stop_reason": "end_turn", "type": "message", "content": []}
         )
@@ -465,7 +466,7 @@ async def test_native_history_restores_matching_fcc_carriers_and_rejects_foreign
     ]
     try:
         await collect(p, body)
-        assert received[0]["messages"][0]["content"] == [native]
+        assert object_array(received[0]["messages"])[0]["content"] == [native]
         body["messages"][0]["content"][0]["signature"] = encode_replay(
             ReplayRecord(replace(origin, provider="foreign"), native)
         )

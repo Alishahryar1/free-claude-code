@@ -24,6 +24,7 @@ from tests.providers.support import (
     reasoning_for,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload
 
 OLLAMA_MODEL = "llama3.1:8b"
 OLLAMA_CLOUD_MODEL = "qwen3-coder:480b"
@@ -85,7 +86,7 @@ def test_build_request_body_uses_openai_chat_shape() -> None:
     body = _provider()._chat._build_request_body(make_messages_request(OLLAMA_MODEL))
 
     assert body["model"] == OLLAMA_MODEL
-    assert body["messages"][0]["role"] == "system"
+    assert object_payload(array_payload(body["messages"])[0])["role"] == "system"
     assert "reasoning_effort" not in body
     assert "thinking" not in body
     assert "extra_body" not in body
@@ -137,10 +138,12 @@ def test_cloud_build_request_body_replays_thinking_in_ollama_reasoning_field() -
     )
 
     assistant = next(
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     )
-    assert assistant["reasoning"] == "Inspect the repository."
-    assert "reasoning_content" not in assistant
+    assert object_payload(assistant)["reasoning"] == "Inspect the repository."
+    assert "reasoning_content" not in object_payload(assistant)
 
 
 @pytest.mark.parametrize("provider", [_provider, _cloud_provider])
@@ -163,13 +166,15 @@ def test_replay_is_independent_of_disabled_current_turn_reasoning(
 
     body = provider()._chat._build_request_body(request, reasoning=REASONING_OFF)
     assistant = next(
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     )
 
     assert body["reasoning_effort"] == "none"
-    assert assistant["reasoning"] == "Hidden plan."
-    assert "reasoning_content" not in assistant
-    assert assistant["content"] == "Visible answer."
+    assert object_payload(assistant)["reasoning"] == "Hidden plan."
+    assert "reasoning_content" not in object_payload(assistant)
+    assert object_payload(assistant)["content"] == "Visible answer."
 
 
 @pytest.mark.asyncio

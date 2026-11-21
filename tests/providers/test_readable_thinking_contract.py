@@ -33,7 +33,12 @@ from tests.providers.test_history_transports import (
     _harness,
     _saved_reply,
 )
-from tests.wire_payload import object_array, object_payload, string_payload
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 def unsigned_events(protocol: str):
@@ -379,8 +384,12 @@ async def test_gemini_protected_owners_survive_reused_indices_and_client_echo(
             content["parts"] = [
                 part
                 for frame in parse_sse_text("".join(chunks))
-                for candidate in frame.data.get("candidates", [])
-                for part in candidate.get("content", {}).get("parts", [])
+                for candidate in array_payload(frame.data.get("candidates", []))
+                for part in array_payload(
+                    object_payload(object_payload(candidate).get("content", {})).get(
+                        "parts", []
+                    )
+                )
             ]
         elif echo == "cli":
             # Gemini CLI 0.29.5 processStreamResponse drops all thought Parts.

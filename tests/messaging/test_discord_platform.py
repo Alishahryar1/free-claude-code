@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from free_claude_code.messaging.models import IncomingMessage
 from free_claude_code.messaging.platforms.discord import (
     DISCORD_AVAILABLE,
     DiscordRuntime,
@@ -306,7 +307,10 @@ class TestDiscordRuntime:
         msg.reference = None
         await platform._on_discord_message(msg)
         handler.assert_awaited_once()
-        call = handler.call_args[0][0]
+        awaited = handler.await_args
+        assert awaited is not None
+        call: object = awaited.args[0]
+        assert isinstance(call, IncomingMessage)
         assert call.text == "hello"
         assert call.chat_id == "123"
         assert call.message_id == "789"
@@ -336,8 +340,9 @@ class TestDiscordRuntime:
             )
         assert msg_id == "999"
         mock_channel.send.assert_awaited_once()
-        call_kw = mock_channel.send.call_args[1]
-        assert call_kw.get("reference") is not None
+        awaited = mock_channel.send.await_args
+        assert awaited is not None
+        assert awaited.kwargs.get("reference") is not None
 
     @pytest.mark.asyncio
     async def test_edit_message_not_found_returns_gracefully(self):

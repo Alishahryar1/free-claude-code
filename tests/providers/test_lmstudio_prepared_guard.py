@@ -15,6 +15,7 @@ from free_claude_code.api.response_streams import (
 )
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.gemini.replay import ReplayBundle, encode_bundle
 from free_claude_code.core.history_replay import (
     ReplayOrigin,
@@ -32,8 +33,9 @@ from tests.providers.test_lmstudio import (
     completion_response,
     metadata_response,
     provider_with_http,
+    stream_request,
 )
-from tests.wire_payload import object_payload
+from tests.wire_payload import decode_object, object_array, object_payload
 
 
 def replay_request(wire: str, record: ReplayRecord):
@@ -90,7 +92,7 @@ async def test_budget_counts_readable_projection_but_not_opaque_carriers(
     def reply(request: httpx2.Request):
         if request.method == "GET":
             return metadata_response(1024)
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         return completion_response()
 
     async with provider_with_http(reply) as provider:
@@ -111,7 +113,7 @@ async def test_budget_counts_readable_projection_but_not_opaque_carriers(
         original = request.model_dump(mode="json")
         if source == "opaque":
             assert [
-                event async for event in getattr(provider, f"stream_{wire}")(request)
+                event async for event in stream_request(provider, wire, request=request)
             ]
             assert len(sent) == 1
             assert "opaque" not in json.dumps(sent)
@@ -119,7 +121,7 @@ async def test_budget_counts_readable_projection_but_not_opaque_carriers(
             with pytest.raises(ExecutionFailure) as caught:
                 _ = [
                     event
-                    async for event in getattr(provider, f"stream_{wire}")(request)
+                    async for event in stream_request(provider, wire, request=request)
                 ]
             assert caught.value.kind == FailureKind.CONTEXT_WINDOW_EXCEEDED
             assert not sent
@@ -136,7 +138,7 @@ async def test_correction_revalidates_the_exact_prepared_body(wire: str):
     def reply(request: httpx2.Request):
         if request.method == "GET":
             return metadata_response()
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         if len(sent) == 1:
             return httpx2.Response(
                 400,
@@ -157,8 +159,8 @@ async def test_correction_revalidates_the_exact_prepared_body(wire: str):
         provider._chat._validate_prepared_body = validate
         _ = [
             event
-            async for event in getattr(provider, f"stream_{wire}")(
-                history_request(wire)
+            async for event in stream_request(
+                provider, wire, request=history_request(wire)
             )
         ]
     assert len(inspected) == len(sent) == 2
@@ -213,8 +215,8 @@ async def test_local_rejection_abandons_probe_without_upstream_rejection(wire: s
             with pytest.raises(ExecutionFailure) as caught:
                 _ = [
                     event
-                    async for event in getattr(provider, f"stream_{wire}")(
-                        history_request(wire)
+                    async for event in stream_request(
+                        provider, wire, request=history_request(wire)
                     )
                 ]
             assert caught.value.kind == FailureKind.CONTEXT_WINDOW_EXCEEDED
@@ -288,15 +290,16 @@ async def test_direct_and_tool_result_images_are_counted_once(
         return completion_response()
 
     if wire == "gemini":
-        image = {"inlineData": {"mimeType": "image/png", "data": data}}
-        request = history_request(wire, replay=tool_result).model_dump(
+        image: JsonObject = {"inlineData": {"mimeType": "image/png", "data": data}}
+        payload: JsonObject = history_request(wire, replay=tool_result).model_dump(
             mode="json", by_alias=True, exclude_none=True
         )
+        parts = object_array(object_array(payload["contents"])[-1]["parts"])
         if tool_result:
-            request["contents"][-1]["parts"][0]["functionResponse"]["parts"] = [image]
+            object_payload(parts[0]["functionResponse"])["parts"] = [image]
         else:
-            request["contents"][-1]["parts"].append(image)
-        request = gemini_request(**request)
+            parts.append(image)
+        request = GeminiRequest.model_validate(payload)
     elif wire == "messages":
         image = {
             "type": "image",
@@ -315,7 +318,9 @@ async def test_direct_and_tool_result_images_are_counted_once(
         request = OpenAIResponsesRequest.model_validate(request)
     async with provider_with_http(reply) as provider:
         with pytest.raises(ExecutionFailure) as caught:
-            _ = [event async for event in getattr(provider, f"stream_{wire}")(request)]
+            _ = [
+                event async for event in stream_request(provider, wire, request=request)
+            ]
         assert caught.value.kind == FailureKind.CONTEXT_WINDOW_EXCEEDED
     assert sizes == [len(data)]
     assert not sent

@@ -420,10 +420,12 @@ async def test_inert_constructor_preserves_native_profile_and_disables_overrides
     assert options["connection"] == sdk.RuntimeConnection.for_stdio(
         path="copilot", args=("--no-auto-update", "--disable-builtin-mcps")
     )
-    assert options["env"]["COPILOT_HOME"] == "native-profile"
-    assert options["env"]["COPILOT_ALLOW_GET_PROVIDER_ENDPOINT"] == "true"
-    assert "never-send-this" not in options["env"].values()
-    assert Path(options["working_directory"]).is_dir()
+    env: dict[str, str] = options["env"]
+    assert env["COPILOT_HOME"] == "native-profile"
+    assert env["COPILOT_ALLOW_GET_PROVIDER_ENDPOINT"] == "true"
+    assert "never-send-this" not in env.values()
+    working_directory: str = options["working_directory"]
+    assert Path(working_directory).is_dir()
     assert "base_directory" not in options
     assert "github_token" not in options
     await runtime.session("model")
@@ -609,7 +611,8 @@ async def test_session_endpoint_refresh_returns_fresh_bound_immutable_snapshot(
     assert "secret" not in repr(first.http)
     assert resolve.await_count == 2
     for call in resolve.await_args_list:
-        assert call.args[0].model_id == "model"
+        request: object = call.args[0]
+        assert getattr(request, "model_id", None) == "model"
         assert call.kwargs["timeout"] == sdk.SDK_RPC_TIMEOUT
     await runtime.close()
     with pytest.raises(CopilotUnavailable, match="closed"):

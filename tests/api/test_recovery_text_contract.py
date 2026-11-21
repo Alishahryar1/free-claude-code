@@ -1,6 +1,5 @@
 """Recovery must not fabricate structured items or misalign token metadata."""
 
-import json
 from copy import deepcopy
 
 import httpx
@@ -34,7 +33,13 @@ from tests.providers.test_anthropic_messages_transport import Endpoint, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
-from tests.wire_payload import int_payload, object_array, object_payload, string_payload
+from tests.wire_payload import (
+    decode_object,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 class Answer(BaseModel):
@@ -214,7 +219,7 @@ async def test_messages_structured_request_does_not_resume_partial_json(path: st
     if path == "native_messages":
 
         def reply(request: httpx.Request):
-            bodies.append(json.loads(request.content))
+            bodies.append(decode_object(request.content))
             return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
@@ -370,7 +375,10 @@ async def test_healthy_logprob_payloads_are_preserved():
     assert_completed(events, "responses")
     by_kind = {event.event: event.data for event in events}
     assert by_kind["response.output_text.delta"]["logprobs"] == source[3]["logprobs"]
-    assert events[-1].data["response"]["output"] == source[-1]["response"]["output"]
+    assert (
+        object_payload(events[-1].data["response"])["output"]
+        == source[-1]["response"]["output"]
+    )
 
 
 @pytest.mark.asyncio
@@ -491,5 +499,8 @@ async def test_failed_snapshot_keeps_its_error_category_with_text_metadata(
     assert len(bodies) == 2
     events = parse_sse_text(raw)
     assert events[-1].event == "response.failed"
-    assert events[-1].data["response"]["error"]["code"] == "context_length_exceeded"
+    assert (
+        object_payload(object_payload(events[-1].data["response"])["error"])["code"]
+        == "context_length_exceeded"
+    )
     assert public_text(events, "responses") == "Hello "

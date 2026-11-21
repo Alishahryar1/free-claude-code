@@ -6,9 +6,11 @@ from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypeGuard, cast
 
-from .json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import load_json_value
+
+from .json_types import DecimalJsonValue, JsonObject, JsonValue
 from .openai_chat import ChatToolResultImages
 from .recovery_limits import RECOVERY_RETENTION_BYTES
 
@@ -99,7 +101,7 @@ def _json_copy(value: object) -> JsonObject:
         ) from exc
 
 
-def is_replay(value: object) -> bool:
+def is_replay(value: object) -> TypeGuard[str]:
     return isinstance(value, str) and value.startswith(
         ("fcc:history:", "fcc:anthropic-reasoning:")
     )
@@ -319,7 +321,7 @@ def decode_replay(value: str) -> ReplayRecord:
     try:
         encoded = value[len(prefix) :]
         payload = _json_copy(
-            json.loads(
+            load_json_value(
                 base64.b64decode(
                     encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True
                 ).decode("utf-8")
@@ -365,7 +367,7 @@ def resolve_messages_replay(content: Sequence[JsonValue]) -> list[JsonValue]:
         )
         if key is None or not is_replay(value := block.get(key)):
             continue
-        record = decode_replay(cast(str, value))
+        record = decode_replay(value)
         if not isinstance(record, AssociatedReplayRecord):
             continue
         group = groups.setdefault(record.group_id, {})
@@ -396,7 +398,7 @@ def resolve_messages_replay(content: Sequence[JsonValue]) -> list[JsonValue]:
     return [block for index, block in enumerate(blocks) if index not in removed]
 
 
-def readable_reasoning(item: Mapping[str, JsonValue]) -> list[tuple[str, bool]]:
+def readable_reasoning(item: Mapping[str, DecimalJsonValue]) -> list[tuple[str, bool]]:
     """Keep distinct readable representations and their summary/full-text meaning."""
     gemini_parts = item.get("parts")
     if isinstance(gemini_parts, list):
@@ -487,14 +489,14 @@ def _replay_readable(
     return native or readable_reasoning(item)
 
 
-def tool_history_context(item: Mapping[str, JsonValue]) -> str:
+def tool_history_context(item: Mapping[str, object]) -> str:
     """Keep available tool data as quoted history, never as new instructions."""
     return "[Earlier tool record]\n" + json.dumps(
         dict(item), ensure_ascii=False, separators=(",", ":")
     )
 
 
-def validate_hosted_tool_history(blocks: list[JsonObject]) -> None:
+def validate_hosted_tool_history(blocks: Sequence[Mapping[str, object]]) -> None:
     """A foreign harness cannot finish an upstream-owned pending tool call."""
     results = {
         block.get("tool_use_id")
@@ -513,7 +515,7 @@ def validate_hosted_tool_history(blocks: list[JsonObject]) -> None:
 def reasoning_detail(value: str) -> list[JsonValue]:
     """Decode older Chat detail strings while retaining unknown opaque state."""
     try:
-        parsed = json.loads(value)
+        parsed = load_json_value(value)
     except ValueError:
         parsed = None
     if isinstance(parsed, dict):
@@ -524,7 +526,7 @@ def reasoning_detail(value: str) -> list[JsonValue]:
 
 
 def _record(
-    item: Mapping[str, JsonValue], *keys: str, destination: ReplayOrigin | None = None
+    item: Mapping[str, object], *keys: str, destination: ReplayOrigin | None = None
 ) -> ReplayRecord | None:
     for key in keys:
         value = item.get(key)
@@ -591,7 +593,7 @@ def responses_reasoning_blocks(item: Mapping[str, JsonValue]) -> list[JsonValue]
 type HistoryPath = tuple[str | int, ...]
 
 
-def protected_reasoning(item: Mapping[str, JsonValue]) -> bool:
+def protected_reasoning(item: Mapping[str, DecimalJsonValue]) -> bool:
     """Local carriers do not turn unsigned readable data into protected state."""
     record = _record(item, "encrypted_content", "signature", "data")
     if record is not None:
@@ -1138,7 +1140,7 @@ def _gemini_replay_turns(
 
 
 def _restore_gemini_parts(
-    parts: list[dict[str, Any]],
+    parts: list[JsonObject],
     origin: ReplayOrigin,
     call_aliases: set[str],
 ) -> tuple[list[dict[str, Any]], int | None, tuple[JsonObject, ...]]:
@@ -1215,7 +1217,9 @@ def _restore_gemini_parts(
             # Ignore only added default-valued fields during comparison. The
             # signed native arguments are restored exactly, never rewritten.
             name = call.get("name")
-            defaults = tool_defaults.get(name, {}) if isinstance(name, str) else {}
+            defaults: Mapping[str, JsonValue] = (
+                tool_defaults.get(name, {}) if isinstance(name, str) else {}
+            )
             for key, value in defaults.items():
                 if (
                     key not in original_args

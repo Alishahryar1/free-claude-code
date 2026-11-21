@@ -9,6 +9,9 @@ from pathlib import Path
 
 import pytest
 
+from free_claude_code.core.json_types import load_json_value
+from tests.wire_payload import decode_object, object_payload, string_payload
+
 pytestmark = pytest.mark.skipif(
     os.name != "nt",
     reason="Tests the native Windows Muse installer and uninstaller",
@@ -520,15 +523,17 @@ def test_muse_installer_publishes_verified_binary_record_and_path(
 
     assert result.returncode == 0, result.stderr
     assert executable.read_bytes() == payload
-    assert json.loads(record_path.read_text(encoding="utf-8-sig")) == _owner_record(
-        payload
-    )
-    state = json.loads(result.stdout.splitlines()[-1])
+    assert load_json_value(
+        record_path.read_text(encoding="utf-8-sig")
+    ) == _owner_record(payload)
+    state = load_json_value(result.stdout.splitlines()[-1])
     for field, prefix in (("UserPath", "user"), ("ProcessPath", "process")):
         expected = [str(tmp_path / f"{prefix}-one"), str(tmp_path / f"{prefix}-two")]
         if empty_path_entries:
             expected = ["", *expected, ""]
-        assert state[field] == os.pathsep.join([str(root / "bin"), *expected])
+        assert object_payload(state)[field] == os.pathsep.join(
+            [str(root / "bin"), *expected]
+        )
     assert call_log.read_text(encoding="utf-8").splitlines() == [
         "metadata",
         "download",
@@ -689,7 +694,7 @@ Write-Output ($result | ConvertTo-Json -Compress)
     )
 
     assert result.returncode == 0, result.stderr
-    process_result = json.loads(result.stdout)
+    process_result = decode_object(result.stdout)
     assert process_result["TimedOut"] is True
     assert process_result["ExitCode"] is None
 
@@ -746,7 +751,7 @@ $probe = Get-MuseVersionProbe -Path {_ps_literal(r"C:\fixture\muse.exe")}
     )
 
     assert result.returncode == 0, result.stderr
-    probe = json.loads(result.stdout)
+    probe = load_json_value(result.stdout)
     assert probe == {"Compatible": compatible, "Reason": reason}
 
 
@@ -846,7 +851,7 @@ def test_muse_uninstaller_removes_only_managed_assets_and_exact_path_entries(
     assert not record_path.exists()
     assert not root.exists()
     assert muse_state.read_text(encoding="utf-8") == '{"native":true}'
-    state = json.loads(result.stdout.splitlines()[-1])
+    state = load_json_value(result.stdout.splitlines()[-1])
     expected_path = os.pathsep.join(path_entries)
     assert state == {
         "UserPath": expected_path,
@@ -947,6 +952,6 @@ def test_muse_uninstaller_dry_run_is_non_mutating(
     assert executable.exists()
     assert record_path.exists()
     assert (managed_bin / ".muse-0123456789abcdef0123456789abcdef.staging.exe").exists()
-    state = json.loads(result.stdout.splitlines()[-1])
-    assert str(managed_bin) in state["UserPath"]
-    assert str(managed_bin) in state["ProcessPath"]
+    state = decode_object(result.stdout.splitlines()[-1])
+    assert str(managed_bin) in string_payload(state["UserPath"])
+    assert str(managed_bin) in string_payload(state["ProcessPath"])

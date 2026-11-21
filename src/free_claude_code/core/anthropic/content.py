@@ -1,10 +1,9 @@
 """Content block helpers for Anthropic-compatible payloads."""
 
 import json
-from typing import Any
 
 
-def get_block_attr(block: Any, attr: str, default: Any = None) -> Any:
+def get_block_attr(block: object, attr: str, default: object = None) -> object:
     """Get an attribute from a Pydantic model, lightweight object, or dict."""
     if hasattr(block, attr):
         return getattr(block, attr)
@@ -13,12 +12,13 @@ def get_block_attr(block: Any, attr: str, default: Any = None) -> Any:
     return default
 
 
-def get_block_type(block: Any) -> str | None:
+def get_block_type(block: object) -> str | None:
     """Return a content block type when present."""
-    return get_block_attr(block, "type")
+    kind = get_block_attr(block, "type")
+    return kind if isinstance(kind, str) else None
 
 
-def extract_text_from_content(content: Any) -> str:
+def extract_text_from_content(content: object) -> str:
     """Extract concatenated text from message content."""
     if isinstance(content, str):
         return content
@@ -32,7 +32,7 @@ def extract_text_from_content(content: Any) -> str:
     return ""
 
 
-def streamed_tool_arguments(joined: str, start_input: Any) -> str:
+def streamed_tool_arguments(joined: str, start_input: object) -> str:
     """Return streamed tool arguments, using the start input when none streamed.
 
     A zero-argument call streams one empty ``input_json_delta``. Like Anthropic's

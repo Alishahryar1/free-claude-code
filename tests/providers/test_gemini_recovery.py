@@ -46,7 +46,14 @@ from tests.providers.test_gemini_transport import (
     gemini_request,
 )
 from tests.providers.test_history_transports import _events_for, _harness
-from tests.wire_payload import object_array
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 @pytest.mark.asyncio
@@ -214,7 +221,7 @@ async def test_public_continuation_uses_delivered_thinking_without_native_copies
     sent = []
 
     def reply(request: httpx2.Request):
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         first = len(sent) == 1
         if invisible_retry and len(sent) == 2:
             return httpx2.Response(503, json={"error": "temporarily unavailable"})
@@ -275,7 +282,7 @@ async def test_large_delivered_reasoning_prevents_unsafe_public_continuation():
     sent = []
 
     def reply(request: httpx2.Request):
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         return chat_response(
             [
                 {"reasoning_content": "native thought " * 100000},
@@ -309,11 +316,11 @@ async def test_large_delivered_reasoning_prevents_unsafe_public_continuation():
             await response.aclose()
     assert len(sent) == 1
     values = [event.data for event in parse_sse_text(raw)]
-    assert values[-1]["error"]["code"] >= 400
+    assert int_payload(object_payload(values[-1]["error"])["code"]) >= 400
     assert not any(
-        candidate.get("finishReason")
+        object_payload(candidate).get("finishReason")
         for value in values
-        for candidate in value.get("candidates", [])
+        for candidate in array_payload(value.get("candidates", []))
     )
 
 
@@ -576,21 +583,23 @@ async def test_gemini_recovery_uses_published_evidence(
             await response.aclose()
     values = [event.data for event in parse_sse_text(raw)]
     text = "".join(
-        part.get("text", "") for value in values for part in gemini_parts(value)
+        string_payload(part.get("text", ""))
+        for value in values
+        for part in gemini_parts(value)
     )
     if stage in {"structured", "retention"}:
         assert len(bodies) == 1
-        assert values[-1]["error"]["code"] >= 400
+        assert int_payload(object_payload(values[-1]["error"])["code"]) >= 400
         assert not any(
-            candidate.get("finishReason")
+            object_payload(candidate).get("finishReason")
             for value in values
-            for candidate in value.get("candidates", [])
+            for candidate in array_payload(value.get("candidates", []))
         )
         assert text == prefix
     else:
         assert len(bodies) == 2
         assert text == ("world again" if stage == "hidden" else "Hello world again")
-        assert values[-1]["candidates"][0]["finishReason"] == "STOP"
+        assert object_array(values[-1]["candidates"])[0]["finishReason"] == "STOP"
         assert len({value["responseId"] for value in values}) == 1
 
 

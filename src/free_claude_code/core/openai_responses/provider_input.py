@@ -169,7 +169,7 @@ def _system_text(request: MessagesRequest) -> list[str]:
 
 
 def _assistant_items(
-    content: Any,
+    content: object,
     *,
     reasoning_content: str | None,
     tool_names: OpenAIToolNameCodec,
@@ -315,7 +315,7 @@ def _assistant_items(
     return items
 
 
-def _user_items(content: Any) -> list[dict[str, Any]]:
+def _user_items(content: object) -> list[dict[str, Any]]:
     if isinstance(content, str):
         return [_user_message([{"type": "input_text", "text": content}])]
     if not isinstance(content, list):
@@ -378,7 +378,7 @@ def _user_items(content: Any) -> list[dict[str, Any]]:
     return items
 
 
-def _image_part(block: Any) -> dict[str, Any]:
+def _image_part(block: object) -> dict[str, Any]:
     try:
         url = portable_anthropic_image_url(get_block_attr(block, "source", {}))
     except AnthropicImageSourceError as exc:
@@ -399,8 +399,8 @@ def _tool_choice(
     *,
     tool_names: OpenAIToolNameCodec,
 ) -> str | dict[str, str]:
-    choice_type = choice.get("type")
-    if choice_type in {"auto", "none"}:
+    choice_type: object = choice.get("type")
+    if choice_type in ("auto", "none"):
         return str(choice_type)
     if choice_type == "any":
         return "required"

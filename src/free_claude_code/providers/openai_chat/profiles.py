@@ -9,6 +9,7 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.json_types import wire_field
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.model_listing import (
@@ -137,18 +138,18 @@ class OpenAIChatProfile:
     def base_url(self, configured: str) -> str:
         return openai_v1_base_url(configured) if self.normalize_base_url else configured
 
-    def reasoning_delta(self, delta: Any) -> str | None:
+    def reasoning_delta(self, delta: object) -> str | None:
         return self.native_reasoning_delta(delta)[1]
 
-    def native_reasoning_delta(self, delta: Any) -> tuple[str, str | None]:
+    def native_reasoning_delta(self, delta: object) -> tuple[str, str | None]:
         """Return the selected value together with its actual upstream field."""
-        value = getattr(delta, self.reasoning_delta_field, None)
+        value = wire_field(delta, self.reasoning_delta_field)
         if isinstance(value, str) and value:
             return self.reasoning_delta_field, value
         fallback = self.reasoning_delta_fallback_field
         if fallback is None:
             return self.reasoning_delta_field, value if isinstance(value, str) else None
-        fallback_value = getattr(delta, fallback, None)
+        fallback_value = wire_field(delta, fallback)
         if isinstance(fallback_value, str):
             return fallback, fallback_value
         return self.reasoning_delta_field, value if isinstance(value, str) else None
@@ -190,7 +191,7 @@ _COHERE_EXTRA_BODY_KEYS = frozenset(
 )
 
 
-def _merge_allowed_cohere_extra_body(body: dict[str, Any], extra_body: Any) -> None:
+def _merge_allowed_cohere_extra_body(body: dict[str, Any], extra_body: object) -> None:
     if extra_body in (None, {}):
         return
     if not isinstance(extra_body, Mapping):

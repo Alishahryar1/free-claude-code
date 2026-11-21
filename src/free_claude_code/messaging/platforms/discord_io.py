@@ -3,7 +3,7 @@
 import asyncio
 import secrets
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 import aiohttp
 from loguru import logger
@@ -21,8 +21,20 @@ from .outbox import PlatformOutbox
 
 DISCORD_MESSAGE_LIMIT = 2000
 
-ClientGetter = Callable[[], Any]
-DiscordGetter = Callable[[], Any]
+if TYPE_CHECKING:
+    from discord import Client, Forbidden, Intents, Message, MessageReference, NotFound
+    from discord.abc import Messageable
+
+
+class DiscordLibrary(Protocol):
+    Intents: type[Intents]
+    MessageReference: type[MessageReference]
+    NotFound: type[NotFound]
+    Forbidden: type[Forbidden]
+
+
+type ClientGetter = Callable[[], Client]
+type DiscordGetter = Callable[[], DiscordLibrary]
 
 
 def truncate_discord_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> str:
@@ -115,7 +127,7 @@ class DiscordMessenger:
             raise RuntimeError(f"Channel {chat_id} not found")
 
         text = truncate_discord_message(text)
-        channel = cast(Any, channel)
+        message_channel = cast("Messageable", channel)
         # Discord returns the existing message when a nonce is reused, so a
         # retried send whose response was lost does not post twice.
         nonce = secrets.token_hex(12)
@@ -127,12 +139,14 @@ class DiscordMessenger:
                 channel_id=int(chat_id),
             )
 
-            async def _send() -> Any:
-                return await channel.send(content=text, reference=ref, nonce=nonce)
+            async def _send() -> Message:
+                return await message_channel.send(
+                    content=text, reference=ref, nonce=nonce
+                )
         else:
 
-            async def _send() -> Any:
-                return await channel.send(content=text, nonce=nonce)
+            async def _send() -> Message:
+                return await message_channel.send(content=text, nonce=nonce)
 
         msg = await self._with_retry(_send)
         return str(msg.id)
@@ -151,11 +165,11 @@ class DiscordMessenger:
             raise RuntimeError(f"Channel {chat_id} not found")
 
         discord = self._get_discord()
-        channel = cast(Any, channel)
+        message_channel = cast("Messageable", channel)
 
         async def _edit() -> None:
             try:
-                msg = await channel.fetch_message(int(message_id))
+                msg = await message_channel.fetch_message(int(message_id))
             except discord.NotFound:
                 return
             await msg.edit(content=truncate_discord_message(text))
@@ -170,11 +184,11 @@ class DiscordMessenger:
             return
 
         discord = self._get_discord()
-        channel = cast(Any, channel)
+        message_channel = cast("Messageable", channel)
 
         async def _delete() -> None:
             try:
-                msg = await channel.fetch_message(int(message_id))
+                msg = await message_channel.fetch_message(int(message_id))
                 await msg.delete()
             except discord.NotFound, discord.Forbidden:
                 pass
@@ -235,7 +249,7 @@ class DiscordMessenger:
             fire_and_forget,
         )
 
-    def fire_and_forget(self, task: Awaitable[Any]) -> None:
+    def fire_and_forget(self, task: Awaitable[object]) -> None:
         """Execute a coroutine without awaiting it."""
         self._outbox.fire_and_forget(task)
 

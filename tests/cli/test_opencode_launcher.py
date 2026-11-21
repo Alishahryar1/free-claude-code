@@ -10,6 +10,11 @@ from free_claude_code.application.model_catalog import CatalogModel
 from free_claude_code.cli.launchers.opencode_config import build_opencode_config
 from free_claude_code.core.model_capabilities import ModelInputModality
 from tests.cli.conftest import LaunchCapture
+from tests.wire_payload import (
+    decode_object,
+    object_array,
+    object_payload,
+)
 
 
 def test_opencode_config_uses_native_responses_and_model_budgets() -> None:
@@ -182,15 +187,32 @@ def test_opencode_child_receives_private_catalog_and_overlay(
     from tests.cli.test_launcher_workflow import launch
 
     def inspect(command: object, env: Mapping[str, str]):
-        config = json.loads(Path(env["OPENCODE_CONFIG"]).read_text())
-        overlay = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-        provider = config["providers"]["free-claude-code"]
-        assert provider["settings"]["baseURL"] == "http://127.0.0.1:8182/v1"
+        config = decode_object(Path(env["OPENCODE_CONFIG"]).read_text())
+        overlay = decode_object(env["OPENCODE_CONFIG_CONTENT"])
+        provider = object_payload(config["providers"])["free-claude-code"]
+        assert (
+            object_payload(object_payload(provider)["settings"])["baseURL"]
+            == "http://127.0.0.1:8182/v1"
+        )
         for key in ("headerTimeout", "chunkTimeout", "timeout"):
-            assert provider["settings"][key] is False
-            assert overlay["providers"]["free-claude-code"]["settings"][key] is False
-        assert "nvidia_nim/catalog-model:variant" in provider["models"]
-        assert overlay["experimental"]["policies"][-1]["resource"] == "free-claude-code"
+            assert object_payload(object_payload(provider)["settings"])[key] is False
+            assert (
+                object_payload(
+                    object_payload(
+                        object_payload(overlay["providers"])["free-claude-code"]
+                    )["settings"]
+                )[key]
+                is False
+            )
+        assert "nvidia_nim/catalog-model:variant" in object_payload(
+            object_payload(provider)["models"]
+        )
+        assert (
+            object_array(object_payload(overlay["experimental"])["policies"])[-1][
+                "resource"
+            ]
+            == "free-claude-code"
+        )
         assert env["FCC_OPENCODE_API_KEY"] == "launcher-test-token"
 
     launch_capture.on_start = inspect

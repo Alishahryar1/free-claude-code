@@ -12,6 +12,8 @@ from free_claude_code.core.anthropic.models import (
     MessagesRequest,
     TokenCountRequest,
 )
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import object_payload
 
 
 def test_messages_request_parses_without_model_mapping_side_effects():
@@ -221,12 +223,13 @@ def test_document_and_web_fetch_blocks_preserve_protocol_extensions() -> None:
 
 
 def test_content_block_descriptions_remain_in_the_public_schema() -> None:
-    definitions = MessagesRequest.model_json_schema()["$defs"]
+    schema: JsonObject = MessagesRequest.model_json_schema()
+    definitions = object_payload(schema["$defs"])
 
-    assert definitions["ContentBlockDocument"]["description"] == (
+    assert object_payload(definitions["ContentBlockDocument"])["description"] == (
         "Anthropic document block (e.g. PDF files via the Files API)."
     )
-    assert definitions["ContentBlockServerToolUse"]["description"] == (
+    assert object_payload(definitions["ContentBlockServerToolUse"])["description"] == (
         "Anthropic server-side tool invocation (e.g. ``web_search``, ``web_fetch``)."
     )
 

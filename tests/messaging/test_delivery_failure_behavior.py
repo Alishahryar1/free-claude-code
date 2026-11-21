@@ -7,6 +7,7 @@ library actually reports a rejected request.
 
 import asyncio
 from collections.abc import Sequence
+from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -53,10 +54,9 @@ async def _run(
             raise outcome
         return outcome
 
-    kwargs = {"parse_mode": parse_mode} if parse_mode is not None else {}
     try:
         result = await messenger._with_retry(
-            call, suppress_known_message_errors=suppress, **kwargs
+            call, parse_mode=parse_mode, suppress_known_message_errors=suppress
         )
     except Exception as error:
         return error, calls
@@ -233,6 +233,12 @@ async def test_other_errors_do_not_pause_the_queue(error: Exception):
     assert await _queue_pause(error) == 0
 
 
+@dataclass
+class _DeleteBot:
+    delete_messages: AsyncMock
+    delete_message: AsyncMock
+
+
 def _bulk_messenger(bulk_outcomes: Sequence[TelegramError]):
     """A messenger whose bot fails bulk deletes as scripted and logs single ones."""
     bulk = iter(bulk_outcomes)
@@ -242,7 +248,7 @@ def _bulk_messenger(bulk_outcomes: Sequence[TelegramError]):
         if isinstance(outcome, BaseException):
             raise outcome
 
-    bot = SimpleNamespace(
+    bot = _DeleteBot(
         delete_messages=AsyncMock(side_effect=delete_messages),
         delete_message=AsyncMock(),
     )

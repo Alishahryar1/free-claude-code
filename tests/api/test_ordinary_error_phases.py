@@ -6,6 +6,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from free_claude_code.api.dependencies import app_services
 from free_claude_code.application.errors import (
     ApplicationError,
     ApplicationUnavailableError,
@@ -183,7 +184,7 @@ def test_runtime_acquisition_failure_is_protocol_specific_503_without_terminal_h
     acquire = AsyncMock(side_effect=ApplicationUnavailableError(message))
 
     with (
-        patch.object(app.state.services.requests, "acquire", new=acquire),
+        patch.object(app_services(app).requests, "acquire", new=acquire),
         TestClient(app) as client,
     ):
         response = client.post(path, json=payload)

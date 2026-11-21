@@ -19,6 +19,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     text_content,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
@@ -32,7 +33,14 @@ from free_claude_code.providers.openai_codex.auth import (
     OpenAIReconnectRequired,
 )
 from free_claude_code.providers.openai_codex.provider import OpenAICodexProvider
+from tests.mock_calls import keyword_arguments
 from tests.providers.support import immediate_admission, make_provider_config
+from tests.wire_payload import (
+    decode_object,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 class _FakeAuth(OpenAIAuthManager):
@@ -387,7 +395,7 @@ async def test_provider_uses_subscription_headers_and_visible_model_catalog() ->
     assert response_request.headers["originator"] == "codex_cli_rs"
     assert response_request.headers["accept"] == "text/event-stream"
     assert response_request.headers["session_id"]
-    payload = json.loads(response_request.content)
+    payload = decode_object(response_request.content)
     assert payload["model"] == "gpt-test"
     assert payload["store"] is False
     events = parse_sse_text(body)
@@ -502,7 +510,7 @@ async def test_provider_accepts_claude_client_controls_before_upstream_io() -> N
     assert len(requests) == 1
     upstream = requests[0]
     assert upstream.url.path.endswith("/responses")
-    payload = json.loads(upstream.content)
+    payload = decode_object(upstream.content)
     assert payload["model"] == "gpt-test"
     assert payload["reasoning"] == {"effort": "high", "summary": "auto"}
     assert "max_output_tokens" not in payload
@@ -543,7 +551,7 @@ async def test_provider_relays_native_responses_with_private_field_policy() -> N
     body = await _collect(stream)
 
     assert len(requests) == 1
-    upstream = json.loads(requests[0].content)
+    upstream = decode_object(requests[0].content)
     assert upstream["model"] == "gpt-test"
     assert upstream["input"] == [{"role": "user", "content": "hello"}]
     assert upstream["stream"] is True
@@ -560,10 +568,10 @@ async def test_provider_relays_native_responses_with_private_field_policy() -> N
         "response.output_text.delta",
         "response.completed",
     ]
-    assert events[0].data["response"]["id"] == "resp_1"
-    assert events[0].data["response"]["model"] == "openai/gpt-test"
-    assert events[-1].data["response"]["id"] == "resp_1"
-    assert events[-1].data["response"]["model"] == "openai/gpt-test"
+    assert object_payload(events[0].data["response"])["id"] == "resp_1"
+    assert object_payload(events[0].data["response"])["model"] == "openai/gpt-test"
+    assert object_payload(events[-1].data["response"])["id"] == "resp_1"
+    assert object_payload(events[-1].data["response"])["model"] == "openai/gpt-test"
     await provider.cleanup()
 
 
@@ -638,9 +646,9 @@ async def test_provider_round_trips_portable_tool_name_alias() -> None:
     payloads: list[dict[str, Any]] = []
 
     def handler(http_request: httpx2.Request) -> httpx2.Response:
-        payload = json.loads(http_request.content)
+        payload = decode_object(http_request.content)
         payloads.append(payload)
-        alias = payload["tools"][0]["name"]
+        alias = object_array(payload["tools"])[0]["name"]
         body = _sse(
             (
                 "response.output_item.added",
@@ -694,8 +702,8 @@ async def test_provider_round_trips_portable_tool_name_alias() -> None:
 
     body = await _collect(provider.stream_messages(request))
 
-    payload = payloads[0]
-    alias = payload["tools"][0]["name"]
+    payload: JsonObject = payloads[0]
+    alias = string_payload(object_array(payload["tools"])[0]["name"])
     assert alias != original
     assert len(alias) <= 64
     assert payload["tool_choice"] == {"type": "function", "name": alias}
@@ -706,7 +714,7 @@ async def test_provider_round_trips_portable_tool_name_alias() -> None:
         for event in events
         if event.event == "content_block_start"
     )
-    assert tool_start["name"] == original
+    assert object_payload(tool_start)["name"] == original
     assert alias not in body
     await provider.cleanup()
 
@@ -1036,7 +1044,9 @@ async def test_model_discovery_re_request_is_a_second_admitted_attempt() -> None
     attempt_rows = [
         call.kwargs
         for call in trace.call_args_list
-        if call.kwargs.get("event", "").startswith("provider.attempt.")
+        if string_payload(keyword_arguments(call).get("event", "")).startswith(
+            "provider.attempt."
+        )
     ]
     assert [row["event"] for row in attempt_rows] == [
         "provider.attempt.started",

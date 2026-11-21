@@ -9,6 +9,7 @@ from urllib.error import URLError
 import pytest
 
 from free_claude_code.cli.launchers import runner
+from free_claude_code.core.json_types import load_json_value
 from tests.cli.conftest import LaunchCapture
 from tests.cli.test_launcher_workflow import launch
 
@@ -78,13 +79,13 @@ def test_dsh_attaches_patch_without_overriding_native_profile(
 ) -> None:
     def inspect(command: list[str], env: Mapping[str, str]):
         path = Path(command[command.index("--patch") + 1])
-        patch = json.loads(path.read_text())
+        patch = load_json_value(path.read_text())
         serialized = json.dumps(patch)
         assert "openai-responses" in serialized
         assert "http://127.0.0.1:8182/v1" in serialized
         assert "nvidia_nim/catalog-model:variant" in serialized
         assert not (path.parent / "settings.yaml").exists()
-        assert json.loads((path.parent / ".credentials.yaml").read_text()) == {}
+        assert load_json_value((path.parent / ".credentials.yaml").read_text()) == {}
         assert env["FCC_DSH_API_KEY"] == "launcher-test-token"
         assert env["DSH_TELEMETRY_DISABLED"] == "1"
         assert "launcher-test-token" not in serialized

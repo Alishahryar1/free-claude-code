@@ -32,6 +32,7 @@ from tests.providers.support import (
     reasoning_for,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 @pytest.fixture
@@ -108,7 +109,7 @@ def test_build_request_body_openai_shape(kilo_provider: KiloProvider):
     )
 
     assert body["model"] == "anthropic/claude-sonnet-4.5"
-    assert body["messages"][0] == {"role": "user", "content": "Hello"}
+    assert array_payload(body["messages"])[0] == {"role": "user", "content": "Hello"}
     assert body["max_tokens"] == 100
 
 
@@ -125,7 +126,7 @@ def test_build_request_body_forwards_caller_extra_body(kilo_provider: KiloProvid
         request, reasoning=reasoning_for(request)
     )
 
-    assert body.get("extra_body", {}).get("custom_field") == "value"
+    assert object_payload(body.get("extra_body", {})).get("custom_field") == "value"
 
 
 @pytest.mark.parametrize(
@@ -169,7 +170,7 @@ def test_build_request_body_sends_reasoning_object(kilo_provider: KiloProvider):
         request, reasoning=reasoning_for(request)
     )
 
-    assert body.get("extra_body", {}).get("reasoning") is not None
+    assert object_payload(body.get("extra_body", {})).get("reasoning") is not None
 
 
 def test_build_request_body_sends_reasoning_disabled(kilo_provider: KiloProvider):
@@ -185,7 +186,7 @@ def test_build_request_body_sends_reasoning_disabled(kilo_provider: KiloProvider
         reasoning=ReasoningPolicy.off(),
     )
 
-    assert body["extra_body"]["reasoning"] == {"enabled": False}
+    assert object_payload(body["extra_body"])["reasoning"] == {"enabled": False}
 
 
 def test_build_request_body_replays_opaque_reasoning_details_on_tool_turn(
@@ -233,8 +234,12 @@ def test_build_request_body_replays_opaque_reasoning_details_on_tool_turn(
         reasoning=reasoning_for(request),
     )
 
-    assistant = next(msg for msg in body["messages"] if msg["role"] == "assistant")
-    assert assistant["reasoning_details"] == [detail]
+    assistant = next(
+        msg
+        for msg in array_payload(body["messages"])
+        if object_payload(msg)["role"] == "assistant"
+    )
+    assert object_payload(assistant)["reasoning_details"] == [detail]
 
 
 @pytest.mark.asyncio
@@ -296,10 +301,10 @@ async def test_stream_uses_reasoning_field_without_duplicating_plain_details(
         block = event.data.get("content_block", {})
         delta = event.data.get("delta", {})
         value = (
-            block.get("data")
-            if block.get("type") == "redacted_thinking"
-            else delta.get("signature")
-            if delta.get("type") == "signature_delta"
+            object_payload(block).get("data")
+            if object_payload(block).get("type") == "redacted_thinking"
+            else object_payload(delta).get("signature")
+            if object_payload(delta).get("type") == "signature_delta"
             else None
         )
         if is_replay(value):
@@ -398,10 +403,10 @@ async def test_stream_hides_readable_reasoning_and_preserves_opaque_when_disable
     assert thinking_content(events) == ""
     assert text_content(events) == "done"
     assert [
-        event.data["content_block"]["data"]
+        object_payload(event.data["content_block"])["data"]
         for event in events
         if event.event == "content_block_start"
-        and event.data["content_block"]["type"] == "redacted_thinking"
+        and object_payload(event.data["content_block"])["type"] == "redacted_thinking"
     ] == ["opaque"]
     assert stream.closed
 

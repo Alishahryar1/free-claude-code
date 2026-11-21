@@ -16,6 +16,7 @@ from tests.providers.support import (
     sdk_chat_chunk,
 )
 from tests.providers.test_open_router import image_routing_error_body, routing_error
+from tests.wire_payload import object_payload, response_object, string_payload
 
 IMAGE_DATA = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6nGQAAAAASUVORK5CYII="
 IMAGE_URL = f"data:image/png;base64,{IMAGE_DATA}"
@@ -53,9 +54,10 @@ def image_payload(wire: str, stream: bool):
 
 
 def sent_parts(call: _Call):
+    messages: list[JsonObject] = call.kwargs["messages"]
     return [
         part
-        for message in call.kwargs["messages"]
+        for message in messages
         if isinstance(message["content"], list)
         for part in message["content"]
     ]
@@ -130,10 +132,14 @@ def test_openrouter_unrelated_404_keeps_the_image(wire: str, stream: bool):
 
     assert response.status_code == 404
     assert response.headers["x-should-retry"] == "false"
-    error = response.json()["error"]
-    assert error["type"] == "api_error"
-    assert body["message"] in error["message"]
-    assert response.headers["request-id"] in error["message"]
+    error = response_object(response)["error"]
+    assert object_payload(error)["type"] == "api_error"
+    assert string_payload(body["message"]) in string_payload(
+        object_payload(error)["message"]
+    )
+    assert response.headers["request-id"] in string_payload(
+        object_payload(error)["message"]
+    )
     assert create.await_count == 1
     assert {"type": "image_url", "image_url": {"url": IMAGE_URL}} in sent_parts(
         create.await_args_list[0]

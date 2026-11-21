@@ -4,11 +4,14 @@ import asyncio
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from typing import Any, override
+from typing import TYPE_CHECKING, Any, override
 
 import httpx
 import pytest
 from loguru import logger
+
+if TYPE_CHECKING:
+    from loguru import Message
 
 from free_claude_code.core.continuation_request import ContinuationRequest
 from free_claude_code.core.diagnostics import attach_upstream_error_body
@@ -105,8 +108,8 @@ class Record:
 def record() -> Iterator[Record]:
     result = Record()
 
-    def sink(message: Any) -> None:
-        payload = message.record["extra"].get(TRACE_PAYLOAD_BINDING)
+    def sink(message: Message) -> None:
+        payload: object = message.record["extra"].get(TRACE_PAYLOAD_BINDING)
         if isinstance(payload, dict):
             result.traces.append(payload)
 

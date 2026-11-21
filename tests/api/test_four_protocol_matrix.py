@@ -35,9 +35,11 @@ from tests.providers.test_history_transports import _native
 from tests.providers.test_native_tool_arguments import tool_events
 from tests.wire_payload import (
     array_payload,
+    decode_object,
     int_payload,
     object_array,
     object_payload,
+    response_payload,
     string_payload,
 )
 
@@ -60,7 +62,7 @@ def test_messages_custom_tool_type_is_translated_to_native_gemini(
     bodies = []
 
     def reply(request: httpx.Request | httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _sse([{"text": "hello"}])
 
     tool = {"name": "read", "description": "Read a file", "input_schema": SCHEMA}
@@ -268,7 +270,7 @@ def ingress_request(
 def response_value(response: httpx.Response, wire: str, streaming: bool):
     assert response.status_code == 200, response.text
     if not streaming:
-        return response.json()
+        return response_payload(response)
     events = parse_sse_text(response.text)
     if wire == "responses":
         assert events[-1].event == "response.completed", response.text
@@ -394,7 +396,7 @@ def test_all_sixteen_paths_replay_native_state_and_tool_results(
     bodies = []
 
     def reply(request: httpx.Request | httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         events = source_events(protocol)
         raw = "".join(
             (f"event: {event['type']}\n" if protocol == "messages" else "")
@@ -417,12 +419,17 @@ def test_all_sixteen_paths_replay_native_state_and_tool_results(
     assert len(bodies) == 2
     assert "tool-value" in json.dumps(bodies[1])
     if protocol == "gemini":
-        assert bodies[1]["contents"][1] == {"role": "model", "parts": GEMINI_PARTS}
+        assert array_payload(bodies[1]["contents"])[1] == {
+            "role": "model",
+            "parts": GEMINI_PARTS,
+        }
     elif protocol == "messages":
         replayed = next(
             block
-            for block in bodies[1]["messages"][1]["content"]
-            if block.get("type") == "thinking"
+            for block in array_payload(
+                object_array(bodies[1]["messages"])[1]["content"]
+            )
+            if object_payload(block).get("type") == "thinking"
         )
         expected = _native(protocol)
         # The existing Messages -> Responses codec retains signed fields, but
@@ -431,22 +438,25 @@ def test_all_sixteen_paths_replay_native_state_and_tool_results(
             expected.pop("extension")
         assert replayed == expected
     elif protocol == "responses":
-        assert _native(protocol) in bodies[1]["input"]
+        assert _native(protocol) in array_payload(bodies[1]["input"])
     else:
         assistant = next(
             message
-            for message in bodies[1]["messages"]
-            if message["role"] == "assistant"
+            for message in array_payload(bodies[1]["messages"])
+            if object_payload(message)["role"] == "assistant"
         )
         if wire in {"chat", "gemini"}:
             assert (
-                assistant["reasoning_details"] == _native(protocol)["reasoning_details"]
+                object_payload(assistant)["reasoning_details"]
+                == _native(protocol)["reasoning_details"]
             )
         else:
             # Existing Messages/Responses presentations expose Chat's opaque
             # bytes separately from its readable scalar representation.
             assert any(
-                detail.get("data") == "opaque-original"
-                for detail in assistant["reasoning_details"]
+                object_payload(detail).get("data") == "opaque-original"
+                for detail in array_payload(
+                    object_payload(assistant)["reasoning_details"]
+                )
             )
             assert json.dumps(assistant).count("Find 17.") == 1

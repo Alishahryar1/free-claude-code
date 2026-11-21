@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from free_claude_code.messaging.models import MessageScope
+from free_claude_code.messaging.models import IncomingMessage, MessageScope
 from free_claude_code.messaging.platforms.voice_flow import (
     VOICE_DISABLED_MESSAGE,
     VOICE_TRANSCRIPTION_ERROR_MESSAGE,
@@ -109,7 +109,9 @@ async def test_voice_flow_success_builds_incoming_message() -> None:
     )
     queue_delete.assert_not_awaited()
     handler.assert_awaited_once()
-    incoming = handler.call_args.args[0]
+    assert handler.call_args is not None
+    incoming: object = handler.call_args.args[0]
+    assert isinstance(incoming, IncomingMessage)
     assert incoming.text == "hello from voice"
     assert incoming.chat_id == "chat"
     assert incoming.message_id == "voice"

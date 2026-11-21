@@ -3,7 +3,7 @@
 import math
 from collections.abc import Iterator, Mapping
 from dataclasses import replace
-from typing import Any, override
+from typing import override
 from urllib.parse import quote
 
 import httpx
@@ -14,6 +14,7 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.provider_catalog import CLOUDFLARE_AI_REST_ROOT
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.chat_completions.response import chat_failure
+from free_claude_code.core.json_types import JsonValue, wire_field
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
@@ -97,7 +98,7 @@ class CloudflareChatBehavior(OpenAIChatBehavior):
 
     @override
     def extra_reasoning_events(
-        self, delta: Any, output: ChatStreamOutput, *, output_reasoning: bool
+        self, delta: object, output: ChatStreamOutput, *, output_reasoning: bool
     ) -> Iterator[str]:
         """Map Cloudflare's ``reasoning`` delta field to Anthropic thinking."""
         reasoning = _cloudflare_reasoning(delta)
@@ -168,7 +169,7 @@ class CloudflareProvider(OpenAIChatProvider):
         )
         try:
             try:
-                payload = response.json()
+                payload: JsonValue = response.json()
             except ValueError as exc:
                 raise ModelListResponseError(
                     "CLOUDFLARE model-list response is malformed: invalid JSON"
@@ -183,12 +184,12 @@ class CloudflareProvider(OpenAIChatProvider):
         return {"Authorization": f"Bearer {self._api_key}"}
 
 
-def _cloudflare_reasoning(delta: Any) -> str | None:
-    reasoning = getattr(delta, "reasoning", None)
+def _cloudflare_reasoning(delta: object) -> str | None:
+    reasoning = wire_field(delta, "reasoning")
     if isinstance(reasoning, str) and reasoning:
         return reasoning
 
-    model_extra = getattr(delta, "model_extra", None)
+    model_extra = wire_field(delta, "model_extra")
     if isinstance(model_extra, Mapping):
         reasoning = model_extra.get("reasoning")
         if isinstance(reasoning, str) and reasoning:

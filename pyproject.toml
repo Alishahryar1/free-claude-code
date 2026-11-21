@@ -188,3 +188,6 @@ ignore-missing-imports = [
     "PIL",
     "PIL.**",
 ]
+
+[tool.pyrefly.errors]
+explicit-any-use = "error"

@@ -7,11 +7,14 @@ evidence reach the upstream or the client unchanged.
 
 import json
 from collections.abc import Iterator, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
 from loguru import logger
+
+if TYPE_CHECKING:
+    from loguru import Message
 
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
@@ -25,14 +28,15 @@ from free_claude_code.core.trace import TRACE_PAYLOAD_BINDING
 from free_claude_code.providers.anthropic.provider import AnthropicProvider
 from tests.providers.test_anthropic_messages_transport import Wire, _events, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
+from tests.wire_payload import object_payload
 
 
 @pytest.fixture
 def traces() -> Iterator[list[dict[str, Any]]]:
     payloads: list[dict[str, Any]] = []
 
-    def sink(message: Any) -> None:
-        payload = message.record["extra"].get(TRACE_PAYLOAD_BINDING)
+    def sink(message: Message) -> None:
+        payload: object = message.record["extra"].get(TRACE_PAYLOAD_BINDING)
         if isinstance(payload, dict):
             payloads.append(payload)
 
@@ -112,7 +116,7 @@ async def test_context_window_stop_reaches_the_client_as_a_stop():
         await p.cleanup()
 
     stops = [
-        event.data["delta"]["stop_reason"]
+        object_payload(event.data["delta"])["stop_reason"]
         for event in parse_sse_text("".join(frames))
         if event.data["type"] == "message_delta"
     ]

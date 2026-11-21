@@ -21,6 +21,13 @@ from tests.api.test_stream_delivery import drained
 from tests.api.test_tool_call_buffer import _response
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import (
+    array_payload,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 @pytest.mark.asyncio
@@ -73,23 +80,32 @@ async def test_continuation_timeout_retains_delivered_output(
         event.event in {"message_stop", "response.completed"} for event in events
     )
     failure = events[-1].data if wire == "messages" else events[-1].data["response"]
-    assert failure["error"]["type"] == "api_error"
-    assert "Continuation read timed out" in failure["error"]["message"]
+    assert object_payload(object_payload(failure)["error"])["type"] == "api_error"
+    assert "Continuation read timed out" in string_payload(
+        object_payload(object_payload(failure)["error"])["message"]
+    )
     if wire == "messages":
         return
 
-    assert failure["id"] == events[0].data["response"]["id"]
-    assert failure["status"] == "failed"
-    assert failure["usage"]["output_tokens"] > 0
+    assert (
+        object_payload(failure)["id"]
+        == object_payload(events[0].data["response"])["id"]
+    )
+    assert object_payload(failure)["status"] == "failed"
+    assert (
+        int_payload(object_payload(object_payload(failure)["usage"])["output_tokens"])
+        > 0
+    )
     assert all(
-        left.data["sequence_number"] < right.data["sequence_number"]
+        int_payload(left.data["sequence_number"])
+        < int_payload(right.data["sequence_number"])
         for left, right in pairwise(events)
     )
     assert (
         "".join(
-            part.get("text", "")
-            for item in failure["output"]
-            for part in item.get("content") or []
+            string_payload(object_payload(part).get("text", ""))
+            for item in array_payload(object_payload(failure)["output"])
+            for part in object_array(object_payload(item).get("content") or [])
         )
         == "Hello "
     )
@@ -139,14 +155,24 @@ async def test_pending_recovery_failure_does_not_require_successful_closures(
     events = parse_sse_text(await drained(source(), "responses"))
     failure = events[-1].data["response"]
     assert events[-1].event == "response.failed"
-    assert "recovery boundary failed" in failure["error"]["message"]
+    assert "recovery boundary failed" in string_payload(
+        object_payload(object_payload(failure)["error"])["message"]
+    )
     assert len(events) == len(prefix) + 1
-    assert len(failure["output"]) == 1
+    assert len(array_payload(object_payload(failure)["output"])) == 1
     if handoff:
-        assert failure["output"][0] == prefix[-1]["item"]
+        assert array_payload(object_payload(failure)["output"])[0] == prefix[-1]["item"]
     else:
-        assert failure["output"][0]["status"] == "in_progress"
-        assert failure["output"][0]["content"][0]["text"] == "Hello "
+        assert (
+            object_array(object_payload(failure)["output"])[0]["status"]
+            == "in_progress"
+        )
+        assert (
+            object_array(object_array(object_payload(failure)["output"])[0]["content"])[
+                0
+            ]["text"]
+            == "Hello "
+        )
 
 
 @pytest.mark.asyncio

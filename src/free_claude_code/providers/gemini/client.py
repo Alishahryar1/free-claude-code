@@ -1,7 +1,7 @@
 """Google AI Studio provider using native GenerateContent and model discovery."""
 
 from collections.abc import AsyncIterator, Mapping
-from typing import Any, override
+from typing import override
 from uuid import uuid4
 
 import httpx
@@ -18,6 +18,7 @@ from free_claude_code.core.gemini.native_request import (
     native_gemini_body,
     responses_to_gemini,
 )
+from free_claude_code.core.json_types import JsonObject, JsonValue, json_array
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesToolAdapter,
@@ -91,14 +92,14 @@ class GeminiProvider(BaseProvider):
         seen: set[str] = set()
         while True:
 
-            async def fetch(page_token: str | None = page_token) -> dict[str, Any]:
+            async def fetch(page_token: str | None = page_token) -> JsonObject:
                 response = await self._http.get(
                     f"{self._snapshot.base_url}/models",
                     headers={"x-goog-api-key": self._snapshot.api_key or ""},
                     params={"pageToken": page_token} if page_token else {},
                 )
                 response.raise_for_status()
-                payload = response.json()
+                payload: JsonValue = response.json()
                 if not isinstance(payload, dict) or not isinstance(
                     payload.get("models"), list
                 ):
@@ -111,29 +112,35 @@ class GeminiProvider(BaseProvider):
             payload = await execution.run_call(
                 fetch, operation_kind=ProviderOperationKind.MODEL_DISCOVERY
             )
-            for model in payload["models"]:
+            for model in json_array(payload["models"]):
                 if not isinstance(model, dict) or not isinstance(
-                    model.get("name"), str
+                    name := model.get("name"), str
                 ):
                     raise ValueError("Gemini model discovery returned an invalid model")
-                if "generateContent" not in model.get("supportedGenerationMethods", []):
+                methods = model.get("supportedGenerationMethods", [])
+                if not isinstance(methods, list) or "generateContent" not in methods:
                     continue
-                records[model["name"]] = ProviderModelInfo(
-                    model_id=model["name"],
+                records[name] = ProviderModelInfo(
+                    model_id=name,
                     supports_thinking=model.get("thinking")
                     if isinstance(model.get("thinking"), bool)
                     else None,
                     reasoning_capability=ReasoningCapability.NONE
                     if model.get("thinking") is False
                     else ReasoningCapability.UNKNOWN,
-                    context_window_tokens=model.get("inputTokenLimit"),
-                    max_output_tokens=model.get("outputTokenLimit"),
+                    context_window_tokens=context
+                    if isinstance(context := model.get("inputTokenLimit"), int)
+                    else None,
+                    max_output_tokens=output
+                    if isinstance(output := model.get("outputTokenLimit"), int)
+                    else None,
                 )
-            page_token = payload.get("nextPageToken")
-            if not page_token:
+            next_page_token = payload.get("nextPageToken")
+            if not next_page_token:
                 return frozenset(records.values())
-            if not isinstance(page_token, str) or page_token in seen:
+            if not isinstance(next_page_token, str) or next_page_token in seen:
                 raise ValueError("Gemini model discovery repeated a page token")
+            page_token = next_page_token
             seen.add(page_token)
 
     def stream_messages(

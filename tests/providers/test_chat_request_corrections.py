@@ -6,7 +6,6 @@ request bodies the upstream received and the failure the caller sees.
 
 import json
 from collections.abc import Callable
-from typing import Any
 from unittest.mock import patch
 
 import httpx2
@@ -24,9 +23,10 @@ from free_claude_code.core.stream_delivery import (
 from free_claude_code.providers.groq import GroqProvider
 from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_openai_responses_transport import _client
+from tests.wire_payload import decode_object, int_payload
 
 MODEL = "opaque-model-a"
-Reply = Callable[[list[dict[str, Any]]], httpx2.Response]
+Reply = Callable[[list[JsonObject]], httpx2.Response]
 
 _CAP = (
     "`max_completion_tokens` must be less than or equal to `16384`, the maximum "
@@ -88,9 +88,9 @@ def _in_stream(message: str) -> httpx2.Response:
     )
 
 
-def _groq(reply: Reply, bodies: list[dict[str, Any]]) -> GroqProvider:
+def _groq(reply: Reply, bodies: list[JsonObject]) -> GroqProvider:
     def handle(request: httpx2.Request) -> httpx2.Response:
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return reply(bodies)
 
     with patch(
@@ -132,7 +132,7 @@ def _first_then_ok(first: httpx2.Response) -> Reply:
 
 @pytest.mark.asyncio
 async def test_output_cap_is_clamped_and_learned_for_the_next_request():
-    bodies: list[dict[str, Any]] = []
+    bodies: list[JsonObject] = []
     provider = _groq(
         _first_then_ok(_rejected(_CAP, param="max_completion_tokens")), bodies
     )
@@ -147,7 +147,7 @@ async def test_output_cap_is_clamped_and_learned_for_the_next_request():
 
 @pytest.mark.asyncio
 async def test_stream_usage_rejection_drops_only_the_usage_option():
-    bodies: list[dict[str, Any]] = []
+    bodies: list[JsonObject] = []
     provider = _groq(_first_then_ok(_rejected(_USAGE)), bodies)
     try:
         await _send(provider)
@@ -162,7 +162,7 @@ async def test_stream_usage_rejection_drops_only_the_usage_option():
 
 @pytest.mark.asyncio
 async def test_provider_correction_adjusts_the_rejected_field():
-    bodies: list[dict[str, Any]] = []
+    bodies: list[JsonObject] = []
     provider = _groq(_first_then_ok(_rejected(_VOCABULARY)), bodies)
     try:
         await _send(provider, reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH))
@@ -174,7 +174,7 @@ async def test_provider_correction_adjusts_the_rejected_field():
 
 @pytest.mark.asyncio
 async def test_late_provider_correction_runs_after_the_standard_ones():
-    bodies: list[dict[str, Any]] = []
+    bodies: list[JsonObject] = []
     provider = _groq(
         _first_then_ok(
             _rejected(_TPM, status=413, type="tokens", code="rate_limit_exceeded")
@@ -187,12 +187,14 @@ async def test_late_provider_correction_runs_after_the_standard_ones():
         await provider.cleanup()
 
     assert len(bodies) == 2
-    assert bodies[1]["max_completion_tokens"] < bodies[0]["max_completion_tokens"]
+    assert int_payload(bodies[1]["max_completion_tokens"]) < int_payload(
+        bodies[0]["max_completion_tokens"]
+    )
 
 
 @pytest.mark.asyncio
 async def test_each_correction_is_applied_at_most_once():
-    bodies: list[dict[str, Any]] = []
+    bodies: list[JsonObject] = []
     provider = _groq(lambda bodies: _rejected(_USAGE), bodies)
     try:
         with pytest.raises(ExecutionFailure) as caught:
@@ -206,7 +208,7 @@ async def test_each_correction_is_applied_at_most_once():
 
 @pytest.mark.asyncio
 async def test_unrelated_rejection_is_not_corrected():
-    bodies: list[dict[str, Any]] = []
+    bodies: list[JsonObject] = []
     provider = _groq(
         lambda bodies: _rejected("messages: invalid role 'wizard'"), bodies
     )
@@ -223,7 +225,7 @@ async def test_unrelated_rejection_is_not_corrected():
 async def test_in_stream_rejection_without_a_status_is_not_corrected():
     # The SDK raises an in-stream error without an HTTP status, which none of
     # the Chat corrections accept as a validation rejection.
-    bodies: list[dict[str, Any]] = []
+    bodies: list[JsonObject] = []
     provider = _groq(_first_then_ok(_in_stream(_CAP)), bodies)
     try:
         with pytest.raises(ExecutionFailure):

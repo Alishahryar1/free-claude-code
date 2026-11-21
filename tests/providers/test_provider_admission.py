@@ -4,6 +4,7 @@ import asyncio
 import ssl
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 from types import SimpleNamespace
@@ -28,6 +29,8 @@ from free_claude_code.providers.admission import (
 from free_claude_code.providers.http import ProviderAttemptScope
 from free_claude_code.providers.recovery_errors import ProviderRecoveryExhausted
 from free_claude_code.providers.stream_recovery import TruncatedProviderStreamError
+from tests.mock_calls import keyword_arguments
+from tests.wire_payload import string_payload
 
 
 def _controller(
@@ -71,9 +74,14 @@ async def _open(execution: ProviderExecution) -> ProviderAttempt:
     return await execution.open_attempt(ProviderOperationKind.GENERATION)
 
 
+@dataclass
+class RecoveryClock:
+    now: float = 100.0
+
+
 @pytest.fixture
-def recovery_clock(monkeypatch: pytest.MonkeyPatch):
-    clock = SimpleNamespace(now=100.0)
+def recovery_clock(monkeypatch: pytest.MonkeyPatch) -> RecoveryClock:
+    clock = RecoveryClock()
     monotonic_time = SimpleNamespace(monotonic=lambda: clock.now)
     monkeypatch.setattr(admission, "time", monotonic_time)
     monkeypatch.setattr(failure_reporting, "time", monotonic_time)
@@ -377,7 +385,9 @@ async def test_recovery_traces_keep_the_logical_request_id() -> None:
     recovery_rows = [
         call.kwargs
         for call in trace.call_args_list
-        if call.kwargs.get("event", "").startswith("provider.recovery")
+        if string_payload(keyword_arguments(call).get("event", "")).startswith(
+            "provider.recovery"
+        )
         or call.kwargs.get("event") == "provider.retry.scheduled"
     ]
     assert {row["event"] for row in recovery_rows} == {
@@ -414,7 +424,9 @@ async def test_each_physical_call_has_one_correlated_trace_pair() -> None:
     attempt_rows = [
         call.kwargs
         for call in trace.call_args_list
-        if call.kwargs.get("event", "").startswith("provider.attempt.")
+        if string_payload(keyword_arguments(call).get("event", "")).startswith(
+            "provider.attempt."
+        )
     ]
     assert [row["event"] for row in attempt_rows] == [
         "provider.attempt.started",
@@ -606,7 +618,7 @@ async def test_discovery_requests_share_recovery_health() -> None:
 
 @pytest.mark.asyncio
 async def test_one_leader_backs_off_while_followers_coalesce(
-    recovery_clock: SimpleNamespace,
+    recovery_clock: RecoveryClock,
 ) -> None:
     controller = _controller(base_delay=2.0, max_delay=60.0)
     leader_execution = controller.start_execution()
@@ -667,7 +679,7 @@ async def test_cancelled_follower_leaves_recovery_episode() -> None:
 
 @pytest.mark.asyncio
 async def test_cancelled_backoff_leader_transfers_to_a_waiter(
-    recovery_clock: SimpleNamespace,
+    recovery_clock: RecoveryClock,
 ) -> None:
     controller = _controller(base_delay=2.0, max_delay=60.0)
     leader_execution = controller.start_execution()
@@ -928,7 +940,7 @@ async def test_late_in_flight_failure_keeps_exhausted_generation_outcome() -> No
 @pytest.mark.asyncio
 @pytest.mark.parametrize("hint", ["7", "60", "invalid", None])
 async def test_retry_after_within_ceiling_keeps_coordinated_backoff(
-    hint: str | None, recovery_clock: SimpleNamespace
+    hint: str | None, recovery_clock: RecoveryClock
 ):
     controller = _controller(max_attempts=2, base_delay=1, max_delay=60)
     execution = controller.start_execution()
@@ -953,7 +965,7 @@ async def test_retry_after_within_ceiling_keeps_coordinated_backoff(
 
 @pytest.mark.asyncio
 async def test_long_http_date_stops_retry_and_reopens_at_deadline(
-    recovery_clock: SimpleNamespace,
+    recovery_clock: RecoveryClock,
 ):
     controller = _controller(max_delay=60)
     future = format_datetime(datetime.now(UTC) + timedelta(hours=1), usegmt=True)
@@ -990,7 +1002,7 @@ async def test_long_http_date_stops_retry_and_reopens_at_deadline(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("leader_wait", ["backoff", "capacity", "in_flight"])
 async def test_long_hint_supersedes_short_recovery_and_releases_waiters(
-    leader_wait: str, recovery_clock: SimpleNamespace
+    leader_wait: str, recovery_clock: RecoveryClock
 ):
     controller = _controller(max_concurrency=3, base_delay=10, max_delay=60)
     leader = controller.start_execution(model="primary")
@@ -1062,7 +1074,7 @@ async def test_long_hint_supersedes_short_recovery_and_releases_waiters(
 @pytest.mark.parametrize("elapsed", [0, 30, 120, 3600])
 @pytest.mark.asyncio
 async def test_terminal_waiters_keep_captured_failure(
-    elapsed: int, recovery_clock: SimpleNamespace
+    elapsed: int, recovery_clock: RecoveryClock
 ):
     controller = _controller(base_delay=10, max_delay=60)
     queued_execution = controller.start_execution(model="primary")
@@ -1139,7 +1151,7 @@ async def test_terminal_waiters_keep_captured_failure(
 @pytest.mark.parametrize("long_first", [False, True])
 @pytest.mark.asyncio
 async def test_terminal_episode_selects_late_attempt_failure(
-    recovery_clock: SimpleNamespace, late_budget: int, long_first: bool
+    recovery_clock: RecoveryClock, late_budget: int, long_first: bool
 ):
     controller = _controller(max_attempts=2, max_delay=60)
     leader = controller.start_execution(model="primary")
@@ -1187,7 +1199,7 @@ async def test_terminal_episode_selects_late_attempt_failure(
 
 @pytest.mark.asyncio
 async def test_gate_rejection_stays_terminal_after_route_reopens(
-    recovery_clock: SimpleNamespace,
+    recovery_clock: RecoveryClock,
 ):
     controller = _controller(max_delay=60)
     source = await _open(controller.start_execution(model="primary"))

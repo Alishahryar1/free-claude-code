@@ -94,7 +94,7 @@ class DeepSeekChatBehavior(OpenAIChatBehavior):
         return cache_hit_tokens if prompt_tokens is not None else None
 
     @override
-    def anthropic_usage_fields(self, usage_info: Any) -> dict[str, int]:
+    def anthropic_usage_fields(self, usage_info: object) -> dict[str, int]:
         cache_partition = _deepseek_cache_partition(usage_info)
         if cache_partition is None:
             return {}

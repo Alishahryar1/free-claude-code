@@ -4,7 +4,8 @@ import json
 import re
 import traceback
 from dataclasses import dataclass
-from typing import Any
+
+from free_claude_code.core.json_types import load_json_value
 
 from .failures import ExecutionFailure
 
@@ -210,21 +211,23 @@ def reported_http_status(exc: BaseException) -> int | None:
     return response_status if isinstance(response_status, int) else None
 
 
-def _body_from_response(exc: Exception) -> Any:
-    response = getattr(exc, "response", None)
+def _body_from_response(exc: Exception) -> object:
+    response: object = getattr(exc, "response", None)
     if response is None:
         return None
     try:
-        return response.json()
+        decode: object = getattr(response, "json", None)
+        if callable(decode):
+            return decode()
     except Exception:
         pass
     try:
-        return response.text
+        return getattr(response, "text", None)
     except Exception:
         return None
 
 
-def _normalize_body_text(body: Any) -> str | None:
+def _normalize_body_text(body: object) -> str | None:
     if body is None:
         return None
     if isinstance(body, bytes):
@@ -240,7 +243,7 @@ def _normalize_body_text(body: Any) -> str | None:
     if not stripped:
         return None
     try:
-        parsed = json.loads(stripped)
+        parsed = load_json_value(stripped)
     except ValueError:
         return stripped
     return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
@@ -286,13 +289,13 @@ def _exception_cause_chain_text(exc: BaseException) -> str | None:
     return text
 
 
-def _category_hint_from_body(body: Any, body_text: str | None) -> str | None:
+def _category_hint_from_body(body: object, body_text: str | None) -> str | None:
     parsed = body
     if isinstance(parsed, bytes):
         parsed = parsed.decode("utf-8", errors="replace")
     if isinstance(parsed, str):
         try:
-            parsed = json.loads(parsed)
+            parsed = load_json_value(parsed)
         except ValueError:
             parsed = None
     if isinstance(parsed, dict):

@@ -19,6 +19,7 @@ from tests.providers.support import (
     profiled_provider,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 def make_request(**overrides: object):
@@ -136,7 +137,7 @@ def test_build_request_body_keeps_max_tokens(vercel_provider: OpenAIChatProvider
 
         body = vercel_provider._chat._build_request_body(make_request())
 
-    assert body["messages"][0].get("name") == "alice"
+    assert object_payload(array_payload(body["messages"])[0]).get("name") == "alice"
     assert body["max_tokens"] == 42
     assert "max_completion_tokens" not in body
 

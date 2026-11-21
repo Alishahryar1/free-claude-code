@@ -46,7 +46,8 @@ def browser_workers(monkeypatch: pytest.MonkeyPatch):
 
 def test_listeners_remain_exclusive_until_owner_closes():
     with ServerSockets.reserve("127.0.0.1", 0) as owner:
-        port = owner.sockets[0].getsockname()[1]
+        address: tuple[str, int] = owner.sockets[0].getsockname()
+        port = address[1]
         with pytest.raises(OSError):
             ServerSockets.reserve("127.0.0.1", port)
     with ServerSockets.reserve("127.0.0.1", port) as replacement:
@@ -95,7 +96,8 @@ async def test_uvicorn_readiness_and_early_exit_close_runtime(failure: str):
 
     app = FastAPI(lifespan=lifespan)
     with ServerSockets.reserve("127.0.0.1", 0) as owner:
-        port = owner.sockets[0].getsockname()[1]
+        address: tuple[str, int] = owner.sockets[0].getsockname()
+        port = address[1]
 
         def started():
             ready()

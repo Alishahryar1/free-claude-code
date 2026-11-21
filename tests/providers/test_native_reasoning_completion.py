@@ -45,7 +45,12 @@ from tests.providers.test_history_transports import (
     _native,
     _saved_reply,
 )
-from tests.wire_payload import array_payload, object_array, object_payload
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 def _chunks(deltas: Sequence[tuple[Mapping[str, JsonValue], str | None]]):
@@ -87,7 +92,7 @@ async def test_plain_reasoning_emits_no_artificial_replay_state(
         starts = [
             event.data for event in events if event.event == "content_block_start"
         ]
-        assert [event["content_block"]["type"] for event in starts] == (
+        assert [object_payload(event["content_block"])["type"] for event in starts] == (
             ["thinking"] if thinking else []
         ) + ["text"]
         stops = [
@@ -98,14 +103,17 @@ async def test_plain_reasoning_emits_no_artificial_replay_state(
         assert stops[-1] == next(
             event["index"]
             for event in starts
-            if event["content_block"]["type"] == "text"
+            if object_payload(event["content_block"])["type"] == "text"
         )
     else:
-        output = events[-1].data["response"]["output"]
-        assert [item["type"] for item in output] == (
+        output = object_payload(events[-1].data["response"])["output"]
+        assert [object_payload(item)["type"] for item in array_payload(output)] == (
             ["reasoning"] if thinking else []
         ) + ["message"]
-        assert all(not item.get("encrypted_content") for item in output)
+        assert all(
+            not object_payload(item).get("encrypted_content")
+            for item in array_payload(output)
+        )
 
 
 @pytest.mark.asyncio
@@ -150,7 +158,7 @@ async def test_late_opaque_metadata_finishes_before_answer(wire: str):
         text_index = next(
             event["index"]
             for event in starts
-            if event["content_block"]["type"] == "text"
+            if object_payload(event["content_block"])["type"] == "text"
         )
         assert [
             event.data["index"]
@@ -158,9 +166,10 @@ async def test_late_opaque_metadata_finishes_before_answer(wire: str):
             if event.event == "content_block_stop"
         ][-1] == text_index
         assert [
-            event.data["delta"]["signature"]
+            object_payload(event.data["delta"])["signature"]
             for event in events
-            if event.data.get("delta", {}).get("type") == "signature_delta"
+            if object_payload(event.data.get("delta", {})).get("type")
+            == "signature_delta"
         ] == ["firstsecond"]
     else:
         done = [
@@ -169,11 +178,11 @@ async def test_late_opaque_metadata_finishes_before_answer(wire: str):
             if event.event == "response.output_item.done"
         ]
         assert [
-            item.get("encrypted_content")
+            object_payload(item).get("encrypted_content")
             for item in done
-            if item["type"] == "reasoning"
+            if object_payload(item)["type"] == "reasoning"
         ] == ["firstsecond"]
-        assert done[-1]["type"] == "message"
+        assert object_payload(done[-1])["type"] == "message"
 
 
 @pytest.mark.asyncio
@@ -395,15 +404,19 @@ async def test_responses_late_cipher_preserves_thinking_and_final_answer():
     events = parse_sse_text(stream)
     starts = [event.data for event in events if event.event == "content_block_start"]
     text_index = next(
-        event["index"] for event in starts if event["content_block"]["type"] == "text"
+        event["index"]
+        for event in starts
+        if object_payload(event["content_block"])["type"] == "text"
     )
     assert [
         event.data["index"] for event in events if event.event == "content_block_stop"
     ][-1] == text_index
     assert [
-        decode_replay(event.data["delta"]["signature"]).native["encrypted_content"]
+        decode_replay(
+            string_payload(object_payload(event.data["delta"])["signature"])
+        ).native["encrypted_content"]
         for event in events
-        if event.data.get("delta", {}).get("type") == "signature_delta"
+        if object_payload(event.data.get("delta", {})).get("type") == "signature_delta"
     ] == ["opaque-original"]
 
 
@@ -493,7 +506,8 @@ def test_converted_top_level_thought_has_valid_responses_identity():
         ),
         reasoning=ReasoningPolicy.on(),
     )
-    assert body["input"][0]["id"].startswith("rs_")
+    items: list[JsonObject] = body["input"]
+    assert string_payload(items[0]["id"]).startswith("rs_")
 
 
 def test_responses_summary_maps_to_structured_chat_summary():
@@ -557,7 +571,9 @@ def test_existing_responses_tool_delta_does_not_close_final_text():
     events = parse_sse_text("".join(frames))
     starts = [event.data for event in events if event.event == "content_block_start"]
     text_index = next(
-        event["index"] for event in starts if event["content_block"]["type"] == "text"
+        event["index"]
+        for event in starts
+        if object_payload(event["content_block"])["type"] == "text"
     )
     assert [
         event.data["index"] for event in events if event.event == "content_block_stop"
@@ -738,7 +754,7 @@ async def test_completed_full_reasoning_survives_streamed_summary(
             event.data["index"]
             for event in events
             if event.event == "content_block_start"
-            and event.data["content_block"]["type"] == "text"
+            and object_payload(event.data["content_block"])["type"] == "text"
         )
         assert [
             event.data["index"]
@@ -778,9 +794,10 @@ def test_responses_seeded_reasoning_and_fragments_are_completed_once(summary: bo
     events = parse_sse_text("".join(frames))
     assert (
         "".join(
-            event.data["delta"]["thinking"]
+            string_payload(object_payload(event.data["delta"])["thinking"])
             for event in events
-            if event.data.get("delta", {}).get("type") == "thinking_delta"
+            if object_payload(event.data.get("delta", {})).get("type")
+            == "thinking_delta"
         )
         == "First, think."
     )

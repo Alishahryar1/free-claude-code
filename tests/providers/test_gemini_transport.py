@@ -16,7 +16,7 @@ from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.gemini.replay import decode_bundle
 from free_claude_code.core.gemini.response import GeminiResponseAccumulator
 from free_claude_code.core.history_replay import readable_reasoning
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.anthropic_messages.transport import (
@@ -53,7 +53,13 @@ from tests.providers.test_openai_responses_transport import (
 from tests.providers.test_openai_responses_transport import (
     _transport as responses_transport,
 )
-from tests.wire_payload import object_array, object_payload
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 def gemini_request(**values: object):
@@ -142,7 +148,7 @@ async def test_chat_gemini_stream_preserves_text_identity_and_reported_usage():
     sent = []
 
     def reply(request: httpx2.Request):
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         return chat_response(
             [{"content": "hello "}, {"content": "world"}],
             usage={
@@ -213,7 +219,7 @@ async def test_messages_gemini_text_and_native_thinking_replay():
     sent = []
 
     def reply(request: httpx.Request):
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         events = messages_events()
         events[1:1] = [
             {
@@ -285,7 +291,7 @@ async def test_responses_gemini_text_complete_call_and_late_reasoning_replay():
     }
 
     def reply(request: httpx2.Request):
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         return httpx2.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -341,7 +347,7 @@ async def test_responses_gemini_text_complete_call_and_late_reasoning_replay():
     bundle = decode_bundle(parts[-1]["thoughtSignature"])
     assert bundle is not None and bundle.records[0].native == reasoning
     assert "usageMetadata" not in value
-    assert sent[0]["input"][0]["role"] == "user"
+    assert object_array(sent[0]["input"])[0]["role"] == "user"
 
 
 @pytest.mark.asyncio
@@ -496,7 +502,7 @@ async def test_google_replay_survives_client_replacement_and_preserves_edited_ar
     opaque = {"google": {"thought_signature": "native-signed-bytes"}}
 
     def reply(request: httpx2.Request):
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         if len(sent) > 1:
             return chat_response([{"content": "continued"}])
         if tool_call:
@@ -569,17 +575,30 @@ async def test_google_replay_survives_client_replacement_and_preserves_edited_ar
         gemini_request(tools=tools, contents=history),
         "first-account" if same_connection else "different-account",
     )
-    assert any(item["role"] == "assistant" for item in sent[1]["messages"]), sent[1]
+    assert any(
+        object_payload(item)["role"] == "assistant"
+        for item in array_payload(sent[1]["messages"])
+    ), sent[1]
     assistant = next(
-        item for item in sent[1]["messages"] if item["role"] == "assistant"
+        item
+        for item in array_payload(sent[1]["messages"])
+        if object_payload(item)["role"] == "assistant"
     )
-    target = assistant["tool_calls"][0] if tool_call else assistant
+    target = (
+        array_payload(object_payload(assistant)["tool_calls"])[0]
+        if tool_call
+        else assistant
+    )
     if same_connection:
-        assert target["extra_content"] == opaque
+        assert object_payload(target)["extra_content"] == opaque
     else:
         assert "native-signed-bytes" not in json.dumps(sent[1])
     if tool_call:
-        assert json.loads(target["function"]["arguments"]) == {"path": "edited"}
+        assert load_json_value(
+            string_payload(
+                object_payload(object_payload(target)["function"])["arguments"]
+            )
+        ) == {"path": "edited"}
     assert "fcc:history" not in json.dumps(sent[1])
 
 

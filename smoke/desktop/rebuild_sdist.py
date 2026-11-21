@@ -31,7 +31,13 @@ def check(directory: Path) -> None:
             assert before.read(entrypoints) == after.read(entrypoints)
 
 
+class _BuildArgs(argparse.Namespace):
+    directory: Path
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
-    check(parser.parse_args().directory)
+    arguments = _BuildArgs()
+    parser.parse_args(namespace=arguments)
+    check(arguments.directory)

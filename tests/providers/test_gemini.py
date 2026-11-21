@@ -22,7 +22,17 @@ from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.gemini import GeminiProvider
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    stream_provider_request,
+)
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+)
 
 
 def _sse(parts: Sequence[Mapping[str, JsonValue]]):
@@ -124,7 +134,7 @@ async def test_all_ingresses_use_native_gemini_and_replay_signed_parts(
         assert request.url.path == "/v1beta/models/test-model:streamGenerateContent"
         assert request.url.params["alt"] == "sse"
         assert request.headers["x-goog-api-key"] == "test-key"
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _sse(parts)
 
     provider = GeminiProvider(
@@ -135,8 +145,8 @@ async def test_all_ingresses_use_native_gemini_and_replay_signed_parts(
     try:
         first = await _collect(
             wire,
-            getattr(provider, f"stream_{wire}")(
-                _request(wire), response_model="public"
+            stream_provider_request(
+                provider, wire, _request(wire), response_model="public"
             ),
         )
         history: list[JsonObject]
@@ -166,10 +176,13 @@ async def test_all_ingresses_use_native_gemini_and_replay_signed_parts(
             ]
         original = deepcopy(history)
         await _collect(
-            wire, getattr(provider, f"stream_{wire}")(_request(wire, history))
+            wire, stream_provider_request(provider, wire, _request(wire, history))
         )
         assert history == original
-        assert bodies[1]["contents"][1] == {"role": "model", "parts": parts}
+        assert array_payload(bodies[1]["contents"])[1] == {
+            "role": "model",
+            "parts": parts,
+        }
         assert "model" not in bodies[0]
         assert "literal answer" in str(first)
     finally:
@@ -197,7 +210,7 @@ async def test_native_signed_tool_round_trip_keeps_original_parts_and_ids(
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _sse(parts if len(bodies) == 1 else [{"text": "complete"}])
 
     schema = {
@@ -225,7 +238,7 @@ async def test_native_signed_tool_round_trip_keeps_original_parts_and_ids(
         transport=httpx.MockTransport(reply),
     )
     try:
-        first = await _collect(wire, getattr(provider, f"stream_{wire}")(request))
+        first = await _collect(wire, stream_provider_request(provider, wire, request))
         if wire == "messages":
             call = next(
                 block for block in first["content"] if block["type"] == "tool_use"
@@ -271,11 +284,16 @@ async def test_native_signed_tool_round_trip_keeps_original_parts_and_ids(
                 "input" if wire == "responses" else "messages": history,
             }
         )
-        await _collect(wire, getattr(provider, f"stream_{wire}")(next_request))
-        assert bodies[-1]["contents"][1] == {"role": "model", "parts": parts}
-        result = bodies[-1]["contents"][2]["parts"][0]["functionResponse"]
-        assert result.get("id") == native_id
-        assert result["name"] == "lookup"
+        await _collect(wire, stream_provider_request(provider, wire, next_request))
+        assert array_payload(bodies[-1]["contents"])[1] == {
+            "role": "model",
+            "parts": parts,
+        }
+        result = object_array(object_array(bodies[-1]["contents"])[2]["parts"])[0][
+            "functionResponse"
+        ]
+        assert object_payload(result).get("id") == native_id
+        assert object_payload(result)["name"] == "lookup"
     finally:
         await provider.cleanup()
 
@@ -290,7 +308,7 @@ async def test_prefer_off_uses_normal_allowance_without_unavailable_disable_cont
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _sse([{"text": "verdict"}])
 
     provider = GeminiProvider(
@@ -312,8 +330,10 @@ async def test_prefer_off_uses_normal_allowance_without_unavailable_disable_cont
         )
         assert len(bodies) == 1
         config = bodies[0]["generationConfig"]
-        assert "maxOutputTokens" not in config
-        assert "thinkingBudget" not in config["thinkingConfig"]
+        assert "maxOutputTokens" not in object_payload(config)
+        assert "thinkingBudget" not in object_payload(
+            object_payload(config)["thinkingConfig"]
+        )
     finally:
         await provider.cleanup()
 
@@ -336,8 +356,8 @@ async def test_explicit_off_hides_native_thoughts_but_keeps_signed_replay(wire: 
     try:
         result = await _collect(
             wire,
-            getattr(provider, f"stream_{wire}")(
-                _request(wire), reasoning=ReasoningPolicy.off()
+            stream_provider_request(
+                provider, wire, _request(wire), reasoning=ReasoningPolicy.off()
             ),
         )
         assert "hidden thought" not in json.dumps(result)
@@ -353,7 +373,7 @@ async def test_explicit_off_rejection_does_not_relax_caller_control():
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return httpx.Response(
             400, json={"error": {"message": "Thinking cannot be disabled"}}
         )
@@ -372,7 +392,12 @@ async def test_explicit_off_rejection_does_not_relax_caller_control():
                 ),
             )
         assert len(bodies) == 1
-        assert bodies[0]["generationConfig"]["thinkingConfig"]["thinkingBudget"] == 0
+        assert (
+            object_payload(
+                object_payload(bodies[0]["generationConfig"])["thinkingConfig"]
+            )["thinkingBudget"]
+            == 0
+        )
     finally:
         await provider.cleanup()
 
@@ -452,7 +477,7 @@ async def test_native_reasoning_uses_one_computation_control(
     bodies: list[dict[str, Any]] = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _sse([{"text": "answer"}])
 
     provider = GeminiProvider(
@@ -497,7 +522,7 @@ async def test_native_empty_signed_part_does_not_emit_empty_text_block():
         event.data
         for event in events
         if event.data.get("type") == "content_block_start"
-        and event.data.get("content_block", {}).get("type") == "text"
+        and object_payload(event.data.get("content_block", {})).get("type") == "text"
     ]
     assert len(text_starts) == 1
     stops = [
@@ -518,7 +543,7 @@ async def test_native_inband_error_preserves_retry_semantics_without_history_pro
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -561,7 +586,7 @@ async def test_native_history_modes_share_attempt_budget_and_restore_source():
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         if len(bodies) < 3:
             return httpx.Response(
                 400, json={"error": {"code": 400, "message": "Unsupported history"}}
@@ -595,10 +620,10 @@ async def test_native_history_modes_share_attempt_budget_and_restore_source():
     assert history == original
     thoughts = [
         [
-            part["text"]
-            for content in body["contents"]
-            for part in content["parts"]
-            if part.get("thought")
+            object_payload(part)["text"]
+            for content in array_payload(body["contents"])
+            for part in array_payload(object_payload(content)["parts"])
+            if object_payload(part).get("thought")
         ]
         for body in bodies
     ]

@@ -16,6 +16,7 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.providers.openai_codex import auth as openai_auth
 from free_claude_code.runtime import diagnostics
+from tests.wire_payload import decode_object, object_payload
 
 
 @pytest.fixture(autouse=True)
@@ -311,14 +312,27 @@ def test_complete_report_reads_real_files_without_mutation(
     monkeypatch.setattr(doctor, "copy_text", copied.append)
     doctor.main([])
     stdout = capsys.readouterr().out
-    report = json.loads(stdout)
+    report = decode_object(stdout)
     assert copied == [stdout]
-    assert report["model_routing"]["model"] == "openai_api/process"
-    assert report["integrations"]["claude-vscode"]["connected"] is True
-    assert report["providers"]["github_copilot"]["saved_connection"] == "connected"
+    assert object_payload(report["model_routing"])["model"] == "openai_api/process"
+    assert (
+        object_payload(object_payload(report["integrations"])["claude-vscode"])[
+            "connected"
+        ]
+        is True
+    )
+    assert (
+        object_payload(object_payload(report["providers"])["github_copilot"])[
+            "saved_connection"
+        ]
+        == "connected"
+    )
     assert report["errors"] == []
-    assert report["model_discovery"]["status"] == "unavailable"
-    assert all(not item["installed"] for item in report["harnesses"].values())
+    assert object_payload(report["model_discovery"])["status"] == "unavailable"
+    assert all(
+        not object_payload(item)["installed"]
+        for item in object_payload(report["harnesses"]).values()
+    )
     for private in (
         "managed-secret",
         "ignored-secret",
@@ -506,12 +520,18 @@ def test_fallback_model_efforts_are_json_serializable_in_doctor_report():
         {"model": "open_router/vendor/two", "reasoning": "client"},
     ]
     settings = Settings(MODEL_FALLBACKS=entries)
-    report = json.loads(json.dumps(diagnostics.settings_report(settings, {})))
-    assert report["model_routing"]["model_fallbacks"] == [
+    report = decode_object(json.dumps(diagnostics.settings_report(settings, {})))
+    assert object_payload(report["model_routing"])["model_fallbacks"] == [
         entry | {"api_key_number": 1} for entry in entries
     ]
-    assert report["providers"]["groq"]["referenced"] is True
-    assert report["providers"]["open_router"]["referenced"] is True
+    assert (
+        object_payload(object_payload(report["providers"])["groq"])["referenced"]
+        is True
+    )
+    assert (
+        object_payload(object_payload(report["providers"])["open_router"])["referenced"]
+        is True
+    )
 
 
 def test_disconnect_mode_does_not_collect_or_copy_diagnostics(

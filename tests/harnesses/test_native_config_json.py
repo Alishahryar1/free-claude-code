@@ -17,6 +17,7 @@ from free_claude_code.harnesses import (
 from free_claude_code.harnesses import (
     vscode_chat_integration as vscode,
 )
+from tests.fixture_parameters import fixture_parameter
 
 
 @pytest.fixture(params=["claude", "vscode", "desktop", "jetbrains"])
@@ -30,7 +31,8 @@ def native_reader(request: pytest.FixtureRequest):
         "desktop": desktop._read,
         "jetbrains": jetbrains._read,
     }
-    return readers[request.param], request.param == "vscode"
+    harness: str = fixture_parameter(request, str)
+    return readers[harness], harness == "vscode"
 
 
 def source_for(source: str, array: bool):

@@ -14,6 +14,7 @@ from tests.providers.test_groq_tpm import (
     _provider,
     _status_error,
 )
+from tests.wire_payload import object_payload, response_object, string_payload
 
 
 @pytest.mark.parametrize(
@@ -48,15 +49,18 @@ def test_groq_quota_failure_reaches_clients_after_correction(
             response = client.post(f"/v1/{wire}", json=payload)
         assert response.status_code == 400
         assert response.headers["x-should-retry"] == "false"
-        body = response.json()["error"]
-        assert body["type"] == "invalid_request_error"
-        assert "token-rate allowance" in body["message"]
+        body = response_object(response)["error"]
+        assert object_payload(body)["type"] == "invalid_request_error"
+        assert "token-rate allowance" in string_payload(object_payload(body)["message"])
         assert (
-            "Limit 7000, Requested 23253" in body["message"]
+            "Limit 7000, Requested 23253"
+            in string_payload(object_payload(body)["message"])
             if quota == "itpm"
-            else "Limit 8000" in body["message"]
+            else "Limit 8000" in string_payload(object_payload(body)["message"])
         )
-        assert response.headers["request-id"] in body["message"]
+        assert response.headers["request-id"] in string_payload(
+            object_payload(body)["message"]
+        )
         assert create.await_count == (1 if quota == "itpm" else 2)
         assert (
             create.await_args_list[0].kwargs["max_completion_tokens"] == _ORIGINAL_MAX

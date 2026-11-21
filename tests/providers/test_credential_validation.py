@@ -128,7 +128,7 @@ async def _check_credentials(settings: Settings, keys: tuple[str, ...]):
         if d.credential_env and d.credential_attr
     }
     submissions = tuple(
-        CredentialSubmission(key, getattr(settings, owners[key]))
+        CredentialSubmission(key, settings.credential_keys(owners[key]))
         for key in dict.fromkeys(keys)
         if key in owners
     )

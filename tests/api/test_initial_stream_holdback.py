@@ -85,7 +85,7 @@ async def test_initial_text_reaches_http_without_another_upstream_event(
     sent = []
 
     async def capture(message: Message):
-        data = message.get("body", b"")
+        data: bytes = message.get("body", b"")
         sent.append(data)
         if b"buffered text" in data:
             visible.set()
@@ -157,7 +157,8 @@ async def test_cutoff_continues_already_released_text(
     sent = []
 
     async def capture(message: Message):
-        sent.append(message.get("body", b""))
+        body: bytes = message.get("body", b"")
+        sent.append(body)
 
     async with _harness(protocol, reply) as (send, bodies, _):
 
@@ -199,7 +200,7 @@ async def test_failure_after_immediate_release_continues_the_visible_answer(
     sent = []
 
     async def capture(message: Message):
-        data = message.get("body", b"")
+        data: bytes = message.get("body", b"")
         sent.append(data)
         if b"Hello " in data:
             visible.set()
@@ -329,7 +330,8 @@ async def test_immediate_delivery_keeps_incomplete_tools_hidden_and_retryable(
     async def capture(message: Message):
         if message["type"] == "http.response.start":
             started.set()
-        sent.append(message.get("body", b""))
+        body: bytes = message.get("body", b"")
+        sent.append(body)
 
     async with _harness(
         protocol,
@@ -373,7 +375,8 @@ async def test_immediate_delivery_keeps_projected_reasoning_hidden_and_retryable
     async def capture(message: Message):
         if message["type"] == "http.response.start":
             started.set()
-        sent.append(message.get("body", b""))
+        body: bytes = message.get("body", b"")
+        sent.append(body)
 
     async with _harness(
         protocol,

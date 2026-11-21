@@ -22,12 +22,12 @@ from starlette.requests import Request
 from free_claude_code.cli.process_registry import kill_pid_tree_best_effort
 from free_claude_code.config import env_migrations, paths
 from free_claude_code.config.settings import Settings
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from tests.api.support import create_test_app, provider_manager_for_app
 from tests.harnesses.antigravity_support import write_previous_connection
 from tests.providers.test_custom_provider import definition, event, provider
 from tests.providers.test_gemini_transport import chat_response
-from tests.wire_payload import string_payload
+from tests.wire_payload import decode_object, string_payload
 
 pytestmark = [pytest.mark.live, pytest.mark.smoke_target("clients")]
 
@@ -219,7 +219,7 @@ def test_native_launcher_session_tools_and_resume(
 
     def upstream(request: httpx.Request | httpx2.Request):
         nonlocal issued
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         sent.append(body)
         initial = bool(body.get("tools")) and not issued
         if initial:
@@ -261,6 +261,8 @@ def test_native_launcher_session_tools_and_resume(
 
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
+    address: tuple[str, int] = sock.getsockname()
+    port = address[1]
     server = uvicorn.Server(uvicorn.Config(app, log_level="error", lifespan="off"))
 
     async def serve():
@@ -296,7 +298,7 @@ def test_native_launcher_session_tools_and_resume(
         TEMP=str(home / "tmp"),
         TMP=str(home / "tmp"),
         HOST="127.0.0.1",
-        PORT=str(sock.getsockname()[1]),
+        PORT=str(port),
         ANTHROPIC_AUTH_TOKEN=token,
         FCC_OPEN_BROWSER="0",
         PATH=str(Path(native).parent) + os.pathsep + env.get("PATH", ""),
@@ -335,7 +337,7 @@ def test_native_launcher_session_tools_and_resume(
             time.sleep(0.05)
         assert server.started
         assert "FCC:" in run("models", "models")
-        assert json.loads(native_settings.read_text()) == original
+        assert load_json_value(native_settings.read_text()) == original
         assert not connection.exists()
         assert token not in native_settings.read_text()
         args = [
@@ -346,12 +348,17 @@ def test_native_launcher_session_tools_and_resume(
             "--output-format",
             "json",
         ]
-        first_output = json.loads(run("initial", *args))
+        first_output = decode_object(run("initial", *args))
         assert first_output["status"] == "SUCCESS"
         assert _MARKER in json.dumps(first_output)
         if mode == "resume":
-            resumed = json.loads(
-                run("resumed", "--conversation", first_output["conversation_id"], *args)
+            resumed = decode_object(
+                run(
+                    "resumed",
+                    "--conversation",
+                    string_payload(first_output["conversation_id"]),
+                    *args,
+                )
             )
             assert resumed["status"] == "SUCCESS" and _MARKER in json.dumps(resumed)
         main = [body for body in sent if body.get("tools")]
@@ -369,7 +376,7 @@ def test_native_launcher_session_tools_and_resume(
         assert all(body["model"] == "agy-backend:variant" for body in sent)
         assert f"/v1beta/models/{selected}:streamGenerateContent" in ingress
         assert provider_manager_for_app(app)._current.active_leases == 0
-        assert json.loads(native_settings.read_text()) == original
+        assert load_json_value(native_settings.read_text()) == original
         assert not connection.exists()
         assert all(
             path == f"/v1beta/models/{selected}:streamGenerateContent"

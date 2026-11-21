@@ -15,7 +15,7 @@ from tests.api.test_four_protocol_matrix import (
     matrix_app,
     response_value,
 )
-from tests.wire_payload import object_array
+from tests.wire_payload import decode_object, object_array
 
 PAIRS = [(source, "chat") for source in ("chat", "messages", "responses", "gemini")] + [
     ("gemini", wire) for wire in ("messages", "responses", "gemini")
@@ -41,7 +41,7 @@ def test_truncated_text_continues_without_duplicate_output(
     bodies = []
 
     def reply(request: httpx.Request | httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         text = "The answer is " if len(bodies) == 1 else "The answer is forty-two."
         events = (
             native_text(text, len(bodies) > 1)
@@ -187,7 +187,7 @@ def test_native_gemini_structured_output_never_continues_partial_json(
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         events = native_text(
             '{"x":' if len(bodies) == 1 else '{"y":1}', len(bodies) > 1
         )

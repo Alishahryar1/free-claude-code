@@ -20,7 +20,7 @@ from tests.providers.support import assistant_history_text, without_empty_reason
 from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _events_for, _harness, _saved_reply
-from tests.wire_payload import array_payload, object_array
+from tests.wire_payload import array_payload, decode_object, object_array
 
 
 @pytest.mark.asyncio
@@ -258,7 +258,7 @@ async def test_native_messages_repeated_continuation_replaces_only_private_tail(
 
     def reply(request: httpx.Request):
         assert all(wire.closed for wire in wires[: len(bodies)])
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -275,9 +275,13 @@ async def test_native_messages_repeated_continuation_replaces_only_private_tail(
         assert public_text(parse_sse_text(result), "messages") == "Hello world again."
         assert len(bodies) == 3
         assert (
-            without_empty_reasoning(bodies[-1]["messages"][:-2]) == initial["messages"]
+            without_empty_reasoning(array_payload(bodies[-1]["messages"])[:-2])
+            == initial["messages"]
         )
-        assert assistant_history_text(bodies[-1]["messages"][-2:]) == "Hello world "
+        assert (
+            assistant_history_text(array_payload(bodies[-1]["messages"])[-2:])
+            == "Hello world "
+        )
         assert all(wire.closed for wire in wires)
     finally:
         await p.cleanup()

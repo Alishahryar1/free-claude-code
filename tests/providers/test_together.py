@@ -23,6 +23,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 @pytest.fixture
@@ -88,15 +89,23 @@ def test_build_request_body_preserves_common_chat_tools_and_images(
 
     assert body["model"] == "zai-org/GLM-5.2"
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
-    assert body["messages"][0] == {"role": "system", "content": "Be concise."}
-    assert body["messages"][1]["content"] == [
+    assert array_payload(body["messages"])[0] == {
+        "role": "system",
+        "content": "Be concise.",
+    }
+    assert object_payload(array_payload(body["messages"])[1])["content"] == [
         {"type": "text", "text": "Inspect this image."},
         {
             "type": "image_url",
             "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
         },
     ]
-    assert body["tools"][0]["function"]["name"] == "inspect_image"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "inspect_image"
+    )
 
 
 @pytest.mark.parametrize("reasoning", [REASONING_OFF, REASONING_ON])
@@ -116,7 +125,7 @@ def test_build_request_body_does_not_invent_catalog_wide_reasoning_control(
 
     for field in ("reasoning", "reasoning_effort", "chat_template_kwargs"):
         assert field not in body
-        assert field not in extra_body
+        assert field not in object_payload(extra_body)
 
 
 def test_build_request_body_replays_documented_reasoning_field(
@@ -144,7 +153,7 @@ def test_build_request_body_replays_documented_reasoning_field(
         reasoning=reasoning_for(request),
     )
 
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "assistant",
         "content": "The answer is 42.",
         "reasoning": "Work through it.",

@@ -1,7 +1,6 @@
 """Discovery snapshots remain authoritative for each compatibility request."""
 
 import asyncio
-import json
 
 import httpx
 import pytest
@@ -20,6 +19,7 @@ from free_claude_code.providers.anthropic.models import model_record
 from free_claude_code.providers.model_listing import ModelListResponseError
 from tests.providers.test_anthropic_messages_transport import _events, _sse
 from tests.providers.test_anthropic_provider import provider
+from tests.wire_payload import decode_object, object_payload
 
 
 def metadata(model: str, adaptive: bool, *, max_tokens: int = 8192) -> JsonObject:
@@ -150,7 +150,7 @@ async def test_concurrent_models_use_independent_conversion_capabilities():
                     "has_more": False,
                 },
             )
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         await asyncio.sleep(0)
         return httpx.Response(
             200, headers={"content-type": "text/event-stream"}, content=_sse(*_events())
@@ -218,7 +218,7 @@ async def test_refresh_does_not_mutate_an_inflight_model_record():
                     "has_more": False,
                 },
             )
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         posted.set()
         await release.wait()
         return httpx.Response(
@@ -252,9 +252,9 @@ async def test_refresh_does_not_mutate_an_inflight_model_record():
         release.set()
         await task
         await run()
-        assert sent[0]["thinking"]["type"] == "enabled"
+        assert object_payload(sent[0]["thinking"])["type"] == "enabled"
         assert sent[0]["max_tokens"] == 8192
-        assert sent[1]["thinking"]["type"] == "adaptive"
+        assert object_payload(sent[1]["thinking"])["type"] == "adaptive"
         assert sent[1]["max_tokens"] == 4096
     finally:
         release.set()

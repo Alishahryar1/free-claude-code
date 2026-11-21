@@ -1,7 +1,6 @@
 """CLI event handling for a single queued node (transcript + session + errors)."""
 
-from collections.abc import Awaitable, Callable
-from typing import Any
+from collections.abc import Awaitable, Callable, Mapping
 
 from loguru import logger
 
@@ -19,7 +18,7 @@ FailClaim = Callable[[str, str], Awaitable[None]]
 
 
 async def handle_session_info_event(
-    event_data: dict[str, Any],
+    event_data: Mapping[str, object],
     claim: NodeClaim,
     captured_session_id: str | None,
     temp_session_id: str | None,
@@ -32,7 +31,11 @@ async def handle_session_info_event(
         return captured_session_id, temp_session_id
 
     real_session_id = event_data.get("session_id")
-    if not real_session_id or not temp_session_id:
+    if (
+        not isinstance(real_session_id, str)
+        or not real_session_id
+        or not temp_session_id
+    ):
         return captured_session_id, temp_session_id
 
     registered = await cli_manager.register_real_session_id(
@@ -56,7 +59,7 @@ async def handle_session_info_event(
 
 
 async def process_parsed_cli_event(
-    parsed: dict[str, Any],
+    parsed: Mapping[str, object],
     transcript: TranscriptBuffer,
     update_ui: Callable[..., Awaitable[None]],
     last_status: str | None,
@@ -70,7 +73,8 @@ async def process_parsed_cli_event(
     log_messaging_error_details: bool = False,
 ) -> tuple[str | None, bool]:
     """Process a single parsed CLI event. Returns (last_status, had_transcript_events)."""
-    ptype = parsed.get("type") or ""
+    kind = parsed.get("type")
+    ptype = kind if isinstance(kind, str) else ""
 
     if ptype in TRANSCRIPT_EVENT_TYPES:
         transcript.apply(parsed)

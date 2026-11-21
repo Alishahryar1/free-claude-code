@@ -12,6 +12,7 @@ from free_claude_code.application.model_catalog import CatalogModel
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import load_json_value
 from free_claude_code.harnesses import vscode_chat_integration as vscode
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.runtime.runtime import ProviderRuntime
@@ -23,6 +24,7 @@ from tests.runtime.catalog_support import (
     finish_publication,
     pause_next_write,
 )
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 @pytest_asyncio.fixture
@@ -86,13 +88,16 @@ async def test_catalog_updates_connected_file_and_disconnect_stays_removed(
     )
     await finish_publication(runtime.provider_manager)
     await settle(runtime)
-    models = json.loads(path.read_text())[0]["models"]
-    assert {m["id"] for m in models} == {"nvidia_nim/one", "nvidia_nim/two"}
+    models = object_array(load_json_value(path.read_text()))[0]["models"]
+    assert {m["id"] for m in object_array(models)} == {
+        "nvidia_nim/one",
+        "nvidia_nim/two",
+    }
     assert (await runtime.vscode_chat_status())["connected"]
     await runtime.disconnect_vscode_chat()
     runtime._integrations.catalog_changed()
     await settle(runtime)
-    assert json.loads(path.read_text()) == []
+    assert load_json_value(path.read_text()) == []
     assert not (await runtime.vscode_chat_status())["connected"]
 
 
@@ -137,7 +142,10 @@ async def test_update_arriving_during_write_is_not_lost(
     await settle(runtime)
     assert calls >= 2
     assert "nvidia_nim/late" in [
-        m["id"] for m in json.loads(vscode.config_path().read_text())[0]["models"]
+        m["id"]
+        for m in object_array(
+            object_array(load_json_value(vscode.config_path().read_text()))[0]["models"]
+        )
     ]
 
 
@@ -229,10 +237,14 @@ async def test_replaced_generation_cannot_publish_old_url_or_token(
     finally:
         release.set()
     await settle(runtime)
-    group = json.loads(vscode.config_path().read_text())[0]
-    assert all(m["requestHeaders"] == {"x-api-key": "rotated"} for m in group["models"])
+    group = array_payload(load_json_value(vscode.config_path().read_text()))[0]
     assert all(
-        m["url"] == "http://127.0.0.1:12345/v1/messages" for m in group["models"]
+        m["requestHeaders"] == {"x-api-key": "rotated"}
+        for m in object_array(object_payload(group)["models"])
+    )
+    assert all(
+        m["url"] == "http://127.0.0.1:12345/v1/messages"
+        for m in object_array(object_payload(group)["models"])
     )
 
 
@@ -253,5 +265,8 @@ async def test_codex_publication_failure_does_not_block_vscode(
     assert runtime.provider_manager.catalog_status()["catalog_file"] == "failed"
     assert runtime._integrations._vscode_update.state == "ready"
     assert "nvidia_nim/new" in [
-        m["id"] for m in json.loads(vscode.config_path().read_text())[0]["models"]
+        m["id"]
+        for m in object_array(
+            object_array(load_json_value(vscode.config_path().read_text()))[0]["models"]
+        )
     ]

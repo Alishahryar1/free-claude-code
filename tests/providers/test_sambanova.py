@@ -17,6 +17,7 @@ from tests.providers.support import (
     profiled_provider,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 def make_request(**overrides: object):
@@ -71,7 +72,7 @@ def test_build_request_body_basic(sambanova_provider: OpenAIChatProvider):
     body = sambanova_provider._chat._build_request_body(make_request())
 
     assert body["model"] == "Meta-Llama-3.3-70B-Instruct"
-    assert body["messages"][0]["role"] == "system"
+    assert object_payload(array_payload(body["messages"])[0])["role"] == "system"
     assert body["max_tokens"] == 100
     assert "max_completion_tokens" not in body
 

@@ -16,7 +16,13 @@ from tests.api.test_hidden_stream_retries import delivered
 from tests.api.test_tool_call_buffer import _frames, _response
 from tests.providers.support import assistant_history_text
 from tests.providers.test_history_transports import _harness
-from tests.wire_payload import object_payload
+from tests.wire_payload import (
+    array_payload,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 def responses_parts(
@@ -111,29 +117,36 @@ def responses_parts(
 
 def response_text(event: SSEEvent):
     return "".join(
-        part.get("text", "")
-        for item in event.data["response"]["output"]
-        for part in item.get("content", [])
+        string_payload(object_payload(part).get("text", ""))
+        for item in array_payload(object_payload(event.data["response"])["output"])
+        for part in object_array(object_payload(item).get("content", []))
     )
 
 
 def assert_completion_text_agrees(events: list[SSEEvent]):
     final = {
-        item["id"]: item
-        for item in events[-1].data["response"]["output"]
-        if item["type"] == "message"
+        object_payload(item)["id"]: item
+        for item in array_payload(object_payload(events[-1].data["response"])["output"])
+        if object_payload(item)["type"] == "message"
     }
     for event in events:
         data = event.data
         if event.event == "response.output_text.done":
-            part = final[data["item_id"]]["content"][data["content_index"]]
-            assert data["text"] == part["text"]
+            part = array_payload(object_payload(final[data["item_id"]])["content"])[
+                int_payload(object_payload(data)["content_index"])
+            ]
+            assert data["text"] == object_payload(part)["text"]
         elif event.event == "response.content_part.done":
-            part = final[data["item_id"]]["content"][data["content_index"]]
+            part = array_payload(object_payload(final[data["item_id"]])["content"])[
+                int_payload(object_payload(data)["content_index"])
+            ]
             assert data["part"] == part
         elif event.event == "response.output_item.done":
-            assert data["item"]["content"] == final[data["item"]["id"]]["content"]
-    numbers = [event.data["sequence_number"] for event in events]
+            assert (
+                object_payload(data["item"])["content"]
+                == object_payload(final[object_payload(data["item"])["id"]])["content"]
+            )
+    numbers = [int_payload(event.data["sequence_number"]) for event in events]
     assert all(before < after for before, after in pairwise(numbers)), numbers
 
 
@@ -173,9 +186,11 @@ async def test_split_replay_has_one_answer_across_representations(
     assert events[-1].event == "response.completed"
     assert response_text(events[-1]) == "Hello world."
     retained = [
-        part["text"]
-        for item in events[-1].data["response"]["output"][1:]
-        for part in item["content"]
+        object_payload(part)["text"]
+        for item in array_payload(
+            object_payload(events[-1].data["response"])["output"]
+        )[1:]
+        for part in array_payload(object_payload(item)["content"])
     ]
     assert retained == ["", "world."]
     assert_completion_text_agrees(events)

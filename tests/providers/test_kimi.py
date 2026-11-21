@@ -17,6 +17,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import object_payload
 
 
 @pytest.fixture
@@ -97,7 +98,7 @@ def test_build_request_body_disables_kimi_thinking(kimi_provider: OpenAIChatProv
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["thinking"] == {"type": "disabled"}
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "disabled"}
 
 
 @pytest.mark.asyncio

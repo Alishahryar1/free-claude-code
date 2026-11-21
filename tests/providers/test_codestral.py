@@ -18,6 +18,7 @@ from tests.providers.support import (
     profiled_provider,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 def make_request(**overrides: object):
@@ -64,7 +65,7 @@ def test_build_request_body_basic(codestral_provider: OpenAIChatProvider):
     body = codestral_provider._chat._build_request_body(req)
 
     assert body["model"] == "devstral-small-latest"
-    assert body["messages"][0]["role"] == "system"
+    assert object_payload(array_payload(body["messages"])[0])["role"] == "system"
 
 
 def test_build_request_body_global_disable_blocks_reasoning_mapping():
@@ -80,7 +81,9 @@ def test_build_request_body_global_disable_blocks_reasoning_mapping():
     req = make_request()
     body = provider._chat._build_request_body(req)
 
-    roles = [m.get("role") for m in body.get("messages", [])]
+    roles = [
+        object_payload(m).get("role") for m in array_payload(body.get("messages", []))
+    ]
     assert "assistant_reasoning_content" not in roles
 
 

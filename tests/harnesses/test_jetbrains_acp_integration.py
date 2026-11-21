@@ -6,12 +6,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.harnesses import jetbrains_acp_integration as jb
 from free_claude_code.harnesses.jetbrains_acp_integration import (
     registry_path,
     system_root,
 )
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 
 def write(path: Path, value: JsonObject):
@@ -110,29 +111,56 @@ def test_lifecycle_preserves_other_agents_and_refreshes_owned_settings(
     assert not jb.configure(config, "http://localhost:8082", "token")["connected"]
     assert jb.configure(config, "http://localhost:8082", "token", True)["connected"]
     assert registry.read_bytes() == original
-    saved = json.loads(config.read_text())
-    entry = saved["agent_servers"]["Claude Code (FCC)"]
-    assert entry["command"] == str(node)
-    assert entry["args"] == [str(script), "--hide-claude-auth"]
-    assert entry["env"]["ANTHROPIC_AUTH_TOKEN"] == "token"
-    assert entry["env"]["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0"
-    entry["env"]["KEEP"] = "yes"
-    entry["env"]["CLAUDE_CODE_MAX_RETRIES"] = "10"
-    entry["env"]["API_TIMEOUT_MS"] = "1000"
-    entry["use_idea_mcp"] = False
+    saved = decode_object(config.read_text())
+    entry = object_payload(saved["agent_servers"])["Claude Code (FCC)"]
+    assert object_payload(entry)["command"] == str(node)
+    assert object_payload(entry)["args"] == [str(script), "--hide-claude-auth"]
+    assert (
+        object_payload(object_payload(entry)["env"])["ANTHROPIC_AUTH_TOKEN"] == "token"
+    )
+    assert (
+        object_payload(object_payload(entry)["env"])["CLAUDE_CODE_AUTO_MODE_SERVER"]
+        == "0"
+    )
+    object_payload(object_payload(entry)["env"])["KEEP"] = "yes"
+    object_payload(object_payload(entry)["env"])["CLAUDE_CODE_MAX_RETRIES"] = "10"
+    object_payload(object_payload(entry)["env"])["API_TIMEOUT_MS"] = "1000"
+    object_payload(entry)["use_idea_mcp"] = False
     write(config, saved)
     _, updated = install(registry, systems, version="0.80.0")
     assert jb.refresh_connected(config, "http://localhost:9090", "rotated")
-    refreshed = json.loads(config.read_text())["agent_servers"]["Claude Code (FCC)"]
-    assert refreshed["args"][0] == str(updated)
-    assert refreshed["env"]["ANTHROPIC_AUTH_TOKEN"] == "rotated"
-    assert refreshed["env"]["KEEP"] == "yes"
-    assert refreshed["env"]["CLAUDE_CODE_MAX_RETRIES"] == "10"
-    assert refreshed["env"]["API_TIMEOUT_MS"] == "2147483647"
-    assert refreshed["env"]["CLAUDE_ENABLE_STREAM_WATCHDOG"] == "0"
-    assert refreshed["env"]["CLAUDE_ENABLE_BYTE_WATCHDOG"] == "0"
-    assert refreshed["env"]["API_FORCE_IDLE_TIMEOUT"] == "0"
-    assert refreshed["use_idea_mcp"] is False
+    refreshed = object_payload(decode_object(config.read_text())["agent_servers"])[
+        "Claude Code (FCC)"
+    ]
+    assert array_payload(object_payload(refreshed)["args"])[0] == str(updated)
+    assert (
+        object_payload(object_payload(refreshed)["env"])["ANTHROPIC_AUTH_TOKEN"]
+        == "rotated"
+    )
+    assert object_payload(object_payload(refreshed)["env"])["KEEP"] == "yes"
+    assert (
+        object_payload(object_payload(refreshed)["env"])["CLAUDE_CODE_MAX_RETRIES"]
+        == "10"
+    )
+    assert (
+        object_payload(object_payload(refreshed)["env"])["API_TIMEOUT_MS"]
+        == "2147483647"
+    )
+    assert (
+        object_payload(object_payload(refreshed)["env"])[
+            "CLAUDE_ENABLE_STREAM_WATCHDOG"
+        ]
+        == "0"
+    )
+    assert (
+        object_payload(object_payload(refreshed)["env"])["CLAUDE_ENABLE_BYTE_WATCHDOG"]
+        == "0"
+    )
+    assert (
+        object_payload(object_payload(refreshed)["env"])["API_FORCE_IDLE_TIMEOUT"]
+        == "0"
+    )
+    assert object_payload(refreshed)["use_idea_mcp"] is False
     before = config.stat().st_mtime_ns
     assert not jb.refresh_connected(config, "http://localhost:9090", "rotated")
     assert config.stat().st_mtime_ns == before
@@ -141,7 +169,7 @@ def test_lifecycle_preserves_other_agents_and_refreshes_owned_settings(
     assert not jb.configure(config, "http://localhost:9090", "rotated", False)[
         "connected"
     ]
-    assert json.loads(config.read_text()) == {
+    assert load_json_value(config.read_text()) == {
         "agent_servers": {"Other": other},
         "default_mcp_settings": {"use_idea_mcp": True},
     }
@@ -206,15 +234,15 @@ def test_unusable_installation_preserves_connected_entry(
     jb.configure(config, "http://localhost:8082", "token", True)
     before = config.read_bytes()
     package = script.parent.parent / "package.json"
-    metadata = json.loads(package.read_text())
+    metadata = decode_object(package.read_text())
     if fault == "marker":
         next(systems.rglob(".installed")).unlink()
     elif fault == "version":
         metadata["version"] = "0.1.0"
     elif fault == "escape":
-        metadata["bin"]["claude-agent-acp"] = str(config)
+        object_payload(metadata["bin"])["claude-agent-acp"] = str(config)
     elif fault == "engine":
-        metadata["engines"]["node"] = "^22"
+        object_payload(metadata["engines"])["node"] = "^22"
     else:
 
         def run_probe(
@@ -256,9 +284,11 @@ def test_platform_layout_and_launch(
     config, registry, systems = files
     node, script = install(registry, systems)
     jb.configure(config, "http://localhost:8082", "token", True)
-    entry = json.loads(config.read_text())["agent_servers"]["Claude Code (FCC)"]
-    assert entry["command"] == str(node)
-    assert entry["args"][0] == str(script)
+    entry = object_payload(decode_object(config.read_text())["agent_servers"])[
+        "Claude Code (FCC)"
+    ]
+    assert object_payload(entry)["command"] == str(node)
+    assert array_payload(object_payload(entry)["args"])[0] == str(script)
 
 
 def test_previous_ide_is_preferred_and_system_node_is_fallback(
@@ -278,9 +308,11 @@ def test_previous_ide_is_preferred_and_system_node_is_fallback(
 
     monkeypatch.setattr(jb.shutil, "which", replace_which)
     jb.refresh_connected(config, "http://localhost:8082", "token")
-    entry = json.loads(config.read_text())["agent_servers"]["Claude Code (FCC)"]
-    assert entry["command"] == str(system.resolve())
-    assert entry["args"][0] == str(script)
+    entry = object_payload(decode_object(config.read_text())["agent_servers"])[
+        "Claude Code (FCC)"
+    ]
+    assert object_payload(entry)["command"] == str(system.resolve())
+    assert array_payload(object_payload(entry)["args"])[0] == str(script)
 
 
 def test_timed_out_node_leaves_config_unchanged(

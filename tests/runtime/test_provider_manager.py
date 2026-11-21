@@ -15,6 +15,7 @@ from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.mock_calls import keyword_arguments, positional_arguments
 from tests.runtime.catalog_support import finish_discovery, finish_publication
 
 
@@ -382,7 +383,7 @@ async def test_catalog_publication_failure_is_warning_only_and_secret_safe() -> 
     log_blob = " ".join(
         str(value)
         for call in warning.call_args_list
-        for value in (*call.args, *call.kwargs.values())
+        for value in (*positional_arguments(call), *keyword_arguments(call).values())
     )
     assert "PermissionError" in log_blob
     assert secret not in log_blob

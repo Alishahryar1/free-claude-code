@@ -1,7 +1,6 @@
 """Sampling compatibility follows actual upstream rejections, not model IDs."""
 
 import asyncio
-import json
 from copy import deepcopy
 from typing import Any, Literal, overload
 
@@ -34,6 +33,7 @@ from tests.providers.test_openai_responses_transport import (
     _collect_native,
     _transport,
 )
+from tests.wire_payload import array_payload, decode_object
 
 
 @overload
@@ -71,7 +71,7 @@ def _stream(
     return provider.stream_responses(request, reasoning=reasoning)
 
 
-def _rejection(param: str, *, default_only: bool = False) -> dict[str, Any]:
+def _rejection(param: str, *, default_only: bool = False) -> dict[str, str]:
     # Captured HTTP error shapes; stream variants below are compatibility contracts.
     return {
         "type": "invalid_request_error",
@@ -126,7 +126,7 @@ async def test_supported_sampling_is_never_removed_proactively(
     bodies = []
 
     def handler(request: httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _success()
 
     provider = _provider(httpx2.MockTransport(handler))
@@ -153,7 +153,7 @@ async def test_only_explicitly_rejected_sampling_is_removed(
     bodies = []
 
     def handler(request: httpx2.Request):
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         bodies.append(body)
         if param in body:
             return _failure(_rejection(param, default_only=default_only), surface)
@@ -185,7 +185,7 @@ async def test_two_rejections_are_request_local(
     both_started = asyncio.Event()
 
     async def handler(request: httpx2.Request):
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         bodies.append(body)
         if concurrent and all(param in body for param in order):
             if sum(all(param in item for param in order) for item in bodies) == 2:
@@ -243,7 +243,7 @@ async def test_ambiguous_or_unrelated_validation_is_not_corrected(error: JsonVal
     bodies = []
 
     def handler(request: httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _failure(error)
 
     provider = _provider(httpx2.MockTransport(handler), max_attempts=3)
@@ -264,7 +264,7 @@ async def test_other_http_failures_do_not_remove_sampling(status: int, attempts:
     bodies = []
 
     def handler(request: httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _failure(_rejection("temperature"), status=status)
 
     provider = _provider(httpx2.MockTransport(handler), max_attempts=2)
@@ -293,7 +293,7 @@ async def test_reasoning_and_sampling_corrections_compose(reasoning_first: bool)
     bodies = []
 
     def handler(request: httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         if len(bodies) <= len(errors):
             return _failure(errors[len(bodies) - 1])
         return _success()
@@ -321,7 +321,7 @@ async def test_sampling_corrections_share_the_attempt_budget(budget: int):
     bodies = []
 
     def handler(request: httpx2.Request):
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         bodies.append(body)
         if len(bodies) == 1:
             return _failure({"code": "server_error", "message": "busy"}, status=500)
@@ -346,7 +346,7 @@ async def test_rejection_of_an_already_removed_field_stops_correction():
     bodies = []
 
     def handler(request: httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _failure(_rejection("temperature"))
 
     provider = _provider(httpx2.MockTransport(handler), max_attempts=5)
@@ -375,7 +375,7 @@ async def test_history_and_sampling_corrections_preserve_each_other(
     bodies = []
 
     def handler(request: httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         if len(bodies) <= 2:
             return _failure(errors[len(bodies) - 1])
         return _success()
@@ -404,7 +404,7 @@ async def test_history_and_sampling_corrections_preserve_each_other(
     expected = deepcopy(bodies[0])
     for index, error in enumerate(errors):
         if error is history_error:
-            expected["input"][0] = {
+            array_payload(expected["input"])[0] = {
                 "role": "assistant",
                 "content": "Saved reasoning",
             }
@@ -426,7 +426,7 @@ async def test_sampling_correction_respects_stream_commitment(
     partial = "x" * 70_000 if committed else "discarded"
 
     def handler(request: httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         if len(bodies) > 1:
             return _success()
         return httpx2.Response(
@@ -499,7 +499,7 @@ async def test_shared_transport_does_not_apply_openai_api_sampling_correction():
     bodies = []
 
     def handler(request: httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _failure(_rejection("temperature"))
 
     client = _client(handler)

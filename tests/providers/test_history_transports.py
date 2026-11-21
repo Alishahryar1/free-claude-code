@@ -38,7 +38,7 @@ from free_claude_code.core.history_replay import (
     readable_reasoning,
     resolve_messages_replay,
 )
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_output import StreamOutput
@@ -73,6 +73,7 @@ from tests.providers.test_openai_responses_transport import (
 )
 from tests.wire_payload import (
     array_payload,
+    decode_object,
     object_array,
     object_payload,
     string_payload,
@@ -276,7 +277,7 @@ async def _harness(
     bodies: _CapturedRequests = []
 
     def response_parts(request: httpx.Request | httpx2.Request) -> tuple[int, object]:
-        bodies.append(object_payload(json.loads(request.content)))
+        bodies.append(object_payload(decode_object(request.content)))
         return responder(bodies) if responder else (200, _events_for(protocol))
 
     def sse_text(payload: object) -> str:
@@ -412,7 +413,7 @@ async def _saved_reply(
         assert error is None and saw_stop
         return [{"role": "assistant", "content": message["content"]}]
     events = parse_sse_text("".join([event async for event in frames]))
-    return object_array(events[-1].data["response"]["output"])
+    return object_array(object_payload(events[-1].data["response"])["output"])
 
 
 @pytest.mark.asyncio
@@ -478,7 +479,7 @@ async def test_chat_refusal_is_not_sent_as_ordinary_responses_text() -> None:
     parsed = parse_sse_text("".join(events))
     assert parsed[-1].event == "response.completed"
     assert all(
-        not event.data["delta"].strip()
+        not string_payload(event.data["delta"]).strip()
         for event in parsed
         if event.event == "response.output_text.delta"
     )
@@ -526,7 +527,7 @@ async def test_responses_messages_roundtrip_preserves_bound_reasoning(
         saved = await _saved_reply(
             send("messages", [{"role": "user", "content": "hello"}]), "messages"
         )
-        history = json.loads(
+        history = load_json_value(
             json.dumps([*saved, {"role": "user", "content": "continue"}])
         )
         original = deepcopy(history)
@@ -581,7 +582,7 @@ async def test_old_raw_thinking_recovers_named_rejections_within_budget(
         body = bodies[-1]
         items = [
             x
-            for x in without_empty_reasoning(body["input"])
+            for x in object_array(without_empty_reasoning(body["input"]))
             if x.get("type") == "reasoning"
         ]
         for item in items:
@@ -665,7 +666,7 @@ async def test_legacy_provider_a_b_a_preserves_exact_native_history(
             "native" if protocol == "messages" else "actual-returned"
         )
         assert record.origin.model != "public-alias"
-        history = json.loads(
+        history = load_json_value(
             json.dumps([*saved, {"role": "user", "content": "continue"}])
         )
         original = deepcopy(history)
@@ -727,7 +728,7 @@ async def test_legacy_responses_id_then_cipher_rejection_recovers_without_changi
             object_array(bodies[1]["input"])[0]["encrypted_content"]
             == "opaque-original"
         )
-        assert without_empty_reasoning(bodies[2]["input"])[0] == {
+        assert object_array(without_empty_reasoning(bodies[2]["input"]))[0] == {
             "role": "assistant",
             "content": "Find 17.",
         }
@@ -879,7 +880,7 @@ async def test_successful_fallback_preserves_raw_state_and_gets_unmodified_input
     bodies = []
 
     def reply(request: httpx2.Request):
-        bodies.append(object_payload(json.loads(request.content)))
+        bodies.append(object_payload(decode_object(request.content)))
         return httpx2.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -1182,8 +1183,8 @@ async def test_chat_pending_reasoning_is_discarded_on_failure_or_retry(
             saved = [{"role": "assistant", "content": message["content"]}]
         else:
             final = parse_sse_text(output)[-1].data["response"]
-            assert final["status"] == "failed"
-            saved = final["output"]
+            assert object_payload(final)["status"] == "failed"
+            saved = object_payload(final)["output"]
         assert len(bodies) == 1
         assert text in json.dumps(saved)
         assert "first" not in json.dumps(saved)
@@ -1235,7 +1236,9 @@ async def test_chat_plaintext_beside_encrypted_details_survives_switching(
                 )["signature"] = carrier
         else:
             assert _carrier(saved, wire) == "opaque-only"
-        history = json.loads(json.dumps([*saved, {"role": "user", "content": "next"}]))
+        history = load_json_value(
+            json.dumps([*saved, {"role": "user", "content": "next"}])
+        )
         original = deepcopy(history)
         async with _harness(destination, key="b") as (foreign, bodies, _):
             await _saved_reply(foreign(wire, history), wire)

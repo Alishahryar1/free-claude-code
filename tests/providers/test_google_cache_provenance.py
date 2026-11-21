@@ -1,7 +1,6 @@
 """Cached Google metadata is scoped to the credential used by each attempt."""
 
 import asyncio
-import json
 from dataclasses import replace
 from typing import Any
 
@@ -10,6 +9,7 @@ import pytest
 from openai import AsyncOpenAI
 
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.gemini.replay import decode_bundle
 from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -27,6 +27,7 @@ from tests.providers.test_gemini_review_regressions import (
     transport,
 )
 from tests.providers.test_gemini_transport import chat_response, collect, gemini_request
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 
 def history_request(wire: str, *, model: str = "model", replay: bool = False):
@@ -115,12 +116,15 @@ def history_request(wire: str, *, model: str = "model", replay: bool = False):
 async def consume(
     adapter: OpenAIChatTransport, wire: str, model: str = "model", replay: bool = False
 ):
-    return [
-        event
-        async for event in getattr(adapter, f"stream_{wire}")(
-            history_request(wire, model=model, replay=replay)
-        )
-    ]
+    request = history_request(wire, model=model, replay=replay)
+    if isinstance(request, MessagesRequest):
+        stream = adapter.stream_messages(request)
+    elif isinstance(request, GeminiRequest):
+        stream = adapter.stream_gemini(request)
+    else:
+        assert isinstance(request, OpenAIResponsesRequest)
+        stream = adapter.stream_responses(request)
+    return [event async for event in stream]
 
 
 @pytest.mark.asyncio
@@ -134,7 +138,7 @@ async def test_cache_restoration_uses_actual_connection_for_every_ingress(
     sent = []
 
     def reply(request: httpx2.Request):
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         return chat_response(
             [
                 {
@@ -172,13 +176,26 @@ async def test_cache_restoration_uses_actual_connection_for_every_ingress(
             replay=True,
             model="changed" if change == "model" else "model",
         )
-    call = next(m for m in sent[1]["messages"] if m.get("tool_calls"))["tool_calls"][0]
+    call = array_payload(
+        object_payload(
+            next(
+                m
+                for m in array_payload(sent[1]["messages"])
+                if object_payload(m).get("tool_calls")
+            )
+        )["tool_calls"]
+    )[0]
     expected = (
         GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR
         if change in {"credential", "endpoint"}
         else "source-signature"
     )
-    assert call["extra_content"]["google"]["thought_signature"] == expected
+    assert (
+        object_payload(object_payload(object_payload(call)["extra_content"])["google"])[
+            "thought_signature"
+        ]
+        == expected
+    )
 
 
 @pytest.mark.asyncio

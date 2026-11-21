@@ -1,5 +1,6 @@
 """Rendered contracts for Admin asset generation consistency."""
 
+from typing import TypedDict
 from urllib.parse import urlsplit
 
 import pytest
@@ -9,6 +10,14 @@ from e2e.form_support import assert_autofill_opt_out
 from e2e.layout import visible_bounds
 from e2e.provider_support import api_key_input, open_provider
 from free_claude_code.core.version import package_version
+
+
+class _Measurements(TypedDict):
+    top: float
+    bottom: float
+    bar: float
+    endGap: float | None
+    headingGap: float
 
 
 @pytest.mark.parametrize("width", [1280, 900, 390])
@@ -26,7 +35,7 @@ def test_admin_page_spacing_matches_visible_action_bar(
         page.evaluate(
             "() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
         )
-        measurements = page.evaluate("""() => {
+        measurements: _Measurements = page.evaluate("""() => {
           const main = document.querySelector('.main');
           const style = getComputedStyle(main);
           const bar = document.querySelector('.action-bar');

@@ -3,7 +3,8 @@
 import re
 import unicodedata
 from functools import cache
-from typing import Any
+
+from free_claude_code.core.json_types import JsonObject, JsonValue
 
 _CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
 _SCHEMA_MAP_KEYS = frozenset(
@@ -38,7 +39,7 @@ _SCHEMA_KEYS = frozenset(
 )
 
 
-def translate_tool_schema_patterns(schema: Any) -> Any:
+def translate_tool_schema_patterns(schema: JsonValue) -> JsonValue:
     """Copy changed schema paths only; instance data and unsupported regexes pass through."""
     if isinstance(schema, list):
         items = [translate_tool_schema_patterns(item) for item in schema]
@@ -49,7 +50,7 @@ def translate_tool_schema_patterns(schema: Any) -> Any:
         )
     if not isinstance(schema, dict):
         return schema
-    result = {}
+    result: JsonObject = {}
     changed = False
     for key, value in schema.items():
         replacement = value

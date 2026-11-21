@@ -2,7 +2,7 @@
 
 import asyncio
 import inspect
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from loguru import logger
 
@@ -16,18 +16,18 @@ from free_claude_code.providers.canonical_failures import ProviderFailureOverrid
 _ResourceT = TypeVar("_ResourceT")
 
 
-async def maybe_await_aclose(response: Any) -> None:
+async def maybe_await_aclose(response: object) -> None:
     """Call ``aclose`` on httpx-like responses; ignore sync test doubles."""
-    close = getattr(response, "aclose", None)
+    close: object = getattr(response, "aclose", None)
     if not callable(close):
         return
-    result = close()
+    result: object = close()
     if inspect.isawaitable(result):
         await result
 
 
 async def close_provider_stream(
-    stream: Any,
+    stream: object,
     *,
     active_error: BaseException | None,
     provider_name: str,

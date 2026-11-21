@@ -13,6 +13,7 @@ from free_claude_code.core.anthropic.server_tool_sse import (
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.web_tools import WebFetchResult, WebSearchResult
+from tests.wire_payload import object_payload
 
 
 @pytest.mark.parametrize(
@@ -98,16 +99,19 @@ def test_local_tool_event_order_linked_results_and_usage(
         "message_delta",
         "message_stop",
     ]
-    assert events[0].data["message"]["model"] == "public/model"
-    assert events[0].data["message"]["usage"] == expected_start
-    assert events[1].data["content_block"]["id"] == "srvtoolu_local"
-    assert events[3].data["content_block"]["tool_use_id"] == "srvtoolu_local"
+    assert object_payload(events[0].data["message"])["model"] == "public/model"
+    assert object_payload(events[0].data["message"])["usage"] == expected_start
+    assert object_payload(events[1].data["content_block"])["id"] == "srvtoolu_local"
+    assert (
+        object_payload(events[3].data["content_block"])["tool_use_id"]
+        == "srvtoolu_local"
+    )
     assert [events[index].data["index"] for index in (1, 3, 5)] == [0, 1, 2]
     assert events[-2].data["usage"] == {
         **expected_end,
         "server_tool_use": {f"{tool_name}_requests": 1},
     }
-    assert events[-2].data["delta"]["stop_reason"] == "end_turn"
+    assert object_payload(events[-2].data["delta"])["stop_reason"] == "end_turn"
     if failed:
         assert block["content"] == {
             "type": "web_search_tool_result_error"

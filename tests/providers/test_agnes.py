@@ -22,6 +22,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 @pytest.fixture
@@ -93,15 +94,23 @@ def test_build_request_body_preserves_common_chat_tools_and_images(
 
     assert body["model"] == "agnes-2.0-flash"
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
-    assert body["messages"][0] == {"role": "system", "content": "Be concise."}
-    assert body["messages"][1]["content"] == [
+    assert array_payload(body["messages"])[0] == {
+        "role": "system",
+        "content": "Be concise.",
+    }
+    assert object_payload(array_payload(body["messages"])[1])["content"] == [
         {"type": "text", "text": "Inspect this image."},
         {
             "type": "image_url",
             "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
         },
     ]
-    assert body["tools"][0]["function"]["name"] == "inspect_image"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "inspect_image"
+    )
 
 
 @pytest.mark.parametrize(
@@ -155,7 +164,7 @@ def test_build_request_body_keeps_readable_reasoning_separate(
         reasoning=reasoning_for(request),
     )
 
-    assistant = body["messages"][1]
+    assistant = array_payload(body["messages"])[1]
     assert assistant == {
         "role": "assistant",
         "content": "The answer is 42.",

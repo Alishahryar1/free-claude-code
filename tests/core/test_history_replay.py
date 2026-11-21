@@ -20,7 +20,7 @@ from free_claude_code.core.history_replay import (
     resolve_messages_replay,
 )
 from free_claude_code.core.json_types import JsonObject
-from tests.wire_payload import object_array
+from tests.wire_payload import decode_object, object_array
 
 
 def _origin(
@@ -61,7 +61,7 @@ def test_response_history_roundtrip_across_providers_and_restart():
     restored = cast(
         dict[str, Any],
         prepare_history(
-            json.loads(json.dumps(saved)), _origin(model="completely-different")
+            decode_object(json.dumps(saved)), _origin(model="completely-different")
         ),
     )
     assert restored["input"][0] == native
@@ -196,10 +196,8 @@ def test_legacy_chat_replay_materializes_all_readable_thinking_once(native_text:
         ]
     }
     original = deepcopy(body)
-    result = cast(
-        dict[str, Any],
-        prepare_history(body, _origin("b", "chat"), scope=HistoryMode.ALL),
-    )["messages"][0]
+    prepared = prepare_history(body, _origin("b", "chat"), scope=HistoryMode.ALL)
+    result = object_array(prepared["messages"])[0]
     assert result["content"] == "answer"
     assert "reasoning_details" not in result
     assert result["reasoning_content"] == (

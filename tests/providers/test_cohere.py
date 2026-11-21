@@ -18,6 +18,7 @@ from tests.providers.support import (
     reasoning_for,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 def make_request(**overrides: object):
@@ -87,7 +88,7 @@ def test_build_request_body_sanitizes_documented_unsupported_fields(
 
         body = cohere_provider._chat._build_request_body(make_request())
 
-    assert body["messages"][0].get("name") is None
+    assert object_payload(array_payload(body["messages"])[0]).get("name") is None
     assert body["max_tokens"] == 42
     assert "max_completion_tokens" not in body
     for key in (

@@ -3,8 +3,10 @@ from pathlib import Path
 
 import pytest
 
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.harnesses import codex_integration
 from free_claude_code.harnesses.codex_integration import config_path
+from tests.wire_payload import object_payload
 
 URL = "http://127.0.0.1:8082"
 
@@ -25,7 +27,8 @@ def test_connect_disconnect_preserve_model_comments_and_other_providers(tmp_path
     data = tomllib.loads(saved)
     assert data["model"] == "my-choice"
     assert data["model_provider"] == "fcc"
-    assert Path(data["model_catalog_json"]) == tmp_path / "catalog.json"
+    catalog_path: str = data["model_catalog_json"]
+    assert Path(catalog_path) == tmp_path / "catalog.json"
     assert data["model_providers"]["fcc"] == {
         "name": "Free Claude Code",
         "base_url": URL + "/v1",
@@ -99,7 +102,8 @@ def test_refresh_extends_fcc_waiting_and_preserves_retry_and_other_provider_sett
     assert codex_integration.refresh_connected(path, catalog_path, URL)
 
     saved = tomllib.loads(path.read_text())
-    provider = saved["model_providers"]["fcc"]
+    providers: JsonObject = saved["model_providers"]
+    provider = object_payload(providers["fcc"])
     assert provider["stream_idle_timeout_ms"] == 2147483647
     assert provider["request_max_retries"] == 3
     assert provider["stream_max_retries"] == 2
@@ -180,7 +184,8 @@ def test_disconnect_keeps_global_selections_for_another_provider(tmp_path: Path)
     operate(path, False)
     data = tomllib.loads(path.read_text())
     assert data["model_provider"] == "other"
-    assert Path(data["model_catalog_json"]) == tmp_path / "other.json"
+    catalog_path: str = data["model_catalog_json"]
+    assert Path(catalog_path) == tmp_path / "other.json"
     assert "fcc" not in data.get("model_providers", {})
 
 

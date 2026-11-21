@@ -53,7 +53,7 @@ def committed_response_failure_frame(
     if failure is not None:
         error = openai_error_from_failure(failure)
     else:
-        error = openai_error_payload(
+        error: JsonObject = openai_error_payload(
             message=safe_exception_message(exc),
             error_type="api_error",
         )["error"]

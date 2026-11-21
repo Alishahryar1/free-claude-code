@@ -1,5 +1,7 @@
 """Pure FastAPI application factory."""
 
+from collections.abc import Sequence
+
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import (
     http_exception_handler,
@@ -8,6 +10,7 @@ from fastapi.exception_handlers import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from loguru import logger
+from pydantic_core import ErrorDetails
 from starlette.exceptions import HTTPException
 
 from free_claude_code.application.code_sessions import (
@@ -118,6 +121,7 @@ def create_app(services: ApiServices) -> FastAPI:
             body = {"_json_error": type(error).__name__}
 
         message_summary, tool_names = summarize_request_validation_body(body)
+        errors: Sequence[ErrorDetails] = exc.errors()
         trace_event(
             stage="ingress",
             event="server.request.validation_failed",
@@ -127,15 +131,15 @@ def create_app(services: ApiServices) -> FastAPI:
                 key: "[REDACTED]" if key == "key" else value
                 for key, value in request.query_params.items()
             },
-            error_locs=[list(error.get("loc", ())) for error in exc.errors()],
-            error_types=[str(error.get("type", "")) for error in exc.errors()],
+            error_locs=[list(error["loc"]) for error in errors],
+            error_types=[error["type"] for error in errors],
             message_summary=message_summary,
             tool_names=tool_names,
         )
         if generation_api(request.url.path) in {"gemini", "chat"}:
             message = "; ".join(
                 f"{'.'.join(map(str, error['loc']))}: {error['msg']}"
-                for error in exc.errors()
+                for error in errors
             )
             return JSONResponse(
                 status_code=400,
@@ -150,8 +154,12 @@ def create_app(services: ApiServices) -> FastAPI:
                 status_code=422,
                 content={
                     "detail": [
-                        {key: error[key] for key in ("loc", "msg", "type")}
-                        for error in exc.errors()
+                        {
+                            "loc": error["loc"],
+                            "msg": error["msg"],
+                            "type": error["type"],
+                        }
+                        for error in errors
                     ]
                 },
             )

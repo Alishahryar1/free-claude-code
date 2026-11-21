@@ -264,7 +264,7 @@ def _normalized_search_history(messages: list[Message]) -> tuple[list[Message], 
         ):
             used_this_turn = 0
         if not isinstance(content, list) or not any(
-            getattr(block, "type", None) in _SERVER_HISTORY_TYPES for block in content
+            block.type in _SERVER_HISTORY_TYPES for block in content
         ):
             normalized.append(message)
             continue

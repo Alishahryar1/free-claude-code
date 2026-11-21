@@ -123,7 +123,9 @@ _NORMAL_STOPS = frozenset({"tool_use", "end_turn", "stop_sequence"})
 async def _read_message(response: httpx.Response) -> JsonObject:
     await response.aread()
     try:
-        message = response.json()
+        message: JsonValue = response.json()
+        if not isinstance(message, dict):
+            raise ValueError("Expected a Messages response object")
         validate_messages_json(message)
     except ValueError as error:
         raise RetryableProviderProtocolError(
@@ -594,7 +596,7 @@ class _MessagesAttempt(TransportAttempt):
             await attempt.accept()
             yield StreamOutput((output,))
             return
-        content_type = response.headers.get("content-type", "")
+        content_type: str = response.headers.get("content-type", "")
         if "text/event-stream" not in content_type.lower():
             raise RetryableProviderProtocolError(
                 "Messages upstream did not return an SSE stream."

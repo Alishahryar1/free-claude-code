@@ -11,6 +11,7 @@ from openai import AsyncOpenAI
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import load_json_value
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.openai_chat import (
@@ -22,6 +23,7 @@ from free_claude_code.providers.openai_chat import (
 )
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import capture_openai_chat_wire_body
+from tests.wire_payload import object_payload, string_payload
 
 pytestmark = pytest.mark.asyncio
 
@@ -99,12 +101,20 @@ async def test_error_shaped_model_text_is_not_a_protocol_error() -> None:
     ) as client:
         result = await _consume(_transport(client), "messages")
     payloads = [
-        json.loads(line[6:])
+        load_json_value(line[6:])
         for line in result.splitlines()
         if line.startswith("data: ")
     ]
-    assert "".join(p.get("delta", {}).get("text", "") for p in payloads) == content
-    assert payloads[-1]["type"] == "message_stop"
+    assert (
+        "".join(
+            string_payload(
+                object_payload(object_payload(p).get("delta", {})).get("text", "")
+            )
+            for p in payloads
+        )
+        == content
+    )
+    assert object_payload(payloads[-1])["type"] == "message_stop"
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])

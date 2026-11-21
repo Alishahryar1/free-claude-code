@@ -1,6 +1,7 @@
 """What one retryable failure does to its model's recovery episode."""
 
 import asyncio
+from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -16,6 +17,7 @@ from free_claude_code.providers.admission import (
     ProviderOperationKind,
 )
 from free_claude_code.providers.recovery_errors import ProviderRecoveryExhausted
+from tests.mock_calls import keyword_arguments
 from tests.providers.test_provider_admission import _status_error
 
 _RECOVERY_EVENTS = {
@@ -27,9 +29,14 @@ _RECOVERY_EVENTS = {
 }
 
 
+@dataclass
+class _Clock:
+    value: float
+
+
 @pytest.fixture
 def clock(monkeypatch: pytest.MonkeyPatch):
-    now = SimpleNamespace(value=100.0)
+    now = _Clock(100.0)
     monkeypatch.setattr(admission, "time", SimpleNamespace(monotonic=lambda: now.value))
     return now
 
@@ -56,14 +63,14 @@ async def _fail(attempt: ProviderAttempt, error: HTTPStatusError):
     rows = [
         call.kwargs
         for call in trace.call_args_list
-        if call.kwargs["event"] in _RECOVERY_EVENTS
+        if keyword_arguments(call)["event"] in _RECOVERY_EVENTS
     ]
     return decision, rows
 
 
 @pytest.mark.asyncio
 async def test_first_failure_opens_an_episode_led_by_the_failing_execution(
-    clock: SimpleNamespace,
+    clock: _Clock,
 ):
     controller = _controller()
     execution = controller.start_execution(model="m")
@@ -87,7 +94,7 @@ async def test_first_failure_opens_an_episode_led_by_the_failing_execution(
 
 @pytest.mark.asyncio
 async def test_failed_probe_schedules_the_next_probe_with_more_backoff(
-    clock: SimpleNamespace,
+    clock: _Clock,
 ):
     controller = _controller()
     execution = controller.start_execution(model="m")
@@ -111,7 +118,7 @@ async def test_failed_probe_schedules_the_next_probe_with_more_backoff(
 
 
 @pytest.mark.asyncio
-async def test_failure_outside_the_probe_waits_for_the_leader(clock: SimpleNamespace):
+async def test_failure_outside_the_probe_waits_for_the_leader(clock: _Clock):
     controller = _controller()
     leader = controller.start_execution(model="m")
     follower = controller.start_execution(model="m")
@@ -131,7 +138,7 @@ async def test_failure_outside_the_probe_waits_for_the_leader(clock: SimpleNames
 
 @pytest.mark.asyncio
 async def test_last_attempt_without_an_episode_opens_an_exhausted_one(
-    clock: SimpleNamespace,
+    clock: _Clock,
 ):
     controller = _controller(max_attempts=1)
     execution = controller.start_execution(model="m", request_id="req")
@@ -156,7 +163,7 @@ async def test_last_attempt_without_an_episode_opens_an_exhausted_one(
 
 @pytest.mark.asyncio
 async def test_last_probe_exhausts_the_episode_and_fails_its_waiters(
-    clock: SimpleNamespace,
+    clock: _Clock,
 ):
     controller = _controller(max_attempts=2)
     leader = controller.start_execution(model="m")
@@ -186,7 +193,7 @@ async def test_last_probe_exhausts_the_episode_and_fails_its_waiters(
 
 @pytest.mark.asyncio
 async def test_last_attempt_outside_the_probe_leaves_the_episode_alone(
-    clock: SimpleNamespace,
+    clock: _Clock,
 ):
     controller = _controller(max_attempts=1)
     leader = controller.start_execution(model="m")
@@ -214,7 +221,7 @@ async def test_last_attempt_outside_the_probe_leaves_the_episode_alone(
 
 @pytest.mark.asyncio
 async def test_failure_after_the_episode_closed_takes_the_episode_failure(
-    clock: SimpleNamespace,
+    clock: _Clock,
 ):
     controller = _controller(max_attempts=2)
     leader = controller.start_execution(model="m")
@@ -236,7 +243,7 @@ async def test_failure_after_the_episode_closed_takes_the_episode_failure(
 
 
 @pytest.mark.asyncio
-async def test_long_retry_after_starts_a_reported_cooldown(clock: SimpleNamespace):
+async def test_long_retry_after_starts_a_reported_cooldown(clock: _Clock):
     controller = _controller()
     execution = controller.start_execution(model="m", request_id="req")
     error = _status_error(429, retry_after="3600")
@@ -259,7 +266,7 @@ async def test_long_retry_after_starts_a_reported_cooldown(clock: SimpleNamespac
 
 
 @pytest.mark.asyncio
-async def test_retry_after_at_the_ceiling_still_backs_off(clock: SimpleNamespace):
+async def test_retry_after_at_the_ceiling_still_backs_off(clock: _Clock):
     controller = _controller()
     execution = controller.start_execution(model="m")
 
@@ -275,7 +282,7 @@ async def test_retry_after_at_the_ceiling_still_backs_off(clock: SimpleNamespace
 @pytest.mark.asyncio
 @pytest.mark.parametrize("leader_in_flight", [False, True])
 async def test_cooldown_over_an_open_episode_fails_only_an_idle_leader(
-    clock: SimpleNamespace, leader_in_flight: bool
+    clock: _Clock, leader_in_flight: bool
 ):
     controller = _controller()
     leader = controller.start_execution(model="m")
@@ -310,7 +317,7 @@ async def test_cooldown_over_an_open_episode_fails_only_an_idle_leader(
 
 
 @pytest.mark.asyncio
-async def test_longer_cooldown_extends_an_earlier_one(clock: SimpleNamespace):
+async def test_longer_cooldown_extends_an_earlier_one(clock: _Clock):
     controller = _controller()
     first = await _attempt(controller.start_execution(model="m"))
     second = await _attempt(controller.start_execution(model="m"))
@@ -328,7 +335,7 @@ async def test_longer_cooldown_extends_an_earlier_one(clock: SimpleNamespace):
 
 
 @pytest.mark.asyncio
-async def test_shorter_cooldown_takes_the_covering_one(clock: SimpleNamespace):
+async def test_shorter_cooldown_takes_the_covering_one(clock: _Clock):
     controller = _controller()
     first = await _attempt(controller.start_execution(model="m"))
     second = await _attempt(controller.start_execution(model="m"))
@@ -346,7 +353,7 @@ async def test_shorter_cooldown_takes_the_covering_one(clock: SimpleNamespace):
 
 @pytest.mark.asyncio
 async def test_cooldown_inside_an_exhausted_window_reports_that_window(
-    clock: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    clock: _Clock, monkeypatch: pytest.MonkeyPatch
 ):
     controller = ProviderAdmissionController(
         provider_name="TEST",
@@ -381,7 +388,7 @@ async def test_cooldown_inside_an_exhausted_window_reports_that_window(
 
 
 @pytest.mark.asyncio
-async def test_transitions_finish_without_yielding(clock: SimpleNamespace):
+async def test_transitions_finish_without_yielding(clock: _Clock):
     controller = _controller()
     execution = controller.start_execution(model="m")
     attempt = await _attempt(execution)

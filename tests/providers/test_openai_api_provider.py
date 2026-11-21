@@ -21,6 +21,7 @@ from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.openai_api.provider import OpenAIAPIProvider
 from free_claude_code.providers.runtime.config import build_provider_config
 from tests.providers.support import immediate_admission, make_provider_config
+from tests.wire_payload import decode_object, object_payload
 
 
 def _sse(*events: tuple[str, dict[str, Any]]) -> str:
@@ -191,7 +192,7 @@ async def test_api_key_provider_uses_public_responses_endpoint(
     assert request.headers["authorization"] == "Bearer platform-key"
     assert "originator" not in request.headers
     assert "chatgpt-account-id" not in request.headers
-    body = json.loads(request.content)
+    body = decode_object(request.content)
     assert body["model"] == "gpt-test"
     assert body["store"] is False
     assert body["max_output_tokens"] == 64
@@ -240,7 +241,7 @@ async def test_api_key_provider_preserves_tool_calls() -> None:
     upstream_bodies: list[dict[str, Any]] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         upstream_bodies.append(body)
         return httpx2.Response(
             200,
@@ -313,4 +314,4 @@ async def test_api_key_provider_preserves_tool_calls() -> None:
         for event in events
         if event.event == "content_block_start"
     )
-    assert tool_start["name"] == tool_name
+    assert object_payload(tool_start)["name"] == tool_name

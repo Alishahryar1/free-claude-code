@@ -1,5 +1,7 @@
 """Estimate final model input without omitting large tails or counting carriers."""
 
+from typing import override
+
 import pytest
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
@@ -71,7 +73,18 @@ def test_large_tails_are_counted_with_bounded_tokenizer_and_json_work(
 
 def test_counting_stops_once_budget_is_exceeded(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(tokens, "estimate_text_tokens", len)
-    body = {"messages": [{"content": "x" * 40000}], "tools": object()}
+
+    class UnexpectedTools(list[JsonValue]):
+        @override
+        def __iter__(self):
+            raise AssertionError(
+                "Tool schemas must not be counted after exceeding the budget"
+            )
+
+    body: JsonObject = {
+        "messages": [{"content": "x" * 40000}],
+        "tools": UnexpectedTools([{"type": "function"}]),
+    }
     assert tokens.estimate_prepared_input_tokens(body, budget=10) > 10
 
 

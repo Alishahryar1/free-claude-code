@@ -1,6 +1,5 @@
 """Smoke server subprocesses isolate runtime state and retain credential ownership."""
 
-import json
 import sys
 import textwrap
 from dataclasses import replace
@@ -17,6 +16,7 @@ from free_claude_code.config.env_migrations import (
 )
 from free_claude_code.config.loader import ManagedConfigStore, get_settings
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
+from free_claude_code.core.json_types import load_json_value
 from smoke.lib.child_process import cmd_fcc_server
 from smoke.lib.config import SmokeConfig
 from smoke.lib.server import RunningServer, start_server
@@ -96,7 +96,7 @@ def probe_command():
 
 
 def snapshot(server: RunningServer):
-    return json.loads(server.log_path.read_text().splitlines()[0])
+    return load_json_value(server.log_path.read_text().splitlines()[0])
 
 
 def test_smoke_servers_isolate_runtime_and_share_original_auth(

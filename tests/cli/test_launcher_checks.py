@@ -1,6 +1,5 @@
 """One bootstrap contract, with only native probe syntax varying by harness."""
 
-import importlib
 import subprocess
 from unittest.mock import patch
 from urllib.error import URLError
@@ -10,7 +9,7 @@ import pytest
 from free_claude_code.cli.launchers import common, runner
 from free_claude_code.core.json_types import JsonValue
 from tests.cli.conftest import LaunchCapture
-from tests.cli.test_launcher_workflow import HARNESSES, launch
+from tests.cli.test_launcher_workflow import HARNESSES, launch, launcher
 from tests.wire_payload import object_payload
 
 
@@ -149,4 +148,4 @@ def test_programming_errors_are_not_disguised_as_setup_failures(
 ) -> None:
     launch_capture.catalog_error = AssertionError("programming error")
     with pytest.raises(AssertionError, match="programming error"):
-        importlib.import_module("free_claude_code.cli.launchers.codex").launch([])
+        launcher("codex")([])

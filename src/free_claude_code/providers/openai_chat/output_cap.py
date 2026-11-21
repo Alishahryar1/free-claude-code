@@ -17,6 +17,7 @@ from typing import Any
 
 import openai
 
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.providers.request_correction import Proposal, Rejection
 
 # Body keys that carry the output-token budget across OpenAI-compatible policies.
@@ -72,10 +73,10 @@ def _normalized_output_field(value: object) -> str | None:
     return field if field in _OUTPUT_TOKEN_FIELDS else None
 
 
-def _structured_error_texts(body: dict[str, Any] | list[Any]) -> tuple[str, ...]:
+def _structured_error_texts(body: JsonObject | list[JsonValue]) -> tuple[str, ...]:
     """Extract messages without discarding their structured parameter scope."""
     texts: list[str] = []
-    pending: list[dict[str, Any] | list[Any]] = [body]
+    pending: list[JsonObject | list[JsonValue]] = [body]
     while pending:
         value = pending.pop()
         if isinstance(value, list):

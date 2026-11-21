@@ -13,6 +13,7 @@ import pytest
 from free_claude_code.cli import local_http
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import decode_object, object_payload
 
 
 class JsonResponse(io.BytesIO):
@@ -76,11 +77,11 @@ class LaunchCapture:
         if command[1:] == ["config", "get", "model.provider", "--json"]:
             env = kwargs["env"]
             assert isinstance(env, Mapping)
-            config = json.loads(
+            config = decode_object(
                 (Path(env["HERMES_MANAGED_DIR"]) / "config.yaml").read_text()
             )
             return subprocess.CompletedProcess(
-                command, 0, json.dumps(config["model"]["provider"]), ""
+                command, 0, json.dumps(object_payload(config["model"])["provider"]), ""
             )
         return subprocess.CompletedProcess(command, 0, self.versions[command[0]], "")
 

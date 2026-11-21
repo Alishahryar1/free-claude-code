@@ -7,10 +7,10 @@ connections are disposed. Each transaction exclusively leases one connection.
 import asyncio
 import os
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import closing
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 from sqlalchemy.engine.interfaces import DBAPIConnection
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
@@ -41,6 +41,32 @@ _MESSAGING_COLUMNS = {
 }
 
 
+class _RowCursor(Protocol):
+    def __iter__(self) -> Iterator[sqlite3.Row]: ...
+
+    def fetchone(self) -> sqlite3.Row | None: ...
+
+    def fetchall(self) -> list[sqlite3.Row]: ...
+
+
+def query_rows(
+    connection: sqlite3.Connection, statement: str, parameters: Sequence[object] = ()
+) -> _RowCursor:
+    """Execute a query on a connection configured with SQLite's named row factory."""
+    if connection.row_factory is not sqlite3.Row:
+        raise sqlite3.DatabaseError("FCC queries require SQLite named rows.")
+    return cast(_RowCursor, connection.execute(statement, parameters))
+
+
+def required_column[T](row: sqlite3.Row, key: str | int, expected: type[T]) -> T:
+    value: object = row[key]
+    if not isinstance(value, expected):
+        raise sqlite3.DatabaseError(
+            f"Invalid {key!r} column: expected {expected.__name__}."
+        )
+    return value
+
+
 def _connect(
     path: Path, *, existing: bool = False, check_same_thread: bool = True
 ) -> sqlite3.Connection:
@@ -61,13 +87,16 @@ def _connect(
 
 
 def _schema_version(connection: sqlite3.Connection) -> int:
-    version = connection.execute("PRAGMA user_version").fetchone()[0]
+    version_row = query_rows(connection, "PRAGMA user_version").fetchone()
+    assert version_row is not None
+    version = required_column(version_row, 0, int)
     if not 0 <= version <= MIGRATIONS[-1][0]:
         raise sqlite3.DatabaseError(f"Unsupported FCC database version {version}.")
     tables = {
         row[0]
-        for row in connection.execute(
-            "SELECT name FROM sqlite_schema WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%'"
+        for row in query_rows(
+            connection,
+            "SELECT name FROM sqlite_schema WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%'",
         )
     }
     if version == 0 and not tables:
@@ -85,7 +114,9 @@ def _schema_version(connection: sqlite3.Connection) -> int:
             expected.add("native_permission_defaults")
         if version >= 3 and table == "code_sessions":
             expected.add("context_used_tokens")
-        actual = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+        actual = {
+            row[1] for row in query_rows(connection, f"PRAGMA table_info({table})")
+        }
         if not expected <= actual:
             raise sqlite3.DatabaseError(f"Incomplete FCC database schema in {table}.")
     return version
@@ -112,15 +143,20 @@ def _check_path(path: Path) -> None:
 def _relocate(source: Path, destination: Path) -> None:
     with closing(_connect(source, existing=True)) as connection:
         _schema_version(connection)
-        if connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal":
-            busy, pages, checkpointed = connection.execute(
-                "PRAGMA wal_checkpoint(TRUNCATE)"
+        if (
+            mode := query_rows(connection, "PRAGMA journal_mode").fetchone()
+        ) is not None and mode[0] == "wal":
+            checkpoint = query_rows(
+                connection,
+                "PRAGMA wal_checkpoint(TRUNCATE)",
             ).fetchone()
-            if busy or pages != checkpointed:
+            if checkpoint is None or checkpoint[0] or checkpoint[1] != checkpoint[2]:
                 raise sqlite3.DatabaseError(
                     "FCC database checkpoint is busy. Stop FCC before updating."
                 )
-        if connection.execute("PRAGMA journal_mode=DELETE").fetchone()[0] != "delete":
+        if (
+            mode := query_rows(connection, "PRAGMA journal_mode=DELETE").fetchone()
+        ) is None or mode[0] != "delete":
             raise sqlite3.DatabaseError(
                 "FCC database journals are still in use. Stop FCC before updating."
             )
@@ -166,7 +202,9 @@ def initialize_database(path: Path, legacy_path: Path | None = None) -> None:
         _relocate(legacy_path, path)
     with closing(_connect(path)) as connection:
         version = _schema_version(connection)
-        if connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] != "wal":
+        if (
+            mode := query_rows(connection, "PRAGMA journal_mode=WAL").fetchone()
+        ) is None or mode[0] != "wal":
             raise sqlite3.DatabaseError("FCC database could not enable WAL.")
         for next_version, upgrade in MIGRATIONS:
             if next_version <= version:
@@ -175,7 +213,7 @@ def initialize_database(path: Path, legacy_path: Path | None = None) -> None:
             try:
                 upgrade(connection)
                 if (
-                    connection.execute("PRAGMA foreign_key_check").fetchone()
+                    query_rows(connection, "PRAGMA foreign_key_check").fetchone()
                     is not None
                 ):
                     raise sqlite3.DatabaseError(

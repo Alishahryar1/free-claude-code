@@ -332,7 +332,7 @@ def _tool_names(event: SSEEvent):
     items = [data.get("item")]
     response = data.get("response")
     if isinstance(response, dict):
-        items += response.get("output") or []
+        items += array_payload(response.get("output") or [])
     return [
         item["name"]
         for item in items

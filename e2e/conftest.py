@@ -227,7 +227,8 @@ def admin_base_url(
     monkeypatch.setenv("VOICE_NOTE_ENABLED", "false")
     monkeypatch.setenv("FCC_OPEN_BROWSER", "false")
     monkeypatch.setenv("PROXY_AUTH_ENABLED", "false")
-    for key, value in getattr(request, "param", {}).items():
+    overrides: dict[str, str] = getattr(request, "param", {})
+    for key, value in overrides.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(paths, "config_dir_path", lambda: config_dir)
     monkeypatch.setattr(env_migrations, "legacy_env_paths", lambda: ())
@@ -370,7 +371,8 @@ def admin_base_url(
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(("127.0.0.1", 0))
     listener.listen(128)
-    port = listener.getsockname()[1]
+    address: tuple[str, int] = listener.getsockname()
+    port = address[1]
     server = uvicorn.Server(
         uvicorn.Config(
             app,

@@ -80,7 +80,7 @@ async def test_queue_edit_awaits_limiter_with_dedup_key() -> None:
     )
 
     limiter.enqueue.assert_awaited_once()
-    operation = limiter.enqueue.call_args.args[0]
+    operation: Callable[[], Awaitable[str]] = limiter.enqueue.call_args.args[0]
     assert limiter.enqueue.call_args.kwargs["dedup_key"] == "edit:chat:message"
     await operation()
 

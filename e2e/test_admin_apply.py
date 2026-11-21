@@ -6,7 +6,7 @@ from playwright.sync_api import Page, Route, expect
 from e2e.provider_support import api_key_input, close_provider, open_provider
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.credential_validation import check_credentials
-from tests.wire_payload import object_payload
+from tests.wire_payload import object_payload, response_object
 
 
 @pytest.mark.parametrize(
@@ -195,7 +195,7 @@ def test_unverified_warning_survives_apply(
         if restart:
             old.fulfill(status=503, json={"detail": "Old check failed"})
         else:
-            payload = old.fetch().json()
+            payload = response_object(old.fetch())
             payload.update(
                 status="offline", label="Offline", message="Old availability result"
             )

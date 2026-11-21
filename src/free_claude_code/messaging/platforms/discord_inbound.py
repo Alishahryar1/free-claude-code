@@ -1,7 +1,7 @@
 """Discord inbound event normalization."""
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
@@ -13,6 +13,9 @@ from .voice_flow import (
     is_audio_metadata,
 )
 
+if TYPE_CHECKING:
+    from discord import Attachment, Message
+
 
 def parse_allowed_channels(raw: str | None) -> set[str]:
     """Parse comma-separated Discord channel IDs."""
@@ -21,7 +24,7 @@ def parse_allowed_channels(raw: str | None) -> set[str]:
     return {s.strip() for s in raw.split(",") if s.strip()}
 
 
-def get_audio_attachment(message: Any) -> Any | None:
+def get_audio_attachment(message: Message) -> Attachment | None:
     """Return the first audio attachment from a Discord message."""
     for att in message.attachments:
         if is_audio_metadata(att.filename, att.content_type):
@@ -30,7 +33,7 @@ def get_audio_attachment(message: Any) -> Any | None:
 
 
 def discord_text_message_from_event(
-    message: Any,
+    message: Message,
     *,
     log_raw_messaging_content: bool,
 ) -> IncomingMessage:
@@ -76,8 +79,8 @@ def discord_text_message_from_event(
 
 
 def discord_voice_request_from_event(
-    message: Any,
-    attachment: Any,
+    message: Message,
+    attachment: Attachment,
     channel_id: str,
 ) -> VoiceNoteRequest:
     """Normalize a Discord voice/audio attachment into a voice-note request."""
@@ -89,7 +92,7 @@ def discord_voice_request_from_event(
     )
 
     async def _download_to(tmp_path: Path) -> None:
-        await attachment.save(str(tmp_path))
+        await attachment.save(tmp_path)
 
     async def _reply_text(text: str) -> None:
         await message.reply(text)

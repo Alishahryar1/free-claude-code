@@ -19,6 +19,7 @@ from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.custom import CustomProvider
 from free_claude_code.providers.runtime.config import build_custom_provider_config
 from tests.providers.support import MockHandler, continuation_seed, mock_response
+from tests.wire_payload import array_payload, decode_object, int_payload, object_payload
 
 pytestmark = pytest.mark.asyncio
 
@@ -82,7 +83,7 @@ async def test_native_default_preserves_controls_without_advertised_support(
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return httpx.Response(
             200,
             text=completion("anthropic_messages"),
@@ -129,7 +130,7 @@ async def test_messages_egress_obeys_request_model_limit(
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return httpx.Response(
             200,
             text=completion("anthropic_messages"),
@@ -160,7 +161,7 @@ async def test_messages_egress_obeys_request_model_limit(
         assert [frame async for item in stream for frame in item.frames]
         assert bodies[0]["max_tokens"] == expected
         assert "thinking" not in bodies[0]
-        assert "effort" not in bodies[0].get("output_config", {})
+        assert "effort" not in object_payload(bodies[0].get("output_config", {}))
         assert request.model_dump() == before
     finally:
         await instance.cleanup()
@@ -175,7 +176,7 @@ async def test_manual_preset_respects_cap_before_resolving_budget(
     bodies = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return httpx.Response(
             200,
             text=completion("anthropic_messages"),
@@ -222,7 +223,11 @@ async def test_manual_preset_respects_cap_before_resolving_budget(
         else:
             assert await consume()
             assert bodies[0]["max_tokens"] == cap
-            assert 1024 <= bodies[0]["thinking"]["budget_tokens"] < cap
+            assert (
+                1024
+                <= int_payload(object_payload(bodies[0]["thinking"])["budget_tokens"])
+                < cap
+            )
     finally:
         await instance.cleanup()
 
@@ -265,7 +270,7 @@ async def test_concurrent_models_keep_independent_limits():
     both_started = asyncio.Event()
 
     async def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         if len(bodies) == 2:
             both_started.set()
         await asyncio.wait_for(both_started.wait(), timeout=2)
@@ -524,15 +529,15 @@ async def test_six_paths_use_exact_endpoint_and_credentials(
         )
         assert "openai-organization" not in sent.headers
         assert "openai-project" not in sent.headers
-        body = json.loads(sent.content)
+        body = decode_object(sent.content)
         if seeded:
             history = body.get("messages", body.get("input"))
-            assert "Prefix text" in str(history[-2])
-            assert "Prior reasoning" in str(history[:-1])
-            assert "Prior reasoning" not in str(history[-1])
+            assert "Prefix text" in str(array_payload(history)[-2])
+            assert "Prior reasoning" in str(array_payload(history)[:-1])
+            assert "Prior reasoning" not in str(array_payload(history)[-1])
             assert "Prefix text" not in str(request.model_dump())
         if ingress == "responses" and api_format == "openai_responses":
-            assert body["reasoning"]["effort"] == "medium"
+            assert object_payload(body["reasoning"])["effort"] == "medium"
         else:
             assert "reasoning_effort" not in body
             assert not body.get("reasoning")
@@ -619,7 +624,7 @@ async def test_reasoning_presets_encode_controls_on_the_wire(
     bodies = []
 
     def reply(request: httpx.Request | httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         cls = httpx.Response if api_format == "anthropic_messages" else httpx2.Response
         return cls(
             200,
@@ -658,7 +663,7 @@ async def test_tool_continuation_keeps_tool_results_and_images(
     bodies = []
 
     def reply(request: httpx.Request | httpx2.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         cls = httpx.Response if api_format == "anthropic_messages" else httpx2.Response
         return cls(
             200,

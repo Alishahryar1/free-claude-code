@@ -4,12 +4,14 @@ import pytest
 from fastapi.applications import FastAPI
 from fastapi.testclient import TestClient
 
+from free_claude_code.api.dependencies import app_services
 from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.ports import StopResult
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.json_types import JsonObject
 from tests.api.support import create_test_app
 from tests.web_tools_support import StubWebToolsClient
+from tests.wire_payload import object_payload, response_object, string_payload
 
 
 @pytest.fixture
@@ -31,10 +33,12 @@ def test_create_message_empty_messages_returns_400(client: TestClient):
     }
     response = client.post("/v1/messages", json=payload)
     assert response.status_code == 400
-    data = response.json()
+    data = response_object(response)
     assert data.get("type") == "error"
-    assert data.get("error", {}).get("type") == "invalid_request_error"
-    assert "cannot be empty" in data.get("error", {}).get("message", "")
+    assert object_payload(data.get("error", {})).get("type") == "invalid_request_error"
+    assert "cannot be empty" in string_payload(
+        object_payload(data.get("error", {})).get("message", "")
+    )
 
 
 def test_count_tokens_empty_messages_returns_400(client: TestClient):
@@ -42,10 +46,12 @@ def test_count_tokens_empty_messages_returns_400(client: TestClient):
     payload: JsonObject = {"model": "claude-3-sonnet", "messages": []}
     response = client.post("/v1/messages/count_tokens", json=payload)
     assert response.status_code == 400
-    data = response.json()
+    data = response_object(response)
     assert data.get("type") == "error"
-    assert data.get("error", {}).get("type") == "invalid_request_error"
-    assert "cannot be empty" in data.get("error", {}).get("message", "")
+    assert object_payload(data.get("error", {})).get("type") == "invalid_request_error"
+    assert "cannot be empty" in string_payload(
+        object_payload(data.get("error", {})).get("message", "")
+    )
 
 
 def test_count_tokens_endpoint(client: TestClient):
@@ -120,7 +126,7 @@ def test_count_tokens_error_returns_500(client: TestClient):
 def test_stop_cli_with_messaging_workflow(app: FastAPI, client: TestClient):
     session_control = MagicMock()
     session_control.stop_all = AsyncMock(return_value=StopResult(cancelled_count=3))
-    services = app.state.services
+    services = app_services(app)
     app.state.services = ApiServices(
         requests=services.requests,
         admin=services.admin,
@@ -131,14 +137,14 @@ def test_stop_cli_with_messaging_workflow(app: FastAPI, client: TestClient):
     response = client.post("/stop")
 
     assert response.status_code == 200
-    assert response.json()["cancelled_count"] == 3
+    assert response_object(response)["cancelled_count"] == 3
     session_control.stop_all.assert_awaited_once()
 
 
 def test_stop_cli_fallback_to_manager(app: FastAPI, client: TestClient):
     session_control = MagicMock()
     session_control.stop_all = AsyncMock(return_value=StopResult(source="cli_manager"))
-    services = app.state.services
+    services = app_services(app)
     app.state.services = ApiServices(
         requests=services.requests,
         admin=services.admin,
@@ -149,5 +155,5 @@ def test_stop_cli_fallback_to_manager(app: FastAPI, client: TestClient):
     response = client.post("/stop")
 
     assert response.status_code == 200
-    assert response.json()["source"] == "cli_manager"
+    assert response_object(response)["source"] == "cli_manager"
     session_control.stop_all.assert_awaited_once()

@@ -1,7 +1,7 @@
 import asyncio
 import json
 import threading
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -89,7 +89,8 @@ async def test_slow_status_does_not_block_other_integration(
     task = asyncio.create_task(runtime.vscode_chat_status())
     try:
         await asyncio.wait_for(entered.wait(), 5)
-        result = await asyncio.wait_for(getattr(runtime, other)(), 1)
+        status: Callable[[], Awaitable[JsonObject]] = getattr(runtime, other)
+        result = await asyncio.wait_for(status(), 1)
         assert result["connected"] is False
         assert not task.done()
     finally:

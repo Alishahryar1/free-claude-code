@@ -130,10 +130,8 @@ class TestCLIParser:
             "source": "exit",
             "exit_code": 1,
         }
-        assert (
-            "exit" in result[0]["message"].lower()
-            or "code" in result[0]["message"].lower()
-        )
+        message: str = result[0]["message"]
+        assert "exit" in message.lower() or "code" in message.lower()
 
     def test_parse_invalid_event(self):
         """Test parsing returns empty list for unrecognized event."""
@@ -227,7 +225,7 @@ class TestManagedClaudeSession:
 
             # Verify command construction
             # Arg 1 is subprocess command
-            args = mock_exec.call_args[0]
+            args = mock_exec.call_args.args
             assert args[0] == "claude"
             assert "-p" in args
             assert "Hello" in args
@@ -268,7 +266,7 @@ class TestManagedClaudeSession:
             async for _ in session.start_task("Hello", session_id="sess_abc"):
                 pass
 
-            args = mock_exec.call_args[0]
+            args = mock_exec.call_args.args
             assert "--resume" in args
             assert "sess_abc" in args
             assert "--fork-session" not in args
@@ -297,7 +295,7 @@ class TestManagedClaudeSession:
             ):
                 pass
 
-            args = mock_exec.call_args[0]
+            args = mock_exec.call_args.args
             assert "--resume" in args
             assert "sess_abc" in args
             assert "--fork-session" in args
@@ -620,8 +618,8 @@ class TestManagedClaudeSession:
                 pass
 
             # Check env var
-            kwargs = mock_exec.call_args[1]
-            env = kwargs["env"]
+            kwargs = mock_exec.call_args.kwargs
+            env: dict[str, str] = kwargs["env"]
             assert env["ANTHROPIC_BASE_URL"] == "http://localhost:8082"
 
     @pytest.mark.asyncio
@@ -648,7 +646,7 @@ class TestManagedClaudeSession:
             async for _ in session.start_task("test"):
                 pass
 
-            env = mock_exec.call_args.kwargs["env"]
+            env: dict[str, str] = mock_exec.call_args.kwargs["env"]
             assert env["ANTHROPIC_AUTH_TOKEN"] == "proxy-token"
             assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
             assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "190000"
@@ -682,7 +680,7 @@ class TestManagedClaudeSession:
             async for _ in session.start_task("test"):
                 pass
 
-            env = mock_exec.call_args.kwargs["env"]
+            env: dict[str, str] = mock_exec.call_args.kwargs["env"]
             assert env["ANTHROPIC_AUTH_TOKEN"] == "freecc"
 
     @pytest.mark.asyncio
@@ -709,7 +707,7 @@ class TestManagedClaudeSession:
             async for _ in session.start_task("test"):
                 pass
 
-            cmd = mock_exec.call_args[0]
+            cmd = mock_exec.call_args.args
             assert "--add-dir" in cmd
             assert os.path.normpath("/dir1") in cmd
             assert os.path.normpath("/dir2") in cmd

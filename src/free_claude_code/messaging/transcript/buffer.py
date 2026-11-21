@@ -1,6 +1,6 @@
 """Transcript event application and open-block tracking."""
 
-from typing import Any
+from collections.abc import Mapping
 
 from .context import RenderCtx
 from .renderer import render_segments
@@ -44,9 +44,11 @@ class TranscriptBuffer:
         self._show_tool_results = show_tool_results
         self._subagents = SubagentState(debug=debug_subagent_stack)
 
-    def apply(self, event: dict[str, Any]) -> None:
+    def apply(self, event: Mapping[str, object]) -> None:
         """Apply a parsed CLI transcript event."""
         event_type = event.get("type")
+        if not isinstance(event_type, str):
+            return
         if self._subagents.in_subagent() and event_type in _SUBAGENT_SUPPRESSED_EVENTS:
             return
 
@@ -135,7 +137,7 @@ class TranscriptBuffer:
                 self._open_text_by_index[index] = segment
         segment.append(text)
 
-    def _start_tool_use(self, event: dict[str, Any]) -> None:
+    def _start_tool_use(self, event: Mapping[str, object]) -> None:
         index = _event_index(event)
         if index >= 0:
             self._close_block(index)
@@ -155,7 +157,7 @@ class TranscriptBuffer:
         if index >= 0:
             self._open_tools_by_index[index] = segment
 
-    def _append_complete_tool_use(self, event: dict[str, Any]) -> None:
+    def _append_complete_tool_use(self, event: Mapping[str, object]) -> None:
         tool_id = _event_tool_id(event, "id")
         name = str(event.get("name", "") or "tool")
         if tool_id:
@@ -180,7 +182,7 @@ class TranscriptBuffer:
         self._segments.append(segment)
         return segment
 
-    def _append_tool_result(self, event: dict[str, Any]) -> None:
+    def _append_tool_result(self, event: Mapping[str, object]) -> None:
         tool_id = _event_tool_id(event, "tool_use_id")
         name = self._tool_name_by_id.get(tool_id)
 
@@ -212,9 +214,12 @@ class TranscriptBuffer:
             self._open_text_by_index.pop(index, None)
 
 
-def _event_index(event: dict[str, Any]) -> int:
-    return int(event.get("index", -1))
+def _event_index(event: Mapping[str, object]) -> int:
+    index = event.get("index", -1)
+    if not isinstance(index, (int, float, str)):
+        raise TypeError("Expected a numeric transcript block index")
+    return int(index)
 
 
-def _event_tool_id(event: dict[str, Any], key: str) -> str:
+def _event_tool_id(event: Mapping[str, object], key: str) -> str:
     return str(event.get(key, "") or "").strip()

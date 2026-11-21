@@ -23,6 +23,7 @@ from free_claude_code.providers.openai_chat import (
 )
 from tests.api.support import create_test_app
 from tests.providers.support import immediate_admission, make_provider_config
+from tests.wire_payload import array_payload, object_payload, response_object
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -108,10 +109,10 @@ async def _mock_empty_stream(*args: MessagesRequest, **kwargs: object):
 
 def _invalid_request_error(response: Response):
     assert response.status_code == 400
-    payload = response.json()
+    payload = response_object(response)
     assert payload["type"] == "error"
     assert payload["request_id"] == response.headers["request-id"]
-    assert payload["error"]["type"] == "invalid_request_error"
+    assert object_payload(payload["error"])["type"] == "invalid_request_error"
     return payload["error"]
 
 
@@ -120,7 +121,7 @@ def _terminal_json_error(response: Response, *, status_code: int):
     assert response.headers["content-type"].startswith("application/json")
     assert response.headers["x-should-retry"] == "false"
     request_id = response.headers["request-id"]
-    payload = response.json()
+    payload = response_object(response)
     assert payload["request_id"] == request_id
     return payload["error"]
 
@@ -158,9 +159,9 @@ def test_health(client: TestClient):
 def test_models_list(client: TestClient):
     response = client.get("/v1/models")
     assert response.status_code == 200
-    data = response.json()
+    data = response_object(response)
     assert data["has_more"] is False
-    ids = [item["id"] for item in data["data"]]
+    ids = [object_payload(item)["id"] for item in array_payload(data["data"])]
     assert "claude-sonnet-5-5" in ids
     assert data["first_id"] == ids[0]
     assert data["last_id"] == ids[-1]
@@ -223,7 +224,7 @@ def test_auto_mode_classifier_without_stream_returns_json(client: TestClient):
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
-    body = response.json()
+    body = response_object(response)
     assert body["type"] == "message"
     assert body["usage"] == {"input_tokens": 0, "output_tokens": 0}
     routed_request = _stream_messages_calls[0][0][0]

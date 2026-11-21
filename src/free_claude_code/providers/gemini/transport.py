@@ -245,7 +245,8 @@ class _GeminiAttempt(TransportAttempt):
         if not response.is_success:
             await response.aread()
             response.raise_for_status()
-        if "text/event-stream" not in response.headers.get("content-type", "").lower():
+        content_type: str = response.headers.get("content-type", "")
+        if "text/event-stream" not in content_type.lower():
             raise RetryableProviderProtocolError(
                 "Gemini upstream did not return an SSE stream"
             )

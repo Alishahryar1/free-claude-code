@@ -6,6 +6,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from free_claude_code.core.json_types import load_json_value
 from free_claude_code.core.windows_dpi import enable_dpi_awareness
 
 _TITLE = "Choose a Code Session folder"
@@ -103,7 +104,7 @@ def decode_result(
     if returncode != 0:
         raise RuntimeError(diagnostic or "Folder picker failed")
     if platform == "win32":
-        result = json.loads(stdout)
+        result = load_json_value(stdout)
         if not isinstance(result, dict) or "path" not in result:
             raise ValueError("Missing folder selection")
         path = result["path"]

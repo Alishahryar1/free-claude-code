@@ -3,15 +3,21 @@
 import json
 from pathlib import Path
 
+from tests.wire_payload import decode_object, object_payload
+
 
 def write_previous_connection(path: Path, state: Path, model: str = "provider/model"):
-    original = json.loads(path.read_text()) if path.exists() else {}
-    previous = {key: original[key] for key in ("modelProvider",) if key in original}
-    document = json.loads(json.dumps(original))
+    original = decode_object(path.read_text()) if path.exists() else {}
+    previous = {
+        key: object_payload(original)[key]
+        for key in ("modelProvider",)
+        if key in original
+    }
+    document = decode_object(json.dumps(original))
     document["modelProvider"] = "gemini"
-    document.setdefault("customModelsConfig", {}).setdefault("customModels", {})[
-        model
-    ] = {
+    config = object_payload(document.setdefault("customModelsConfig", {}))
+    models = object_payload(config.setdefault("customModels", {}))
+    models[model] = {
         "modelName": "gemini-api://models/" + model,
         "label": "FCC: " + model,
         "toolFormatterType": "TOOL_FORMATTER_TYPE_NONE",

@@ -60,7 +60,7 @@ class ConfigFieldSpec:
 
         if self.settings_attr is None:
             return None
-        value = Settings.model_fields[self.settings_attr].get_default(
+        value: object = Settings.model_fields[self.settings_attr].get_default(
             call_default_factory=True
         )
         if value is None or self.field_type == "api_key_list":

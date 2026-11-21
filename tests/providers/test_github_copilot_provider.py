@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import override
@@ -26,7 +26,7 @@ from free_claude_code.core.history_replay import (
     ReplayRecord,
     encode_replay,
 )
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
 )
@@ -71,6 +71,12 @@ from tests.providers.test_openai_responses_transport import (
 from tests.providers.test_openai_responses_transport import (
     _sse as responses_sse,
 )
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+)
 
 
 @pytest.mark.asyncio
@@ -98,7 +104,7 @@ async def test_conversion_runs_once_under_current_account_lease(
         (CopilotEgress.MESSAGES, False): (AnthropicMessagesTransport, "_messages_body"),
         (CopilotEgress.MESSAGES, True): (AnthropicMessagesTransport, "_responses_body"),
     }[egress, responses]
-    original = getattr(cls, name)
+    original: Callable[..., object] = getattr(cls, name)
 
     def build(
         transport: AnthropicMessagesTransport
@@ -125,11 +131,11 @@ async def test_conversion_runs_once_under_current_account_lease(
             )
         assert conversion.call_count == len(harness.seen) == 1
         if seeded:
-            body = json.loads(harness.seen[0].content)
+            body = decode_object(harness.seen[0].content)
             history = body.get("messages", body.get("input"))
-            assert "Prefix text" in str(history[-2])
-            assert "Prior reasoning" in str(history[:-1])
-            assert "Prior reasoning" not in str(history[-1])
+            assert "Prefix text" in str(array_payload(history)[-2])
+            assert "Prior reasoning" in str(array_payload(history)[:-1])
+            assert "Prior reasoning" not in str(array_payload(history)[-1])
         assert harness.provider._active == 0
     finally:
         await harness.close()
@@ -379,7 +385,7 @@ async def test_classifier_uses_current_lease_controls_and_clears_raw_hints(
             for frame in event.frames
         ]
         assert text_content(parse_sse_text("".join(output))) == "ok"
-        body = json.loads(harness.seen[0].content)
+        body = decode_object(harness.seen[0].content)
         if egress is CopilotEgress.MESSAGES:
             assert body["thinking"] == {"type": "disabled"}
             assert body["max_tokens"] == (64 if supports_off else 4096)
@@ -527,7 +533,7 @@ async def test_six_cells_use_metadata_and_preserve_text_usage_public_model_and_h
             "x-api-key" if egress is CopilotEgress.MESSAGES else "authorization"
         )
         assert "account-secret" in request.headers[credential]
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         assert body["model"] == harness.runtime.name
         assert body["stream"] is True
         raw = request.content.decode()
@@ -538,14 +544,21 @@ async def test_six_cells_use_metadata_and_preserve_text_usage_public_model_and_h
         assert not harness.runtime.sessions[0].closed
         if responses:
             assert events[-1].event == "response.completed"
-            assert events[-1].data["response"]["model"] == "public-alias"
-            assert events[-1].data["response"]["usage"]["output_tokens"] == 2
+            assert (
+                object_payload(events[-1].data["response"])["model"] == "public-alias"
+            )
+            assert (
+                object_payload(object_payload(events[-1].data["response"])["usage"])[
+                    "output_tokens"
+                ]
+                == 2
+            )
             assert "ok" in "".join(event.raw for event in events)
         else:
             assert_anthropic_stream_contract(events)
             assert text_content(events) == "ok"
-            assert events[0].data["message"]["model"] == "public-alias"
-            assert events[-2].data["usage"]["output_tokens"] == 2
+            assert object_payload(events[0].data["message"])["model"] == "public-alias"
+            assert object_payload(events[-2].data["usage"])["output_tokens"] == 2
     finally:
         await harness.close()
 
@@ -589,11 +602,13 @@ async def test_non_messages_controls_use_advertised_efforts(
     harness = Harness(tmp_path, egress)
     try:
         await collect(harness.stream(responses, reasoning=policy))
-        body = json.loads(harness.seen[0].content)
+        body = decode_object(harness.seen[0].content)
         if egress is CopilotEgress.CHAT:
             assert body.get("reasoning_effort") == wire_effort
         else:
-            assert body.get("reasoning", {}).get("effort") == wire_effort
+            assert (
+                object_payload(body.get("reasoning", {})).get("effort") == wire_effort
+            )
     finally:
         await harness.close()
 
@@ -644,7 +659,7 @@ async def test_native_messages_uses_capabilities_and_exact_budget(
                 request, reasoning=ReasoningPolicy.on(budget_tokens=1024)
             )
         )
-        body = json.loads(harness.seen[0].content)
+        body = decode_object(harness.seen[0].content)
         assert body["max_tokens"] == 4096
         assert body["thinking"] == {"type": "enabled", "budget_tokens": 1024}
     finally:
@@ -686,11 +701,13 @@ async def test_native_reasoning_carrier_replays_only_to_messages_egress(
     try:
         if egress is CopilotEgress.MESSAGES:
             await collect(harness.provider.stream_responses(request))
-            body = json.loads(harness.seen[0].content)
-            assert body["messages"][0]["content"][0] == block
+            body = decode_object(harness.seen[0].content)
+            assert (
+                array_payload(object_array(body["messages"])[0]["content"])[0] == block
+            )
         else:
             await collect(harness.provider.stream_responses(request))
-            body = json.loads(harness.seen[0].content)
+            body = load_json_value(harness.seen[0].content)
             wire = json.dumps(body)
             assert "[Earlier reasoning]" not in wire
             assert "private reasoning" in wire

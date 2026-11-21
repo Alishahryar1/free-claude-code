@@ -3,6 +3,8 @@
 from collections.abc import AsyncIterator, Mapping
 from typing import Any, override
 
+from openai.types.chat import ChatCompletionChunk
+
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
@@ -99,7 +101,11 @@ class MistralChatBehavior(OpenAIChatBehavior):
         return Proposal(retry_body, "dropped reasoning")
 
     @override
-    def normalize_stream(self, stream: Any, _body: Mapping[str, Any]) -> Any:
+    def normalize_stream(
+        self,
+        stream: AsyncIterator[ChatCompletionChunk],
+        _body: Mapping[str, object],
+    ) -> AsyncIterator[ChatCompletionChunk]:
         return normalize_mistral_stream(stream)
 
 

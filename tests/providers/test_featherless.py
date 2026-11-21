@@ -16,6 +16,7 @@ from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
+from tests.mock_calls import keyword_arguments
 from tests.providers.support import (
     REASONING_OFF,
     REASONING_ON,
@@ -24,6 +25,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload, object_payload, string_payload
 
 _MODEL = "Qwen/Qwen3-32B"
 
@@ -125,15 +127,23 @@ def test_build_request_body_preserves_shared_chat_contract(
 
     assert body["model"] == _MODEL
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
-    assert body["messages"][0] == {"role": "system", "content": "Be concise."}
-    assert body["messages"][1]["content"] == [
+    assert array_payload(body["messages"])[0] == {
+        "role": "system",
+        "content": "Be concise.",
+    }
+    assert object_payload(array_payload(body["messages"])[1])["content"] == [
         {"type": "text", "text": "Inspect this image."},
         {
             "type": "image_url",
             "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
         },
     ]
-    assert body["tools"][0]["function"]["name"] == "inspect_image"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "inspect_image"
+    )
 
 
 @pytest.mark.parametrize(
@@ -215,7 +225,7 @@ def test_build_request_body_replays_reasoning_and_tool_history(
         reasoning=reasoning_for(request),
     )
 
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "assistant",
         "content": "I will inspect it.",
         "reasoning_content": "Read it first.",
@@ -230,7 +240,7 @@ def test_build_request_body_replays_reasoning_and_tool_history(
             }
         ],
     }
-    assert body["messages"][2] == {
+    assert array_payload(body["messages"])[2] == {
         "role": "tool",
         "tool_call_id": "toolu_1",
         "content": "print('hello')",
@@ -300,7 +310,9 @@ async def test_catalog_fetches_all_pages_filters_strictly_and_deduplicates_overl
     attempt_rows = [
         call.kwargs
         for call in trace.call_args_list
-        if call.kwargs.get("event", "").startswith("provider.attempt.")
+        if string_payload(keyword_arguments(call).get("event", "")).startswith(
+            "provider.attempt."
+        )
     ]
     assert [row["event"] for row in attempt_rows] == [
         "provider.attempt.started",

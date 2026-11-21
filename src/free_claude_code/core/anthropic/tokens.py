@@ -20,7 +20,7 @@ type CountTools = Sequence[Tool | dict[str, Any]] | None
 type TokenCounter = Callable[[CountMessages, CountSystem, CountTools], int]
 
 
-def _image_tokens(block: Any) -> int:
+def _image_tokens(block: object) -> int:
     """Estimate one image block from its base64 size, or a flat cost without data.
 
     Tool-result content is not validated, so ``data`` can be any JSON value there;

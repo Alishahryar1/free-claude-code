@@ -33,6 +33,7 @@ from tests.providers.test_anthropic_messages_transport import (
 from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_provider_admission import _controller, _open, _status_error
 from tests.providers.test_request_recovery_transitions import Wire
+from tests.wire_payload import decode_object
 
 
 async def _response(source: AsyncIterator[StreamOutput], wire: str):
@@ -58,7 +59,7 @@ async def _messages_path(
     admission = _controller(max_attempts=max_attempts, max_concurrency=2)
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         status, payload = respond(len(bodies))
         wire = (
             payload

@@ -31,7 +31,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
 )
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.history_replay import ReplayOrigin, prepare_history
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import (
@@ -58,7 +58,14 @@ from tests.providers.support import (
     reasoning_for,
     without_empty_reasoning,
 )
-from tests.wire_payload import array_payload, object_payload
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 def _config():
@@ -620,7 +627,7 @@ async def test_direct_inference_routes_responses_without_prior_model_listing() -
     assert [request.url.path for request in generation_requests] == [
         "/zen/v1/responses"
     ]
-    payload = json.loads(generation_requests[0].content)
+    payload = decode_object(generation_requests[0].content)
     assert payload["model"] == "responses-upstream"
     events = parse_sse_text(body)
     assert_anthropic_stream_contract(events)
@@ -642,7 +649,7 @@ async def test_chat_catalog_route_uses_existing_chat_transport_and_upstream_id()
     assert [request.url.path for request in generation_requests] == [
         "/zen/v1/chat/completions"
     ]
-    payload = json.loads(generation_requests[0].content)
+    payload = decode_object(generation_requests[0].content)
     assert payload["model"] == "chat-upstream"
     events = parse_sse_text(body)
     assert_anthropic_stream_contract(events)
@@ -663,7 +670,7 @@ async def test_responses_ingress_uses_catalog_responses_transport_natively() -> 
     assert [request.url.path for request in generation_requests] == [
         "/zen/v1/responses"
     ]
-    payload = json.loads(generation_requests[0].content)
+    payload = decode_object(generation_requests[0].content)
     assert payload["model"] == "responses-upstream"
     assert payload["input"] == "hello"
     assert payload["stream"] is True
@@ -674,8 +681,8 @@ async def test_responses_ingress_uses_catalog_responses_transport_natively() -> 
         "response.output_text.delta",
         "response.completed",
     ]
-    assert events[0].data["response"]["id"] == "resp_1"
-    assert events[-1].data["response"]["model"] == "responses-selector"
+    assert object_payload(events[0].data["response"])["id"] == "resp_1"
+    assert object_payload(events[-1].data["response"])["model"] == "responses-selector"
 
 
 @pytest.mark.asyncio
@@ -706,8 +713,12 @@ async def test_responses_tool_search_accepts_optional_codex_arguments() -> None:
     original = request.model_dump()
 
     def upstream(wire_request: httpx2.Request) -> httpx2.Response:
-        schema = json.loads(wire_request.content)["tools"][0]["parameters"]
-        if set(schema["required"]) != set(schema["properties"]):
+        schema = object_array(decode_object(wire_request.content)["tools"])[0][
+            "parameters"
+        ]
+        if set(array_payload(object_payload(schema)["required"])) != set(
+            object_payload(object_payload(schema)["properties"])
+        ):
             return httpx2.Response(
                 400,
                 json={
@@ -741,13 +752,15 @@ async def test_responses_tool_search_accepts_optional_codex_arguments() -> None:
 
     assert len(wire_requests) == 1
     assert "hello" in body
-    forwarded = json.loads(wire_requests[0].content)["tools"]
-    validator = Draft202012Validator(forwarded[0]["parameters"])
+    forwarded = decode_object(wire_requests[0].content)["tools"]
+    validator = Draft202012Validator(
+        object_payload(object_array(forwarded)[0]["parameters"])
+    )
     assert validator.is_valid({"query": "files", "limit": None})
     assert validator.is_valid({"query": "files", "limit": 3})
     assert not validator.is_valid({"query": "files", "limit": "three"})
     assert not validator.is_valid({"query": None, "limit": 3})
-    assert forwarded[1] == tools[1]
+    assert array_payload(forwarded)[1] == tools[1]
     assert request.model_dump() == original
 
 
@@ -770,10 +783,11 @@ async def test_codex_custom_tool_round_trip_uses_opencode_function_tools() -> No
     ]
 
     def upstream(wire_request: httpx2.Request) -> httpx2.Response:
-        wire = json.loads(wire_request.content)
+        wire = decode_object(wire_request.content)
         if any(
-            tool["type"] == "custom" or "search_content_types" in tool
-            for tool in wire["tools"]
+            object_payload(tool)["type"] == "custom"
+            or "search_content_types" in object_payload(tool)
+            for tool in array_payload(wire["tools"])
         ):
             return httpx2.Response(
                 400,
@@ -785,7 +799,7 @@ async def test_codex_custom_tool_round_trip_uses_opencode_function_tools() -> No
                 },
             )
         packets = [
-            json.loads(line[6:])
+            load_json_value(line[6:])
             for line in _responses_event_stream("done").splitlines()
             if line.startswith("data: ")
         ]
@@ -793,7 +807,7 @@ async def test_codex_custom_tool_round_trip_uses_opencode_function_tools() -> No
             "type": "function_call",
             "id": "item_custom",
             "call_id": "call_custom",
-            "name": wire["tools"][0]["name"],
+            "name": object_array(wire["tools"])[0]["name"],
             "arguments": json.dumps({"input": patch_text}),
             "status": "completed",
         }
@@ -817,13 +831,21 @@ async def test_codex_custom_tool_round_trip_uses_opencode_function_tools() -> No
                 "arguments": item["arguments"],
             },
             {"type": "response.output_item.done", "output_index": 0, "item": item},
-            {**packets[-1], "response": {**packets[-1]["response"], "output": [item]}},
+            {
+                **object_payload(packets[-1]),
+                "response": {
+                    **object_payload(object_payload(packets[-1])["response"]),
+                    "output": [item],
+                },
+            },
         ]
         return httpx2.Response(
             200,
             headers={"content-type": "text/event-stream"},
             text="".join(
-                "data: " + json.dumps({**packet, "sequence_number": index}) + "\n\n"
+                "data: "
+                + json.dumps({**object_payload(packet), "sequence_number": index})
+                + "\n\n"
                 for index, packet in enumerate(packets)
             ),
         )
@@ -834,7 +856,7 @@ async def test_codex_custom_tool_round_trip_uses_opencode_function_tools() -> No
     try:
         output = await _collect_responses(provider, "responses-selector", tools=tools)
         events = parse_sse_text(output)
-        call = events[-1].data["response"]["output"][0]
+        call = array_payload(object_payload(events[-1].data["response"])["output"])[0]
         assert call == {
             "type": "custom_tool_call",
             "id": "item_custom",
@@ -852,7 +874,7 @@ async def test_codex_custom_tool_round_trip_uses_opencode_function_tools() -> No
             event.event.startswith("response.function_call_arguments")
             for event in events
         )
-        sequences = [event.data["sequence_number"] for event in events]
+        sequences = [int_payload(event.data["sequence_number"]) for event in events]
         assert sequences == sorted(set(sequences))
         await _collect_responses(
             provider,
@@ -870,12 +892,19 @@ async def test_codex_custom_tool_round_trip_uses_opencode_function_tools() -> No
     finally:
         await provider.cleanup()
 
-    first = json.loads(wire_requests[0].content)
-    assert first["tools"][0]["type"] == "function"
-    assert first["tools"][1] == {"type": "web_search", "external_web_access": False}
-    replay = without_empty_reasoning(json.loads(wire_requests[1].content)["input"])
+    first = decode_object(wire_requests[0].content)
+    assert object_array(first["tools"])[0]["type"] == "function"
+    assert array_payload(first["tools"])[1] == {
+        "type": "web_search",
+        "external_web_access": False,
+    }
+    replay = object_array(
+        without_empty_reasoning(decode_object(wire_requests[1].content)["input"])
+    )
     assert replay[0]["type"] == "function_call"
-    assert json.loads(replay[0]["arguments"]) == {"input": patch_text}
+    assert load_json_value(string_payload(replay[0]["arguments"])) == {
+        "input": patch_text
+    }
     assert replay[1] == {
         "type": "function_call_output",
         "call_id": "call_custom",
@@ -898,14 +927,18 @@ async def test_responses_ingress_uses_catalog_chat_transport_directly() -> None:
     assert [request.url.path for request in generation_requests] == [
         "/zen/v1/chat/completions"
     ]
-    payload = json.loads(generation_requests[0].content)
+    payload = decode_object(generation_requests[0].content)
     assert payload["model"] == "chat-upstream"
     assert payload["messages"] == [{"role": "user", "content": "hello"}]
     events = parse_sse_text(body)
     assert events[0].event == "response.created"
     assert events[-1].event == "response.completed"
-    assert events[-1].data["response"]["model"] == "chat-selector"
-    assert events[-1].data["response"]["output"][0]["content"][0]["text"] == ("chat-ok")
+    assert object_payload(events[-1].data["response"])["model"] == "chat-selector"
+    assert object_array(
+        object_array(object_payload(events[-1].data["response"])["output"])[0][
+            "content"
+        ]
+    )[0]["text"] == ("chat-ok")
 
 
 @pytest.mark.asyncio
@@ -940,31 +973,37 @@ async def test_discovered_custom_tools_survive_sdk_calls_and_replay(
     history = [discovery, {**discovery, "call_id": "search_two"}]
 
     def upstream(request: httpx2.Request) -> httpx2.Response:
-        body = json.loads(request.content)
-        loaded_tools = body["input"][:2]
+        body = decode_object(request.content)
+        loaded_tools = array_payload(body["input"])[:2]
         assert len(loaded_tools) == 2
-        for loaded in loaded_tools:
+        for loaded in array_payload(loaded_tools):
             if execution == "client":
-                assert loaded["type"] == "function_call_output"
-                tool = json.loads(loaded["output"])[0]
-                assert "defer_loading" not in tool
-                assert tool in body["tools"]
+                assert object_payload(loaded)["type"] == "function_call_output"
+                tool = array_payload(
+                    load_json_value(string_payload(object_payload(loaded)["output"]))
+                )[0]
+                assert "defer_loading" not in object_payload(tool)
+                assert tool in array_payload(body["tools"])
             else:
-                assert loaded["execution"] == execution
-                tool = loaded["tools"][0]
-                assert tool["defer_loading"] is True
-            assert tool["type"] == "function"
-            assert tool["name"] == "editor__edit"
-            assert "namespace" not in tool
+                assert object_payload(loaded)["execution"] == execution
+                tool = array_payload(object_payload(loaded)["tools"])[0]
+                assert object_payload(tool)["defer_loading"] is True
+            assert object_payload(tool)["type"] == "function"
+            assert object_payload(tool)["name"] == "editor__edit"
+            assert "namespace" not in object_payload(tool)
             for field in ("allowed_callers", "extension"):
-                assert tool[field] == expected_tool[field]
+                assert object_payload(tool)[field] == expected_tool[field]
         body["input"] = without_empty_reasoning(body["input"])
-        if len(body["input"]) > 2:
-            assert body["input"][2]["type"] == "function_call"
-            assert body["input"][2]["name"] == "editor__edit"
-            assert "namespace" not in body["input"][2]
-            assert json.loads(body["input"][2]["arguments"]) == {"input": "patch"}
-            assert body["input"][3] == {
+        if len(array_payload(body["input"])) > 2:
+            assert object_array(body["input"])[2]["type"] == "function_call"
+            assert object_array(body["input"])[2]["name"] == "editor__edit"
+            assert "namespace" not in object_array(body["input"])[2]
+            assert load_json_value(
+                string_payload(
+                    object_payload(array_payload(body["input"])[2])["arguments"]
+                )
+            ) == {"input": "patch"}
+            assert array_payload(body["input"])[3] == {
                 "type": "function_call_output",
                 "call_id": "edit_one",
                 "output": "applied",
@@ -975,7 +1014,7 @@ async def test_discovered_custom_tools_survive_sdk_calls_and_replay(
                 text=_responses_event_stream("done"),
             )
         packets = [
-            json.loads(line[6:])
+            load_json_value(line[6:])
             for line in _responses_event_stream("done").splitlines()
             if line.startswith("data: ")
         ]
@@ -995,13 +1034,21 @@ async def test_discovered_custom_tools_survive_sdk_calls_and_replay(
                 "item": {**call, "status": "in_progress", "arguments": ""},
             },
             {"type": "response.output_item.done", "output_index": 0, "item": call},
-            {**packets[-1], "response": {**packets[-1]["response"], "output": [call]}},
+            {
+                **object_payload(packets[-1]),
+                "response": {
+                    **object_payload(object_payload(packets[-1])["response"]),
+                    "output": [call],
+                },
+            },
         ]
         return httpx2.Response(
             200,
             headers={"content-type": "text/event-stream"},
             text="".join(
-                "data: " + json.dumps({**event, "sequence_number": i}) + "\n\n"
+                "data: "
+                + json.dumps({**object_payload(event), "sequence_number": i})
+                + "\n\n"
                 for i, event in enumerate(events)
             ),
         )
@@ -1013,9 +1060,14 @@ async def test_discovered_custom_tools_survive_sdk_calls_and_replay(
         response = await _collect_responses(
             provider, "responses-selector", input=history
         )
-        call = parse_sse_text(response)[-1].data["response"]["output"][0]
-        assert call["type"] == "custom_tool_call"
-        assert call["name"] == "edit" and call["namespace"] == "editor"
+        call = array_payload(
+            object_payload(parse_sse_text(response)[-1].data["response"])["output"]
+        )[0]
+        assert object_payload(call)["type"] == "custom_tool_call"
+        assert (
+            object_payload(call)["name"] == "edit"
+            and object_payload(call)["namespace"] == "editor"
+        )
         reply = await _collect_responses(
             provider,
             "responses-selector",
@@ -1171,10 +1223,10 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
         failed_path,
         fallback_path,
     ]
-    payloads = [json.loads(request.content) for request in generation_requests]
+    payloads = [decode_object(request.content) for request in generation_requests]
     if midstream:
         history = payloads[-1].get("messages", payloads[-1].get("input"))
-        assert "Before. " in str(history[-2])
+        assert "Before. " in str(array_payload(history)[-2])
     assert [payload["model"] for payload in payloads] == [
         upstream_id(primary_model),
         upstream_id(primary_model),
@@ -1184,10 +1236,10 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
     if wire_api == "responses":
         assert [event.event for event in events].count("response.created") == 1
         assert [event.event for event in events].count("response.completed") == 1
-        assert events[-1].data["response"]["model"] == "public-model"
+        assert object_payload(events[-1].data["response"])["model"] == "public-model"
         assert (
             "".join(
-                event.data["delta"]
+                string_payload(event.data["delta"])
                 for event in events
                 if event.event == "response.output_text.delta"
             )
@@ -1195,7 +1247,7 @@ async def test_candidate_fallback_resolves_each_opencode_transport(
         )
     else:
         assert_anthropic_stream_contract(events)
-        assert events[0].data["message"]["model"] == "public-model"
+        assert object_payload(events[0].data["message"])["model"] == "public-model"
         assert text_content(events) == ("Before. " if midstream else "") + fallback_text
     assert "temporary overload" not in body
 
@@ -1345,12 +1397,17 @@ def test_build_request_body_replays_tool_reasoning_natively(
 
     body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
 
-    assistant = body["messages"][0]
-    assert assistant["content"] == ""
-    assert assistant["reasoning_content"] == "I should inspect the file."
-    assert "<think>" not in assistant["content"]
-    assert assistant["tool_calls"][0]["id"] == "call_1"
-    assert body["messages"][1] == {
+    assistant = array_payload(body["messages"])[0]
+    assert object_payload(assistant)["content"] == ""
+    assert (
+        object_payload(assistant)["reasoning_content"] == "I should inspect the file."
+    )
+    assert "<think>" not in string_payload(object_payload(assistant)["content"])
+    assert (
+        object_payload(array_payload(object_payload(assistant)["tool_calls"])[0])["id"]
+        == "call_1"
+    )
+    assert array_payload(body["messages"])[1] == {
         "role": "tool",
         "tool_call_id": "call_1",
         "content": "file contents",

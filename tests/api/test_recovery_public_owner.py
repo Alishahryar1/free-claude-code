@@ -21,7 +21,12 @@ from tests.api.test_tool_call_buffer import _call, _frames, _response, _start
 from tests.api.test_tool_call_buffer_transports import _tools
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
-from tests.wire_payload import array_payload, object_payload
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 @pytest.mark.asyncio
@@ -97,12 +102,16 @@ async def test_continuation_preserves_call_completed_by_terminal_snapshot(
     events = parse_sse_text(raw)
     assert len(bodies) == 2
     assert events[-1].event == "response.completed", events[-1].data
-    output = events[-1].data["response"]["output"]
-    calls = [item for item in output if item["type"] == "function_call"]
+    output = object_payload(events[-1].data["response"])["output"]
+    calls = [
+        item
+        for item in array_payload(output)
+        if object_payload(item)["type"] == "function_call"
+    ]
     assert len(calls) == 1
-    assert calls[0]["call_id"] == "call_probe"
-    assert calls[0]["arguments"] == '{"path":"file"}'
-    assert calls[0]["status"] == "completed"
+    assert object_payload(calls[0])["call_id"] == "call_probe"
+    assert object_payload(calls[0])["arguments"] == '{"path":"file"}'
+    assert object_payload(calls[0])["status"] == "completed"
     assert public_text(events, "responses") == "Hello " + (
         "world." if preceding_text else ""
     )
@@ -197,7 +206,7 @@ async def test_public_transform_failure_preserves_returned_packets_and_emits_err
     def prepare(self: ContinuationStream, payload: JsonObject):
         if payload["type"] == "response.output_text.done":
             raise ValueError("public transform failed")
-        return original(self, payload)
+        return original(self, object_payload(payload))
 
     monkeypatch.setattr(ContinuationStream, "prepare", prepare)
 
@@ -254,9 +263,13 @@ async def test_terminal_only_text_uses_the_same_overlap_and_progress_rule(text: 
         "response.completed" if "world" in text else "response.failed"
     )
     if "world" in text:
-        output = events[-1].data["response"]["output"]
+        output = object_payload(events[-1].data["response"])["output"]
         assert (
-            "".join(part["text"] for item in output for part in item.get("content", []))
+            "".join(
+                string_payload(part["text"])
+                for item in array_payload(output)
+                for part in object_array(object_payload(item).get("content", []))
+            )
             == "Hello world."
         )
 
@@ -316,7 +329,8 @@ async def test_filtered_snapshot_does_not_change_overlap_target_identity():
     assert "call_0" not in raw
     assert public_text(events, "responses") == "Hello world."
     assert [
-        item["content"][0]["text"] for item in events[-1].data["response"]["output"]
+        object_array(object_payload(item)["content"])[0]["text"]
+        for item in array_payload(object_payload(events[-1].data["response"])["output"])
     ] == ["Hello ", "world."]
 
 

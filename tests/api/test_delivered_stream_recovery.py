@@ -1,7 +1,6 @@
 """Recovery extends one public response after content has been delivered."""
 
 import asyncio
-import json
 from copy import deepcopy
 from itertools import pairwise
 from typing import override
@@ -32,7 +31,15 @@ from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
-from tests.wire_payload import array_payload, int_payload, object_array, object_payload
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    int_payload,
+    object_array,
+    object_payload,
+    response_object,
+    string_payload,
+)
 
 
 def text_events(protocol: str, text: str, *, complete: bool = True) -> list[JsonObject]:
@@ -144,12 +151,14 @@ def text_events(protocol: str, text: str, *, complete: bool = True) -> list[Json
 def public_text(events: list[SSEEvent], wire: str):
     if wire == "messages":
         return "".join(
-            event.data.get("delta", {}).get("text", "")
-            + event.data.get("content_block", {}).get("text", "")
+            string_payload(object_payload(event.data.get("delta", {})).get("text", ""))
+            + string_payload(
+                object_payload(event.data.get("content_block", {})).get("text", "")
+            )
             for event in events
         )
     return "".join(
-        event.data["delta"]
+        string_payload(event.data["delta"])
         for event in events
         if event.event == "response.output_text.delta"
     )
@@ -169,12 +178,12 @@ def assert_completed(events: list[SSEEvent], wire: str):
     )
     assert not any(event.event in {"error", "response.failed"} for event in events)
     if wire == "responses":
-        numbers = [event.data["sequence_number"] for event in events]
+        numbers = [int_payload(event.data["sequence_number"]) for event in events]
         assert all(right > left for left, right in pairwise(numbers))
         assert (
             len(
                 {
-                    event.data["response"]["id"]
+                    object_payload(event.data["response"])["id"]
                     for event in events
                     if "response" in event.data
                 }
@@ -208,12 +217,12 @@ async def test_text_cutoff_continues_one_response_and_preserves_tools(
     assert bodies[1]["tools"] == bodies[0]["tools"]
     assert "Hello " in str(bodies[1])
     if wire == "responses":
-        output = events[-1].data["response"]["output"]
+        output = object_payload(events[-1].data["response"])["output"]
         assert (
             "".join(
-                part.get("text", "")
-                for item in output
-                for part in item.get("content", [])
+                string_payload(object_payload(part).get("text", ""))
+                for item in array_payload(output)
+                for part in object_array(object_payload(item).get("content", []))
             )
             == "Hello world."
         )
@@ -243,9 +252,14 @@ async def test_released_tool_finishes_handoff_without_another_request(
         return
     assert_completed(events, wire)
     if wire == "messages":
-        assert events[-2].data["delta"]["stop_reason"] == "tool_use"
+        assert object_payload(events[-2].data["delta"])["stop_reason"] == "tool_use"
     else:
-        assert events[-1].data["response"]["output"][0]["call_id"] == "call_probe"
+        assert (
+            object_array(object_payload(events[-1].data["response"])["output"])[0][
+                "call_id"
+            ]
+            == "call_probe"
+        )
 
 
 def after_text(protocol: str, tail: list[JsonObject]):
@@ -286,18 +300,23 @@ async def test_partial_call_after_public_text_is_discarded_before_continuation(
     assert public_text(events, wire) == "Before. "
     if wire == "messages":
         arguments = "".join(
-            e.data.get("delta", {}).get("partial_json", "") for e in events
+            string_payload(
+                object_payload(e.data.get("delta", {})).get("partial_json", "")
+            )
+            for e in events
         )
         assert arguments == '{"path":"winning"}'
     else:
         assert "winning" in result
         calls = [
             item
-            for item in events[-1].data["response"]["output"]
-            if item["type"] == "function_call"
+            for item in array_payload(
+                object_payload(events[-1].data["response"])["output"]
+            )
+            if object_payload(item)["type"] == "function_call"
         ]
         assert len(calls) == 1
-        assert calls[0]["arguments"] == '{"path":"winning"}'
+        assert object_payload(calls[0])["arguments"] == '{"path":"winning"}'
 
 
 @pytest.mark.asyncio
@@ -320,8 +339,8 @@ async def test_repeated_interruption_uses_latest_prefix_and_one_budget(
     assert_completed(events, wire)
     assert public_text(events, wire) == "One two three."
     assert len(bodies) == 3
-    history = without_empty_reasoning(
-        bodies[-1].get("messages", bodies[-1].get("input"))
+    history = object_array(
+        without_empty_reasoning(bodies[-1].get("messages", bodies[-1].get("input")))
     )
     assert (
         history[0]
@@ -360,12 +379,12 @@ async def test_exact_overlap_filter_preserves_nonmatching_text(
     assert_completed(events, wire)
     assert public_text(events, wire) == expected
     if wire == "responses":
-        output = events[-1].data["response"]["output"]
+        output = object_payload(events[-1].data["response"])["output"]
         assert (
             "".join(
-                part.get("text", "")
-                for item in output
-                for part in item.get("content", [])
+                string_payload(object_payload(part).get("text", ""))
+                for item in array_payload(output)
+                for part in object_array(object_payload(item).get("content", []))
             )
             == expected
         )
@@ -445,9 +464,11 @@ async def test_partial_overlap_across_single_character_chunks(
     if wire == "responses":
         assert (
             "".join(
-                part.get("text", "")
-                for item in events[-1].data["response"]["output"]
-                for part in item.get("content", [])
+                string_payload(object_payload(part).get("text", ""))
+                for item in array_payload(
+                    object_payload(events[-1].data["response"])["output"]
+                )
+                for part in object_array(object_payload(item).get("content", []))
             )
             == expected
         )
@@ -460,7 +481,7 @@ async def test_native_passthrough_continuation_closes_original_connection():
     second = Wire([_sse(*text_events("messages", "world."))])
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         if len(bodies) == 2:
             assert first.closed
         return httpx.Response(
@@ -678,7 +699,7 @@ def test_http_recovery_then_real_harness_tool_result_has_no_private_history():
     wires = []
 
     def reply(request: httpx.Request):
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         sent.append(body)
         if len(sent) == 3:
             return httpx.Response(
@@ -719,10 +740,10 @@ def test_http_recovery_then_real_harness_tool_result_has_no_private_history():
             event.data["content_block"]
             for event in events
             if event.event == "content_block_start"
-            and event.data["content_block"]["type"] == "tool_use"
+            and object_payload(event.data["content_block"])["type"] == "tool_use"
         ]
         assert len(calls) == 1
-        call = {**calls[0], "input": {"path": "winning"}}
+        call = {**object_payload(calls[0]), "input": {"path": "winning"}}
         history = [
             *array_payload(body["messages"]),
             {
@@ -744,7 +765,10 @@ def test_http_recovery_then_real_harness_tool_result_has_no_private_history():
             "/v1/messages", json={**body, "stream": False, "messages": history}
         )
         assert second.status_code == 200
-        assert second.json()["content"][0]["text"] == "result received"
+        assert (
+            object_array(response_object(second)["content"])[0]["text"]
+            == "result received"
+        )
     assert len(sent) == 3
     assert without_empty_reasoning(sent[2]["messages"]) == history
     assert "previous provider stream" not in str(sent[2])
@@ -821,21 +845,30 @@ async def test_retention_limit_during_continuation_keeps_final_output_consistent
         final = events[-1].data["response"]
         assert (
             "".join(
-                part.get("text", "")
-                for item in final["output"]
-                for part in item.get("content", [])
+                string_payload(object_payload(part).get("text", ""))
+                for item in array_payload(object_payload(final)["output"])
+                for part in object_array(object_payload(item).get("content", []))
             )
             == "First " + "x" * 2000
         )
         streamed_ids = [
-            event.data["item"]["id"]
+            object_payload(event.data["item"])["id"]
             for event in events
             if event.event == "response.output_item.done"
         ]
-        assert [item["id"] for item in final["output"]] == streamed_ids
-        assert final["usage"]["output_tokens"] > 0
+        assert [
+            object_payload(item)["id"]
+            for item in array_payload(object_payload(final)["output"])
+        ] == streamed_ids
+        assert (
+            int_payload(object_payload(object_payload(final)["usage"])["output_tokens"])
+            > 0
+        )
     else:
-        assert events[-2].data["usage"]["output_tokens"] >= 250
+        assert (
+            int_payload(object_payload(events[-2].data["usage"])["output_tokens"])
+            >= 250
+        )
 
 
 @pytest.mark.asyncio

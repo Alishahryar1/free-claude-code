@@ -1,7 +1,7 @@
 """Request construction for native GenerateContent, without a Chat intermediate."""
 
+from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any
 
 from ..anthropic.image_sources import portable_anthropic_image_url
 from ..anthropic.models import MessagesRequest
@@ -24,7 +24,14 @@ from ..history_replay import (
     readable_reasoning,
     resolve_messages_replay,
 )
-from ..json_types import JsonObject
+from ..json_types import (
+    JsonObject,
+    JsonValue,
+    json_array,
+    json_object,
+    json_objects,
+    json_text,
+)
 from ..openai_responses import OpenAIResponsesRequest
 from ..reasoning import ReasoningControl, ReasoningPolicy
 from .errors import GeminiConversionError
@@ -32,7 +39,7 @@ from .models import GeminiRequest, InlineData, ThinkingConfig
 from .web_search_replay import restore_web_search_history
 
 
-def _image(url: str) -> dict[str, Any]:
+def _image(url: str) -> JsonObject:
     if not url.startswith("data:") or ";base64," not in url:
         raise GeminiConversionError("Native Gemini requires inline base64 images")
     media, data = url[5:].split(";base64,", 1)
@@ -40,8 +47,8 @@ def _image(url: str) -> dict[str, Any]:
     return {"inlineData": image.model_dump(by_alias=True)}
 
 
-def _text_parts(value: Any, *, responses: bool = False) -> list[dict[str, Any]]:
-    parts = []
+def _text_parts(value: JsonValue, *, responses: bool = False) -> list[JsonObject]:
+    parts: list[JsonObject] = []
     for part in content_parts(value):
         kind = part.get("type")
         if kind in ("text", "input_text", "output_text"):
@@ -78,18 +85,16 @@ def _text_parts(value: Any, *, responses: bool = False) -> list[dict[str, Any]]:
     return parts
 
 
-def _append(
-    contents: list[dict[str, Any]], role: str, parts: list[dict[str, Any]]
-) -> None:
+def _append(contents: list[JsonObject], role: str, parts: list[JsonObject]) -> None:
     if not parts:
         return
     if contents and contents[-1]["role"] == role:
-        contents[-1]["parts"].extend(parts)
+        json_array(contents[-1]["parts"]).extend(parts)
     else:
         contents.append({"role": role, "parts": parts})
 
 
-def _reasoning(item: dict[str, Any]) -> list[dict[str, Any]]:
+def _reasoning(item: Mapping[str, JsonValue]) -> list[JsonObject]:
     carrier = item.get("encrypted_content") or item.get("signature") or item.get("data")
     if carrier:
         if not is_replay(carrier):
@@ -108,12 +113,12 @@ def _reasoning(item: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def apply_reasoning(
-    body: dict[str, Any], policy: ReasoningPolicy, *, native: bool = False
+    body: JsonObject, policy: ReasoningPolicy, *, native: bool = False
 ) -> None:
-    config = body.setdefault("generationConfig", {})
+    config = json_object(body.setdefault("generationConfig", {}))
     if native and policy == ReasoningPolicy.provider_default():
         return
-    thinking = config.setdefault("thinkingConfig", {})
+    thinking = json_object(config.setdefault("thinkingConfig", {}))
     if (
         native
         and policy.control is not ReasoningControl.OFF
@@ -132,7 +137,7 @@ def apply_reasoning(
         thinking["thinkingBudget"] = budget
 
 
-def _tool_config(choice: Any, *, responses: bool = False) -> dict[str, Any]:
+def _tool_config(choice: JsonValue, *, responses: bool = False) -> JsonObject:
     if isinstance(choice, str):
         mode = {"auto": "AUTO", "none": "NONE", "required": "ANY", "any": "ANY"}.get(
             choice
@@ -142,7 +147,9 @@ def _tool_config(choice: Any, *, responses: bool = False) -> dict[str, Any]:
         return {"functionCallingConfig": {"mode": mode}}
     if isinstance(choice, dict):
         name = (
-            choice.get("name") if responses else choice.get("function", {}).get("name")
+            choice.get("name")
+            if responses
+            else json_object(choice.get("function", {})).get("name")
         )
         if isinstance(name, str):
             return {
@@ -151,14 +158,14 @@ def _tool_config(choice: Any, *, responses: bool = False) -> dict[str, Any]:
     raise GeminiConversionError("Unsupported tool_choice")
 
 
-def _format(config: dict[str, Any], format_: dict[str, Any]) -> None:
+def _format(config: JsonObject, format_: JsonObject) -> None:
     kind = format_.get("type")
     if kind == "text":
         return
     if kind == "json_object":
         config["responseMimeType"] = "application/json"
     elif kind == "json_schema":
-        schema = format_.get("json_schema", format_)
+        schema = json_object(format_.get("json_schema", format_))
         config.update(
             responseMimeType="application/json",
             responseJsonSchema=deepcopy(schema["schema"]),
@@ -168,11 +175,11 @@ def _format(config: dict[str, Any], format_: dict[str, Any]) -> None:
 
 
 def _function_result(
-    call_id: str, name: str, value: Any, *, responses: bool = False
-) -> dict[str, Any]:
+    call_id: str, name: str, value: JsonValue, *, responses: bool = False
+) -> JsonObject:
     parts = _text_parts(value, responses=responses)
-    text = "\n".join(part["text"] for part in parts if "text" in part)
-    result: dict[str, Any] = {"id": call_id, "name": name, "response": {"output": text}}
+    text = "\n".join(json_text(part["text"]) for part in parts if "text" in part)
+    result: JsonObject = {"id": call_id, "name": name, "response": {"output": text}}
     images = [part for part in parts if "inlineData" in part]
     if images:
         result["parts"] = images
@@ -200,12 +207,12 @@ def chat_to_gemini(
             "response_format",
         },
     )
-    contents: list[dict[str, Any]] = []
-    system: list[dict[str, Any]] = []
+    contents: list[JsonObject] = []
+    system: list[JsonObject] = []
     calls: dict[str, str] = {}
-    for message in body["messages"]:
+    for message in json_objects(body["messages"]):
         validate_message_fields(message)
-        role = message["role"]
+        role = json_text(message["role"])
         if role in {"system", "developer"}:
             parts = _text_parts(message.get("content"))
             if any("text" not in part for part in parts):
@@ -213,7 +220,7 @@ def chat_to_gemini(
             system.extend(parts)
             continue
         if role == "tool":
-            call_id = message["tool_call_id"]
+            call_id = json_text(message["tool_call_id"])
             if call_id not in calls:
                 raise GeminiConversionError("Orphaned tool response")
             _append(
@@ -228,13 +235,13 @@ def chat_to_gemini(
                 key: value for key, value in message.items() if key != "content"
             }
             parts.extend(_reasoning(reasoning))
-            for detail in message.get("reasoning_details") or []:
+            for detail in json_objects(message.get("reasoning_details") or []):
                 if detail.get("type") == "reasoning.encrypted":
                     parts.extend(_reasoning(detail))
-                elif detail.get("type") not in {
+                elif detail.get("type") not in (
                     "reasoning.text",
                     "reasoning.summary",
-                } or detail.get("signature"):
+                ) or detail.get("signature"):
                     raise GeminiConversionError(
                         "Unsupported protected reasoning detail"
                     )
@@ -242,7 +249,8 @@ def chat_to_gemini(
         if message.get("refusal"):
             parts.append({"text": message["refusal"]})
         for call in function_calls(message):
-            name, call_id = call["function"]["name"], call["id"]
+            name = json_text(json_object(call["function"])["name"])
+            call_id = json_text(call["id"])
             if call_id in calls:
                 raise GeminiConversionError("Duplicate function call ID")
             calls[call_id] = name
@@ -258,7 +266,7 @@ def chat_to_gemini(
         _append(contents, "model" if role == "assistant" else "user", parts)
     if calls and not allow_pending_calls:
         raise GeminiConversionError("Unresolved tool calls in history")
-    config: dict[str, Any] = {}
+    config: JsonObject = {}
     for source, target in {
         "temperature": "temperature",
         "top_p": "topP",
@@ -275,8 +283,8 @@ def chat_to_gemini(
             [body["stop"]] if isinstance(body["stop"], str) else body["stop"]
         )
     if fmt := body.get("response_format"):
-        _format(config, fmt)
-    result: dict[str, Any] = {
+        _format(config, json_object(fmt))
+    result: JsonObject = {
         "model": request.model,
         "contents": contents,
         "generationConfig": config,
@@ -284,10 +292,10 @@ def chat_to_gemini(
     if system:
         result["systemInstruction"] = {"parts": system}
     declarations = []
-    for tool in body.get("tools") or []:
+    for tool in json_objects(body.get("tools") or []):
         if tool.get("type") != "function":
             raise GeminiConversionError("Native Gemini supports function tools only")
-        function = tool["function"]
+        function = json_object(tool["function"])
         if function.get("strict"):
             raise GeminiConversionError(
                 "Native Gemini cannot enforce strict function tools"
@@ -328,16 +336,16 @@ def messages_to_gemini(
         raise GeminiConversionError(
             f"Native Gemini cannot represent Messages fields: {sorted(unsupported)}"
         )
-    contents: list[dict[str, Any]] = []
-    system: list[dict[str, Any]] = []
+    contents: list[JsonObject] = []
+    system: list[JsonObject] = []
     if body.get("system"):
         system = [{"text": part["text"]} for part in content_parts(body["system"])]
     calls: dict[str, str] = {}
-    result_parts: list[dict[str, Any]] | None = None
+    result_parts: list[JsonObject] | None = None
     result_order: dict[str, int] = {}
-    for message in restore_web_search_history(body["messages"]):
-        role = message["role"]
-        parts: list[dict[str, Any]] = []
+    for message in restore_web_search_history(json_objects(body["messages"])):
+        role = json_text(message["role"])
+        parts: list[JsonObject] = []
         if message.get("reasoning_content"):
             parts.append({"text": message["reasoning_content"], "thought": True})
         for block in resolve_messages_replay(content_parts(message.get("content"))):
@@ -348,7 +356,7 @@ def messages_to_gemini(
                 parts.append({"text": block["text"]})
             elif kind == "image":
                 parts.append(_image(portable_anthropic_image_url(block["source"])))
-            elif kind in {"thinking", "redacted_thinking"}:
+            elif kind in ("thinking", "redacted_thinking"):
                 parts.extend(_reasoning(block))
             elif kind == "tool_use":
                 if block.get("extra_content"):
@@ -385,19 +393,19 @@ def messages_to_gemini(
                         "Parallel tool results must be consecutive"
                     )
                 value = block.get("content")
-                output_parts: list[dict[str, Any]] = (
+                output_parts: list[JsonObject] = (
                     [] if isinstance(value, dict) else content_parts(value)
                 )
                 text = (
                     deepcopy(value)
                     if isinstance(value, dict)
                     else "\n".join(
-                        part["text"]
+                        json_text(part["text"])
                         for part in output_parts
                         if part.get("type") == "text"
                     )
                 )
-                result: dict[str, Any] = {
+                result: JsonObject = {
                     "id": call_id,
                     "name": calls.pop(call_id),
                     "response": {"error" if block.get("is_error") else "output": text},
@@ -408,7 +416,7 @@ def messages_to_gemini(
                     if part.get("type") == "image"
                 ]
                 if any(
-                    part.get("type") not in {"image", "text"} for part in output_parts
+                    part.get("type") not in ("image", "text") for part in output_parts
                 ):
                     raise GeminiConversionError("Unsupported tool result content")
                 if images:
@@ -418,7 +426,9 @@ def messages_to_gemini(
                 raise GeminiConversionError(f"Unsupported Messages content {kind!r}")
         if result_parts is not None:
             result_parts.sort(
-                key=lambda part: result_order[part["functionResponse"]["id"]]
+                key=lambda part: result_order[
+                    json_text(json_object(part["functionResponse"])["id"])
+                ]
             )
         if parts:
             if role == "user" and calls:
@@ -433,7 +443,7 @@ def messages_to_gemini(
             result_parts = None
     if calls and not allow_pending_calls:
         raise GeminiConversionError("Unresolved tool calls in history")
-    config: dict[str, Any] = {}
+    config: JsonObject = {}
     for source, target in {
         "max_tokens": "maxOutputTokens",
         "temperature": "temperature",
@@ -443,12 +453,12 @@ def messages_to_gemini(
     }.items():
         if body.get(source) is not None:
             config[target] = body[source]
-    output = body.get("output_config") or {}
+    output = json_object(body.get("output_config") or {})
     if set(output) - {"effort", "format"}:
         raise GeminiConversionError("Unsupported Messages output_config")
     if fmt := output.get("format"):
-        _format(config, fmt)
-    result: dict[str, Any] = {
+        _format(config, json_object(fmt))
+    result: JsonObject = {
         "model": request.model,
         "contents": contents,
         "generationConfig": config,
@@ -457,7 +467,7 @@ def messages_to_gemini(
         result["systemInstruction"] = {"parts": system}
     if body.get("tools"):
         declarations = []
-        for tool in body["tools"]:
+        for tool in json_objects(body["tools"]):
             if tool.get("strict"):
                 raise GeminiConversionError(
                     "Native Gemini cannot enforce strict function tools"
@@ -480,7 +490,8 @@ def messages_to_gemini(
                 }
             )
         result["tools"] = [{"functionDeclarations": declarations}]
-    if body.get("tools") and (choice := body.get("tool_choice")):
+    if body.get("tools") and body.get("tool_choice"):
+        choice = json_object(body["tool_choice"])
         if choice.get("disable_parallel_tool_use"):
             raise GeminiConversionError(
                 "Native Gemini cannot enforce disable_parallel_tool_use"
@@ -494,7 +505,7 @@ def messages_to_gemini(
 def responses_to_gemini(
     request: OpenAIResponsesRequest, *, allow_pending_calls: bool = False
 ) -> JsonObject:
-    body = request.model_dump(mode="json", exclude_none=True)
+    body: JsonObject = request.model_dump(mode="json", exclude_none=True)
     supported = {
         "model",
         "input",
@@ -528,8 +539,10 @@ def responses_to_gemini(
         if isinstance(value, list)
         else [value]
     )
-    contents: list[dict[str, Any]] = []
-    system = [{"text": body["instructions"]}] if body.get("instructions") else []
+    contents: list[JsonObject] = []
+    system: list[JsonObject] = (
+        [{"text": body["instructions"]}] if body.get("instructions") else []
+    )
     calls: dict[str, str] = {}
     for item in items:
         if not isinstance(item, dict):
@@ -538,11 +551,11 @@ def responses_to_gemini(
         if kind == "message":
             role = item.get("role", "user")
             parts = _text_parts(item.get("content"), responses=True)
-            if role in {"system", "developer"}:
+            if role in ("system", "developer"):
                 if any("text" not in part for part in parts):
                     raise GeminiConversionError("System instructions must be text")
                 system.extend(parts)
-            elif role in {"assistant", "user"}:
+            elif role in ("assistant", "user"):
                 _append(contents, "model" if role == "assistant" else "user", parts)
             else:
                 raise GeminiConversionError("Unsupported Responses role")
@@ -560,7 +573,7 @@ def responses_to_gemini(
                 raise GeminiConversionError(
                     "Function calls require an ID, name, and arguments"
                 )
-            call_id, name = item["call_id"], item["name"]
+            call_id, name = json_text(item["call_id"]), json_text(item["name"])
             calls[call_id] = name
             args = tool_arguments({"function": {"arguments": item["arguments"]}})
             _append(
@@ -587,7 +600,7 @@ def responses_to_gemini(
             raise GeminiConversionError(f"Unsupported Responses input item {kind!r}")
     if calls and not allow_pending_calls:
         raise GeminiConversionError("Unresolved function calls in history")
-    config: dict[str, Any] = {}
+    config: JsonObject = {}
     for source, target in {
         "temperature": "temperature",
         "top_p": "topP",
@@ -595,14 +608,14 @@ def responses_to_gemini(
     }.items():
         if body.get(source) is not None:
             config[target] = body[source]
-    text = body.get("text") or {}
+    text = json_object(body.get("text") or {})
     if set(text) - {"format"}:
         raise GeminiConversionError(
             "Native Gemini cannot represent Responses text controls"
         )
     if fmt := text.get("format"):
-        _format(config, fmt)
-    result: dict[str, Any] = {
+        _format(config, json_object(fmt))
+    result: JsonObject = {
         "model": request.model,
         "contents": contents,
         "generationConfig": config,
@@ -610,7 +623,7 @@ def responses_to_gemini(
     if system:
         result["systemInstruction"] = {"parts": system}
     declarations = []
-    for tool in body.get("tools") or []:
+    for tool in json_objects(body.get("tools") or []):
         if tool.get("type") != "function":
             raise GeminiConversionError("Native Gemini supports function tools only")
         if tool.get("strict"):

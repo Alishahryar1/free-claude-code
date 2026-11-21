@@ -11,6 +11,14 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.core.gateway_model_ids import desktop_model_id
 from free_claude_code.harnesses import claude_desktop_integration as desktop
 from tests.api.support import create_test_app
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_payload,
+    response_object,
+    response_payload,
+    string_payload,
+)
 
 ROOT = "/admin/api/integrations/claude-desktop"
 
@@ -35,20 +43,22 @@ def test_pending_disconnect_survives_runtime_restart(monkeypatch: pytest.MonkeyP
         with monkeypatch.context() as patch:
             patch.setattr(Path, "unlink", fail)
             assert client.post(ROOT + "/disconnect").status_code == 503
-        assert client.get(ROOT).json()["disconnect_pending"] is True
+        assert response_object(client.get(ROOT))["disconnect_pending"] is True
     before = profile.read_bytes()
     with TestClient(
         create_test_app(settings.model_copy(update={"proxy_auth_token": "rotated"})),
         base_url="http://127.0.0.1",
         client=("127.0.0.1", 50000),
     ) as client:
-        status = client.get(ROOT).json()
+        status = response_object(client.get(ROOT))
         assert status["disconnect_pending"] is True
         assert profile.read_bytes() == before
         refused = client.post(ROOT + "/connect")
         assert refused.status_code == 400
-        assert "Finish disconnecting" in refused.json()["detail"]
-        result = client.post(ROOT + "/disconnect").json()
+        assert "Finish disconnecting" in string_payload(
+            response_object(refused)["detail"]
+        )
+        result = response_object(client.post(ROOT + "/disconnect"))
         assert result["connected"] is False
         assert result["disconnect_pending"] is False
         assert not profile.exists()
@@ -68,29 +78,29 @@ def client():
 def test_desktop_routes_connect_disconnect_and_hide_credentials(client: TestClient):
     root = desktop.config_root()
     response = client.get(ROOT)
-    assert response.json()["connected"] is False
+    assert response_object(response)["connected"] is False
     assert response.headers["cache-control"] == "no-store"
     assert not root.exists()
     response = client.post(ROOT + "/connect")
     assert response.status_code == 200
-    assert response.json()["connected"] is True
+    assert response_object(response)["connected"] is True
     assert "desktop-secret" not in response.text
     profile = root / "configLibrary" / f"{desktop.FCC_ID}.json"
     assert (
-        json.loads(profile.read_text())["inferenceGatewayBaseUrl"]
+        decode_object(profile.read_text())["inferenceGatewayBaseUrl"]
         == "http://127.0.0.1:4321"
     )
-    config = json.loads(profile.read_text())
+    config = decode_object(profile.read_text())
     models = [desktop_model_id("nvidia_nim/one")]
     config["inferenceModels"] = models
     profile.write_text(json.dumps(config))
     before = {path: path.stat().st_mtime_ns for path in root.rglob("*.json")}
     response = client.get(ROOT)
-    assert response.json()["connected"] is True
+    assert response_object(response)["connected"] is True
     assert "desktop-secret" not in response.text
-    assert json.loads(profile.read_text())["inferenceModels"] == models
+    assert decode_object(profile.read_text())["inferenceModels"] == models
     assert before == {path: path.stat().st_mtime_ns for path in root.rglob("*.json")}
-    assert client.post(ROOT + "/disconnect").json()["connected"] is False
+    assert response_object(client.post(ROOT + "/disconnect"))["connected"] is False
     assert not profile.exists()
 
 
@@ -131,25 +141,39 @@ def test_desktop_model_view_preserves_labels_and_query_precedence():
     )
     with TestClient(create_test_app(settings)) as client:
         headers = {"X-FCC-Model-View": "claude-desktop"}
-        payload = client.get("/v1/models", headers=headers).json()
-        models = [row for row in payload["data"] if "/" in row["id"]]
-        assert [row["id"] for row in models] == [
+        payload = response_object(client.get("/v1/models", headers=headers))
+        models = [
+            row
+            for row in array_payload(payload["data"])
+            if "/" in string_payload(object_payload(row)["id"])
+        ]
+        assert [object_payload(row)["id"] for row in models] == [
             desktop_model_id(ref),
             desktop_model_id(ref, no_thinking=True),
         ]
-        assert [row["display_name"] for row in models] == [ref, ref + " (no thinking)"]
-        regular = client.get("/v1/models").json()
-        assert client.get("/v1/models?view=claude", headers=headers).json() == regular
+        assert [object_payload(row)["display_name"] for row in models] == [
+            ref,
+            ref + " (no thinking)",
+        ]
+        regular = response_payload(client.get("/v1/models"))
+        assert (
+            response_payload(client.get("/v1/models?view=claude", headers=headers))
+            == regular
+        )
         assert (
             client.get(
                 "/v1/models", headers={"X-FCC-Model-View": "invalid"}
             ).status_code
             == 422
         )
-    route = ModelRouter(settings).resolve(models[0]["id"])
+    route = ModelRouter(settings).resolve(
+        string_payload(object_payload(models[0])["id"])
+    )
     assert route.primary.provider_model_ref == ref
     assert (
-        ModelRouter(settings).resolve(models[1]["id"]).reasoning_preference.value
+        ModelRouter(settings)
+        .resolve(string_payload(object_payload(models[1])["id"]))
+        .reasoning_preference.value
         == "off"
     )
 
@@ -200,9 +224,9 @@ def test_pending_windows_migration_reports_recovery_without_writes(
     history.write_text('{"chat":"keep"}')
     response = client.post(ROOT + "/connect")
     assert response.status_code == 400
-    detail = response.json()["detail"]
-    assert "Launch Claude Desktop" in detail
-    assert "quit" in detail
-    assert "retry Connect" in detail
+    detail = response_object(response)["detail"]
+    assert "Launch Claude Desktop" in string_payload(detail)
+    assert "quit" in string_payload(detail)
+    assert "retry Connect" in string_payload(detail)
     assert not desktop.config_root().exists()
     assert history.read_text() == '{"chat":"keep"}'

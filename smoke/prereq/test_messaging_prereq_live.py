@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 from smoke.lib.config import SmokeConfig
+from tests.wire_payload import object_payload, response_object
 
 
 @pytest.mark.live
@@ -17,7 +18,7 @@ def test_telegram_bot_api_permissions(smoke_config: SmokeConfig) -> None:
     base_url = f"https://api.telegram.org/bot{token}"
     get_me = httpx.get(f"{base_url}/getMe", timeout=smoke_config.timeout_s)
     assert get_me.status_code == 200, get_me.text
-    assert get_me.json()["ok"] is True
+    assert response_object(get_me)["ok"] is True
 
     chat_id = os.getenv("FCC_SMOKE_TELEGRAM_CHAT_ID") or (
         smoke_config.settings.allowed_telegram_user_id or ""
@@ -32,7 +33,7 @@ def test_telegram_bot_api_permissions(smoke_config: SmokeConfig) -> None:
         timeout=smoke_config.timeout_s,
     )
     assert sent.status_code == 200, sent.text
-    message_id = sent.json()["result"]["message_id"]
+    message_id = object_payload(response_object(sent)["result"])["message_id"]
 
     edited = httpx.post(
         f"{base_url}/editMessageText",
@@ -79,7 +80,7 @@ def test_discord_bot_api_permissions(smoke_config: SmokeConfig) -> None:
         timeout=smoke_config.timeout_s,
     )
     assert sent.status_code == 200, sent.text
-    message_id = sent.json()["id"]
+    message_id = response_object(sent)["id"]
 
     edited = httpx.patch(
         f"{base_url}/channels/{channel_id}/messages/{message_id}",

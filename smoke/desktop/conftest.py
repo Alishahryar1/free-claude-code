@@ -12,6 +12,9 @@ from typing import TypedDict
 
 import pytest
 
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import object_payload, string_payload
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -78,9 +81,9 @@ def installed_desktop(
         timeout=60,
         stdout=subprocess.DEVNULL,
     )
-    version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"][
-        "requires-python"
-    ].removeprefix("==")
+    metadata: JsonObject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    project = object_payload(metadata["project"])
+    version = string_payload(project["requires-python"]).removeprefix("==")
 
     def create_venv(venv: Path) -> None:
         subprocess.run(
@@ -130,7 +133,7 @@ def installed_desktop(
     )
     app = home / "Applications/Free Claude Code.app"
     with (app / "Contents/Resources/runtime.plist").open("rb") as stream:
-        runtime = plistlib.load(stream)
+        runtime: dict[str, object] = plistlib.load(stream)
     # Launch Services receives explicit private settings; no launchd-wide changes.
     launch_env = {
         "HOME": str(home),

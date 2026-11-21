@@ -24,6 +24,7 @@ from tests.providers.support import (
     reasoning_for,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 def make_request(**overrides: object):
@@ -141,7 +142,7 @@ def test_build_request_body_basic(mistral_provider: MistralProvider):
     body = mistral_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
 
     assert body["model"] == "devstral-small-latest"
-    assert body["messages"][0]["role"] == "system"
+    assert object_payload(array_payload(body["messages"])[0])["role"] == "system"
     assert body["reasoning_effort"] == "high"
 
 
@@ -179,11 +180,15 @@ def test_build_request_body_replays_prior_thinking_as_mistral_chunks(
 
     body = mistral_provider._chat._build_request_body(req, reasoning=reasoning_for(req))
 
-    assert body["messages"][0]["reasoning_content"] == "Need the tool."
+    assert (
+        object_payload(array_payload(body["messages"])[0])["reasoning_content"]
+        == "Need the tool."
+    )
     body = mistral_provider._behavior.prepare_history_body(
         body, ReplayOrigin("MISTRAL", "chat", "", "", "model")
     )
-    assistant = body["messages"][0]
+    messages: list[JsonObject] = body["messages"]
+    assistant = messages[0]
     assert "reasoning_content" not in assistant
     assert assistant["content"] == [
         {
@@ -192,7 +197,7 @@ def test_build_request_body_replays_prior_thinking_as_mistral_chunks(
         },
         {"type": "text", "text": "Calling the tool."},
     ]
-    assert assistant["tool_calls"][0]["id"] == "toolu_1"
+    assert object_array(assistant["tool_calls"])[0]["id"] == "toolu_1"
 
 
 def test_build_request_body_preserves_tools_tool_choice_and_params(
@@ -220,7 +225,12 @@ def test_build_request_body_preserves_tools_tool_choice_and_params(
     assert body["temperature"] == 0.5
     assert body["top_p"] == 0.9
     assert body["stop"] == ["STOP"]
-    assert body["tools"][0]["function"]["name"] == "echo"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "echo"
+    )
     assert body["tool_choice"] == {"type": "function", "function": {"name": "echo"}}
 
 
@@ -236,7 +246,9 @@ def test_build_request_body_reasoning_off_uses_native_none():
     body = provider._chat._build_request_body(req, reasoning=REASONING_OFF)
 
     assert body["reasoning_effort"] == "none"
-    assert all("reasoning_content" not in m for m in body.get("messages", []))
+    assert all(
+        "reasoning_content" not in m for m in object_array(body.get("messages", []))
+    )
 
 
 def test_reasoning_off_keeps_replay_separate_from_new_turn_compute():
@@ -263,7 +275,10 @@ def test_reasoning_off_keeps_replay_separate_from_new_turn_compute():
     body = provider._chat._build_request_body(req, reasoning=REASONING_OFF)
 
     assert body["reasoning_effort"] == "none"
-    assert body["messages"][0]["reasoning_content"] == "Hidden."
+    assert (
+        object_payload(array_payload(body["messages"])[0])["reasoning_content"]
+        == "Hidden."
+    )
     body = provider._behavior.prepare_history_body(
         body, ReplayOrigin("MISTRAL", "chat", "", "", "model")
     )

@@ -6,10 +6,15 @@ from playwright.sync_api import Page
 
 from free_claude_code.core.tool_schema_patterns import translate_tool_schema_patterns
 from tests.core.test_tool_schema_patterns import ARTIFACT_PATTERN
+from tests.wire_payload import object_payload, string_payload
 
 
 def test_artifact_pattern_matches_javascript_reference(page: Page):
-    converted = translate_tool_schema_patterns({"pattern": ARTIFACT_PATTERN})["pattern"]
+    converted = string_payload(
+        object_payload(translate_tool_schema_patterns({"pattern": ARTIFACT_PATTERN}))[
+            "pattern"
+        ]
+    )
     samples = [
         "",
         "demo",
@@ -31,7 +36,7 @@ def test_artifact_pattern_matches_javascript_reference(page: Page):
         "\U000e0000",
         "\U000e0080",
     ]
-    mismatches = page.evaluate(
+    mismatches: list[str] = page.evaluate(
         """({original, converted, samples}) => {
             const before = new RegExp(original, 'u');
             const after = new RegExp(converted, 'u');

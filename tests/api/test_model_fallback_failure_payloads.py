@@ -32,7 +32,13 @@ from tests.api.test_tool_call_buffer_transports import _tools
 from tests.assertions import require_present
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
-from tests.wire_payload import array_payload, object_array, object_payload
+from tests.wire_payload import (
+    array_payload,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 def failed_response(text: str, label: str):
@@ -76,10 +82,13 @@ async def test_final_native_failure_preserves_projected_error_output_usage_and_e
     assert sum(event.event == "response.failed" for event in events) == 1
     assert final["extension"] == expected["extension"]
     for field in ("id", "output", "usage", "error", "metadata", "status"):
-        assert final["response"][field] == object_payload(expected["response"])[field]
-    assert final["response"]["model"] == "public-alias"
-    assert type(final["response"]["created_at"]) is int
-    assert type(final["response"]["completed_at"]) is int
+        assert (
+            object_payload(final["response"])[field]
+            == object_payload(expected["response"])[field]
+        )
+    assert object_payload(final["response"])["model"] == "public-alias"
+    assert type(object_payload(final["response"])["created_at"]) is int
+    assert type(object_payload(final["response"])["completed_at"]) is int
     assert source[-1] == expected
 
 
@@ -105,12 +114,13 @@ async def test_final_native_snapshot_cannot_release_a_withheld_call():
     events = parse_sse_text(raw)
     assert "call_abandoned" not in raw and "unreleased" not in raw
     assert (
-        events[-1].data["response"]["error"]
+        object_payload(events[-1].data["response"])["error"]
         == object_payload(final["response"])["error"]
     )
-    assert [item["type"] for item in events[-1].data["response"]["output"]] == [
-        "message"
-    ]
+    assert [
+        object_payload(item)["type"]
+        for item in array_payload(object_payload(events[-1].data["response"])["output"])
+    ] == ["message"]
     assert public_text(events, "responses") == "Before. "
 
 
@@ -164,9 +174,17 @@ async def test_zero_call_final_candidate_keeps_published_response_identity(
     events = parse_sse_text(raw)
     assert [event.event for event in events] == ["response.created", "response.failed"]
     first_event, final = (event.data for event in events)
-    assert final["response"]["id"] == first_event["response"]["id"]
-    assert final["response"]["created_at"] == first_event["response"]["created_at"]
-    assert final["sequence_number"] > first_event["sequence_number"]
+    assert (
+        object_payload(final["response"])["id"]
+        == object_payload(first_event["response"])["id"]
+    )
+    assert (
+        object_payload(final["response"])["created_at"]
+        == object_payload(first_event["response"])["created_at"]
+    )
+    assert int_payload(final["sequence_number"]) > int_payload(
+        first_event["sequence_number"]
+    )
 
 
 def failed_overlapping_calls():
@@ -248,9 +266,10 @@ async def test_failed_snapshot_preserves_independently_completed_call(
     assert len(last_bodies) == (0 if same_candidate else 1)
     events = parse_sse_text(raw)
     assert events[-1].event == "response.completed"
-    assert [item["call_id"] for item in events[-1].data["response"]["output"]] == [
-        "call_finished"
-    ]
+    assert [
+        object_payload(item)["call_id"]
+        for item in array_payload(object_payload(events[-1].data["response"])["output"])
+    ] == ["call_finished"]
     assert "call_unfinished" not in raw
 
 
@@ -276,33 +295,44 @@ async def test_last_model_error_keeps_combined_output_with_public_item_ids():
     assert sum(event.event == "response.failed" for event in events) == 1
     assert sum(event.event == "response.created" for event in events) == 1
     final = events[-1].data
-    assert final["response"]["id"] == "resp_first"
-    assert final["response"]["created_at"] == events[0].data["response"]["created_at"]
+    assert object_payload(final["response"])["id"] == "resp_first"
+    assert (
+        object_payload(final["response"])["created_at"]
+        == object_payload(events[0].data["response"])["created_at"]
+    )
     assert (
         object_payload(final["response"])["error"]
         == object_payload(last_events[-1]["response"])["error"]
     )
-    assert final["response"]["metadata"] == {"candidate": "last"}
+    assert object_payload(final["response"])["metadata"] == {"candidate": "last"}
     assert final["extension"] == {"candidate": "last"}
     assert public_text(events, "responses") == "One two"
     assert (
         "".join(
-            part["text"]
-            for item in final["response"]["output"]
-            for part in item.get("content", [])
+            string_payload(part["text"])
+            for item in array_payload(object_payload(final["response"])["output"])
+            for part in object_array(object_payload(item).get("content", []))
         )
         == "One two"
     )
-    assert {item["id"] for item in final["response"]["output"]} == {
+    assert {
+        object_payload(item)["id"]
+        for item in array_payload(object_payload(final["response"])["output"])
+    } == {
         event.data["item_id"]
         for event in events
         if event.event == "response.output_text.delta"
     }
     assert all(
-        a.data["sequence_number"] < b.data["sequence_number"]
+        int_payload(a.data["sequence_number"]) < int_payload(b.data["sequence_number"])
         for a, b in pairwise(events)
     )
-    assert final["response"]["usage"]["output_tokens"] > 0
+    assert (
+        int_payload(
+            object_payload(object_payload(final["response"])["usage"])["output_tokens"]
+        )
+        > 0
+    )
 
 
 @pytest.mark.asyncio
@@ -345,13 +375,16 @@ async def test_fallback_timeout_before_its_first_frame_retains_prefix_and_closes
     assert events[-1].event == ("error" if wire == "messages" else "response.failed")
     if wire == "responses":
         final = events[-1].data["response"]
-        assert final["id"] == events[0].data["response"]["id"]
+        assert (
+            object_payload(final)["id"]
+            == object_payload(events[0].data["response"])["id"]
+        )
         assert (
             "".join(
-                part["text"]
-                for item in final["output"]
-                for part in item.get("content", [])
+                string_payload(part["text"])
+                for item in array_payload(object_payload(final)["output"])
+                for part in object_array(object_payload(item).get("content", []))
             )
             == "Before. "
         )
-        assert final["error"]["type"] == "timeout_error"
+        assert object_payload(object_payload(final)["error"])["type"] == "timeout_error"

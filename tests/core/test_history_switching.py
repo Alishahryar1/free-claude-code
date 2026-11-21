@@ -29,7 +29,7 @@ from tests.providers.support import (
     make_provider_config,
     without_empty_reasoning,
 )
-from tests.wire_payload import object_array, object_payload
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 def _chat(items: Sequence[Mapping[str, JsonValue]]):
@@ -167,11 +167,13 @@ def test_opaque_details_stay_with_the_assistant_that_produced_them():
     original = request.model_dump()
     assistants = [
         message
-        for message in provider._chat._build_request_body(request)["messages"]
-        if message["role"] == "assistant"
+        for message in array_payload(
+            provider._chat._build_request_body(request)["messages"]
+        )
+        if object_payload(message)["role"] == "assistant"
     ]
-    assert "reasoning_details" not in assistants[0]
-    assert assistants[1]["reasoning_details"] == [detail]
+    assert "reasoning_details" not in object_payload(assistants[0])
+    assert object_payload(assistants[1])["reasoning_details"] == [detail]
     assert request.model_dump() == original
 
 
@@ -271,11 +273,13 @@ def test_deepseek_off_to_on_preserves_effort_and_all_available_history(wire: str
                 request, reasoning=ReasoningPolicy.on()
             ).body,
         )
-    assert body["extra_body"]["thinking"] == {"type": "enabled"}
+    assert object_payload(body["extra_body"])["thinking"] == {"type": "enabled"}
     assistants = [
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     ]
-    assert [message["reasoning_content"] for message in assistants] == [
+    assert [object_payload(message)["reasoning_content"] for message in assistants] == [
         "",
         "",
         "real reasoning",
@@ -360,12 +364,25 @@ def test_messages_interleaved_reasoning_belongs_to_the_tool_group():
         }
     )
     messages = provider._chat._build_request_body(request)["messages"]
-    assistant = next(message for message in messages if message.get("tool_calls"))
-    assert assistant["reasoning_content"] == "first\nsecond"
-    assert assistant["reasoning_details"] == [
+    assistant = next(
+        message
+        for message in array_payload(messages)
+        if object_payload(message).get("tool_calls")
+    )
+    assert object_payload(assistant)["reasoning_content"] == "first\nsecond"
+    assert object_payload(assistant)["reasoning_details"] == [
         {"type": "reasoning.encrypted", "data": "second-opaque"}
     ]
-    assert len([message for message in messages if message["role"] == "assistant"]) == 1
+    assert (
+        len(
+            [
+                message
+                for message in array_payload(messages)
+                if object_payload(message)["role"] == "assistant"
+            ]
+        )
+        == 1
+    )
 
 
 def test_completed_native_hosted_tools_become_readable_chat_history():
@@ -402,7 +419,7 @@ def test_completed_native_hosted_tools_become_readable_chat_history():
     rendered = json.dumps(body["messages"])
     assert "[Earlier tool record]" in rendered
     assert "sample" in rendered and "web_search_tool_result" in rendered
-    assert "tool_calls" not in body["messages"][0]
+    assert "tool_calls" not in object_array(body["messages"])[0]
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])

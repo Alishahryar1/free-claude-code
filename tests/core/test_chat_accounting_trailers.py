@@ -181,7 +181,7 @@ def test_mixed_accounting_and_active_tool_keeps_usage_and_source_order(native: b
         assert "".join(t["function"]["arguments"] for t in fragments) == "{}"
     else:
         assert isinstance(result[0], CompletedChatCall)
-        assert result[0].body["function"]["arguments"] == "{}"
+        assert object_payload(result[0].body["function"])["arguments"] == "{}"
 
 
 @pytest.mark.parametrize("native", [False, True])

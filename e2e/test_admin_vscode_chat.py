@@ -3,8 +3,15 @@ import json
 import pytest
 from playwright.sync_api import Page, Route, expect
 
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.harnesses import vscode_chat_integration as vscode
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    response_object,
+    string_payload,
+)
 
 
 def test_connect_and_disconnect_native_chat(page: Page, admin_base_url: str):
@@ -28,17 +35,20 @@ def test_connect_and_disconnect_native_chat(page: Page, admin_base_url: str):
     dialog.get_by_role("button", name="Connect", exact=True).click()
     expect(button).to_have_text("Disconnect")
     expect(button).to_have_class("danger-button")
-    group = json.loads(path.read_text())[1]
-    assert group["apiType"] == "messages"
-    assert group["models"]
-    assert all(m["url"].endswith("/v1/messages") for m in group["models"])
+    group = array_payload(load_json_value(path.read_text()))[1]
+    assert object_payload(group)["apiType"] == "messages"
+    assert object_payload(group)["models"]
+    assert all(
+        string_payload(m["url"]).endswith("/v1/messages")
+        for m in object_array(object_payload(group)["models"])
+    )
     page.reload()
     expect(button).to_have_text("Disconnect")
     expect(page.locator("#vscodeChatIntegrationMessage")).not_to_be_visible()
     button.click()
     dialog.get_by_role("button", name="Disconnect", exact=True).click()
     expect(button).to_have_text("Connect")
-    assert json.loads(path.read_text()) == [other]
+    assert load_json_value(path.read_text()) == [other]
 
 
 @pytest.mark.parametrize("status_read_failed", [False, True])
@@ -54,9 +64,13 @@ def test_failed_update_has_actionable_retry(
 
     def startup(route: Route):
         response = route.fetch()
-        payload = response.json()
-        payload["startup"]["integrations"]["vscode-chat"] = dict(progress)
-        payload["startup"]["messaging"]["state"] = "starting"
+        payload = response_object(response)
+        object_payload(object_payload(payload["startup"])["integrations"])[
+            "vscode-chat"
+        ] = dict(progress)
+        object_payload(object_payload(payload["startup"])["messaging"])["state"] = (
+            "starting"
+        )
         route.fulfill(response=response, json=payload)
 
     def status(route: Route):

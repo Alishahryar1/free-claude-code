@@ -3,6 +3,8 @@ from typing import Protocol
 import pytest
 from playwright.sync_api import Locator, Page, Route, expect
 
+from tests.wire_payload import object_payload, response_object
+
 
 class ObserveNotice(Protocol):
     def __call__(
@@ -28,15 +30,24 @@ type Notice = tuple[str, Locator, Locator, ObserveNotice]
     ]
 )
 def notice(page: Page, admin_base_url: str, request: pytest.FixtureRequest) -> Notice:
-    integration, button_id, message_id = request.param
+    param: object = getattr(request, "param", None)
+    assert isinstance(param, tuple) and len(param) == 3
+    integration, button_id, message_id = param
+    assert (
+        isinstance(integration, str)
+        and isinstance(button_id, str)
+        and isinstance(message_id, str)
+    )
     progress = {"state": "ready", "changed": True, "message": None}
     server = {"instance_id": "first"}
 
     def startup(route: Route):
         response = route.fetch()
-        payload = response.json()
+        payload = response_object(response)
         payload["instance_id"] = server["instance_id"]
-        payload["startup"]["integrations"][integration] = dict(progress)
+        object_payload(object_payload(payload["startup"])["integrations"])[
+            integration
+        ] = dict(progress)
         route.fulfill(response=response, json=payload)
 
     def status(route: Route):

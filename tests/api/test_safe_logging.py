@@ -12,6 +12,7 @@ from free_claude_code.api.handlers import MessagesHandler, TokenCountHandler
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import AnthropicStreamLedger
 from free_claude_code.core.anthropic.models import Message, MessagesRequest
+from tests.mock_calls import positional_arguments
 from tests.web_tools_support import StubWebToolsClient
 
 
@@ -115,7 +116,7 @@ def test_stream_ledger_raw_logging_includes_event_body_when_enabled():
 def _flatten_log_calls(mock_log: MagicMock) -> str:
     parts: list[str] = []
     for call in mock_log.call_args_list:
-        parts.extend(str(arg) for arg in call.args)
+        parts.extend(str(arg) for arg in positional_arguments(call))
         parts.append(repr(call.kwargs))
     return " ".join(parts)
 

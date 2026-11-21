@@ -9,9 +9,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.config.settings import Settings
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from tests.api.support import create_test_app, provider_manager_for_app
 from tests.providers.test_custom_provider import completion, definition, provider
+from tests.wire_payload import (
+    decode_object,
+    object_array,
+    object_payload,
+    response_object,
+    string_payload,
+)
 
 
 @pytest.mark.parametrize(
@@ -24,7 +31,7 @@ def test_chat_http_dispatch_preserves_controls_credentials_and_public_model(
     sent = []
 
     def reply(request: httpx.Request | httpx2.Request):
-        sent.append((json.loads(request.content), dict(request.headers)))
+        sent.append((decode_object(request.content), dict(request.headers)))
         module = httpx if wire == "anthropic_messages" else httpx2
         return module.Response(
             200, text=completion(wire), headers={"content-type": "text/event-stream"}
@@ -59,22 +66,32 @@ def test_chat_http_dispatch_preserves_controls_credentials_and_public_model(
         if streaming:
             assert response.text.endswith("data: [DONE]\n\n")
             values = [
-                json.loads(line[6:])
+                load_json_value(line[6:])
                 for line in response.text.splitlines()
                 if line.startswith("data: ") and line != "data: [DONE]"
             ]
             assert (
                 "".join(
-                    choice.get("delta", {}).get("content") or ""
+                    string_payload(
+                        object_payload(object_payload(choice).get("delta", {})).get(
+                            "content"
+                        )
+                        or ""
+                    )
                     for value in values
-                    for choice in value.get("choices", [])
+                    for choice in object_array(object_payload(value).get("choices", []))
                 )
                 == "Hello"
             )
-            assert all(value["model"] == "public" for value in values)
+            assert all(object_payload(value)["model"] == "public" for value in values)
         else:
-            assert response.json()["model"] == "public"
-            assert response.json()["choices"][0]["message"]["content"] == "Hello"
+            assert response_object(response)["model"] == "public"
+            assert (
+                object_payload(
+                    object_array(response_object(response)["choices"])[0]["message"]
+                )["content"]
+                == "Hello"
+            )
         assert provider_manager_for_app(app)._current.active_leases == 0
     assert len(sent) == 1
     body, headers = sent[0]
@@ -102,7 +119,7 @@ def test_chat_function_strictness_survives_upstream_translation(
     sent = []
 
     def reply(request: httpx2.Request):
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         return httpx2.Response(
             200, text=completion(wire), headers={"content-type": "text/event-stream"}
         )
@@ -228,8 +245,11 @@ def test_native_chat_null_tool_delta_preserves_text_and_later_calls(
         else None
     )
     if streaming:
-        first = json.loads(response.text.splitlines()[0][6:])
-        assert first["choices"][0]["delta"]["tool_calls"] is None
+        first = decode_object(response.text.splitlines()[0][6:])
+        assert (
+            object_payload(object_array(first["choices"])[0]["delta"])["tool_calls"]
+            is None
+        )
 
 
 @pytest.mark.parametrize(
@@ -349,8 +369,8 @@ def test_native_chat_nullable_fields_accumulate_later_values(
         value = response_value(response, "chat", streaming)
     assert value["choices"][0]["message"][field] == expected
     if streaming:
-        first = json.loads(response.text.splitlines()[0][6:])
-        assert first["choices"][0]["delta"][field] is None
+        first = decode_object(response.text.splitlines()[0][6:])
+        assert object_payload(object_array(first["choices"])[0]["delta"])[field] is None
 
 
 @pytest.mark.parametrize("streaming", [False, True])

@@ -172,10 +172,10 @@ def test_http_bad_request_beats_transient_body() -> None:
 def test_http_client_network_errors_have_the_same_failure_policy(
     error_name: str,
 ) -> None:
-    errors = [
-        getattr(module, error_name)("connection interrupted")
-        for module in (httpx, httpx2)
-    ]
+    errors: list[Exception] = []
+    for module in (httpx, httpx2):
+        error_type: type[Exception] = getattr(module, error_name)
+        errors.append(error_type("connection interrupted"))
     failures = [
         finalize_provider_failure(
             error, provider_name="TEST", read_timeout_s=10, request_id="request"
@@ -675,7 +675,7 @@ _CASES = (
 )
 
 
-@pytest.mark.parametrize("case", _CASES, ids=lambda case: case.name)
+@pytest.mark.parametrize("case", _CASES, ids=[case.name for case in _CASES])
 def test_raw_provider_failure_maps_to_canonical_failure(
     case: _ClassificationCase,
 ) -> None:

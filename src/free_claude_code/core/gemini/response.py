@@ -4,7 +4,8 @@ import json
 from collections.abc import Mapping
 from copy import deepcopy
 from hashlib import sha256
-from typing import Any
+
+from free_claude_code.core.json_types import load_json_value
 
 from ..failures import ExecutionFailure, FailureKind
 from ..history_replay import (
@@ -13,23 +14,33 @@ from ..history_replay import (
     protected_reasoning,
     readable_reasoning,
 )
-from ..json_types import JsonObject
+from ..json_types import (
+    JsonObject,
+    JsonTree,
+    json_array,
+    json_object,
+    json_objects,
+    json_text,
+)
 from ..recovery_limits import RECOVERY_RETENTION_BYTES
 from .errors import gemini_error_payload
 from .replay import CallReplay, ReplayBundle, encode_bundle
 
 
-def gemini_parts(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+def gemini_parts[T](payload: Mapping[str, JsonTree[T]]) -> list[dict[str, JsonTree[T]]]:
     return [
         part
-        for candidate in payload.get("candidates", [])
-        for part in candidate.get("content", {}).get("parts", [])
+        for candidate in json_objects(payload.get("candidates", []))
+        for part in json_objects(
+            json_object(candidate.get("content", {})).get("parts", [])
+        )
     ]
 
 
-def gemini_finished(payload: Mapping[str, Any]) -> bool:
+def gemini_finished[T](payload: Mapping[str, JsonTree[T]]) -> bool:
     return any(
-        candidate.get("finishReason") for candidate in payload.get("candidates", [])
+        candidate.get("finishReason")
+        for candidate in json_objects(payload.get("candidates", []))
     )
 
 
@@ -45,7 +56,7 @@ def conversion_failure(message: str) -> ExecutionFailure:
 
 def function_arguments(arguments: str) -> JsonObject:
     try:
-        value = json.loads(arguments)
+        value = load_json_value(arguments)
         json.dumps(value, allow_nan=False)
     except (ValueError, TypeError) as error:
         raise conversion_failure(
@@ -210,16 +221,19 @@ class GeminiResponseAccumulator:
     """Aggregate the same public deltas served by streamGenerateContent."""
 
     def __init__(self) -> None:
-        self.response: dict[str, Any] = {}
-        self.parts: list[dict[str, Any]] = []
+        self.response: JsonObject = {}
+        self.parts: list[JsonObject] = []
         self.finished = False
 
-    def feed(self, payload: dict[str, Any]) -> None:
+    def feed(self, payload: JsonObject) -> None:
         error = payload.get("error")
         if isinstance(error, dict):
+            code = error.get("code", 502)
+            if not isinstance(code, (str, int, float)):
+                raise conversion_failure("Gemini returned an invalid error code")
             raise ExecutionFailure(
                 kind=FailureKind.UPSTREAM,
-                status_code=int(error.get("code", 502)),
+                status_code=int(code),
                 message=str(error.get("message", "Generation failed")),
                 retryable=False,
             )
@@ -228,8 +242,10 @@ class GeminiResponseAccumulator:
         for key, value in payload.items():
             if key != "candidates":
                 self.response[key] = deepcopy(value)
-        for candidate in payload.get("candidates", []):
-            for part in candidate.get("content", {}).get("parts", []):
+        for candidate in json_objects(payload.get("candidates", [])):
+            for part in json_objects(
+                json_object(candidate.get("content", {})).get("parts", [])
+            ):
                 if (
                     self.parts
                     and set(part) <= {"text", "thought"}
@@ -239,10 +255,14 @@ class GeminiResponseAccumulator:
                     and part.get("thought", False)
                     == self.parts[-1].get("thought", False)
                 ):
-                    self.parts[-1]["text"] += part["text"]
+                    self.parts[-1]["text"] = json_text(
+                        self.parts[-1]["text"]
+                    ) + json_text(part["text"])
                 else:
                     self.parts.append(deepcopy(part))
-            target = self.response.setdefault("candidates", [{"index": 0}])[0]
+            target = json_object(
+                json_array(self.response.setdefault("candidates", [{"index": 0}]))[0]
+            )
             target.update(
                 {
                     key: deepcopy(value)
@@ -253,12 +273,13 @@ class GeminiResponseAccumulator:
             if candidate.get("finishReason"):
                 self.finished = True
         if self.parts:
-            self.response["candidates"][0]["content"] = {
+            candidate = json_object(json_array(self.response["candidates"])[0])
+            candidate["content"] = {
                 "role": "model",
                 "parts": self.parts,
             }
 
-    def result(self) -> dict[str, Any]:
+    def result(self) -> JsonObject:
         if not self.finished:
             raise conversion_failure("Gemini stream ended without completion")
         return self.response

@@ -5,6 +5,7 @@ import re
 from collections.abc import Sequence
 
 from free_claude_code.config.server_urls import proxy_v1_url
+from free_claude_code.core.json_types import load_json_value
 from free_claude_code.harnesses.environment import (
     client_environment,
     require_unset_environment,
@@ -41,7 +42,7 @@ _ROUTING_ENV_KEYS = frozenset(
 
 def _compatible_version(output: str) -> bool:
     try:
-        payload = json.loads(output)
+        payload = load_json_value(output)
     except json.JSONDecodeError:
         return False
     if not isinstance(payload, dict):

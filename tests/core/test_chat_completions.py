@@ -14,6 +14,7 @@ from free_claude_code.core.chat_completions.request import (
 )
 from free_claude_code.core.gemini.native_request import chat_to_gemini
 from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import object_array
 
 
 def test_chat_preserves_native_fields_and_nulls():
@@ -104,7 +105,8 @@ def test_rich_tool_output_uses_responses_input_part_types():
             }
         ],
     )
-    output = cast(dict[str, Any], chat_responses_body(request))["input"][0]["output"]
+    body: JsonObject = chat_responses_body(request)
+    output = object_array(body["input"])[0]["output"]
     assert output == [
         {"type": "input_text", "text": "result"},
         {"type": "input_image", "image_url": "data:image/png;base64,AA=="},

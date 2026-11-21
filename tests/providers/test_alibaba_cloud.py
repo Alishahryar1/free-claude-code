@@ -11,12 +11,13 @@ from openai import AsyncOpenAI
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import MessagesRequest
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.runtime import build_provider_config
 from tests.providers.support import immediate_admission
+from tests.wire_payload import decode_object, object_array, object_payload
 
 BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 
@@ -366,28 +367,50 @@ async def test_chat_stream_preserves_reasoning_tools_and_usage(wire: str):
     assert len(requests) == 1
     assert requests[0].url.path == "/compatible-mode/v1/chat/completions"
     assert requests[0].headers["authorization"] == "Bearer test-key"
-    body = json.loads(requests[0].content)
+    body = decode_object(requests[0].content)
     assert body["model"] == "qwen-coder"
     assert body["stream"] is True
     assert body["stream_options"] == {"include_usage": True}
     assert body["max_tokens"] == 2048
-    assert body["tools"][0]["function"]["parameters"] == schema
+    assert (
+        object_payload(object_array(body["tools"])[0]["function"])["parameters"]
+        == schema
+    )
     assert "enable_thinking" not in body
     assert "Inspecting." in output
     assert "inspect" in output
     assert "README.md" in output
     events = [
-        json.loads(line[6:])
+        load_json_value(line[6:])
         for line in output.splitlines()
         if line.startswith("data: {")
     ]
     if wire == "messages":
-        terminal = next(event for event in events if event["type"] == "message_delta")
-        assert terminal["delta"]["stop_reason"] == "tool_use"
-        assert terminal["usage"]["output_tokens"] == 10
+        terminal = next(
+            event
+            for event in events
+            if object_payload(event)["type"] == "message_delta"
+        )
+        assert (
+            object_payload(object_payload(terminal)["delta"])["stop_reason"]
+            == "tool_use"
+        )
+        assert object_payload(object_payload(terminal)["usage"])["output_tokens"] == 10
     else:
         terminal = next(
-            event for event in events if event["type"] == "response.completed"
+            event
+            for event in events
+            if object_payload(event)["type"] == "response.completed"
         )
-        assert terminal["response"]["usage"]["input_tokens"] == 25
-        assert terminal["response"]["usage"]["output_tokens"] == 10
+        assert (
+            object_payload(
+                object_payload(object_payload(terminal)["response"])["usage"]
+            )["input_tokens"]
+            == 25
+        )
+        assert (
+            object_payload(
+                object_payload(object_payload(terminal)["response"])["usage"]
+            )["output_tokens"]
+            == 10
+        )

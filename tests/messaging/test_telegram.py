@@ -3,8 +3,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from telegram.error import TelegramError
 
+from free_claude_code.messaging.models import IncomingMessage
 from free_claude_code.messaging.platforms.telegram import TelegramRuntime
 from free_claude_code.messaging.voice import Transcriber
+
+
+def _mock_application_builder(mock_app: MagicMock) -> MagicMock:
+    builder = MagicMock()
+    builder.token.return_value = builder
+    builder.request.return_value = builder
+    builder.get_updates_request.return_value = builder
+    builder.build.return_value = mock_app
+    return builder
 
 
 def _limiter_mock() -> MagicMock:
@@ -62,7 +72,7 @@ async def test_telegram_platform_start_success(
         mock_app.start = AsyncMock()
         mock_app.updater.start_polling = AsyncMock()
 
-        mock_builder.return_value.token.return_value.request.return_value.build.return_value = mock_app
+        mock_builder.return_value = _mock_application_builder(mock_app)
 
         await telegram_platform.start()
 
@@ -99,11 +109,8 @@ async def test_telegram_platform_start_with_proxy():
         mock_app.start = AsyncMock()
         mock_app.updater.start_polling = AsyncMock()
 
-        builder = mock_builder.return_value
-        builder.token.return_value = builder
-        builder.request.return_value = builder
-        builder.get_updates_request.return_value = builder
-        builder.build.return_value = mock_app
+        builder = _mock_application_builder(mock_app)
+        mock_builder.return_value = builder
         request = MagicMock()
         update_request = MagicMock()
         request_cls.side_effect = [request, update_request]
@@ -296,7 +303,7 @@ async def test_telegram_platform_queue_send_message(
     monkeypatch: pytest.MonkeyPatch, telegram_platform: TelegramRuntime
 ):
     mock_limiter = telegram_platform._limiter
-    mock_enqueue = AsyncMock()
+    mock_enqueue = AsyncMock(return_value="message")
     monkeypatch.setattr(mock_limiter, "enqueue", mock_enqueue)
 
     await telegram_platform.outbound.queue_send_message(
@@ -321,7 +328,9 @@ async def test_on_telegram_message_authorized(telegram_platform: TelegramRuntime
     await telegram_platform._on_telegram_message(mock_update, MagicMock())
 
     handler.assert_called_once()
-    incoming = handler.call_args[0][0]
+    assert handler.call_args is not None
+    incoming: object = handler.call_args.args[0]
+    assert isinstance(incoming, IncomingMessage)
     assert incoming.text == "hello"
 
 

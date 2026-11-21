@@ -16,6 +16,12 @@ from tests.api.test_four_protocol_matrix import (
     reply_history,
     response_value,
 )
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+)
 
 
 def native(text: str, finish: bool = False):
@@ -60,7 +66,7 @@ def test_recovered_signed_answer_replays_exact_history(
 
     def reply(request: httpx.Request):
         nonlocal final_native
-        value = json.loads(request.content)
+        value = decode_object(request.content)
         requests.append(deepcopy(value))
         n = len(requests)
         if n <= interruptions:
@@ -83,8 +89,11 @@ def test_recovered_signed_answer_replays_exact_history(
                 signature = content["parts"].pop()["thoughtSignature"]
                 content["parts"][0]["thoughtSignature"] = signature
         else:
-            assert value["contents"][:-2] == requests[interruptions]["contents"]
-            assert value["contents"][-2] == final_native
+            assert (
+                array_payload(value["contents"])[:-2]
+                == requests[interruptions]["contents"]
+            )
+            assert array_payload(value["contents"])[-2] == final_native
             event = native("FOLLOWUP_OK", True)
         if thinking and (wire != "gemini" or thinking == "visible"):
             event["candidates"][0]["content"]["parts"].insert(
@@ -182,7 +191,7 @@ def test_recovered_signed_tool_call_accepts_its_result(
     }
 
     def reply(request: httpx.Request):
-        value = json.loads(request.content)
+        value = decode_object(request.content)
         bodies.append(value)
         if len(bodies) == 1:
             event = native("I will read it. ")
@@ -191,10 +200,14 @@ def test_recovered_signed_tool_call_accepts_its_result(
                 "candidates": [{"index": 0, "content": signed, "finishReason": "STOP"}]
             }
         else:
-            assert value["contents"][:-2] == bodies[1]["contents"]
-            assert value["contents"][-2] == signed
-            result = value["contents"][-1]["parts"][0]["functionResponse"]
-            assert result.get("id") == ("native-call" if native_id else None)
+            assert array_payload(value["contents"])[:-2] == bodies[1]["contents"]
+            assert array_payload(value["contents"])[-2] == signed
+            result = object_array(object_array(value["contents"])[-1]["parts"])[0][
+                "functionResponse"
+            ]
+            assert object_payload(result).get("id") == (
+                "native-call" if native_id else None
+            )
             assert "tool-value" in json.dumps(result)
             event = native("TOOL_RESULT_OK", True)
         return httpx.Response(

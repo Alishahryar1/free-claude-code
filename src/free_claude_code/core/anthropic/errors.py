@@ -1,5 +1,6 @@
 """Anthropic error types and envelopes."""
 
+from collections.abc import Mapping
 from typing import Any
 
 from free_claude_code.core.diagnostics import redact_sensitive_error_text
@@ -98,9 +99,10 @@ def anthropic_status_for_error_type(error_type: str) -> int:
     return _ANTHROPIC_ERROR_STATUS_CODES.get(error_type, 500)
 
 
-def anthropic_failure_from_error(error: dict[str, Any]) -> ExecutionFailure:
+def anthropic_failure_from_error(error: Mapping[str, object]) -> ExecutionFailure:
     """Preserve the status and category of an in-band Messages error."""
-    status = anthropic_status_for_error_type(error.get("type", ""))
+    code = error.get("type")
+    status = anthropic_status_for_error_type(code if isinstance(code, str) else "")
     kind = {
         400: FailureKind.INVALID_REQUEST,
         401: FailureKind.AUTHENTICATION,

@@ -1,7 +1,7 @@
 """OpenAI-chat streamed usage helper tests."""
 
 from types import SimpleNamespace
-from typing import Any, override
+from typing import override
 from unittest.mock import AsyncMock, patch
 
 import openai
@@ -41,6 +41,7 @@ from tests.providers.support import (
     make_provider_config,
     sdk_chat_chunk,
 )
+from tests.wire_payload import object_payload
 
 
 class _UsageTestBehavior(OpenAIChatBehavior):
@@ -91,7 +92,7 @@ def _chunk(
     *,
     content: str | None = None,
     finish_reason: str | None = None,
-    usage: Any = None,
+    usage: CompletionUsage | None = None,
 ):
     if content is None and finish_reason is None:
         return sdk_chat_chunk(SimpleNamespace(choices=[], usage=usage))
@@ -406,14 +407,14 @@ async def test_openai_chat_stream_requests_usage_and_uses_provider_prompt_tokens
     assert await_args.kwargs["stream_options"] == {"include_usage": True}
     parsed = parse_sse_text("".join(events))
     start_usage = next(
-        event.data["message"]["usage"]
+        object_payload(event.data["message"])["usage"]
         for event in parsed
         if event.event == "message_start"
     )
     final_usage = next(
         event.data["usage"] for event in parsed if event.event == "message_delta"
     )
-    assert start_usage["input_tokens"] == 7
+    assert object_payload(start_usage)["input_tokens"] == 7
     assert final_usage == {
         "input_tokens": 4,
         "output_tokens": 4,
@@ -502,7 +503,7 @@ async def test_openai_chat_responses_stream_preserves_cache_write_usage():
         for event in parse_sse_text("".join(events))
         if event.event == "response.completed"
     )
-    assert completed["usage"] == {
+    assert object_payload(completed)["usage"] == {
         "input_tokens": 22,
         "input_tokens_details": {
             "cached_tokens": 15,
@@ -546,7 +547,7 @@ async def test_openai_chat_stream_keeps_response_model_separate_from_upstream_mo
         for event in parse_sse_text("".join(events))
         if event.event == "message_start"
     )
-    assert message_start["model"] == "anthropic/test/upstream/model"
+    assert object_payload(message_start)["model"] == "anthropic/test/upstream/model"
 
 
 @pytest.mark.asyncio

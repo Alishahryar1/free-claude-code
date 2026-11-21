@@ -36,6 +36,7 @@ from tests.providers.support import (
     reasoning_for,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload, string_payload
 
 
 @pytest.fixture
@@ -142,12 +143,22 @@ def test_build_request_body_uses_supported_output_field_tools_and_images(
     assert body["model"] == "deepseek/deepseek-v4-flash-free"
     assert body["max_completion_tokens"] == 100
     assert "max_tokens" not in body
-    assert body["messages"][0] == {"role": "system", "content": "Be concise."}
-    assert body["messages"][1]["content"][1] == {
+    assert array_payload(body["messages"])[0] == {
+        "role": "system",
+        "content": "Be concise.",
+    }
+    assert array_payload(object_payload(array_payload(body["messages"])[1])["content"])[
+        1
+    ] == {
         "type": "image_url",
         "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
     }
-    assert body["tools"][0]["function"]["name"] == "inspect_image"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "inspect_image"
+    )
 
 
 @pytest.mark.parametrize(
@@ -171,7 +182,7 @@ def test_build_request_body_maps_reasoning_effort_to_documented_vocabulary(
         reasoning=ReasoningPolicy.on(effort=effort),
     )
 
-    assert body["extra_body"]["reasoning"] == {"effort": expected}
+    assert object_payload(body["extra_body"])["reasoning"] == {"effort": expected}
 
 
 @pytest.mark.parametrize(
@@ -189,7 +200,7 @@ def test_build_request_body_maps_reasoning_control_and_budget(
 ) -> None:
     body = zenmux_provider._chat._build_request_body(_request(), reasoning=reasoning)
 
-    assert body["extra_body"]["reasoning"] == expected
+    assert object_payload(body["extra_body"])["reasoning"] == expected
 
 
 def test_build_request_body_leaves_reasoning_to_provider_by_default(
@@ -200,7 +211,7 @@ def test_build_request_body_leaves_reasoning_to_provider_by_default(
         reasoning=ReasoningPolicy.provider_default(),
     )
 
-    assert "reasoning" not in body.get("extra_body", {})
+    assert "reasoning" not in object_payload(body.get("extra_body", {}))
 
 
 def test_build_request_body_preserves_unrelated_gateway_options(
@@ -278,10 +289,12 @@ def test_build_request_body_replays_reasoning_and_signed_details_unchanged(
     )
 
     assistant = next(
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     )
-    assert assistant["reasoning"] == "Need a tool."
-    assert assistant["reasoning_details"] == [detail]
+    assert object_payload(assistant)["reasoning"] == "Need a tool."
+    assert object_payload(assistant)["reasoning_details"] == [detail]
 
 
 def test_reasoning_delta_prefers_reasoning_and_falls_back_to_reasoning_content(
@@ -349,11 +362,11 @@ async def test_stream_preserves_signed_details_without_duplicating_reasoning(
     assert thinking_content(events) == "plan "
     assert text_content(events) == "done"
     records = [
-        event.data["delta"]["signature"]
+        object_payload(event.data["delta"])["signature"]
         for event in events
-        if event.data.get("delta", {}).get("type") == "signature_delta"
+        if object_payload(event.data.get("delta", {})).get("type") == "signature_delta"
     ]
-    assert [decode_replay(record).native for record in records] == [
+    assert [decode_replay(string_payload(record)).native for record in records] == [
         {"reasoning_details": [detail]}
     ]
     assert stream.closed

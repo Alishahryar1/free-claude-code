@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import httpx
@@ -13,11 +14,23 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.providers import admission, failure_reporting
 from tests.api.test_delivered_stream_recovery import public_text, text_events
 from tests.api.test_four_protocol_matrix import ingress_request, matrix_app
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_payload,
+    response_object,
+    string_payload,
+)
+
+
+@dataclass
+class _Clock:
+    now: float
 
 
 @pytest.fixture
 def cooldown_clock(monkeypatch: pytest.MonkeyPatch):
-    clock = SimpleNamespace(now=100.0)
+    clock = _Clock(100.0)
     monotonic_time = SimpleNamespace(monotonic=lambda: clock.now)
     monkeypatch.setattr(admission, "time", monotonic_time)
     monkeypatch.setattr(failure_reporting, "time", monotonic_time)
@@ -37,7 +50,7 @@ def cooldown_clock(monkeypatch: pytest.MonkeyPatch):
 )
 @pytest.mark.asyncio
 async def test_cooldown_reports_remaining_time_for_initial_and_later_requests(
-    wire: str, protocol: str, cooldown_clock: SimpleNamespace
+    wire: str, protocol: str, cooldown_clock: _Clock
 ):
     calls = []
 
@@ -66,12 +79,16 @@ async def test_cooldown_reports_remaining_time_for_initial_and_later_requests(
             assert response.status_code == 429, response.text
             assert response.headers["x-should-retry"] == "false"
             assert "retry-after" not in response.headers
-            error = response.json()["error"]
-            assert error.get("status" if wire == "gemini" else "type") == (
-                "RESOURCE_EXHAUSTED" if wire == "gemini" else "rate_limit_error"
+            error = response_object(response)["error"]
+            assert object_payload(error).get(
+                "status" if wire == "gemini" else "type"
+            ) == ("RESOURCE_EXHAUSTED" if wire == "gemini" else "rate_limit_error")
+            assert "test quota exhausted" in string_payload(
+                object_payload(error)["message"]
             )
-            assert "test quota exhausted" in error["message"]
-            assert f"{remaining} seconds" in error["message"]
+            assert f"{remaining} seconds" in string_payload(
+                object_payload(error)["message"]
+            )
             cooldown_clock.now += 300
     assert len(calls) == 1
 
@@ -79,7 +96,7 @@ async def test_cooldown_reports_remaining_time_for_initial_and_later_requests(
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.asyncio
 async def test_continuation_cooldown_uses_terminal_event(
-    protocol: str, monkeypatch: pytest.MonkeyPatch, cooldown_clock: SimpleNamespace
+    protocol: str, monkeypatch: pytest.MonkeyPatch, cooldown_clock: _Clock
 ):
     calls = []
     response_type = httpx.Response if protocol == "messages" else httpx2.Response
@@ -123,13 +140,13 @@ async def test_continuation_cooldown_uses_terminal_event(
 @pytest.mark.parametrize("with_backup", [False, True])
 @pytest.mark.asyncio
 async def test_automatic_websearch_preserves_continuation_cooldown(
-    with_backup: bool, cooldown_clock: SimpleNamespace
+    with_backup: bool, cooldown_clock: _Clock
 ):
     partial = "Partial answer" if with_backup else "a" * 66_000
     calls = []
 
     def reply(request: httpx2.Request):
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         calls.append(body)
         if body["model"] == "backup":
             events = text_events("chat", "Answer from backup.")
@@ -169,20 +186,23 @@ async def test_automatic_websearch_preserves_continuation_cooldown(
         if not with_backup:
             second = await asyncio.wait_for(client.post(path, json=request), 3)
             assert second.status_code == 429, second.text
-            assert "3600 seconds" in second.json()["error"]["message"]
+            assert "3600 seconds" in string_payload(
+                object_payload(response_object(second)["error"])["message"]
+            )
 
     assert partial not in json.dumps(calls[1]["messages"])
     models = [body["model"] for body in calls]
     if with_backup:
         assert models == ["backend", "backend", "backup"]
         assert first.status_code == 200, first.text
-        assert [block["text"] for block in first.json()["content"]] == [
-            "Answer from backup."
-        ]
+        assert [
+            object_payload(block)["text"]
+            for block in array_payload(response_object(first)["content"])
+        ] == ["Answer from backup."]
     else:
         assert models == ["backend", "backend"]
         assert first.status_code == 429, first.text
-        error = first.json()["error"]
-        assert error["type"] == "rate_limit_error"
-        assert "continuation quota" in error["message"]
-        assert "3600 seconds" in error["message"]
+        error = response_object(first)["error"]
+        assert object_payload(error)["type"] == "rate_limit_error"
+        assert "continuation quota" in string_payload(object_payload(error)["message"])
+        assert "3600 seconds" in string_payload(object_payload(error)["message"])

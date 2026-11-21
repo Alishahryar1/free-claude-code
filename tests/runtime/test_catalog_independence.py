@@ -28,7 +28,7 @@ from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.runtime.catalog_support import finish_discovery, finish_publication
 from tests.web_tools_support import StubWebToolsClient
-from tests.wire_payload import object_payload
+from tests.wire_payload import array_payload, object_payload, response_object
 
 
 @pytest_asyncio.fixture
@@ -99,7 +99,10 @@ async def test_http_catalog_exposes_ready_models_while_another_provider_waits(
     ) as client:
         response = await asyncio.wait_for(client.get(path), 1)
     assert response.status_code == 200
-    ids = {entry["id"] for entry in response.json()["data"]}
+    ids = {
+        object_payload(entry)["id"]
+        for entry in array_payload(response_object(response)["data"])
+    }
     assert {
         no_thinking_gateway_model_id("nvidia_nim/configured"),
         "nvidia_nim/discovered",

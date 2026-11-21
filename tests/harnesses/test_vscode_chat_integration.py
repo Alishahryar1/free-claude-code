@@ -7,8 +7,10 @@ from pathlib import Path
 import pytest
 
 from free_claude_code.application.model_catalog import CatalogModel
+from free_claude_code.core.json_types import load_json_value
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.harnesses import vscode_chat_integration as vscode
+from tests.wire_payload import array_payload, object_array, object_payload
 
 URL = "http://127.0.0.1:8082"
 MODEL = CatalogModel("nim/model", "nim/model", "NIM Model", None)
@@ -21,25 +23,31 @@ def test_connect_refresh_disconnect_preserves_other_groups_and_options(tmp_path:
     path.write_text(json.dumps([other]))
     assert not vscode.status(path)["connected"]
     assert vscode.configure(path, URL, "secret", (MODEL,))
-    data = json.loads(path.read_text())
-    assert data[0] == other
-    assert data[1]["models"][0]["url"] == URL + "/v1/messages"
-    data[1].update(name="My FCC", settings={"keep": True}, url="old", apiKey="old")
+    data = load_json_value(path.read_text())
+    assert array_payload(data)[0] == other
+    assert (
+        object_array(object_array(data)[1]["models"])[0]["url"] == URL + "/v1/messages"
+    )
+    object_payload(array_payload(data)[1]).update(
+        name="My FCC", settings={"keep": True}, url="old", apiKey="old"
+    )
     path.write_text(json.dumps(data))
     assert vscode.configure(path, URL, "new", (MODEL,), only_existing=True)
-    saved = json.loads(path.read_text())
-    assert saved[1]["settings"] == {"keep": True}
-    assert saved[1]["name"] == "My FCC"
-    assert "url" not in saved[1]
-    assert "apiKey" not in saved[1]
-    assert saved[1]["models"][0]["requestHeaders"] == {"x-api-key": "new"}
+    saved = load_json_value(path.read_text())
+    assert object_array(saved)[1]["settings"] == {"keep": True}
+    assert object_array(saved)[1]["name"] == "My FCC"
+    assert "url" not in object_array(saved)[1]
+    assert "apiKey" not in object_array(saved)[1]
+    assert object_array(object_payload(array_payload(saved)[1])["models"])[0][
+        "requestHeaders"
+    ] == {"x-api-key": "new"}
     before = path.stat().st_mtime_ns
     assert not vscode.configure(path, URL, "new", (MODEL,), only_existing=True)
     assert path.stat().st_mtime_ns == before
     assert vscode.status(path)["connected"] is True
     assert "new" not in json.dumps(vscode.status(path))
     vscode.disconnect(path)
-    assert json.loads(path.read_text()) == [other]
+    assert load_json_value(path.read_text()) == [other]
     assert not vscode.configure(path, URL, "new", (MODEL,), only_existing=True)
 
 
@@ -83,17 +91,17 @@ def test_conflict_does_not_claim_an_unmarked_group(tmp_path: Path):
 def test_duplicate_markers_fail_but_disconnect_recovers_name_collision(tmp_path: Path):
     path = tmp_path / "models.json"
     vscode.configure(path, URL, "secret", (MODEL,))
-    owned = json.loads(path.read_text())[0]
+    owned = array_payload(load_json_value(path.read_text()))[0]
     path.write_text(json.dumps([owned, owned]))
     with pytest.raises(ValueError):
         vscode.disconnect(path)
-    other = {"vendor": "customendpoint", "name": owned["name"]}
+    other = {"vendor": "customendpoint", "name": object_payload(owned)["name"]}
     path.write_text(json.dumps([owned, other]))
     with pytest.raises(ValueError):
         vscode.configure(path, URL, "secret", (MODEL,))
     assert vscode.status(path)["connected"]
     vscode.disconnect(path)
-    assert json.loads(path.read_text()) == [other]
+    assert load_json_value(path.read_text()) == [other]
 
 
 @pytest.mark.parametrize(
@@ -130,7 +138,12 @@ def test_comment_input_and_order_are_preserved_semantically(tmp_path: Path):
     path.write_text('[/* comment */ {"vendor":"other", "name":"Other",},]')
     second = replace(MODEL, wire_slug="custom/z", display_name="Custom Z")
     vscode.configure(path, URL, "secret", (MODEL, second))
-    assert [m["id"] for m in json.loads(path.read_text())[1]["models"]] == [
+    assert [
+        m["id"]
+        for m in object_array(
+            object_array(load_json_value(path.read_text()))[1]["models"]
+        )
+    ] == [
         MODEL.wire_slug,
         second.wire_slug,
     ]
@@ -160,17 +173,22 @@ def test_refresh_preserves_native_preferences_and_replaces_generated_capabilitie
     path = tmp_path / "models.json"
     removed = replace(MODEL, wire_slug="nim/removed")
     vscode.configure(path, URL, "old", (MODEL, removed))
-    data = json.loads(path.read_text())
+    data = load_json_value(path.read_text())
     preferences = {MODEL.wire_slug: {"reasoningEffort": "high"}}
-    data[0]["settings"] = preferences
-    data[0]["models"][0]["maxOutputTokens"] = 777
+    object_array(data)[0]["settings"] = preferences
+    object_array(object_array(data)[0]["models"])[0]["maxOutputTokens"] = 777
     path.write_text(json.dumps(data))
     vscode.configure(path, URL, "new", (replace(MODEL, supports_reasoning=False),))
-    saved = json.loads(path.read_text())[0]
-    assert saved["settings"] == preferences
-    assert [m["id"] for m in saved["models"]] == [MODEL.wire_slug]
-    assert saved["models"][0]["maxOutputTokens"] == 81920
-    assert "supportsReasoningEffort" not in saved["models"][0]
+    saved = array_payload(load_json_value(path.read_text()))[0]
+    assert object_payload(saved)["settings"] == preferences
+    assert [m["id"] for m in object_array(object_payload(saved)["models"])] == [
+        MODEL.wire_slug
+    ]
+    assert object_array(object_payload(saved)["models"])[0]["maxOutputTokens"] == 81920
+    assert (
+        "supportsReasoningEffort"
+        not in object_array(object_payload(saved)["models"])[0]
+    )
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file permissions")

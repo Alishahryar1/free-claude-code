@@ -1,8 +1,9 @@
 import asyncio
 import contextlib
 import sys
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from contextvars import Context
+from types import ModuleType
 from unittest.mock import AsyncMock
 
 import pytest
@@ -497,7 +498,7 @@ async def test_claim_launch_uses_portable_event_loop_task_contract(
     reason="uvloop is not installed on this Python platform",
 )
 def test_claim_launch_runs_on_uvloop() -> None:
-    uvloop = pytest.importorskip("uvloop")
+    uvloop: ModuleType = pytest.importorskip("uvloop")
 
     async def scenario() -> None:
         processed = asyncio.Event()
@@ -512,7 +513,11 @@ def test_claim_launch_runs_on_uvloop() -> None:
         assert decision.accepted is True
         assert processed.is_set()
 
-    uvloop.run(scenario())
+    run: Callable[[Coroutine[object, object, None]], None] | None = getattr(
+        uvloop, "run", None
+    )
+    assert run is not None
+    run(scenario())
 
 
 @pytest.mark.asyncio

@@ -25,6 +25,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 @pytest.fixture
@@ -88,14 +89,25 @@ def test_build_request_body_preserves_common_chat_tools_and_images(
 
     assert body["model"] == "grok-4.5"
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
-    assert body["messages"][0] == {"role": "system", "content": "Be concise."}
-    user_content = body["messages"][1]["content"]
-    assert user_content[0] == {"type": "text", "text": "Inspect this image."}
-    assert user_content[1] == {
+    assert array_payload(body["messages"])[0] == {
+        "role": "system",
+        "content": "Be concise.",
+    }
+    user_content = object_payload(array_payload(body["messages"])[1])["content"]
+    assert array_payload(user_content)[0] == {
+        "type": "text",
+        "text": "Inspect this image.",
+    }
+    assert array_payload(user_content)[1] == {
         "type": "image_url",
         "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
     }
-    assert body["tools"][0]["function"]["name"] == "inspect_image"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "inspect_image"
+    )
 
 
 @pytest.mark.parametrize("reasoning", [REASONING_OFF, REASONING_ON])
@@ -113,7 +125,7 @@ def test_build_request_body_does_not_invent_catalog_wide_reasoning_control(
     body = xai_provider._chat._build_request_body(request, reasoning=reasoning)
 
     assert "reasoning_effort" not in body
-    assert "reasoning" not in body.get("extra_body", {})
+    assert "reasoning" not in object_payload(body.get("extra_body", {}))
 
 
 def test_build_request_body_replays_prior_reasoning_content(
@@ -141,7 +153,7 @@ def test_build_request_body_replays_prior_reasoning_content(
         reasoning=reasoning_for(request),
     )
 
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "assistant",
         "content": "The answer is 42.",
         "reasoning_content": "Work through it.",

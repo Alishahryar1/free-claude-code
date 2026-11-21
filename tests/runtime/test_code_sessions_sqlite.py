@@ -22,7 +22,7 @@ from free_claude_code.application.code_sessions.models import (
 )
 from free_claude_code.runtime import code_sessions_sqlite as code_store_module
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
-from free_claude_code.runtime.sqlite_database import SQLiteDatabase
+from free_claude_code.runtime.sqlite_database import SQLiteDatabase, query_rows
 from tests.assertions import require_present
 from tests.fixture_types import DatabaseFactory
 
@@ -376,8 +376,8 @@ async def test_cancelled_code_write_delivers_outcome_before_database_close(
         reopened = database_factory(store.database.path, tmp_path / "code.lock")
         await reopened.start()
         saved = await reopened.run(
-            lambda connection: connection.execute(
-                "SELECT id FROM code_sessions"
+            lambda connection: query_rows(
+                connection, "SELECT id FROM code_sessions"
             ).fetchall(),
             write=False,
         )
@@ -492,10 +492,10 @@ async def test_active_prompt_and_identity_queries_have_indexed_access(
             ),
         )
         for query, params in queries:
-            details = [
-                row[3].upper()
-                for row in connection.execute("EXPLAIN QUERY PLAN " + query, params)
-            ]
+            plan: list[tuple[int, int, int, str]] = connection.execute(
+                "EXPLAIN QUERY PLAN " + query, params
+            ).fetchall()
+            details = [row[3].upper() for row in plan]
             assert any("SEARCH" in detail and "INDEX" in detail for detail in details)
 
 
@@ -638,11 +638,10 @@ async def test_version_two_database_gains_nullable_context_usage(
         assert (await store.get_session(session.id)).context_used_tokens is None
         with closing(sqlite3.connect(tmp_path / "code.db")) as connection:
             assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
-            column = next(
-                row
-                for row in connection.execute("PRAGMA table_info(code_sessions)")
-                if row[1] == "context_used_tokens"
+            table_info: list[tuple[int, str, str, int, str | None, int]] = (
+                connection.execute("PRAGMA table_info(code_sessions)").fetchall()
             )
+            column = next(row for row in table_info if row[1] == "context_used_tokens")
             assert column[3] == 0
             with pytest.raises(sqlite3.IntegrityError):
                 connection.execute(
@@ -695,7 +694,10 @@ async def test_schema_rejects_second_active_run_and_cross_session_item_link(
     other = await _session(store)
     with closing(sqlite3.connect(tmp_path / "code.db")) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
-        columns = [row[1] for row in connection.execute("PRAGMA table_info(code_runs)")]
+        code_runs_info: list[tuple[int, str, str, int, str | None, int]] = (
+            connection.execute("PRAGMA table_info(code_runs)").fetchall()
+        )
+        columns = [row[1] for row in code_runs_info]
         expressions = [
             "'another'"
             if column == "id"
@@ -708,9 +710,10 @@ async def test_schema_rejects_second_active_run_and_cross_session_item_link(
             connection.execute(
                 f"INSERT INTO code_runs SELECT {','.join(expressions)} FROM code_runs"
             )
-        columns = [
-            row[1] for row in connection.execute("PRAGMA table_info(code_items)")
-        ]
+        code_items_info: list[tuple[int, str, str, int, str | None, int]] = (
+            connection.execute("PRAGMA table_info(code_items)").fetchall()
+        )
+        columns = [row[1] for row in code_items_info]
         expressions = ["?" if column == "session_id" else column for column in columns]
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
@@ -1014,10 +1017,10 @@ async def test_legacy_prompts_migrate_once_to_run_ends_without_resequencing(
         with closing(sqlite3.connect(path)) as connection:
             assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
-            assert any(
-                row[2] == "code_items"
-                for row in connection.execute("PRAGMA foreign_key_list(code_prompts)")
+            foreign_keys: list[tuple[int, int, str, str, str, str, str, str]] = (
+                connection.execute("PRAGMA foreign_key_list(code_prompts)").fetchall()
             )
+            assert any(row[2] == "code_items" for row in foreign_keys)
         await store.close()
         await store.database.close()
 
@@ -1048,10 +1051,10 @@ async def test_failed_prompt_migration_rolls_back_items_schema_and_version(
         assert connection.execute("SELECT count(*) FROM code_prompts").fetchone()[
             0
         ] == len(prompts)
-        assert not any(
-            row[2] == "code_items"
-            for row in connection.execute("PRAGMA foreign_key_list(code_prompts)")
+        foreign_keys: list[tuple[int, int, str, str, str, str, str, str]] = (
+            connection.execute("PRAGMA foreign_key_list(code_prompts)").fetchall()
         )
+        assert not any(row[2] == "code_items" for row in foreign_keys)
         connection.execute("DROP TRIGGER refuse_second_prompt")
     store = SQLiteCodeStore(
         database_factory(tmp_path / "code.db", tmp_path / "code.lock")

@@ -21,6 +21,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload, object_payload
 
 _MODEL = "Qwen/Qwen3-32B-TEE"
 
@@ -111,12 +112,15 @@ def test_keeps_reasoning_separate_and_preserves_tool_history(
         reasoning=reasoning_for(request),
     )
 
-    assistant = body["messages"][1]
-    assert assistant["content"] == "I will inspect it."
-    assert assistant["tool_calls"][0]["id"] == "toolu_1"
-    assert assistant["reasoning_content"] == "Read it first."
-    assert "reasoning" not in assistant
-    assert body["messages"][2] == {
+    assistant = array_payload(body["messages"])[1]
+    assert object_payload(assistant)["content"] == "I will inspect it."
+    assert (
+        object_payload(array_payload(object_payload(assistant)["tool_calls"])[0])["id"]
+        == "toolu_1"
+    )
+    assert object_payload(assistant)["reasoning_content"] == "Read it first."
+    assert "reasoning" not in object_payload(assistant)
+    assert array_payload(body["messages"])[2] == {
         "role": "tool",
         "tool_call_id": "toolu_1",
         "content": "print('hello')",

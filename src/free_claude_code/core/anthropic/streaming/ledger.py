@@ -6,6 +6,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.token_estimation import estimate_text_tokens
 
 from .emitter import AnthropicSseEmitter
@@ -142,7 +143,9 @@ class AnthropicStreamLedger:
         self.message_stopped = True
         return self._emitter.event("message_stop", {"type": "message_stop"})
 
-    def content_block_start(self, index: int, block_type: str, **kwargs: Any) -> str:
+    def content_block_start(
+        self, index: int, block_type: str, **kwargs: JsonValue
+    ) -> str:
         content_block: dict[str, Any] = {"type": block_type}
         if block_type == "thinking":
             content_block["thinking"] = kwargs.get("thinking", "")
@@ -364,7 +367,7 @@ class AnthropicStreamLedger:
         for block in self.tool_blocks():
             yield block.name, block.content
 
-    def _record_block_start(self, index: int, block: dict[str, Any]) -> None:
+    def _record_block_start(self, index: int, block: JsonObject) -> None:
         self.blocks.reserve_index(index)
         block_type = str(block.get("type", ""))
         state = StreamBlockState(index=index, block_type=block_type)

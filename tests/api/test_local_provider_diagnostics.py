@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from free_claude_code.api import admin_routes
 from free_claude_code.config.admin.state import ConfigValueState
 from tests.api.support import create_test_app, runtime_for_app
+from tests.wire_payload import response_object
 
 
 class LocalProbe(Protocol):
@@ -101,7 +102,7 @@ def test_local_probe_preserves_http_status_without_returning_response_content(
     response, requests = local_probe(callback)
 
     assert len(requests) == 1
-    payload = response.json()
+    payload = response_object(response)
     reachable = 200 <= status_code < 300
     assert payload["status"] == ("reachable" if reachable else "offline")
     assert payload["label"] == ("Reachable" if reachable else "Offline")
@@ -135,7 +136,7 @@ def test_local_probe_returns_safe_failure_categories(
     response, requests = local_probe(fail)
 
     assert len(requests) == 1
-    payload = response.json()
+    payload = response_object(response)
     assert payload["status"] == "offline"
     assert payload["label"] == "Offline"
     assert payload["error_type"] == error_type

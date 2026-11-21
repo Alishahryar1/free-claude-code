@@ -14,6 +14,11 @@ from free_claude_code.providers.history_negotiation import (
     HistoryModeCache,
     HistoryNegotiation,
 )
+from free_claude_code.providers.openai_chat import OpenAIChatProvider
+from free_claude_code.providers.openai_responses.transport import (
+    OpenAIResponsesTransport,
+)
+from tests.providers.support import stream_provider_request
 
 
 def native_seed(wire: WireProtocol):
@@ -54,7 +59,7 @@ def test_partial_thinking_is_governed_by_history_mode(
     body = {"model": "model", field: [{"role": "user", "content": "Question"}]}
     original = deepcopy(body)
     seed = native_seed(wire)
-    source = ContinuationRequest(protocol).build(body, seed)
+    source: JsonObject = ContinuationRequest(protocol).build(body, seed)
     origin = ReplayOrigin("provider", protocol, "https://test.invalid", "key", "model")
     cache = HistoryModeCache()
     cache.update(
@@ -106,7 +111,8 @@ def test_native_suffix_preserves_response_summary_meaning_and_input():
     source = ContinuationRequest("responses").build({"input": []}, seed)
     assert source["input"][0]["summary"][0]["text"] == "Summary"
     assert source["input"][0]["content"][0]["text"] == "Full"
-    assert "Summary" not in str(source["input"][-1])
+    source_items: list[JsonObject] = source["input"]
+    assert "Summary" not in str(source_items[-1])
 
 
 def test_response_continuation_preserves_delivered_part_text():
@@ -163,17 +169,28 @@ async def test_fallback_prefix_follows_effective_sdk_history_override(protocol: 
             admission=immediate_admission(),
         ),
     ) as (_, bodies, provider):
-        await _saved_reply(
-            getattr(provider, f"stream_{wire}")(
+        if isinstance(provider, OpenAIResponsesTransport):
+            assert isinstance(request, OpenAIResponsesRequest)
+            stream = provider.stream_responses(
                 request,
                 input_tokens=0,
                 request_id="override-continuation",
                 response_model="public",
                 reasoning=ReasoningPolicy.on(),
                 continuation=native_seed(wire),
-            ),
-            wire,
-        )
+            )
+        else:
+            assert isinstance(provider, OpenAIChatProvider)
+            stream = stream_provider_request(
+                provider,
+                wire,
+                request,
+                request_id="override-continuation",
+                response_model="public",
+                reasoning=ReasoningPolicy.on(),
+                continuation=native_seed(wire),
+            )
+        await _saved_reply(stream, wire)
     assert len(bodies) == 1
     assert bodies[0]["model"] == "effective-model"
     assert "Effective question" in str(bodies[0][field])

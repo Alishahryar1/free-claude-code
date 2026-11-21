@@ -14,6 +14,7 @@ from tests.api.test_four_protocol_matrix import (
     response_value,
 )
 from tests.providers.test_gemini import _sse
+from tests.wire_payload import decode_object, object_array
 
 
 @pytest.mark.parametrize("wire", ["chat", "messages", "responses"])
@@ -36,7 +37,7 @@ def test_signed_no_argument_call_can_be_echoed(wire: str, native_part: JsonObjec
     sent = []
 
     def reply(request: Request):
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         return _sse([native_part] if len(sent) == 1 else [{"text": "done"}])
 
     streaming = wire == "responses"
@@ -87,14 +88,14 @@ def test_signed_no_argument_call_can_be_echoed(wire: str, native_part: JsonObjec
         second = client.post(path, json=body)
         assert second.status_code == 200, second.text
         assert len(sent) == 2
-        assert sent[1]["contents"][1]["parts"] == [native_part]
+        assert object_array(sent[1]["contents"])[1]["parts"] == [native_part]
 
 
 def test_native_chat_allows_documented_allowed_tools_choice():
     sent = []
 
     def reply(request: httpx2.Request):
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         event = {
             "id": "chatcmpl-test",
             "created": 1,

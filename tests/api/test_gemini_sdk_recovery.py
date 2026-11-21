@@ -13,7 +13,12 @@ from free_claude_code.core.json_types import JsonObject
 from tests.api.support import provider_manager_for_app
 from tests.api.test_four_protocol_matrix import matrix_app
 from tests.api.test_gemini_continuation_replay import native
-from tests.wire_payload import array_payload, object_array, object_payload
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+)
 
 # google-genai 3.0 has a docstring escape warning under Python 3.14.
 with warnings.catch_warnings():
@@ -82,7 +87,7 @@ def test_sdk_recovers_and_replays_native_generation(
     bodies = []
 
     def upstream(request: httpx.Request):
-        value = json.loads(request.content)
+        value = decode_object(request.content)
         bodies.append(deepcopy(value))
         event: JsonObject
         if len(bodies) == 1:
@@ -96,7 +101,7 @@ def test_sdk_recovers_and_replays_native_generation(
                 assert ("Prefix " in json.dumps(value["contents"])) == streaming
                 assert "Done" in json.dumps(value["contents"])
             else:
-                assert value["contents"][:-2] == bodies[1]["contents"]
+                assert array_payload(value["contents"])[:-2] == bodies[1]["contents"]
                 expected = deepcopy(signed)
                 if not streaming and case in {"defaults", "null_fields"}:
                     expected_parts = object_array(expected["parts"])
@@ -106,7 +111,7 @@ def test_sdk_recovers_and_replays_native_generation(
                     else:
                         function.pop("args")
                         function.pop("id")
-                assert value["contents"][-2] == expected
+                assert array_payload(value["contents"])[-2] == expected
             event = {
                 "candidates": [
                     {
@@ -282,7 +287,7 @@ async def test_sdk_chat_automatic_tool_result_preserves_recovered_history(
     }
 
     def upstream(request: httpx.Request):
-        value = json.loads(request.content)
+        value = decode_object(request.content)
         bodies.append(deepcopy(value))
         if len(bodies) == 1:
             event = {**native("Prefix ")}
@@ -292,9 +297,17 @@ async def test_sdk_chat_automatic_tool_result_preserves_recovered_history(
             }
         else:
             assert (
-                value["contents"][: len(bodies[1]["contents"])] == bodies[1]["contents"]
+                array_payload(value["contents"])[
+                    : len(array_payload(bodies[1]["contents"]))
+                ]
+                == bodies[1]["contents"]
             )
-            assert value["contents"][len(bodies[1]["contents"])] == signed
+            assert (
+                array_payload(value["contents"])[
+                    len(array_payload(bodies[1]["contents"]))
+                ]
+                == signed
+            )
             assert "functionResponse" in json.dumps(value["contents"])
             event = {
                 "candidates": [

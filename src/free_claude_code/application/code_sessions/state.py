@@ -218,7 +218,8 @@ class SessionState:
             raise CodeConflictError(
                 "Finish this turn and its prompts before changing settings."
             )
-        if "mode" in changes and changes["mode"] not in get_args(CodeMode.__value__):
+        mode_type: object = getattr(CodeMode, "__value__", CodeMode)
+        if "mode" in changes and changes["mode"] not in get_args(mode_type):
             raise CodeValidationError("Choose an available permission mode.")
         return updates
 

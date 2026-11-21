@@ -26,7 +26,7 @@ from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
-from free_claude_code.core.json_types import JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.admission import (
@@ -52,7 +52,12 @@ from tests.providers.test_anthropic_messages_transport import (
     _transport as messages_transport,
 )
 from tests.providers.test_history_transports import _events_for
-from tests.wire_payload import array_payload, object_array, object_payload
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+)
 
 
 class Endpoint:
@@ -89,7 +94,7 @@ async def _transport(
     endpoint: Endpoint | None = None,
 ):
     endpoint = endpoint if endpoint is not None else Endpoint()
-    bodies = []
+    bodies: list[JsonObject] = []
     wires = []
     admission = ProviderAdmissionController(
         provider_name="TEST",
@@ -103,7 +108,7 @@ async def _transport(
     )
 
     def scripted_reply(request_content: bytes):
-        bodies.append(json.loads(request_content))
+        bodies.append(decode_object(request_content))
         status, payload = responder(len(bodies))
         if status == 200:
             content = "".join(
@@ -617,7 +622,9 @@ async def test_committed_chat_continuation_has_separate_body_correction_scope(
             assert len(bodies) == 2
         else:
             assert len(bodies) == 3
-            assert bodies[1]["stream_options"] == {"include_usage": True}
+            assert object_payload(bodies[1])["stream_options"] == {
+                "include_usage": True
+            }
             assert "stream_options" not in bodies[2]
             assert sum(event.event == "message_stop" for event in parsed) == 1, parsed[
                 -1

@@ -62,7 +62,7 @@ class AlibabaCloudProvider(OpenAIChatProvider):
         )
 
     @override
-    async def _list_models_payload(self) -> Any:
+    async def _list_models_payload(self) -> object:
         # An absolute URL avoids the OpenAI SDK appending to /compatible-mode/v1.
         url = urljoin(self._base_url, "/api/v1/models")
         models: list[dict[str, Any]] = []

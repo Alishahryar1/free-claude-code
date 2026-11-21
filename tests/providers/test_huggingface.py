@@ -21,6 +21,7 @@ from tests.providers.support import (
     profiled_provider,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 def make_request(**overrides: object):
@@ -164,7 +165,7 @@ def test_build_request_body_keeps_max_tokens(huggingface_provider: OpenAIChatPro
         mock_convert.call_args.kwargs["reasoning_replay"]
         is ReasoningReplayMode.REASONING_CONTENT
     )
-    assert body["messages"][0].get("name") == "alice"
+    assert object_payload(array_payload(body["messages"])[0]).get("name") == "alice"
     assert body["max_tokens"] == 42
     assert "max_completion_tokens" not in body
 
@@ -179,7 +180,7 @@ def test_build_request_body_preserves_caller_extra_body(
 
     assert body["extra_body"] == extra_body
     assert body["extra_body"] is not extra_body
-    assert body["extra_body"]["routing"] is not extra_body["routing"]
+    assert object_payload(body["extra_body"])["routing"] is not extra_body["routing"]
 
 
 @pytest.mark.parametrize(
@@ -229,7 +230,10 @@ def test_build_request_body_keeps_prior_thinking_in_native_field(
             "reasoning_content": "hidden prior thought",
         }
     ]
-    assert body["messages"][0]["reasoning_content"] == "hidden prior thought"
+    assert (
+        object_payload(array_payload(body["messages"])[0])["reasoning_content"]
+        == "hidden prior thought"
+    )
     assert "hidden prior thought" in str(body)
 
 

@@ -1,10 +1,11 @@
 """Message and tool format converters."""
 
 import json
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 from free_claude_code.core.history_replay import (
     HistoryReplayError,
@@ -16,7 +17,7 @@ from free_claude_code.core.history_replay import (
     unprotected_replay,
     validate_hosted_tool_history,
 )
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_chat import (
     IMAGE_TOOL_RESULT_MARKER,
     ChatToolResultImages,
@@ -41,6 +42,22 @@ class OpenAIConversionError(Exception):
     """Raised when Anthropic content cannot be converted to OpenAI chat without data loss."""
 
 
+class _MessageInput(Protocol):
+    @property
+    def role(self) -> str: ...
+
+    @property
+    def content(self) -> object: ...
+
+
+class _ToolInput(Protocol):
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def description(self) -> str | None: ...
+
+
 class ReasoningReplayMode(StrEnum):
     """How assistant reasoning history is replayed to OpenAI-compatible providers."""
 
@@ -49,9 +66,9 @@ class ReasoningReplayMode(StrEnum):
 
 
 def resolve_anthropic_tool_choice(
-    tools: list[Any] | None,
-    tool_choice: dict[str, Any] | None,
-) -> dict[str, Any] | None:
+    tools: Sequence[object] | None,
+    tool_choice: JsonObject | None,
+) -> JsonObject | None:
     """Materialize Anthropic's automatic choice when tools are available.
 
     A choice with no tools has nothing to act on, so it is dropped rather than
@@ -67,7 +84,7 @@ def resolve_anthropic_tool_choice(
 
 def unrepresentable_client_tool_constraints(tool: Tool) -> list[str]:
     """Identify Anthropic constraints a plain upstream function cannot enforce."""
-    options = tool.model_extra or {}
+    options: Mapping[str, object] = tool.model_extra or {}
     unsupported = [
         key
         for key in ("strict", "defer_loading")
@@ -102,20 +119,20 @@ def _openai_reject_native_only_top_level_fields(
     )
 
 
-def _tool_input_schema(tool: Any) -> dict[str, Any]:
-    schema = getattr(tool, "input_schema", None)
+def _tool_input_schema(tool: object) -> dict[str, Any]:
+    schema: object = getattr(tool, "input_schema", None)
     if isinstance(schema, dict):
         return schema
     return {"type": "object", "properties": {}}
 
 
-def _clean_reasoning_content(value: Any) -> str | None:
+def _clean_reasoning_content(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     return value
 
 
-def _tool_call_from_tool_use(block: Any) -> dict[str, Any]:
+def _tool_call_from_tool_use(block: object) -> dict[str, Any]:
     tool_input = get_block_attr(block, "input", {})
     tool_call: dict[str, Any] = {
         "id": get_block_attr(block, "id"),
@@ -142,7 +159,7 @@ class _PlainSegment:
 class _ToolTurnSegment:
     assistant_message: dict[str, Any]
     required_tool_ids: list[str]
-    deferred_blocks: list[Any] = field(default_factory=list)
+    deferred_blocks: Sequence[object] = field(default_factory=list)
     top_level_reasoning: str | None = None
     reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.REASONING_CONTENT
     assistant_emitted: bool = False
@@ -154,20 +171,20 @@ _TranscriptSegment = _PlainSegment | _ToolTurnSegment
 def _tool_call_ids(tool_calls: list[dict[str, Any]]) -> list[str]:
     ids: list[str] = []
     for tool_call in tool_calls:
-        tool_id = tool_call.get("id")
+        tool_id: object = tool_call.get("id")
         if tool_id is not None and str(tool_id).strip() != "":
             ids.append(str(tool_id))
     return ids
 
 
-def _index_first_tool_use(blocks: list[Any]) -> int | None:
+def _index_first_tool_use(blocks: Sequence[object]) -> int | None:
     for i, block in enumerate(blocks):
         if get_block_type(block) == "tool_use":
             return i
     return None
 
 
-def _iter_tool_uses_in_order(blocks: list[Any]) -> list[dict[str, Any]]:
+def _iter_tool_uses_in_order(blocks: Sequence[object]) -> list[dict[str, Any]]:
     return [
         _tool_call_from_tool_use(block)
         for block in blocks
@@ -176,8 +193,8 @@ def _iter_tool_uses_in_order(blocks: list[Any]) -> list[dict[str, Any]]:
 
 
 def _deferred_post_tool_blocks(
-    content: list[Any], *, first_tool_index: int
-) -> list[Any]:
+    content: Sequence[object], *, first_tool_index: int
+) -> list[object]:
     return [
         b
         for i, b in enumerate(content)
@@ -185,7 +202,7 @@ def _deferred_post_tool_blocks(
     ]
 
 
-def _assert_no_forbidden_assistant_block(block: Any) -> None:
+def _assert_no_forbidden_assistant_block(block: object) -> None:
     block_type = get_block_type(block)
     if block_type == "image":
         raise OpenAIConversionError(
@@ -194,7 +211,7 @@ def _assert_no_forbidden_assistant_block(block: Any) -> None:
 
 
 def _openai_system_text(
-    content: Any,
+    content: object,
     *,
     context: str,
 ) -> str | None:
@@ -221,7 +238,7 @@ def _openai_system_text(
     return "\n\n".join(text_parts)
 
 
-def _openai_user_image_part(block: Any) -> JsonObject:
+def _openai_user_image_part(block: object) -> JsonObject:
     """Convert one Anthropic user image block without performing I/O."""
     try:
         url = portable_anthropic_image_url(get_block_attr(block, "source", {}))
@@ -237,8 +254,10 @@ class _OpenAIChatToolResult:
     rich_user_message: JsonObject | None = None
 
 
-def _openai_chat_tool_result(block: Any) -> _OpenAIChatToolResult:
+def _openai_chat_tool_result(block: object) -> _OpenAIChatToolResult:
     tool_id = get_block_attr(block, "tool_use_id")
+    if not isinstance(tool_id, str):
+        raise OpenAIConversionError("OpenAI chat replay requires a tool result ID.")
     tool_content = get_block_attr(block, "content", "")
     try:
         decomposed = decompose_tool_result_content(tool_content)
@@ -256,7 +275,7 @@ def _openai_chat_tool_result(block: Any) -> _OpenAIChatToolResult:
         )
 
     rich_parts: list[JsonObject] = [
-        {"type": "text", "text": image_tool_result_label(str(tool_id))}
+        {"type": "text", "text": image_tool_result_label(tool_id)}
     ]
     for part in decomposed.parts:
         if isinstance(part, ToolResultText):
@@ -274,7 +293,7 @@ def _openai_chat_tool_result(block: Any) -> _OpenAIChatToolResult:
     )
 
 
-def _openai_user_content_parts(content: Any) -> list[dict[str, Any]]:
+def _openai_user_content_parts(content: object) -> list[dict[str, Any]]:
     """Return an owned content-part list for one converted user message."""
     if isinstance(content, str):
         return [{"type": "text", "text": content}]
@@ -285,7 +304,9 @@ def _openai_user_content_parts(content: Any) -> list[dict[str, Any]]:
     )
 
 
-def _merge_openai_user_content(first: Any, second: Any) -> str | list[dict[str, Any]]:
+def _merge_openai_user_content(
+    first: object, second: object
+) -> str | list[dict[str, Any]]:
     """Combine adjacent user content while preserving multimodal part order."""
     if isinstance(first, str) and isinstance(second, str):
         return f"{first}\n\n{second}"
@@ -297,8 +318,8 @@ def _merge_openai_user_content(first: Any, second: Any) -> str | list[dict[str, 
         bool(second_parts) and second_parts[0].get("type") == "text"
     )
     if first_ends_in_text and second_starts_with_text:
-        first_text = first_parts[-1].get("text", "")
-        second_text = second_parts.pop(0).get("text", "")
+        first_text: object = first_parts[-1].get("text", "")
+        second_text: object = second_parts.pop(0).get("text", "")
         first_parts[-1]["text"] = f"{first_text}\n\n{second_text}"
     return [*first_parts, *second_parts]
 
@@ -340,8 +361,8 @@ class _OpenAIChatHistoryLedger:
         self._segments.append(segment)
         self._drain_ready_segments()
 
-    def add_user_blocks(self, blocks: list[Any]) -> None:
-        text_blocks: list[Any] = []
+    def add_user_blocks(self, blocks: Sequence[object]) -> None:
+        text_blocks: list[object] = []
         for block in blocks:
             block_type = get_block_type(block)
             if block_type == "tool_result":
@@ -368,13 +389,13 @@ class _OpenAIChatHistoryLedger:
             self._emit_tool_turn(segment)
         return self._output
 
-    def _add_text_blocks(self, blocks: list[Any]) -> None:
+    def _add_text_blocks(self, blocks: list[object]) -> None:
         if not blocks:
             return
         self.add_plain(AnthropicToOpenAIConverter._convert_user_message(blocks))
         blocks.clear()
 
-    def _record_tool_result(self, block: Any) -> None:
+    def _record_tool_result(self, block: object) -> None:
         tuid = get_block_attr(block, "tool_use_id")
         tuid_s = str(tuid) if tuid is not None else ""
         if not tuid_s:
@@ -468,7 +489,7 @@ class AnthropicToOpenAIConverter:
 
     @staticmethod
     def convert_messages(
-        messages: list[Any],
+        messages: Sequence[_MessageInput],
         *,
         reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.REASONING_CONTENT,
         structured_reasoning_details: bool = False,
@@ -506,7 +527,7 @@ class AnthropicToOpenAIConverter:
     @staticmethod
     def _convert_message_to_segments(
         role: str,
-        content: Any,
+        content: object,
         *,
         reasoning_content: str | None,
         reasoning_replay: ReasoningReplayMode,
@@ -567,7 +588,7 @@ class AnthropicToOpenAIConverter:
 
     @staticmethod
     def _convert_assistant_message_with_split(
-        content: list[Any],
+        content: Sequence[object],
         *,
         first_tool_index: int,
         reasoning_content: str | None,
@@ -627,7 +648,7 @@ class AnthropicToOpenAIConverter:
 
     @staticmethod
     def _convert_assistant_message(
-        content: list[Any],
+        content: Sequence[object],
         *,
         reasoning_content: str | None = None,
         reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.REASONING_CONTENT,
@@ -654,10 +675,19 @@ class AnthropicToOpenAIConverter:
                 )
                 continue
             if block_type == "text":
-                content_parts.append(get_block_attr(block, "text", ""))
+                text = get_block_attr(block, "text", "")
+                if not isinstance(text, str):
+                    raise OpenAIConversionError(
+                        "Anthropic text blocks must contain text."
+                    )
+                content_parts.append(text)
             elif block_type == "thinking":
                 signature = get_block_attr(block, "signature", None)
                 thinking = get_block_attr(block, "thinking", "")
+                if not isinstance(thinking, str):
+                    raise OpenAIConversionError(
+                        "Anthropic thinking blocks must contain text."
+                    )
                 if is_replay(signature):
                     details.extend(reasoning_detail(signature))
                     if has_readable_replay(signature):
@@ -685,11 +715,18 @@ class AnthropicToOpenAIConverter:
                 "web_search_tool_result",
                 "web_fetch_tool_result",
             }:
-                value = (
-                    block
-                    if isinstance(block, dict)
-                    else block.model_dump(mode="json", exclude_none=True)
-                )
+                value = block
+                if not isinstance(value, dict):
+                    dump: object = getattr(block, "model_dump", None)
+                    if not callable(dump):
+                        raise OpenAIConversionError(
+                            "Anthropic hosted tool blocks require an object."
+                        )
+                    value = dump(mode="json", exclude_none=True)
+                if not isinstance(value, dict):
+                    raise OpenAIConversionError(
+                        "Anthropic hosted tool blocks require an object."
+                    )
                 content_parts.append(tool_history_context(value))
             elif block_type == "tool_use":
                 tool_calls.append(_tool_call_from_tool_use(block))
@@ -728,7 +765,7 @@ class AnthropicToOpenAIConverter:
         )
 
     @staticmethod
-    def _convert_user_message(content: list[Any]) -> list[dict[str, Any]]:
+    def _convert_user_message(content: Sequence[object]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         content_parts: list[dict[str, Any]] = []
         tool_results: list[_OpenAIChatToolResult] = []
@@ -776,7 +813,7 @@ class AnthropicToOpenAIConverter:
         return result
 
     @staticmethod
-    def convert_tools(tools: list[Any]) -> list[dict[str, Any]]:
+    def convert_tools(tools: Sequence[_ToolInput]) -> list[dict[str, Any]]:
         return [
             {
                 "type": "function",
@@ -792,7 +829,7 @@ class AnthropicToOpenAIConverter:
         ]
 
     @staticmethod
-    def convert_tool_choice(tool_choice: Any) -> Any:
+    def convert_tool_choice(tool_choice: JsonValue) -> JsonValue:
         if not isinstance(tool_choice, dict):
             return tool_choice
 
@@ -811,7 +848,7 @@ class AnthropicToOpenAIConverter:
         return tool_choice
 
     @staticmethod
-    def convert_system_prompt(system: Any) -> dict[str, str] | None:
+    def convert_system_prompt(system: object) -> dict[str, str] | None:
         if system is None:
             return None
         system_text = _openai_system_text(

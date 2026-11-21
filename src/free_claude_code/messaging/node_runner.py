@@ -299,7 +299,7 @@ class MessagingNodeRunner:
                         log_messaging_error_details=self._log_messaging_error_details,
                     )
                     if ptype == "error" and parsed.get("source") != "exit":
-                        error_message = parsed.get("message", "Unknown error")
+                        error_message: object = parsed.get("message", "Unknown error")
                         non_exit_error = (
                             error_message
                             if isinstance(error_message, str)

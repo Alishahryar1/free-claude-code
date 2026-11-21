@@ -108,7 +108,7 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         )
 
         error_text = str(error)
-        error_body = getattr(error, "body", None)
+        error_body: object = getattr(error, "body", None)
         if error_body is not None:
             error_text = f"{error_text} {json.dumps(error_body, default=str)}"
         error_text = error_text.lower()
@@ -129,8 +129,7 @@ class NvidiaNimChatBehavior(OpenAIChatBehavior):
         """Classify NVIDIA-specific 400/500 responses by their actual semantics."""
         if not isinstance(error, openai.BadRequestError | openai.InternalServerError):
             return None
-        status = getattr(error, "status_code", None)
-        if status not in (400, 500):
+        if error.status_code not in (400, 500):
             return None
         bodies = _nim_error_bodies(error)
         if any(_is_context_window_exhaustion(body) for body in bodies):

@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +44,7 @@ class IncomingMessage:
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     # Platform-specific raw event stays at ingress and is never persisted by trees.
-    raw_event: Any = None
+    raw_event: object = None
 
     def is_reply(self) -> bool:
         """Check if this message is a reply to another message."""

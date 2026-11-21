@@ -5,6 +5,7 @@ import pytest
 from playwright.sync_api import Page, Route, expect
 
 from free_claude_code.harnesses import claude_desktop_integration as desktop
+from tests.wire_payload import object_payload, response_object
 
 
 @pytest.mark.parametrize("status_failure", ["none", "read", "startup"])
@@ -47,7 +48,7 @@ def test_real_disconnect_failure_keeps_retry_after_reload(
 
             def failed_update(route: Route):
                 result = route.fetch()
-                body = result.json()
+                body = response_object(result)
                 if marker.exists():
                     body["connected"] = None
                     body["update"] = failed
@@ -55,9 +56,11 @@ def test_real_disconnect_failure_keeps_retry_after_reload(
 
             def failed_startup(route: Route):
                 result = route.fetch()
-                body = result.json()
+                body = response_object(result)
                 if marker.exists():
-                    body["startup"]["integrations"]["claude-desktop"] = failed
+                    object_payload(object_payload(body["startup"])["integrations"])[
+                        "claude-desktop"
+                    ] = failed
                 route.fulfill(response=result, json=body)
 
             page.route(endpoint, failed_update)

@@ -6,11 +6,16 @@ see: upstream requests, admission outcomes, raised failures and traces.
 
 import json
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
 from loguru import logger
+
+from tests.wire_payload import object_payload
+
+if TYPE_CHECKING:
+    from loguru import Message
 
 from free_claude_code.config.provider_catalog import GEMINI_DEFAULT_BASE
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
@@ -37,6 +42,7 @@ from tests.providers.test_stream_failure_resolution_transports import (
     _gemini,
     _outcomes,
 )
+from tests.wire_payload import decode_object
 
 HISTORY = [{"role": "user", "content": "greet"}]
 HARNESSED = ["chat", "messages", "responses"]
@@ -46,8 +52,8 @@ HARNESSED = ["chat", "messages", "responses"]
 def traces() -> Iterator[list[dict[str, Any]]]:
     payloads: list[dict[str, Any]] = []
 
-    def sink(message: Any) -> None:
-        payload = message.record["extra"].get(TRACE_PAYLOAD_BINDING)
+    def sink(message: Message) -> None:
+        payload: object = message.record["extra"].get(TRACE_PAYLOAD_BINDING)
         if isinstance(payload, dict):
             payloads.append(payload)
 
@@ -259,7 +265,7 @@ async def test_gemini_continuation_drops_a_rejected_reasoning_control():
     bodies: list[dict[str, Any]] = []
 
     def reply(request: httpx.Request):
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         if len(bodies) == 1:
             partial = {
                 "candidates": [
@@ -298,7 +304,8 @@ async def test_gemini_continuation_drops_a_rejected_reasoning_control():
     finally:
         await provider.cleanup()
 
+    configs: list[JsonObject] = [body["generationConfig"] for body in bodies]
     assert [
-        "thinkingBudget" in body["generationConfig"].get("thinkingConfig", {})
-        for body in bodies
+        "thinkingBudget" in object_payload(config.get("thinkingConfig", {}))
+        for config in configs
     ] == [True, True, False]

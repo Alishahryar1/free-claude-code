@@ -1,6 +1,5 @@
 """FCC configures Antigravity for the child session without a saved connection."""
 
-import json
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -9,7 +8,7 @@ import pytest
 from free_claude_code.harnesses import antigravity
 from tests.cli.conftest import LaunchCapture
 from tests.cli.test_launcher_workflow import launch
-from tests.wire_payload import string_payload
+from tests.wire_payload import decode_object, object_payload, string_payload
 
 
 def test_fresh_launch_uses_temporary_settings(launch_capture: LaunchCapture):
@@ -23,12 +22,14 @@ def test_fresh_launch_uses_temporary_settings(launch_capture: LaunchCapture):
     def inspect(command: list[str], env: Mapping[str, str]):
         path = Path(command[command.index("--settings") + 1])
         files.append(path)
-        settings = json.loads(path.read_text())
+        settings = decode_object(path.read_text())
         assert settings["modelProvider"] == "gemini"
-        model = launch_capture.catalog["default_model_id"]
-        assert settings["customModelsConfig"]["customModels"][model]["modelName"] == (
-            "gemini-api://models/" + string_payload(model)
-        )
+        model = string_payload(launch_capture.catalog["default_model_id"])
+        assert object_payload(
+            object_payload(
+                object_payload(settings["customModelsConfig"])["customModels"]
+            )[model]
+        )["modelName"] == ("gemini-api://models/" + string_payload(model))
         assert env["GEMINI_API_KEY"] not in path.read_text()
         assert antigravity.config_path().read_bytes() == before
         assert not antigravity.state_path().exists()

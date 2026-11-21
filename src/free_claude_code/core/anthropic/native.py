@@ -120,7 +120,7 @@ def build_native_messages_request(
 
     if not request.messages:
         raise NativeMessagesError("Messages input must not be empty.")
-    body = cast(JsonObject, dump_messages_request(request))
+    body = dump_messages_request(request)
     raw_request = cast(JsonObject, request.model_dump(mode="json", exclude_none=True))
     for name in request.model_extra or ():
         if name not in raw_request:

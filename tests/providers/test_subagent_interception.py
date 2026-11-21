@@ -18,11 +18,14 @@ from free_claude_code.providers.openai_chat.stream_output import (
     CompletedToolCall,
     ResponsesChatStreamOutput,
 )
+from tests.fixture_parameters import fixture_parameter
+from tests.wire_payload import object_payload, string_payload
 
 
 @pytest.fixture(params=["messages", "responses"])
 def output(request: pytest.FixtureRequest) -> ChatStreamOutput:
-    if request.param == "messages":
+    protocol: str = fixture_parameter(request, str)
+    if protocol == "messages":
         return AnthropicChatStreamOutput(
             message_id="msg_test", model="test-model", input_tokens=1
         )
@@ -37,9 +40,14 @@ def _argument_deltas(frames: list[str]) -> list[str]:
     parts = []
     for event in parse_sse_text("".join(frames)):
         if event.event == "response.function_call_arguments.delta":
-            parts.append(event.data["delta"])
-        elif event.data.get("delta", {}).get("type") == "input_json_delta":
-            parts.append(event.data["delta"]["partial_json"])
+            parts.append(string_payload(event.data["delta"]))
+        elif (
+            object_payload(event.data.get("delta", {})).get("type")
+            == "input_json_delta"
+        ):
+            parts.append(
+                string_payload(object_payload(event.data["delta"])["partial_json"])
+            )
     return parts
 
 

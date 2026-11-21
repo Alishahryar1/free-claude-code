@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
+from free_claude_code.core.json_types import load_json_value
 from scripts.ci_timings import effective_durations
+from tests.wire_payload import decode_object
 
 
 @pytest.fixture
@@ -64,7 +66,7 @@ def run_pytest(suite: Path, *args: str):
 def collect(suite: Path, *args: str):
     result = run_pytest(suite, "--collect-only", "-q", *args)
     assert result.returncode == 0, result.stdout + result.stderr
-    return json.loads((suite / "items.json").read_text())
+    return load_json_value((suite / "items.json").read_text())
 
 
 def split_args(count: int, group: int):
@@ -155,10 +157,12 @@ def test_recorded_timings_partition_once_and_only_store_fresh_measurements(
             "--clean-durations",
         )
         assert result.returncode == 0, result.stdout + result.stderr
-        fresh = json.loads(path.read_text())
+        fresh = decode_object(path.read_text())
         assert set(fresh) == set(members)
         assert not measured.keys() & fresh.keys()
-        measured.update(fresh)
+        for node_id, elapsed in fresh.items():
+            assert isinstance(elapsed, (int, float))
+            measured[node_id] = elapsed
     assert len(selected) == len(set(selected)) == len(baseline)
     assert set(measured) == set(baseline)
     assert all(value >= 0 for value in measured.values())

@@ -40,16 +40,21 @@ class QueryCredentialFilter(logging.Filter):
 def uvicorn_log_config(*, console: bool) -> dict[str, object]:
     """Send Uvicorn records to FCC's file and optional standard console handlers."""
     config = deepcopy(uvicorn.config.LOGGING_CONFIG)
+    formatters: dict[str, object] = config["formatters"]
+    handler_config: dict[str, object] = config["handlers"]
+    loggers: dict[str, dict[str, object]] = config["loggers"]
     config["filters"] = {"query_credentials": {"()": QueryCredentialFilter}}
-    config["loggers"]["uvicorn.access"]["filters"] = ["query_credentials"]
+    loggers["uvicorn.access"]["filters"] = ["query_credentials"]
     if not console:
-        config["formatters"].clear()
-        config["handlers"].clear()
-    config["handlers"]["fcc"] = {"()": InterceptHandler}
+        formatters.clear()
+        handler_config.clear()
+    handler_config["fcc"] = {"()": InterceptHandler}
     for name in ("uvicorn", "uvicorn.access"):
-        handlers = config["loggers"][name]["handlers"]
-        config["loggers"][name]["handlers"] = [*handlers, "fcc"] if console else ["fcc"]
-    return config
+        handlers = loggers[name]["handlers"]
+        if not isinstance(handlers, list):
+            raise TypeError("Expected Uvicorn logging handlers")
+        loggers[name]["handlers"] = [*handlers, "fcc"] if console else ["fcc"]
+    return dict(config)
 
 
 class RuntimeServer(uvicorn.Server):

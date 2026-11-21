@@ -1,12 +1,14 @@
 """CI matrix generation rejects invalid counts and covers every OS shard."""
 
-import json
 import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+
+from free_claude_code.core.json_types import load_json_value
+from tests.wire_payload import array_payload, object_payload
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNNERS = {
@@ -44,20 +46,29 @@ def test_matrix_outputs_cover_each_os_and_shard(counts: tuple[int, ...]):
     result = run_matrix(counts)
     assert result.returncode == 0, result.stderr
     outputs = {
-        name: json.loads(value)
+        name: load_json_value(value)
         for name, value in (line.split("=", 1) for line in result.stdout.splitlines())
     }
     assert set(outputs) == {"pytest_matrix", "playwright_matrix"}
     for name, suite_counts in zip(
         ("pytest_matrix", "playwright_matrix"), (counts[:3], counts[3:]), strict=True
     ):
-        entries = outputs[name]["include"]
-        assert len(entries) == sum(suite_counts)
-        assert {(row["os"], row["runner"]) for row in entries} == set(RUNNERS.items())
+        entries = object_payload(outputs[name])["include"]
+        assert len(array_payload(entries)) == sum(suite_counts)
+        assert {
+            (object_payload(row)["os"], object_payload(row)["runner"])
+            for row in array_payload(entries)
+        } == set(RUNNERS.items())
         for os_name, count in zip(RUNNERS, suite_counts, strict=True):
-            rows = [row for row in entries if row["os"] == os_name]
-            assert [row["shard"] for row in rows] == list(range(1, count + 1))
-            assert {row["shards"] for row in rows} == {count}
+            rows = [
+                row
+                for row in array_payload(entries)
+                if object_payload(row)["os"] == os_name
+            ]
+            assert [object_payload(row)["shard"] for row in rows] == list(
+                range(1, count + 1)
+            )
+            assert {object_payload(row)["shards"] for row in rows} == {count}
 
 
 @pytest.mark.parametrize("invalid", ["0", "-1", "1.5", "five", "86"])
