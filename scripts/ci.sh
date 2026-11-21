@@ -132,10 +132,10 @@ selected_checks_need_uv() {
 run_suppressions() {
     step "Ban suppressions and legacy annotations"
     pattern='# type: ignore|# ty: ignore|#[[:space:]]*pyrefly:[[:space:]]*ignore|from __future__ import annotations'
-    print_command grep -rE "$pattern" --include='*.py' . \
+    print_command grep -rE "$pattern" --include='*.py' --include='*.pyi' . \
         --exclude-dir=.venv --exclude-dir=.git
     if [ "$dry_run" -eq 0 ]; then
-        if grep -rE "$pattern" --include='*.py' . \
+        if grep -rE "$pattern" --include='*.py' --include='*.pyi' . \
             --exclude-dir=.venv --exclude-dir=.git; then
             fail "Type-checker suppressions and legacy future annotations are not allowed. Fix the underlying type/import issue instead."
         fi

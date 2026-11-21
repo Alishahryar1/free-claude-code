@@ -135,10 +135,10 @@ function Test-SelectedChecksNeedUv {
 function Invoke-SuppressionsCheck {
     Write-Step "Ban suppressions and legacy annotations"
     $pattern = '# type: ignore|# ty: ignore|#\s*pyrefly:\s*ignore|from __future__ import annotations'
-    Write-Host "+ Get-ChildItem -Recurse -Filter *.py (excluding .venv, .git) | Select-String '$pattern'"
+    Write-Host "+ Get-ChildItem -Recurse -Include *.py,*.pyi (excluding .venv, .git) | Select-String '$pattern'"
 
     if (-not $DryRun) {
-        $matches = Get-ChildItem -Path . -Recurse -Filter *.py -File |
+        $matches = Get-ChildItem -Path . -Recurse -Include *.py,*.pyi -File |
             Where-Object {
                 $full = $_.FullName
                 $full -notmatch '[\\/]\.venv[\\/]' -and

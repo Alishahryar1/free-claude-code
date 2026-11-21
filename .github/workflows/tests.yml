@@ -40,7 +40,7 @@ jobs:
 
       - name: "Fail on type ignores and legacy future annotations"
         run: |
-          if grep -rE '# type: ignore|# ty: ignore|#[[:space:]]*pyrefly:[[:space:]]*ignore|from __future__ import annotations' --include='*.py' . --exclude-dir=.venv --exclude-dir=.git; then
+          if grep -rE '# type: ignore|# ty: ignore|#[[:space:]]*pyrefly:[[:space:]]*ignore|from __future__ import annotations' --include='*.py' --include='*.pyi' . --exclude-dir=.venv --exclude-dir=.git; then
             echo "::error::Type-checker suppressions and legacy future annotations are not allowed. Fix the underlying type/import issue instead."
             exit 1
           fi

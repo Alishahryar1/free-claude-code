@@ -58,6 +58,7 @@ def _powershell_interpreter() -> str:
 
 
 @pytest.mark.parametrize("script_name", ["ci.sh", "ci.ps1"])
+@pytest.mark.parametrize("suffix", [".py", ".pyi"])
 @pytest.mark.parametrize(
     ("before", "after", "directive"),
     [
@@ -67,9 +68,14 @@ def _powershell_interpreter() -> str:
     ],
 )
 def test_ci_rejects_pyrefly_suppressions(
-    tmp_path: Path, script_name: str, before: str, after: str, directive: str
+    tmp_path: Path,
+    script_name: str,
+    suffix: str,
+    before: str,
+    after: str,
+    directive: str,
 ) -> None:
-    (tmp_path / "sample.py").write_text(
+    (tmp_path / f"sample{suffix}").write_text(
         f"x: int = 'invalid'  #{before}pyrefly:{after}{directive}\n", encoding="utf-8"
     )
     script = str(_repo_root() / "scripts" / script_name)
