@@ -1,6 +1,7 @@
 """OpenAI Responses SSE event formatting."""
 
 import json
+import re
 from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any, cast
@@ -21,11 +22,15 @@ OPENAI_RESPONSES_SSE_HEADERS: dict[str, str] = {
 
 
 def responses_event_index(value: JsonValue) -> int:
-    """Read an integral position from a provider's Responses event."""
+    """Read a Responses position, treating null like an omitted index."""
+    if value is None:
+        return 0
     if isinstance(value, float) and value.is_integer():
         return int(value)
-    if isinstance(value, str) and value.isascii() and value.isdecimal():
-        return int(value)
+    if isinstance(value, str) and (
+        match := re.fullmatch(r"([+-]?[0-9]+)(?:\.0+)?", value)
+    ):
+        return int(match[1])
     return json_index(value)
 
 

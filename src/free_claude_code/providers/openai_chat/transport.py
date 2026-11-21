@@ -840,12 +840,25 @@ class OpenAIChatTransport:
             if on_event is not None:
                 on_event(event)
 
+        def normalize(event: ChatCompletionChunk) -> ChatCompletionChunk:
+            event = self._behavior.normalize_chunk(event)
+            choices: object = event.choices
+            if (
+                native_chat
+                and event.usage is not None
+                and isinstance(choices, dict)
+                and not choices
+            ):
+                # Some compatible providers use an empty object on usage trailers.
+                return event.model_copy(update={"choices": []})
+            return event
+
         stream = scope.retain(
             OpenAIStreamAdapter(
                 await client.chat.completions.create(**create_body, stream=True),
                 read_timeout_s=self._read_timeout_s,
                 on_event=observed,
-                transform_event=self._behavior.normalize_chunk,
+                transform_event=normalize,
             )
         )
         if native_chat:

@@ -373,6 +373,37 @@ def test_native_chat_nullable_fields_accumulate_later_values(
         assert object_payload(object_array(first["choices"])[0]["delta"])[field] is None
 
 
+@pytest.mark.filterwarnings(
+    "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
+)
+@pytest.mark.parametrize("choices", [[], {}])
+def test_native_chat_usage_trailer_completes_stream(choices: JsonValue):
+    from tests.api.test_four_protocol_matrix import matrix_app
+    from tests.providers.test_openai_chat_transport import _success
+
+    usage = {"prompt_tokens": 22, "completion_tokens": 4, "total_tokens": 26}
+
+    def reply(_: httpx2.Request) -> httpx2.Response:
+        return _success(usage_trailer={"choices": choices, "usage": usage})
+
+    with TestClient(matrix_app("chat", sdk_reply=reply)) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "public",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            },
+        )
+    assert response.status_code == 200, response.text
+    trailer, done = response.text.strip().split("\n\n")[-2:]
+    assert done == "data: [DONE]"
+    payload = decode_object(trailer.removeprefix("data: "))
+    assert payload["choices"] == []
+    assert payload["usage"] == usage
+
+
 @pytest.mark.parametrize("streaming", [False, True])
 def test_native_custom_tool_fragments_survive_public_chat_response(streaming: bool):
     from tests.api.test_four_protocol_matrix import matrix_app, response_value
