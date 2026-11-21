@@ -1,5 +1,6 @@
 """Protocol-neutral diagnostic redaction and detail contracts."""
 
+import pytest
 from httpx import ConnectError, HTTPStatusError, Request, Response
 
 from free_claude_code.core.diagnostics import (
@@ -150,3 +151,44 @@ def test_execution_failure_format_uses_semantic_category_and_request_id() -> Non
     assert '{"error":{"message":"bad field token=<redacted>"}}' in message
     assert "Request ID: req_diagnostic" in message
     assert "invalid_request_error" not in message
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        {"type": "about:blank", "title": "Gone", "status": 410},
+        {"type": "ABOUT:blank", "title": "Gone", "status": 410},
+        {"type": "about:blank", "code": "model_gone", "status": 410},
+        {
+            "type": "about:blank",
+            "title": "Unsupported Media Type",
+            "status": 415,
+            "instance": "/v1/models/example",
+        },
+    ],
+    ids=["nim-410", "mixed-case", "code-field", "model-words"],
+)
+def test_problem_details_about_blank_type_is_not_shown_as_category(
+    problem: dict[str, object],
+) -> None:
+    status = problem["status"]
+    assert isinstance(status, int)
+    response = Response(
+        status,
+        json={**problem, "detail": "The model has reached its end of life."},
+        request=Request("POST", "https://example.com/v1/chat/completions"),
+    )
+    error = HTTPStatusError("Failed", request=response.request, response=response)
+    failure = ExecutionFailure(
+        kind=FailureKind.UPSTREAM,
+        status_code=status,
+        message="Provider API request failed.",
+        retryable=False,
+    )
+
+    detail = extract_upstream_error_detail(error)
+    message = format_execution_failure_message(failure, detail, upstream_name="NIM")
+
+    assert detail.category_hint is None
+    assert "Category: upstream\n" in message
+    assert "The model has reached its end of life." in message
