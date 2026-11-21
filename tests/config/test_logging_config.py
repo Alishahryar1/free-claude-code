@@ -83,8 +83,8 @@ def test_exception_logs_omit_local_values_but_keep_explicit_context(tmp_path, st
     secret = "DUMMY_EXCEPTION_CREDENTIAL"
     headers = {"Authorization": f"Bearer {secret}"}
     try:
-        _ = len(headers) / 0
-    except ZeroDivisionError:
+        _ = headers["Request-ID"]
+    except KeyError:
         with logger.contextualize(attempt=2):
             if stdlib:
                 logging.getLogger("test.exception").exception("request failed")
@@ -98,7 +98,7 @@ def test_exception_logs_omit_local_values_but_keep_explicit_context(tmp_path, st
     assert row["record"]["extra"]["attempt"] == 2
     assert row["record"]["message"] == "request failed"
     assert row["record"]["exception"]["traceback"] is True
-    assert "ZeroDivisionError: division by zero" in row["text"]
+    assert "KeyError: 'Request-ID'" in row["text"]
 
 
 def test_logging_preserves_records_across_process_restarts(tmp_path):

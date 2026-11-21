@@ -111,7 +111,7 @@ def _validate_supported_request(request: MessagesRequest) -> None:
     if request.model_extra:
         raise ResponsesConversionError(
             "OpenAI Responses does not support these request fields: "
-            f"{sorted(str(key) for key in request.model_extra)}."
+            f"{sorted(request.model_extra)}."
         )
     provider_tool_types = sorted(
         {

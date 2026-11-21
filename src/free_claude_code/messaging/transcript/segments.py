@@ -75,10 +75,10 @@ class ToolCallSegment(Segment):
 
     def __init__(self, tool_use_id: str, name: str, *, indent_level: int = 0) -> None:
         super().__init__(kind="tool_call")
-        self.tool_use_id = str(tool_use_id or "")
-        self.name = str(name or "tool")
+        self.tool_use_id = tool_use_id or ""
+        self.name = name or "tool"
         self.closed = False
-        self.indent_level = max(0, int(indent_level))
+        self.indent_level = max(0, indent_level)
 
     def render(self, ctx: RenderCtx) -> str:
         name = ctx.code_inline(self.name)
@@ -102,9 +102,9 @@ class ToolResultSegment(Segment):
         is_error: bool = False,
     ) -> None:
         super().__init__(kind="tool_result")
-        self.tool_use_id = str(tool_use_id or "")
-        self.name = str(name) if name is not None else None
-        self.is_error = bool(is_error)
+        self.tool_use_id = tool_use_id or ""
+        self.name = name
+        self.is_error = is_error
         self.content_text = (
             content if isinstance(content, str) else safe_json_dumps(content)
         )
@@ -128,14 +128,14 @@ class SubagentSegment(Segment):
 
     def __init__(self, description: str) -> None:
         super().__init__(kind="subagent")
-        self.description = str(description or "Subagent")
+        self.description = description or "Subagent"
         self.tool_calls = 0
         self.tools_used = set()
         self.current_tool = None
 
     def set_current_tool_call(self, tool_use_id: str, name: str) -> ToolCallSegment:
-        tool_use_id = str(tool_use_id or "")
-        name = str(name or "tool")
+        tool_use_id = tool_use_id or ""
+        name = name or "tool"
         self.tools_used.add(name)
         self.tool_calls += 1
         self.current_tool = ToolCallSegment(tool_use_id, name, indent_level=1)
@@ -170,7 +170,7 @@ class ErrorSegment(Segment):
 
     def __init__(self, message: str) -> None:
         super().__init__(kind="error")
-        self.message = str(message or "Unknown error")
+        self.message = message or "Unknown error"
 
     def render(self, ctx: RenderCtx) -> str:
         return f"⚠️ {ctx.bold('Error:')} {ctx.code_inline(self.message)}"

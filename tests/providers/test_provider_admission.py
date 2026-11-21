@@ -192,7 +192,8 @@ async def test_deterministic_correction_is_typed_and_final_at_exhaustion() -> No
     first = await _open(execution)
     assert await first.correct(error) is ProviderCorrectionAction.RETRY
     await first.aclose()
-    assert execution.state is ProviderExecutionState.ACTIVE
+    state_after_retry = execution.state
+    assert state_after_retry is ProviderExecutionState.ACTIVE
     assert execution.attempts_remaining == 1
 
     final = await _open(execution)

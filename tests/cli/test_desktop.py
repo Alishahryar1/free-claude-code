@@ -44,7 +44,8 @@ def test_supervisor_accepts_restart_during_scheduled_startup() -> None:
         patch("free_claude_code.cli.commands.kill_all_best_effort"),
     ):
         assert supervisor.schedule_run() is True
-        assert supervisor.status is ServerStatus.STARTING
+        initial_status = supervisor.status
+        assert initial_status is ServerStatus.STARTING
         assert supervisor.request_restart() is True
         supervisor.run(open_admin_browser=False)
 

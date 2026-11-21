@@ -368,7 +368,7 @@ def _decode_cursor(cursor: str | None) -> tuple[int, str] | None:
         ):
             raise ValueError
         return value[0], value[1]
-    except ValueError, UnicodeError:
+    except ValueError:
         raise CodeValidationError("Invalid session page cursor.") from None
 
 
@@ -382,5 +382,5 @@ def _decode_item_cursor(cursor: str) -> tuple[int, int]:
         ):
             raise ValueError
         return value[0], value[1]
-    except ValueError, UnicodeError:
+    except ValueError:
         raise CodeValidationError("Invalid transcript page cursor.") from None

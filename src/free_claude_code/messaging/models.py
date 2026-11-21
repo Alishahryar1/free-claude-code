@@ -54,4 +54,4 @@ class IncomingMessage:
     @property
     def scope(self) -> MessageScope:
         """Return the namespace that owns this message's platform IDs."""
-        return MessageScope(platform=str(self.platform), chat_id=str(self.chat_id))
+        return MessageScope(platform=self.platform, chat_id=self.chat_id)

@@ -93,7 +93,7 @@ def _json_copy(value: object) -> JsonObject:
                 json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
             ),
         )
-    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise HistoryReplayError(
             "History replay requires finite, representable JSON."
         ) from exc
@@ -325,7 +325,7 @@ def decode_replay(value: str) -> ReplayRecord:
                 ).decode("utf-8")
             )
         )
-    except (ValueError, UnicodeError, RecursionError) as exc:
+    except (ValueError, RecursionError) as exc:
         raise HistoryReplayError("Malformed history replay.") from exc
     if prefix == _LEGACY_PREFIX:
         if (
@@ -401,7 +401,7 @@ def readable_reasoning(item: Mapping[str, JsonValue]) -> list[tuple[str, bool]]:
     gemini_parts = item.get("parts")
     if isinstance(gemini_parts, list):
         return [
-            (str(part["text"]), True)
+            (part["text"], True)
             for part in gemini_parts
             if isinstance(part, dict)
             and part.get("thought") is True
@@ -415,7 +415,7 @@ def readable_reasoning(item: Mapping[str, JsonValue]) -> list[tuple[str, bool]]:
         content_parts = item.get(key)
         if isinstance(content_parts, list):
             text = "\n\n".join(
-                str(part["text"])
+                part["text"]
                 for part in content_parts
                 if isinstance(part, dict) and isinstance(part.get("text"), str)
             )

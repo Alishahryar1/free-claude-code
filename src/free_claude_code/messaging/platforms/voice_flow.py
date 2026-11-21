@@ -179,7 +179,7 @@ class VoiceNoteFlow:
             )
             if delivered_status_id is None:
                 raise RuntimeError("Voice status delivery returned no message ID.")
-            status_msg_id = str(delivered_status_id)
+            status_msg_id = delivered_status_id
             status_bound = await self._pending_voice.bind_status(claim, status_msg_id)
             if not status_bound:
                 _, cancellation = await self._finish_failed_pending_voice(

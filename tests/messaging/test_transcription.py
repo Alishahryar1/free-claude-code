@@ -206,7 +206,8 @@ async def test_cancelled_transcription_keeps_ownership_until_thread_exits(
 
             assert not transcribe_task.done()
             assert not close_task.done()
-            assert service._huggingface_api_key == "hf-secret"
+            key_during_transcription = service._huggingface_api_key
+            assert key_during_transcription == "hf-secret"
         finally:
             release.set()
 

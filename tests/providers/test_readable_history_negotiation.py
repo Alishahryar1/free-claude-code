@@ -302,7 +302,8 @@ def test_destination_change_restarts_mode_order_and_seen_shapes(dimension):
     state.prepare(source, origin)
     assert state.rejected() is not None
     state.prepare(source, origin)
-    assert state.mode is HistoryMode.CURRENT
+    original_mode = state.mode
+    assert original_mode is HistoryMode.CURRENT
 
     target = (
         replace(origin, endpoint="https://new.test/v1")
@@ -314,7 +315,8 @@ def test_destination_change_restarts_mode_order_and_seen_shapes(dimension):
     source = {**source, "model": target.model}
     wire = state.prepare(source, target)
     assert "Old" not in json.dumps(wire) and "New" not in json.dumps(wire)
-    assert state.mode is HistoryMode.NONE
+    cached_mode = state.mode
+    assert cached_mode is HistoryMode.NONE
     assert state.rejected() is not None
     wire = state.prepare(source, target)
     assert "Old" in json.dumps(wire) and "New" in json.dumps(wire)

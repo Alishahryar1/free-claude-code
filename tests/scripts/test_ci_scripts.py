@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -75,9 +76,14 @@ def test_ci_rejects_pyrefly_suppressions(
     after: str,
     directive: str,
 ) -> None:
-    (tmp_path / f"sample{suffix}").write_text(
-        f"x: int = 'invalid'  #{before}pyrefly:{after}{directive}\n", encoding="utf-8"
+    comment = f"#{before}pyrefly:{after}{directive}"
+    assignment = "x: int = 'invalid'"
+    source = (
+        f"{comment}\n{assignment}\n"
+        if directive == "ignore-errors"
+        else f"{assignment}  {comment}\n"
     )
+    (tmp_path / f"sample{suffix}").write_text(source, encoding="utf-8")
     script = str(_repo_root() / "scripts" / script_name)
     if script_name == "ci.sh":
         command = [_shell_interpreter(), script, "--only", "suppressions"]
@@ -94,7 +100,46 @@ def test_ci_rejects_pyrefly_suppressions(
         command, cwd=tmp_path, text=True, capture_output=True, check=False
     )
     assert result.returncode != 0
-    assert "x: int = 'invalid'" in result.stdout
+    assert comment in result.stdout
+
+
+@pytest.mark.parametrize("suffix", [".py", ".pyi"])
+@pytest.mark.parametrize(
+    ("source", "diagnostic"),
+    [
+        (
+            "from typing import cast\nx: str\ny = cast(str, x)\n",
+            "redundant-cast",
+        ),
+        ("x: int = 'invalid'  # type:ignore\n", "bad-assignment"),
+        ("x: int = 'invalid'  # pyrefly:\u0085ignore\n", "bad-assignment"),
+        (f"# {'pyrefly: ignore-errors'}\nx: int = 'invalid'\n", "bad-assignment"),
+    ],
+)
+def test_pyrefly_check_enforces_project_diagnostics(
+    tmp_path: Path, suffix: str, source: str, diagnostic: str
+) -> None:
+    sample = tmp_path / f"sample{suffix}"
+    sample.write_text(source, encoding="utf-8")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pyrefly",
+            "check",
+            "--config",
+            str(_repo_root() / "pyproject.toml"),
+            "--output-format",
+            "min-text",
+            str(sample),
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 1, result.stderr
+    assert f"[{diagnostic}]" in result.stdout
 
 
 def test_ci_sh_runs_ci_checks_in_order() -> None:

@@ -352,7 +352,7 @@ class SessionState:
 
     def matches_turn(self, event: HarnessEvent, *, known_turn: bool) -> bool:
         run = self._run
-        return bool(
+        return (
             run is not None
             and self.busy
             and run.submission_started

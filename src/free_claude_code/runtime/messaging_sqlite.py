@@ -145,9 +145,9 @@ class SQLiteMessagingStore:
                 "INSERT INTO messaging_managed_messages(platform,chat_id,message_id,ts,direction,kind) "
                 "VALUES (?,?,?,?,?,?) ON CONFLICT(platform,chat_id,message_id) DO NOTHING",
                 (
-                    str(platform),
-                    str(chat_id),
-                    str(message_id),
+                    platform,
+                    chat_id,
+                    message_id,
                     datetime.now(UTC).isoformat(),
                     direction,
                     kind,

@@ -51,7 +51,7 @@ uv run pyrefly check
 uv run pytest -v --tb=short
 ```
 
-GitHub CI runs Ruff in check-only mode and also bans `# type: ignore`, `# ty: ignore`, `# pyrefly: ignore`, and legacy annotation workarounds. Fix underlying typing and import-boundary problems instead of suppressing them.
+Pyrefly warnings fail the check. GitHub CI runs Ruff in check-only mode and also bans `# type: ignore`, `# ty: ignore`, `# pyrefly: ignore`, and legacy annotation workarounds. Fix underlying typing and import-boundary problems instead of suppressing them.
 
 ## Project Standards
 

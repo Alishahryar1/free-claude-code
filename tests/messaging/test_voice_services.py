@@ -58,7 +58,7 @@ async def test_cancel_before_status_binding_rejects_late_flow() -> None:
     assert cancellation.delete_message_ids == frozenset({"voice-1"})
     assert await registry.bind_status(claim, "status-1") is False
     assert await registry.handoff(claim, callback) is VoiceHandoffOutcome.REJECTED
-    assert callback_called is False
+    assert not callback_called
 
 
 @pytest.mark.asyncio

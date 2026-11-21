@@ -660,7 +660,7 @@ async def test_failed_candidate_cleanup_is_retried_at_shutdown() -> None:
     assert factory.runtimes[1].cleanup_calls == 3
     assert manager._unpublished == set()
     assert manager.cached_model_ids() == {}
-    assert manager._closed is True
+    assert manager._closed
 
 
 @pytest.mark.asyncio
@@ -848,7 +848,7 @@ async def test_cancelled_shutdown_reuses_the_same_owned_cleanup_task() -> None:
 
     assert cleanup_calls == 1
     assert manager._retired == {}
-    assert manager._closed is True
+    assert manager._closed
 
 
 @pytest.mark.asyncio
@@ -879,7 +879,7 @@ async def test_failed_shutdown_cleanup_is_retryable() -> None:
     assert factory.runtimes[0].cleanup_calls == 2
     assert manager._retired == {}
     assert manager.cached_model_ids() == {}
-    assert manager._closed is True
+    assert manager._closed
 
 
 @pytest.mark.asyncio

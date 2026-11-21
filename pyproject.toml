@@ -107,6 +107,10 @@ dev = [
     "pyyaml>=6.0.3",
     "pytest-split>=0.11.0",
     "google-genai>=3.3.0",
+    "types-jsonschema>=4.26.0.20261006",
+    "types-pyperclip>=1.11.0.20260508",
+    "types-pyyaml>=6.0.12.20261113",
+    "types-simplejson>=4.3.0.20261112",
 ]
 
 [tool.ruff]
@@ -166,6 +170,8 @@ markers = [
 ]
 
 [tool.pyrefly]
+min-severity = "warn"
+enabled-ignores = []
 python-version = "3.14"
 search-path = ["src", "."]
 # Optional voice_local extra: torch, transformers, librosa for local whisper transcription

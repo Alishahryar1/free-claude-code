@@ -48,6 +48,11 @@ from .routes import router
 from .validation_log import summarize_request_validation_body
 
 
+def _public_http_error_message(detail: object) -> str:
+    """Convert FastAPI's JSON detail to the message expected by generation clients."""
+    return str(detail)
+
+
 def create_app(services: ApiServices) -> FastAPI:
     """Create the HTTP adapter around explicitly supplied runtime services."""
     app = FastAPI(title="Claude Code Proxy", version=package_version())
@@ -68,7 +73,7 @@ def create_app(services: ApiServices) -> FastAPI:
                 status_code=exc.status_code,
                 headers=exc.headers,
                 content=openai_error_payload(
-                    message=str(exc.detail),
+                    message=_public_http_error_message(exc.detail),
                     error_type="authentication_error"
                     if exc.status_code == 401
                     else "invalid_request_error",
@@ -77,7 +82,9 @@ def create_app(services: ApiServices) -> FastAPI:
         if generation_api(request.url.path) == "gemini":
             return JSONResponse(
                 status_code=exc.status_code,
-                content=gemini_error_payload(exc.status_code, str(exc.detail)),
+                content=gemini_error_payload(
+                    exc.status_code, _public_http_error_message(exc.detail)
+                ),
                 headers=exc.headers,
             )
         return await http_exception_handler(request, exc)

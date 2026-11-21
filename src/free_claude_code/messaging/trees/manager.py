@@ -170,7 +170,7 @@ class TreeQueueManager:
         parent_reference_id: str | None = None,
     ) -> QueueDecision:
         """Publish one admission before its processor can begin."""
-        node_id = str(incoming.message_id)
+        node_id = incoming.message_id
         scope = incoming.scope
         prompt = incoming.text or ""
         async with self._transaction() as transaction:

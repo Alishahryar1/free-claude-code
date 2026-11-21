@@ -614,7 +614,7 @@ def _jwt_claims(token: str) -> dict[str, Any]:
         encoded = token.split(".")[1]
         encoded += "=" * (-len(encoded) % 4)
         payload = json.loads(base64.urlsafe_b64decode(encoded))
-    except (IndexError, ValueError, json.JSONDecodeError) as exc:
+    except (IndexError, ValueError) as exc:
         raise OpenAILoginError("OpenAI returned an invalid identity token.") from exc
     if not isinstance(payload, dict):
         raise OpenAILoginError("OpenAI returned invalid identity claims.")
