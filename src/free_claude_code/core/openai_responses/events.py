@@ -21,17 +21,23 @@ OPENAI_RESPONSES_SSE_HEADERS: dict[str, str] = {
 }
 
 
-def responses_event_index(value: JsonValue) -> int:
-    """Read a Responses position, treating null like an omitted index."""
+def _canonical_position(value: JsonValue) -> int | None:
     if value is None:
         return 0
+    if isinstance(value, int):
+        return value
     if isinstance(value, float) and value.is_integer():
         return int(value)
     if isinstance(value, str) and (
         match := re.fullmatch(r"([+-]?[0-9]+)(?:\.0+)?", value)
     ):
         return int(match[1])
-    return json_index(value)
+    return None
+
+
+def responses_event_index(value: JsonValue) -> int:
+    """Read a Responses position, treating null like an omitted index."""
+    return json_index(_canonical_position(value))
 
 
 def format_response_sse_event(event_type: str, data: Mapping[str, Any]) -> str:

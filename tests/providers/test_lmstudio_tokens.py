@@ -18,6 +18,16 @@ def test_text_parts_and_string_content_have_the_same_cost():
     )
 
 
+@pytest.mark.parametrize("field", ["reasoning_details", "tool_calls"])
+@pytest.mark.parametrize("empty_records", [{}, "", []])
+def test_empty_history_collections_add_no_tokens(field: str, empty_records: JsonValue):
+    message: JsonObject = {"role": "assistant", "content": "hello"}
+    baseline = estimate({"messages": [message]})
+    message[field] = empty_records
+    assert estimate({"messages": [message]}) == baseline
+    assert message[field] == empty_records
+
+
 @pytest.mark.parametrize(
     "field",
     ["text", "reasoning", "arguments", "result", "tool_schema", "response_schema"],

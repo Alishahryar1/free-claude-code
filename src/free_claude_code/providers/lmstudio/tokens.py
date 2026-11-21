@@ -69,7 +69,7 @@ def _input_costs(body: Mapping[str, JsonValue]) -> Iterator[int]:
         for field in ("reasoning_content", "reasoning"):
             if isinstance(text := message.get(field), str):
                 yield from _text_costs(text)
-        for detail in json_objects(message.get("reasoning_details", [])):
+        for detail in json_objects(message.get("reasoning_details") or []):
             if detail.get("type") in ("reasoning.text", "reasoning.summary"):
                 text = detail.get("summary", detail.get("text"))
                 if isinstance(text, str):
@@ -77,7 +77,7 @@ def _input_costs(body: Mapping[str, JsonValue]) -> Iterator[int]:
         for field in ("name", "tool_call_id", "refusal"):
             if isinstance(text := message.get(field), str):
                 yield from _text_costs(text)
-        for call in json_objects(message.get("tool_calls", [])):
+        for call in json_objects(message.get("tool_calls") or []):
             yield 4
             for text in (
                 call.get("id"),

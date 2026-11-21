@@ -8,7 +8,7 @@ import pytest
 
 from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.stream_contracts import SSEEvent, parse_sse_text
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.core.stream_output import completed_output
 from tests.api.test_delivered_stream_recovery import public_text, text_events
@@ -201,11 +201,21 @@ async def test_split_replay_has_one_answer_across_representations(
     "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
 )
 @pytest.mark.parametrize(
-    "index_case",
-    ["output_index", "content_index", "terminal_extensions", "unused_item"],
+    ("index_case", "index_value"),
+    [
+        ("output_index", 0.0),
+        ("content_index", 0.0),
+        ("output_index", "0"),
+        ("output_index", "0.0"),
+        ("content_index", "0"),
+        ("output_index", None),
+        ("content_index", None),
+        ("terminal_extensions", None),
+        ("unused_item", None),
+    ],
 )
 async def test_responses_continuation_preserves_text_with_provider_index_encodings(
-    index_case: str,
+    index_case: str, index_value: JsonValue
 ):
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
@@ -222,7 +232,7 @@ async def test_responses_continuation_preserves_text_with_provider_index_encodin
             if index_case == "unused_item":
                 delta["item"] = None
             else:
-                delta[index_case] = 0.0
+                delta[index_case] = index_value
         return 200, events
 
     async with _harness("responses", reply, max_attempts=2) as (send, bodies, _):
