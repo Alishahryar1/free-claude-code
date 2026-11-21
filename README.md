@@ -73,6 +73,33 @@ Windows PowerShell:
 & ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1")))
 ```
 
+On macOS/Linux, `install.sh` sets `UV_SYSTEM_CERTS=1` (unless you already set it) so uv trusts the operating system certificate store, which lets it download Python behind TLS-inspecting corporate proxies. Set `UV_SYSTEM_CERTS=0` to opt out. `install.ps1` does not set it. On Windows behind such a proxy, set it yourself in the same PowerShell session before running the installer: `$env:UV_SYSTEM_CERTS = "1"`. On macOS/Linux, run `export UV_SYSTEM_CERTS=1` first if you call uv by hand.
+
+If you need uv first, install it and put `~/.local/bin` on your PATH. A new terminal does not pick this up until the shell profile is sourced:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+uv --version
+```
+
+"command not found: uv" (or zsh offering to "correct" a command) means the PATH line above is missing in that terminal.
+
+Tested end to end on a MacBook Pro (M4 Pro, macOS 26.5.2, arm64) and an Intel MacBook Pro 2017 (i5-7267U, macOS 13.7.8, x86_64, uv 0.13.8).
+
+Some agents (for example Cline and OpenCode) need Node.js 24 or newer. If `node` is missing and Homebrew is slow (older Intel Macs build packages from source), install the prebuilt binary without admin rights. Download `node-v24.x.x-darwin-x64.tar.gz` (Intel) or `node-v24.x.x-darwin-arm64.tar.gz` (Apple Silicon) from <https://nodejs.org/en/download>, then:
+
+```bash
+mkdir -p ~/.local/node
+tar -xzf ~/Downloads/node-v24.*-darwin-*.tar.gz -C ~/.local/node --strip-components=1
+echo 'export PATH="$HOME/.local/node/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+node --version && npm --version
+```
+
+Behind a TLS-inspecting proxy, also set `NODE_USE_SYSTEM_CA=1` so Node trusts the macOS keychain.
+
 When prompted, choose at least one coding agent and optionally enable [RTK](https://github.com/rtk-ai/rtk) + [Headroom](https://github.com/headroomlabs-ai/headroom) token optimization for supported agents.
 
 ### 2. Start FCC
