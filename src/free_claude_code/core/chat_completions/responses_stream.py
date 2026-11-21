@@ -11,7 +11,7 @@ from ..history_replay import (
     protected_reasoning,
 )
 from ..json_types import JsonObject, JsonValue, json_object, json_objects
-from ..openai_responses.events import responses_event_index
+from ..openai_responses import responses_event_index
 from .response import ChatOutput, chat_failure
 
 

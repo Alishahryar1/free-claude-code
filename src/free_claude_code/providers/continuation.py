@@ -141,7 +141,11 @@ class SourceRecoveryState:
                 ):
                     self.unsafe_reason = "native_content"
                     self._handoff_blocked = True
-        elif protocol == "messages":
+        elif protocol == "messages" and kind in (
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+        ):
             block = payload.get("content_block")
             index = json_index(payload.get("index", -1))
             if isinstance(block, dict) and block.get("type") in (
@@ -172,7 +176,7 @@ class SourceRecoveryState:
                     self._signed.add(index)
             if kind == "content_block_stop" and index in self._signed:
                 self._pending_reasoning.discard(index)
-        else:
+        elif protocol == "responses":
             item = payload.get("item")
             if isinstance(item, dict):
                 self._response_item(item, completed=kind == "response.output_item.done")

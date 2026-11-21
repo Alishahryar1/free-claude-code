@@ -130,8 +130,10 @@ class DeliveredResponse:
             if isinstance(delta, dict)
             else ""
         )
-        block = json_object(data.get("content_block", {}))
+        started_tool_use = False
         if kind == "content_block_start":
+            block = json_object(data.get("content_block", {}))
+            started_tool_use = block.get("type") == "tool_use"
             text += json_text(block.get("text", "")) + json_text(
                 block.get("thinking", "")
             )
@@ -145,7 +147,7 @@ class DeliveredResponse:
             or self._new_snapshot_text(data)
             or json_object(data.get("part", {})).get("refusal")
             or (kind == "response.refusal.done" and data.get("refusal"))
-            or (kind == "content_block_start" and block.get("type") == "tool_use")
+            or started_tool_use
             or (
                 kind == "response.output_item.done"
                 and is_client_call(json_object(data.get("item", {})))

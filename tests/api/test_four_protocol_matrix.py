@@ -386,6 +386,31 @@ def test_responses_text_translation_preserves_whole_valued_indexes(
         assert object_payload(result["usageMetadata"])["totalTokenCount"] == 10
 
 
+@pytest.mark.parametrize("wire", ["chat", "gemini", "messages", "responses"])
+@pytest.mark.parametrize(
+    "event_type", ["message_start", "message_delta", "message_stop"]
+)
+def test_messages_lifecycle_ignores_unused_block_index(wire: str, event_type: str):
+    events = text_events("messages", "Hello")
+    event = next(event for event in events if event["type"] == event_type)
+    event["index"] = None
+
+    def reply(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(
+                f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+                for event in events
+            ),
+        )
+
+    with TestClient(matrix_app("messages", native_reply=reply)) as client:
+        path, body = ingress_request(wire, True)
+        result = response_value(client.post(path, json=body), wire, True)
+    assert "Hello" in json.dumps(result)
+
+
 def reply_history(value: JsonObject, wire: str):
     initial = {"role": "user", "content": "hello"}
     if wire == "messages":

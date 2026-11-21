@@ -66,24 +66,21 @@ class ContinuationOverlap:
 
     def feed(self, payload: Mapping[str, DecimalJsonValue]) -> list[DecimalJsonObject]:
         data = deepcopy(dict(payload))
-        block = json_object(data.get("content_block", {}))
-        field = "thinking" if self._channel == "thinking" else "text"
-        if (
-            data.get("type") == "content_block_start"
-            and block.get("type") == field
-            and block.get(field)
-        ):
-            text, block[field] = block[field], ""
-            return [
-                *self._feed(data),
-                *self._feed(
-                    {
-                        "type": "content_block_delta",
-                        "index": data["index"],
-                        "delta": {"type": f"{field}_delta", field: text},
-                    }
-                ),
-            ]
+        if data.get("type") == "content_block_start":
+            block = json_object(data.get("content_block", {}))
+            field = "thinking" if self._channel == "thinking" else "text"
+            if block.get("type") == field and block.get(field):
+                text, block[field] = block[field], ""
+                return [
+                    *self._feed(data),
+                    *self._feed(
+                        {
+                            "type": "content_block_delta",
+                            "index": data["index"],
+                            "delta": {"type": f"{field}_delta", field: text},
+                        }
+                    ),
+                ]
         return self._feed(data)
 
     def _feed(self, data: DecimalJsonObject) -> list[DecimalJsonObject]:
@@ -214,9 +211,9 @@ class ContinuationOverlap:
                 and bool(part.get("thought")) == (self._channel == "thinking")
             ]
         kind = json_text(data.get("type", ""))
-        index = json_index(data.get("index", 0))
         field = "thinking" if self._channel == "thinking" else "text"
         if kind == "content_block_start":
+            index = json_index(data.get("index", 0))
             block = json_object(data.get("content_block", {}))
             return (
                 [_Text((index, 0), (index, 0), block, field)]
@@ -224,6 +221,7 @@ class ContinuationOverlap:
                 else []
             )
         if kind == "content_block_delta":
+            index = json_index(data.get("index", 0))
             delta = json_object(data.get("delta", {}))
             return (
                 [_Text((index, 0), (index, 0), delta, field, delta=True)]
@@ -239,8 +237,8 @@ class ContinuationOverlap:
                     raise TypeError("Invalid continuation item identity")
                 texts.extend(self._item_texts(item, identity, position))
             return texts
-        item = json_object(data.get("item", {}))
         if kind in {"response.output_item.added", "response.output_item.done"}:
+            item = json_object(data.get("item", {}))
             if item.get("type") != (
                 "message" if self._channel == "text" else "reasoning"
             ):

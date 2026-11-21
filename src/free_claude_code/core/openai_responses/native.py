@@ -99,6 +99,11 @@ class NativeResponsesRelay:
                 f"event {self._terminal_type!r}."
             )
         data = cast(JsonObject, deepcopy(dict(payload)))
+        # Recovery and output assembly use indexes as integer positions.
+        for field in ("output_index", "content_index", "summary_index"):
+            index = data.get(field)
+            if isinstance(index, float) and index.is_integer():
+                data[field] = int(index)
         response = data.get("response")
         if isinstance(response, dict):
             response["model"] = self._public_model

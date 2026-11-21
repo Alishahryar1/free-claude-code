@@ -197,6 +197,47 @@ async def test_split_replay_has_one_answer_across_representations(
 
 
 @pytest.mark.asyncio
+@pytest.mark.filterwarnings(
+    "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
+)
+@pytest.mark.parametrize(
+    "index_case",
+    ["output_index", "content_index", "terminal_extensions", "unused_item"],
+)
+async def test_responses_continuation_preserves_text_with_provider_index_encodings(
+    index_case: str,
+):
+    def reply(bodies: list[JsonObject]):
+        if len(bodies) == 1:
+            return 200, text_events("responses", "Hello ", complete=False)
+        events = text_events("responses", "Hello world.")
+        if index_case == "terminal_extensions":
+            events[-1].update(index=None, content_block=None)
+        else:
+            delta = next(
+                event
+                for event in events
+                if event["type"] == "response.output_text.delta"
+            )
+            if index_case == "unused_item":
+                delta["item"] = None
+            else:
+                delta[index_case] = 0.0
+        return 200, events
+
+    async with _harness("responses", reply, max_attempts=2) as (send, bodies, _):
+        raw = await delivered(
+            send("responses", [{"role": "user", "content": "greet"}]), "responses"
+        )
+    events = parse_sse_text(raw)
+    assert len(bodies) == 2
+    assert events[-1].event == "response.completed"
+    assert public_text(events, "responses") == "Hello world."
+    assert response_text(events[-1]) == "Hello world."
+    assert_completion_text_agrees(events)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("representation", ["terminal", "text_done", "mixed"])
 @pytest.mark.parametrize(
     "input_tokens",

@@ -6,7 +6,7 @@ from uuid import uuid4
 from ..failures import ExecutionFailure
 from ..history_replay import ReplayOrigin, ReplayRecord
 from ..json_types import JsonObject, JsonValue, json_object, json_objects
-from ..openai_responses.events import responses_event_index
+from ..openai_responses import responses_event_index
 from ..openai_tool_names import OpenAIToolNameCodec
 from .response import GeminiOutput, conversion_failure, function_arguments
 
