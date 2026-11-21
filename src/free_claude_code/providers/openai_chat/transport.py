@@ -1394,7 +1394,8 @@ class _ChatAttempt(TransportAttempt):
             )
             return
         choices: list[JsonObject] = []
-        for choice in chunk.choices:
+        # The SDK can leave choices unset on a usage-only trailer.
+        for choice in chunk.choices or ():
             delta = choice.delta
             extras: JsonObject = (delta.model_extra or {}) if delta is not None else {}
             choices.append(

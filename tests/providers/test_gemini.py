@@ -1,7 +1,7 @@
 """All client protocols exercise native Gemini over HTTP, including replay."""
 
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
@@ -35,7 +35,9 @@ from tests.wire_payload import (
 )
 
 
-def _sse(parts: Sequence[Mapping[str, JsonValue]]):
+def _sse(
+    parts: Sequence[Mapping[str, JsonValue]], *, usage: JsonObject | None = None
+) -> httpx.Response:
     events: list[dict[str, Any]] = [
         {"candidates": [{"index": 0, "content": {"role": "model", "parts": [part]}}]}
         for part in parts
@@ -44,7 +46,9 @@ def _sse(parts: Sequence[Mapping[str, JsonValue]]):
         {
             "modelVersion": "actual",
             "candidates": [{"index": 0, "finishReason": "STOP"}],
-            "usageMetadata": {
+            "usageMetadata": usage
+            if usage is not None
+            else {
                 "promptTokenCount": 12,
                 "candidatesTokenCount": 3,
                 "thoughtsTokenCount": 4,
@@ -108,6 +112,53 @@ async def _collect(wire: str, stream: AsyncIterator[StreamOutput]):
     assert chunks[-1] == "data: [DONE]\n\n"
     accumulator.finish()
     return accumulator.result()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize(
+    "encode_count", [int, str, float], ids=["integer", "quoted", "zero-fraction"]
+)
+async def test_translated_gemini_stream_accepts_compatible_token_counts(
+    wire: str, encode_count: Callable[[int], int | str | float]
+) -> None:
+    counts = {
+        "promptTokenCount": 12,
+        "candidatesTokenCount": 3,
+        "thoughtsTokenCount": 4,
+        "cachedContentTokenCount": 2,
+        "totalTokenCount": 19,
+    }
+    usage: JsonObject = {key: encode_count(value) for key, value in counts.items()}
+    provider = GeminiProvider(
+        make_provider_config(api_key="test-key", base_url=GEMINI_DEFAULT_BASE),
+        admission=immediate_admission(max_attempts=1),
+        transport=httpx.MockTransport(
+            lambda request: _sse([{"text": "answer"}], usage=usage)
+        ),
+    )
+    try:
+        stream = stream_provider_request(provider, wire, _request(wire))
+        frames = [frame async for chunk in stream for frame in chunk.frames]
+    finally:
+        await provider.cleanup()
+
+    events = parse_sse_text("".join(frames))
+    if wire == "messages":
+        assert events[-1].event == "message_stop"
+        reported = next(
+            object_payload(event.data["usage"])
+            for event in events
+            if event.event == "message_delta"
+        )
+    else:
+        assert events[-1].event == "response.completed"
+        reported = object_payload(object_payload(events[-1].data["response"])["usage"])
+        assert reported["input_tokens_details"] == {"cached_tokens": 2}
+        assert reported["output_tokens_details"] == {"reasoning_tokens": 4}
+        assert reported["total_tokens"] == 19
+    assert reported["input_tokens"] == 12
+    assert reported["output_tokens"] == 7
 
 
 @pytest.mark.asyncio

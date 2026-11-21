@@ -19,7 +19,6 @@ from free_claude_code.core.json_types import (
     JsonObject,
     JsonValue,
     json_array,
-    json_index,
     json_object,
     json_objects,
     json_text,
@@ -30,6 +29,12 @@ from free_claude_code.providers.openai_chat import (
     ChatStreamUsage,
     CompletedToolCall,
 )
+
+
+def _usage_count(value: JsonValue) -> int:
+    if not isinstance(value, (int, float, str)):
+        raise TypeError("Expected a number or numeric string for a Gemini token count")
+    return int(value)
 
 
 class GeminiStream:
@@ -305,12 +310,12 @@ class GeminiStream:
             return [*events, gemini_frame(self._terminal)]
         events.extend(self._output.close_content_blocks())
         usage = self._usage
-        input_tokens = json_index(
+        input_tokens = _usage_count(
             usage.get("promptTokenCount", self._output.input_tokens)
         )
-        reasoning_tokens = json_index(usage.get("thoughtsTokenCount", 0))
+        reasoning_tokens = _usage_count(usage.get("thoughtsTokenCount", 0))
         output_tokens = (
-            json_index(usage.get("candidatesTokenCount", 0)) + reasoning_tokens
+            _usage_count(usage.get("candidatesTokenCount", 0)) + reasoning_tokens
         )
         reason = (
             "max_tokens"
@@ -327,13 +332,13 @@ class GeminiStream:
                 usage=ChatStreamUsage(
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
-                    cached_tokens=json_index(usage.get("cachedContentTokenCount", 0)),
+                    cached_tokens=_usage_count(usage.get("cachedContentTokenCount", 0)),
                     reasoning_tokens=reasoning_tokens,
                     reported={
                         "prompt_tokens": input_tokens,
                         "completion_tokens": output_tokens,
                         "reasoning_tokens": reasoning_tokens,
-                        "total_tokens": json_index(
+                        "total_tokens": _usage_count(
                             usage.get("totalTokenCount", input_tokens + output_tokens)
                         ),
                     },
