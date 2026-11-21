@@ -1,15 +1,22 @@
 """Tests for catalog-driven Command Code Messages / Chat Completions routing."""
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Callable, Coroutine
 from unittest.mock import patch
 
 import httpx
+import httpx2
 import pytest
+from openai import AsyncOpenAI
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.gemini import GeminiRequest
+from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.commandcode import (
     CommandCodeProvider,
@@ -246,46 +253,6 @@ async def test_claude_model_is_sent_to_messages_endpoint_with_api_key() -> None:
 
 
 @pytest.mark.asyncio
-async def test_open_model_is_sent_to_chat_transport_not_messages() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "GET"
-        return httpx.Response(200, json=_payload())
-
-    provider = CommandCodeProvider(
-        _config(),
-        admission=immediate_admission(provider_name="commandcode"),
-        http_client=_client(handler),
-    )
-    sentinel = object()
-
-    async def fake_chat(
-        *_args: object, **kwargs: object
-    ) -> AsyncIterator[StreamOutput]:
-        assert kwargs["input_tokens"] == 7
-        assert sentinel is not None
-        return
-        yield
-
-    try:
-        with (
-            patch.object(
-                provider._chat, "stream_messages", side_effect=fake_chat
-            ) as chat,
-            patch.object(provider._messages, "stream_messages") as native,
-        ):
-            await _drain(
-                provider.stream_messages(
-                    _request("deepseek/deepseek-v4-flash"), input_tokens=7
-                )
-            )
-    finally:
-        await provider.cleanup()
-
-    chat.assert_called_once()
-    native.assert_not_called()
-
-
-@pytest.mark.asyncio
 async def test_unknown_model_is_rejected_before_any_generation_request() -> None:
     seen: list[httpx.Request] = []
 
@@ -323,3 +290,154 @@ async def test_list_model_infos_uses_the_catalog() -> None:
         "claude-sonnet-5-5",
         "deepseek/deepseek-v4-flash",
     }
+
+
+def _chat_sse(text: str) -> str:
+    chunks: tuple[JsonObject, ...] = (
+        {
+            "id": "chatcmpl_1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "deepseek/deepseek-v4-flash",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": text},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl_1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "deepseek/deepseek-v4-flash",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+        },
+    )
+    return "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + (
+        "data: [DONE]\n\n"
+    )
+
+
+def _chat_request(model: str) -> ChatRequest:
+    return ChatRequest.model_validate(
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 64,
+        }
+    )
+
+
+def _gemini_request(model: str) -> GeminiRequest:
+    return GeminiRequest.model_validate(
+        {"model": model, "contents": [{"role": "user", "parts": [{"text": "hello"}]}]}
+    )
+
+
+def _responses_request(model: str) -> OpenAIResponsesRequest:
+    return OpenAIResponsesRequest.model_validate(
+        {"model": model, "input": "hello", "max_output_tokens": 64}
+    )
+
+
+_Request = MessagesRequest | ChatRequest | GeminiRequest | OpenAIResponsesRequest
+_METHODS = ("stream_messages", "stream_chat", "stream_gemini", "stream_responses")
+
+
+def _call(
+    provider: CommandCodeProvider, method: str, model: str
+) -> AsyncIterator[StreamOutput]:
+    if method == "stream_chat":
+        return provider.stream_chat(_chat_request(model))
+    if method == "stream_gemini":
+        return provider.stream_gemini(_gemini_request(model))
+    if method == "stream_responses":
+        return provider.stream_responses(_responses_request(model))
+    return provider.stream_messages(_request(model))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", _METHODS)
+@pytest.mark.parametrize(
+    ("model", "messages_transport"),
+    [("claude-sonnet-5-5", True), ("deepseek/deepseek-v4-flash", False)],
+    ids=["messages-transport", "chat-transport"],
+)
+async def test_every_ingress_reaches_only_the_transport_that_serves_the_model(
+    method: str, model: str, messages_transport: bool
+) -> None:
+    provider = CommandCodeProvider(
+        _config(),
+        admission=immediate_admission(provider_name="commandcode"),
+        http_client=_client(lambda _request: httpx.Response(200, json=_payload())),
+    )
+    seen: list[str] = []
+
+    def spy(request: _Request, **_kwargs: object) -> AsyncIterator[StreamOutput]:
+        seen.append(request.model)
+
+        async def empty() -> AsyncIterator[StreamOutput]:
+            return
+            yield
+
+        return empty()
+
+    target = provider._messages if messages_transport else provider._chat
+    other = provider._chat if messages_transport else provider._messages
+    try:
+        with (
+            patch.object(target, method, side_effect=spy),
+            patch.object(other, method) as untouched,
+        ):
+            await _drain(_call(provider, method, model))
+    finally:
+        await provider.cleanup()
+
+    assert seen == [model]
+    untouched.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_chat_model_sends_authenticated_chat_completions_request() -> None:
+    chat_requests: list[httpx2.Request] = []
+
+    def chat_handler(request: httpx2.Request) -> httpx2.Response:
+        chat_requests.append(request)
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=_chat_sse("from-chat"),
+        )
+
+    sdk = AsyncOpenAI(
+        api_key="test_commandcode_key",
+        base_url=BASE_URL,
+        max_retries=0,
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(chat_handler)),
+    )
+    with patch(
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI", return_value=sdk
+    ):
+        provider = CommandCodeProvider(
+            _config(),
+            admission=immediate_admission(provider_name="commandcode"),
+            http_client=_client(lambda _request: httpx.Response(200, json=_payload())),
+        )
+    try:
+        text = await _drain(
+            provider.stream_messages(_request("deepseek/deepseek-v4-flash"))
+        )
+    finally:
+        await provider.cleanup()
+
+    assert "from-chat" in text
+    assert len(chat_requests) == 1
+    sent = chat_requests[0]
+    assert str(sent.url) == f"{BASE_URL}/chat/completions"
+    assert sent.headers["authorization"] == "Bearer test_commandcode_key"
+    body = decode_object(sent.content)
+    assert body["model"] == "deepseek/deepseek-v4-flash"
+    assert body["stream"] is True
