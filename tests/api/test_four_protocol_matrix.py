@@ -39,6 +39,7 @@ from tests.wire_payload import (
     int_payload,
     object_array,
     object_payload,
+    response_object,
     response_payload,
     string_payload,
 )
@@ -295,6 +296,49 @@ def response_value(response: httpx.Response, wire: str, streaming: bool):
         assert isinstance(accumulator, ChatResponseAccumulator)
         accumulator.finish()
     return accumulator.result()
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_gemini_tool_call_survives_whole_valued_candidate_index(streaming: bool):
+    events = source_events("gemini")
+    candidate = object_array(events[0]["candidates"])[0]
+    candidate["index"] = 0.0
+
+    def reply(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=f"data: {json.dumps(events[0])}\n\n",
+        )
+
+    with TestClient(matrix_app("gemini", native_reply=reply)) as client:
+        path, body = ingress_request("gemini", streaming)
+        result = object_payload(
+            response_value(client.post(path, json=body), "gemini", streaming)
+        )
+    content = object_payload(object_array(result["candidates"])[0]["content"])
+    assert any(
+        part.get("functionCall") == GEMINI_PARTS[1]["functionCall"]
+        for part in object_array(content["parts"])
+    )
+
+
+def test_gemini_backed_chat_rejects_nonstring_tool_result_id():
+    def unexpected_request(_: httpx.Request) -> Never:
+        raise AssertionError("Invalid tool history reached the upstream provider")
+
+    history = [
+        {"role": "user", "content": "read"},
+        {"role": "tool", "tool_call_id": 1, "content": "tool result"},
+    ]
+    with TestClient(matrix_app("gemini", native_reply=unexpected_request)) as client:
+        path, body = ingress_request("chat", False, history)
+        response = client.post(path, json=body)
+    assert response.status_code == 400, response.text
+    assert (
+        object_payload(response_object(response)["error"])["type"]
+        == "invalid_request_error"
+    )
 
 
 def reply_history(value: JsonObject, wire: str):

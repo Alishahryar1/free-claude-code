@@ -70,13 +70,20 @@ def call_references(frames: Iterable[str]) -> tuple[CompletedCall, ...]:
                             )
                         )
             for candidate in json_objects(data.get("candidates", [])):
+                candidate_index = candidate.get("index", 0)
                 content = json_object(candidate.get("content", {}))
                 for index, part in enumerate(json_objects(content.get("parts", []))):
                     if "functionCall" in part:
                         result.append(
                             CompletedCall(
                                 "gemini",
-                                (json_index(candidate.get("index", 0)), index),
+                                # Native Gemini also accepts 0.0 for its sole candidate.
+                                (
+                                    0
+                                    if candidate_index == 0
+                                    else json_index(candidate_index),
+                                    index,
+                                ),
                                 optional_string(
                                     json_object(part["functionCall"]).get("id")
                                 ),

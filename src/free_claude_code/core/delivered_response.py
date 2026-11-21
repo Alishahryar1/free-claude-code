@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from copy import deepcopy
+from decimal import Decimal
 from typing import Literal
 
 import simplejson
@@ -678,7 +679,10 @@ class DeliveredResponse:
 
     def usage(self, output: list[DecimalJsonObject] | None = None) -> DecimalJsonObject:
         initial = deepcopy(json_object(self.header.get("usage") or {}))
-        input_tokens = json_index(initial.get("input_tokens", 0))
+        reported_input = initial.get("input_tokens")
+        input_tokens = (
+            reported_input if isinstance(reported_input, (int, float, Decimal)) else 0
+        )
         output_tokens = self.output_tokens(output)
         return {
             **initial,

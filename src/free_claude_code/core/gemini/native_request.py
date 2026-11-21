@@ -220,8 +220,8 @@ def chat_to_gemini(
             system.extend(parts)
             continue
         if role == "tool":
-            call_id = json_text(message["tool_call_id"])
-            if call_id not in calls:
+            call_id = message.get("tool_call_id")
+            if not isinstance(call_id, str) or call_id not in calls:
                 raise GeminiConversionError("Orphaned tool response")
             _append(
                 contents,

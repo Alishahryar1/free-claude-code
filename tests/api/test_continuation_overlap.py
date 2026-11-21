@@ -198,10 +198,27 @@ async def test_split_replay_has_one_answer_across_representations(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("representation", ["terminal", "text_done", "mixed"])
-async def test_split_pure_replay_is_not_public_progress(representation: str):
+@pytest.mark.parametrize(
+    "input_tokens",
+    [
+        12,
+        pytest.param(
+            12.0,
+            marks=pytest.mark.filterwarnings(
+                "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
+            ),
+        ),
+    ],
+)
+async def test_split_pure_replay_is_not_public_progress(
+    representation: str, input_tokens: int | float
+):
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
-            return 200, text_events("responses", "Hello ", complete=False)
+            events = text_events("responses", "Hello ", complete=False)
+            usage = object_payload(object_payload(events[0]["response"])["usage"])
+            usage["input_tokens"] = input_tokens
+            return 200, events
         return 200, responses_parts(["He", "llo "], representation=representation)
 
     async with _harness("responses", reply, max_attempts=3) as (send, bodies, _):
@@ -212,6 +229,9 @@ async def test_split_pure_replay_is_not_public_progress(representation: str):
     assert len(bodies) == 2
     assert events[-1].event == "response.failed"
     assert response_text(events[-1]) == "Hello "
+    usage = object_payload(object_payload(events[-1].data["response"])["usage"])
+    assert usage["input_tokens"] == 12
+    assert usage["total_tokens"] == 12 + int_payload(usage["output_tokens"])
 
 
 @pytest.mark.asyncio
