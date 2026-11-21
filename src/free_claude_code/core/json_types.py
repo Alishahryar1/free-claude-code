@@ -39,6 +39,14 @@ def json_array[T](value: JsonTree[T]) -> list[JsonTree[T]]:
     return value
 
 
+def normalize_empty_array_field(payload: JsonObject, key: str) -> None:
+    """Canonicalize empty provider placeholders in a known array field."""
+    value = payload.get(key)
+    if isinstance(value, (dict, str)) and not value:
+        empty: list[JsonValue] = []
+        payload[key] = empty
+
+
 def json_index(value: object) -> int:
     if not isinstance(value, int):
         raise TypeError("Expected an integer index")

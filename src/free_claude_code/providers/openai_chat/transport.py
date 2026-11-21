@@ -56,6 +56,7 @@ from free_claude_code.core.json_types import (
     json_object,
     json_objects,
     json_text,
+    normalize_empty_array_field,
 )
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -526,20 +527,15 @@ class _ChatStreamPresenter:
 def _native_chunk_payload(chunk: ChatCompletionChunk) -> JsonObject:
     """Normalize empty provider arrays at the native Chat SDK boundary."""
     payload: JsonObject = chunk.model_dump(mode="json", exclude_unset=True)
-    choices = payload.get("choices")
-    if isinstance(choices, (dict, str)) and not choices:
-        empty_choices: list[JsonObject] = []
-        payload["choices"] = empty_choices
-    if isinstance(choices, list):
+    normalize_empty_array_field(payload, "choices")
+    if isinstance(choices := payload.get("choices"), list):
         for choice in choices:
             if not isinstance(choice, dict) or not isinstance(
                 delta := choice.get("delta"), dict
             ):
                 continue
             for field in ("tool_calls", "reasoning_details"):
-                value = delta.get(field)
-                if isinstance(value, (dict, str)) and not value:
-                    delta[field] = []
+                normalize_empty_array_field(delta, field)
     return payload
 
 

@@ -478,6 +478,94 @@ def test_responses_text_translation_preserves_provider_index_encodings(
         assert object_payload(result["usageMetadata"])["totalTokenCount"] == 10
 
 
+@pytest.mark.filterwarnings(
+    "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
+)
+@pytest.mark.parametrize(
+    "snapshot", ["response.created", "response.completed", "response.failed"]
+)
+@pytest.mark.parametrize("empty_output", [{}, ""])
+def test_native_responses_preserves_lifecycle_with_empty_output(
+    snapshot: str, empty_output: JsonValue
+):
+    events = text_events("responses", "Hello")
+    if snapshot == "response.failed":
+        events[-1]["type"] = snapshot
+        failure = object_payload(events[-1]["response"])
+        failure.update(
+            status="failed",
+            error={"code": "server_error", "message": "Upstream ended the request"},
+        )
+    event = next(event for event in events if event["type"] == snapshot)
+    object_payload(event["response"])["output"] = empty_output
+
+    def reply(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+        )
+
+    with TestClient(matrix_app("responses", sdk_reply=reply)) as client:
+        path, body = ingress_request("responses", True)
+        response = client.post(path, json=body)
+
+    assert response.status_code == 200, response.text
+    streamed = parse_sse_text(response.text)
+    assert streamed[0].event == "response.created"
+    assert object_payload(streamed[0].data["response"])["output"] == []
+    assert [
+        frame.data["delta"]
+        for frame in streamed
+        if frame.event == "response.output_text.delta"
+    ] == ["Hello"]
+    final = streamed[-1]
+    if snapshot == "response.failed":
+        assert final.event == snapshot
+        error = object_payload(object_payload(final.data["response"])["error"])
+        assert "Upstream ended the request" in string_payload(error["message"])
+    else:
+        assert final.event == "response.completed"
+
+
+@pytest.mark.parametrize("wire", ["chat", "gemini", "messages", "responses"])
+@pytest.mark.parametrize("empty_parts", [{}, ""])
+def test_gemini_finishes_with_empty_provider_parts(wire: str, empty_parts: JsonValue):
+    events = [
+        {
+            "candidates": [
+                {"index": 0, "content": {"role": "model", "parts": [{"text": "Hello"}]}}
+            ]
+        },
+        {
+            "candidates": [
+                {
+                    "index": 0,
+                    "content": {"role": "model", "parts": empty_parts},
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 8,
+                "candidatesTokenCount": 2,
+                "totalTokenCount": 10,
+            },
+        },
+    ]
+
+    def reply(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+        )
+
+    with TestClient(matrix_app("gemini", native_reply=reply)) as client:
+        path, body = ingress_request(wire, True)
+        result = response_value(client.post(path, json=body), wire, True)
+    assert "Hello" in json.dumps(result)
+
+
 @pytest.mark.parametrize("wire", ["chat", "gemini", "messages", "responses"])
 @pytest.mark.parametrize(
     "event_type", ["message_start", "message_delta", "message_stop"]
