@@ -63,11 +63,16 @@ def _stream_chat(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("include_usage", "input_count"),
-    [(True, 4.0), (False, 4.0), (False, "unavailable")],
+    ("include_usage", "input_count", "output_count"),
+    [
+        (True, 4.0, 7.0),
+        (True, 4.0, 7.25),
+        (False, 4.0, 7.0),
+        (False, "unavailable", 7.0),
+    ],
 )
 async def test_messages_to_chat_completes_with_provider_usage(
-    include_usage: bool, input_count: JsonValue
+    include_usage: bool, input_count: JsonValue, output_count: float
 ):
     events = _events("Hello")
     object_payload(events[0]["message"])["usage"] = {
@@ -76,7 +81,7 @@ async def test_messages_to_chat_completes_with_provider_usage(
         "cache_creation_input_tokens": 6.0,
         "output_tokens": 0,
     }
-    events[-2]["usage"] = {"output_tokens": 7.0}
+    events[-2]["usage"] = {"output_tokens": output_count}
     request = ChatRequest.model_validate(
         {
             "model": "test",
@@ -94,11 +99,12 @@ async def test_messages_to_chat_completes_with_provider_usage(
         usage = object_payload(result["usage"])
         assert usage == {
             "prompt_tokens": 15,
-            "completion_tokens": 7,
-            "total_tokens": 22,
+            "completion_tokens": output_count,
+            "total_tokens": 15 + output_count,
             "prompt_tokens_details": {"cached_tokens": 5},
         }
-        assert type(usage["completion_tokens"]) is int
+        if output_count.is_integer():
+            assert type(usage["completion_tokens"]) is int
         assert (
             type(object_payload(usage["prompt_tokens_details"])["cached_tokens"]) is int
         )

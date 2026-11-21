@@ -9,7 +9,7 @@ import simplejson
 
 from free_claude_code.core.diagnostics import safe_exception_message
 from free_claude_code.core.failures import find_execution_failure
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue, json_index
 
 from .errors import openai_error_from_failure, openai_error_payload
 
@@ -18,6 +18,13 @@ OPENAI_RESPONSES_SSE_HEADERS: dict[str, str] = {
     "Cache-Control": "no-cache",
     "Connection": "keep-alive",
 }
+
+
+def responses_event_index(value: JsonValue) -> int:
+    """Read an integral position from a provider's Responses event."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return json_index(value)
 
 
 def format_response_sse_event(event_type: str, data: Mapping[str, Any]) -> str:

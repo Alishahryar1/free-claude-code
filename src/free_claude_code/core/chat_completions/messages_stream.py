@@ -9,12 +9,12 @@ from ..json_types import JsonObject, JsonValue, json_object, json_text
 from .response import ChatOutput, chat_failure
 
 
-def _token_count(value: JsonValue) -> int:
+def _token_count(value: JsonValue) -> int | float:
     if isinstance(value, int):
         return value
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
-    raise chat_failure("Messages usage token count must be a whole number")
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else value
+    raise chat_failure("Messages usage token count must be a number")
 
 
 class ChatMessagesStream:

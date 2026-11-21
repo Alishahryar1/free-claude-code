@@ -24,6 +24,7 @@ from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.providers.gemini import GeminiProvider
 from free_claude_code.providers.open_router import OpenRouterProvider
 from tests.api.support import create_test_app, provider_manager_for_app
+from tests.api.test_delivered_stream_recovery import text_events
 from tests.providers.support import (
     MockHandler,
     immediate_admission,
@@ -339,6 +340,50 @@ def test_gemini_backed_chat_rejects_nonstring_tool_result_id():
         object_payload(response_object(response)["error"])["type"]
         == "invalid_request_error"
     )
+
+
+@pytest.mark.filterwarnings(
+    "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
+)
+@pytest.mark.parametrize("wire", ["chat", "gemini"])
+@pytest.mark.parametrize("index_case", ["output_index", "content_index", "unused"])
+def test_responses_text_translation_preserves_whole_valued_indexes(
+    wire: str, index_case: str
+):
+    events = text_events("responses", "Hello")
+    if index_case == "unused":
+        events[0]["output_index"] = None
+        events[-1]["output_index"] = None
+    else:
+        delta = next(
+            event for event in events if event["type"] == "response.output_text.delta"
+        )
+        delta[index_case] = 0.0
+
+    def reply(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+        )
+
+    with TestClient(matrix_app("responses", sdk_reply=reply)) as client:
+        path, body = ingress_request(wire, False)
+        result = object_payload(
+            response_value(client.post(path, json=body), wire, False)
+        )
+
+    if wire == "chat":
+        choice = object_array(result["choices"])[0]
+        assert object_payload(choice["message"])["content"] == "Hello"
+        assert object_payload(result["usage"])["total_tokens"] == 10
+    else:
+        candidate = object_array(result["candidates"])[0]
+        parts = object_array(object_payload(candidate["content"])["parts"])
+        assert (
+            "".join(string_payload(part.get("text", "")) for part in parts) == "Hello"
+        )
+        assert object_payload(result["usageMetadata"])["totalTokenCount"] == 10
 
 
 def reply_history(value: JsonObject, wire: str):

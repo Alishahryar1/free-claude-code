@@ -5,7 +5,8 @@ from uuid import uuid4
 
 from ..failures import ExecutionFailure
 from ..history_replay import ReplayOrigin, ReplayRecord
-from ..json_types import JsonObject, JsonValue, json_index, json_object, json_objects
+from ..json_types import JsonObject, JsonValue, json_object, json_objects
+from ..openai_responses.events import responses_event_index
 from ..openai_tool_names import OpenAIToolNameCodec
 from .response import GeminiOutput, conversion_failure, function_arguments
 
@@ -53,13 +54,50 @@ class GeminiResponsesStream:
         data = payload
         if self.completed:
             raise conversion_failure("Responses event arrived after completion")
-        index = json_index(data.get("output_index", 0))
         if event_type in {
             "response.created",
             "response.in_progress",
             "response.queued",
         }:
             return []
+        if event_type in {"response.completed", "response.incomplete"}:
+            response = json_object(data.get("response", {}))
+            events: list[str] = []
+            for position, item in enumerate(json_objects(response.get("output", []))):
+                index = next(
+                    (
+                        i
+                        for i, known in self._items.items()
+                        if item.get("id") and known.get("id") == item["id"]
+                    ),
+                    position,
+                )
+                events.extend(self._item(index, item, complete=True))
+            self._output.order_records(sorted(self._items))
+            reason = "SAFETY" if self._refusal else "STOP"
+            if event_type == "response.incomplete":
+                incomplete = json_object(response.get("incomplete_details") or {}).get(
+                    "reason"
+                )
+                if incomplete not in ("max_output_tokens", "content_filter"):
+                    raise conversion_failure(
+                        f"Gemini cannot represent Responses incomplete reason {incomplete}"
+                    )
+                reason = "MAX_TOKENS" if incomplete == "max_output_tokens" else "SAFETY"
+            events.extend(
+                self._output.finish(
+                    reason,
+                    _usage(
+                        response.get("usage"),
+                        has_reasoning=any(
+                            item.get("type") == "reasoning"
+                            for item in self._items.values()
+                        ),
+                    ),
+                )
+            )
+            return events
+        index = responses_event_index(data.get("output_index", 0))
         if event_type == "response.output_item.added":
             item = data.get("item")
             if not isinstance(item, dict):
@@ -73,7 +111,7 @@ class GeminiResponsesStream:
         }:
             thought = "reasoning" in event_type
             field = "summary" if "summary" in event_type else "content"
-            position = json_index(
+            position = responses_event_index(
                 data.get("summary_index" if field == "summary" else "content_index", 0)
             )
             self._refusal |= "refusal" in event_type
@@ -112,7 +150,7 @@ class GeminiResponsesStream:
             "response.reasoning_summary_text.done",
         }:
             field = "summary" if "summary" in event_type else "content"
-            position = json_index(
+            position = responses_event_index(
                 data.get("summary_index" if field == "summary" else "content_index", 0)
             )
             self._refusal |= "refusal" in event_type
@@ -131,7 +169,7 @@ class GeminiResponsesStream:
         }:
             part = json_object(data.get("part", {}))
             field = "summary" if "summary" in event_type else "content"
-            position = json_index(
+            position = responses_event_index(
                 data.get("summary_index" if field == "summary" else "content_index", 0)
             )
             return self._part(index, field, position, part)
@@ -140,43 +178,6 @@ class GeminiResponsesStream:
             if not isinstance(item, dict):
                 raise conversion_failure("Responses completed item is missing")
             return self._item(index, item, complete=True)
-        if event_type in {"response.completed", "response.incomplete"}:
-            response = json_object(data.get("response", {}))
-            events: list[str] = []
-            for position, item in enumerate(json_objects(response.get("output", []))):
-                index = next(
-                    (
-                        i
-                        for i, known in self._items.items()
-                        if item.get("id") and known.get("id") == item["id"]
-                    ),
-                    position,
-                )
-                events.extend(self._item(index, item, complete=True))
-            self._output.order_records(sorted(self._items))
-            reason = "SAFETY" if self._refusal else "STOP"
-            if event_type == "response.incomplete":
-                incomplete = json_object(response.get("incomplete_details") or {}).get(
-                    "reason"
-                )
-                if incomplete not in ("max_output_tokens", "content_filter"):
-                    raise conversion_failure(
-                        f"Gemini cannot represent Responses incomplete reason {incomplete}"
-                    )
-                reason = "MAX_TOKENS" if incomplete == "max_output_tokens" else "SAFETY"
-            events.extend(
-                self._output.finish(
-                    reason,
-                    _usage(
-                        response.get("usage"),
-                        has_reasoning=any(
-                            item.get("type") == "reasoning"
-                            for item in self._items.values()
-                        ),
-                    ),
-                )
-            )
-            return events
         if event_type == "response.output_text.annotation.added":
             raise conversion_failure(
                 "Gemini cannot represent upstream native annotations"
