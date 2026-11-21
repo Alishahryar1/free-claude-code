@@ -95,11 +95,17 @@ async def test_executor_converts_selected_opencode_route_once(wire, egress, warm
         ("responses", "responses"): "_build_native_body",
     }
     name = builders[egress, wire]
-    routed = _routed_request() if wire == "messages" else _routed_responses_request()
-    routed = replace(
-        routed,
-        request=routed.request.model_copy(update={"model": f"{egress}-selector"}),
-    )
+    update = {"model": f"{egress}-selector"}
+    if wire == "messages":
+        messages_route = _routed_request()
+        routed = replace(
+            messages_route, request=messages_route.request.model_copy(update=update)
+        )
+    else:
+        responses_route = _routed_responses_request()
+        routed = replace(
+            responses_route, request=responses_route.request.model_copy(update=update)
+        )
     try:
         if warm:
             await provider.list_model_infos()

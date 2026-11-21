@@ -10,11 +10,13 @@ from fastapi.testclient import TestClient
 
 from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.base import BaseProvider
 from tests.api.support import create_test_app
 from tests.providers.support import without_empty_reasoning
 from tests.providers.test_anthropic_fallback_reasoning import model_metadata
 from tests.providers.test_anthropic_provider import native_body, provider
+from tests.wire_payload import array_payload
 
 
 @pytest.mark.parametrize("effort", ["inherit", "client", "off", "low", "high", "max"])
@@ -137,7 +139,7 @@ def test_native_ingress_forwards_system_turns_for_upstream_to_judge():
     )
     body = native_body()
     body["messages"] = [
-        *body["messages"],
+        *array_payload(body["messages"]),
         {"role": "system", "content": "reminder", "clear_at": "next_user_message"},
         {"role": "user", "content": "again"},
     ]
@@ -210,7 +212,7 @@ def test_leading_pings_allow_exhausted_primary_to_reach_native_fallback():
     def handle(request):
         model = json.loads(request.content)["model"]
         calls.append(model)
-        events = (
+        events: list[JsonObject] = (
             [{"type": "error", "error": {"type": "overloaded_error"}}]
             if model == "primary"
             else _events()

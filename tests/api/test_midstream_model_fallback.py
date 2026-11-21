@@ -28,6 +28,7 @@ from tests.providers.support import (
 )
 from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 async def delivered_candidates(senders, wire, *, tools=None, history=None):
@@ -105,11 +106,11 @@ async def test_messages_fallback_accepts_partial_output_slots(wire, case):
     assert len(bodies) == 1
     assert_completed(events, wire)
     assert public_text(events, wire) == prefix + "Recovered."
-    for message in bodies[0]["messages"]:
+    for message in object_array(bodies[0]["messages"]):
         if message.get("role") == "assistant":
             assert all(
                 block.get("text") != ""
-                for block in message["content"]
+                for block in object_array(message["content"])
                 if block.get("type") == "text"
             )
     assert ("Find 17." in str(bodies[0]["messages"])) is (case != "text_empty_part")
@@ -296,7 +297,7 @@ async def test_permanent_rejection_advances_without_erasing_incoming_prefix(
         2 if status == 400 else 1,
         1,
     ]
-    assert "Hello " in str(third_bodies[0]["messages"][-2])
+    assert "Hello " in str(array_payload(third_bodies[0]["messages"])[-2])
     assert_completed(parse_sse_text(raw), wire)
     assert public_text(parse_sse_text(raw), wire) == "Hello world."
 
@@ -324,7 +325,7 @@ async def test_abandoned_calls_never_cross_model_boundary(protocol, wire, visibl
         raw = await delivered_candidates([first, second], wire, tools=_tools(wire))
     assert len(first_bodies) == len(second_bodies) == 1
     assert "call_abandoned" not in raw and "abandoned" not in str(second_bodies[0])
-    assert len(second_bodies[0]["messages"]) == (3 if visible else 1)
+    assert len(object_array(second_bodies[0]["messages"])) == (3 if visible else 1)
     events = parse_sse_text(raw)
     assert_completed(events, wire)
     assert public_text(events, wire) == ("Before. " if visible else "")
@@ -426,7 +427,7 @@ async def test_released_calls_handoff_only_for_retryable_failure(
                 **completed[-1],
                 "type": "response.failed",
                 "response": {
-                    **completed[-1]["response"],
+                    **object_payload(completed[-1]["response"]),
                     "status": "failed",
                     "error": error,
                 },
@@ -608,12 +609,18 @@ async def test_shared_cooldown_skips_candidate_with_zero_calls_and_keeps_seed(
         ),
     ):
 
-        def same_model(*args, **kwargs):
-            return first(*args, **{**kwargs, "model": "provider-model"})
+        def same_model(wire, history, *, tools, model, continuation):
+            return first(
+                wire,
+                history,
+                tools=tools,
+                model="provider-model",
+                continuation=continuation,
+            )
 
         raw = await delivered_candidates([first, same_model, third], wire)
     assert [execution.attempts_started for execution in executions] == [2, 0]
     assert len(shared_bodies) == 2 and len(third_bodies) == 1
-    assert "Hello " in str(third_bodies[0]["messages"][-2])
+    assert "Hello " in str(array_payload(third_bodies[0]["messages"])[-2])
     assert_completed(parse_sse_text(raw), wire)
     assert public_text(parse_sse_text(raw), wire) == "Hello world."

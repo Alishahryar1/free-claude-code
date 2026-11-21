@@ -2,6 +2,7 @@
 
 import pytest
 
+from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from tests.providers.test_history_transports import _harness, _saved_reply
@@ -46,12 +47,13 @@ async def test_named_effort_reaches_nim_without_numeric_budget(wire, policy, exp
         bodies,
         provider,
     ):
+        request = _alias_request(wire)
         stream = (
-            provider.stream_messages
-            if wire == "messages"
-            else provider.stream_responses
+            provider.stream_messages(request, reasoning=policy)
+            if isinstance(request, MessagesRequest)
+            else provider.stream_responses(request, reasoning=policy)
         )
-        reply = await _saved_reply(stream(_alias_request(wire), reasoning=policy), wire)
+        reply = await _saved_reply(stream, wire)
 
     assert reply
     assert len(bodies) == 1
@@ -74,12 +76,13 @@ async def test_unsupported_named_effort_is_not_silently_remapped(wire, policy):
         bodies,
         provider,
     ):
-        stream = (
-            provider.stream_messages
-            if wire == "messages"
-            else provider.stream_responses
-        )
+        request = _alias_request(wire)
         with pytest.raises(ExecutionFailure, match="reasoning_effort"):
-            await _saved_reply(stream(_alias_request(wire), reasoning=policy), wire)
+            stream = (
+                provider.stream_messages(request, reasoning=policy)
+                if isinstance(request, MessagesRequest)
+                else provider.stream_responses(request, reasoning=policy)
+            )
+            await _saved_reply(stream, wire)
 
     assert len(bodies) == 1

@@ -9,9 +9,17 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.chat_completions.response import ChatResponseAccumulator
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.providers.anthropic_messages.transport import (
+    AnthropicMessagesTransport,
+)
+from free_claude_code.providers.openai_chat.provider import OpenAIChatProvider
+from free_claude_code.providers.openai_responses.transport import (
+    OpenAIResponsesTransport,
+)
 from tests.providers.test_anthropic_messages_transport import Endpoint
 from tests.providers.test_history_transports import _events_for, _harness, _native
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 async def collect(stream):
@@ -23,6 +31,31 @@ async def collect(stream):
     assert chunks[-1] == "data: [DONE]\n\n"
     accumulator.finish()
     return accumulator.result()
+
+
+def _stream_chat(
+    transport: AnthropicMessagesTransport
+    | OpenAIChatProvider
+    | OpenAIResponsesTransport,
+    request: ChatRequest,
+    reasoning: ReasoningPolicy,
+):
+    if isinstance(transport, AnthropicMessagesTransport):
+        return transport.stream_chat(
+            request,
+            endpoint_context=Endpoint(),
+            input_tokens=0,
+            request_id=None,
+            response_model="public",
+            reasoning=reasoning,
+        )
+    return transport.stream_chat(
+        request,
+        input_tokens=0,
+        request_id=None,
+        response_model="public",
+        reasoning=reasoning,
+    )
 
 
 @pytest.mark.asyncio
@@ -37,15 +70,7 @@ async def test_chat_round_trip_preserves_native_reasoning_once(protocol):
                 "stream_options": {"include_usage": True},
             }
         )
-        kwargs = {
-            "input_tokens": 0,
-            "request_id": None,
-            "response_model": "public",
-            "reasoning": ReasoningPolicy(),
-        }
-        if protocol == "messages":
-            kwargs["endpoint_context"] = Endpoint()
-        first = await collect(transport.stream_chat(request, **kwargs))
+        first = await collect(_stream_chat(transport, request, ReasoningPolicy()))
         assert first["model"] == "public"
         message = first["choices"][0]["message"]
         assert "Find 17." in json.dumps(message)
@@ -58,7 +83,7 @@ async def test_chat_round_trip_preserves_native_reasoning_once(protocol):
                 ]
             }
         )
-        await collect(transport.stream_chat(second, **kwargs))
+        await collect(_stream_chat(transport, second, ReasoningPolicy()))
     history = (
         bodies[-1]["messages"][1]["content"]
         if protocol == "messages"
@@ -78,15 +103,7 @@ async def test_chat_explicit_off_keeps_protected_state_without_readable_echo(pro
         request = ChatRequest(
             model="test", messages=[{"role": "user", "content": "hello"}]
         )
-        kwargs = {
-            "input_tokens": 0,
-            "request_id": None,
-            "response_model": "public",
-            "reasoning": ReasoningPolicy.off(),
-        }
-        if protocol == "messages":
-            kwargs["endpoint_context"] = Endpoint()
-        result = await collect(transport.stream_chat(request, **kwargs))
+        result = await collect(_stream_chat(transport, request, ReasoningPolicy.off()))
     message = result["choices"][0]["message"]
     assert "Find 17." not in json.dumps(message)
     assert any(
@@ -120,15 +137,7 @@ async def test_completed_chat_tool_arguments_remain_opaque(protocol, arguments):
                 ],
             }
         )
-        kwargs = {
-            "input_tokens": 0,
-            "request_id": None,
-            "response_model": "public",
-            "reasoning": ReasoningPolicy(),
-        }
-        if protocol == "messages":
-            kwargs["endpoint_context"] = Endpoint()
-        result = await collect(transport.stream_chat(request, **kwargs))
+        result = await collect(_stream_chat(transport, request, ReasoningPolicy()))
     # A Messages zero-argument call streams one empty delta after input {}.
     expected = "{}" if protocol == "messages" and not arguments else arguments
     assert (
@@ -142,12 +151,14 @@ async def test_chat_round_trip_keeps_multiple_summary_parts():
     from tests.providers.test_history_transports import _events_for
 
     native = _native("responses")
-    native["summary"].append({"type": "summary_text", "text": "Then verify 19."})
+    array_payload(native["summary"]).append(
+        {"type": "summary_text", "text": "Then verify 19."}
+    )
 
     def reply(_):
         events = _events_for("responses")
         events[-2]["item"] = native
-        events[-1]["response"]["output"] = [native]
+        object_payload(events[-1]["response"])["output"] = [native]
         return 200, events
 
     async with _harness("responses", reply) as (_, bodies, transport):
@@ -171,7 +182,7 @@ async def test_chat_round_trip_keeps_multiple_summary_parts():
             }
         )
         await collect(transport.stream_chat(request, **kwargs))
-    assert native in bodies[-1]["input"]
+    assert native in object_array(bodies[-1]["input"])
 
 
 @pytest.mark.asyncio
@@ -229,9 +240,11 @@ async def test_chat_refusal_round_trip_preserves_responses_refusal_part():
             )
         )
     assistant = next(
-        value for value in bodies[-1]["input"] if value.get("role") == "assistant"
+        value
+        for value in object_array(bodies[-1]["input"])
+        if value.get("role") == "assistant"
     )
-    assert assistant["content"] == item["content"]
+    assert object_payload(assistant)["content"] == item["content"]
 
 
 @pytest.mark.asyncio
@@ -301,7 +314,7 @@ async def test_native_chat_json_reassembles_readable_reasoning_but_keeps_opaque_
                 )
             )
         )
-    assert bodies[-1]["messages"][1]["reasoning_details"] == expected
+    assert object_array(bodies[-1]["messages"])[1]["reasoning_details"] == expected
 
 
 def _tool_names(event):

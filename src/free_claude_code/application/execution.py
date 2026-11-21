@@ -402,9 +402,6 @@ class ProviderExecutor:
         candidates = (ProviderModelCandidate(primary), *resolved.fallbacks)
         gateway_model = resolved.original_model
         route_trace: dict[str, object] = {
-            "stage": "routing",
-            "event": "free_claude_code.api.route.resolved",
-            "source": "api",
             "request_id": request_id,
             "provider_id": primary.provider_id,
             "provider_model": primary.provider_model,
@@ -421,22 +418,24 @@ class ProviderExecutor:
             route_trace["wire_api"] = wire_api
         if self._generation_id is not None:
             route_trace["generation_id"] = self._generation_id
-        trace_event(**route_trace)
+        trace_event(
+            stage="routing",
+            event="free_claude_code.api.route.resolved",
+            source="api",
+            **route_trace,
+        )
 
-        ingress_trace: dict[str, object] = {
-            "stage": "ingress",
-            "event": (
+        trace_event(
+            lambda: {"snapshot": {**request_snapshot(), "model": gateway_model}},
+            stage="ingress",
+            event=(
                 "free_claude_code.api.responses.request.received"
                 if wire_api == "responses"
                 else "free_claude_code.api.request.received"
             ),
-            "source": "api",
-            "request_id": request_id,
-            ingress_count_name: ingress_count,
-        }
-        trace_event(
-            lambda: {"snapshot": {**request_snapshot(), "model": gateway_model}},
-            **ingress_trace,
+            source="api",
+            request_id=request_id,
+            **{ingress_count_name: ingress_count},
         )
 
         if self._log_raw_payloads:

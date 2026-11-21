@@ -14,6 +14,7 @@ from tests.api.test_hidden_stream_retries import delivered
 from tests.api.test_tool_call_buffer import _frames, _response
 from tests.providers.support import assistant_history_text
 from tests.providers.test_history_transports import _harness
+from tests.wire_payload import object_payload
 
 
 def responses_parts(parts, *, separate_items=False, representation="deltas"):
@@ -94,7 +95,7 @@ def responses_parts(parts, *, separate_items=False, representation="deltas"):
             {"type": "response.output_item.done", "output_index": index, "item": item}
         )
     terminal = deepcopy(template[-1])
-    terminal["response"]["output"] = items
+    object_payload(terminal["response"])["output"] = items
     events.append(terminal)
     if representation == "terminal":
         events = [events[0], terminal]
@@ -208,7 +209,7 @@ async def test_messages_replay_across_blocks_uses_the_same_rule(wire, seeded):
             for event in part:
                 event["index"] = index
             if seeded:
-                part[0]["content_block"]["text"] = text
+                object_payload(part[0]["content_block"])["text"] = text
                 part.pop(1)
             events.extend(part)
         return 200, [*events, *template[-2:]]
@@ -320,6 +321,7 @@ async def test_overlap_release_records_each_packet_only_when_returned():
                 and event.data["text"] == "world."
                 for event in frames
             ):
+                assert states[0].prefix is not None
                 assert states[0].prefix.text == "Hello world."
                 assert resumed == []
         assert resumed == ["Hello world."]
@@ -402,6 +404,7 @@ async def test_cancellation_drops_ambiguous_replay_and_closes_the_source():
     reader = asyncio.create_task(consume())
     try:
         await asyncio.wait_for(waiting.wait(), 1)
+        assert states[0].prefix is not None
         assert states[0].prefix.text == "Hello "
         reader.cancel()
         with pytest.raises(asyncio.CancelledError):

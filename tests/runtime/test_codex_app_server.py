@@ -530,6 +530,7 @@ async def test_terminal_storage_failure_drains_the_native_dispatcher(
         assert len(rejected) == 1 and len(connections) == 1
         native = connections[0]
         assert native.process.returncode is not None
+        assert native._reader is not None and native._dispatcher is not None
         assert native._reader.done() and native._dispatcher.done()
         saved = await store.latest_run(session.id)
         assert saved is not None and saved.status == "running"

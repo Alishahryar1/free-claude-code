@@ -216,9 +216,6 @@ def trace_terminal_execution_error(
     else:
         record_request_failure(error_type)
     fields: dict[str, object] = {
-        "stage": "egress",
-        "event": "free_claude_code.api.response.terminal_execution_error",
-        "source": "api",
         "wire_api": wire_api,
         "request_id": request_id,
         "status_code": status_code,
@@ -231,7 +228,12 @@ def trace_terminal_execution_error(
     if failure is not None:
         fields["failure_kind"] = failure.kind.value
         fields["provider_retryable"] = failure.retryable
-    trace_event(**fields)
+    trace_event(
+        stage="egress",
+        event="free_claude_code.api.response.terminal_execution_error",
+        source="api",
+        **fields,
+    )
 
 
 async def _first_chunk_streaming_response(

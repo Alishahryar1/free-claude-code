@@ -355,7 +355,7 @@ def test_sdk_stream_invalid_request_preserves_public_error_semantics(
     def reply(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
-        events = []
+        events: list[JsonObject] = []
         if partial:
             events.append(
                 {

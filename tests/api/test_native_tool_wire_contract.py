@@ -21,6 +21,7 @@ from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 async def public_frames(body, wire):
@@ -43,7 +44,7 @@ async def public_frames(body, wire):
 
 def truncated_messages():
     events = tool_events("messages", "{}")
-    events[-2]["delta"]["stop_reason"] = "max_tokens"
+    object_payload(events[-2]["delta"])["stop_reason"] = "max_tokens"
     events[-2:-2] = [
         {
             "type": "content_block_start",
@@ -113,7 +114,7 @@ async def test_filtered_messages_blocks_have_dense_consistent_client_indexes(
 
 def parallel_responses():
     events = tool_events("responses", "{}")
-    first = events[1]["item"]
+    first = object_payload(events[1]["item"])
     second = {**first, "id": "fc_second", "call_id": "call_second"}
     done = {**second, "status": "completed", "arguments": "{}"}
     events[2:2] = [
@@ -134,7 +135,7 @@ def parallel_responses():
         },
         {"type": "response.output_item.done", "output_index": 1, "item": done},
     ]
-    events[-1]["response"]["output"].append(done)
+    array_payload(object_payload(events[-1]["response"])["output"]).append(done)
     for index, event in enumerate(events):
         event["sequence_number"] = index
     return events
@@ -174,17 +175,21 @@ async def test_native_responses_number_every_emitted_event_in_output_order(
 @pytest.mark.parametrize("invalid", [None, "", "   ", "duplicate"])
 async def test_native_chat_never_releases_calls_without_unambiguous_ids(invalid):
     events = tool_events("chat", "{}")
-    first = events[0]["choices"][0]["delta"]["tool_calls"][0]
+    first = object_array(
+        object_payload(object_array(events[0]["choices"])[0]["delta"])["tool_calls"]
+    )[0]
     if invalid == "duplicate":
-        first["function"]["arguments"] = "{}"
+        object_payload(object_payload(first)["function"])["arguments"] = "{}"
         other = deepcopy(first)
-        other["index"] = 1
-        events[0]["choices"][0]["delta"]["tool_calls"].append(other)
+        object_payload(other)["index"] = 1
+        array_payload(
+            object_payload(object_array(events[0]["choices"])[0]["delta"])["tool_calls"]
+        ).append(other)
         events = [events[0], events[-1]]
     elif invalid is None:
         first.pop("id")
     else:
-        first["id"] = invalid
+        object_payload(first)["id"] = invalid
     prefix = {
         **events[0],
         "choices": [
@@ -230,7 +235,7 @@ async def test_native_chat_never_releases_calls_without_unambiguous_ids(invalid)
 async def test_native_complete_calls_require_execution_identity(protocol, field):
     events = tool_events(protocol, "{}")
     if protocol == "messages":
-        events[1]["content_block"].pop(field)
+        object_payload(events[1]["content_block"]).pop(field)
         p = provider(
             lambda _: httpx.Response(
                 200,
@@ -250,9 +255,9 @@ async def test_native_complete_calls_require_execution_identity(protocol, field)
     else:
         for event in events:
             if "item" in event:
-                event["item"].pop(field, None)
+                object_payload(event["item"]).pop(field, None)
             if "response" in event:
-                for item in event["response"]["output"]:
+                for item in object_array(object_payload(event["response"])["output"]):
                     item.pop(field, None)
         async with _harness("responses", lambda _: (200, events), max_attempts=1) as (
             send,
@@ -309,12 +314,14 @@ async def test_generated_alias_with_arguments_waits_for_remaining_name_and_sourc
     def reply(bodies):
         alias = bodies[-1]["tools"][0]["function"]["name"]
         events = tool_events("chat", "{}")
-        first = events[0]["choices"][0]["delta"]["tool_calls"][0]
-        first["function"] = {"name": alias[:15], "arguments": "{}"}
+        first = object_array(
+            object_payload(object_array(events[0]["choices"])[0]["delta"])["tool_calls"]
+        )[0]
+        object_payload(first)["function"] = {"name": alias[:15], "arguments": "{}"}
         if not complete:
             return 200, events[:1]
         second = deepcopy(events[0])
-        second["choices"][0]["delta"]["tool_calls"] = [
+        object_payload(object_array(second["choices"])[0]["delta"])["tool_calls"] = [
             {"index": 0, "function": {"name": alias[15:]}}
         ]
         return 200, [events[0], second, events[-1]]
@@ -352,12 +359,12 @@ async def test_contradictory_snapshot_never_replaces_a_completed_native_call(
     final = deepcopy(events[-1])
     changed = deepcopy(final)
     changed["type"] = kind
-    changed["response"]["status"] = kind.split(".")[-1]
-    changed["response"]["output"][0].update(
+    object_payload(changed["response"])["status"] = kind.split(".")[-1]
+    object_array(object_payload(changed["response"])["output"])[0].update(
         status="incomplete", name="delete", arguments='{"changed":true}'
     )
     if kind == "response.failed":
-        changed["response"]["error"] = {
+        object_payload(changed["response"])["error"] = {
             "code": "server_error",
             "message": "upstream failed",
         }
@@ -388,7 +395,9 @@ async def test_chat_fragment_placeholders_preserve_the_resolved_execution_id(
     wire, public, placeholder
 ):
     events = tool_events("chat", "{}")
-    events[1]["choices"][0]["delta"]["tool_calls"][0]["id"] = placeholder
+    object_array(
+        object_payload(object_array(events[1]["choices"])[0]["delta"])["tool_calls"]
+    )[0]["id"] = placeholder
     async with _harness("chat", lambda _: (200, events), max_attempts=1) as (
         send,
         bodies,

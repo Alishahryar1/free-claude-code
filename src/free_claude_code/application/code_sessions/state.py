@@ -487,7 +487,7 @@ class SessionState:
             raw=raw,
             complete=update.complete or bool(existing and existing.complete),
         )
-        if item == existing:
+        if existing is not None and item == existing:
             return existing, False
         self._items[item.id] = item
         self._dirty.add(item.id)

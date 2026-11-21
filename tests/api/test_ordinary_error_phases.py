@@ -13,6 +13,7 @@ from free_claude_code.application.errors import (
     UnknownProviderError,
 )
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.open_router import OpenRouterProvider
 from tests.api.support import create_test_app
 from tests.providers.support import immediate_admission, make_provider_config
@@ -50,7 +51,7 @@ def _settings(**updates: object) -> Settings:
 
 @pytest.mark.parametrize("mode", ["messages_stream", "messages_nonstream", "responses"])
 def test_conversion_error_returns_http_400_without_generation(mode):
-    payload = {"model": "open_router/test-model"}
+    payload: JsonObject = {"model": "open_router/test-model"}
     if mode == "responses":
         payload["input"] = [
             {"type": "reasoning", "encrypted_content": "fcc:history:v2:unsupported"}

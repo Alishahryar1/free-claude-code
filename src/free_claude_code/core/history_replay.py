@@ -398,10 +398,11 @@ def resolve_messages_replay(content: Sequence[JsonValue]) -> list[JsonValue]:
 
 def readable_reasoning(item: Mapping[str, JsonValue]) -> list[tuple[str, bool]]:
     """Keep distinct readable representations and their summary/full-text meaning."""
-    if isinstance(native_parts := item.get("parts"), list):
+    gemini_parts = item.get("parts")
+    if isinstance(gemini_parts, list):
         return [
             (str(part["text"]), True)
-            for part in native_parts
+            for part in gemini_parts
             if isinstance(part, dict)
             and part.get("thought") is True
             and isinstance(part.get("text"), str)
@@ -411,11 +412,11 @@ def readable_reasoning(item: Mapping[str, JsonValue]) -> list[tuple[str, bool]]:
         return [(text, False)] if text else []
     fields: list[tuple[str, bool]] = []
     for key in ("content", "summary"):
-        parts = item.get(key)
-        if isinstance(parts, list):
+        content_parts = item.get(key)
+        if isinstance(content_parts, list):
             text = "\n\n".join(
                 str(part["text"])
-                for part in parts
+                for part in content_parts
                 if isinstance(part, dict) and isinstance(part.get("text"), str)
             )
             if text:
@@ -1210,7 +1211,9 @@ def _restore_gemini_parts(
             # Harnesses can materialize declared defaults before echoing a call.
             # Ignore only added default-valued fields during comparison. The
             # signed native arguments are restored exactly, never rewritten.
-            for key, value in tool_defaults.get(call.get("name"), {}).items():
+            name = call.get("name")
+            defaults = tool_defaults.get(name, {}) if isinstance(name, str) else {}
+            for key, value in defaults.items():
                 if (
                     key not in original_args
                     and key in echo_args
@@ -1256,9 +1259,10 @@ def _prepare_gemini_history(
             for index, content in enumerate(contents[:-1] if continuation else contents)
             if isinstance(content, dict)
             and content.get("role", "user") == "user"
+            and isinstance(parts := content.get("parts"), list)
             and any(
                 isinstance(part, dict) and "functionResponse" not in part
-                for part in content.get("parts", [])
+                for part in parts
             )
         ),
         default=-1,

@@ -15,6 +15,7 @@ from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.gemini.replay import decode_bundle
 from free_claude_code.core.gemini.response import GeminiResponseAccumulator
 from free_claude_code.core.history_replay import readable_reasoning
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.google_openai.provider import GoogleChatBehavior
 from free_claude_code.providers.openai_chat import OpenAIChatTransport
@@ -41,6 +42,7 @@ from tests.providers.test_openai_responses_transport import (
 from tests.providers.test_openai_responses_transport import (
     _transport as responses_transport,
 )
+from tests.wire_payload import object_array, object_payload
 
 
 def gemini_request(**values):
@@ -321,13 +323,13 @@ async def test_responses_gemini_replay_uses_output_order_not_completion_order(
         "id": "rs_ordinary",
         "summary": [{"type": "summary_text", "text": "Independent"}],
     }
-    response = deepcopy(_events_for("responses")[-1]["response"])
+    response = deepcopy(object_payload(_events_for("responses")[-1]["response"]))
     response.update(output=[first, ordinary, second], usage=None)
     if terminal == "response.incomplete":
         response.update(
             status="incomplete", incomplete_details={"reason": "max_output_tokens"}
         )
-    events = [
+    events: list[JsonObject] = [
         {"type": "response.output_item.done", "output_index": 2, "item": second},
         {"type": "response.output_item.done", "output_index": 1, "item": ordinary},
     ]
@@ -370,11 +372,15 @@ async def test_responses_gemini_replay_uses_output_order_not_completion_order(
             )
         )
     assert len(bodies) == 2
-    native = [item for item in bodies[-1]["input"] if item.get("encrypted_content")]
+    native = [
+        item
+        for item in object_array(bodies[-1]["input"])
+        if item.get("encrypted_content")
+    ]
     assert native == [first, second]
     unsigned = [
         item
-        for item in bodies[-1]["input"]
+        for item in object_array(bodies[-1]["input"])
         if item.get("type") == "reasoning" and not item.get("encrypted_content")
     ]
     assert "".join(
@@ -404,13 +410,15 @@ async def test_responses_gemini_usage_accounts_for_terminal_only_reasoning(
     }
     if kind == "protected":
         item["encrypted_content"] = "cipher"
-    response = deepcopy(_events_for("responses")[-1]["response"])
+    response = deepcopy(object_payload(_events_for("responses")[-1]["response"]))
     response.update(
         output=[] if kind == "none" else [item],
         usage={"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
     )
     if breakdown is not None:
-        response["usage"]["output_tokens_details"] = {"reasoning_tokens": breakdown}
+        object_payload(response["usage"])["output_tokens_details"] = {
+            "reasoning_tokens": breakdown
+        }
     async with _harness(
         "responses",
         lambda _: (200, [{"type": "response.completed", "response": response}]),

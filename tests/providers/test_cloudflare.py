@@ -30,6 +30,7 @@ from tests.providers.support import (
     reasoning_for,
     sdk_chat_chunk,
 )
+from tests.wire_payload import object_array, object_payload
 
 _ACCOUNT_ID = "account-123"
 _BASE_URL = f"{CLOUDFLARE_AI_REST_ROOT}/accounts/{_ACCOUNT_ID}/ai/v1"
@@ -469,7 +470,10 @@ def test_cloudflare_normalization_preserves_other_fields_and_source(
             "choices": [
                 {
                     **payload["choices"][0],
-                    "delta": {**payload["choices"][0]["delta"], "content": "0"},
+                    "delta": {
+                        **object_payload(object_array(payload["choices"])[0]["delta"]),
+                        "content": "0",
+                    },
                 },
                 *payload["choices"][1:],
             ],

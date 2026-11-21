@@ -173,12 +173,12 @@ def _desktop_owner_running() -> bool:
         return False
     lock = InterprocessFileLock(paths.config_dir_path() / "desktop.lock")
     try:
-        acquired = lock.acquire()
+        if not lock.acquire():
+            return True
     except OSError:
         return False
-    if acquired:
-        lock.release()
-    return not acquired
+    lock.release()
+    return False
 
 
 def _server_owner_running() -> bool:

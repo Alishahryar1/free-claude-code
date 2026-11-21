@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-CHECK_ORDER="suppressions ruff-format ruff-check ty pytest playwright macos-desktop"
+CHECK_ORDER="suppressions ruff-format ruff-check pyrefly pytest playwright macos-desktop"
 
 dry_run=0
 only_checks=""
@@ -11,15 +11,15 @@ show_usage() {
     cat <<'USAGE'
 Usage: ci.sh [options]
 
-Runs the local sequence for the same check IDs enforced by GitHub CI.
-Requires uv on PATH when running ruff, ty, pytest, or Playwright checks.
+Runs the local sequence for checks enforced by GitHub CI.
+Requires uv on PATH when running Ruff, Pyrefly, pytest, or Playwright checks.
 Local ruff checks repair formatting and autofixable lint before later checks.
 
 Checks (in order):
   suppressions   Ban type ignores and legacy future annotations
   ruff-format    uv run ruff format
   ruff-check     uv run ruff check --fix
-  ty             uv run ty check
+  pyrefly        uv run pyrefly check
   pytest         uv run pytest -v --tb=short
   playwright     Install Chromium and run deterministic Admin browser tests
   macos-desktop  Build and test the native app (macOS GUI required, --only)
@@ -71,7 +71,7 @@ run() {
 
 valid_check_id() {
     case "$1" in
-        suppressions | ruff-format | ruff-check | ty | pytest | playwright | macos-desktop) return 0 ;;
+        suppressions | ruff-format | ruff-check | pyrefly | pytest | playwright | macos-desktop) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -131,13 +131,13 @@ selected_checks_need_uv() {
 
 run_suppressions() {
     step "Ban suppressions and legacy annotations"
-    pattern='# type: ignore|# ty: ignore|from __future__ import annotations'
+    pattern='# type: ignore|# ty: ignore|#[[:space:]]*pyrefly:[[:space:]]*ignore|from __future__ import annotations'
     print_command grep -rE "$pattern" --include='*.py' . \
         --exclude-dir=.venv --exclude-dir=.git
     if [ "$dry_run" -eq 0 ]; then
         if grep -rE "$pattern" --include='*.py' . \
             --exclude-dir=.venv --exclude-dir=.git; then
-            fail "type: ignore / ty: ignore comments and legacy future annotations are not allowed. Fix the underlying type/import issue instead."
+            fail "Type-checker suppressions and legacy future annotations are not allowed. Fix the underlying type/import issue instead."
         fi
     fi
 }
@@ -152,9 +152,9 @@ run_ruff_check() {
     run uv run ruff check --fix
 }
 
-run_ty() {
-    step "ty check"
-    run uv run ty check
+run_pyrefly() {
+    step "pyrefly check"
+    run uv run pyrefly check
 }
 
 run_pytest() {
@@ -175,7 +175,7 @@ run_check() {
         suppressions) run_suppressions ;;
         ruff-format) run_ruff_format ;;
         ruff-check) run_ruff_check ;;
-        ty) run_ty ;;
+        pyrefly) run_pyrefly ;;
         pytest) run_pytest ;;
         playwright) run_playwright ;;
         macos-desktop)

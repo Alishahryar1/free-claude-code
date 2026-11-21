@@ -2,6 +2,7 @@
 
 import pytest
 
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.lmstudio import tokens
 
 
@@ -40,8 +41,8 @@ def test_large_tails_are_counted_with_bounded_tokenizer_and_json_work(
 
     monkeypatch.setattr(tokens.json, "dumps", bounded_dumps)
     text = 'a\\"\n' * 400000 + "TAIL-MUST-SURVIVE"
-    message = {"role": "assistant", "content": "hello"}
-    body = {"messages": [message]}
+    message: JsonObject = {"role": "assistant", "content": "hello"}
+    body: JsonObject = {"messages": [message]}
     if field == "text":
         message["content"] = text
     elif field == "reasoning":
@@ -75,7 +76,7 @@ def test_counting_stops_once_budget_is_exceeded(monkeypatch):
 
 
 def test_carriers_metadata_and_generation_controls_are_not_model_text():
-    message = {
+    message: JsonObject = {
         "role": "assistant",
         "content": "answer",
         "reasoning_content": "readable",

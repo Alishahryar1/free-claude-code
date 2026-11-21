@@ -354,6 +354,7 @@ class TreeQueueManager:
 
     async def _finish_claim(self, tree: MessageTree, claim: NodeClaim) -> None:
         """Serialize successor task publication with aggregate detachment."""
+        tree_is_published = False
         try:
             async with self._transaction(worker=claim) as transaction:
                 if self._closing or tree in self._interrupted:

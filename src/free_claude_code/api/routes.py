@@ -190,6 +190,7 @@ async def _create_messages_response(
         native = resolved is not None and supports_native_messages(
             resolved.primary.provider_id
         )
+        native_request = None
         if native:
             try:
                 native_request = NativeMessagesRequest(raw)
@@ -218,7 +219,7 @@ async def _create_messages_response(
             request_headers=request_headers,
             model_info_lookup=lease.model_info,
         )
-        if native:
+        if native_request is not None:
             assert resolved is not None
             response = await handler.create_native(
                 router.route_native_messages(native_request, resolved),

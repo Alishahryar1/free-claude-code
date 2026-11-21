@@ -10,6 +10,7 @@ import pytest
 from openai import AsyncOpenAI
 
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.mistral import MistralProvider
 from tests.api.support import create_test_app, provider_manager_for_app
 from tests.providers.support import immediate_admission, make_provider_config
@@ -78,7 +79,7 @@ async def mistral_wire(handler=None):
     ],
 )
 async def test_affinity_for_existing_harness_identity(ingress, header):
-    payload = {"model": "mistral/mistral-large-latest", "stream": True}
+    payload: JsonObject = {"model": "mistral/mistral-large-latest", "stream": True}
     if ingress == "messages":
         payload.update(messages=[{"role": "user", "content": "hello"}], max_tokens=128)
     else:

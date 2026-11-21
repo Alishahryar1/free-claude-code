@@ -246,30 +246,37 @@ class _GeminiAttempt(TransportAttempt):
             raise RetryableProviderProtocolError(
                 "Gemini upstream did not return an SSE stream"
             )
-        declarations = [
-            function
-            for tool in self.body.get("tools", [])
-            if isinstance(tool, dict)
-            for function in tool.get("functionDeclarations", [])
-            if isinstance(function, dict)
-        ]
+        tools = self.body.get("tools")
+        tool_defaults: dict[str, JsonObject] = {}
+        for tool in tools if isinstance(tools, list) else ():
+            if not isinstance(tool, dict):
+                continue
+            declarations = tool.get("functionDeclarations")
+            for declaration in declarations if isinstance(declarations, list) else ():
+                if not isinstance(declaration, dict):
+                    continue
+                name = str(declaration["name"])
+                parameters = declaration.get("parametersJsonSchema") or declaration.get(
+                    "parameters"
+                )
+                properties = (
+                    parameters.get("properties")
+                    if isinstance(parameters, dict)
+                    else None
+                )
+                tool_defaults[name] = {
+                    key: schema["default"]
+                    for key, schema in (
+                        properties.items() if isinstance(properties, dict) else ()
+                    )
+                    if isinstance(schema, dict) and "default" in schema
+                }
         presenter = self._presenter = GeminiStream(
             model=self._response_model,
             origin=self._origin,
             output=self._output_factory(),
-            tool_names=frozenset(str(tool["name"]) for tool in declarations),
-            tool_defaults={
-                str(tool["name"]): {
-                    name: schema["default"]
-                    for name, schema in (
-                        tool.get("parametersJsonSchema") or tool.get("parameters") or {}
-                    )
-                    .get("properties", {})
-                    .items()
-                    if isinstance(schema, dict) and "default" in schema
-                }
-                for tool in declarations
-            },
+            tool_names=frozenset(tool_defaults),
+            tool_defaults=tool_defaults,
             include_thoughts=self._include_thoughts,
             continuation_context=self._continuation.sent_context(
                 self.sent_body,

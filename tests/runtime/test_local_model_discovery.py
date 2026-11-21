@@ -23,6 +23,7 @@ from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime import provider_manager
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.runtime.catalog_support import finish_discovery, finish_publication
+from tests.wire_payload import object_payload
 
 LOCAL_IDS = ("lmstudio", "llamacpp", "ollama")
 
@@ -189,7 +190,10 @@ async def test_local_deadlines_are_parallel_and_do_not_block_other_provider_read
         status = manager.catalog_status()
         assert status["catalog"] == "ready"
         assert status["catalog_file"] == "ready"
-        assert all(status["providers"][name] == "unavailable" for name in LOCAL_IDS)
+        assert all(
+            object_payload(status["providers"])[name] == "unavailable"
+            for name in LOCAL_IDS
+        )
     finally:
         await manager.close()
 
@@ -224,7 +228,10 @@ async def test_optional_absence_is_quiet_but_shared_manual_test_keeps_failure(
         assert result.failed_provider_ids == ("ollama",)
         assert "private-url" not in str(result.failure_messages)
         assert providers["ollama"].list_model_infos.await_count == 1
-        assert manager.catalog_status()["providers"]["ollama"] == "unavailable"
+        assert (
+            object_payload(manager.catalog_status()["providers"])["ollama"]
+            == "unavailable"
+        )
         assert not [record for record in caplog.records if record.levelno >= 30]
     finally:
         release.set()
@@ -263,7 +270,10 @@ async def test_explicit_local_configuration_reports_failure(intent):
         result = await manager.refresh_model_list_cache()
         assert result.failed_provider_ids == (expected_provider,)
         assert expected_provider in result.failure_messages
-        assert manager.catalog_status()["providers"][expected_provider] == "failed"
+        assert (
+            object_payload(manager.catalog_status()["providers"])[expected_provider]
+            == "failed"
+        )
     finally:
         await manager.close()
 
@@ -291,7 +301,9 @@ async def test_responding_or_broken_optional_provider_reports_real_errors(failur
         result = await manager.refresh_model_list_cache()
         assert result.failed_provider_ids == ("ollama",)
         assert "private-response" not in str(result.failure_messages)
-        assert manager.catalog_status()["providers"]["ollama"] == "failed"
+        assert (
+            object_payload(manager.catalog_status()["providers"])["ollama"] == "failed"
+        )
     finally:
         await manager.close()
 

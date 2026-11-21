@@ -43,7 +43,7 @@ class MessagingRateLimiter:
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._active_futures: list[asyncio.Future[Any]] = []
         self._closed = False
-        self._paused_until = 0
+        self._paused_until = 0.0
 
         logger.info(
             f"MessagingRateLimiter initialized ({rate_limit} req / {rate_window}s with Task Compaction)"

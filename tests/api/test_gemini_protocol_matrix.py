@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.gemini.response import GeminiResponseAccumulator
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.custom import CustomProvider
 from free_claude_code.providers.runtime.config import build_custom_provider_config
@@ -155,20 +156,11 @@ def test_gemini_http_fallback_keeps_one_response_across_egresses(
 ):
     sent = []
 
-    def reply(request):
-        body = json.loads(request.content)
+    def response_text(content: bytes) -> str:
+        body = json.loads(content)
         sent.append(body)
-        module = (
-            httpx
-            if first_wire == "anthropic_messages" and body["model"] == "first"
-            else httpx2
-        )
         if body["model"] == "second":
-            return module.Response(
-                200,
-                text=completion("openai_responses"),
-                headers={"content-type": "text/event-stream"},
-            )
+            return completion("openai_responses")
         protocol = {
             "openai_chat": "chat",
             "openai_responses": "responses",
@@ -182,8 +174,20 @@ def test_gemini_http_fallback_keeps_one_response_across_egresses(
             + f"data: {json.dumps(event)}\n\n"
             for event in events
         )
-        return module.Response(
-            200, text=raw, headers={"content-type": "text/event-stream"}
+        return raw
+
+    def messages_reply(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=response_text(request.content),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    def openai_reply(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200,
+            text=response_text(request.content),
+            headers={"content-type": "text/event-stream"},
         )
 
     configs = [
@@ -199,8 +203,8 @@ def test_gemini_http_fallback_keeps_one_response_across_egresses(
             build_custom_provider_config(config, Settings()),
             definition=config,
             admission=immediate_admission(max_attempts=1),
-            openai_transport=httpx2.MockTransport(reply),
-            messages_transport=httpx.MockTransport(reply),
+            openai_transport=httpx2.MockTransport(openai_reply),
+            messages_transport=httpx.MockTransport(messages_reply),
         )
         for config in configs
     }
@@ -212,7 +216,7 @@ def test_gemini_http_fallback_keeps_one_response_across_egresses(
         ),
         providers=instances,
     )
-    payload = {"contents": [{"parts": [{"text": "hello"}]}]}
+    payload: JsonObject = {"contents": [{"parts": [{"text": "hello"}]}]}
     if structured:
         payload["generationConfig"] = {
             "responseMimeType": "application/json",

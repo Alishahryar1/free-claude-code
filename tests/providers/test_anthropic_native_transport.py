@@ -10,6 +10,7 @@ import pytest
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.history_replay import ReplayRecord, encode_replay
 from free_claude_code.core.json_types import JsonObject
@@ -358,6 +359,7 @@ async def test_early_consumer_exit_releases_admission_and_response():
     stream = p.stream_native_messages(NativeMessagesRequest(native_body(True)))
     try:
         await anext(stream)
+        assert isinstance(stream, AsyncCloseable)
         await stream.aclose()
         assert wire.closed
         assert await collect(p, native_body(True))

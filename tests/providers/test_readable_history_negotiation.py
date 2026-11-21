@@ -35,6 +35,7 @@ from tests.providers.test_anthropic_messages_transport import (
     _transport,
 )
 from tests.providers.test_history_transports import _events_for, _harness, _saved_reply
+from tests.wire_payload import object_array, object_payload
 
 
 def readable_history():
@@ -140,10 +141,14 @@ async def test_deepseek_tool_history_keeps_empty_reasoning_after_native_filterin
             "messages",
         )
     assert len(bodies) == 1
-    assistant = next(m for m in bodies[0]["messages"] if m["role"] == "assistant")
-    assert assistant["reasoning_content"] == ""
+    assistant = next(
+        m
+        for m in object_array(bodies[0]["messages"])
+        if object_payload(m)["role"] == "assistant"
+    )
+    assert object_payload(assistant)["reasoning_content"] == ""
     assert "reasoning_details" not in assistant
-    assert assistant["tool_calls"] == [
+    assert object_payload(assistant)["tool_calls"] == [
         {
             "id": "call_1",
             "type": "function",
@@ -168,14 +173,18 @@ async def test_http_400_tries_all_current_none_without_changing_source():
     fields = [
         [
             m.get("reasoning_content")
-            for m in body["messages"]
-            if m["role"] == "assistant"
+            for m in object_array(body["messages"])
+            if object_payload(m)["role"] == "assistant"
         ]
         for body in bodies
     ]
     assert fields == [["Old", "New"], [None, "New"], [None, None]]
     assert [
-        [m["content"] for m in body["messages"] if m["role"] == "assistant"]
+        [
+            object_payload(m)["content"]
+            for m in object_array(body["messages"])
+            if object_payload(m)["role"] == "assistant"
+        ]
         for body in bodies
     ] == [["First answer", "Next answer"]] * 3
     assert history == original
@@ -295,9 +304,10 @@ def test_destination_change_restarts_mode_order_and_seen_shapes(dimension):
     state.prepare(source, origin)
     assert state.mode is HistoryMode.CURRENT
 
-    target = replace(
-        origin,
-        **{dimension: "https://new.test/v1" if dimension == "endpoint" else "new"},
+    target = (
+        replace(origin, endpoint="https://new.test/v1")
+        if dimension == "endpoint"
+        else replace(origin, model="new")
     )
     target_key = (target.provider, target.endpoint, target.protocol, target.model)
     cache.update(target_key, 0, HistoryMode.NONE)
@@ -700,5 +710,6 @@ async def test_non_history_correction_survives_all_three_modes():
         assert "Old" not in json.dumps(bodies[2]) and "New" in json.dumps(bodies[2])
         assert "New" not in json.dumps(bodies[3])
         assert all(
-            not b.get("stream_options", {}).get("include_usage") for b in bodies[1:]
+            not object_payload(b.get("stream_options", {})).get("include_usage")
+            for b in bodies[1:]
         )

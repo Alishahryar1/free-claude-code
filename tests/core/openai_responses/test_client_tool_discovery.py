@@ -31,6 +31,7 @@ from free_claude_code.providers.openai_responses.presentation import (
     NativeResponsesPresenter,
 )
 from tests.providers.test_opencode import _responses_event_stream
+from tests.wire_payload import array_payload, object_payload, string_payload
 
 SEARCH: JsonObject = {
     "type": "tool_search",
@@ -2023,10 +2024,12 @@ def test_argument_numbers_survive_sse_serialization(
         actual = (
             item["arguments"]
             if search
-            else json.loads(item["arguments"], parse_float=Decimal)
+            else json.loads(string_payload(item["arguments"]), parse_float=Decimal)
         )
         assert actual == json.loads(arguments, parse_float=Decimal)
-        assert type(actual["nested"]["values"][1]) is (int if search else Decimal)
+        assert type(
+            array_payload(object_payload(object_payload(actual)["nested"])["values"])[1]
+        ) is (int if search else Decimal)
         if not search:
             assert item["arguments"] == arguments
 

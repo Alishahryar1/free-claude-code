@@ -591,11 +591,13 @@ def test_anthropic_standard_modal_groups_key_workspace_and_proxy(
     dialog.get_by_role("button", name="Save", exact=True).click()
     expect(dialog).not_to_be_visible()
     assert len(submissions) == 1
-    assert set(submissions[0]["values"]) == {
+    submitted = submissions[0]
+    assert isinstance(submitted, dict)
+    assert set(submitted["values"]) == {
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_WORKSPACE_ID",
     }
-    assert submissions[0]["values"]["ANTHROPIC_API_KEY"]["entries"] == [
+    assert submitted["values"]["ANTHROPIC_API_KEY"]["entries"] == [
         {"value": "test-api-key"}
     ]
-    assert submissions[0]["values"]["ANTHROPIC_WORKSPACE_ID"] == "wrkspc_test"
+    assert submitted["values"]["ANTHROPIC_WORKSPACE_ID"] == "wrkspc_test"

@@ -41,7 +41,7 @@ class ReplayBundle:
 
 
 def encode_bundle(bundle: ReplayBundle) -> str:
-    payload = {
+    payload: JsonObject = {
         "response_id": bundle.response_id,
         "records": [encode_replay(record) for record in bundle.records],
         "calls": [asdict(call) for call in bundle.calls],

@@ -161,7 +161,7 @@ async def test_many_turns_release_history_and_preserve_prompt_receipts(code):
         owner = service._owners[session.id]
         assert not owner.state.items and not owner.state.prompts
         assert tuple(owner.state.runs) == (detail.run.id,)
-    assert len(harness.connections) == 1 and not connection.closed
+    assert len(harness.connections) == 1 and not harness.connections[0].closed
     for prompt_id, response_id in receipts:
         receipt = await service.answer(
             session.id, prompt_id, response_id, {"decision": "accept"}

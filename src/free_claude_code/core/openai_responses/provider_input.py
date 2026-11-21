@@ -348,12 +348,15 @@ def _user_items(content: Any) -> list[dict[str, Any]]:
             except AnthropicImageSourceError as exc:
                 raise ResponsesConversionError(str(exc)) from exc
             if decomposed.has_images:
-                output: str | list[JsonObject] = []
+                image_output: list[JsonObject] = []
                 for part in decomposed.parts:
                     if isinstance(part, ToolResultText):
-                        output.append({"type": "input_text", "text": part.text})
+                        image_output.append({"type": "input_text", "text": part.text})
                     elif isinstance(part, ToolResultImage):
-                        output.append({"type": "input_image", "image_url": part.url})
+                        image_output.append(
+                            {"type": "input_image", "image_url": part.url}
+                        )
+                output = image_output
             else:
                 output = serialize_tool_result_content(tool_content)
             items.append(

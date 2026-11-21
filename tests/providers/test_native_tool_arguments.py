@@ -9,6 +9,7 @@ from free_claude_code.core.anthropic.sse_aggregation import (
 )
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses.streaming.event_builders import (
     ResponseEventBuilder,
 )
@@ -26,7 +27,7 @@ ARGUMENTS = [
 ]
 
 
-def tool_events(protocol, arguments):
+def tool_events(protocol: str, arguments: str) -> list[JsonObject]:
     if protocol == "chat":
         template = _events_for("chat")[0]
         deltas = [

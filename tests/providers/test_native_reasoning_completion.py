@@ -25,6 +25,7 @@ from free_claude_code.core.openai_responses.provider_stream import (
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.google_openai import GoogleOpenAIProvider
+from free_claude_code.providers.openai_chat.provider import OpenAIChatProvider
 from free_claude_code.providers.openai_chat.reasoning_details import (
     StructuredReasoningStream,
 )
@@ -40,6 +41,7 @@ from tests.providers.test_history_transports import (
     _native,
     _saved_reply,
 )
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 def _chunks(deltas):
@@ -175,7 +177,7 @@ async def test_native_reasoning_is_forwarded_without_replacement(protocol):
         saved = await _saved_reply(
             send(protocol, [{"role": "user", "content": "hello"}]), protocol
         )
-    item = saved[0]["content"][0] if protocol == "messages" else saved[0]
+    item = array_payload(saved[0]["content"])[0] if protocol == "messages" else saved[0]
     assert item == _native(protocol)
 
 
@@ -223,12 +225,16 @@ async def test_google_message_signature_round_trips_in_its_native_field(
             send(wire, [*saved, {"role": "user", "content": "next"}]), wire
         )
     assistant = [
-        message for message in bodies[-1]["messages"] if message["role"] == "assistant"
+        message
+        for message in object_array(bodies[-1]["messages"])
+        if object_payload(message)["role"] == "assistant"
     ]
     assert len(assistant) == 1
-    assert assistant[0]["content"] == "Pong"
+    assert object_payload(assistant[0])["content"] == "Pong"
     assert (
-        assistant[0]["extra_content"]["google"]["thought_signature"]
+        object_payload(
+            object_payload(object_payload(assistant[0])["extra_content"])["google"]
+        )["thought_signature"]
         == "google-signature"
     )
     assert "reasoning_details" not in assistant[0]
@@ -276,6 +282,7 @@ async def test_interrupted_opaque_only_state_keeps_hidden_retry_eligible(
         chat_provider_factory=factory if provider_kind == "google" else None,
         max_attempts=2,
     ) as (_, bodies, provider):
+        assert isinstance(provider, OpenAIChatProvider)
         if wire == "messages":
             stream = provider.stream_messages(
                 MessagesRequest(
@@ -340,7 +347,7 @@ async def test_responses_late_cipher_preserves_thinking_and_final_answer():
         "content": [{"type": "output_text", "text": "Pong", "annotations": []}],
     }
     terminal = original[-1]
-    terminal["response"]["output"].append(message)
+    array_payload(object_payload(terminal["response"])["output"]).append(message)
     upstream = [
         *original[:3],
         {
@@ -569,8 +576,8 @@ async def test_unrecognized_detail_data_is_not_a_reasoning_signature(wire):
             send(wire, [{"role": "user", "content": "hello"}]), wire
         )
     assert "ordinary-extra-data" not in str(saved)
-    blocks = saved[0]["content"] if wire == "messages" else saved
-    assert [block["type"] for block in blocks] == [
+    blocks = object_array(saved[0]["content"]) if wire == "messages" else saved
+    assert [object_payload(block)["type"] for block in blocks] == [
         "text" if wire == "messages" else "message"
     ]
 
@@ -659,7 +666,7 @@ async def test_hidden_readable_only_cutoff_retries_without_delivered_content():
 @pytest.mark.parametrize("answer_before_done", [False, True])
 async def test_completed_full_reasoning_survives_streamed_summary(answer_before_done):
     upstream = deepcopy(_events_for("responses"))
-    upstream[3]["item"]["content"] = [
+    object_payload(upstream[3]["item"])["content"] = [
         {"type": "reasoning_text", "text": "Distinct full thought."}
     ]
     if answer_before_done:
@@ -685,7 +692,9 @@ async def test_completed_full_reasoning_survives_streamed_summary(answer_before_
             },
             {"type": "response.output_item.done", "output_index": 1, "item": message},
         ]
-        upstream[-1]["response"]["output"].append(message)
+        array_payload(object_payload(upstream[-1]["response"])["output"]).append(
+            message
+        )
         for sequence, event in enumerate(upstream):
             event["sequence_number"] = sequence
     async with _harness("responses", lambda _: (200, upstream)) as (send, bodies, _):

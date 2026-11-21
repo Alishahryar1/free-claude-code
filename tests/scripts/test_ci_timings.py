@@ -330,7 +330,10 @@ def test_commands_copy_record_and_merge_real_files_with_same_input_on_partial_re
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
+    working = root / "working" / "durations.json"
+    last_shard = None
     for (suite, system, shard), count in timing.expected_shards(run.matrices).items():
+        last_shard = suite, system
         for key, value in {
             "CI_TIMINGS_SUITE": suite,
             "RUNNER_OS": system,
@@ -340,7 +343,6 @@ def test_commands_copy_record_and_merge_real_files_with_same_input_on_partial_re
             monkeypatch.setenv(key, value)
         monkeypatch.setattr(sys, "argv", ["ci_timings", "start"])
         timing.main()
-        working = root / "working" / "durations.json"
         assert (
             timing.load_json(working.read_bytes()) == maps()[f"{suite}-{system}.json"]
         )
@@ -361,4 +363,6 @@ def test_commands_copy_record_and_merge_real_files_with_same_input_on_partial_re
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
     monkeypatch.setattr(sys, "argv", ["ci_timings", "start"])
     timing.main()
+    assert last_shard is not None
+    suite, system = last_shard
     assert timing.load_json(working.read_bytes()) == maps()[f"{suite}-{system}.json"]

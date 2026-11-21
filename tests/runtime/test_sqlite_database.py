@@ -285,6 +285,7 @@ async def test_startup_failure_disposes_connections_before_releasing_owner(
             asyncio.CancelledError if cancel else sqlite3.OperationalError
         ):
             await starting
+        assert observed[0] is not None
         with pytest.raises(sqlite3.ProgrammingError, match="closed"):
             observed[0].execute("SELECT 1")
         reopened = sqlite_database.SQLiteDatabase(database.path, tmp_path / "fcc.lock")
@@ -346,6 +347,7 @@ async def test_partial_pool_creation_cleans_up_writer(tmp_path, monkeypatch):
     try:
         with pytest.raises(RuntimeError, match="reader pool"):
             await database.start()
+        assert observed[0] is not None
         with pytest.raises(sqlite3.ProgrammingError, match="closed"):
             observed[0].execute("SELECT 1")
         other = sqlite_database.SQLiteDatabase(database.path, tmp_path / "fcc.lock")

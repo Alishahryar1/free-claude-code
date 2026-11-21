@@ -10,6 +10,7 @@ from free_claude_code.core.anthropic.conversion import AnthropicToOpenAIConverte
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.history_replay import (
     HistoryMode,
+    HistoryProtocol,
     ReplayOrigin,
     ReplayRecord,
     encode_replay,
@@ -24,9 +25,10 @@ from free_claude_code.providers.history_replay import (
     history_retry_body,
     normalize_messages_history,
 )
+from tests.wire_payload import object_array
 
 
-def origin(protocol="chat"):
+def origin(protocol: HistoryProtocol = "chat"):
     return ReplayOrigin("provider", protocol, "https://test.invalid", "key", "model")
 
 
@@ -230,7 +232,7 @@ async def test_sdk_history_override_keeps_scalar_detail_alias_once(scalar, carri
             ),
             "messages",
         )
-    assert bodies[0]["messages"][-1]["reasoning_content"] == "Plan"
+    assert object_array(bodies[0]["messages"])[-1]["reasoning_content"] == "Plan"
     assert request.model_dump() == before
 
 

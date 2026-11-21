@@ -13,6 +13,12 @@ from tests.api.test_delivered_stream_recovery import (
 )
 from tests.api.test_hidden_stream_retries import delivered
 from tests.providers.test_history_transports import _events_for, _harness
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 def reasoning_events(*, field="summary", seeded="", closed=True):
@@ -21,13 +27,21 @@ def reasoning_events(*, field="summary", seeded="", closed=True):
     for event in events:
         item = event.get("item")
         items = (
-            [item] if item is not None else event.get("response", {}).get("output", [])
+            [object_payload(item)]
+            if item is not None
+            else object_array(
+                object_payload(event.get("response", {})).get("output", [])
+            )
         )
         for item in items:
             item.pop("encrypted_content", None)
             item["content"] = None
             item["summary"] = []
-            text = seeded if event["type"].endswith(".added") else seeded + "Find 17."
+            text = (
+                seeded
+                if string_payload(event["type"]).endswith(".added")
+                else seeded + "Find 17."
+            )
             if text:
                 item[field] = [{"type": part_type, "text": text}]
         if (
@@ -57,8 +71,10 @@ async def test_nullable_reasoning_content_preserves_healthy_response(wire):
     events = _events_for("responses")
     for event in events:
         if "item" in event:
-            event["item"]["content"] = None
-        for item in event.get("response", {}).get("output", []):
+            object_payload(event["item"])["content"] = None
+        for item in object_array(
+            object_payload(event.get("response", {})).get("output", [])
+        ):
             item["content"] = None
     async with _harness("responses", lambda _: (200, events), max_attempts=1) as (
         send,
@@ -71,7 +87,7 @@ async def test_nullable_reasoning_content_preserves_healthy_response(wire):
     if wire == "responses":
         item = parse_sse_text(raw)[-1].data["response"]["output"][0]
         assert item["content"] is None
-        assert item == events[-1]["response"]["output"][0]
+        assert item == object_array(object_payload(events[-1]["response"])["output"])[0]
 
 
 @pytest.mark.asyncio
@@ -98,8 +114,10 @@ async def test_readable_reasoning_continues_from_released_content(field, closed,
     assert public_text(events, wire) == "Hello world."
     assert "Find 17." in str(bodies[1]["input"])
     assert "Hello " in str(bodies[1]["input"])
-    assert "Find 17." not in str(bodies[1]["input"][-1])
-    assert any(item.get("type") == "reasoning" for item in bodies[1]["input"])
+    assert "Find 17." not in str(array_payload(bodies[1]["input"])[-1])
+    assert any(
+        item.get("type") == "reasoning" for item in object_array(bodies[1]["input"])
+    )
 
 
 @pytest.mark.asyncio
@@ -209,10 +227,10 @@ async def test_synthetic_reasoning_closure_preserves_followup_history(field, see
     assert len(bodies) == 3
     native = output[0]
     assert native["type"] == "reasoning"
-    assert native["id"] == first[1]["item"]["id"]
+    assert native["id"] == object_payload(first[1]["item"])["id"]
     assert native["status"] == "completed"
     assert native[field][0]["text"] == seeded + "Find 17."
-    assert native["extension"] == first[1]["item"]["extension"]
+    assert native["extension"] == object_payload(first[1]["item"])["extension"]
     assert str(bodies[2]).count(seeded + "Find 17.") == 1
     assert "previous provider stream" not in str(bodies[2])
     assert history[:-1] == output
@@ -277,7 +295,7 @@ async def test_native_failure_snapshot_preserves_error_and_blocks_recovery(
             return 200, text_events("responses", "Hello ", complete=False)
         events = text_events("responses", "Unpublished failure snapshot")
         final = deepcopy(events[-1])
-        response = final["response"]
+        response = object_payload(final["response"])
         if failure == "incomplete_context":
             final["type"] = "response.incomplete"
             response.update(
@@ -288,7 +306,9 @@ async def test_native_failure_snapshot_preserves_error_and_blocks_recovery(
             final["type"] = "response.failed"
             response.update(status="failed", error=error)
         if native == "annotations":
-            response["output"][0]["content"][0]["annotations"] = [
+            object_array(object_array(response["output"])[0]["content"])[0][
+                "annotations"
+            ] = [
                 {
                     "type": "url_citation",
                     "url": "https://example.com",
@@ -298,7 +318,7 @@ async def test_native_failure_snapshot_preserves_error_and_blocks_recovery(
                 }
             ]
         else:
-            response["output"].append(
+            array_payload(response["output"]).append(
                 {
                     "type": "reasoning",
                     "id": "rs_final",

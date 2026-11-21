@@ -20,6 +20,7 @@ from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_chat_tool_identity import call
 from tests.providers.test_history_transports import _harness, _saved_reply
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import object_array
 
 
 def chat_chunk(delta, finish=None):
@@ -449,7 +450,11 @@ async def test_google_compat_metadata_replays_under_each_public_id(wire, indexes
             wire,
         )
         if wire == "messages":
-            calls = [item for item in saved[0]["content"] if item["type"] == "tool_use"]
+            calls = [
+                item
+                for item in object_array(saved[0]["content"])
+                if item["type"] == "tool_use"
+            ]
             public_ids = [item["id"] for item in calls]
             followup = [
                 {
@@ -490,7 +495,9 @@ async def test_google_compat_metadata_replays_under_each_public_id(wire, indexes
         assert len(set(public_ids)) == 2
         await _saved_reply(send(wire, followup, tools=_tools(wire)), wire)
         replayed = next(
-            row["tool_calls"] for row in bodies[1]["messages"] if row.get("tool_calls")
+            object_array(row["tool_calls"])
+            for row in object_array(bodies[1]["messages"])
+            if row.get("tool_calls")
         )
     assert [(item["id"], item["extra_content"]) for item in replayed] == [
         (public_ids[0], {"google": {"thought_signature": "sig-a"}}),

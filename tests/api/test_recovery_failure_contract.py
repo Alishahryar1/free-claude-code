@@ -23,6 +23,7 @@ from tests.api.test_delivered_stream_recovery import (
 )
 from tests.api.test_hidden_stream_retries import delivered
 from tests.providers.test_history_transports import _harness
+from tests.wire_payload import object_payload
 
 
 def assert_unavailable_snapshot(events):
@@ -98,7 +99,7 @@ async def test_failed_frame_keeps_error_category_and_finishes_execution(
             return 200, text_events("responses", "First ", complete=False)
         events = text_events("responses", "x" * 2000)
         events[-1]["type"] = "response.failed"
-        events[-1]["response"].update(status="failed", error=error)
+        object_payload(events[-1]["response"]).update(status="failed", error=error)
         return 200, events
 
     async with _harness("responses", reply, max_attempts=2) as (send, bodies, _):
@@ -241,7 +242,9 @@ async def test_annotated_part_blocks_continuation_before_its_item_snapshot(
         if len(bodies) != annotated_attempt:
             return 200, text_events("responses", "Tail.")
         events = deepcopy(text_events("responses", "Cited "))[:6]
-        events[2 if part_event == "added" else 5]["part"]["annotations"] = [ANNOTATION]
+        object_payload(events[2 if part_event == "added" else 5]["part"])[
+            "annotations"
+        ] = [ANNOTATION]
         return 200, events
 
     async with _harness("responses", reply, max_attempts=3) as (send, bodies, _):
@@ -261,8 +264,8 @@ async def test_annotated_part_blocks_continuation_before_its_item_snapshot(
 async def test_healthy_original_response_preserves_annotations(annotated):
     source = text_events("responses", "Cited ")
     if annotated:
-        source[2]["part"]["annotations"] = [ANNOTATION]
-        source[5]["part"]["annotations"] = [ANNOTATION]
+        object_payload(source[2]["part"])["annotations"] = [ANNOTATION]
+        object_payload(source[5]["part"])["annotations"] = [ANNOTATION]
     async with _harness("responses", lambda _: (200, source)) as (send, bodies, _):
         raw = await delivered(
             send("responses", [{"role": "user", "content": "cite"}]), "responses"

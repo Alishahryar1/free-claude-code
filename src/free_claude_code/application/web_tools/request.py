@@ -17,6 +17,7 @@ from free_claude_code.core.anthropic.models import (
     ContentBlockWebFetchToolResult,
     ContentBlockWebSearchToolResult,
     Message,
+    MessageContentBlock,
 )
 from free_claude_code.core.anthropic.server_tool_types import HIDDEN_WEB_SEARCH_NAME
 from free_claude_code.core.gemini.web_search_replay import signed_gemini_turn
@@ -303,7 +304,7 @@ def _normalized_search_history(messages: list[Message]) -> tuple[list[Message], 
         signed_turn = any(use.name == "web_search" for use in uses.values()) and (
             signed_gemini_turn(content) is not None
         )
-        projected = []
+        projected: list[MessageContentBlock] = []
         for block in content:
             if isinstance(block, ContentBlockServerToolUse):
                 result_index, result = results[block.id]

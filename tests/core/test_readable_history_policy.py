@@ -7,6 +7,7 @@ import pytest
 
 from free_claude_code.core.history_replay import (
     HistoryMode,
+    HistoryProtocol,
     ReplayOrigin,
     ReplayRecord,
     encode_replay,
@@ -14,7 +15,7 @@ from free_claude_code.core.history_replay import (
 )
 
 
-def origin(protocol="chat"):
+def origin(protocol: HistoryProtocol = "chat"):
     return ReplayOrigin(
         "provider", protocol, "https://provider.test/v1", "key", "model"
     )

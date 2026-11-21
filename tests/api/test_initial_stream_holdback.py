@@ -28,6 +28,7 @@ from tests.api.test_tool_call_buffer import _response
 from tests.api.test_tool_call_buffer_transports import _tools
 from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import object_payload
 
 
 def encode(protocol, events):
@@ -123,7 +124,7 @@ async def test_cutoff_continues_already_released_text(
             "type": "response.failed",
             "sequence_number": 4,
             "response": {
-                **text_events(protocol, "abandoned")[-1]["response"],
+                **object_payload(text_events(protocol, "abandoned")[-1]["response"]),
                 "status": "failed",
                 "error": {"code": "server_error", "message": "interrupted"},
             },

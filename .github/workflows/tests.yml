@@ -1,6 +1,6 @@
 # Branch protection: require these stable checks, not individual shard jobs:
 #   Ban suppressions and legacy annotations
-#   ruff-format, ruff-check, ty
+#   ruff-format, ruff-check, ty (runs Pyrefly)
 #   Version policy
 #   pytest, playwright
 # GitHub may prefix with the workflow name (e.g. "CI / ruff-format"); use the names the branch protection UI offers after a run.
@@ -40,8 +40,8 @@ jobs:
 
       - name: "Fail on type ignores and legacy future annotations"
         run: |
-          if grep -rE '# type: ignore|# ty: ignore|from __future__ import annotations' --include='*.py' . --exclude-dir=.venv --exclude-dir=.git; then
-            echo "::error::type: ignore / ty: ignore comments and legacy future annotations are not allowed. Fix the underlying type/import issue instead."
+          if grep -rE '# type: ignore|# ty: ignore|#[[:space:]]*pyrefly:[[:space:]]*ignore|from __future__ import annotations' --include='*.py' . --exclude-dir=.venv --exclude-dir=.git; then
+            echo "::error::Type-checker suppressions and legacy future annotations are not allowed. Fix the underlying type/import issue instead."
             exit 1
           fi
           exit 0
@@ -60,8 +60,9 @@ jobs:
             run: uv run --locked ruff format --check
           - id: ruff-check
             run: uv run --locked ruff check
+          # The main ruleset requires this check name.
           - id: ty
-            run: uv run --locked ty check
+            run: uv run --locked pyrefly check
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

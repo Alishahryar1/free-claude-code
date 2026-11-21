@@ -113,7 +113,9 @@ async def test_awaitable_restart_callback_is_not_executed_under_apply_lock(tmp_p
     callback_tasks = []
 
     async def close_on_restart():
-        callback_tasks.append(asyncio.current_task())
+        task = asyncio.current_task()
+        assert task is not None
+        callback_tasks.append(task)
         await runtime.close()
 
     # A dynamically supplied callback can evade static checking by returning a coroutine.

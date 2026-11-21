@@ -27,6 +27,7 @@ from free_claude_code.core.history_replay import (
 )
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningPolicy
+from tests.wire_payload import object_array, object_payload
 
 
 def request(**extra):
@@ -108,15 +109,17 @@ def test_direct_builders_preserve_parallel_tool_history_and_schema(protocol):
     prepared = build(source, protocol)
     assert prepared.reserved_tool_ids == {"a", "b"}
     assert prepared.declared_names == frozenset({"read.file"})
-    tool = prepared.body["tools"][0]
+    tool = object_array(prepared.body["tools"])[0]
     schema = (
-        tool["function"]["parameters"]
+        object_payload(tool["function"])["parameters"]
         if protocol == "chat"
         else tool["parameters"]
         if protocol == "responses"
         else tool["input_schema"]
     )
-    assert schema["properties"]["path"]["default"] is None
+    schema = object_payload(schema)
+    path = object_payload(object_payload(schema["properties"])["path"])
+    assert path["default"] is None
     assert schema["additionalProperties"] is False
     assert source.model_dump() == before
     assert prepared.body["model"] == "backend"
