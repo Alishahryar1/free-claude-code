@@ -13,7 +13,7 @@ from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import SSEEvent, parse_sse_text
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
 from free_claude_code.providers.request_correction import RequestCorrector
@@ -162,6 +162,57 @@ def public_text(events: list[SSEEvent], wire: str):
         for event in events
         if event.event == "response.output_text.delta"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.filterwarnings(
+    "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
+)
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("empty_delta", [[], False])
+async def test_empty_chat_stop_delta_completes_translation(
+    wire: WireProtocol, empty_delta: JsonValue
+):
+    events = text_events("chat", "hello")
+    object_array(events[-1]["choices"])[0]["delta"] = empty_delta
+    async with _harness("chat", lambda _: (200, events), max_attempts=1) as (
+        send,
+        _,
+        _,
+    ):
+        stream = await delivered(send(wire, [{"role": "user", "content": "hi"}]), wire)
+
+    output = parse_sse_text(stream)
+    assert_completed(output, wire)
+    assert public_text(output, wire) == "hello"
+
+
+@pytest.mark.asyncio
+@pytest.mark.filterwarnings(
+    "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
+)
+@pytest.mark.parametrize(
+    ("wire", "field"),
+    [("messages", "content"), ("responses", "content"), ("messages", "refusal")],
+)
+@pytest.mark.parametrize("invalid_text", [42, ["trailing"]])
+async def test_nonstring_chat_text_cannot_complete_translation(
+    wire: WireProtocol, field: str, invalid_text: JsonValue
+):
+    events = text_events("chat", "hello")
+    malformed = text_events("chat", "", complete=False)[0]
+    object_array(malformed["choices"])[0]["delta"] = {field: invalid_text}
+    events.insert(1, malformed)
+    async with _harness("chat", lambda _: (200, events), max_attempts=1) as (
+        send,
+        _,
+        _,
+    ):
+        stream = await delivered(send(wire, [{"role": "user", "content": "hi"}]), wire)
+
+    output = parse_sse_text(stream)
+    assert output[-1].event == ("error" if wire == "messages" else "response.failed")
+    assert public_text(output, wire) == "hello"
 
 
 def assert_completed(events: list[SSEEvent], wire: str):

@@ -17,7 +17,7 @@ from typing import Any, cast, override
 import httpx2
 from loguru import logger
 from openai import AsyncOpenAI, Omit
-from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
+from openai.types.chat.chat_completion_chunk import ChatCompletionChunk, ChoiceDelta
 from openai.types.chat.completion_create_params import CompletionCreateParamsStreaming
 
 from free_claude_code.application.errors import InvalidRequestError
@@ -55,7 +55,7 @@ from free_claude_code.core.json_types import (
     JsonValue,
     json_object,
     json_objects,
-    optional_string,
+    json_text,
 )
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -429,13 +429,13 @@ class _ChatStreamPresenter:
 
         yield from self._extra_reasoning_events(delta, self._output)
 
-        refusal = optional_string(delta.get("refusal"))
+        refusal = delta.get("refusal")
         if isinstance(self._output, AnthropicChatStreamOutput) and refusal:
             self._refused = True
-            yield from _iter_visible_text_events(self._output, refusal)
-        content = optional_string(delta.get("content"))
+            yield from _iter_visible_text_events(self._output, json_text(refusal))
+        content = delta.get("content")
         if content:
-            for part in self._think_parser.feed(content):
+            for part in self._think_parser.feed(json_text(content)):
                 if part.type == ContentType.THINKING:
                     if not self._output_reasoning:
                         continue
@@ -1396,16 +1396,16 @@ class _ChatAttempt(TransportAttempt):
         choices: list[JsonObject] = []
         # The SDK can leave choices unset on a usage-only trailer.
         for choice in chunk.choices or ():
-            delta = choice.delta
-            extras: JsonObject = (delta.model_extra or {}) if delta is not None else {}
-            choices.append(
-                {
-                    "delta": {
-                        "reasoning_details": extras.get("reasoning_details"),
-                        "audio": delta is not None and bool(delta.audio),
-                    },
+            # The SDK can keep a provider's empty stop delta as a raw value.
+            delta: object = choice.delta
+            metadata: JsonObject = {}
+            if isinstance(delta, ChoiceDelta):
+                extras: JsonObject = delta.model_extra or {}
+                metadata = {
+                    "reasoning_details": extras.get("reasoning_details"),
+                    "audio": bool(delta.audio),
                 }
-            )
+            choices.append({"delta": metadata})
         source.observe(
             "chat",
             {
