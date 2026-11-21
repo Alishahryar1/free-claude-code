@@ -93,6 +93,8 @@ CHEAPERINFERENCE_DEFAULT_BASE = "https://api.cheaperinference.com/v1"
 ORCAROUTER_DEFAULT_BASE = "https://api.orcarouter.ai/v1"
 # Atlas Cloud OpenAI-compatible multi-provider gateway.
 ATLASCLOUD_DEFAULT_BASE = "https://api.atlascloud.ai/v1"
+# TrustedRouter OpenAI-compatible multi-provider gateway.
+TRUSTEDROUTER_DEFAULT_BASE = "https://api.trustedrouter.com/v1"
 # xKiro OpenAI-compatible multi-provider gateway.
 XKIRO_DEFAULT_BASE = "https://api.xkiro.com/v1"
 # Opper OpenAI-compatible Chat Completions gateway.
@@ -755,6 +757,17 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         credential_attr="atlascloud_api_keys",
         default_base_url=ATLASCLOUD_DEFAULT_BASE,
         proxy_attr="atlascloud_proxy",
+    ),
+    "trustedrouter": ProviderDescriptor(
+        provider_id="trustedrouter",
+        display_name="TrustedRouter",
+        website_url="https://trustedrouter.com/",
+        logo_filename="trustedrouter.svg",
+        credential_env="TRUSTEDROUTER_API_KEY",
+        credential_url="https://trustedrouter.com/console/api-keys",
+        credential_attr="trustedrouter_api_keys",
+        default_base_url=TRUSTEDROUTER_DEFAULT_BASE,
+        proxy_attr="trustedrouter_proxy",
     ),
     "xkiro": ProviderDescriptor(
         provider_id="xkiro",
