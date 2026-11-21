@@ -52,6 +52,4 @@ def build() -> None:
         subprocess.run(["/usr/bin/otool", "-L", str(output)], check=True)
         subprocess.run(["/usr/bin/otool", "-l", str(output)], check=True)
 
-
-if __name__ == "__main__":
     build()
