@@ -1402,7 +1402,12 @@ def test_install_sh_discovers_hermes_in_xdg_data_home(
 
     assert result.returncode == 0, result.stdout
     assert (
-        Path(posix_harness.env["HOME"]) / ".local" / "share" / "hermes" / "bin" / "hermes"
+        Path(posix_harness.env["HOME"])
+        / ".local"
+        / "share"
+        / "hermes"
+        / "bin"
+        / "hermes"
     ).is_file()
     calls = posix_harness.calls()
     assert calls.index("hermes-install:--non-interactive --skip-setup") < calls.index(
