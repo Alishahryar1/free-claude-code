@@ -74,7 +74,7 @@ def test_managed_claude_builds_new_task_command_and_env() -> None:
     assert invocation.env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
     assert invocation.env["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] == "1"
     assert invocation.env["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"] == "1"
-    assert "CLAUDE_CODE_USE_BEDROCK" not in invocation.env
+    assert invocation.env["CLAUDE_CODE_USE_BEDROCK"] == "0"
     assert invocation.env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "190000"
     assert "DISABLE_AUTOUPDATER" not in invocation.env
     assert invocation.env["DISABLE_FEEDBACK_COMMAND"] == "1"

@@ -6,6 +6,16 @@ from free_claude_code.harnesses.environment import client_environment
 
 CLAUDE_CODE_AUTO_COMPACT_WINDOW = "190000"
 CLAUDE_BINARY_NAME = "claude"
+# Switches that route Claude to a backend other than ANTHROPIC_BASE_URL.
+CLAUDE_PROVIDER_SWITCHES = (
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_GATEWAY",
+)
 
 
 def claude_proxy_values(proxy_root_url: str, auth_token: str) -> dict[str, str]:
@@ -15,6 +25,8 @@ def claude_proxy_values(proxy_root_url: str, auth_token: str) -> dict[str, str]:
         "ANTHROPIC_AUTH_TOKEN": auth_token,
         # Ignore provider, endpoint and auth values from Claude settings files.
         "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST": "1",
+        # Override inherited switches, since settings can no longer turn them off.
+        **dict.fromkeys(CLAUDE_PROVIDER_SWITCHES, "0"),
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
         # FCC uses Claude's separate classifier requests, not Anthropic server checks.
         "CLAUDE_CODE_AUTO_MODE_SERVER": "0",
@@ -43,9 +55,7 @@ def build_claude_proxy_env(
     return client_environment(
         base_env,
         proxy_root_url=proxy_root_url,
-        # Provider switches select a non-FCC backend, and host-managed mode
-        # ignores any settings-file value that would turn them off again.
-        remove_prefixes=("ANTHROPIC_", "CLAUDE_CODE_USE_"),
+        remove_prefixes=("ANTHROPIC_",),
         remove_keys=("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",),
         updates=claude_proxy_values(proxy_root_url, auth_token),
     )

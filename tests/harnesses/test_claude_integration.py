@@ -5,6 +5,7 @@ import pytest
 
 from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.harnesses import claude_integration
+from free_claude_code.harnesses.claude import CLAUDE_PROVIDER_SWITCHES
 from free_claude_code.harnesses.claude_integration import settings_path
 from tests.wire_payload import decode_object, object_array, object_payload
 
@@ -119,6 +120,7 @@ def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_AUTH_TOKEN",
         "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+        *CLAUDE_PROVIDER_SWITCHES,
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
         "CLAUDE_CODE_DISABLE_ADVISOR_TOOL",
         "CLAUDE_CODE_AUTO_MODE_SERVER",
