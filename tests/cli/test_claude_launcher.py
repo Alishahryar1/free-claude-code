@@ -4,7 +4,6 @@ import os
 
 import pytest
 
-from free_claude_code.harnesses.claude import CLAUDE_PROVIDER_SWITCHES
 from tests.cli.conftest import LaunchCapture
 from tests.cli.test_launcher_workflow import launch
 
@@ -34,24 +33,6 @@ def test_claude_owns_permission_selection(
     assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0"
     # Settings-file provider, endpoint and auth values cannot bypass FCC.
     assert env["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"] == "1"
-
-
-@pytest.mark.parametrize("name", CLAUDE_PROVIDER_SWITCHES)
-def test_claude_launch_turns_off_inherited_provider_switches(
-    name: str, launch_capture: LaunchCapture, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Host-managed mode ignores settings that would turn these off again.
-    monkeypatch.setenv(name, "1")
-    launch("claude", [])
-    assert launch_capture.environments[0][name] == "0"
-
-
-def test_claude_launch_keeps_non_provider_use_preferences(
-    launch_capture: LaunchCapture, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("CLAUDE_CODE_USE_POWERSHELL_TOOL", "1")
-    launch("claude", [])
-    assert launch_capture.environments[0]["CLAUDE_CODE_USE_POWERSHELL_TOOL"] == "1"
 
 
 @pytest.mark.parametrize("retry_value", [None, "1"])
