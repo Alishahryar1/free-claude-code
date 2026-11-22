@@ -1,6 +1,5 @@
 """Claude owns permission options and prompt interpretation."""
 
-import json
 import os
 from collections.abc import Mapping
 from pathlib import Path
@@ -11,7 +10,7 @@ from free_claude_code.core.json_types import JsonObject
 from free_claude_code.harnesses.claude import claude_proxy_values
 from tests.cli.conftest import LaunchCapture
 from tests.cli.test_launcher_workflow import launch
-from tests.wire_payload import decode_object, object_payload
+from tests.wire_payload import decode_object
 
 _FCC_ENV = claude_proxy_values("http://127.0.0.1:8182", "launcher-test-token")
 
@@ -106,60 +105,3 @@ def test_claude_settings_files_cannot_redirect_the_fcc_connection(
     assert captured == [{"env": dict(_FCC_ENV)}]
     settings_path = Path(launch_capture.commands[0][2])
     assert not settings_path.exists()
-
-
-@pytest.mark.parametrize("form", ["separate", "equals", "file"])
-def test_claude_user_settings_flag_is_merged_under_fcc_connection(
-    form: str, launch_capture: LaunchCapture, tmp_path: Path
-) -> None:
-    user_settings: JsonObject = {
-        "model": "user-model",
-        "env": {"ANTHROPIC_BASE_URL": "https://elsewhere.invalid", "KEEP": "1"},
-    }
-    value = json.dumps(user_settings)
-    if form == "file":
-        path = tmp_path / "user-settings.json"
-        path.write_text(value, encoding="utf-8")
-        value = str(path)
-    flag = [f"--settings={value}"] if form == "equals" else ["--settings", value]
-    captured = _capture_settings(launch_capture)
-
-    launch("claude", ["--verbose", *flag, "fix tests"])
-
-    [command] = launch_capture.commands
-    assert command[3:] == ["--verbose", "fix tests"]
-    [settings] = captured
-    assert settings["model"] == "user-model"
-    assert object_payload(settings["env"]) == {"KEEP": "1", **_FCC_ENV}
-
-
-def test_claude_last_user_settings_flag_wins_like_claude(
-    launch_capture: LaunchCapture,
-) -> None:
-    captured = _capture_settings(launch_capture)
-    launch(
-        "claude",
-        ["--settings", '{"model": "first"}', "--settings", '{"model": "second"}'],
-    )
-    assert captured[0]["model"] == "second"
-    assert launch_capture.commands[0][3:] == []
-
-
-def test_claude_settings_after_separator_stays_prompt_text(
-    launch_capture: LaunchCapture,
-) -> None:
-    captured = _capture_settings(launch_capture)
-    args = ["--", "--settings", '{"model": "literal"}']
-    launch("claude", args)
-    assert launch_capture.commands[0][3:] == args
-    assert captured == [{"env": dict(_FCC_ENV)}]
-
-
-@pytest.mark.parametrize(
-    "value", ["[1]", '{"env": ["x"]}', "missing-settings.json", "{not json"]
-)
-def test_claude_unreadable_user_settings_stop_launch(
-    value: str, launch_capture: LaunchCapture
-) -> None:
-    launch("claude", ["--settings", value], exit_code=1)
-    assert not launch_capture.commands

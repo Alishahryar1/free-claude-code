@@ -30,21 +30,13 @@ def claude_proxy_values(proxy_root_url: str, auth_token: str) -> dict[str, str]:
     }
 
 
-def claude_session_settings(
-    proxy_root_url: str, auth_token: str, user_settings: JsonObject | None = None
-) -> JsonObject:
+def claude_session_settings(proxy_root_url: str, auth_token: str) -> JsonObject:
     """Return ``--settings`` content that keeps a launched session on FCC.
 
     Claude Code applies settings-file ``env`` over its process environment, and
-    a ``--settings`` file over the user and project settings files. Other
-    settings and ``env`` keys from ``user_settings`` are kept.
+    a ``--settings`` file over the user and project settings files.
     """
-    settings: JsonObject = dict(user_settings or {})
-    user_env = settings.get("env", {})
-    if not isinstance(user_env, dict):
-        raise ValueError("Claude settings env must be a JSON object")
-    settings["env"] = {**user_env, **claude_proxy_values(proxy_root_url, auth_token)}
-    return settings
+    return {"env": dict(claude_proxy_values(proxy_root_url, auth_token))}
 
 
 def build_claude_proxy_env(
