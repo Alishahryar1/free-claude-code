@@ -3,18 +3,14 @@
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from loguru import logger
 
-from free_claude_code.config.paths import messaging_state_dir_path
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.harnesses.claude import (
     CLAUDE_BINARY_NAME,
     build_claude_proxy_env,
-    claude_session_settings,
 )
-from free_claude_code.harnesses.config_file import atomic_write_text
 
 MANAGED_CLAUDE_MODEL_TIER = "fable"
 
@@ -57,20 +53,10 @@ class ManagedClaudeParseState:
     session_id_extracted: bool = False
 
 
-def write_managed_claude_settings(config: ManagedClaudeConfig) -> Path:
-    """Write the private ``--settings`` file that keeps managed tasks on FCC."""
-
-    path = messaging_state_dir_path() / "claude-settings.json"
-    settings = claude_session_settings(config.proxy_root_url, config.auth_token)
-    atomic_write_text(path, json.dumps(settings, indent=2) + "\n", private=True)
-    return path
-
-
 def build_managed_claude_invocation(
     *,
     config: ManagedClaudeConfig,
     request: ManagedClaudeTaskRequest,
-    settings_path: Path,
     base_env: Mapping[str, str],
 ) -> ManagedClaudeInvocation:
     """Build a Claude Code stream-json subprocess invocation."""
@@ -81,7 +67,6 @@ def build_managed_claude_invocation(
         session_id=request.session_id,
         fork_session=request.fork_session,
         allowed_dirs=config.allowed_dirs,
-        settings_path=settings_path,
     )
     resume_session_id = (
         request.session_id
@@ -135,7 +120,6 @@ def build_managed_claude_command(
     session_id: str | None,
     fork_session: bool,
     allowed_dirs: list[str],
-    settings_path: Path,
 ) -> list[str]:
     """Return the Claude Code stream-json command for a managed task."""
 
@@ -172,7 +156,6 @@ def build_managed_claude_command(
 
     for directory in allowed_dirs:
         cmd.extend(["--add-dir", directory])
-    cmd.extend(["--settings", str(settings_path)])
 
     return cmd
 

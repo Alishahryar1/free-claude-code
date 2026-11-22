@@ -2,7 +2,6 @@
 
 from collections.abc import Mapping
 
-from free_claude_code.core.json_types import JsonObject
 from free_claude_code.harnesses.environment import client_environment
 
 CLAUDE_CODE_AUTO_COMPACT_WINDOW = "190000"
@@ -14,6 +13,8 @@ def claude_proxy_values(proxy_root_url: str, auth_token: str) -> dict[str, str]:
     return {
         "ANTHROPIC_BASE_URL": proxy_root_url,
         "ANTHROPIC_AUTH_TOKEN": auth_token,
+        # Ignore provider, endpoint and auth values from Claude settings files.
+        "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST": "1",
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
         # FCC uses Claude's separate classifier requests, not Anthropic server checks.
         "CLAUDE_CODE_AUTO_MODE_SERVER": "0",
@@ -28,15 +29,6 @@ def claude_proxy_values(proxy_root_url: str, auth_token: str) -> dict[str, str]:
         "DISABLE_FEEDBACK_COMMAND": "1",
         "DISABLE_ERROR_REPORTING": "1",
     }
-
-
-def claude_session_settings(proxy_root_url: str, auth_token: str) -> JsonObject:
-    """Return ``--settings`` content that keeps a launched session on FCC.
-
-    Claude Code applies settings-file ``env`` over its process environment, and
-    a ``--settings`` file over the user and project settings files.
-    """
-    return {"env": dict(claude_proxy_values(proxy_root_url, auth_token))}
 
 
 def build_claude_proxy_env(

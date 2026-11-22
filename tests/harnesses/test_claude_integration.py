@@ -118,6 +118,7 @@ def test_connect_merges_jsonc_and_disconnect_preserves_unrelated_values(
         "KEEP",
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
         "CLAUDE_CODE_DISABLE_ADVISOR_TOOL",
         "CLAUDE_CODE_AUTO_MODE_SERVER",

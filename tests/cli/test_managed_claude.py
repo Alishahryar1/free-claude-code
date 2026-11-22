@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 
 from free_claude_code.cli.managed.claude import (
     MANAGED_CLAUDE_MODEL_TIER,
@@ -10,16 +9,9 @@ from free_claude_code.cli.managed.claude import (
     build_managed_claude_invocation,
     extract_managed_claude_session_id,
     parse_managed_claude_stdout_line,
-    write_managed_claude_settings,
 )
 from free_claude_code.cli.managed.diagnostics import classify_managed_claude_stderr
-from free_claude_code.harnesses.claude import (
-    build_claude_proxy_env,
-    claude_proxy_values,
-)
-from tests.wire_payload import decode_object
-
-_SETTINGS_PATH = Path("/tmp/claude-settings.json")
+from free_claude_code.harnesses.claude import build_claude_proxy_env
 
 
 def _config(**overrides: object) -> ManagedClaudeConfig:
@@ -56,7 +48,6 @@ def test_managed_claude_builds_new_task_command_and_env() -> None:
     invocation = build_managed_claude_invocation(
         config=_config(allowed_dirs=[os.path.normpath("/tmp/extra")]),
         request=ManagedClaudeTaskRequest(prompt="hello"),
-        settings_path=_SETTINGS_PATH,
         base_env={
             "PATH": "keep",
             "ANTHROPIC_API_KEY": "official",
@@ -75,12 +66,13 @@ def test_managed_claude_builds_new_task_command_and_env() -> None:
     assert "stream-json" in invocation.argv
     assert "--add-dir" in invocation.argv
     assert os.path.normpath("/tmp/extra") in invocation.argv
-    assert invocation.argv[-2:] == ("--settings", str(_SETTINGS_PATH))
+    assert "--settings" not in invocation.argv
     assert invocation.env["PATH"] == "keep"
     assert invocation.env["ANTHROPIC_BASE_URL"] == "http://localhost:8082"
     assert invocation.env["ANTHROPIC_AUTH_TOKEN"] == "proxy-token"
     assert invocation.env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
     assert invocation.env["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] == "1"
+    assert invocation.env["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"] == "1"
     assert invocation.env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "190000"
     assert "DISABLE_AUTOUPDATER" not in invocation.env
     assert invocation.env["DISABLE_FEEDBACK_COMMAND"] == "1"
@@ -96,29 +88,10 @@ def test_managed_claude_builds_new_task_command_and_env() -> None:
     assert invocation.trace_metadata["managed_model_tier"] == MANAGED_CLAUDE_MODEL_TIER
 
 
-def test_managed_claude_settings_keep_the_fcc_connection() -> None:
-    # Claude Code applies settings-file env over the process environment, so the
-    # FCC connection must also arrive through --settings.
-    path = write_managed_claude_settings(_config())
-
-    assert decode_object(path.read_text(encoding="utf-8")) == {
-        "env": dict(claude_proxy_values("http://localhost:8082", "proxy-token"))
-    }
-    invocation = build_managed_claude_invocation(
-        config=_config(),
-        request=ManagedClaudeTaskRequest(prompt="hello"),
-        settings_path=path,
-        base_env={},
-    )
-    assert invocation.argv[-2:] == ("--settings", str(path))
-    assert not any("proxy-token" in arg for arg in invocation.argv)
-
-
 def test_managed_claude_builds_resume_and_fork_commands() -> None:
     resume = build_managed_claude_invocation(
         config=_config(),
         request=ManagedClaudeTaskRequest(prompt="again", session_id="sess_1"),
-        settings_path=_SETTINGS_PATH,
         base_env={},
     )
     fork = build_managed_claude_invocation(
@@ -126,7 +99,6 @@ def test_managed_claude_builds_resume_and_fork_commands() -> None:
         request=ManagedClaudeTaskRequest(
             prompt="branch", session_id="sess_1", fork_session=True
         ),
-        settings_path=_SETTINGS_PATH,
         base_env={},
     )
 
@@ -152,9 +124,13 @@ def test_managed_claude_builds_resume_and_fork_commands() -> None:
 
 
 def test_managed_claude_uses_native_plan_storage() -> None:
-    path = write_managed_claude_settings(_config())
+    invocation = build_managed_claude_invocation(
+        config=_config(),
+        request=ManagedClaudeTaskRequest(prompt="hello"),
+        base_env={},
+    )
 
-    assert "plansDirectory" not in decode_object(path.read_text(encoding="utf-8"))
+    assert "--settings" not in invocation.argv
 
 
 def test_managed_claude_env_forwards_retained_proxy_auth_token() -> None:

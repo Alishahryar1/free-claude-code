@@ -21,7 +21,6 @@ from .claude import (
     ManagedClaudeTaskRequest,
     build_managed_claude_invocation,
     parse_managed_claude_stdout_line,
-    write_managed_claude_settings,
 )
 from .diagnostics import classify_managed_claude_stderr
 
@@ -123,7 +122,6 @@ class ManagedClaudeSession:
                             session_id=session_id,
                             fork_session=fork_session,
                         ),
-                        settings_path=write_managed_claude_settings(self.config),
                         base_env=os.environ,
                     )
 
