@@ -1302,14 +1302,47 @@ function Install-Hermes {
     Add-KnownBinDirectories
 }
 
+function Repair-HermesEnvironment {
+    param([string] $HermesPath)
+
+    if ([string]::IsNullOrWhiteSpace($HermesPath)) {
+        throw "Hermes Agent executable path is empty; dependency repair cannot run."
+    }
+
+    Write-Host "Checking and repairing the Hermes dependency environment before version verification."
+    try {
+        Invoke-NativeCommand -FilePath $HermesPath -Arguments @("pm", "repair")
+    }
+    catch {
+        throw "Hermes dependency repair failed at '$HermesPath'. Run '`"$HermesPath`" pm repair' manually, review its output, and rerun the FCC installer. $($_.Exception.Message)"
+    }
+}
+
 function Ensure-Hermes {
     $command = Get-ApplicationCommand "hermes"
     if ($command) {
         $script:InstallStepOutcome = "Reused"
-        Write-Host "Hermes Agent already found on PATH; verifying it."
+        Write-Host "Hermes Agent already found on PATH; repairing and verifying its dependency environment."
     }
     else {
         Install-Hermes
+        if ($DryRun) {
+            Write-Host "+ hermes pm repair"
+            Write-Host "+ hermes --version"
+            return
+        }
+        $command = Get-ApplicationCommand "hermes"
+    }
+
+    if (-not $command) {
+        throw "Hermes Agent installation completed, but 'hermes' is not available on PATH. Add its installation directory to PATH, then rerun the installer."
+    }
+
+    if (-not $DryRun) {
+        Repair-HermesEnvironment -HermesPath $command.Source
+    }
+    else {
+        Write-Host "+ $(Format-Command -FilePath $command.Source -Arguments @('pm', 'repair'))"
     }
 
     Confirm-Application -CommandName "hermes" -DisplayName "Hermes Agent"
