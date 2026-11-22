@@ -6,15 +6,35 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
+
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import object_payload, string_payload
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
+class InstalledDesktop(TypedDict):
+    root: Path
+    home: Path
+    venv: Path
+    python: Path
+    app: Path
+    output: Path
+    env: dict[str, str]
+    launch_env: dict[str, str]
+    runtime: dict[str, object]
+    create_venv: Callable[[Path], None]
+
+
 @pytest.fixture(scope="session")
-def installed_desktop(tmp_path_factory):
+def installed_desktop(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[InstalledDesktop]:
     if sys.platform != "darwin":
         pytest.skip("requires a macOS GUI session")
     root = tmp_path_factory.mktemp("FCC's 日本語 desktop")
@@ -61,11 +81,11 @@ def installed_desktop(tmp_path_factory):
         timeout=60,
         stdout=subprocess.DEVNULL,
     )
-    version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"][
-        "requires-python"
-    ].removeprefix("==")
+    metadata: JsonObject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    project = object_payload(metadata["project"])
+    version = string_payload(project["requires-python"]).removeprefix("==")
 
-    def create_venv(venv):
+    def create_venv(venv: Path) -> None:
         subprocess.run(
             ["uv", "venv", "--managed-python", "--python", f"{version}+gil", str(venv)],
             env=env,
@@ -113,7 +133,7 @@ def installed_desktop(tmp_path_factory):
     )
     app = home / "Applications/Free Claude Code.app"
     with (app / "Contents/Resources/runtime.plist").open("rb") as stream:
-        runtime = plistlib.load(stream)
+        runtime: dict[str, object] = plistlib.load(stream)
     # Launch Services receives explicit private settings; no launchd-wide changes.
     launch_env = {
         "HOME": str(home),

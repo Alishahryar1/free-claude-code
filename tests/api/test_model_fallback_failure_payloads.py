@@ -1,14 +1,26 @@
 """Only the final candidate failure reaches the public Responses lifecycle."""
 
+from collections.abc import AsyncIterator
 from copy import deepcopy
 from itertools import pairwise
 
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_delivery import (
+    StreamDeliveryState,
+    bind_stream_delivery,
+)
+from free_claude_code.core.stream_output import StreamOutput
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
+from free_claude_code.providers.endpoint_types import EndpointContext
+from free_claude_code.providers.openai_chat.provider import OpenAIChatProvider
 from tests.api.test_delivered_stream_recovery import (
     after_text,
     public_text,
@@ -17,27 +29,27 @@ from tests.api.test_delivered_stream_recovery import (
 from tests.api.test_hidden_stream_retries import partial_tool
 from tests.api.test_midstream_model_fallback import delivered_candidates
 from tests.api.test_tool_call_buffer_transports import _tools
+from tests.assertions import require_present
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import (
+    array_payload,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
-@pytest.fixture(autouse=True)
-def release_events(monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
-
-
-def failed_response(text, label):
+def failed_response(text: str, label: str):
     events = text_events("responses", text)
     for event in events:
         if "response" in event:
-            event["response"]["id"] = f"resp_{label}"
+            object_payload(event["response"])["id"] = f"resp_{label}"
     final = events[-1]
     final["type"] = "response.failed"
     final["extension"] = {"candidate": label}
-    final["response"].update(
+    object_payload(final["response"]).update(
         status="failed",
         created_at=12.0,
         completed_at=34.0,
@@ -54,7 +66,9 @@ def failed_response(text, label):
 
 
 @pytest.mark.asyncio
-async def test_final_native_failure_preserves_projected_error_output_usage_and_extensions():
+async def test_final_native_failure_preserves_projected_error_output_usage_and_extensions() -> (
+    None
+):
     source = failed_response("Partial text", "only")
     expected = deepcopy(source[-1])
     async with _harness("responses", lambda _: (200, source), max_attempts=1) as (
@@ -70,22 +84,27 @@ async def test_final_native_failure_preserves_projected_error_output_usage_and_e
     assert sum(event.event == "response.failed" for event in events) == 1
     assert final["extension"] == expected["extension"]
     for field in ("id", "output", "usage", "error", "metadata", "status"):
-        assert final["response"][field] == expected["response"][field]
-    assert final["response"]["model"] == "public-alias"
-    assert type(final["response"]["created_at"]) is int
-    assert type(final["response"]["completed_at"]) is int
+        assert (
+            object_payload(final["response"])[field]
+            == object_payload(expected["response"])[field]
+        )
+    assert object_payload(final["response"])["model"] == "public-alias"
+    assert type(object_payload(final["response"])["created_at"]) is int
+    assert type(object_payload(final["response"])["completed_at"]) is int
     assert source[-1] == expected
 
 
 @pytest.mark.asyncio
-async def test_final_native_snapshot_cannot_release_a_withheld_call():
+async def test_final_native_snapshot_cannot_release_a_withheld_call() -> None:
     source = after_text("responses", partial_tool("responses"))
     final = failed_response("Before. ", "only")[-1]
-    call = tool_events("responses", '{"path":"unreleased"}')[-1]["response"]["output"][
-        0
-    ]
-    call["call_id"] = "call_abandoned"
-    final["response"]["output"].append(call)
+    call = object_array(
+        object_payload(
+            tool_events("responses", '{"path":"unreleased"}')[-1]["response"]
+        )["output"]
+    )[0]
+    call.update(id="fc_abandoned", call_id="call_abandoned", status="incomplete")
+    array_payload(object_payload(final["response"])["output"]).append(call)
     final["sequence_number"] = len(source)
     source.append(final)
     async with _harness("responses", lambda _: (200, source), max_attempts=1) as (
@@ -96,16 +115,22 @@ async def test_final_native_snapshot_cannot_release_a_withheld_call():
         raw = await delivered_candidates([send], "responses", tools=_tools("responses"))
     events = parse_sse_text(raw)
     assert "call_abandoned" not in raw and "unreleased" not in raw
-    assert events[-1].data["response"]["error"] == final["response"]["error"]
-    assert [item["type"] for item in events[-1].data["response"]["output"]] == [
-        "message"
-    ]
+    assert (
+        object_payload(events[-1].data["response"])["error"]
+        == object_payload(final["response"])["error"]
+    )
+    assert [
+        object_payload(item)["type"]
+        for item in array_payload(object_payload(events[-1].data["response"])["output"])
+    ] == ["message"]
     assert public_text(events, "responses") == "Before. "
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
-async def test_zero_call_final_candidate_keeps_published_response_identity(protocol):
+async def test_zero_call_final_candidate_keeps_published_response_identity(
+    protocol: str,
+) -> None:
     admission = ProviderAdmissionController(
         provider_name="cooled",
         rate_limit=1000,
@@ -126,7 +151,9 @@ async def test_zero_call_final_candidate_keeps_published_response_identity(proto
             max_attempts=1,
         ) as (last, last_bodies, provider),
     ):
-        transport = provider._chat if protocol == "chat" else provider
+        transport = (
+            provider._chat if isinstance(provider, OpenAIChatProvider) else provider
+        )
         transport._admission = admission
         warmup = last(
             "responses",
@@ -134,9 +161,13 @@ async def test_zero_call_final_candidate_keeps_published_response_identity(proto
             model="model-1",
         )
         try:
-            with pytest.raises(ExecutionFailure):
+            with (
+                bind_stream_delivery(StreamDeliveryState()),
+                pytest.raises(ExecutionFailure),
+            ):
                 await anext(warmup)
         finally:
+            assert isinstance(warmup, AsyncCloseable)
             await warmup.aclose()
         prior_calls = len(last_bodies)
         raw = await delivered_candidates([first, last], "responses")
@@ -145,16 +176,24 @@ async def test_zero_call_final_candidate_keeps_published_response_identity(proto
     events = parse_sse_text(raw)
     assert [event.event for event in events] == ["response.created", "response.failed"]
     first_event, final = (event.data for event in events)
-    assert final["response"]["id"] == first_event["response"]["id"]
-    assert final["response"]["created_at"] == first_event["response"]["created_at"]
-    assert final["sequence_number"] > first_event["sequence_number"]
+    assert (
+        object_payload(final["response"])["id"]
+        == object_payload(first_event["response"])["id"]
+    )
+    assert (
+        object_payload(final["response"])["created_at"]
+        == object_payload(first_event["response"])["created_at"]
+    )
+    assert int_payload(final["sequence_number"]) > int_payload(
+        first_event["sequence_number"]
+    )
 
 
 def failed_overlapping_calls():
     template = tool_events("responses", '{"path":"finished"}')
-    response = deepcopy(template[-1]["response"])
+    response = deepcopy(object_payload(template[-1]["response"]))
     finished = {
-        **response["output"][0],
+        **object_array(response["output"])[0],
         "id": "fc_finished",
         "call_id": "call_finished",
         "status": "completed",
@@ -166,7 +205,7 @@ def failed_overlapping_calls():
         "arguments": '{"path":',
         "status": "incomplete",
     }
-    events = [
+    events: list[JsonObject] = [
         {
             **template[0],
             "response": {**response, "status": "in_progress", "output": []},
@@ -202,22 +241,9 @@ def failed_overlapping_calls():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("same_candidate", [False, True])
 @pytest.mark.parametrize("hold_final_attempt", [False, True])
-async def test_failed_snapshot_cannot_release_an_overlapping_group_hidden_by_provider(
-    monkeypatch, same_candidate, hold_final_attempt
-):
-    buffers = []
-
-    def buffer():
-        value = RecoveryHoldbackBuffer(
-            max_bytes=1_000_000 if buffers and hold_final_attempt else 1,
-            holdback_seconds=60,
-        )
-        buffers.append(value)
-        return value
-
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer", buffer
-    )
+async def test_failed_snapshot_preserves_independently_completed_call(
+    monkeypatch: pytest.MonkeyPatch, same_candidate: bool, hold_final_attempt: bool
+) -> None:
     async with (
         _harness(
             "responses",
@@ -241,13 +267,16 @@ async def test_failed_snapshot_cannot_release_an_overlapping_group_hidden_by_pro
     assert len(first_bodies) == (2 if same_candidate else 1)
     assert len(last_bodies) == (0 if same_candidate else 1)
     events = parse_sse_text(raw)
-    assert [event.event for event in events] == ["response.created", "response.failed"]
-    assert events[-1].data["response"]["output"] == []
-    assert "call_finished" not in raw and "call_unfinished" not in raw
+    assert events[-1].event == "response.completed"
+    assert [
+        object_payload(item)["call_id"]
+        for item in array_payload(object_payload(events[-1].data["response"])["output"])
+    ] == ["call_finished"]
+    assert "call_unfinished" not in raw
 
 
 @pytest.mark.asyncio
-async def test_last_model_error_keeps_combined_output_with_public_item_ids():
+async def test_last_model_error_keeps_combined_output_with_public_item_ids() -> None:
     first_events = failed_response("One ", "first")
     last_events = failed_response("two", "last")
     async with (
@@ -268,45 +297,70 @@ async def test_last_model_error_keeps_combined_output_with_public_item_ids():
     assert sum(event.event == "response.failed" for event in events) == 1
     assert sum(event.event == "response.created" for event in events) == 1
     final = events[-1].data
-    assert final["response"]["id"] == "resp_first"
-    assert final["response"]["created_at"] == events[0].data["response"]["created_at"]
-    assert final["response"]["error"] == last_events[-1]["response"]["error"]
-    assert final["response"]["metadata"] == {"candidate": "last"}
+    assert object_payload(final["response"])["id"] == "resp_first"
+    assert (
+        object_payload(final["response"])["created_at"]
+        == object_payload(events[0].data["response"])["created_at"]
+    )
+    assert (
+        object_payload(final["response"])["error"]
+        == object_payload(last_events[-1]["response"])["error"]
+    )
+    assert object_payload(final["response"])["metadata"] == {"candidate": "last"}
     assert final["extension"] == {"candidate": "last"}
     assert public_text(events, "responses") == "One two"
     assert (
         "".join(
-            part["text"]
-            for item in final["response"]["output"]
-            for part in item.get("content", [])
+            string_payload(part["text"])
+            for item in array_payload(object_payload(final["response"])["output"])
+            for part in object_array(object_payload(item).get("content", []))
         )
         == "One two"
     )
-    assert {item["id"] for item in final["response"]["output"]} == {
+    assert {
+        object_payload(item)["id"]
+        for item in array_payload(object_payload(final["response"])["output"])
+    } == {
         event.data["item_id"]
         for event in events
         if event.event == "response.output_text.delta"
     }
     assert all(
-        a.data["sequence_number"] < b.data["sequence_number"]
+        int_payload(a.data["sequence_number"]) < int_payload(b.data["sequence_number"])
         for a, b in pairwise(events)
     )
-    assert final["response"]["usage"]["output_tokens"] > 0
+    assert (
+        int_payload(
+            object_payload(object_payload(final["response"])["usage"])["output_tokens"]
+        )
+        > 0
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_fallback_timeout_before_its_first_frame_retains_prefix_and_closes(wire):
+async def test_fallback_timeout_before_its_first_frame_retains_prefix_and_closes(
+    wire: WireProtocol,
+) -> None:
     opened = []
     closed = []
 
-    async def timed_out(*args, **kwargs):
-        opened.append(kwargs["continuation"])
+    async def timed_out(
+        wire: str,
+        history: object,
+        *,
+        tools: object = None,
+        model: str = "requested",
+        continuation: ContinuationSeed | None = None,
+        reasoning: ReasoningPolicy | None = None,
+        endpoint_context: EndpointContext | None = None,
+    ) -> AsyncIterator[StreamOutput]:
+        opened.append(require_present(continuation))
         try:
             raise ExecutionFailure(
                 FailureKind.TIMEOUT, 504, "Provider read timed out", False
             )
-            yield "unreachable"
+            yield StreamOutput(("unreachable",))
         finally:
             closed.append(True)
 
@@ -323,13 +377,16 @@ async def test_fallback_timeout_before_its_first_frame_retains_prefix_and_closes
     assert events[-1].event == ("error" if wire == "messages" else "response.failed")
     if wire == "responses":
         final = events[-1].data["response"]
-        assert final["id"] == events[0].data["response"]["id"]
+        assert (
+            object_payload(final)["id"]
+            == object_payload(events[0].data["response"])["id"]
+        )
         assert (
             "".join(
-                part["text"]
-                for item in final["output"]
-                for part in item.get("content", [])
+                string_payload(part["text"])
+                for item in array_payload(object_payload(final)["output"])
+                for part in object_array(object_payload(item).get("content", []))
             )
             == "Before. "
         )
-        assert final["error"]["type"] == "timeout_error"
+        assert object_payload(object_payload(final)["error"])["type"] == "timeout_error"

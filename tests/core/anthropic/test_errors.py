@@ -41,3 +41,20 @@ def test_anthropic_error_payload_adds_request_id_and_redacts_credentials() -> No
         },
         "request_id": "req_test",
     }
+
+
+def test_anthropic_error_payload_includes_error_code_details() -> None:
+    payload = anthropic_error_payload(
+        error_type="invalid_request_error",
+        message="bad",
+        error_code="some_code",
+    )
+
+    assert payload == {
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "message": "bad",
+            "details": {"error_code": "some_code"},
+        },
+    }

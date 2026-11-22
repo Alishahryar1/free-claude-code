@@ -43,7 +43,7 @@ def _provider_query_failure_reason(exc: BaseException) -> str:
     """Classify the transport cause without copying upstream text or URLs."""
     import openai
 
-    from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
+    from free_claude_code.providers.recovery_errors import ProviderRecoveryExhausted
 
     chain: list[BaseException] = []
     seen: set[int] = set()

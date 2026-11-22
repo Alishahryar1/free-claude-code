@@ -12,6 +12,7 @@ from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.history_negotiation import HistoryModeCache
 
@@ -61,7 +62,7 @@ class BaseProvider(ABC):
         request_headers: Mapping[str, str] | None = None,
         reasoning_override: ReasoningPolicy | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         raise InvalidRequestError(
             "This provider does not support native Messages execution."
         )
@@ -77,7 +78,7 @@ class BaseProvider(ABC):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         raise InvalidRequestError("This provider does not support Chat execution.")
 
     def stream_gemini(
@@ -91,7 +92,7 @@ class BaseProvider(ABC):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         raise InvalidRequestError("This provider does not support Gemini execution.")
 
     @abstractmethod
@@ -106,7 +107,7 @@ class BaseProvider(ABC):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Validate the request before yielding a response in Anthropic SSE format."""
 
     @abstractmethod
@@ -121,5 +122,5 @@ class BaseProvider(ABC):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Validate the request before yielding OpenAI Responses SSE events."""

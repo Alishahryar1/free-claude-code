@@ -7,7 +7,7 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
+from free_claude_code.core.json_types import JsonObject
 from tests.api.support import provider_manager_for_app
 from tests.api.test_delivered_stream_recovery import text_events
 from tests.api.test_four_protocol_matrix import (
@@ -15,14 +15,18 @@ from tests.api.test_four_protocol_matrix import (
     matrix_app,
     response_value,
 )
+from tests.wire_payload import decode_object, object_array
 
 PAIRS = [(source, "chat") for source in ("chat", "messages", "responses", "gemini")] + [
     ("gemini", wire) for wire in ("messages", "responses", "gemini")
 ]
 
 
-def native_text(text, complete):
-    candidate = {"index": 0, "content": {"role": "model", "parts": [{"text": text}]}}
+def native_text(text: str, complete: bool):
+    candidate: JsonObject = {
+        "index": 0,
+        "content": {"role": "model", "parts": [{"text": text}]},
+    }
     if complete:
         candidate["finishReason"] = "STOP"
     return [
@@ -31,15 +35,13 @@ def native_text(text, complete):
 
 
 @pytest.mark.parametrize(("source", "wire"), PAIRS)
-def test_truncated_text_continues_without_duplicate_output(source, wire, monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
+def test_truncated_text_continues_without_duplicate_output(
+    source: str, wire: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     bodies = []
 
-    def reply(request):
-        bodies.append(json.loads(request.content))
+    def reply(request: httpx.Request | httpx2.Request):
+        bodies.append(decode_object(request.content))
         text = "The answer is " if len(bodies) == 1 else "The answer is forty-two."
         events = (
             native_text(text, len(bodies) > 1)
@@ -47,7 +49,7 @@ def test_truncated_text_continues_without_duplicate_output(source, wire, monkeyp
             else text_events(source, text, complete=len(bodies) > 1)
         )
         if source == "chat" and len(bodies) > 1:
-            events[0]["choices"][0]["finish_reason"] = "stop"
+            object_array(events[0]["choices"])[0]["finish_reason"] = "stop"
             events = events[:1]
         raw = "".join(
             (f"event: {event['type']}\n" if source == "messages" else "")
@@ -59,7 +61,7 @@ def test_truncated_text_continues_without_duplicate_output(source, wire, monkeyp
         )
         return response(200, headers={"content-type": "text/event-stream"}, text=raw)
 
-    app = matrix_app(source, reply)
+    app = matrix_app(source, native_reply=reply, sdk_reply=reply)
     with TestClient(app) as client:
         path, body = ingress_request(wire, True)
         response = client.post(path, json=body)
@@ -94,14 +96,16 @@ def test_truncated_text_continues_without_duplicate_output(source, wire, monkeyp
         {"role": "user", "content": [{"type": "input_text"}]},
     ],
 )
-def test_malformed_responses_history_is_rejected_before_native_gemini(item):
+def test_malformed_responses_history_is_rejected_before_native_gemini(
+    item: JsonObject,
+) -> None:
     calls = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         calls.append(request)
         return httpx.Response(500)
 
-    app = matrix_app("gemini", reply)
+    app = matrix_app("gemini", native_reply=reply)
     with TestClient(app) as client:
         response = client.post(
             "/v1/responses", json={"model": "public", "input": [item], "stream": True}
@@ -157,14 +161,16 @@ def test_malformed_responses_history_is_rejected_before_native_gemini(item):
         ),
     ],
 )
-def test_unsupported_native_gemini_controls_fail_before_inference(path, body):
+def test_unsupported_native_gemini_controls_fail_before_inference(
+    path: str, body: JsonObject
+) -> None:
     calls = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         calls.append(request)
         return httpx.Response(500)
 
-    with TestClient(matrix_app("gemini", reply)) as client:
+    with TestClient(matrix_app("gemini", native_reply=reply)) as client:
         response = client.post(path, json=body)
     assert response.status_code == 400, response.text
     assert not calls
@@ -178,16 +184,12 @@ def test_unsupported_native_gemini_controls_fail_before_inference(path, body):
     ],
 )
 def test_native_gemini_structured_output_never_continues_partial_json(
-    config, monkeypatch
-):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
+    config: JsonObject, monkeypatch: pytest.MonkeyPatch
+) -> None:
     bodies = []
 
-    def reply(request):
-        bodies.append(json.loads(request.content))
+    def reply(request: httpx.Request):
+        bodies.append(decode_object(request.content))
         events = native_text(
             '{"x":' if len(bodies) == 1 else '{"y":1}', len(bodies) > 1
         )
@@ -197,7 +199,7 @@ def test_native_gemini_structured_output_never_continues_partial_json(
             text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
         )
 
-    with TestClient(matrix_app("gemini", reply)) as client:
+    with TestClient(matrix_app("gemini", native_reply=reply)) as client:
         response = client.post(
             "/v1beta/models/public:streamGenerateContent?alt=sse",
             json={

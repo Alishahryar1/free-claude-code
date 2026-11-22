@@ -1,11 +1,10 @@
 """Native GenerateContent attempts using the shared execution/recovery owners."""
 
 import asyncio
-import sys
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import aclosing
 from functools import partial
-from typing import Any
+from typing import override
 from urllib.parse import quote
 
 import httpx
@@ -15,47 +14,40 @@ from free_claude_code.core.anthropic.stream_contracts import SSEEvent
 from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
 from free_claude_code.core.continuation_request import ContinuationRequest
 from free_claude_code.core.history_replay import HistoryReplayError
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, normalize_empty_array_field
+from free_claude_code.core.stream_output import StreamOutput, completed_output
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderExecution,
     ProviderOperationKind,
 )
-from free_claude_code.providers.continuation import (
-    SourceRecoveryState,
-    public_recovery,
-    public_stream_failure,
+from free_claude_code.providers.attempt_loop import (
+    AttemptContext,
+    AttemptPlan,
+    FailureReporting,
+    TransportAttempt,
+    run_attempts,
 )
 from free_claude_code.providers.endpoint import RequestEndpoint
 from free_claude_code.providers.endpoint_types import EndpointContext
-from free_claude_code.providers.failure_policy import (
-    RetryableProviderProtocolError,
-    classify_provider_failure,
-    is_retryable_stream_error,
-)
 from free_claude_code.providers.history_negotiation import HistoryModeCache
-from free_claude_code.providers.history_replay import replay_origin
+from free_claude_code.providers.history_replay import ReplayOrigin, replay_origin
 from free_claude_code.providers.http import ProviderAttemptScope, maybe_await_aclose
 from free_claude_code.providers.openai_chat import ChatStreamOutput
 from free_claude_code.providers.reasoning_compatibility import ReasoningCorrection
-from free_claude_code.providers.request_recovery import (
-    RequestCorrections,
-    RequestRecovery,
+from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
+from free_claude_code.providers.request_correction import (
+    RequestCorrector,
 )
 from free_claude_code.providers.stream_read import read_stream_event
-from free_claude_code.providers.stream_recovery import (
-    HoldbackSignal,
-    RecoveryController,
-    RecoveryFailureAction,
-)
 
 from .stream import GeminiStream
 
 
 async def _events(
     response: httpx.Response, *, read_timeout: float
-) -> AsyncIterator[dict[str, Any]]:
+) -> AsyncIterator[JsonObject]:
     async with aclosing(_decoded_events(response)) as source:
         while True:
             try:
@@ -68,7 +60,14 @@ async def _events(
                 )
             except StopAsyncIteration:
                 return
-            yield event.data
+            payload = event.data
+            if isinstance(candidates := payload.get("candidates"), list):
+                for candidate in candidates:
+                    if isinstance(candidate, dict) and isinstance(
+                        content := candidate.get("content"), dict
+                    ):
+                        normalize_empty_array_field(content, "parts")
+            yield payload
 
 
 async def _decoded_events(response: httpx.Response) -> AsyncGenerator[SSEEvent]:
@@ -105,7 +104,7 @@ class GeminiTransport:
         include_thoughts: bool = True,
         reasoning_correction: ReasoningCorrection | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         execution = self._admission.start_execution(
             request_id=request_id, model=str(body["model"])
         )
@@ -133,7 +132,7 @@ class GeminiTransport:
             await maybe_await_aclose(run)
             execution.abandon()
 
-    async def _run(
+    def _run(
         self,
         body: JsonObject,
         *,
@@ -144,226 +143,175 @@ class GeminiTransport:
         include_thoughts: bool,
         reasoning_correction: ReasoningCorrection | None,
         continuation: ContinuationSeed | None,
-    ) -> AsyncIterator[str]:
-        recovery = RecoveryController(execution.delivery)
+    ) -> AsyncIterator[StreamOutput]:
         endpoint = RequestEndpoint(endpoint_context)
-        request_recovery = RequestRecovery(
-            execution, endpoint=endpoint, stream=recovery
-        )
-        corrections = RequestCorrections("gemini", reasoning=reasoning_correction)
         continuation_request = ContinuationRequest("gemini")
         operation = ProviderOperationKind.GENERATION
         if continuation is not None:
             body = continuation_request.build(body, continuation)
             operation = ProviderOperationKind.CONTINUATION
-        source: SourceRecoveryState | None = None
-        while execution.can_attempt:
-            source = SourceRecoveryState(execution, previous=source)
-            scope: ProviderAttemptScope | None = None
-            presenter: GeminiStream | None = None
-            sent_body = body
-            opened = False
-            try:
-                attempt = await execution.open_attempt(operation)
-                scope = ProviderAttemptScope(
-                    attempt, provider_name="GEMINI", request_id=execution.request_id
-                )
-                snapshot = await endpoint.resolve()
-                origin = replay_origin(
-                    "GEMINI", "gemini", str(body["model"]), endpoint=snapshot
-                )
-                try:
-                    sent_body = corrections.prepare_history(
-                        body,
-                        origin,
-                        self._history_cache,
-                        continuation=operation is ProviderOperationKind.CONTINUATION,
-                    )
-                except HistoryReplayError as error:
-                    raise InvalidRequestError(str(error)) from error
-                assert corrections.history is not None
-                model = str(sent_body["model"]).removeprefix("models/")
-                headers = {"Accept": "text/event-stream", **snapshot.headers}
-                if snapshot.api_key:
-                    headers["x-goog-api-key"] = snapshot.api_key
-                response = scope.retain(
-                    await self._client.send(
-                        self._client.build_request(
-                            "POST",
-                            f"{snapshot.base_url.rstrip('/')}/models/{quote(model, safe='')}:streamGenerateContent",
-                            params={"alt": "sse"},
-                            headers=headers,
-                            json={
-                                key: value
-                                for key, value in sent_body.items()
-                                if key != "model"
-                            },
-                        ),
-                        stream=True,
-                    )
-                )
-                if not response.is_success:
-                    await response.aread()
-                    response.raise_for_status()
-                if (
-                    "text/event-stream"
-                    not in response.headers.get("content-type", "").lower()
-                ):
-                    raise RetryableProviderProtocolError(
-                        "Gemini upstream did not return an SSE stream"
-                    )
-                opened = True
-                declarations = [
-                    function
-                    for tool in body.get("tools", [])
-                    if isinstance(tool, dict)
-                    for function in tool.get("functionDeclarations", [])
-                    if isinstance(function, dict)
-                ]
-                presenter = GeminiStream(
-                    model=response_model,
-                    origin=origin,
-                    output=output_factory(),
-                    tool_names=frozenset(str(tool["name"]) for tool in declarations),
-                    tool_defaults={
-                        str(tool["name"]): {
-                            name: schema["default"]
-                            for name, schema in (
-                                tool.get("parametersJsonSchema")
-                                or tool.get("parameters")
-                                or {}
-                            )
-                            .get("properties", {})
-                            .items()
-                            if isinstance(schema, dict) and "default" in schema
-                        }
-                        for tool in declarations
-                    },
+        return run_attempts(
+            AttemptPlan(
+                body=body,
+                operation_kind=operation,
+                execution=execution,
+                continuation=continuation_request,
+                corrector=partial(
+                    RequestCorrector, "gemini", reasoning=reasoning_correction
+                ),
+                start=partial(
+                    _GeminiAttempt,
+                    transport=self,
+                    endpoint=endpoint,
+                    continuation=continuation_request,
+                    response_model=response_model,
+                    output_factory=output_factory,
                     include_thoughts=include_thoughts,
-                    continuation_context=continuation_request.sent_context(
-                        sent_body,
-                        source=corrections.history.source,
-                        source_paths=corrections.history.paths,
-                    ),
-                )
-                upstream = _events(response, read_timeout=self._read_timeout)
-                try:
-                    async with recovery.read_stream(upstream) as events:
-                        async for payload in events:
-                            if payload is HoldbackSignal.EXPIRED:
-                                for event in recovery.flush():
-                                    yield event
-                                continue
-                            source.observe(
-                                "gemini",
-                                payload,
-                                continuing=operation
-                                is ProviderOperationKind.CONTINUATION,
-                            )
-                            output = presenter.feed(payload)
-                            corrections.accepted_history()
-                            if not attempt.accepted:
-                                await attempt.accept()
-                            for event in output:
-                                for held in recovery.push(event):
-                                    yield held
-                finally:
-                    await maybe_await_aclose(upstream)
-                if not presenter.normal_stop_seen:
-                    raise RetryableProviderProtocolError(
-                        "Gemini stream ended without finishReason"
-                    )
-                for event in presenter.finish():
-                    for held in recovery.push(event):
-                        yield held
-                for event in recovery.flush():
-                    yield event
-                return
-            except asyncio.CancelledError, GeneratorExit:
-                raise
-            except Exception as error:
-                normal_stop = presenter.normal_stop_seen if presenter else False
-                attempt_failure = None
-                if scope is not None:
-                    corrected = await request_recovery.retry_request(
-                        error,
-                        error.response.status_code
-                        if isinstance(error, httpx.HTTPStatusError)
-                        else None,
-                        scope.attempt,
-                        body,
-                        operation_kind=operation,
-                        normal_stop_seen=normal_stop,
-                        propose_correction=partial(
-                            corrections.next_body,
-                            error,
-                            body,
-                            sent_body=sent_body,
-                            reasoning_error=error,
-                            reasoning_sent_body=sent_body,
-                        ),
-                    )
-                    if corrected is not None:
-                        body = corrected
-                        recovery.discard()
-                        continue
-                    if not scope.attempt.accepted:
-                        attempt_failure = await scope.attempt.fail(error)
-                if attempt_failure is not None and attempt_failure.retry_allowed:
-                    recovery.discard()
-                    continue
-                decision = recovery.advance_failure(
-                    retryable=attempt_failure.retryable
-                    if attempt_failure
-                    else is_retryable_stream_error(error),
-                    stream_opened=opened,
-                    generated_output=recovery.committed,
-                    complete_tool_salvageable=False,
-                    attempts_remaining=execution.attempts_remaining,
-                    normal_stop_seen=normal_stop,
-                )
-                if decision.action is RecoveryFailureAction.EARLY_RETRY:
-                    recovery.discard()
-                    continue
-                if scope is not None:
-                    await scope.aclose(active_error=error)
-                recovered = public_recovery(
-                    execution,
-                    body=body,
-                    request=continuation_request,
-                    retryable=decision.retryable,
-                    normal_stop_seen=normal_stop,
-                    source=source,
-                )
-                if recovered is not None:
-                    recovery.discard()
-                    if recovered.body is None:
-                        return
-                    body = recovered.body
-                    operation = ProviderOperationKind.CONTINUATION
-                    corrections = RequestCorrections("gemini")
-                    continue
-                if isinstance(error, InvalidRequestError):
-                    raise
-                failure = classify_provider_failure(
-                    error,
-                    provider_name="GEMINI",
+                ),
+                reporting=FailureReporting(
                     read_timeout_s=self._read_timeout,
-                    request_id=execution.request_id,
+                    # History the caller sent cannot be replayed; that is their error.
+                    raise_unfinalized=(InvalidRequestError,),
+                ),
+                provider_name="GEMINI",
+                transport="gemini",
+                gateway_model=response_model,
+                refreshable=endpoint,
+            )
+        )
+
+
+class _GeminiAttempt(TransportAttempt):
+    """One GenerateContent attempt."""
+
+    def __init__(
+        self,
+        context: AttemptContext,
+        *,
+        transport: GeminiTransport,
+        endpoint: RequestEndpoint,
+        continuation: ContinuationRequest,
+        response_model: str,
+        output_factory: Callable[[], ChatStreamOutput | None],
+        include_thoughts: bool,
+    ) -> None:
+        super().__init__(context)
+        self._transport = transport
+        self._endpoint = endpoint
+        self._continuation = continuation
+        self._response_model = response_model
+        self._output_factory = output_factory
+        self._include_thoughts = include_thoughts
+        self._presenter: GeminiStream | None = None
+        self._request: httpx.Request | None = None
+        self._origin: ReplayOrigin | None = None
+
+    @property
+    @override
+    def normal_stop_seen(self) -> bool:
+        return self._presenter is not None and self._presenter.normal_stop_seen
+
+    @override
+    async def prepare(self) -> None:
+        context = self.context
+        snapshot = await self._endpoint.resolve()
+        self._origin = replay_origin(
+            "GEMINI", "gemini", str(self.body["model"]), endpoint=snapshot
+        )
+        try:
+            self.sent_body = context.history.prepare(
+                self.body,
+                self._origin,
+                self._transport._history_cache,
+                continuation=context.continuing,
+            )
+        except HistoryReplayError as error:
+            raise InvalidRequestError(str(error)) from error
+        model = str(self.sent_body["model"]).removeprefix("models/")
+        headers = {"Accept": "text/event-stream", **snapshot.headers}
+        if snapshot.api_key:
+            headers["x-goog-api-key"] = snapshot.api_key
+        self._request = self._transport._client.build_request(
+            "POST",
+            f"{snapshot.base_url.rstrip('/')}/models/{quote(model, safe='')}:streamGenerateContent",
+            params={"alt": "sse"},
+            headers=headers,
+            json={
+                key: value for key, value in self.sent_body.items() if key != "model"
+            },
+        )
+
+    @override
+    async def stream(self, scope: ProviderAttemptScope) -> AsyncIterator[StreamOutput]:
+        assert self._request is not None and self._origin is not None
+        history = self.context.history
+        source, paths = history.source, history.paths
+        assert source is not None and paths is not None
+        client = self._transport._client
+        response = scope.retain(await client.send(self._request, stream=True))
+        if not response.is_success:
+            await response.aread()
+            response.raise_for_status()
+        content_type: str = response.headers.get("content-type", "")
+        if "text/event-stream" not in content_type.lower():
+            raise RetryableProviderProtocolError(
+                "Gemini upstream did not return an SSE stream"
+            )
+        tools = self.body.get("tools")
+        tool_defaults: dict[str, JsonObject] = {}
+        for tool in tools if isinstance(tools, list) else ():
+            if not isinstance(tool, dict):
+                continue
+            declarations = tool.get("functionDeclarations")
+            for declaration in declarations if isinstance(declarations, list) else ():
+                if not isinstance(declaration, dict):
+                    continue
+                name = str(declaration["name"])
+                parameters = declaration.get("parametersJsonSchema") or declaration.get(
+                    "parameters"
                 )
-                recovery.discard()
-                if execution.delivery is not None:
-                    raise public_stream_failure(
-                        failure,
-                        source=source,
-                        body=body,
-                        protocol="gemini",
-                        normal_stop_seen=normal_stop,
-                    ) from error
-                raise failure from error
-            finally:
-                if scope is not None:
-                    await scope.aclose(active_error=sys.exception())
-        if execution.last_failure is not None:
-            raise execution.last_failure
-        raise RuntimeError("Gemini execution ended without a terminal result")
+                properties = (
+                    parameters.get("properties")
+                    if isinstance(parameters, dict)
+                    else None
+                )
+                tool_defaults[name] = {
+                    key: schema["default"]
+                    for key, schema in (
+                        properties.items() if isinstance(properties, dict) else ()
+                    )
+                    if isinstance(schema, dict) and "default" in schema
+                }
+        presenter = self._presenter = GeminiStream(
+            model=self._response_model,
+            origin=self._origin,
+            output=self._output_factory(),
+            tool_names=frozenset(tool_defaults),
+            tool_defaults=tool_defaults,
+            include_thoughts=self._include_thoughts,
+            continuation_context=self._continuation.sent_context(
+                self.sent_body,
+                source=source,
+                source_paths=paths,
+            ),
+        )
+        upstream = _events(response, read_timeout=self._transport._read_timeout)
+        try:
+            async for payload in upstream:
+                self.context.source.observe(
+                    "gemini", payload, continuing=self.context.continuing
+                )
+                output = presenter.feed(payload)
+                history.accepted()
+                if not scope.attempt.accepted:
+                    await scope.attempt.accept()
+                if output:
+                    yield completed_output(output)
+        finally:
+            await maybe_await_aclose(upstream)
+        if not presenter.normal_stop_seen:
+            raise RetryableProviderProtocolError(
+                "Gemini stream ended without finishReason"
+            )
+        for event in presenter.finish():
+            yield StreamOutput((event,))

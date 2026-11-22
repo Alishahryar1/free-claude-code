@@ -1,7 +1,9 @@
 import asyncio
 import io
 import threading
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -16,7 +18,7 @@ from free_claude_code.core.interprocess_lock import InterprocessFileLock
 from free_claude_code.runtime.configuration import ConfigurationService
 
 
-def test_reads_are_fresh_read_only_snapshots():
+def test_reads_are_fresh_read_only_snapshots() -> None:
     store = ManagedConfigStore()
     store.initialize()
     for port in (8123, 8124):
@@ -32,14 +34,16 @@ def test_reads_are_fresh_read_only_snapshots():
         assert snapshot.managed["PORT"] == str(port)
 
 
-def test_read_does_not_recreate_missing_storage():
+def test_read_does_not_recreate_missing_storage() -> None:
     store = ManagedConfigStore()
     with pytest.raises(ValueError, match="initializ"):
         store.read()
     assert not store.path.exists()
 
 
-def test_preparation_uses_captured_disk_and_process_state(monkeypatch):
+def test_preparation_uses_captured_disk_and_process_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = ManagedConfigStore()
     store.initialize()
     snapshot = store.read({"PORT": "8123"})
@@ -54,7 +58,7 @@ def test_preparation_uses_captured_disk_and_process_state(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_read_waits_for_storage_lock_without_blocking_event_loop():
+async def test_read_waits_for_storage_lock_without_blocking_event_loop() -> None:
     store = ManagedConfigStore()
     store.initialize()
     service = ConfigurationService(store)
@@ -68,7 +72,9 @@ async def test_read_waits_for_storage_lock_without_blocking_event_loop():
 
 
 @pytest.mark.parametrize("schema", ["", "999"])
-def test_reads_and_commits_fail_closed_on_uninitialized_or_newer_schema(schema):
+def test_reads_and_commits_fail_closed_on_uninitialized_or_newer_schema(
+    schema: str,
+) -> None:
     store = ManagedConfigStore()
     store.initialize()
     text = f"FCC_CONFIG_SCHEMA={schema}\nANTHROPIC_AUTH_TOKEN=preserve\n"
@@ -80,14 +86,19 @@ def test_reads_and_commits_fail_closed_on_uninitialized_or_newer_schema(schema):
     assert store.path.read_text() == text
 
 
-def test_cooperative_commits_are_serialized_and_leave_complete_files():
+def test_cooperative_commits_are_serialized_and_leave_complete_files() -> None:
     store = ManagedConfigStore()
     store.initialize()
     original = loader.atomic_write_managed_config
     writing = threading.Lock()
     seen = []
 
-    def checked_write(values, **kwargs):
+    def checked_write(
+        values: Mapping[str, str],
+        *,
+        path: Path | None = None,
+        mask_secrets: bool = False,
+    ):
         probe = InterprocessFileLock(config_lock_path())
         try:
             assert not probe.acquire(), "commit does not hold the shared write lock"
@@ -96,11 +107,11 @@ def test_cooperative_commits_are_serialized_and_leave_complete_files():
         assert writing.acquire(blocking=False), "cooperative writes overlap"
         try:
             seen.append(values["PORT"])
-            return original(values, **kwargs)
+            return original(values, path=path, mask_secrets=mask_secrets)
         finally:
             writing.release()
 
-    def write(port):
+    def write(port: int):
         ManagedConfigStore().commit({"FCC_CONFIG_SCHEMA": "1", "PORT": str(port)})
 
     with (
@@ -115,7 +126,9 @@ def test_cooperative_commits_are_serialized_and_leave_complete_files():
     assert not list(store.path.parent.glob("*.tmp"))
 
 
-def test_atomic_commit_waits_for_an_open_snapshot_reader(monkeypatch):
+def test_atomic_commit_waits_for_an_open_snapshot_reader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = ManagedConfigStore()
     store.initialize()
     store.commit({"FCC_CONFIG_SCHEMA": "1", "PORT": "8123"})
@@ -123,8 +136,15 @@ def test_atomic_commit_waits_for_an_open_snapshot_reader(monkeypatch):
     original_open = io.open
     reader_thread = None
 
-    def hold_reader(path, *args, **kwargs):
-        handle = original_open(path, *args, **kwargs)
+    def hold_reader(
+        path: Path,
+        mode: str = "r",
+        buffering: int = -1,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ):
+        handle = original_open(path, mode, buffering, encoding, errors, newline)
         if path == store.path and threading.current_thread() is reader_thread:
             opened.set()
             if not release.wait(5):
@@ -160,7 +180,7 @@ def test_atomic_commit_waits_for_an_open_snapshot_reader(monkeypatch):
 @pytest.mark.parametrize(
     "operation", ["initialize", "admin_config", "admin_values", "prepare", "commit"]
 )
-async def test_storage_work_does_not_block_event_loop(operation):
+async def test_storage_work_does_not_block_event_loop(operation: str) -> None:
     store = ManagedConfigStore()
     store.initialize()
     service = ConfigurationService(store)
@@ -172,9 +192,9 @@ async def test_storage_work_does_not_block_event_loop(operation):
     method = {"admin_config": "read", "admin_values": "read", "prepare": "read"}.get(
         operation, operation
     )
-    original = getattr(store, method)
+    original: Callable[..., object] = getattr(store, method)
 
-    def blocked(*args, **kwargs):
+    def blocked(*args: object, **kwargs: object):
         entered.set()
         assert release.wait(5), "event loop failed to release storage"
         assert heartbeat.is_set()

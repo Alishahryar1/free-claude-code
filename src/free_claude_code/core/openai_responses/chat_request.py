@@ -14,7 +14,7 @@ from free_claude_code.core.history_replay import (
     tool_history_context,
     unprotected_replay,
 )
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.core.openai_chat import (
     IMAGE_TOOL_RESULT_MARKER,
     ChatToolResultImages,
@@ -56,7 +56,6 @@ class ResponsesChatRequest:
 
     body: dict[str, object]
     tool_names: OpenAIToolNameCodec
-    tool_schemas: dict[str, JsonObject]
     reserved_tool_ids: frozenset[str]
     tool_adapter: ResponsesToolAdapter
 
@@ -73,7 +72,8 @@ class _PendingReasoning:
         return not self.items
 
     def take(self) -> list[Mapping[str, JsonValue]]:
-        items, self.items = self.items, []
+        items = self.items
+        self.items = []
         return items
 
 
@@ -159,9 +159,14 @@ class _ResponsesChatInputBuilder:
         if not tool_names.has_aliases:
             return
         for message in self._discovery_outputs:
-            tools = json.loads(cast(str, message["content"]))
+            tools = load_json_value(
+                required_str(message["content"], "discovery output")
+            )
+            assert isinstance(tools, list)
             for tool in tools:
-                tool["name"] = tool_names.encode(tool["name"])
+                assert isinstance(tool, dict)
+                name = required_str(tool.get("name"), "discovery tool name")
+                tool["name"] = tool_names.encode(name)
             message["content"] = json.dumps(tools)
 
     def _add_message(self, item: Mapping[str, JsonValue]) -> None:
@@ -430,7 +435,7 @@ def build_responses_chat_request(
     if request.metadata is not None:
         body["metadata"] = request.metadata
 
-    extra = request.model_extra or {}
+    extra: JsonObject = request.model_extra or {}
     for field_name in _CHAT_OPTION_FIELDS:
         value = extra.get(field_name)
         if value is not None:
@@ -438,14 +443,12 @@ def build_responses_chat_request(
     if response_format := _chat_response_format(extra.get("text")):
         body["response_format"] = response_format
 
-    tool_schemas = _body_tool_schemas(body)
     reserved_tool_ids = frozenset(_body_tool_call_ids(body))
     tool_names = OpenAIToolNameCodec.from_names(_body_tool_names(body))
     builder.encode_discovery_outputs(tool_names)
     return ResponsesChatRequest(
         body=body,
         tool_names=tool_names,
-        tool_schemas=tool_schemas,
         reserved_tool_ids=reserved_tool_ids,
         tool_adapter=adapter,
     )
@@ -618,7 +621,7 @@ def _chat_function_tool(tool: Mapping[str, JsonValue]) -> tuple[dict[str, object
     name = required_str(tool.get("name"), "tool.name")
     parameters = tool.get("parameters")
     if parameters is None:
-        parameters = {"type": "object", "properties": {}}
+        parameters = {"type": "object", "properties": dict[str, JsonValue]()}
     if not isinstance(parameters, Mapping):
         raise ResponsesConversionError(
             f"Responses tool {name!r} parameters must be an object"
@@ -712,24 +715,6 @@ def _body_tool_names(body: Mapping[str, object]) -> list[str]:
         if isinstance(function, Mapping) and isinstance(function.get("name"), str):
             names.append(function["name"])
     return names
-
-
-def _body_tool_schemas(body: Mapping[str, object]) -> dict[str, JsonObject]:
-    schemas: dict[str, JsonObject] = {}
-    tools = body.get("tools")
-    if not isinstance(tools, list):
-        return schemas
-    for tool in tools:
-        if not isinstance(tool, Mapping):
-            continue
-        function = tool.get("function")
-        if not isinstance(function, Mapping):
-            continue
-        name = function.get("name")
-        parameters = function.get("parameters")
-        if isinstance(name, str) and isinstance(parameters, Mapping):
-            schemas[name] = dict(parameters)
-    return schemas
 
 
 def _body_tool_call_ids(body: Mapping[str, object]) -> list[str]:

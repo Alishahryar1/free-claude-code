@@ -1,4 +1,5 @@
 import json
+from typing import override
 
 import httpx2
 import pytest
@@ -17,12 +18,20 @@ from free_claude_code.providers.openai_codex.auth import (
 from free_claude_code.providers.openai_codex.provider import OpenAICodexProvider
 from tests.api.support import create_test_app
 from tests.providers.support import make_provider_config
+from tests.wire_payload import (
+    decode_object,
+    object_payload,
+    response_object,
+    string_payload,
+)
 
 
 class _FakeOpenAIAuth(OpenAIAuthManager):
+    @override
     async def access(self, *, force_refresh: bool = False) -> OpenAIAccess:
         return OpenAIAccess("access", "account", False)
 
+    @override
     async def recover_unauthorized(self, rejected_token: str) -> OpenAIAccess:
         raise AssertionError("The compatibility request must not require auth recovery")
 
@@ -130,7 +139,7 @@ async def test_messages_accepts_current_claude_controls_for_openai_provider(
     assert_anthropic_stream_contract(events)
     assert text_content(events) == "hello"
     assert len(upstream_requests) == 1
-    payload = json.loads(upstream_requests[0].content)
+    payload = decode_object(upstream_requests[0].content)
     assert payload["model"] == "gpt-test"
     assert payload["reasoning"] == {"effort": "high", "summary": "auto"}
     assert "max_output_tokens" not in payload
@@ -177,11 +186,11 @@ async def test_messages_auto_mode_classifier_composes_with_openai_provider() -> 
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
-    body = response.json()
+    body = response_object(response)
     assert body["content"] == [{"type": "text", "text": "<severity>0</severity>"}]
     assert body["stop_reason"] == "end_turn"
     assert len(upstream_requests) == 1
-    payload = json.loads(upstream_requests[0].content)
+    payload = decode_object(upstream_requests[0].content)
     assert payload["model"] == "gpt-test"
     assert payload["reasoning"] == {"effort": "none"}
     assert "stop" not in payload
@@ -212,8 +221,10 @@ async def test_messages_non_classifier_stop_remains_lossy_for_openai_provider() 
         await provider.cleanup()
 
     assert response.status_code == 400
-    body = response.json()
-    assert body["error"]["type"] == "invalid_request_error"
-    assert "cannot represent" in body["error"]["message"]
-    assert "stop_sequences" in body["error"]["message"]
+    body = response_object(response)
+    assert object_payload(body["error"])["type"] == "invalid_request_error"
+    assert "cannot represent" in string_payload(
+        object_payload(body["error"])["message"]
+    )
+    assert "stop_sequences" in string_payload(object_payload(body["error"])["message"])
     assert upstream_requests == []

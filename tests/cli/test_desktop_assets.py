@@ -2,6 +2,7 @@
 
 import builtins
 import struct
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -59,7 +60,9 @@ def test_desktop_entrypoint_rejects_unknown_arguments(
     assert "Usage: fcc-desktop" in capsys.readouterr().err
 
 
-def test_macos_installer_mode_does_not_import_tray(monkeypatch):
+def test_macos_installer_mode_does_not_import_tray(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from free_claude_code.cli import macos_app
 
     installed = []
@@ -67,16 +70,24 @@ def test_macos_installer_mode_does_not_import_tray(monkeypatch):
     monkeypatch.setattr(macos_app, "install", lambda: installed.append(True))
     original_import = builtins.__import__
 
-    def checked_import(name, *args, **kwargs):
+    def checked_import(
+        name: str,
+        globals: Mapping[str, object] | None = None,
+        locals: Mapping[str, object] | None = None,
+        fromlist: Sequence[str] | None = (),
+        level: int = 0,
+    ):
         assert name not in {"pystray", "free_claude_code.cli.desktop_tray"}
-        return original_import(name, *args, **kwargs)
+        return original_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", checked_import)
     desktop_entrypoint.launch(["--install-macos-app"])
     assert installed == [True]
 
 
-def test_macos_installer_mode_is_rejected_on_windows(monkeypatch):
+def test_macos_installer_mode_is_rejected_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(desktop_entrypoint.sys, "platform", "win32")
     with pytest.raises(SystemExit) as error:
         desktop_entrypoint.launch(["--install-macos-app"])
@@ -84,7 +95,9 @@ def test_macos_installer_mode_is_rejected_on_windows(monkeypatch):
 
 
 @pytest.mark.parametrize("auto_started", [False, True])
-def test_desktop_sets_scaling_before_importing_native_tray(monkeypatch, auto_started):
+def test_desktop_sets_scaling_before_importing_native_tray(
+    monkeypatch: pytest.MonkeyPatch, auto_started: bool
+) -> None:
     calls = []
     monkeypatch.setattr(desktop_entrypoint.sys, "platform", "win32")
     monkeypatch.setattr(
@@ -94,16 +107,22 @@ def test_desktop_sets_scaling_before_importing_native_tray(monkeypatch, auto_sta
     )
     original_import = builtins.__import__
 
-    def import_module(name, *args, **kwargs):
+    def import_module(
+        name: str,
+        globals: Mapping[str, object] | None = None,
+        locals: Mapping[str, object] | None = None,
+        fromlist: Sequence[str] | None = (),
+        level: int = 0,
+    ):
         if name == "free_claude_code.cli.desktop_tray":
             assert calls == ["scaling"]
 
-            def launch(**kwargs):
+            def launch(**kwargs: object):
                 assert kwargs == {"auto_started": auto_started}
                 calls.append("tray")
 
             return SimpleNamespace(launch=launch)
-        return original_import(name, *args, **kwargs)
+        return original_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", import_module)
     desktop_entrypoint.launch(["--auto-started"] if auto_started else [])

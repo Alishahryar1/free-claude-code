@@ -6,9 +6,11 @@ import pytest
 
 from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.gemini.native_request import chat_to_gemini
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import object_array, object_payload
 
 
-def test_chat_to_gemini_keeps_thoughts_typed_and_tool_ids():
+def test_chat_to_gemini_keeps_thoughts_typed_and_tool_ids() -> None:
     request = ChatRequest(
         model="models/model",
         messages=[
@@ -28,17 +30,24 @@ def test_chat_to_gemini_keeps_thoughts_typed_and_tool_ids():
             {"role": "tool", "tool_call_id": "call_1", "content": "file"},
         ],
     )
-    body = cast(dict[str, Any], chat_to_gemini(request))
-    parts = body["contents"][1]["parts"]
+    body: JsonObject = chat_to_gemini(request)
+    parts = object_array(object_array(body["contents"])[1]["parts"])
     assert parts[:2] == [
         {"text": "actual thought", "thought": True},
         {"text": "<thought>literal answer</thought>"},
     ]
     assert parts[2]["functionCall"] == {"id": "call_1", "name": "read", "args": {}}
-    assert body["contents"][2]["parts"][0]["functionResponse"]["id"] == "call_1"
+    assert (
+        object_payload(
+            object_array(object_array(body["contents"])[2]["parts"])[0][
+                "functionResponse"
+            ]
+        )["id"]
+        == "call_1"
+    )
 
 
-def test_messages_auto_choice_without_tools_has_no_function_config():
+def test_messages_auto_choice_without_tools_has_no_function_config() -> None:
     from free_claude_code.core.anthropic.models import MessagesRequest
     from free_claude_code.core.gemini.native_request import messages_to_gemini
 
@@ -50,7 +59,7 @@ def test_messages_auto_choice_without_tools_has_no_function_config():
     assert "toolConfig" not in messages_to_gemini(request)
 
 
-def test_messages_object_tool_result_retains_complete_value():
+def test_messages_object_tool_result_retains_complete_value() -> None:
     from free_claude_code.core.anthropic.models import MessagesRequest
     from free_claude_code.core.gemini.native_request import messages_to_gemini
 
@@ -81,7 +90,60 @@ def test_messages_object_tool_result_retains_complete_value():
     ] == {"count": 3, "nested": {"ok": True}}
 
 
-def test_gemini_25_effort_uses_supported_numeric_budget():
+def test_messages_tool_result_and_followup_remain_distinct_turns() -> None:
+    from free_claude_code.core.anthropic.models import MessagesRequest
+    from free_claude_code.core.gemini.native_request import messages_to_gemini
+
+    request = MessagesRequest(
+        model="model",
+        messages=[
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "call",
+                        "name": "echo",
+                        "input": {"value": "FCC_RESUME"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call",
+                        "content": "FCC_RESUME",
+                    },
+                ],
+            },
+            {"role": "user", "content": "Reply exactly OK without calling tools."},
+        ],
+    )
+    body: JsonObject = messages_to_gemini(request)
+    contents = object_array(body["contents"])
+    assert contents[-2:] == [
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "functionResponse": {
+                        "id": "call",
+                        "name": "echo",
+                        "response": {"output": "FCC_RESUME"},
+                    }
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "parts": [{"text": "Reply exactly OK without calling tools."}],
+        },
+    ]
+
+
+def test_gemini_25_effort_uses_supported_numeric_budget() -> None:
     from free_claude_code.core.gemini.native_request import apply_reasoning
     from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 
@@ -95,7 +157,7 @@ def test_gemini_25_effort_uses_supported_numeric_budget():
             }
 
 
-def test_messages_strict_tool_guarantee_is_rejected_for_gemini():
+def test_messages_strict_tool_guarantee_is_rejected_for_gemini() -> None:
     from free_claude_code.core.anthropic.models import MessagesRequest
     from free_claude_code.core.gemini.native_request import messages_to_gemini
 
@@ -108,7 +170,7 @@ def test_messages_strict_tool_guarantee_is_rejected_for_gemini():
         messages_to_gemini(request)
 
 
-def test_messages_noop_context_management_keeps_claude_code_compatible():
+def test_messages_noop_context_management_keeps_claude_code_compatible() -> None:
     from free_claude_code.core.anthropic.models import MessagesRequest
     from free_claude_code.core.gemini.native_request import messages_to_gemini
 

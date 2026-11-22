@@ -18,7 +18,7 @@ from tests.runtime.test_application_runtime import (
 
 
 @pytest.mark.asyncio
-async def test_close_cancels_both_feature_owners_before_acquiring_config_lock():
+async def test_close_cancels_both_feature_owners_before_acquiring_config_lock() -> None:
     manager = ProviderRuntimeManager(_settings("nvidia_nim/model"))
     database = AsyncMock(spec=SQLiteDatabase)
     import_started = asyncio.Event()
@@ -60,7 +60,7 @@ async def test_close_cancels_both_feature_owners_before_acquiring_config_lock():
 
 
 @pytest.mark.asyncio
-async def test_draining_runtime_rejects_new_feature_work():
+async def test_draining_runtime_rejects_new_feature_work() -> None:
     runtime = ApplicationRuntime(
         ProviderRuntimeManager(_settings("nvidia_nim/model")),
         configuration=AsyncMock(spec=ConfigurationService),
@@ -80,7 +80,7 @@ async def test_draining_runtime_rejects_new_feature_work():
 
 
 @pytest.mark.asyncio
-async def test_failed_messaging_drain_retains_shared_dependencies_until_retry():
+async def test_failed_messaging_drain_retains_shared_dependencies_until_retry() -> None:
     events = []
     factory = TrackingFactory()
     manager = ProviderRuntimeManager(

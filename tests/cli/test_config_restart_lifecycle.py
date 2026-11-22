@@ -1,8 +1,10 @@
 """Real HTTP and supervisor coverage for runtime-owned Apply restarts."""
 
 import socket
+import subprocess
 import threading
 import time
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
@@ -13,12 +15,14 @@ from free_claude_code.api.app import create_app
 from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.code_sessions import CodeService
 from free_claude_code.cli import commands, desktop
+from free_claude_code.cli.desktop import DesktopController
 from free_claude_code.cli.launchers import common
 from free_claude_code.config import paths
-from free_claude_code.config.loader import ManagedConfigStore
+from free_claude_code.config.loader import ManagedConfigSnapshot, ManagedConfigStore
+from free_claude_code.config.settings import Settings
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
 from free_claude_code.providers.runtime import ProviderRuntime
-from free_claude_code.runtime.application import ApplicationRuntime
+from free_claude_code.runtime.application import ApplicationRuntime, RestartCallback
 from free_claude_code.runtime.asgi import RuntimeASGIApp
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
 from free_claude_code.runtime.configuration import ConfigurationService
@@ -26,13 +30,14 @@ from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from free_claude_code.runtime.sqlite_database import SQLiteDatabase
 from tests.code_sessions_support import FakeHarness
 from tests.web_tools_support import StubWebToolsClient
+from tests.wire_payload import object_payload, response_object
 
 
 @pytest.mark.parametrize("owner_kind", ["desktop", "terminal"])
 @pytest.mark.parametrize("change_port", [False, True])
 def test_harness_waits_through_owner_apply_restart(
-    monkeypatch, change_port, owner_kind
-):
+    monkeypatch: pytest.MonkeyPatch, change_port: bool, owner_kind: str
+) -> None:
     monkeypatch.setenv("HOST", "127.0.0.1")
     monkeypatch.setenv("FCC_OPEN_BROWSER", "0")
     monkeypatch.delenv("PORT", raising=False)
@@ -40,14 +45,16 @@ def test_harness_waits_through_owner_apply_restart(
     with socket.socket() as first, socket.socket() as second:
         first.bind(("127.0.0.1", 0))
         second.bind(("127.0.0.1", 0))
-        port = first.getsockname()[1]
-        next_port = second.getsockname()[1] if change_port else port
+        first_address: tuple[str, int] = first.getsockname()
+        second_address: tuple[str, int] = second.getsockname()
+        port = first_address[1]
+        next_port = second_address[1] if change_port else port
     store = ManagedConfigStore()
     store.initialize()
     store.commit(dict(store.read().managed) | {"PORT": str(port)})
     runtimes = []
 
-    def build(settings, restart_callback):
+    def build(settings: Settings, restart_callback: RestartCallback):
         manager = ProviderRuntimeManager(
             settings,
             runtime_factory=lambda snapshot, admission_registry, history_cache=None: (
@@ -55,7 +62,11 @@ def test_harness_waits_through_owner_apply_restart(
             ),
         )
         monkeypatch.setattr(manager, "start_model_list_refresh", lambda: None)
-        monkeypatch.setattr(manager, "_start_pass", lambda *args, **kwargs: None)
+
+        def replace_start_pass(*args: object, **kwargs: object):
+            return None
+
+        monkeypatch.setattr(manager, "_start_pass", replace_start_pass)
         database = SQLiteDatabase(paths.fcc_database_path(), paths.code_lock_path())
         code = CodeService(SQLiteCodeStore(database), FakeHarness())
         runtime = ApplicationRuntime(
@@ -99,29 +110,42 @@ def test_harness_waits_through_owner_apply_restart(
     restart_entered, release_restart = threading.Event(), threading.Event()
     run_once = commands.ServerSupervisor._run_once
 
-    def gated_run(self, settings, **kwargs):
+    def gated_run(
+        self: commands.ServerSupervisor,
+        settings: Settings,
+        *,
+        open_admin_browser: bool,
+        restart_generation: int,
+    ):
         if runtimes:
             restart_entered.set()
             assert release_restart.wait(10)
-        return run_once(self, settings, **kwargs)
+        return run_once(
+            self,
+            settings,
+            open_admin_browser=open_admin_browser,
+            restart_generation=restart_generation,
+        )
 
     monkeypatch.setattr(commands.ServerSupervisor, "_run_once", gated_run)
     wait_for_server = common._wait_for_server
 
-    def release_when_waiting(*args, **kwargs):
+    def release_when_waiting(
+        proxy_root_url: str, process: subprocess.Popen[bytes] | None, *, deadline: float
+    ):
         release_restart.set()
-        return wait_for_server(*args, **kwargs)
+        return wait_for_server(proxy_root_url, process, deadline=deadline)
 
     monkeypatch.setattr(common, "_wait_for_server", release_when_waiting)
     trays = []
 
     class Tray:
-        def __init__(self, controller):
+        def __init__(self, controller: DesktopController):
             self.controller = controller
             self.stopped = threading.Event()
             trays.append(self)
 
-        def run(self, setup):
+        def run(self, setup: Callable[[], None]):
             setup()
             assert self.stopped.wait(20)
 
@@ -146,7 +170,7 @@ def test_harness_waits_through_owner_apply_restart(
     try:
         with httpx.Client(trust_env=False, timeout=1) as client:
 
-            def code_ready(on_port):
+            def code_ready(on_port: int):
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline:
                     response = client.get(
@@ -178,7 +202,7 @@ def test_harness_waits_through_owner_apply_restart(
                 },
             )
             assert response.status_code == 200
-            assert response.json()["restart"]["automatic"]
+            assert object_payload(response_object(response)["restart"])["automatic"]
             assert restart_entered.wait(5)
             with pytest.raises(OSError, match="already owns"):
                 commands.ServerSupervisor().run(open_admin_browser=False)
@@ -186,8 +210,10 @@ def test_harness_waits_through_owner_apply_restart(
                 common.ensure_proxy_available(f"http://127.0.0.1:{next_port}", env={})
                 is None
             )
-            after = client.get(f"http://127.0.0.1:{next_port}/admin/api/status").json()
-            assert after["instance_id"] != before.json()["instance_id"]
+            after = response_object(
+                client.get(f"http://127.0.0.1:{next_port}/admin/api/status")
+            )
+            assert after["instance_id"] != response_object(before)["instance_id"]
             assert after["port"] == next_port
             assert owner.is_alive()
             code_ready(next_port)
@@ -208,19 +234,22 @@ def test_harness_waits_through_owner_apply_restart(
 
 
 @pytest.mark.parametrize("stop_during_commit", [False, True])
-def test_supervised_http_apply_finishes_and_reconnects(monkeypatch, stop_during_commit):
+def test_supervised_http_apply_finishes_and_reconnects(
+    monkeypatch: pytest.MonkeyPatch, stop_during_commit: bool
+) -> None:
     monkeypatch.setenv("HOST", "127.0.0.1")
     monkeypatch.delenv("PORT", raising=False)
     monkeypatch.delenv("LOG_LEVEL", raising=False)
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
+        address: tuple[str, int] = listener.getsockname()
+        port = address[1]
     store = ManagedConfigStore()
     store.initialize()
     store.commit(dict(store.read().managed) | {"PORT": str(port)})
     runtimes = []
 
-    def build(settings, restart_callback):
+    def build(settings: Settings, restart_callback: RestartCallback):
         manager = ProviderRuntimeManager(
             settings,
             runtime_factory=lambda snapshot, admission_registry, history_cache=None: (
@@ -228,7 +257,11 @@ def test_supervised_http_apply_finishes_and_reconnects(monkeypatch, stop_during_
             ),
         )
         monkeypatch.setattr(manager, "start_model_list_refresh", lambda: None)
-        monkeypatch.setattr(manager, "_start_pass", lambda *args, **kwargs: None)
+
+        def replace_start_pass(*args: object, **kwargs: object):
+            return None
+
+        monkeypatch.setattr(manager, "_start_pass", replace_start_pass)
         runtime = ApplicationRuntime(
             manager,
             configuration=ConfigurationService(ManagedConfigStore()),
@@ -264,19 +297,23 @@ def test_supervised_http_apply_finishes_and_reconnects(monkeypatch, stop_during_
     entered, release = threading.Event(), threading.Event()
     commit = ManagedConfigStore.commit
 
-    def blocked_commit(self, values, expected=None):
+    def blocked_commit(
+        self: ManagedConfigStore,
+        values: Mapping[str, str],
+        expected: ManagedConfigSnapshot | None = None,
+    ):
         entered.set()
         assert release.wait(10)
         commit(self, values, expected)
 
-    def wait_status(client, old_id=None):
+    def wait_status(client: httpx.Client, old_id: str | None = None):
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             assert not errors
             try:
                 response = client.get("/admin/api/status")
                 if response.status_code == 200:
-                    status = response.json()
+                    status = response_object(response)
                     if (
                         status["status"] == "running"
                         and status["instance_id"] != old_id
@@ -307,11 +344,17 @@ def test_supervised_http_apply_finishes_and_reconnects(monkeypatch, stop_during_
                     release.set()
                 response = apply.result(timeout=10)
             assert response.status_code == 200
-            result = response.json()
+            result = response_object(response)
             assert result["applied"]
-            assert result["restart"]["automatic"]
-            assert result["restart"]["instance_id"] == before["instance_id"]
-            assert result["restart"]["admin_url"] == f"http://127.0.0.1:{port}/admin"
+            assert object_payload(result["restart"])["automatic"]
+            assert (
+                object_payload(result["restart"])["instance_id"]
+                == before["instance_id"]
+            )
+            assert (
+                object_payload(result["restart"])["admin_url"]
+                == f"http://127.0.0.1:{port}/admin"
+            )
             if not stop_during_commit:
                 after = wait_status(client, before["instance_id"])
                 assert after["pending_fields"] == []

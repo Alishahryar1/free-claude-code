@@ -3,14 +3,21 @@
 import pytest
 
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.open_router import OpenRouterProvider
 from tests.api.test_tool_call_buffer import _response
 from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
-def _tools(wire):
+def _tools(wire: str) -> list[JsonObject]:
     return (
         [{"type": "function", "name": "read", "parameters": {"type": "object"}}]
         if wire == "responses"
@@ -22,7 +29,9 @@ def _tools(wire):
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("arguments", ['{"path":"x"}', '{"path":', "null"])
-async def test_real_transport_arguments_reach_http_unchanged(protocol, wire, arguments):
+async def test_real_transport_arguments_reach_http_unchanged(
+    protocol: str, wire: str, arguments: str
+) -> None:
     async with _harness(
         protocol, lambda _: (200, tool_events(protocol, arguments))
     ) as (send, bodies, _):
@@ -34,16 +43,17 @@ async def test_real_transport_arguments_reach_http_unchanged(protocol, wire, arg
     events = parse_sse_text(result)
     assert len(bodies) == 1
     if wire == "responses":
-        call = events[-1].data["response"]["output"][0]
-        assert call["arguments"] == arguments
-        assert call["call_id"] == "call_probe"
+        call = array_payload(object_payload(events[-1].data["response"])["output"])[0]
+        assert object_payload(call)["arguments"] == arguments
+        assert object_payload(call)["call_id"] == "call_probe"
         assert events[-1].event == "response.completed"
     else:
         assert (
             "".join(
-                event.data["delta"]["partial_json"]
+                string_payload(object_payload(event.data["delta"])["partial_json"])
                 for event in events
-                if event.data.get("delta", {}).get("type") == "input_json_delta"
+                if object_payload(event.data.get("delta", {})).get("type")
+                == "input_json_delta"
             )
             == arguments
         )
@@ -53,16 +63,22 @@ async def test_real_transport_arguments_reach_http_unchanged(protocol, wire, arg
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_real_transport_cutoff_cannot_complete_partial_tool(protocol, wire):
+async def test_real_transport_cutoff_cannot_complete_partial_tool(
+    protocol: str, wire: str
+) -> None:
     events = tool_events(protocol, "x")
     arguments = '{"path":"' + "x" * 70_000
     if protocol == "chat":
-        events[1]["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"] = (
-            arguments
-        )
+        object_payload(
+            object_array(
+                object_payload(object_array(events[1]["choices"])[0]["delta"])[
+                    "tool_calls"
+                ]
+            )[0]["function"]
+        )["arguments"] = arguments
         events = events[:-1]
     elif protocol == "messages":
-        events[2]["delta"]["partial_json"] = arguments
+        object_payload(events[2]["delta"])["partial_json"] = arguments
         events = events[:3]
     else:
         events[2]["delta"] = arguments
@@ -148,8 +164,10 @@ async def test_real_transport_cutoff_cannot_complete_partial_tool(protocol, wire
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_native_signed_thinking_interleaves_with_parallel_tool_calls(wire):
-    events = [
+async def test_native_signed_thinking_interleaves_with_parallel_tool_calls(
+    wire: str,
+) -> None:
+    events: list[JsonObject] = [
         tool_events("messages", "x")[0],
         {
             "type": "content_block_start",
@@ -219,18 +237,24 @@ async def test_native_signed_thinking_interleaves_with_parallel_tool_calls(wire)
     delivered = parse_sse_text(result)
     if wire == "messages":
         calls = [
-            event.data["content_block"]["id"]
+            object_payload(event.data["content_block"])["id"]
             for event in delivered
-            if event.data.get("content_block", {}).get("type") == "tool_use"
+            if object_payload(event.data.get("content_block", {})).get("type")
+            == "tool_use"
         ]
         signature = next(
-            event.data["delta"]["signature"]
+            object_payload(event.data["delta"])["signature"]
             for event in delivered
-            if event.data.get("delta", {}).get("type") == "signature_delta"
+            if object_payload(event.data.get("delta", {})).get("type")
+            == "signature_delta"
         )
     else:
-        output = delivered[-1].data["response"]["output"]
-        calls = [item["call_id"] for item in output if item["type"] == "function_call"]
-        signature = output[0]["encrypted_content"]
+        output = object_payload(delivered[-1].data["response"])["output"]
+        calls = [
+            object_payload(item)["call_id"]
+            for item in array_payload(output)
+            if object_payload(item)["type"] == "function_call"
+        ]
+        signature = object_array(output)[0]["encrypted_content"]
     assert calls == ["call_1", "call_2"]
     assert signature == "signed-native"

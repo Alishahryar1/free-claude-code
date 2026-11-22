@@ -6,20 +6,20 @@ from free_claude_code.api.detection import (
     detect_safety_classifier_stop_sequence,
 )
 from free_claude_code.core.anthropic.models import Message, MessagesRequest
+from free_claude_code.core.json_types import JsonObject
 
 
 def _make_request(
-    content: str, *, inline_system: str | None = None, **kwargs
+    content: str, *, system: str, tools: list[JsonObject] | None = None
 ) -> MessagesRequest:
-    messages = []
-    if inline_system is not None:
-        messages.append(Message(role="system", content=inline_system))
-    messages.append(Message(role="user", content=content))
-    return MessagesRequest(
-        model="claude-3-sonnet",
-        max_tokens=kwargs.pop("max_tokens", 100),
-        messages=messages,
-        **kwargs,
+    return MessagesRequest.model_validate(
+        {
+            "model": "claude-3-sonnet",
+            "max_tokens": 100,
+            "messages": [Message(role="user", content=content)],
+            "system": system,
+            "tools": tools,
+        }
     )
 
 
@@ -50,14 +50,6 @@ class TestDetectSafetyClassifierStopSequence:
         req = _make_request(self._TRANSCRIPT, system=system)
 
         assert detect_safety_classifier_stop_sequence(req) == expected
-
-    def test_inline_system_context_uses_same_detection_path(self) -> None:
-        req = _make_request(
-            self._TRANSCRIPT,
-            inline_system=self._CURRENT_SYSTEM,
-        )
-
-        assert detect_safety_classifier_stop_sequence(req) == "</severity>"
 
     def test_request_with_tools_is_not_classifier(self) -> None:
         req = _make_request(

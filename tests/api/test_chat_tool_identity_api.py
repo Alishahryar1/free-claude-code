@@ -1,17 +1,22 @@
 """Public API routes preserve parallel Chat calls with imperfect indexes."""
 
 import json
+from collections.abc import Mapping, Sequence
 
 import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from openai import AsyncOpenAI
 
+from free_claude_code.application.response_collection import (
+    WireProtocol,
+    collect_response,
+)
 from free_claude_code.config.settings import Settings
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.anthropic.stream_contracts import SSEEvent, parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.providers.google_openai import GoogleOpenAIProvider
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from free_claude_code.providers.vertex.client import _PROFILE as GOOGLE_PROFILE
 from tests.api.support import create_test_app
 from tests.api.test_hidden_stream_retries import delivered
@@ -20,9 +25,17 @@ from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_chat_tool_identity import call
 from tests.providers.test_history_transports import _harness, _saved_reply
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+    response_object,
+    string_payload,
+)
 
 
-def chat_chunk(delta, finish=None):
+def chat_chunk(delta: JsonObject, finish: str | None = None):
     return {
         "id": "chat_identity",
         "object": "chat.completion.chunk",
@@ -32,15 +45,22 @@ def chat_chunk(delta, finish=None):
     }
 
 
-def google_compat_api_response(monkeypatch, events, wire, streaming, *, max_attempts=2):
+def google_compat_api_response(
+    monkeypatch: pytest.MonkeyPatch,
+    events: Sequence[Mapping[str, JsonValue]],
+    wire: str,
+    streaming: bool,
+    *,
+    max_attempts: int = 2,
+):
     sent = []
     upstream = (
         "".join(f"data: {json.dumps(event)}\n\n" for event in events)
         + "data: [DONE]\n\n"
     )
 
-    def reply(request):
-        sent.append(json.loads(request.content))
+    def reply(request: httpx2.Request):
+        sent.append(decode_object(request.content))
         return httpx2.Response(
             200, headers={"content-type": "text/event-stream"}, content=upstream
         )
@@ -51,8 +71,12 @@ def google_compat_api_response(monkeypatch, events, wire, streaming, *, max_atte
         max_retries=0,
         http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply)),
     )
+
+    def callback(**_: object):
+        return sdk
+
     monkeypatch.setattr(
-        "free_claude_code.providers.openai_chat.client.AsyncOpenAI", lambda **_: sdk
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI", callback
     )
     provider = GoogleOpenAIProvider(
         make_provider_config(api_key="fixture", base_url="https://fixture.invalid/v1"),
@@ -105,7 +129,7 @@ def google_compat_api_response(monkeypatch, events, wire, streaming, *, max_atte
                 [call(1, None, '{"path":"b"}')],
                 [call(1, "call_b", "", name=None)],
             ],
-            ("call_a", None),
+            ("call_a", "call_b"),
         ),
         (
             [
@@ -113,7 +137,7 @@ def google_compat_api_response(monkeypatch, events, wire, streaming, *, max_atte
                 [call(None, "call_b", '{"path":"b"}')],
                 [call(0, "call_a", "", name=None)],
             ],
-            (None, "call_b"),
+            ("call_a", "call_b"),
         ),
         (
             [
@@ -140,8 +164,12 @@ def google_compat_api_response(monkeypatch, events, wire, streaming, *, max_atte
     "wire,streaming", [("messages", True), ("messages", False), ("responses", True)]
 )
 def test_google_compat_parallel_calls_reach_public_api(
-    monkeypatch, deltas, expected_ids, wire, streaming
-):
+    monkeypatch: pytest.MonkeyPatch,
+    deltas: list[list[JsonObject]],
+    expected_ids: tuple[str, ...],
+    wire: str,
+    streaming: bool,
+) -> None:
     events = [chat_chunk({"tool_calls": calls}) for calls in deltas]
     events.append(chat_chunk({}, "tool_calls"))
     response, sent = google_compat_api_response(monkeypatch, events, wire, streaming)
@@ -150,9 +178,13 @@ def test_google_compat_parallel_calls_reach_public_api(
 
     if not streaming:
         values = [
-            (item["id"], item["name"], item["input"])
-            for item in response.json()["content"]
-            if item["type"] == "tool_use"
+            (
+                object_payload(item)["id"],
+                object_payload(item)["name"],
+                object_payload(item)["input"],
+            )
+            for item in array_payload(response_object(response)["content"])
+            if object_payload(item)["type"] == "tool_use"
         ]
     elif wire == "messages":
         calls = {}
@@ -161,25 +193,33 @@ def test_google_compat_parallel_calls_reach_public_api(
         for event in events:
             data = event.data
             block = data.get("content_block", {})
-            if block.get("type") == "tool_use":
+            if object_payload(block).get("type") == "tool_use":
                 calls[data["index"]] = {
-                    "id": block["id"],
-                    "name": block["name"],
+                    "id": object_payload(block)["id"],
+                    "name": object_payload(block)["name"],
                     "arguments": "",
                 }
-            if data.get("delta", {}).get("type") == "input_json_delta":
-                calls[data["index"]]["arguments"] += data["delta"]["partial_json"]
+            if object_payload(data.get("delta", {})).get("type") == "input_json_delta":
+                calls[data["index"]]["arguments"] += string_payload(
+                    object_payload(data["delta"])["partial_json"]
+                )
         values = [
-            (item["id"], item["name"], json.loads(item["arguments"]))
+            (item["id"], item["name"], load_json_value(item["arguments"]))
             for item in calls.values()
         ]
     else:
         events = parse_sse_text(response.text)
         assert events[-1].event == "response.completed"
         values = [
-            (item["call_id"], item["name"], json.loads(item["arguments"]))
-            for item in events[-1].data["response"]["output"]
-            if item["type"] == "function_call"
+            (
+                object_payload(item)["call_id"],
+                object_payload(item)["name"],
+                load_json_value(string_payload(object_payload(item)["arguments"])),
+            )
+            for item in array_payload(
+                object_payload(events[-1].data["response"])["output"]
+            )
+            if object_payload(item)["type"] == "function_call"
         ]
     assert [(name, arguments) for _, name, arguments in values] == [
         ("read", {"path": "a"}),
@@ -188,7 +228,7 @@ def test_google_compat_parallel_calls_reach_public_api(
     assert len({tool_id for tool_id, _, _ in values}) == 2
     for (tool_id, _, _), expected_id in zip(values, expected_ids, strict=True):
         if expected_id is None:
-            assert tool_id.startswith("tool_")
+            assert string_payload(tool_id).startswith("tool_")
         else:
             assert tool_id == expected_id
 
@@ -198,8 +238,8 @@ def test_google_compat_parallel_calls_reach_public_api(
     "wire,streaming", [("messages", True), ("messages", False), ("responses", True)]
 )
 def test_google_compat_unresolvable_calls_cannot_complete(
-    monkeypatch, anonymous, wire, streaming
-):
+    monkeypatch: pytest.MonkeyPatch, anonymous: bool, wire: str, streaming: bool
+) -> None:
     if anonymous:
         events = [
             chat_chunk(
@@ -242,25 +282,65 @@ def test_google_compat_unresolvable_calls_cannot_complete(
         assert "call_a" not in response.text and "call_b" not in response.text
     else:
         assert response.status_code == 502
-        assert isinstance(response.json().get("error"), dict)
+        assert isinstance(response_object(response).get("error"), dict)
 
 
-def completed_arguments(events, wire):
+def completed_arguments(events: list[SSEEvent], wire: str):
     if wire == "messages":
         return "".join(
-            event.data["delta"]["partial_json"]
+            string_payload(object_payload(event.data["delta"])["partial_json"])
             for event in events
-            if event.data.get("delta", {}).get("type") == "input_json_delta"
+            if object_payload(event.data.get("delta", {})).get("type")
+            == "input_json_delta"
         )
     return "".join(
-        event.data["item"]["arguments"]
+        string_payload(object_payload(event.data["item"])["arguments"])
         for event in events
         if event.event == "response.output_item.done"
-        and event.data["item"]["type"] == "function_call"
+        and object_payload(event.data["item"])["type"] == "function_call"
     )
 
 
-def ambiguous_events(stop, *, incomplete=False, fragment_index=0):
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize(
+    "metadata", [[], "", False, "placeholder", {"google": {"thought_signature": "sig"}}]
+)
+def test_optional_metadata_does_not_prevent_tool_completion(
+    monkeypatch: pytest.MonkeyPatch, wire: str, metadata: JsonValue
+) -> None:
+    arguments = '{"path":"out"}'
+    tool = call(arguments=arguments)
+    tool["extra_content"] = metadata
+    response, sent = google_compat_api_response(
+        monkeypatch,
+        [chat_chunk({"tool_calls": [tool]}), chat_chunk({}, "tool_calls")],
+        wire,
+        streaming=True,
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(sent) == 1
+    events = parse_sse_text(response.text)
+    assert events[-1].event == (
+        "message_stop" if wire == "messages" else "response.completed"
+    )
+    assert completed_arguments(events, wire) == arguments
+    if wire == "messages":
+        block = next(
+            object_payload(event.data["content_block"])
+            for event in events
+            if event.event == "content_block_start"
+            and object_payload(event.data["content_block"])["type"] == "tool_use"
+        )
+        if isinstance(metadata, dict):
+            assert block["extra_content"] == metadata
+        else:
+            assert "extra_content" not in block
+
+
+def ambiguous_events(
+    stop: str | None, *, incomplete: bool = False, fragment_index: int | None = 0
+):
     events = [
         chat_chunk(
             {
@@ -299,12 +379,13 @@ def ambiguous_events(stop, *, incomplete=False, fragment_index=0):
 @pytest.mark.parametrize("max_attempts", [1, 2])
 @pytest.mark.parametrize("fragment_index", [0, None])
 async def test_public_identity_failure_respects_delivery_stop_and_budget(
-    monkeypatch, wire, prefix, stop, max_attempts, fragment_index
-):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
+    monkeypatch: pytest.MonkeyPatch,
+    wire: WireProtocol,
+    prefix: str | None,
+    stop: str | None,
+    max_attempts: int,
+    fragment_index: int | None,
+) -> None:
     first = ambiguous_events(stop, fragment_index=fragment_index)
     if prefix:
         first.insert(
@@ -336,9 +417,9 @@ async def test_public_identity_failure_respects_delivery_stop_and_budget(
         )
 
     # Unsigned readable reasoning follows the same continuation policy as text.
-    retry = stop is None and max_attempts > 1
+    retry = False
     assert len(bodies) == (2 if retry else 1)
-    assert "call_abandoned" not in result
+    assert ("call_abandoned" in result) == (stop == "before")
     events = parse_sse_text(result)
     visible_prefix = prefix is not None
     assert ("already visible" in result) == visible_prefix
@@ -357,15 +438,15 @@ async def test_public_identity_failure_respects_delivery_stop_and_budget(
             "error" if wire == "messages" else "response.failed"
         )
         assert "winning" not in result
-        assert not any(
+        assert any(
             event.event
             in {"response.function_call_arguments.done", "response.output_item.done"}
             and (
                 event.event != "response.output_item.done"
-                or event.data["item"]["type"] == "function_call"
+                or object_payload(event.data["item"])["type"] == "function_call"
             )
             for event in events
-        )
+        ) == (stop == "before" and wire == "responses")
 
 
 @pytest.mark.asyncio
@@ -384,69 +465,26 @@ async def test_public_identity_failure_respects_delivery_stop_and_budget(
     ],
 )
 async def test_private_identity_failure_never_salvages_or_repairs(
-    monkeypatch, wire, incomplete, committed, stop, max_attempts, fragment_index
-):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(
-            holdback_seconds=60, max_bytes=1 if committed else 1_000_000
-        ),
-    )
+    monkeypatch: pytest.MonkeyPatch,
+    wire: WireProtocol,
+    incomplete: bool,
+    committed: bool,
+    stop: str | None,
+    max_attempts: int,
+    fragment_index: int | None,
+) -> None:
     first = ambiguous_events(stop, incomplete=incomplete, fragment_index=fragment_index)
-    emitted = []
-    failure = None
-    async with _harness(
-        "chat",
-        lambda bodies: (
-            200,
-            first if len(bodies) == 1 else tool_events("chat", '{"path":"winning"}'),
-        ),
-        max_attempts=max_attempts,
-    ) as (send, bodies, _):
-        try:
-            async for event in send(
-                wire, [{"role": "user", "content": "read"}], tools=_tools(wire)
-            ):
-                # Retain the prefix even when iteration raises before completion.
-                emitted.extend((event,))
-        except ExecutionFailure as error:
-            failure = error
-
-    retry = not committed and stop is None and max_attempts > 1
-    assert len(bodies) == (2 if retry else 1)
-    result = "".join(emitted)
-    events = parse_sse_text(result)
-    if retry:
-        assert failure is None
-        assert bodies[0] == bodies[1]
-        assert "call_abandoned" not in result
-        assert completed_arguments(events, wire) == '{"path":"winning"}'
-        assert events[-1].event == (
-            "message_stop" if wire == "messages" else "response.completed"
-        )
-    else:
-        assert failure is not None or any(
-            event.event == "response.failed" for event in events
-        )
-        assert not any(
-            event.event
-            in {
-                "message_stop",
-                "response.completed",
-                "response.function_call_arguments.done",
-            }
-            for event in events
-        )
-        started_tools = {
-            event.data["index"]
-            for event in events
-            if event.event == "content_block_start"
-            and event.data["content_block"]["type"] == "tool_use"
-        }
-        assert not any(
-            event.event == "content_block_stop" and event.data["index"] in started_tools
-            for event in events
-        )
+    async with _harness("chat", lambda _: (200, first), max_attempts=max_attempts) as (
+        send,
+        bodies,
+        _,
+    ):
+        with pytest.raises(ExecutionFailure):
+            await collect_response(
+                send(wire, [{"role": "user", "content": "read"}], tools=_tools(wire)),
+                protocol=wire,
+            )
+        assert len(bodies) == 1
 
 
 @pytest.mark.asyncio
@@ -459,7 +497,9 @@ async def test_private_identity_failure_never_salvages_or_repairs(
         ((0, 1), ("reused", "reused")),
     ],
 )
-async def test_google_compat_metadata_replays_under_each_public_id(wire, indexes, ids):
+async def test_google_compat_metadata_replays_under_each_public_id(
+    wire: WireProtocol, indexes: tuple[int | None, int | None], ids: tuple[str, ...]
+) -> None:
     first = [
         chat_chunk(
             {
@@ -502,7 +542,11 @@ async def test_google_compat_metadata_replays_under_each_public_id(wire, indexes
             wire,
         )
         if wire == "messages":
-            calls = [item for item in saved[0]["content"] if item["type"] == "tool_use"]
+            calls = [
+                item
+                for item in object_array(saved[0]["content"])
+                if item["type"] == "tool_use"
+            ]
             public_ids = [item["id"] for item in calls]
             followup = [
                 {
@@ -543,7 +587,9 @@ async def test_google_compat_metadata_replays_under_each_public_id(wire, indexes
         assert len(set(public_ids)) == 2
         await _saved_reply(send(wire, followup, tools=_tools(wire)), wire)
         replayed = next(
-            row["tool_calls"] for row in bodies[1]["messages"] if row.get("tool_calls")
+            object_array(row["tool_calls"])
+            for row in object_array(bodies[1]["messages"])
+            if row.get("tool_calls")
         )
     assert [(item["id"], item["extra_content"]) for item in replayed] == [
         (public_ids[0], {"google": {"thought_signature": "sig-a"}}),

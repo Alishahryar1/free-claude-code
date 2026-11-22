@@ -3,6 +3,7 @@ import logging
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import replace
 from pathlib import Path
+from typing import override
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,6 +22,7 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.messaging.command_context import StopOutcome
 from free_claude_code.messaging.platforms.ports import (
@@ -28,6 +30,7 @@ from free_claude_code.messaging.platforms.ports import (
     MessagingPlatformComponents,
     MessagingStartupNotice,
 )
+from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.credential_validation import (
     CredentialCheck,
@@ -42,11 +45,15 @@ from tests.providers.support import make_provider_config
 
 class TrackingRuntime(ProviderRuntime):
     def __init__(
-        self, settings: Settings, admission_registry, history_cache=None
+        self,
+        settings: Settings,
+        admission_registry: ProviderAdmissionRegistry,
+        history_cache: object = None,
     ) -> None:
         super().__init__(settings, admission_registry)
         self.cleanup_calls = 0
 
+    @override
     async def cleanup(self) -> None:
         self.cleanup_calls += 1
         await super().cleanup()
@@ -87,9 +94,9 @@ class AdminModelProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         if False:
-            yield ""
+            yield StreamOutput(("",))
 
     async def stream_responses(
         self,
@@ -102,9 +109,9 @@ class AdminModelProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         if False:
-            yield ""
+            yield StreamOutput(("",))
 
 
 class TrackingFactory:
@@ -114,7 +121,10 @@ class TrackingFactory:
         self.events: list[str] = []
 
     def __call__(
-        self, settings: Settings, admission_registry, history_cache=None
+        self,
+        settings: Settings,
+        admission_registry: ProviderAdmissionRegistry,
+        history_cache: object = None,
     ) -> ProviderRuntime:
         self.events.append(f"construct:{settings.model}")
         if self.fail:
@@ -139,18 +149,21 @@ class TrackingTranscriber:
 
 
 class FailingTranscriber(TrackingTranscriber):
+    @override
     async def close(self) -> None:
         await super().close()
         raise RuntimeError("transcriber close failed")
 
 
 class CancelledTranscriber(TrackingTranscriber):
+    @override
     async def close(self) -> None:
         await super().close()
         raise asyncio.CancelledError
 
 
 class CancellingOnceTranscriber(TrackingTranscriber):
+    @override
     async def close(self) -> None:
         await super().close()
         if self.close_calls == 1:
@@ -199,6 +212,7 @@ class PersistentlyFailingMessagingRuntime(TrackingMessagingRuntime):
         super().__init__(events)
         self.fail_quiesce = True
 
+    @override
     async def quiesce(self) -> None:
         self.events.append("messaging.quiesce")
         if self.fail_quiesce:
@@ -211,7 +225,7 @@ def _settings(model: str, *, port: int = 8082) -> Settings:
 
 def _prepared(
     settings: Settings,
-    tmp_path,
+    tmp_path: Path,
     *,
     pending_fields: tuple[str, ...] = (),
 ) -> PreparedAdminUpdate:
@@ -355,7 +369,9 @@ async def test_stop_all_maps_messaging_outcome_to_application_count() -> None:
 
 
 @pytest.mark.asyncio
-async def test_provider_apply_constructs_before_commit_then_publishes(tmp_path) -> None:
+async def test_provider_apply_constructs_before_commit_then_publishes(
+    tmp_path: Path,
+) -> None:
     factory = TrackingFactory()
     manager = ProviderRuntimeManager(
         _settings("nvidia_nim/old"),
@@ -399,7 +415,9 @@ async def test_provider_apply_constructs_before_commit_then_publishes(tmp_path) 
 
 
 @pytest.mark.asyncio
-async def test_candidate_failure_never_commits_and_preserves_current(tmp_path) -> None:
+async def test_candidate_failure_never_commits_and_preserves_current(
+    tmp_path: Path,
+) -> None:
     factory = TrackingFactory()
     manager = ProviderRuntimeManager(
         _settings("nvidia_nim/old"),
@@ -430,7 +448,7 @@ async def test_candidate_failure_never_commits_and_preserves_current(tmp_path) -
 
 @pytest.mark.asyncio
 async def test_persistence_failure_closes_candidate_and_preserves_current(
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     factory = TrackingFactory()
     manager = ProviderRuntimeManager(
@@ -464,7 +482,9 @@ async def test_persistence_failure_closes_candidate_and_preserves_current(
 
 
 @pytest.mark.asyncio
-async def test_restart_required_apply_commits_without_hot_publication(tmp_path) -> None:
+async def test_restart_required_apply_commits_without_hot_publication(
+    tmp_path: Path,
+) -> None:
     factory = TrackingFactory()
     manager = ProviderRuntimeManager(
         _settings("nvidia_nim/old"),
@@ -518,7 +538,9 @@ async def test_restart_required_apply_commits_without_hot_publication(tmp_path) 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pending", [(), ("PORT",)])
 @pytest.mark.parametrize("status", list(CredentialStatus))
-async def test_credential_checks_gate_both_apply_paths(tmp_path, pending, status):
+async def test_credential_checks_gate_both_apply_paths(
+    tmp_path: Path, pending: tuple[str, ...], status: CredentialStatus
+) -> None:
     factory = TrackingFactory()
     manager = ProviderRuntimeManager(
         _settings("nvidia_nim/old"), runtime_factory=factory
@@ -576,7 +598,7 @@ async def test_credential_checks_gate_both_apply_paths(tmp_path, pending, status
 
 
 @pytest.mark.asyncio
-async def test_cancelled_credential_check_never_commits(tmp_path):
+async def test_cancelled_credential_check_never_commits(tmp_path: Path) -> None:
     manager = ProviderRuntimeManager(_settings("nvidia_nim/old"))
     runtime = ApplicationRuntime(
         manager, configuration=AsyncMock(spec=ConfigurationService), transcriber=None
@@ -633,7 +655,7 @@ async def test_close_drains_messaging_before_transcriber_and_is_idempotent() -> 
     assert runtime._messaging._transcriber is None
     assert runtime._messaging._messaging_runtime is None
     assert runtime._messaging._messaging_workflow is None
-    assert runtime.is_closed is True
+    assert runtime.is_closed
 
 
 @pytest.mark.asyncio
@@ -692,7 +714,7 @@ async def test_close_retries_runtime_before_closing_later_resources() -> None:
     ]
     assert runtime._messaging._messaging_runtime is None
     assert runtime._messaging._transcriber is None
-    assert runtime._closed is True
+    assert runtime._closed
 
 
 @pytest.mark.asyncio
@@ -797,7 +819,7 @@ async def test_close_retries_workflow_close_before_closing_delivery() -> None:
         "workflow.close",
         "messaging.close",
     ]
-    assert runtime._closed is True
+    assert runtime._closed
 
 
 @pytest.mark.asyncio
@@ -909,7 +931,7 @@ async def test_cancelled_application_close_remains_retryable() -> None:
 
     assert transcriber.close_calls == 2
     assert runtime._messaging._transcriber is None
-    assert runtime._closed is True
+    assert runtime._closed
 
 
 @pytest.mark.asyncio
@@ -1112,7 +1134,7 @@ async def test_public_start_retains_persistently_unclean_partial_messaging_graph
         "messaging.close",
         "transcriber.close",
     ]
-    assert runtime.is_closed is True
+    assert runtime.is_closed
 
 
 @pytest.mark.asyncio
@@ -1216,9 +1238,11 @@ async def test_composition_publishes_startup_notice_after_runtime_and_repair() -
     workflow.repair_restored_statuses = AsyncMock(
         side_effect=lambda: events.append("workflow.repair")
     )
-    workflow.publish_startup_notice = AsyncMock(
-        side_effect=lambda published: events.append("workflow.notice")
-    )
+
+    def side_effect_2(published: object):
+        return events.append("workflow.notice")
+
+    workflow.publish_startup_notice = AsyncMock(side_effect=side_effect_2)
     workflow.close = AsyncMock()
     cli_manager = MagicMock()
 
@@ -1253,7 +1277,9 @@ async def test_composition_publishes_startup_notice_after_runtime_and_repair() -
 
 
 @pytest.mark.asyncio
-async def test_folder_picker_is_stopped_before_http_shutdown_drains(monkeypatch):
+async def test_folder_picker_is_stopped_before_http_shutdown_drains(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import uvicorn
 
     from free_claude_code.cli.uvicorn_server import RuntimeServer
@@ -1262,7 +1288,7 @@ async def test_folder_picker_is_stopped_before_http_shutdown_drains(monkeypatch)
     started = asyncio.Event()
     signals = []
 
-    async def select(_initial, stop):
+    async def select(_initial, stop: asyncio.Event):
         signals.append(stop)
         started.set()
         await stop.wait()
@@ -1272,7 +1298,7 @@ async def test_folder_picker_is_stopped_before_http_shutdown_drains(monkeypatch)
     request = asyncio.create_task(runtime.pick_folder(None))
     await started.wait()
 
-    async def drain(_server, sockets=None):
+    async def drain(_server, sockets: object = None):
         assert signals[0].is_set()
         assert await request is None
 

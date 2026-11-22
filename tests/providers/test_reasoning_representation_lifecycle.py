@@ -5,6 +5,7 @@ from copy import deepcopy
 
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.history_replay import decode_replay
 from free_claude_code.core.json_types import JsonObject
@@ -19,13 +20,28 @@ from free_claude_code.providers.openai_chat.stream_output import (
 from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_history_transports import _events_for, _harness, _saved_reply
 from tests.providers.test_native_reasoning_completion import _chunks
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 def _responses_events(
-    texts, *, field="summary", streamed=True, late=False, signature=None
+    texts: list[str],
+    *,
+    field: str = "summary",
+    streamed: bool = True,
+    late: bool = False,
+    signature: str | None = None,
 ):
     source = deepcopy(_events_for("responses"))
-    reasoning = {**source[3]["item"], "summary": [], "content": []}
+    reasoning: JsonObject = {
+        **object_payload(source[3]["item"]),
+        "summary": [],
+        "content": [],
+    }
     reasoning.pop("encrypted_content", None)
     part_type = "summary_text" if field == "summary" else "reasoning_text"
     reasoning[field] = [{"type": part_type, "text": text} for text in texts]
@@ -38,7 +54,7 @@ def _responses_events(
         "status": "completed",
         "content": [{"type": "output_text", "text": "Answer.", "annotations": []}],
     }
-    events = [
+    events: list[JsonObject] = [
         source[0],
         {
             "type": "response.output_item.added",
@@ -65,7 +81,11 @@ def _responses_events(
                     "delta": text,
                 }
             )
-    done = {"type": "response.output_item.done", "output_index": 0, "item": reasoning}
+    done: JsonObject = {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": reasoning,
+    }
     if not late:
         events.append(done)
     events += [
@@ -88,7 +108,10 @@ def _responses_events(
     events.append(
         {
             "type": "response.completed",
-            "response": {**source[-1]["response"], "output": [reasoning, message]},
+            "response": {
+                **object_payload(source[-1]["response"]),
+                "output": [reasoning, message],
+            },
         }
     )
     for sequence, event in enumerate(events):
@@ -98,7 +121,7 @@ def _responses_events(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["summary", "content"])
-async def test_native_reasoning_parts_are_saved_and_replayed_once(field):
+async def test_native_reasoning_parts_are_saved_and_replayed_once(field: str) -> None:
     upstream = _responses_events(["First part.", "Second part."], field=field)
     async with _harness("responses", lambda _: (200, upstream)) as (send, bodies, _):
         saved = await _saved_reply(
@@ -114,7 +137,7 @@ async def test_native_reasoning_parts_are_saved_and_replayed_once(field):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["summary", "content"])
-async def test_completed_only_reasoning_keeps_final_answer_open(field):
+async def test_completed_only_reasoning_keeps_final_answer_open(field: str) -> None:
     upstream = _responses_events(
         ["Completed thought."],
         field=field,
@@ -126,10 +149,11 @@ async def test_completed_only_reasoning_keeps_final_answer_open(field):
         frames = [
             frame
             async for frame in send("messages", [{"role": "user", "content": "hello"}])
+            for frame in frame.frames
         ]
     events = parse_sse_text("".join(frames))
     starts = {
-        event.data["index"]: event.data["content_block"]["type"]
+        event.data["index"]: object_payload(event.data["content_block"])["type"]
         for event in events
         if event.event == "content_block_start"
     }
@@ -143,7 +167,9 @@ async def test_completed_only_reasoning_keeps_final_answer_open(field):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_chat_secondary_reasoning_prefix_is_not_repeated(wire):
+async def test_chat_secondary_reasoning_prefix_is_not_repeated(
+    wire: WireProtocol,
+) -> None:
     upstream = _chunks(
         [
             (
@@ -176,11 +202,11 @@ async def test_chat_secondary_reasoning_prefix_is_not_repeated(wire):
 
 
 @pytest.mark.asyncio
-async def test_independent_native_items_keep_their_own_text_and_signature():
+async def test_independent_native_items_keep_their_own_text_and_signature() -> None:
     upstream = _responses_events(
         ["Alpha."], field="content", signature="cipher-a", late=True
     )
-    second = {
+    second: JsonObject = {
         "type": "reasoning",
         "id": "rs_second",
         "status": "completed",
@@ -210,7 +236,7 @@ async def test_independent_native_items_keep_their_own_text_and_signature():
     upstream.insert(
         -1, {"type": "response.output_item.done", "output_index": 2, "item": second}
     )
-    upstream[-1]["response"]["output"].append(second)
+    array_payload(object_payload(upstream[-1]["response"])["output"]).append(second)
     for sequence, event in enumerate(upstream):
         event["sequence_number"] = sequence
     async with _harness("responses", lambda _: (200, upstream)) as (send, _, _):
@@ -220,16 +246,18 @@ async def test_independent_native_items_keep_their_own_text_and_signature():
     thinking = [
         (
             block["thinking"],
-            decode_replay(block["signature"]).native["encrypted_content"],
+            decode_replay(string_payload(block["signature"])).native[
+                "encrypted_content"
+            ],
         )
-        for block in saved[0]["content"]
+        for block in object_array(saved[0]["content"])
         if block["type"] == "thinking"
     ]
     assert thinking == [("Alpha.", "cipher-a"), ("Beta.", "cipher-b")]
 
 
 @pytest.mark.asyncio
-async def test_native_signed_empty_thinking_keeps_its_block_kind():
+async def test_native_signed_empty_thinking_keeps_its_block_kind() -> None:
     upstream = _responses_events(
         [""], field="content", streamed=False, signature="empty-signed"
     )
@@ -237,12 +265,12 @@ async def test_native_signed_empty_thinking_keeps_its_block_kind():
         saved = await _saved_reply(
             send("messages", [{"role": "user", "content": "hello"}]), "messages"
         )
-    block = saved[0]["content"][0]
-    assert block["type"] == "thinking"
-    assert block["thinking"] == ""
+    block = array_payload(saved[0]["content"])[0]
+    assert object_payload(block)["type"] == "thinking"
+    assert object_payload(block)["thinking"] == ""
     assert (
-        decode_replay(block["signature"]).native
-        == upstream[-1]["response"]["output"][0]
+        decode_replay(string_payload(object_payload(block)["signature"])).native
+        == array_payload(object_payload(upstream[-1]["response"])["output"])[0]
     )
 
 
@@ -251,11 +279,11 @@ async def test_native_signed_empty_thinking_keeps_its_block_kind():
 @pytest.mark.parametrize("fragmented", [False, True])
 @pytest.mark.parametrize("native_alias", [False, True])
 async def test_chat_signed_details_keep_their_own_text_on_replay(
-    wire, fragmented, native_alias
-):
+    wire: WireProtocol, fragmented: bool, native_alias: bool
+) -> None:
     deltas: list[tuple[JsonObject, str | None]]
     if fragmented:
-        deltas = [
+        deltas: list[tuple[JsonObject, str | None]] = [
             (
                 {
                     "reasoning_details": [
@@ -294,7 +322,7 @@ async def test_chat_signed_details_keep_their_own_text_on_replay(
         ]
         aliases = ["Al", "pha.Beta."]
     else:
-        deltas = [
+        deltas: list[tuple[JsonObject, str | None]] = [
             (
                 {
                     "reasoning_details": [
@@ -330,20 +358,23 @@ async def test_chat_signed_details_keep_their_own_text_on_replay(
     if wire == "messages":
         pairs = [
             (block["thinking"], block.get("signature"))
-            for block in saved[0]["content"]
+            for block in object_array(saved[0]["content"])
             if block["type"] == "thinking"
         ]
     else:
         pairs = [
             (
-                "".join(part["text"] for part in item.get("content", [])),
+                "".join(
+                    string_payload(part["text"])
+                    for part in object_array(item.get("content", []))
+                ),
                 item.get("encrypted_content"),
             )
             for item in saved
             if item["type"] == "reasoning"
         ]
     assert [text for text, _ in pairs] == ["Alpha.", "Beta."]
-    native = [decode_replay(carrier).native for _, carrier in pairs]
+    native = [decode_replay(string_payload(carrier)).native for _, carrier in pairs]
     expected = [
         {
             "type": "reasoning.text",
@@ -359,7 +390,7 @@ async def test_chat_signed_details_keep_their_own_text_on_replay(
         },
     ]
     assert native == [{"reasoning_details": [detail]} for detail in expected]
-    details = bodies[-1]["messages"][0]["reasoning_details"]
+    details = object_array(bodies[-1]["messages"])[0]["reasoning_details"]
     assert details == expected
     assert json.dumps(bodies[-1]).count("Alpha.") == 1
     assert json.dumps(bodies[-1]).count("Beta.") == 1
@@ -367,7 +398,9 @@ async def test_chat_signed_details_keep_their_own_text_on_replay(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_chat_explicit_signed_empty_text_retains_its_kind(wire):
+async def test_chat_explicit_signed_empty_text_retains_its_kind(
+    wire: WireProtocol,
+) -> None:
     upstream = _chunks(
         [
             (
@@ -395,7 +428,9 @@ async def test_chat_explicit_signed_empty_text_retains_its_kind(wire):
         )
     if wire == "messages":
         reasoning = next(
-            block for block in saved[0]["content"] if block["type"] == "thinking"
+            block
+            for block in object_array(saved[0]["content"])
+            if block["type"] == "thinking"
         )
         assert reasoning["thinking"] == ""
         carrier = reasoning["signature"]
@@ -411,8 +446,10 @@ async def test_chat_explicit_signed_empty_text_retains_its_kind(wire):
             "index": 0,
         }
     ]
-    assert decode_replay(carrier).native == {"reasoning_details": expected}
-    assert bodies[-1]["messages"][0]["reasoning_details"] == expected
+    assert decode_replay(string_payload(carrier)).native == {
+        "reasoning_details": expected
+    }
+    assert object_array(bodies[-1]["messages"])[0]["reasoning_details"] == expected
 
 
 @pytest.mark.asyncio
@@ -420,8 +457,8 @@ async def test_chat_explicit_signed_empty_text_retains_its_kind(wire):
 @pytest.mark.parametrize("after_answer", [False, True])
 @pytest.mark.parametrize("fragmented", [False, True])
 async def test_native_first_alias_preserves_later_signed_details(
-    wire, after_answer, fragmented
-):
+    wire: WireProtocol, after_answer: bool, fragmented: bool
+) -> None:
     details = [
         {
             "type": "reasoning.text",
@@ -447,7 +484,7 @@ async def test_native_first_alias_preserves_later_signed_details(
         if fragmented
         else [(details, "stop" if after_answer else None)]
     )
-    deltas = [({"reasoning": "Alpha.Beta."}, None)]
+    deltas: list[tuple[JsonObject, str | None]] = [({"reasoning": "Alpha.Beta."}, None)]
     if after_answer:
         deltas.append(({"content": "Answer."}, None))
     deltas.extend(({"reasoning_details": parts}, finish) for parts, finish in typed)
@@ -467,7 +504,8 @@ async def test_native_first_alias_preserves_later_signed_details(
         await _saved_reply(
             send(wire, [*saved, {"role": "user", "content": "next"}]), wire
         )
-    replayed = bodies[-1]["messages"][0]["reasoning_details"]
+    assistant = object_array(bodies[-1]["messages"])[0]
+    replayed = object_array(assistant["reasoning_details"])
     assert [(part.get("text"), part.get("signature")) for part in replayed] == [
         ("Alpha.", "sig-alpha"),
         ("Beta.", "sig-beta"),
@@ -481,7 +519,9 @@ async def test_native_first_alias_preserves_later_signed_details(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_identical_signed_details_keep_independent_ownership(wire):
+async def test_identical_signed_details_keep_independent_ownership(
+    wire: WireProtocol,
+) -> None:
     upstream = _chunks(
         [
             ({"reasoning_content": "Same.Same."}, None),
@@ -514,14 +554,14 @@ async def test_identical_signed_details_keep_independent_ownership(wire):
         await _saved_reply(
             send(wire, [*saved, {"role": "user", "content": "next"}]), wire
         )
-    assert bodies[-1]["messages"][0]["reasoning_details"] == [
+    assert object_array(bodies[-1]["messages"])[0]["reasoning_details"] == [
         {"type": "reasoning.text", "text": "Same.", "signature": "a", "index": 0},
         {"type": "reasoning.text", "text": "Same.", "signature": "b", "index": 1},
     ]
 
 
 @pytest.mark.parametrize("typed", [False, True])
-def test_first_readable_representation_streams_without_waiting(typed):
+def test_first_readable_representation_streams_without_waiting(typed: bool) -> None:
     output = AnthropicChatStreamOutput(
         message_id="msg_test", model="test", input_tokens=1
     )
@@ -548,11 +588,14 @@ def test_first_readable_representation_streams_without_waiting(typed):
     )
     events = parse_sse_text("".join(early + answer + complete))
     assert (
-        sum(event.data.get("delta", {}).get("thinking") == "Plan." for event in events)
+        sum(
+            object_payload(event.data.get("delta", {})).get("thinking") == "Plan."
+            for event in events
+        )
         == 1
     )
     starts = {
-        event.data["index"]: event.data["content_block"]["type"]
+        event.data["index"]: object_payload(event.data["content_block"])["type"]
         for event in events
         if event.event == "content_block_start"
     }

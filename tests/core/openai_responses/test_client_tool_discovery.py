@@ -11,8 +11,16 @@ from pydantic import TypeAdapter
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import (
+    DecimalJsonObject,
+    DecimalJsonValue,
+    JsonObject,
+    JsonValue,
+    load_json_value,
+)
 from free_claude_code.core.openai_responses import (
+    NativeResponsesRelay,
     OpenAIResponsesRequest,
     ResponsesConversionError,
     ResponsesToolAdapter,
@@ -22,12 +30,20 @@ from free_claude_code.core.openai_responses import (
 from free_claude_code.core.openai_tool_names import encode_openai_chat_tool_names
 from free_claude_code.providers.openai_chat.stream_output import (
     ChatStreamUsage,
+    CompletedToolCall,
     ResponsesChatStreamOutput,
 )
 from free_claude_code.providers.openai_responses.presentation import (
     NativeResponsesPresenter,
 )
 from tests.providers.test_opencode import _responses_event_stream
+from tests.wire_payload import (
+    array_payload,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 SEARCH: JsonObject = {
     "type": "tool_search",
@@ -97,18 +113,22 @@ def test_chat_discovery_preserves_pairing_and_activates_returned_tool() -> None:
         request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
     ).body
     functions = {
-        t["function"]["name"]: t["function"]
-        for t in cast(list[dict[str, Any]], body.get("tools", []))
+        object_payload(t["function"])["name"]: t["function"]
+        for t in object_array(body.get("tools", []))
     }
     assert "agents__spawn_agent" in functions
-    messages = cast(list[dict[str, Any]], body["messages"])
-    assert messages[1]["tool_calls"][0]["id"] == "search"
-    assert json.loads(messages[1]["tool_calls"][0]["function"]["arguments"]) == {
-        "query": "agent"
-    }
+    messages = object_array(body["messages"])
+    assert object_array(messages[1]["tool_calls"])[0]["id"] == "search"
+    assert load_json_value(
+        string_payload(
+            object_payload(object_array(messages[1]["tool_calls"])[0]["function"])[
+                "arguments"
+            ]
+        )
+    ) == {"query": "agent"}
     assert messages[2]["role"] == "tool"
     assert messages[2]["tool_call_id"] == "search"
-    assert "spawn_agent" in messages[2]["content"]
+    assert "spawn_agent" in string_payload(messages[2]["content"])
     assert request.model_dump() == original
 
 
@@ -353,8 +373,10 @@ def test_interrupted_discovery_preserves_terminal_failure(
         "content": [{"type": "output_text", "text": "Saved work", "annotations": []}],
     }
     response = parse_sse_text(_responses_event_stream(""))[-1].data["response"]
-    response["usage"]["input_tokens_details"]["cache_write_tokens"] = 0
-    response.update(
+    object_payload(
+        object_payload(object_payload(response)["usage"])["input_tokens_details"]
+    )["cache_write_tokens"] = 0
+    object_payload(response).update(
         status=terminal,
         output=[sibling, item],
         error={"code": "server_error", "message": "Original upstream timeout"}
@@ -387,14 +409,17 @@ def test_interrupted_discovery_preserves_terminal_failure(
         "response.output_item.done",
         f"response.{terminal}",
     ]
-    assert events[0].data["item"]["arguments"] == {}
+    assert object_payload(events[0].data["item"])["arguments"] == {}
     restored = {key: value for key, value in item.items() if key != "name"}
     restored.update(type="tool_search_call", execution="client")
     assert events[1].data["item"] == restored
     actual = events[-1].data["response"]
-    assert actual["output"] == [sibling, restored]
-    assert actual["error"] == original["error"]
-    assert actual["incomplete_details"] == original["incomplete_details"]
+    assert object_payload(actual)["output"] == [sibling, restored]
+    assert object_payload(actual)["error"] == object_payload(original)["error"]
+    assert (
+        object_payload(actual)["incomplete_details"]
+        == object_payload(original)["incomplete_details"]
+    )
     assert response == original
     parser: TypeAdapter[ResponseStreamEvent] = TypeAdapter(ResponseStreamEvent)
     for event in events:
@@ -460,7 +485,8 @@ def test_interrupted_discovery_is_excluded_before_tool_activation(
         ).body
         assert body["messages"] == [user, retry]
         assert [
-            tool["function"]["name"] for tool in cast(list[Any], body["tools"])
+            object_payload(tool["function"])["name"]
+            for tool in object_array(body["tools"])
         ] == ["fcc_tool_search"]
     assert request.model_dump() == original
 
@@ -505,12 +531,12 @@ def test_interrupted_discovery_keeps_completed_occurrences_of_reused_id(
             request,
             ResponsesToolPolicy(client_tool_search=True, flatten_namespaces=True),
         ).request
-        items = cast(list[dict[str, Any]], prepared.input)
+        items = object_array(prepared.input)
         calls = [
             item["arguments"] for item in items if item.get("type") == "function_call"
         ]
         results = [
-            json.loads(item["output"])
+            load_json_value(string_payload(item["output"]))
             for item in items
             if item.get("type") == "function_call_output"
         ]
@@ -519,23 +545,26 @@ def test_interrupted_discovery_keeps_completed_occurrences_of_reused_id(
         body = build_responses_chat_request(
             request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
         ).body
-        messages = cast(list[dict[str, Any]], body["messages"])
+        messages = object_array(body["messages"])
         calls = [
-            call["function"]["arguments"]
+            object_payload(call["function"])["arguments"]
             for message in messages
-            for call in message.get("tool_calls", [])
+            for call in object_array(message.get("tool_calls", []))
         ]
         results = [
-            json.loads(message["content"])
+            load_json_value(string_payload(message["content"]))
             for message in messages
             if message["role"] == "tool"
         ]
-        names = [tool["function"]["name"] for tool in cast(list[Any], body["tools"])]
-    assert [json.loads(arguments) for arguments in calls] == [
+        names = [
+            object_payload(tool["function"])["name"]
+            for tool in object_array(body["tools"])
+        ]
+    assert [load_json_value(string_payload(arguments)) for arguments in calls] == [
         {"query": "first"},
         {"query": "last"},
     ]
-    assert [tools[0]["name"] for tools in results] == ["first", "last"]
+    assert [object_array(tools)[0]["name"] for tools in results] == ["first", "last"]
     assert set(names) == {"first", "last", "fcc_tool_search"}
     assert request.model_dump() == original
 
@@ -614,7 +643,7 @@ def test_interrupted_discovery_keeps_custom_output_source_and_later_discovery(
                 flatten_namespaces=True,
             ),
         ).request
-        items = cast(list[dict[str, Any]], prepared.input)
+        items = object_array(prepared.input)
         assert [item.get("call_id") for item in items] == [
             None,
             None,
@@ -628,27 +657,37 @@ def test_interrupted_discovery_keeps_custom_output_source_and_later_discovery(
         assert items[1] == history[1]
         assert items[3]["output"] == custom_output
         assert items[-1]["output"] == "Found files"
-        assert json.loads(items[5]["output"])[0]["name"] == "lookup files"
+        assert (
+            object_array(load_json_value(string_payload(items[5]["output"])))[0]["name"]
+            == "lookup files"
+        )
     else:
         translated = build_responses_chat_request(
             request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
         )
         body = translated.body
         encode_openai_chat_tool_names(body, translated.tool_names)
-        messages = cast(list[dict[str, Any]], body["messages"])
+        messages = object_array(body["messages"])
         assert [
             item.get("tool_call_id") for item in messages if item["role"] == "tool"
         ] == ["edit", "found", "lookup"]
         assert messages[1]["reasoning_content"] == "Saved reasoning"
-        assert json.loads(messages[2]["content"]) == custom_output
+        assert load_json_value(string_payload(messages[2]["content"])) == custom_output
         found = next(item for item in messages if item.get("tool_call_id") == "found")
-        wire_name = json.loads(found["content"])[0]["name"]
-        assert " " not in wire_name
+        wire_name = object_array(load_json_value(string_payload(found["content"])))[0][
+            "name"
+        ]
+        assert " " not in string_payload(wire_name)
         assert any(
-            tool["function"]["name"] == wire_name
-            for tool in cast(list[Any], body["tools"])
+            object_payload(tool["function"])["name"] == wire_name
+            for tool in object_array(body["tools"])
         )
-        assert messages[-2]["tool_calls"][0]["function"]["name"] == wire_name
+        assert (
+            object_payload(object_array(messages[-2]["tool_calls"])[0]["function"])[
+                "name"
+            ]
+            == wire_name
+        )
         assert messages[-1]["content"] == "Found files"
     assert request.model_dump() == original
 
@@ -782,11 +821,14 @@ def test_interrupted_discovery_snapshot_can_be_followed_by_completed_call() -> N
     prepared = ResponsesToolAdapter(
         request, ResponsesToolPolicy(client_tool_search=True, flatten_namespaces=True)
     ).request
-    items = cast(list[dict[str, Any]], prepared.input)
+    items = object_array(prepared.input)
     assert len(items) == 3
     assert items[1]["status"] == "completed"
-    assert json.loads(items[1]["arguments"]) == {"query": "agent"}
-    assert json.loads(items[2]["output"])[0]["name"] == "agents__spawn_agent"
+    assert load_json_value(string_payload(items[1]["arguments"])) == {"query": "agent"}
+    assert (
+        object_array(load_json_value(string_payload(items[2]["output"])))[0]["name"]
+        == "agents__spawn_agent"
+    )
     assert "agents__spawn_agent" in [tool["name"] for tool in prepared.tools or []]
 
 
@@ -872,7 +914,12 @@ def test_latest_discovery_and_explicit_definitions_have_stable_precedence() -> N
             "defer_loading": True,
         }
 
-    history = [
+    tool_batches: list[list[JsonObject]] = [
+        [declaration("old")],
+        [declaration("new")],
+        [],
+    ]
+    history: list[JsonObject] = [
         {
             "type": "tool_search_output",
             "call_id": str(i),
@@ -880,7 +927,7 @@ def test_latest_discovery_and_explicit_definitions_have_stable_precedence() -> N
             "status": "completed",
             "tools": tools,
         }
-        for i, tools in enumerate([[declaration("old")], [declaration("new")], []])
+        for i, tools in enumerate(tool_batches)
     ]
     request = OpenAIResponsesRequest(model="example", input=history, tools=[SEARCH])
     adapter = ResponsesToolAdapter(
@@ -1010,7 +1057,9 @@ def test_native_original_arguments_agree_across_the_stream(prefix: str) -> None:
             },
         )
     )
-    completed = cast(dict[str, Any], events[-1][1]["item"])
+    relay = NativeResponsesRelay(public_model="example")
+    events = [(kind, relay.project(kind, data)) for kind, data in events]
+    completed = object_payload(events[-1][1]["item"])
     delta = "".join(
         str(data["delta"])
         for kind, data in events
@@ -1074,9 +1123,9 @@ def test_native_custom_input_is_emitted_once_when_buffered(
             },
         )
     )
-    added = cast(dict[str, Any], events[0][1]["item"])
-    completed = cast(dict[str, Any], events[-1][1]["item"])
-    assembled = added["input"] + "".join(
+    added = object_payload(events[0][1]["item"])
+    completed = object_payload(events[-1][1]["item"])
+    assembled = string_payload(added["input"]) + "".join(
         str(data["delta"])
         for kind, data in events
         if kind == "response.custom_tool_call_input.delta"
@@ -1119,8 +1168,10 @@ def test_chat_forced_namespaced_custom_choice_is_lowered_once(discovery: bool) -
         "type": "function",
         "function": {"name": "editor__edit"},
     }
-    functions = cast(list[dict[str, Any]], body["tools"])
-    assert any(tool["function"]["name"] == "editor__edit" for tool in functions)
+    functions = object_array(body["tools"])
+    assert any(
+        object_payload(tool["function"])["name"] == "editor__edit" for tool in functions
+    )
 
 
 @pytest.mark.parametrize("native", [False, True])
@@ -1173,7 +1224,7 @@ def test_generic_choice_uses_declared_tool_kind(
             "function": {"name": wire_name},
         }
         assert (
-            cast(list[dict[str, Any]], body["tools"])[0]["function"]["name"]
+            object_payload(object_array(body["tools"])[0]["function"])["name"]
             == wire_name
         )
     assert request.model_dump() == original
@@ -1218,17 +1269,17 @@ def test_discovery_optional_status_preserves_valid_tools(
         )
         definitions = adapter.request.tools or []
         names = [tool.get("name") for tool in definitions]
-        items = cast(list[dict[str, Any]], adapter.request.input)
-        payload = json.loads(items[-1]["output"])
+        items = object_array(adapter.request.input)
+        payload = load_json_value(string_payload(items[-1]["output"]))
         assert items[-1]["call_id"] == "search"
     else:
         body = build_responses_chat_request(
             request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
         ).body
-        definitions = cast(list[dict[str, Any]], body["tools"])
-        names = [tool["function"]["name"] for tool in definitions]
-        messages = cast(list[dict[str, Any]], body["messages"])
-        payload = json.loads(messages[-1]["content"])
+        definitions = object_array(body["tools"])
+        names = [object_payload(tool["function"])["name"] for tool in definitions]
+        messages = object_array(body["messages"])
+        payload = load_json_value(string_payload(messages[-1]["content"]))
         assert messages[-1]["tool_call_id"] == "search"
     accepted = status in {"omitted", None, "completed"}
     assert ("lookup" in names) is accepted
@@ -1274,26 +1325,26 @@ def test_discovery_execution_is_inferred_from_the_matching_record(
             request,
             ResponsesToolPolicy(client_tool_search=True, flatten_namespaces=True),
         ).request
-        items = cast(list[dict[str, Any]], prepared.input)
+        items = object_array(prepared.input)
         assert items[-2]["type"] == "function_call"
         assert items[-1]["type"] == "function_call_output"
         assert items[-2]["call_id"] == items[-1]["call_id"] == "search"
         assert "agents__spawn_agent" in [
             tool.get("name") for tool in prepared.tools or []
         ]
-        assert "spawn_agent" in items[-1]["output"]
+        assert "spawn_agent" in string_payload(items[-1]["output"])
     else:
         body = build_responses_chat_request(
             request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
         ).body
-        items = cast(list[dict[str, Any]], body["messages"])
-        assert items[-2]["tool_calls"][0]["id"] == "search"
+        items = object_array(body["messages"])
+        assert object_array(items[-2]["tool_calls"])[0]["id"] == "search"
         assert items[-1]["role"] == "tool"
         assert items[-1]["tool_call_id"] == "search"
-        assert "spawn_agent" in items[-1]["content"]
+        assert "spawn_agent" in string_payload(items[-1]["content"])
         assert "agents__spawn_agent" in [
-            tool["function"]["name"]
-            for tool in cast(list[dict[str, Any]], body["tools"])
+            object_payload(tool["function"])["name"]
+            for tool in object_array(body["tools"])
         ]
     assert request.model_dump() == original
 
@@ -1318,7 +1369,7 @@ def test_discovery_call_id_does_not_imply_client_execution(execution: str) -> No
     prepared = ResponsesToolAdapter(
         request, ResponsesToolPolicy(client_tool_search=True, flatten_namespaces=True)
     ).request
-    items = cast(list[dict[str, Any]], prepared.input)
+    items = object_array(prepared.input)
     assert [item["type"] for item in items] == [
         "tool_search_call",
         "tool_search_output",
@@ -1360,7 +1411,7 @@ def test_discovery_rejects_conflicting_execution_for_one_call(native: bool) -> N
 
 def _completed_tool_events(
     request: OpenAIResponsesRequest, *, native: bool, name: str, arguments: str
-) -> list[dict[str, Any]]:
+) -> list[JsonObject]:
     if native:
         adapter = ResponsesToolAdapter(
             request,
@@ -1389,15 +1440,20 @@ def _completed_tool_events(
                 {"response": {"output": [completed], "status": "completed"}},
             ),
         ]
+        relay = NativeResponsesRelay(public_model="example")
         return [
-            data for kind, payload in payloads for _, data in events.feed(kind, payload)
+            relay.project(kind, data)
+            for event, payload in payloads
+            for kind, data in events.feed(event, payload)
         ]
     adapter = build_responses_chat_request(
         request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
     ).tool_adapter
     writer = ResponsesChatStreamOutput(adapter, input_tokens=1)
-    frames = [*writer.start_events(), writer.start_tool_block(0, "call_test", name)]
-    frames.append(writer.emit_tool_delta(0, arguments))
+    frames = [
+        *writer.start_events(),
+        *writer.emit_complete_tool(0, CompletedToolCall("call_test", name, arguments)),
+    ]
     frames.extend(
         writer.finish_success(
             stop_reason="tool_calls",
@@ -1435,17 +1491,18 @@ def test_namespaced_search_named_tool_keeps_its_identity_in_all_events(
     expected_type = "custom_tool_call" if custom else "function_call"
     for event in events:
         if "item" in event:
-            assert event["item"]["type"] == expected_type
-            assert event["item"]["name"] == "fcc_tool_search"
-            assert event["item"]["namespace"] == "ordinary"
-    final = events[-1]["response"]["output"][0]
-    assert final["type"] == expected_type
-    assert final["namespace"] == "ordinary"
-    assert final["call_id"] == "call_test"
+            assert object_payload(event["item"])["type"] == expected_type
+            assert object_payload(event["item"])["name"] == "fcc_tool_search"
+            assert object_payload(event["item"])["namespace"] == "ordinary"
+    final = array_payload(object_payload(events[-1]["response"])["output"])[0]
+    assert object_payload(final)["type"] == expected_type
+    assert object_payload(final)["namespace"] == "ordinary"
+    assert object_payload(final)["call_id"] == "call_test"
     assert (
-        final.get("input") == "patch"
+        object_payload(final).get("input") == "patch"
         if custom
-        else json.loads(final["arguments"]) == {"query": "ordinary"}
+        else load_json_value(string_payload(object_payload(final)["arguments"]))
+        == {"query": "ordinary"}
     )
 
 
@@ -1472,7 +1529,7 @@ def test_search_name_reserves_ordinary_calls_from_history() -> None:
         ),
     )
     helper = (adapter.request.tools or [])[0]
-    replay = cast(list[dict[str, Any]], adapter.request.input)[0]
+    replay = object_array(adapter.request.input)[0]
     assert helper["name"] != replay["name"]
     restored = cast(
         dict[str, Any], adapter.restore_item({**replay, "status": "completed"})
@@ -1516,7 +1573,7 @@ def test_nested_function_definition_and_choice_use_one_provider_name(
         body = build_responses_chat_request(
             request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
         ).body
-        definition = cast(list[dict[str, Any]], body["tools"])[0]["function"]
+        definition = object_payload(object_array(body["tools"])[0]["function"])
         assert definition["name"] == "group__lookup"
         assert body["tool_choice"] == {
             "type": "function",
@@ -1586,8 +1643,8 @@ def test_discovery_preserves_outer_namespace_in_nested_tools(
             request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
         ).body
         assert {
-            tool["function"]["name"]
-            for tool in cast(list[dict[str, Any]], body["tools"])
+            object_payload(tool["function"])["name"]
+            for tool in object_array(body["tools"])
         } == {"fcc_tool_search", "agents__run"}
         assert body["tool_choice"] == {
             "type": "function",
@@ -1602,29 +1659,30 @@ def test_discovery_preserves_outer_namespace_in_nested_tools(
     expected_type = "custom_tool_call" if custom else "function_call"
     for event in events:
         if "item" in event:
-            assert event["item"]["type"] == expected_type
-            assert event["item"]["name"] == "run"
-            assert event["item"]["namespace"] == "agents"
-    final = events[-1]["response"]["output"][0]
-    assert final["type"] == expected_type
-    assert final["name"] == "run"
-    assert final["namespace"] == "agents"
+            assert object_payload(event["item"])["type"] == expected_type
+            assert object_payload(event["item"])["name"] == "run"
+            assert object_payload(event["item"])["namespace"] == "agents"
+    final = array_payload(object_payload(events[-1]["response"])["output"])[0]
+    assert object_payload(final)["type"] == expected_type
+    assert object_payload(final)["name"] == "run"
+    assert object_payload(final)["namespace"] == "agents"
     if custom:
-        assert final["input"] == "hello"
+        assert object_payload(final)["input"] == "hello"
     else:
-        assert json.loads(final["arguments"]) == {"message": "hello"}
+        assert load_json_value(string_payload(object_payload(final)["arguments"])) == {
+            "message": "hello"
+        }
     assert request.model_dump() == original
 
 
 def test_chat_does_not_turn_missing_search_arguments_into_a_successful_call() -> None:
-    events = _completed_tool_events(
-        OpenAIResponsesRequest(model="example", input="Search", tools=[SEARCH]),
-        native=False,
-        name="fcc_tool_search",
-        arguments="",
-    )
-    assert events[-1]["type"] == "response.failed"
-    assert events[-1]["response"]["output"] == []
+    with pytest.raises(ExecutionFailure, match="cannot be represented"):
+        _completed_tool_events(
+            OpenAIResponsesRequest(model="example", input="Search", tools=[SEARCH]),
+            native=False,
+            name="fcc_tool_search",
+            arguments="",
+        )
 
 
 @pytest.mark.parametrize("native", [False, True])
@@ -1657,10 +1715,10 @@ def test_synthetic_search_wins_over_bare_aliases_of_real_tools(native: bool) -> 
     events = _completed_tool_events(
         request, native=native, name="fcc_tool_search", arguments='{"query":"agent"}'
     )
-    item = events[-1]["response"]["output"][0]
-    assert item["type"] == "tool_search_call"
-    assert item["arguments"] == {"query": "agent"}
-    assert "namespace" not in item
+    item = array_payload(object_payload(events[-1]["response"])["output"])[0]
+    assert object_payload(item)["type"] == "tool_search_call"
+    assert object_payload(item)["arguments"] == {"query": "agent"}
+    assert "namespace" not in object_payload(item)
 
 
 @pytest.mark.parametrize("native", [False, True])
@@ -1706,7 +1764,7 @@ def test_interleaved_tool_kinds_keep_arguments_and_terminal_output_consistent(
     )
     names = ["fcc_tool_search", "group__lookup", "group__edit"]
     fragments = [['{"query":', '"agent"}'], ['{"n":', "8.0}"], ["plain ", "patch"]]
-    events: list[dict[str, Any]]
+    events: list[JsonObject]
     if native:
         adapter = _native_adapter(cast(list[JsonObject], request.tools))
         stream = adapter.event_adapter()
@@ -1775,6 +1833,8 @@ def test_interleaved_tool_kinds_keep_arguments_and_terminal_output_consistent(
                 {"response": {"output": completed, "status": "completed"}},
             )
         )
+        relay = NativeResponsesRelay(public_model="example")
+        events = [relay.project(str(event["type"]), event) for event in events]
     else:
         prepared = build_responses_chat_request(
             request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
@@ -1782,10 +1842,10 @@ def test_interleaved_tool_kinds_keep_arguments_and_terminal_output_consistent(
         writer = ResponsesChatStreamOutput(prepared.tool_adapter, input_tokens=1)
         frames = [*writer.start_events()]
         for i, name in enumerate(names):
-            frames.append(writer.start_tool_block(i, f"call_{i}", name))
-        for part in range(2):
             frames.extend(
-                writer.emit_tool_delta(i, fragments[i][part]) for i in range(3)
+                writer.emit_complete_tool(
+                    i, CompletedToolCall(f"call_{i}", name, "".join(fragments[i]))
+                )
             )
         frames.extend(
             writer.finish_success(
@@ -1794,7 +1854,7 @@ def test_interleaved_tool_kinds_keep_arguments_and_terminal_output_consistent(
             )
         )
         events = [frame.data for frame in parse_sse_text("".join(frames))]
-    final = events[-1]["response"]["output"]
+    final = object_array(object_payload(events[-1]["response"])["output"])
     assert final == [
         event["item"]
         for event in events
@@ -1815,11 +1875,11 @@ def test_interleaved_tool_kinds_keep_arguments_and_terminal_output_consistent(
     argument_events = [
         event
         for event in events
-        if event["type"].startswith("response.function_call_arguments.")
+        if string_payload(event["type"]).startswith("response.function_call_arguments.")
     ]
     assert {event["item_id"] for event in argument_events} == {final[1]["id"]}
     assert argument_events[-1]["arguments"] == final[1]["arguments"]
-    sequences = [event["sequence_number"] for event in events]
+    sequences = [int_payload(event["sequence_number"]) for event in events]
     assert sequences == sorted(set(sequences))
 
 
@@ -1841,7 +1901,7 @@ def test_chat_preserves_custom_result_text_serialization() -> None:
     body = build_responses_chat_request(
         request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
     ).body
-    messages = cast(list[dict[str, Any]], body["messages"])
+    messages = object_array(body["messages"])
     assert len(messages) == 2
     assert messages[-1] == {
         "role": "tool",
@@ -1867,17 +1927,21 @@ def test_non_finite_arguments_are_opaque_except_in_object_conversion(
                 request, native=native, name=name, arguments=arguments
             )
     elif search:
-        events = _completed_tool_events(
-            request, native=native, name=name, arguments=arguments
-        )
-        assert events[-1]["type"] == "response.failed"
-        assert events[-1]["response"]["output"] == []
+        with pytest.raises(ExecutionFailure, match="cannot be represented"):
+            _completed_tool_events(
+                request, native=native, name=name, arguments=arguments
+            )
     else:
         events = _completed_tool_events(
             request, native=native, name=name, arguments=arguments
         )
         assert events[-1]["type"] == "response.completed"
-        assert events[-1]["response"]["output"][0]["arguments"] == arguments
+        assert (
+            object_payload(
+                array_payload(object_payload(events[-1]["response"])["output"])[0]
+            )["arguments"]
+            == arguments
+        )
         json.dumps(events, allow_nan=False)
 
 
@@ -1893,7 +1957,12 @@ def test_non_finite_spellings_remain_valid_custom_text(native: bool) -> None:
     events = _completed_tool_events(
         request, native=native, name="edit", arguments="NaN Infinity -Infinity"
     )
-    assert events[-1]["response"]["output"][0]["input"] == "NaN Infinity -Infinity"
+    assert (
+        object_payload(
+            array_payload(object_payload(events[-1]["response"])["output"])[0]
+        )["input"]
+        == "NaN Infinity -Infinity"
+    )
     json.dumps(events, allow_nan=False)
 
 
@@ -1911,10 +1980,14 @@ def test_non_finite_spellings_in_json_strings_remain_valid(
         name="fcc_tool_search" if search else "agents__spawn_agent",
         arguments='{"text":"NaN Infinity -Infinity","limit":8.0}',
     )
-    item = events[-1]["response"]["output"][0]
-    arguments = item["arguments"] if search else json.loads(item["arguments"])
+    item = array_payload(object_payload(events[-1]["response"])["output"])[0]
+    arguments = (
+        object_payload(item)["arguments"]
+        if search
+        else load_json_value(string_payload(object_payload(item)["arguments"]))
+    )
     assert arguments == {"text": "NaN Infinity -Infinity", "limit": 8}
-    assert type(arguments["limit"]) is (int if search else float)
+    assert type(object_payload(arguments)["limit"]) is (int if search else float)
     json.dumps(events, allow_nan=False)
 
 
@@ -1989,8 +2062,7 @@ def test_argument_numbers_survive_sse_serialization(
         writer = ResponsesChatStreamOutput(adapter, input_tokens=1)
         frames = [
             *writer.start_events(),
-            writer.start_tool_block(0, "call", name),
-            writer.emit_tool_delta(0, arguments),
+            *writer.emit_complete_tool(0, CompletedToolCall("call", name, arguments)),
         ]
         frames.extend(
             writer.finish_success(
@@ -1998,28 +2070,34 @@ def test_argument_numbers_survive_sse_serialization(
                 usage=ChatStreamUsage(input_tokens=1, output_tokens=1),
             )
         )
-    events = [
+    events: list[DecimalJsonObject] = [
         json.loads(line[6:], parse_float=Decimal)
         for line in "".join(frames).splitlines()
         if line.startswith("data: ")
     ]
     items = [
-        event["item"]
+        object_payload(event["item"])
         for event in events
         if event["type"] == "response.output_item.done"
     ]
-    items.extend(events[-1]["response"]["output"])
+    items.extend(object_array(object_payload(events[-1]["response"])["output"]))
     assert len(items) == 2
-    for item in items:
+
+    def load_decimal_arguments(raw: str) -> DecimalJsonValue:
+        return json.loads(raw, parse_float=Decimal)
+
+    for numeric_item in items:
         actual = (
-            item["arguments"]
+            numeric_item["arguments"]
             if search
-            else json.loads(item["arguments"], parse_float=Decimal)
+            else load_decimal_arguments(string_payload(numeric_item["arguments"]))
         )
         assert actual == json.loads(arguments, parse_float=Decimal)
-        assert type(actual["nested"]["values"][1]) is (int if search else Decimal)
+        assert type(
+            array_payload(object_payload(object_payload(actual)["nested"])["values"])[1]
+        ) is (int if search else Decimal)
         if not search:
-            assert item["arguments"] == arguments
+            assert numeric_item["arguments"] == arguments
 
 
 @pytest.mark.parametrize("custom", [False, True])

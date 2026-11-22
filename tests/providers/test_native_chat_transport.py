@@ -3,11 +3,12 @@ import json
 import pytest
 
 from free_claude_code.core.chat_completions.request import ChatRequest
+from free_claude_code.core.json_types import JsonObject
 from tests.providers.test_history_transports import _harness
 
 
 @pytest.mark.asyncio
-async def test_direct_chat_preserves_native_request_and_stream_through_sdk():
+async def test_direct_chat_preserves_native_request_and_stream_through_sdk() -> None:
     request = {
         "model": "native",
         "messages": [
@@ -31,7 +32,7 @@ async def test_direct_chat_preserves_native_request_and_stream_through_sdk():
         "extra_headers": {"x-native-extension": "body-value"},
         "stream": True,
     }
-    events = [
+    events: list[JsonObject] = [
         {
             "id": "native-id",
             "object": "chat.completion.chunk",
@@ -51,10 +52,11 @@ async def test_direct_chat_preserves_native_request_and_stream_through_sdk():
     ]
     async with _harness("chat", lambda bodies: (200, events)) as (_, bodies, provider):
         chunks = [
-            event
+            frame
             async for event in provider.stream_chat(
                 ChatRequest.model_validate(request), response_model="public"
             )
+            for frame in event.frames
         ]
         assert bodies == [request]
         assert json.loads(chunks[0].removeprefix("data: ")) == {

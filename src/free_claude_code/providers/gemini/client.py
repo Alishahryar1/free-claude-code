@@ -1,7 +1,8 @@
 """Google AI Studio provider using native GenerateContent and model discovery."""
 
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from decimal import Decimal, InvalidOperation
+from typing import override
 from uuid import uuid4
 
 import httpx
@@ -18,6 +19,11 @@ from free_claude_code.core.gemini.native_request import (
     native_gemini_body,
     responses_to_gemini,
 )
+from free_claude_code.core.json_types import (
+    DecimalJsonObject,
+    DecimalJsonValue,
+    json_array,
+)
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesToolAdapter,
@@ -29,6 +35,7 @@ from free_claude_code.core.reasoning import (
     ReasoningControl,
     ReasoningPolicy,
 )
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -48,6 +55,21 @@ from free_claude_code.providers.reasoning_compatibility import (
 )
 
 from .transport import GeminiTransport
+
+
+def _model_token_limit(value: DecimalJsonValue) -> int | None:
+    """Decode an optional Gemini int32 token limit from ProtoJSON."""
+    if isinstance(value, str):
+        try:
+            value = Decimal(value)
+        except InvalidOperation:
+            return None
+    if isinstance(value, Decimal):
+        if not value.is_finite() or value != value.to_integral_value():
+            return None
+    elif type(value) is not int:
+        return None
+    return int(value) if -(2**31) <= value < 2**31 else None
 
 
 class GeminiProvider(BaseProvider):
@@ -81,9 +103,6 @@ class GeminiProvider(BaseProvider):
             read_timeout=config.http_read_timeout,
         )
 
-    async def endpoint(self, *, force_refresh: bool = False) -> HttpEndpoint:
-        return self._snapshot
-
     async def cleanup(self) -> None:
         await self._http.aclose()
 
@@ -93,14 +112,16 @@ class GeminiProvider(BaseProvider):
         seen: set[str] = set()
         while True:
 
-            async def fetch(page_token: str | None = page_token) -> dict[str, Any]:
+            async def fetch(
+                page_token: str | None = page_token,
+            ) -> DecimalJsonObject:
                 response = await self._http.get(
                     f"{self._snapshot.base_url}/models",
                     headers={"x-goog-api-key": self._snapshot.api_key or ""},
                     params={"pageToken": page_token} if page_token else {},
                 )
                 response.raise_for_status()
-                payload = response.json()
+                payload: DecimalJsonValue = response.json(parse_float=Decimal)
                 if not isinstance(payload, dict) or not isinstance(
                     payload.get("models"), list
                 ):
@@ -113,29 +134,33 @@ class GeminiProvider(BaseProvider):
             payload = await execution.run_call(
                 fetch, operation_kind=ProviderOperationKind.MODEL_DISCOVERY
             )
-            for model in payload["models"]:
+            for model in json_array(payload["models"]):
                 if not isinstance(model, dict) or not isinstance(
-                    model.get("name"), str
+                    name := model.get("name"), str
                 ):
                     raise ValueError("Gemini model discovery returned an invalid model")
-                if "generateContent" not in model.get("supportedGenerationMethods", []):
+                methods = model.get("supportedGenerationMethods", [])
+                if not isinstance(methods, list) or "generateContent" not in methods:
                     continue
-                records[model["name"]] = ProviderModelInfo(
-                    model_id=model["name"],
+                records[name] = ProviderModelInfo(
+                    model_id=name,
                     supports_thinking=model.get("thinking")
                     if isinstance(model.get("thinking"), bool)
                     else None,
                     reasoning_capability=ReasoningCapability.NONE
                     if model.get("thinking") is False
                     else ReasoningCapability.UNKNOWN,
-                    context_window_tokens=model.get("inputTokenLimit"),
-                    max_output_tokens=model.get("outputTokenLimit"),
+                    context_window_tokens=_model_token_limit(
+                        model.get("inputTokenLimit")
+                    ),
+                    max_output_tokens=_model_token_limit(model.get("outputTokenLimit")),
                 )
-            page_token = payload.get("nextPageToken")
-            if not page_token:
+            next_page_token = payload.get("nextPageToken")
+            if not next_page_token:
                 return frozenset(records.values())
-            if not isinstance(page_token, str) or page_token in seen:
+            if not isinstance(next_page_token, str) or next_page_token in seen:
                 raise ValueError("Gemini model discovery repeated a page token")
+            page_token = next_page_token
             seen.add(page_token)
 
     def stream_messages(
@@ -149,7 +174,7 @@ class GeminiProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         prepared, wire_reasoning = prepare_messages_reasoning(
             request,
             reasoning,
@@ -179,7 +204,7 @@ class GeminiProvider(BaseProvider):
         message_id = f"msg_{uuid4().hex}"
         return self._gemini.stream(
             body,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=public_model,
             include_thoughts=reasoning.output_enabled,
@@ -204,7 +229,7 @@ class GeminiProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         try:
             body = responses_to_gemini(request)
             apply_reasoning(body, reasoning, native=False)
@@ -214,7 +239,7 @@ class GeminiProvider(BaseProvider):
         adapter = ResponsesToolAdapter(request, ResponsesToolPolicy())
         return self._gemini.stream(
             body,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=public_model,
             include_thoughts=reasoning.output_enabled,
@@ -224,6 +249,7 @@ class GeminiProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_chat(
         self,
         request: ChatRequest,
@@ -235,7 +261,7 @@ class GeminiProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         try:
             body = chat_to_gemini(request)
             apply_reasoning(body, reasoning, native=False)
@@ -244,7 +270,7 @@ class GeminiProvider(BaseProvider):
         public_model = response_model or request.model
         return self._gemini.stream(
             body,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=public_model,
             include_thoughts=reasoning.output_enabled,
@@ -256,6 +282,7 @@ class GeminiProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_gemini(
         self,
         request: GeminiRequest,
@@ -267,7 +294,7 @@ class GeminiProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         try:
             body = native_gemini_body(request)
             apply_reasoning(body, reasoning, native=True)
@@ -277,7 +304,7 @@ class GeminiProvider(BaseProvider):
 
         return self._gemini.stream(
             body,
-            endpoint_context=self,
+            endpoint_context=self._snapshot,
             request_id=request_id,
             response_model=public_model,
             include_thoughts=reasoning.output_enabled,

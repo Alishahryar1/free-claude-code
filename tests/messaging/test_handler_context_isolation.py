@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from free_claude_code.messaging.workflow import MessagingWorkflow
+from tests.fixture_types import IncomingMessageFactory
 
 
 async def _wait_for_idle(handler: MessagingWorkflow) -> None:
@@ -15,10 +16,12 @@ async def _wait_for_idle(handler: MessagingWorkflow) -> None:
 
 
 def _session_factory(calls: list[tuple[str, str | None, bool]]):
-    async def get_or_create_session(session_id=None):
+    async def get_or_create_session(session_id: str | None = None):
         session = MagicMock()
 
-        async def start_task(prompt, session_id=None, fork_session=False):
+        async def start_task(
+            prompt: str, session_id: str | None = None, fork_session: bool = False
+        ):
             calls.append((prompt, session_id, fork_session))
             yield {"type": "session_info", "session_id": f"sess_{prompt}"}
             yield {"type": "exit", "code": 0, "stderr": None}
@@ -31,10 +34,10 @@ def _session_factory(calls: list[tuple[str, str | None, bool]]):
 
 @pytest.mark.asyncio
 async def test_sibling_replies_fork_from_parent_session_id(
-    mock_platform,
-    mock_cli_manager,
-    mock_session_store,
-    incoming_message_factory,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    mock_session_store: AsyncMock,
+    incoming_message_factory: IncomingMessageFactory,
 ) -> None:
     calls: list[tuple[str, str | None, bool]] = []
     mock_cli_manager.get_or_create_session = AsyncMock(
@@ -65,10 +68,10 @@ async def test_sibling_replies_fork_from_parent_session_id(
 
 @pytest.mark.asyncio
 async def test_grandchild_reply_forks_from_branch_session(
-    mock_platform,
-    mock_cli_manager,
-    mock_session_store,
-    incoming_message_factory,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    mock_session_store: AsyncMock,
+    incoming_message_factory: IncomingMessageFactory,
 ) -> None:
     calls: list[tuple[str, str | None, bool]] = []
     mock_cli_manager.get_or_create_session = AsyncMock(

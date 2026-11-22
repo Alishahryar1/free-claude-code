@@ -6,6 +6,7 @@ from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
 from tests.api.model_fallback_support import (
     ControlledFallbackProvider,
     execution_failure,
@@ -15,6 +16,7 @@ from tests.api.model_fallback_support import (
     responses_payload,
     text_stream,
 )
+from tests.wire_payload import object_payload
 
 
 def test_messages_fallback_emits_one_lifecycle_with_original_model() -> None:
@@ -89,7 +91,7 @@ def test_responses_fallback_emits_one_stable_response_lifecycle() -> None:
 )
 def test_nonretryable_provider_failure_uses_fallback_before_output(
     path: str,
-    payload: dict[str, object],
+    payload: JsonObject,
     failure: ExecutionFailure,
 ) -> None:
     primary = ControlledFallbackProvider(failure=failure)
@@ -113,7 +115,7 @@ def test_nonretryable_provider_failure_uses_fallback_before_output(
 )
 def test_final_failure_uses_last_candidate_typed_error(
     path: str,
-    payload: dict[str, object],
+    payload: JsonObject,
 ) -> None:
     primary = ControlledFallbackProvider(
         failure=execution_failure("primary overloaded")
@@ -132,8 +134,8 @@ def test_final_failure_uses_last_candidate_typed_error(
     assert response.status_code == 429
     assert response.headers["x-should-retry"] == "false"
     payload = response.json()
-    assert payload["error"]["type"] == "rate_limit_error"
-    assert payload["error"]["message"] == "fallback rate limited"
+    assert object_payload(payload["error"])["type"] == "rate_limit_error"
+    assert object_payload(payload["error"])["message"] == "fallback rate limited"
     assert "primary overloaded" not in response.text
 
 
@@ -146,7 +148,7 @@ def test_final_failure_uses_last_candidate_typed_error(
 )
 def test_lazy_fallback_validation_error_remains_ordinary(
     path: str,
-    payload: dict[str, object],
+    payload: JsonObject,
 ) -> None:
     primary = ControlledFallbackProvider(
         failure=execution_failure("primary overloaded")
@@ -161,12 +163,15 @@ def test_lazy_fallback_validation_error_remains_ordinary(
     assert response.status_code == 400
     assert "x-should-retry" not in response.headers
     payload = response.json()
-    assert payload["error"]["type"] == "invalid_request_error"
-    assert payload["error"]["message"] == "fallback configuration is invalid"
+    assert object_payload(payload["error"])["type"] == "invalid_request_error"
+    assert (
+        object_payload(payload["error"])["message"]
+        == "fallback configuration is invalid"
+    )
     assert fallback.stream_models == []
 
 
-def test_postframe_failure_never_opens_fallback_for_streaming_messages() -> None:
+def test_metadata_only_messages_failure_can_open_fallback() -> None:
     first = format_sse_event(
         "message_start",
         {"type": "message_start", "message": {}},
@@ -182,8 +187,8 @@ def test_postframe_failure_never_opens_fallback_for_streaming_messages() -> None
 
     assert response.status_code == 200
     events = parse_sse_text(response.text)
-    assert [event.event for event in events] == ["error"]
-    assert fallback.stream_models == []
+    assert events[-1].event == "message_stop"
+    assert fallback.stream_models == ["fallback-model"]
 
 
 def test_postframe_failure_never_opens_fallback_for_responses() -> None:
@@ -206,7 +211,7 @@ def test_postframe_failure_never_opens_fallback_for_responses() -> None:
     assert fallback.stream_models == []
 
 
-def test_nonstreaming_partial_failure_discards_content_without_fallback() -> None:
+def test_nonstreaming_partial_failure_discards_draft_before_fallback() -> None:
     partial_text = "PARTIAL_ASSISTANT_OUTPUT"
     partial = text_stream(partial_text, model="nvidia_nim/primary-model")[:3]
     primary = ControlledFallbackProvider(
@@ -218,7 +223,6 @@ def test_nonstreaming_partial_failure_discards_content_without_fallback() -> Non
     with fallback_client(primary, fallback) as client:
         response = client.post("/v1/messages", json=messages_payload(stream=False))
 
-    assert response.status_code == 529
-    assert response.headers["x-should-retry"] == "false"
+    assert response.status_code == 200
     assert partial_text not in response.text
-    assert fallback.stream_models == []
+    assert fallback.stream_models == ["fallback-model"]

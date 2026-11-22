@@ -13,17 +13,17 @@ from free_claude_code.core.anthropic.models import (
 class TestUsage:
     """Tests for Usage model."""
 
-    def test_required_fields(self):
+    def test_required_fields(self) -> None:
         usage = Usage(input_tokens=10, output_tokens=20)
         assert usage.input_tokens == 10
         assert usage.output_tokens == 20
 
-    def test_cache_defaults_zero(self):
+    def test_cache_defaults_zero(self) -> None:
         usage = Usage(input_tokens=1, output_tokens=2)
         assert usage.cache_creation_input_tokens == 0
         assert usage.cache_read_input_tokens == 0
 
-    def test_cache_fields_set(self):
+    def test_cache_fields_set(self) -> None:
         usage = Usage(
             input_tokens=10,
             output_tokens=20,
@@ -33,7 +33,7 @@ class TestUsage:
         assert usage.cache_creation_input_tokens == 5
         assert usage.cache_read_input_tokens == 3
 
-    def test_serialization(self):
+    def test_serialization(self) -> None:
         usage = Usage(input_tokens=10, output_tokens=20)
         data = usage.model_dump()
         assert data == {
@@ -47,11 +47,11 @@ class TestUsage:
 class TestTokenCountResponse:
     """Tests for TokenCountResponse model."""
 
-    def test_basic(self):
+    def test_basic(self) -> None:
         resp = TokenCountResponse(input_tokens=42)
         assert resp.input_tokens == 42
 
-    def test_serialization(self):
+    def test_serialization(self) -> None:
         resp = TokenCountResponse(input_tokens=100)
         data = resp.model_dump()
         assert data == {"input_tokens": 100}
@@ -60,7 +60,7 @@ class TestTokenCountResponse:
 class TestMessagesResponse:
     """Tests for MessagesResponse model."""
 
-    def test_minimum_fields(self):
+    def test_minimum_fields(self) -> None:
         resp = MessagesResponse(
             id="msg_001",
             model="test-model",
@@ -74,7 +74,7 @@ class TestMessagesResponse:
         assert resp.stop_reason is None
         assert resp.stop_sequence is None
 
-    def test_with_text_content(self):
+    def test_with_text_content(self) -> None:
         resp = MessagesResponse(
             id="msg_002",
             model="model",
@@ -87,7 +87,7 @@ class TestMessagesResponse:
         assert block.type == "text"
         assert block.text == "response"
 
-    def test_with_tool_use_content(self):
+    def test_with_tool_use_content(self) -> None:
         resp = MessagesResponse(
             id="msg_003",
             model="model",
@@ -108,7 +108,7 @@ class TestMessagesResponse:
         assert block.name == "Read"
         assert resp.stop_reason == "tool_use"
 
-    def test_with_thinking_content(self):
+    def test_with_thinking_content(self) -> None:
         resp = MessagesResponse(
             id="msg_004",
             model="model",
@@ -127,7 +127,7 @@ class TestMessagesResponse:
         assert isinstance(block1, ContentBlockText)
         assert block1.type == "text"
 
-    def test_with_all_content_types(self):
+    def test_with_all_content_types(self) -> None:
         resp = MessagesResponse(
             id="msg_005",
             model="model",
@@ -143,7 +143,7 @@ class TestMessagesResponse:
         )
         assert len(resp.content) == 3
 
-    def test_with_dict_content(self):
+    def test_with_dict_content(self) -> None:
         """Dict content (unknown block type) should be accepted."""
         resp = MessagesResponse(
             id="msg_006",
@@ -155,7 +155,7 @@ class TestMessagesResponse:
         assert isinstance(block, dict)
         assert block["type"] == "custom"
 
-    def test_stop_reason_values(self):
+    def test_stop_reason_values(self) -> None:
         """All valid stop_reason values should be accepted."""
         from typing import Literal
 
@@ -177,7 +177,7 @@ class TestMessagesResponse:
             )
             assert resp.stop_reason == reason
 
-    def test_serialization_round_trip(self):
+    def test_serialization_round_trip(self) -> None:
         resp = MessagesResponse(
             id="msg_rt",
             model="model-v1",
@@ -191,7 +191,7 @@ class TestMessagesResponse:
         assert restored.model == resp.model
         assert restored.stop_reason == resp.stop_reason
 
-    def test_empty_content_list(self):
+    def test_empty_content_list(self) -> None:
         resp = MessagesResponse(
             id="msg_empty",
             model="model",

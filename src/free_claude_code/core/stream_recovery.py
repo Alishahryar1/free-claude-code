@@ -1,12 +1,13 @@
 """Portable recovery evidence shared by provider, routing, and public delivery."""
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
 from .history_replay import readable_reasoning
-from .json_types import JsonObject
+from .json_types import DecimalJsonValue, JsonObject
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +27,7 @@ class ContinuationSeed:
     """A snapshot of delivered output in the client's own protocol."""
 
     wire_api: Literal["messages", "responses", "gemini", "chat"]
-    items: tuple[JsonObject, ...]
+    items: tuple[Mapping[str, DecimalJsonValue], ...]
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "items", deepcopy(self.items))
@@ -143,3 +144,19 @@ def assess_recovery(
         prefix.continuation,
         reason="portable_prefix",
     )
+
+
+@dataclass(frozen=True, slots=True)
+class CompletedCall:
+    protocol: Literal["messages", "responses", "chat", "gemini"]
+    position: tuple[int, ...]
+    call_id: str | None
+    item_id: str | None = None
+
+    @property
+    def identity(self) -> tuple[object, ...]:
+        if self.protocol == "responses" and self.item_id is not None:
+            return self.protocol, self.item_id
+        if self.protocol in {"messages", "gemini"} and self.call_id is not None:
+            return self.protocol, self.call_id
+        return self.protocol, self.position, self.call_id

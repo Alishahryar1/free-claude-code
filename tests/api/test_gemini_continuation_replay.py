@@ -1,13 +1,14 @@
 """Recovered Gemini answers retain exact signed history on every public API."""
 
 import json
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from tests.api.support import provider_manager_for_app
 from tests.api.test_four_protocol_matrix import (
     ingress_request,
@@ -15,18 +16,26 @@ from tests.api.test_four_protocol_matrix import (
     reply_history,
     response_value,
 )
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+)
 
 
-def native(text, finish=False):
+def native(text: str, finish: bool = False):
     parts = [{"text": text}]
-    candidate = {"index": 0, "content": {"role": "model", "parts": parts}}
+    candidate: JsonObject = {"index": 0, "content": {"role": "model", "parts": parts}}
     if finish:
         parts.append({"text": "", "thoughtSignature": "test-native-signature"})
         candidate["finishReason"] = "STOP"
     return {"candidates": [candidate]}
 
 
-def body(wire, history):
+def body(
+    wire: str, history: Sequence[Mapping[str, JsonValue]]
+) -> tuple[str, JsonObject]:
     if wire == "gemini":
         return "/v1beta/models/public:streamGenerateContent?alt=sse", {
             "contents": history
@@ -45,18 +54,19 @@ def body(wire, history):
 @pytest.mark.parametrize("signature_shape", ["empty_text", "signature_only", "on_text"])
 @pytest.mark.parametrize("thinking", [None, "visible", "hidden"])
 def test_recovered_signed_answer_replays_exact_history(
-    wire, interruptions, ambiguous, signature_shape, thinking, monkeypatch
-):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
+    wire: str,
+    interruptions: int,
+    ambiguous: bool,
+    signature_shape: str,
+    thinking: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     requests = []
     final_native = None
 
-    def reply(request):
+    def reply(request: httpx.Request):
         nonlocal final_native
-        value = json.loads(request.content)
+        value = decode_object(request.content)
         requests.append(deepcopy(value))
         n = len(requests)
         if n <= interruptions:
@@ -79,8 +89,11 @@ def test_recovered_signed_answer_replays_exact_history(
                 signature = content["parts"].pop()["thoughtSignature"]
                 content["parts"][0]["thoughtSignature"] = signature
         else:
-            assert value["contents"][:-2] == requests[interruptions]["contents"]
-            assert value["contents"][-2] == final_native
+            assert (
+                array_payload(value["contents"])[:-2]
+                == requests[interruptions]["contents"]
+            )
+            assert array_payload(value["contents"])[-2] == final_native
             event = native("FOLLOWUP_OK", True)
         if thinking and (wire != "gemini" or thinking == "visible"):
             event["candidates"][0]["content"]["parts"].insert(
@@ -119,7 +132,7 @@ def test_recovered_signed_answer_replays_exact_history(
             request["reasoning"] = {
                 "effort": "high" if thinking == "visible" else "none"
             }
-    app = matrix_app("gemini", reply, max_attempts=interruptions + 1)
+    app = matrix_app("gemini", native_reply=reply, max_attempts=interruptions + 1)
     with TestClient(app) as client:
         first = client.post(path, json=request)
         value = response_value(first, wire, True)
@@ -165,11 +178,9 @@ def test_recovered_signed_answer_replays_exact_history(
 
 @pytest.mark.parametrize("wire", ["messages", "chat", "responses", "gemini"])
 @pytest.mark.parametrize("native_id", [False, True])
-def test_recovered_signed_tool_call_accepts_its_result(wire, native_id, monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
+def test_recovered_signed_tool_call_accepts_its_result(
+    wire: str, native_id: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     bodies = []
     call = {"name": "read", "args": {"path": "kept"}}
     if native_id:
@@ -179,8 +190,8 @@ def test_recovered_signed_tool_call_accepts_its_result(wire, native_id, monkeypa
         "parts": [{"functionCall": call, "thoughtSignature": "signed-call"}],
     }
 
-    def reply(request):
-        value = json.loads(request.content)
+    def reply(request: httpx.Request):
+        value = decode_object(request.content)
         bodies.append(value)
         if len(bodies) == 1:
             event = native("I will read it. ")
@@ -189,10 +200,14 @@ def test_recovered_signed_tool_call_accepts_its_result(wire, native_id, monkeypa
                 "candidates": [{"index": 0, "content": signed, "finishReason": "STOP"}]
             }
         else:
-            assert value["contents"][:-2] == bodies[1]["contents"]
-            assert value["contents"][-2] == signed
-            result = value["contents"][-1]["parts"][0]["functionResponse"]
-            assert result.get("id") == ("native-call" if native_id else None)
+            assert array_payload(value["contents"])[:-2] == bodies[1]["contents"]
+            assert array_payload(value["contents"])[-2] == signed
+            result = object_array(object_array(value["contents"])[-1]["parts"])[0][
+                "functionResponse"
+            ]
+            assert object_payload(result).get("id") == (
+                "native-call" if native_id else None
+            )
             assert "tool-value" in json.dumps(result)
             event = native("TOOL_RESULT_OK", True)
         return httpx.Response(
@@ -201,7 +216,7 @@ def test_recovered_signed_tool_call_accepts_its_result(wire, native_id, monkeypa
             text="data: " + json.dumps(event) + "\n\n",
         )
 
-    app = matrix_app("gemini", reply)
+    app = matrix_app("gemini", native_reply=reply)
     with TestClient(app) as client:
         path, request = ingress_request(wire, True)
         value = response_value(client.post(path, json=request), wire, True)

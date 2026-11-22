@@ -16,7 +16,8 @@ def build() -> None:
             "Building macOS launcher templates requires macOS and Xcode tools"
         )
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    version = project["project"]["requires-python"].removeprefix("==")
+    requirement: str = project["project"]["requires-python"]
+    version = requirement.removeprefix("==")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         raise ValueError("Expected an exact Python requirement")
     destination = ROOT / "src/free_claude_code/assets/macos"

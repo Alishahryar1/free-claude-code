@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator
+from typing import override
 
 import pytest
 
@@ -12,6 +13,8 @@ from free_claude_code.application.web_tools.ports import WebFetchEgressPolicy
 from free_claude_code.application.web_tools.service import WebToolService
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import Message, MessagesRequest, Tool
+from free_claude_code.core.anthropic.tokens import TokenCounter
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.web_tools import WebFetchResult
 from tests.web_tools_support import StubWebToolsClient
 
@@ -20,7 +23,16 @@ async def _no_provider(_provider_id, _api_key_number):
     pytest.fail("This request must not resolve a provider")
 
 
-def _service(settings, client, *, token_counter=lambda *_: 5):
+def callback(*_: object):
+    return 5
+
+
+def _service(
+    settings: Settings,
+    client: StubWebToolsClient,
+    *,
+    token_counter: TokenCounter = callback,
+):
     return WebToolService(
         settings=settings,
         client=client,
@@ -29,7 +41,7 @@ def _service(settings, client, *, token_counter=lambda *_: 5):
     )
 
 
-def _request(tool, *, typed=True):
+def _request(tool: str, *, typed: bool = True):
     return MessagesRequest(
         model="claude-sonnet",
         messages=[Message(role="user", content="https://example.com/")],
@@ -49,11 +61,11 @@ def _request(tool, *, typed=True):
     )
 
 
-async def _drain(body: AsyncIterator[str]) -> str:
-    return "".join([chunk async for chunk in body])
+async def _drain(body: AsyncIterator[StreamOutput]) -> str:
+    return "".join([frame async for packet in body for frame in packet.frames])
 
 
-def test_ordinary_client_tool_needs_no_web_or_token_work():
+def test_ordinary_client_tool_needs_no_web_or_token_work() -> None:
     settings = Settings()
     service = _service(
         settings,
@@ -66,7 +78,7 @@ def test_ordinary_client_tool_needs_no_web_or_token_work():
     assert service.try_stream_messages(routed, request_id="req_unhandled") is None
 
 
-def test_disabled_tool_fails_during_preparation():
+def test_disabled_tool_fails_during_preparation() -> None:
     settings = Settings().model_copy(update={"enable_web_server_tools": False})
     service = _service(settings, StubWebToolsClient())
     routed = ModelRouter(settings).resolve_messages_request(_request("web_fetch"))
@@ -75,13 +87,14 @@ def test_disabled_tool_fails_during_preparation():
 
 
 @pytest.mark.asyncio
-async def test_concurrent_requests_keep_their_own_egress_policy():
+async def test_concurrent_requests_keep_their_own_egress_policy() -> None:
     entered, release = asyncio.Event(), asyncio.Event()
 
     class Client(StubWebToolsClient):
         def __init__(self):
             self.policies = []
 
+        @override
         async def fetch(
             self, url: str, *, egress: WebFetchEgressPolicy
         ) -> WebFetchResult:

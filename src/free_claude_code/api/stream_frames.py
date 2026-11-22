@@ -2,12 +2,13 @@
 
 import re
 from collections.abc import Mapping
-from typing import Any
 
 import simplejson
 
+from free_claude_code.core.json_types import DecimalJsonObject, DecimalJsonValue
 
-def frame_data(frame: str) -> dict[str, Any] | None:
+
+def frame_data(frame: str) -> DecimalJsonObject | None:
     """Read only SSE data, retaining decimal precision for envelope edits."""
     text = "\n".join(
         line[5:].lstrip(" ")
@@ -15,7 +16,7 @@ def frame_data(frame: str) -> dict[str, Any] | None:
         if line.startswith("data:")
     )
     try:
-        value: object = simplejson.loads(text, use_decimal=True)
+        value: DecimalJsonValue = simplejson.loads(text, use_decimal=True)
     except ValueError:
         return None
     return value if isinstance(value, dict) else None

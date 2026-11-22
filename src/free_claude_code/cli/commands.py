@@ -1,7 +1,6 @@
 """Implementations for installed Free Claude Code commands."""
 
 import errno
-import json
 import socket
 import threading
 import time
@@ -25,6 +24,7 @@ from free_claude_code.config.paths import managed_env_path, server_owner_lock_pa
 from free_claude_code.config.server_urls import local_admin_url, local_proxy_root_url
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.interprocess_lock import InterprocessFileLock
+from free_claude_code.core.json_types import load_json_value
 
 from .server_socket import ServerSockets
 
@@ -414,7 +414,7 @@ def _external_fcc_status(
     """Return the status payload an FCC instance reports on this port, or None for other servers."""
     url = f"{local_proxy_root_url(settings)}/admin/api/status"
     with open_local_request(Request(url), timeout=timeout) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+        payload = load_json_value(response.read().decode("utf-8"))
     if not isinstance(payload, dict) or not (
         isinstance(payload.get("instance_id"), str)
         and len(payload["instance_id"]) == 32
@@ -440,10 +440,11 @@ def open_admin_when_ready(
             if status is None:
                 return False
             if status["status"] == "running" and not stop.is_set():
+                instance_id: str = status["instance_id"]
                 completed = _start_admin_browser(
                     settings,
                     lambda: not stop.is_set(),
-                    instance_id=status["instance_id"],
+                    instance_id=instance_id,
                 )
                 # This extra launcher is about to exit: allow a brief URL handoff.
                 handoff_deadline = time.monotonic() + _BROWSER_HANDOFF_SECONDS
@@ -452,7 +453,7 @@ def open_admin_when_ready(
                     if remaining <= 0 or completed.wait(min(0.05, remaining)):
                         break
                 return True
-        except HTTPError, ValueError, UnicodeError:
+        except HTTPError, ValueError:
             return False
         except URLError, OSError:
             pass

@@ -12,6 +12,7 @@ from .events import (
     OPENAI_RESPONSES_SSE_HEADERS,
     committed_response_failure_frame,
     format_response_sse_event,
+    responses_event_index,
 )
 from .ids import (
     new_call_id,
@@ -48,6 +49,7 @@ from .tool_adaptation import (
     ResponsesToolEventAdapter,
     ResponsesToolPolicy,
 )
+from .tool_calls import ResponsesToolCallBuffer, is_client_call
 from .tool_search import is_client_search
 from .tools import (
     ResponsesToolIdentity,
@@ -69,6 +71,7 @@ __all__ = [
     "ResponsesProviderStream",
     "ResponsesStreamFailure",
     "ResponsesToolAdapter",
+    "ResponsesToolCallBuffer",
     "ResponsesToolEventAdapter",
     "ResponsesToolIdentity",
     "ResponsesToolPolicy",
@@ -83,6 +86,7 @@ __all__ = [
     "estimate_responses_input_tokens",
     "flatten_responses_tool_name",
     "format_response_sse_event",
+    "is_client_call",
     "is_client_search",
     "new_call_id",
     "new_message_item_id",
@@ -93,6 +97,7 @@ __all__ = [
     "openai_error_type_for_failure",
     "openai_failure_payload",
     "reasoning_output_item",
+    "responses_event_index",
     "responses_reasoning_config",
     "responses_reasoning_policy",
     "responses_stream_failure_from_event",

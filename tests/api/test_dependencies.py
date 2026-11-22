@@ -4,6 +4,7 @@ import pytest
 from fastapi import HTTPException, Request
 
 from free_claude_code.api.dependencies import (
+    app_services,
     get_services,
     get_settings,
     require_anthropic_proxy_auth,
@@ -40,7 +41,7 @@ def _request(
     return request, settings
 
 
-def _lease(*, provider=None, error: Exception | None = None):
+def _lease(*, provider: MagicMock | None = None, error: Exception | None = None):
     lease = MagicMock(spec=RequestRuntimeLease)
     lease.is_provider_cached.return_value = False
     if error is None:
@@ -56,7 +57,8 @@ def test_get_services_reads_the_single_app_state_boundary() -> None:
 
     services = get_services(request)
 
-    assert services is app.state.services
+    attached: object = getattr(app.state, "services", None)
+    assert services is attached
     assert isinstance(services, ApiServices)
 
 
@@ -69,7 +71,7 @@ def test_get_settings_reads_current_request_runtime_settings() -> None:
         )
     )
 
-    assert get_settings(app.state.services).model == "deepseek/test-model"
+    assert get_settings(app_services(app)).model == "deepseek/test-model"
 
 
 @pytest.mark.asyncio
@@ -122,13 +124,13 @@ async def test_resolve_provider_unrelated_error_is_not_reclassified() -> None:
         await resolve_provider("nvidia_nim", lease=lease)
 
 
-def test_require_proxy_auth_allows_when_disabled_with_retained_token():
+def test_require_proxy_auth_allows_when_disabled_with_retained_token() -> None:
     request, settings = _request(headers={}, enabled=False)
 
     require_proxy_auth(request, settings)
 
 
-def test_require_proxy_auth_rejects_missing_authorization():
+def test_require_proxy_auth_rejects_missing_authorization() -> None:
     request, settings = _request(headers={}, token="secret")
 
     with pytest.raises(HTTPException) as exc_info:
@@ -139,7 +141,7 @@ def test_require_proxy_auth_rejects_missing_authorization():
 
 
 @pytest.mark.parametrize("header_name", ["x-api-key", "anthropic-auth-token"])
-def test_require_proxy_auth_rejects_legacy_header_only(header_name: str):
+def test_require_proxy_auth_rejects_legacy_header_only(header_name: str) -> None:
     request, settings = _request(headers={header_name: "secret"}, token="secret")
 
     with pytest.raises(HTTPException) as exc_info:
@@ -149,7 +151,7 @@ def test_require_proxy_auth_rejects_legacy_header_only(header_name: str):
     assert exc_info.value.detail == "Missing proxy authentication token"
 
 
-def test_require_proxy_auth_accepts_exact_bearer_token():
+def test_require_proxy_auth_accepts_exact_bearer_token() -> None:
     request, settings = _request(
         headers={"authorization": "bEaReR secret"},
         token="secret",
@@ -158,7 +160,7 @@ def test_require_proxy_auth_accepts_exact_bearer_token():
     require_proxy_auth(request, settings)
 
 
-def test_require_proxy_auth_accepts_colons_in_configured_token():
+def test_require_proxy_auth_accepts_colons_in_configured_token() -> None:
     request, settings = _request(
         headers={"authorization": "Bearer secret:with:colons"},
         token="secret:with:colons",
@@ -167,7 +169,9 @@ def test_require_proxy_auth_accepts_colons_in_configured_token():
     require_proxy_auth(request, settings)
 
 
-def test_require_proxy_auth_accepts_valid_bearer_with_conflicting_legacy_headers():
+def test_require_proxy_auth_accepts_valid_bearer_with_conflicting_legacy_headers() -> (
+    None
+):
     request, settings = _request(
         headers={
             "authorization": "Bearer secret",
@@ -192,7 +196,7 @@ def test_require_proxy_auth_accepts_valid_bearer_with_conflicting_legacy_headers
 )
 def test_require_proxy_auth_rejects_malformed_or_invalid_authorization(
     authorization: str,
-):
+) -> None:
     request, settings = _request(
         headers={"authorization": authorization},
         token="secret",
@@ -205,7 +209,7 @@ def test_require_proxy_auth_rejects_malformed_or_invalid_authorization(
     assert exc_info.value.detail == "Invalid proxy authentication token"
 
 
-def test_require_proxy_auth_rejects_invalid_bearer_when_legacy_header_matches():
+def test_require_proxy_auth_rejects_invalid_bearer_when_legacy_header_matches() -> None:
     request, settings = _request(
         headers={"authorization": "Bearer wrong", "x-api-key": "secret"},
         token="secret",

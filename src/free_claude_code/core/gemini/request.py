@@ -35,7 +35,7 @@ type Destination = Literal["chat", "messages", "responses"]
 class GeminiPreparedRequest:
     body: JsonObject
     tool_names: OpenAIToolNameCodec
-    tool_schemas: dict[str, JsonObject]
+    declared_names: frozenset[str]
     reserved_tool_ids: frozenset[str]
     call_replay: tuple[CallReplay, ...]
 
@@ -344,7 +344,7 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
         body["tool_choice"] = {"type": mode} if destination == "messages" else mode
     _controls(request, body, destination)
     return GeminiPreparedRequest(
-        body, codec, schemas, frozenset(reserved), tuple(call_replay)
+        body, codec, frozenset(schemas), frozenset(reserved), tuple(call_replay)
     )
 
 
@@ -376,7 +376,7 @@ def _controls(
         "presence_penalty",
         "frequency_penalty",
     ):
-        value = getattr(config, name)
+        value: int | float | None = getattr(config, name)
         if value is not None:
             if name not in mapping:
                 raise GeminiConversionError(

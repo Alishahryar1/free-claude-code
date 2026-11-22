@@ -17,9 +17,11 @@ from free_claude_code.core.anthropic.stream_contracts import (
 )
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.openai_api.provider import OpenAIAPIProvider
 from free_claude_code.providers.runtime.config import build_provider_config
 from tests.providers.support import immediate_admission, make_provider_config
+from tests.wire_payload import decode_object, object_payload
 
 
 def _sse(*events: tuple[str, dict[str, Any]]) -> str:
@@ -63,18 +65,18 @@ def _provider(
     )
 
 
-async def _collect(stream: AsyncIterator[str]) -> str:
-    return "".join([chunk async for chunk in stream])
+async def _collect(stream: AsyncIterator[StreamOutput]) -> str:
+    return "".join([frame async for chunk in stream for frame in chunk.frames])
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ingress", ["messages", "responses"])
 async def test_key_one_authenticates_discovery_and_failure_never_tries_later_keys(
-    ingress,
-):
+    ingress: str,
+) -> None:
     requests = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         requests.append(request)
         if request.url.path == "/v1/models":
             return httpx2.Response(
@@ -190,7 +192,7 @@ async def test_api_key_provider_uses_public_responses_endpoint(
     assert request.headers["authorization"] == "Bearer platform-key"
     assert "originator" not in request.headers
     assert "chatgpt-account-id" not in request.headers
-    body = json.loads(request.content)
+    body = decode_object(request.content)
     assert body["model"] == "gpt-test"
     assert body["store"] is False
     assert body["max_output_tokens"] == 64
@@ -239,7 +241,7 @@ async def test_api_key_provider_preserves_tool_calls() -> None:
     upstream_bodies: list[dict[str, Any]] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         upstream_bodies.append(body)
         return httpx2.Response(
             200,
@@ -248,6 +250,7 @@ async def test_api_key_provider_preserves_tool_calls() -> None:
                     "response.output_item.added",
                     {
                         "type": "response.output_item.added",
+                        "output_index": 0,
                         "item": {
                             "type": "function_call",
                             "id": "fc_1",
@@ -260,6 +263,7 @@ async def test_api_key_provider_preserves_tool_calls() -> None:
                     "response.output_item.done",
                     {
                         "type": "response.output_item.done",
+                        "output_index": 0,
                         "item": {
                             "type": "function_call",
                             "id": "fc_1",
@@ -310,4 +314,4 @@ async def test_api_key_provider_preserves_tool_calls() -> None:
         for event in events
         if event.event == "content_block_start"
     )
-    assert tool_start["name"] == tool_name
+    assert object_payload(tool_start)["name"] == tool_name

@@ -5,6 +5,7 @@ import json
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
+from typing import override
 from unittest.mock import AsyncMock
 
 import pytest
@@ -22,6 +23,7 @@ from free_claude_code.providers.github_copilot.types import (
     CopilotUnavailable,
 )
 from tests.providers.copilot_support import FakeRuntime
+from tests.wire_payload import decode_object
 
 DEVICE = ConnectedAccountLoginMode.DEVICE
 
@@ -45,7 +47,7 @@ async def test_existing_native_profile_connects_persists_only_safe_state_and_res
     await manager.start_login(DEVICE)
     await settled(manager)
     assert manager.is_connected() and manager.status().display_identity == "@octocat"
-    state = json.loads(path.read_text())
+    state = decode_object(path.read_text())
     assert set(state) == {"schema_version", "enabled", "identity", "revision"}
     assert state["enabled"] is True
     await manager.close()
@@ -56,7 +58,7 @@ async def test_existing_native_profile_connects_persists_only_safe_state_and_res
     assert restarted.is_connected() and replacement.start_calls == 0
     assert list(await restarted.models()) == ["model"]
     await restarted.disconnect()
-    assert json.loads(path.read_text())["enabled"] is False
+    assert decode_object(path.read_text())["enabled"] is False
     assert replacement.close_calls == 1
     await restarted.close()
 
@@ -302,6 +304,7 @@ async def test_cancel_reports_and_retains_failed_runtime_cleanup(
     class Runtime(FakeRuntime):
         fail_close = True
 
+        @override
         async def close(self) -> None:
             if self.fail_close:
                 raise CopilotUnavailable("Owned runtime could not be stopped.")

@@ -4,6 +4,7 @@ import logging
 import socket
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
+from typing import override
 from urllib.parse import parse_qsl, urlencode
 
 import uvicorn
@@ -14,6 +15,7 @@ from free_claude_code.config.logging_config import InterceptHandler
 class QueryCredentialFilter(logging.Filter):
     """Mask query API keys before either Uvicorn output handler sees them."""
 
+    @override
     def filter(self, record: logging.LogRecord) -> bool:
         if (
             record.name == "uvicorn.access"
@@ -38,16 +40,21 @@ class QueryCredentialFilter(logging.Filter):
 def uvicorn_log_config(*, console: bool) -> dict[str, object]:
     """Send Uvicorn records to FCC's file and optional standard console handlers."""
     config = deepcopy(uvicorn.config.LOGGING_CONFIG)
+    formatters: dict[str, object] = config["formatters"]
+    handler_config: dict[str, object] = config["handlers"]
+    loggers: dict[str, dict[str, object]] = config["loggers"]
     config["filters"] = {"query_credentials": {"()": QueryCredentialFilter}}
-    config["loggers"]["uvicorn.access"]["filters"] = ["query_credentials"]
+    loggers["uvicorn.access"]["filters"] = ["query_credentials"]
     if not console:
-        config["formatters"] = {}
-        config["handlers"] = {}
-    config["handlers"]["fcc"] = {"()": InterceptHandler}
+        formatters.clear()
+        handler_config.clear()
+    handler_config["fcc"] = {"()": InterceptHandler}
     for name in ("uvicorn", "uvicorn.access"):
-        handlers = config["loggers"][name]["handlers"]
-        config["loggers"][name]["handlers"] = [*handlers, "fcc"] if console else ["fcc"]
-    return config
+        handlers = loggers[name]["handlers"]
+        if not isinstance(handlers, list):
+            raise TypeError("Expected Uvicorn logging handlers")
+        loggers[name]["handlers"] = [*handlers, "fcc"] if console else ["fcc"]
+    return dict(config)
 
 
 class RuntimeServer(uvicorn.Server):
@@ -66,6 +73,7 @@ class RuntimeServer(uvicorn.Server):
         self._on_started = on_started
         self._close_runtime = close_runtime
 
+    @override
     async def serve(self, sockets: list[socket.socket] | None = None) -> None:
         try:
             await super().serve(sockets)
@@ -75,11 +83,13 @@ class RuntimeServer(uvicorn.Server):
             self._begin_shutdown()
             await self._close_runtime()
 
+    @override
     async def startup(self, sockets: list[socket.socket] | None = None) -> None:
         await super().startup(sockets)
         if self.started and not self.should_exit:
             self._on_started()
 
+    @override
     async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
         self._begin_shutdown()
         await super().shutdown(sockets)

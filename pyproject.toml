@@ -12,19 +12,19 @@ license-files = ["LICENSE"]
 requires-python = "==3.14.10"
 dependencies = [
     "packaging>=26.3",
-    "anyio>=4.15.1",
+    "anyio>=4.16.0",
     "fastapi[standard]>=0.141.1",
     "uvicorn>=0.54.0",
     "httpx[socks]>=0.28.1",
     "httpx2[socks]>=2.7.0,<3",
-    "markdown-it-py>=4.2.0",
-    "pydantic>=2.14.1",
+    "markdown-it-py>=4.3.0",
+    "pydantic>=2.14.3",
     "python-dotenv>=1.2.4",
     "tiktoken>=0.13.0",
     "python-telegram-bot>=22.8",
     "discord.py>=2.7.1",
-    "openai>=3.37.0",
-    "loguru>=0.7.0",
+    "openai>=3.51.0",
+    "loguru>=0.8.0",
     "aiohttp>=3.14.5",
     "jsonschema>=4.25.0",
     "json5>=0.17.3",
@@ -33,18 +33,17 @@ dependencies = [
     "requests[socks]>=2.34.2",
     "pystray>=0.19.5; sys_platform == 'win32' or sys_platform == 'darwin'",
     "Pillow>=13.0.0; sys_platform == 'win32' or sys_platform == 'darwin'",
-    "github-copilot-sdk>=1.0.26",
-    "simplejson>=4.2.0",
-    "grpcio>=1.84.1",
-    "grpcio-tools>=1.81.1",
-    "nvidia-riva-client>=2.26.0",
+    "github-copilot-sdk>=1.0.34",
+    "simplejson>=4.3.0",
+    "grpcio>=1.85.1",
+    "grpcio-tools>=1.85.1",
+    "nvidia-riva-client>=2.28.0",
     "pyperclip>=1.11.0",
-    "sqlalchemy>=2.1.6",
+    "sqlalchemy>=2.1.8",
     "ruamel-yaml>=0.19.1",
 ]
 
 [project.scripts]
-_fcc-update-check = "free_claude_code.updater.check:main"
 fcc-server = "free_claude_code.cli.entrypoints:serve"
 fcc-doctor = "free_claude_code.cli.entrypoints:doctor"
 fcc-claude = "free_claude_code.cli.launchers.claude:launch"
@@ -65,9 +64,9 @@ fcc-desktop = "free_claude_code.cli.desktop_entrypoint:launch"
 [project.optional-dependencies]
 voice_local = [
     "torch>=2.14.1",
-    "transformers>=5.20.2",
+    "transformers>=5.23.0",
     "accelerate>=1.15.0",
-    "librosa>=1.0.0",
+    "librosa>=1.0.1",
 ]
 
 [tool.hatch.version]
@@ -97,16 +96,21 @@ explicit = true
 
 [dependency-groups]
 dev = [
-    "pytest>=9.1.1",
-    "pytest-asyncio>=1.4.0",
+    # pytest 9.2 breaks xdist provider grouping: pytest-dev/pytest#15303.
+    "pytest>=9.1.1,<9.2",
+    "pytest-asyncio>=1.5.0",
     "pytest-cov>=7.1.0",
-    "ty>=0.0.91",
-    "ruff>=0.17.2",
+    "pyrefly==1.5.0",
+    "ruff>=0.17.5",
     "pytest-xdist>=3.8.0",
     "pytest-playwright>=0.10.0",
     "pyyaml>=6.0.3",
     "pytest-split>=0.11.0",
-    "google-genai>=3.0.0",
+    "google-genai>=3.3.0",
+    "types-jsonschema>=4.26.0.20261006",
+    "types-pyperclip>=1.11.0.20260508",
+    "types-pyyaml>=6.0.12.20261113",
+    "types-simplejson>=4.3.0.20261112",
 ]
 
 [tool.ruff]
@@ -145,6 +149,7 @@ skip-magic-trailing-comma = false
 pythonpath = ["src", "."]
 addopts = "-p e2e.thread_diagnostics -n auto --dist=worksteal"
 tmp_path_retention_policy = "failed"
+asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
     "error",
     # Starlette's test client uses this deprecated alias, including in 1.6.0.
@@ -164,15 +169,25 @@ markers = [
     "xdist_group(name): group smoke provider items under pytest-xdist --dist=loadgroup",
 ]
 
-[tool.ty.environment]
+[tool.pyrefly]
+preset = "strict"
+min-severity = "warn"
+enabled-ignores = []
 python-version = "3.14"
-
-[tool.ty.analysis]
+search-path = ["src", "."]
 # Optional voice_local extra: torch, transformers, librosa for local whisper transcription
-allowed-unresolved-imports = [
+ignore-missing-imports = [
     "torch",
+    "torch.**",
     "transformers",
+    "transformers.**",
     "librosa",
+    "librosa.**",
     "pystray",
+    "pystray.**",
     "PIL",
+    "PIL.**",
 ]
+
+[tool.pyrefly.errors]
+explicit-any-use = "error"

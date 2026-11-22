@@ -2,9 +2,10 @@
 
 import asyncio
 import json
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from copy import deepcopy
-from io import StringIO
+from typing import override
 from unittest.mock import patch
 
 import httpx
@@ -17,15 +18,23 @@ from free_claude_code.api.response_streams import (
     anthropic_sse_streaming_response,
     openai_responses_sse_streaming_response,
 )
+from free_claude_code.application.response_collection import (
+    WireProtocol,
+    collect_response,
+)
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
+)
+from free_claude_code.providers.anthropic_messages.transport import (
+    AnthropicMessagesTransport,
 )
 from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.openai_chat import (
@@ -35,6 +44,7 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatRequestPolicy,
 )
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
+from tests.api.test_hidden_stream_retries import delivered
 from tests.api.test_response_streams import _json_error, _serve
 from tests.providers.support import make_provider_config
 from tests.providers.test_anthropic_messages_transport import _events
@@ -42,6 +52,12 @@ from tests.providers.test_anthropic_messages_transport import (
     _transport as messages_transport,
 )
 from tests.providers.test_history_transports import _events_for
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+)
 
 
 class Endpoint:
@@ -49,7 +65,7 @@ class Endpoint:
         self.calls = []
         self.token = "original"
 
-    async def endpoint(self, *, force_refresh=False):
+    async def endpoint(self, *, force_refresh: bool = False):
         self.calls.append(force_refresh)
         if force_refresh:
             self.token = "fresh"
@@ -57,21 +73,28 @@ class Endpoint:
 
 
 class Wire(httpx.AsyncByteStream, httpx2.AsyncByteStream):
-    def __init__(self, content):
+    def __init__(self, content: bytes):
         self.content = content
         self.close_calls = 0
 
+    @override
     async def __aiter__(self):
         yield self.content
 
+    @override
     async def aclose(self):
         self.close_calls += 1
 
 
 @asynccontextmanager
-async def _transport(protocol, responder, *, endpoint=None):
+async def _transport(
+    protocol: str,
+    responder: Callable[[int], tuple[int, JsonValue]],
+    *,
+    endpoint: Endpoint | None = None,
+):
     endpoint = endpoint if endpoint is not None else Endpoint()
-    bodies = []
+    bodies: list[JsonObject] = []
     wires = []
     admission = ProviderAdmissionController(
         provider_name="TEST",
@@ -84,15 +107,18 @@ async def _transport(protocol, responder, *, endpoint=None):
         jitter=0,
     )
 
-    def handler(request):
-        bodies.append(json.loads(request.content))
+    def scripted_reply(request_content: bytes):
+        bodies.append(decode_object(request_content))
         status, payload = responder(len(bodies))
-        module = httpx if protocol == "messages" else httpx2
         if status == 200:
             content = "".join(
-                (f"event: {event['type']}\n" if protocol == "messages" else "")
+                (
+                    f"event: {object_payload(event)['type']}\n"
+                    if protocol == "messages"
+                    else ""
+                )
                 + f"data: {json.dumps(event)}\n\n"
-                for event in payload
+                for event in object_array(payload)
             )
             content_type = "text/event-stream"
         else:
@@ -100,15 +126,21 @@ async def _transport(protocol, responder, *, endpoint=None):
             content_type = "application/json"
         wire = Wire(content.encode())
         wires.append(wire)
-        return module.Response(
-            status, headers={"content-type": content_type}, stream=wire
-        )
+        return status, {"content-type": content_type}, wire
+
+    def messages_reply(request: httpx.Request) -> httpx.Response:
+        status, headers, wire = scripted_reply(request.content)
+        return httpx.Response(status, headers=headers, stream=wire)
+
+    def openai_reply(request: httpx2.Request) -> httpx2.Response:
+        status, headers, wire = scripted_reply(request.content)
+        return httpx2.Response(status, headers=headers, stream=wire)
 
     if protocol == "messages":
-        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client = httpx.AsyncClient(transport=httpx.MockTransport(messages_reply))
         provider = messages_transport(client, admission)
     else:
-        pool = httpx2.MockTransport(handler)
+        pool = httpx2.MockTransport(openai_reply)
         client = AsyncOpenAI(
             api_key="unused",
             max_retries=0,
@@ -148,7 +180,7 @@ async def _transport(protocol, responder, *, endpoint=None):
             await client.close()
 
 
-def _request(protocol):
+def _request(protocol: str):
     block = (
         {"type": "thinking", "thinking": "previous", "signature": "opaque-original"}
         if protocol == "messages"
@@ -169,22 +201,32 @@ def _request(protocol):
     )
 
 
-def _stream(provider, endpoint, request):
+def _stream(
+    provider: AnthropicMessagesTransport
+    | OpenAIChatProvider
+    | OpenAIResponsesTransport,
+    endpoint: Endpoint,
+    request: MessagesRequest,
+):
+    if isinstance(provider, OpenAIResponsesTransport):
+        return provider.stream_messages(
+            request,
+            input_tokens=0,
+            endpoint_context=endpoint,
+            reasoning=ReasoningPolicy.prefer_off(),
+            request_id="recovery-transition",
+            response_model="public",
+        )
     return provider.stream_messages(
         request,
         endpoint_context=endpoint,
         reasoning=ReasoningPolicy.prefer_off(),
         request_id="recovery-transition",
         response_model="public",
-        **(
-            {"input_tokens": 0}
-            if isinstance(provider, OpenAIResponsesTransport)
-            else {}
-        ),
     )
 
 
-def _history_error(protocol):
+def _history_error(protocol: str):
     return {
         "type": "invalid_request_error",
         "code": "invalid_signature"
@@ -201,7 +243,7 @@ def _reasoning_error():
     }
 
 
-def _partial(protocol, text=""):
+def _partial(protocol: str, text: str = ""):
     if protocol == "messages":
         return _events(text)[:3] if text else _events()[:1]
     if protocol == "responses":
@@ -220,7 +262,7 @@ def _partial(protocol, text=""):
             )
         return events
     chunk = deepcopy(_events_for("chat")[-1])
-    chunk["choices"][0] = {
+    array_payload(chunk["choices"])[0] = {
         "index": 0,
         "delta": {"content": text} if text else {"role": "assistant"},
         "finish_reason": None,
@@ -241,8 +283,8 @@ def _partial(protocol, text=""):
 )
 @pytest.mark.parametrize("stopped,public", [(True, True), (False, True), (True, False)])
 async def test_hidden_normal_stop_prevents_request_corrections(
-    protocol, wire, failure_kind, stopped, public
-):
+    protocol: str, wire: WireProtocol, failure_kind: str, stopped: bool, public: bool
+) -> None:
     error = (
         {
             "type": "authentication_error",
@@ -270,13 +312,19 @@ async def test_hidden_normal_stop_prevents_request_corrections(
             events.append(terminal)
     events.append({"type": "error", "error": error})
 
+    def callback(ordinal: int):
+        return (200, events if ordinal == 1 else _events_for(protocol))
+
     async with _transport(
         protocol,
-        lambda ordinal: (200, events if ordinal == 1 else _events_for(protocol)),
+        callback,
     ) as (provider, endpoint, bodies, wires, admission):
         if wire == "messages":
             source = _stream(provider, endpoint, _request(protocol))
         else:
+            assert isinstance(
+                provider, (AnthropicMessagesTransport, OpenAIChatProvider)
+            )
             source = provider.stream_responses(
                 OpenAIResponsesRequest(model="upstream", input="continue"),
                 endpoint_context=endpoint,
@@ -311,11 +359,15 @@ async def test_hidden_normal_stop_prevents_request_corrections(
             else:
                 assert isinstance(response, StreamingResponse)
         else:
-            output = "".join([event async for event in source])
-            assert parse_sse_text(output)[-1].event == (
-                "message_stop" if wire == "messages" else "response.completed"
-            )
-        calls = 1 if public and stopped else 2
+            if stopped:
+                with pytest.raises(ExecutionFailure):
+                    await collect_response(source, protocol=wire)
+            else:
+                output = "".join(await collect_response(source, protocol=wire))
+                assert parse_sse_text(output)[-1].event == (
+                    "message_stop" if wire == "messages" else "response.completed"
+                )
+        calls = 1 if stopped else 2
         assert len(bodies) == calls
         assert all(item.close_calls == 1 for item in wires)
         assert not admission._episodes
@@ -340,9 +392,9 @@ async def test_hidden_normal_stop_prevents_request_corrections(
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages"])
 @pytest.mark.parametrize("exhausted", [False, True])
 async def test_mixed_recovery_keeps_one_budget_and_correction_history(
-    protocol, exhausted
-):
-    def respond(ordinal):
+    protocol: str, exhausted: bool
+) -> None:
+    def respond(ordinal: int):
         if ordinal == 1:
             return 401, {"type": "authentication_error", "message": "expired"}
         if ordinal == 2:
@@ -363,10 +415,14 @@ async def test_mixed_recovery_keeps_one_budget_and_correction_history(
                 with pytest.raises(ExecutionFailure):
                     _ = [event async for event in _stream(provider, endpoint, request)]
             else:
-                output = [event async for event in _stream(provider, endpoint, request)]
+                output = await collect_response(
+                    _stream(provider, endpoint, request), protocol="messages"
+                )
                 parsed = parse_sse_text("".join(output))
                 assert sum(event.event == "message_start" for event in parsed) == 1
-                assert sum(event.event == "message_stop" for event in parsed) == 1
+                assert sum(event.event == "message_stop" for event in parsed) == 1, (
+                    parsed[-1]
+                )
         starts = [
             call.kwargs
             for call in trace.call_args_list
@@ -391,8 +447,10 @@ async def test_mixed_recovery_keeps_one_budget_and_correction_history(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages"])
-async def test_refresh_allowance_survives_an_intervening_correction(protocol):
-    def respond(ordinal):
+async def test_refresh_allowance_survives_an_intervening_correction(
+    protocol: str,
+) -> None:
+    def respond(ordinal: int):
         if ordinal == 2:
             return 400, _history_error(protocol)
         return 401, {"type": "authentication_error", "message": "expired"}
@@ -410,18 +468,21 @@ async def test_refresh_allowance_survives_an_intervening_correction(protocol):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages"])
 @pytest.mark.parametrize("refresh", [False, True])
-async def test_credential_resolution_preserves_admission_order(protocol, refresh):
+async def test_credential_resolution_preserves_admission_order(
+    protocol: str, refresh: bool
+) -> None:
     class FailingEndpoint(Endpoint):
         failed = False
 
-        async def endpoint(self, *, force_refresh=False):
+        @override
+        async def endpoint(self, *, force_refresh: bool = False):
             if force_refresh == refresh and not self.failed:
                 self.failed = True
                 self.calls.append(force_refresh)
                 raise httpx.ReadError("credential service unavailable")
             return await super().endpoint(force_refresh=force_refresh)
 
-    def respond(ordinal):
+    def respond(ordinal: int):
         if refresh and ordinal == 1:
             return 401, {"type": "authentication_error", "message": "expired"}
         return 200, _events_for(protocol)
@@ -433,31 +494,21 @@ async def test_credential_resolution_preserves_admission_order(protocol, refresh
         wires,
         _,
     ):
-        if protocol == "responses":
-            with pytest.raises(
-                ExecutionFailure, match="credential service unavailable"
-            ):
-                _ = [
-                    event
-                    async for event in _stream(provider, endpoint, _request(protocol))
-                ]
-            assert endpoint.calls == ([False, True] if refresh else [False])
-            assert len(bodies) == int(refresh)
-        else:
-            assert [
+        with pytest.raises(ExecutionFailure, match="credential service unavailable"):
+            _ = [
                 event async for event in _stream(provider, endpoint, _request(protocol))
             ]
-            assert endpoint.calls == (
-                [False, True, True] if refresh else [False, False]
-            )
-            assert len(bodies) == 1 + int(refresh)
+        assert endpoint.calls == ([False, True] if refresh else [False])
+        assert len(bodies) == int(refresh)
         assert all(wire.close_calls == 1 for wire in wires)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages"])
 @pytest.mark.parametrize("failure_kind", ["authentication", "reasoning"])
-async def test_committed_output_prevents_generation_corrections(protocol, failure_kind):
+async def test_committed_output_prevents_generation_corrections(
+    protocol: str, failure_kind: str
+) -> None:
     error = (
         {
             "type": "authentication_error",
@@ -471,18 +522,22 @@ async def test_committed_output_prevents_generation_corrections(protocol, failur
         error["code"] = "invalid_request_error"
     events = _partial(protocol, "already visible " * 5000)
     events.append({"type": "error", "error": error})
-    async with _transport(protocol, lambda _: (200, events)) as (
+
+    def callback(_: object):
+        return (200, events)
+
+    async with _transport(protocol, callback) as (
         provider,
         endpoint,
         bodies,
         wires,
         _,
     ):
-        output = StringIO()
-        with pytest.raises(ExecutionFailure):
-            async for event in _stream(provider, endpoint, _request(protocol)):
-                output.write(event)
-        assert "already visible" in output.getvalue()
+        output = await delivered(
+            _stream(provider, endpoint, _request(protocol)), "messages"
+        )
+        assert parse_sse_text(output)[-1].event == "error"
+        assert "already visible" in output
         assert len(bodies) == 1 and endpoint.calls == [False]
         assert all(wire.close_calls == 1 for wire in wires)
 
@@ -490,13 +545,14 @@ async def test_committed_output_prevents_generation_corrections(protocol, failur
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages"])
 async def test_cancelled_forced_resolution_closes_attempt_and_releases_admission(
-    protocol,
-):
+    protocol: str,
+) -> None:
     entered = asyncio.Event()
-    wires = []
+    wires: list[Wire] = []
 
     class BlockingEndpoint(Endpoint):
-        async def endpoint(self, *, force_refresh=False):
+        @override
+        async def endpoint(self, *, force_refresh: bool = False):
             if force_refresh:
                 self.calls.append(force_refresh)
                 assert wires and all(wire.close_calls == 1 for wire in wires)
@@ -504,14 +560,22 @@ async def test_cancelled_forced_resolution_closes_attempt_and_releases_admission
                 await asyncio.Event().wait()
             return await super().endpoint(force_refresh=force_refresh)
 
-    async def consume(provider, endpoint):
+    async def consume(
+        provider: AnthropicMessagesTransport
+        | OpenAIChatProvider
+        | OpenAIResponsesTransport,
+        endpoint: Endpoint,
+    ):
         return [
             event async for event in _stream(provider, endpoint, _request(protocol))
         ]
 
+    def callback(_: object):
+        return (401, {"type": "authentication_error", "message": "expired"})
+
     async with _transport(
         protocol,
-        lambda _: (401, {"type": "authentication_error", "message": "expired"}),
+        callback,
         endpoint=BlockingEndpoint(),
     ) as (provider, endpoint, bodies, owned_wires, admission):
         wires = owned_wires
@@ -534,9 +598,9 @@ async def test_cancelled_forced_resolution_closes_attempt_and_releases_admission
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure_kind", ["authentication", "stream_usage"])
 async def test_committed_chat_continuation_has_separate_body_correction_scope(
-    failure_kind,
-):
-    def respond(ordinal):
+    failure_kind: str,
+) -> None:
+    def respond(ordinal: int):
         if ordinal == 1:
             return 200, _partial("chat", "already visible " * 5000)
         if ordinal == 2:
@@ -546,23 +610,27 @@ async def test_committed_chat_continuation_has_separate_body_correction_scope(
                 "type": "invalid_request_error",
                 "message": "stream_options is unsupported",
             }
-        return 200, _events_for("chat")
+        completed = _partial("chat", "completed")
+        completed[-1]["choices"][0]["finish_reason"] = "stop"
+        return 200, completed
 
     async with _transport("chat", respond) as (provider, endpoint, bodies, wires, _):
-        output = StringIO()
+        output = await delivered(
+            _stream(provider, endpoint, _request("chat")), "messages"
+        )
+        parsed = parse_sse_text(output)
         if failure_kind == "authentication":
-            with pytest.raises(ExecutionFailure):
-                async for event in _stream(provider, endpoint, _request("chat")):
-                    output.write(event)
+            assert parsed[-1].event == "error"
             assert len(bodies) == 2
         else:
-            async for event in _stream(provider, endpoint, _request("chat")):
-                output.write(event)
             assert len(bodies) == 3
-            assert bodies[1]["stream_options"] == {"include_usage": True}
+            assert object_payload(bodies[1])["stream_options"] == {
+                "include_usage": True
+            }
             assert "stream_options" not in bodies[2]
-            parsed = parse_sse_text(output.getvalue())
-            assert sum(event.event == "message_stop" for event in parsed) == 1
-        assert "already visible" in output.getvalue()
+            assert sum(event.event == "message_stop" for event in parsed) == 1, parsed[
+                -1
+            ]
+        assert "already visible" in output
         assert endpoint.calls == [False] * len(bodies)
         assert all(wire.close_calls == 1 for wire in wires)

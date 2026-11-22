@@ -6,6 +6,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from free_claude_code.api.dependencies import app_services
 from free_claude_code.application.errors import (
     ApplicationError,
     ApplicationUnavailableError,
@@ -13,6 +14,7 @@ from free_claude_code.application.errors import (
     UnknownProviderError,
 )
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.open_router import OpenRouterProvider
 from tests.api.support import create_test_app
 from tests.providers.support import immediate_admission, make_provider_config
@@ -49,8 +51,8 @@ def _settings(**updates: object) -> Settings:
 
 
 @pytest.mark.parametrize("mode", ["messages_stream", "messages_nonstream", "responses"])
-def test_conversion_error_returns_http_400_without_generation(mode):
-    payload = {"model": "open_router/test-model"}
+def test_conversion_error_returns_http_400_without_generation(mode: str) -> None:
+    payload: JsonObject = {"model": "open_router/test-model"}
     if mode == "responses":
         payload["input"] = [
             {"type": "reasoning", "encrypted_content": "fcc:history:v2:unsupported"}
@@ -182,7 +184,7 @@ def test_runtime_acquisition_failure_is_protocol_specific_503_without_terminal_h
     acquire = AsyncMock(side_effect=ApplicationUnavailableError(message))
 
     with (
-        patch.object(app.state.services.requests, "acquire", new=acquire),
+        patch.object(app_services(app).requests, "acquire", new=acquire),
         TestClient(app) as client,
     ):
         response = client.post(path, json=payload)

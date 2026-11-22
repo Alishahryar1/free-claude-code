@@ -22,7 +22,9 @@ def telegram_platform():
 
 
 @pytest.mark.asyncio
-async def test_telegram_retry_on_network_error(telegram_platform):
+async def test_telegram_retry_on_network_error(
+    telegram_platform: TelegramRuntime,
+) -> None:
     mock_bot = AsyncMock()
     mock_msg = MagicMock()
     mock_msg.message_id = 999
@@ -47,7 +49,9 @@ async def test_telegram_retry_on_network_error(telegram_platform):
 
 
 @pytest.mark.asyncio
-async def test_telegram_retry_on_retry_after(telegram_platform):
+async def test_telegram_retry_on_retry_after(
+    telegram_platform: TelegramRuntime,
+) -> None:
     mock_bot = AsyncMock()
     mock_msg = MagicMock()
     mock_msg.message_id = 1000
@@ -67,7 +71,9 @@ async def test_telegram_retry_on_retry_after(telegram_platform):
 
 
 @pytest.mark.asyncio
-async def test_telegram_no_retry_on_bad_request(telegram_platform):
+async def test_telegram_no_retry_on_bad_request(
+    telegram_platform: TelegramRuntime,
+) -> None:
     mock_bot = AsyncMock()
 
     # Fail with generic TelegramError (should not retry unless specific conditions met)
@@ -82,7 +88,7 @@ async def test_telegram_no_retry_on_bad_request(telegram_platform):
     assert mock_bot.send_message.call_count == 1
 
 
-def test_handler_build_message_hardening():
+def test_handler_build_message_hardening() -> None:
     # Formatting hardening now lives in TranscriptBuffer rendering.
     from free_claude_code.messaging.rendering.telegram_markdown import (
         escape_md_v2,
@@ -118,7 +124,7 @@ def test_handler_build_message_hardening():
         assert msg.count("```") % 2 == 0
 
 
-def test_render_output_never_exceeds_4096():
+def test_render_output_never_exceeds_4096() -> None:
     """Transcript render with various status lengths never exceeds Telegram 4096 limit."""
     from free_claude_code.messaging.rendering.telegram_markdown import (
         escape_md_v2,

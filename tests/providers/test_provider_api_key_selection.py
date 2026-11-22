@@ -22,7 +22,7 @@ KEYS = ["synthetic-first", "synthetic-second", "synthetic-third"]
 
 
 @pytest.mark.parametrize("provider", ["groq", "gemini", "anthropic", "openai_api"])
-def test_builtin_provider_configuration_selects_the_numbered_key(provider):
+def test_builtin_provider_configuration_selects_the_numbered_key(provider: str) -> None:
     settings = Settings(
         GROQ_API_KEY=KEYS,
         GEMINI_API_KEY=KEYS,
@@ -35,7 +35,7 @@ def test_builtin_provider_configuration_selects_the_numbered_key(provider):
     assert config.api_key == "synthetic-third"
 
 
-def test_custom_provider_configuration_selects_the_numbered_key():
+def test_custom_provider_configuration_selects_the_numbered_key() -> None:
     definition = CustomProviderDefinition(
         provider_id="custom_" + "b" * 32,
         display_name="Gateway",
@@ -46,14 +46,14 @@ def test_custom_provider_configuration_selects_the_numbered_key():
     assert config.api_key == "synthetic-second"
 
 
-def test_missing_selected_key_never_falls_back_to_first():
+def test_missing_selected_key_never_falls_back_to_first() -> None:
     settings = Settings(GROQ_API_KEY=KEYS[:1])
     with pytest.raises(ApplicationUnavailableError, match="Key 2"):
         build_provider_config(PROVIDER_CATALOG["groq"], settings, api_key_number=2)
 
 
 @pytest.mark.asyncio
-async def test_concurrent_resolutions_coalesce_by_provider_and_key():
+async def test_concurrent_resolutions_coalesce_by_provider_and_key() -> None:
     settings = Settings(GROQ_API_KEY=KEYS)
     runtime = ProviderRuntime(
         settings,
@@ -85,7 +85,7 @@ async def test_concurrent_resolutions_coalesce_by_provider_and_key():
 
 
 @pytest.mark.asyncio
-async def test_retained_generation_keeps_its_selected_key_after_a_key_edit():
+async def test_retained_generation_keeps_its_selected_key_after_a_key_edit() -> None:
     old_settings = Settings(MODEL="groq/one", GROQ_API_KEY=KEYS)
     new_settings = Settings(
         MODEL="groq/one", GROQ_API_KEY=["synthetic-first", "replacement-second"]

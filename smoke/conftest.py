@@ -1,7 +1,7 @@
 from collections.abc import Iterator
-from typing import Any
 
 import pytest
+from _pytest.mark.structures import ParameterSet
 
 from smoke.lib.config import ProviderModel, SmokeConfig, auth_headers
 from smoke.lib.report import SmokeReport
@@ -39,7 +39,11 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     target_marks = list(item.iter_markers("smoke_target"))
     if not target_marks:
         return
-    targets = [str(mark.args[0]) for mark in target_marks if mark.args]
+    targets = []
+    for mark in target_marks:
+        if mark.args:
+            target: object = mark.args[0]
+            targets.append(str(target))
     if targets and not any(config.target_enabled(target) for target in targets):
         pytest.skip(f"smoke target disabled: {', '.join(targets)}")
 
@@ -51,9 +55,7 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
         return
     if _REPORT is None:
         return
-    markers = sorted(
-        str(name) for name in report.keywords if str(name).startswith("smoke_")
-    )
+    markers = sorted(name for name in report.keywords if name.startswith("smoke_"))
     detail = "" if report.longrepr is None else str(report.longrepr)
     _REPORT.add(
         nodeid=report.nodeid,
@@ -85,7 +87,7 @@ def smoke_headers() -> dict[str, str]:
     return auth_headers()
 
 
-def provider_model_params(config: SmokeConfig) -> list[Any]:
+def provider_model_params(config: SmokeConfig) -> list[ParameterSet]:
     """Return provider params grouped for pytest-xdist ``--dist=loadgroup``."""
     if not config.live:
         return [_disabled_provider_param("set FCC_LIVE_SMOKE=1 to run provider smoke")]
@@ -104,7 +106,7 @@ def provider_model_params(config: SmokeConfig) -> list[Any]:
     ]
 
 
-def _disabled_provider_param(reason: str) -> Any:
+def _disabled_provider_param(reason: str) -> ParameterSet:
     return pytest.param(
         DISABLED_PROVIDER_MODEL,
         id=provider_model_id(DISABLED_PROVIDER_MODEL),

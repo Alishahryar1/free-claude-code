@@ -3,6 +3,7 @@
 import sys
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
+from typing import override
 
 import httpx
 
@@ -17,6 +18,7 @@ from free_claude_code.core.openai_responses import (
     ResponsesToolPolicy,
 )
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
@@ -186,7 +188,7 @@ class OpenCodeProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._dispatch_stream(
             request,
             input_tokens=input_tokens,
@@ -209,11 +211,11 @@ class OpenCodeProvider(BaseProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         snapshot = await self._catalog.snapshot(request_id=request_id)
         route = self._require_route(snapshot, request.model)
         routed = _routed_messages_request(request, route)
-        selected_stream: AsyncIterator[str] | None = None
+        selected_stream: AsyncIterator[StreamOutput] | None = None
         try:
             if route.transport is OpenCodeUpstreamTransport.RESPONSES:
                 selected_stream = self._responses.stream_messages(
@@ -250,6 +252,7 @@ class OpenCodeProvider(BaseProvider):
                     request_id=request_id,
                 )
 
+    @override
     def stream_chat(
         self,
         request: ChatRequest,
@@ -262,7 +265,7 @@ class OpenCodeProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._dispatch_openai_stream(
             request,
             input_tokens=input_tokens,
@@ -274,6 +277,7 @@ class OpenCodeProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_gemini(
         self,
         request: GeminiRequest,
@@ -286,7 +290,7 @@ class OpenCodeProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._dispatch_openai_stream(
             request,
             input_tokens=input_tokens,
@@ -310,7 +314,7 @@ class OpenCodeProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._dispatch_openai_stream(
             request,
             input_tokens=input_tokens,
@@ -333,13 +337,13 @@ class OpenCodeProvider(BaseProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         snapshot = await self._catalog.snapshot(request_id=request_id)
         route = self._require_route(snapshot, request.model)
         routed = request.model_copy(
             update={"model": route.upstream_model_id}, deep=True
         )
-        selected_stream: AsyncIterator[str] | None = None
+        selected_stream: AsyncIterator[StreamOutput] | None = None
         try:
             if isinstance(routed, ChatRequest):
                 transport = (

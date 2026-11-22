@@ -1,6 +1,9 @@
 import asyncio
 import contextlib
 import sys
+from collections.abc import Callable, Coroutine
+from contextvars import Context
+from types import ModuleType
 from unittest.mock import AsyncMock
 
 import pytest
@@ -11,7 +14,9 @@ from free_claude_code.messaging.trees.manager import TreeQueueManager
 from free_claude_code.messaging.trees.transitions import (
     AdmissionRejection,
     CancellationReason,
+    CancellationResult,
     CancellationUiOwner,
+    MessageSubtreeRemovalResult,
     NodeClaim,
 )
 
@@ -190,7 +195,11 @@ async def test_terminal_operation_serializes_with_successor_task_publication(
         "finish_and_claim_next",
         pause_after_successor_selection,
     )
-    operation_task: asyncio.Task | None = None
+    operation_task: (
+        asyncio.Task[CancellationResult]
+        | asyncio.Task[MessageSubtreeRemovalResult]
+        | None
+    ) = None
     try:
         release_root.set()
         await successor_selected.wait()
@@ -466,7 +475,12 @@ async def test_claim_launch_uses_portable_event_loop_task_contract(
     loop = asyncio.get_running_loop()
     original_create_task = loop.create_task
 
-    def portable_create_task(coro, *, name=None, context=None):
+    def portable_create_task(
+        coro: Coroutine[object, object, None],
+        *,
+        name: str | None = None,
+        context: Context | None = None,
+    ):
         return original_create_task(coro, name=name, context=context)
 
     monkeypatch.setattr(loop, "create_task", portable_create_task)
@@ -484,7 +498,7 @@ async def test_claim_launch_uses_portable_event_loop_task_contract(
     reason="uvloop is not installed on this Python platform",
 )
 def test_claim_launch_runs_on_uvloop() -> None:
-    uvloop = pytest.importorskip("uvloop")
+    uvloop: ModuleType = pytest.importorskip("uvloop")
 
     async def scenario() -> None:
         processed = asyncio.Event()
@@ -499,7 +513,11 @@ def test_claim_launch_runs_on_uvloop() -> None:
         assert decision.accepted is True
         assert processed.is_set()
 
-    uvloop.run(scenario())
+    run: Callable[[Coroutine[object, object, None]], None] | None = getattr(
+        uvloop, "run", None
+    )
+    assert run is not None
+    run(scenario())
 
 
 @pytest.mark.asyncio

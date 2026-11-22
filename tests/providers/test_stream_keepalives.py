@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+from collections.abc import AsyncIterable, Callable
 from contextlib import asynccontextmanager
+from typing import override
 
 import httpx
 import httpx2
@@ -21,9 +23,6 @@ from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
-)
-from free_claude_code.providers.anthropic_messages.passthrough import (
-    stream_native_messages,
 )
 from free_claude_code.providers.anthropic_messages.transport import (
     AnthropicMessagesTransport,
@@ -51,13 +50,14 @@ READ_TIMEOUT = 0.2
 
 
 class Heartbeats(httpx.AsyncByteStream, httpx2.AsyncByteStream):
-    def __init__(self, frame, *, prefix=b""):
+    def __init__(self, frame: bytes, *, prefix: bytes = b""):
         self.frame = frame
         self.prefix = prefix
         self.started = asyncio.Event()
         self.closed = False
         self.reads = 0
 
+    @override
     async def __aiter__(self):
         if self.prefix:
             yield self.prefix
@@ -67,12 +67,19 @@ class Heartbeats(httpx.AsyncByteStream, httpx2.AsyncByteStream):
             self.reads += 1
             yield self.frame
 
+    @override
     async def aclose(self):
         self.closed = True
 
 
 @asynccontextmanager
-async def upstream(egress, body_factory, *, timeout=READ_TIMEOUT, attempts=1):
+async def upstream(
+    egress: str,
+    body_factory: Callable[[], httpx.AsyncByteStream | httpx2.AsyncByteStream],
+    *,
+    timeout: float | int = READ_TIMEOUT,
+    attempts: int = 1,
+):
     admission = ProviderAdmissionController(
         provider_name="TEST",
         rate_limit=10000,
@@ -84,11 +91,13 @@ async def upstream(egress, body_factory, *, timeout=READ_TIMEOUT, attempts=1):
         jitter=0,
     )
 
-    def reply(request):
+    def reply(request: object):
+        body = body_factory()
+        assert isinstance(body, httpx.AsyncByteStream)
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
-            stream=body_factory(),
+            stream=body,
         )
 
     http = httpx.AsyncClient(transport=httpx.MockTransport(reply))
@@ -96,11 +105,13 @@ async def upstream(egress, body_factory, *, timeout=READ_TIMEOUT, attempts=1):
     transport = None
     if egress in {"chat", "responses"}:
 
-        def sdk_reply(request):
+        def sdk_reply(request: object):
+            body = body_factory()
+            assert isinstance(body, httpx2.AsyncByteStream)
             return httpx2.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
-                stream=body_factory(),
+                stream=body,
             )
 
         sdk = AsyncOpenAI(
@@ -133,7 +144,7 @@ async def upstream(egress, body_factory, *, timeout=READ_TIMEOUT, attempts=1):
                 provider_name="TEST",
                 log_raw_sse_events=False,
             )
-    elif egress == "messages":
+    elif egress in {"messages", "native_messages"}:
         transport = AnthropicMessagesTransport(
             client=http,
             admission=admission,
@@ -148,20 +159,17 @@ async def upstream(egress, body_factory, *, timeout=READ_TIMEOUT, attempts=1):
 
     def stream():
         if egress == "native_messages":
-            return stream_native_messages(
-                http,
-                admission,
-                base_url="https://provider.invalid/v1",
-                headers={},
-                body={
+            assert isinstance(transport, AnthropicMessagesTransport)
+            return transport.forward_messages(
+                {
                     "model": "model",
                     "stream": True,
                     "max_tokens": 100,
                     "messages": [{"role": "user", "content": "hello"}],
                 },
+                endpoint_context=Endpoint(),
+                headers={},
                 public_model="public",
-                provider_name="TEST",
-                read_timeout_s=timeout,
                 request_id="keepalive",
             )
         if isinstance(transport, GeminiTransport):
@@ -198,7 +206,7 @@ async def upstream(egress, body_factory, *, timeout=READ_TIMEOUT, attempts=1):
         admission.close()
 
 
-async def collect(stream):
+async def collect[T](stream: AsyncIterable[T]) -> list[T]:
     return [event async for event in stream]
 
 
@@ -212,7 +220,9 @@ async def collect(stream):
         b"event: ping\ndata: {}\n\n",
     ],
 )
-async def test_keepalive_only_upstream_times_out_and_releases_capacity(egress, frame):
+async def test_keepalive_only_upstream_times_out_and_releases_capacity(
+    egress: str, frame: bytes
+) -> None:
     if egress in {"chat", "responses"} and b"data: {}" in frame:
         pytest.skip("SDK does not retain arbitrary SSE names")
     wire = Heartbeats(frame)
@@ -232,7 +242,7 @@ async def test_keepalive_only_upstream_times_out_and_releases_capacity(egress, f
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("egress", EGRESSES)
-async def test_keepalive_timeout_uses_existing_attempt_budget(egress):
+async def test_keepalive_timeout_uses_existing_attempt_budget(egress: str) -> None:
     wires = []
 
     def body():
@@ -251,7 +261,7 @@ async def test_keepalive_timeout_uses_existing_attempt_budget(egress):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("egress", EGRESSES)
-async def test_cancellation_during_heartbeats_closes_and_releases(egress):
+async def test_cancellation_during_heartbeats_closes_and_releases(egress: str) -> None:
     wire = Heartbeats(b": keep-alive\n\n")
     async with upstream(egress, lambda: wire, timeout=10) as (stream, admission):
         task = asyncio.create_task(collect(stream()))
@@ -272,7 +282,7 @@ async def test_cancellation_during_heartbeats_closes_and_releases(egress):
             await asyncio.gather(task, return_exceptions=True)
 
 
-def successful_frames(egress):
+def successful_frames(egress: str):
     if egress == "chat":
         return [
             _chat_chunk("hello"),
@@ -300,28 +310,34 @@ def successful_frames(egress):
 
 
 class Frames(httpx.AsyncByteStream, httpx2.AsyncByteStream):
-    def __init__(self, chunks):
+    def __init__(self, chunks: list[bytes]):
         self.chunks = chunks
         self.closed = False
 
+    @override
     async def __aiter__(self):
         for chunk in self.chunks:
             yield chunk
 
+    @override
     async def aclose(self):
         self.closed = True
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("egress", EGRESSES)
-async def test_pings_are_discarded_before_and_during_valid_responses(egress):
+async def test_pings_are_discarded_before_and_during_valid_responses(
+    egress: str,
+) -> None:
     ping = b'event: ping\ndata: {"type":"ping"}\n\n'
     raw = b"".join(ping + frame for frame in successful_frames(egress))
     # Exercise framing across arbitrary network chunk boundaries as well.
     wire = Frames([raw[index : index + 7] for index in range(0, len(raw), 7)])
     async with upstream(egress, lambda: wire, timeout=1) as (stream, _):
         async with asyncio.timeout(2):
-            result = "".join(await collect(stream()))
+            result = "".join(
+                frame for packet in await collect(stream()) for frame in packet.frames
+            )
         assert "hello" in result
         assert '"ping"' not in result
         assert wire.closed
@@ -329,7 +345,9 @@ async def test_pings_are_discarded_before_and_during_valid_responses(egress):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("egress", EGRESSES)
-async def test_timeout_after_public_output_preserves_prefix_and_reports_failure(egress):
+async def test_timeout_after_public_output_preserves_prefix_and_reports_failure(
+    egress: str,
+) -> None:
     frames = successful_frames(egress)
     prefix = b"".join(frames[:3] if "messages" in egress else frames[:1])
     wire = Heartbeats(b": keep-alive\n\n", prefix=prefix)
@@ -349,7 +367,14 @@ async def test_timeout_after_public_output_preserves_prefix_and_reports_failure(
             )
             assert isinstance(response, ManagedStreamingResponse)
             try:
-                result = "".join(await collect(response.body_iterator))
+                result = "".join(
+                    [
+                        bytes(chunk).decode()
+                        if isinstance(chunk, (bytes, memoryview))
+                        else chunk
+                        for chunk in await collect(response.body_iterator)
+                    ]
+                )
             finally:
                 await response.aclose()
         assert result.count("hello") == 1
@@ -358,14 +383,14 @@ async def test_timeout_after_public_output_preserves_prefix_and_reports_failure(
 
 
 @pytest.mark.asyncio
-async def test_chat_buffered_recovery_read_also_times_out():
+async def test_chat_buffered_recovery_read_also_times_out() -> None:
     prefix = "x" * 70000  # Exceed the private workflow's early holdback.
     first = Frames([_chat_chunk(prefix)])
     recovery = Heartbeats(b": keep-alive\n\n")
     bodies = iter([first, recovery])
     async with upstream("chat", lambda: next(bodies), attempts=2) as (stream, _):
         # A failed buffered repair preserves the original truncation failure.
-        with pytest.raises(ExecutionFailure, match="without finish_reason"):
+        with pytest.raises(ExecutionFailure, match="timed out"):
             async with asyncio.timeout(2):
                 await collect(stream())
         assert first.closed and recovery.closed
@@ -376,8 +401,8 @@ async def test_chat_buffered_recovery_read_also_times_out():
 @pytest.mark.parametrize("egress", ["chat", "gemini"])
 @pytest.mark.parametrize("done", [False, True])
 async def test_stopped_generation_is_not_retried_when_tail_keeps_sending_pings(
-    egress, done
-):
+    egress: str, done: bool
+) -> None:
     if egress == "gemini" and done:
         pytest.skip("Gemini has no DONE sentinel")
     frames = successful_frames(egress)
@@ -407,7 +432,14 @@ async def test_stopped_generation_is_not_retried_when_tail_keeps_sending_pings(
             )
             assert isinstance(response, ManagedStreamingResponse)
             try:
-                result = "".join(await collect(response.body_iterator))
+                result = "".join(
+                    [
+                        bytes(chunk).decode()
+                        if isinstance(chunk, (bytes, memoryview))
+                        else chunk
+                        for chunk in await collect(response.body_iterator)
+                    ]
+                )
             finally:
                 await response.aclose()
         assert '"error"' in result

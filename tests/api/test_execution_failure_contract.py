@@ -3,7 +3,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping
-from typing import Any, cast
+from typing import Any, cast, override
 from unittest.mock import MagicMock, patch
 
 import httpx2
@@ -24,6 +24,7 @@ from free_claude_code.core.openai_responses import (
     openai_error_from_failure,
 )
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -31,10 +32,10 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatProvider,
     OpenAIChatRequestPolicy,
 )
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.support import create_test_app
 from tests.api.test_delivered_stream_recovery import text_events
 from tests.providers.support import immediate_admission, make_provider_config
+from tests.wire_payload import object_payload, response_object, string_payload
 
 _PARTIAL_CONTENT = "PARTIAL_ASSISTANT_CONTENT"
 
@@ -64,11 +65,12 @@ class CanonicalFailureProvider:
         self,
         _request: object,
         **kwargs: Any,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         self.stream_kwargs.append(kwargs)
         for chunk in self._chunks:
-            yield chunk
-        failure = self._failure(str(kwargs["request_id"]))
+            yield StreamOutput((chunk,))
+        request_id: str = kwargs["request_id"]
+        failure = self._failure(request_id)
         if self._grouped:
             raise self._grouped_failure(failure)
         raise failure
@@ -77,15 +79,16 @@ class CanonicalFailureProvider:
         self,
         _request: OpenAIResponsesRequest,
         **kwargs: Any,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         self.stream_kwargs.append(kwargs)
-        failure = self._failure(str(kwargs["request_id"]))
+        request_id: str = kwargs["request_id"]
+        failure = self._failure(request_id)
         if not self._chunks:
             if self._grouped:
                 raise self._grouped_failure(failure)
             raise failure
         for chunk in _partial_responses_stream(failure):
-            yield chunk
+            yield StreamOutput((chunk,))
 
     def _failure(self, request_id: str) -> ExecutionFailure:
         return ExecutionFailure(
@@ -124,11 +127,11 @@ class ResponsesFailureProvider:
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         del input_tokens, response_model, reasoning
         try:
             for chunk in self._responses_chunks:
-                yield chunk
+                yield StreamOutput((chunk,))
             raise ExecutionFailure(
                 FailureKind.TIMEOUT,
                 504,
@@ -275,15 +278,12 @@ def _client_for(
 @pytest.mark.parametrize("path", ["/v1/messages", "/v1/responses"])
 @pytest.mark.parametrize("partial", [False, True])
 def test_retired_progress_value_does_not_interrupt_slow_response(
-    path, partial, monkeypatch
-):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
+    path: str, partial: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     closed = []
 
     class SlowStream(httpx2.AsyncByteStream):
+        @override
         async def __aiter__(self):
             chunks = [
                 ("data: " + json.dumps(event) + "\n\n").encode()
@@ -301,6 +301,7 @@ def test_retired_progress_value_does_not_interrupt_slow_response(
                 yield chunk
             yield b"data: [DONE]\n\n"
 
+        @override
         async def aclose(self):
             closed.append(True)
 
@@ -352,19 +353,14 @@ def test_retired_progress_value_does_not_interrupt_slow_response(
 
 @pytest.mark.parametrize("partial", [False, True])
 def test_sdk_stream_invalid_request_preserves_public_error_semantics(
-    partial, monkeypatch
+    partial: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    if partial:
-        monkeypatch.setattr(
-            "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-            lambda: RecoveryHoldbackBuffer(max_bytes=1),
-        )
     calls = 0
 
     def reply(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
-        events = []
+        events: list[JsonObject] = []
         if partial:
             events.append(
                 {
@@ -432,11 +428,13 @@ def test_sdk_stream_invalid_request_preserves_public_error_semantics(
     else:
         assert response.status_code == 400
         assert response.headers["x-should-retry"] == "false"
-        assert response.json()["request_id"] == request_id
-        error = response.json()["error"]
-    assert error["type"] == "invalid_request_error"
-    assert "multimodal processing is not enabled" in error["message"]
-    assert request_id in error["message"]
+        assert response_object(response)["request_id"] == request_id
+        error = response_object(response)["error"]
+    assert object_payload(error)["type"] == "invalid_request_error"
+    assert "multimodal processing is not enabled" in string_payload(
+        object_payload(error)["message"]
+    )
+    assert request_id in string_payload(object_payload(error)["message"])
 
 
 def _terminal_trace(trace_mock: MagicMock) -> dict[str, Any]:
@@ -496,9 +494,12 @@ def test_grouped_pre_start_execution_failure_keeps_canonical_wire_error(
     request_id = response.headers["request-id"]
     assert response.status_code == 429
     assert response.headers["x-should-retry"] == "false"
-    error = response.json()["error"]
-    assert error["type"] == expected_type
-    assert error["message"] == f"upstream is busy\n\nRequest ID: {request_id}"
+    error = response_object(response)["error"]
+    assert object_payload(error)["type"] == expected_type
+    assert (
+        object_payload(error)["message"]
+        == f"upstream is busy\n\nRequest ID: {request_id}"
+    )
     trace = _terminal_trace(trace_mock)
     assert trace["status_code"] == 429
     assert trace["error_type"] == "rate_limit_error"
@@ -532,10 +533,13 @@ def test_grouped_post_start_execution_failure_keeps_canonical_terminal_event(
         error = events[-1].data["error"]
     else:
         assert events[-1].event == "response.failed"
-        error = events[-1].data["response"]["error"]
+        error = object_payload(events[-1].data["response"])["error"]
     assert response.status_code == 200
-    assert error["type"] == "rate_limit_error"
-    assert error["message"] == f"upstream is busy\n\nRequest ID: {request_id}"
+    assert object_payload(error)["type"] == "rate_limit_error"
+    assert (
+        object_payload(error)["message"]
+        == f"upstream is busy\n\nRequest ID: {request_id}"
+    )
     if path == "/v1/messages":
         assert _terminal_trace(trace_mock)["failure_kind"] == "rate_limit"
     else:
@@ -627,13 +631,16 @@ def test_pre_start_permission_failure_preserves_403_without_client_retry(
         response = client.post(path, json=payload)
 
     request_id = response.headers["request-id"]
-    error = response.json()["error"]
+    error = response_object(response)["error"]
     assert response.status_code == 403
     assert response.headers["x-should-retry"] == "false"
-    assert error["type"] == "permission_error"
-    assert error["message"] == f"Provider denied access.\n\nRequest ID: {request_id}"
+    assert object_payload(error)["type"] == "permission_error"
+    assert (
+        object_payload(error)["message"]
+        == f"Provider denied access.\n\nRequest ID: {request_id}"
+    )
     if path == "/v1/messages":
-        assert response.json()["request_id"] == request_id
+        assert response_object(response)["request_id"] == request_id
         assert "x-request-id" not in response.headers
     else:
         assert response.headers["x-request-id"] == request_id
@@ -668,11 +675,11 @@ def test_pre_start_request_too_large_failure_preserves_413(
         response = client.post(path, json=payload)
 
     request_id = response.headers["request-id"]
-    body = response.json()
+    body = response_object(response)
     assert response.status_code == 413
     assert response.headers["x-should-retry"] == "false"
-    assert body["error"]["type"] == "request_too_large"
-    assert body["error"]["message"] == (
+    assert object_payload(body["error"])["type"] == "request_too_large"
+    assert object_payload(body["error"])["message"] == (
         f"Provider rejected the request as too large.\n\nRequest ID: {request_id}"
     )
     if path == "/v1/messages":
@@ -855,9 +862,9 @@ def test_responses_post_start_execution_failure_retains_id_after_block_close() -
         "response.failed"
     )
     assert event_names[-1] == "response.failed"
-    assert failed["id"] == created["id"]
-    assert failed["status"] == "failed"
-    assert failed["error"] == {
+    assert object_payload(failed)["id"] == object_payload(created)["id"]
+    assert object_payload(failed)["status"] == "failed"
+    assert object_payload(failed)["error"] == {
         "message": f"upstream is busy\n\nRequest ID: {request_id}",
         "type": "rate_limit_error",
         "param": None,
@@ -881,7 +888,9 @@ def test_responses_post_start_context_failure_retains_compaction_code() -> None:
 
     events = parse_sse_text(response.text)
     assert events[-1].event == "response.failed"
-    assert events[-1].data["response"]["error"]["code"] == ("context_length_exceeded")
+    assert object_payload(object_payload(events[-1].data["response"])["error"])[
+        "code"
+    ] == ("context_length_exceeded")
 
 
 def test_messages_stream_false_discards_partial_content_on_execution_failure() -> None:
@@ -980,10 +989,15 @@ def test_post_start_provider_timeout_is_terminal_protocol_event(path: str) -> No
     else:
         assert events[0].event == "response.created"
         assert events[-1].event == "response.failed"
-        assert events[-1].data["response"]["id"] == events[0].data["response"]["id"]
-        error = events[-1].data["response"]["error"]
-    assert error["type"] == "timeout_error"
-    assert error["message"] == (f"Provider read timed out.\n\nRequest ID: {request_id}")
+        assert (
+            object_payload(events[-1].data["response"])["id"]
+            == object_payload(events[0].data["response"])["id"]
+        )
+        error = object_payload(events[-1].data["response"])["error"]
+    assert object_payload(error)["type"] == "timeout_error"
+    assert object_payload(error)["message"] == (
+        f"Provider read timed out.\n\nRequest ID: {request_id}"
+    )
     if path == "/v1/messages":
         trace = _terminal_trace(trace_mock)
         assert trace["failure_kind"] == "timeout"
@@ -1028,9 +1042,9 @@ def test_responses_provider_timeout_closes_committed_lifecycle() -> None:
     ]
     assert events[-1].data["sequence_number"] == 1
     failed = events[-1].data["response"]
-    assert failed["id"] == response_id
-    assert failed["status"] == "failed"
-    assert failed["error"] == {
+    assert object_payload(failed)["id"] == response_id
+    assert object_payload(failed)["status"] == "failed"
+    assert object_payload(failed)["error"] == {
         "message": (f"Provider read timed out.\n\nRequest ID: {request_id}"),
         "type": "timeout_error",
         "param": None,

@@ -4,7 +4,9 @@ import pytest
 from playwright.sync_api import Page, Route, expect
 
 from e2e.provider_support import api_key_input, close_provider, open_provider
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.credential_validation import check_credentials
+from tests.wire_payload import object_payload, response_object
 
 
 @pytest.mark.parametrize(
@@ -16,7 +18,12 @@ from free_claude_code.providers.credential_validation import check_credentials
     ],
 )
 def test_saved_unverified_notice_names_the_credential_owners(
-    page, admin_base_url, monkeypatch, provider_id, key, owners
+    page: Page,
+    admin_base_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_id: str,
+    key: str,
+    owners: str,
 ):
     monkeypatch.setattr(
         "free_claude_code.runtime.application.check_credentials", check_credentials
@@ -188,7 +195,7 @@ def test_unverified_warning_survives_apply(
         if restart:
             old.fulfill(status=503, json={"detail": "Old check failed"})
         else:
-            payload = old.fetch().json()
+            payload = response_object(old.fetch())
             payload.update(
                 status="offline", label="Offline", message="Old availability result"
             )
@@ -273,7 +280,7 @@ def test_restart_timeout_can_reconnect_without_resubmitting_keys(
     page: Page, admin_base_url: str
 ):
     ready = False
-    submissions: list[dict] = []
+    submissions: list[JsonObject] = []
 
     def apply_result(route: Route):
         payload = route.request.post_data_json
@@ -331,10 +338,10 @@ def test_restart_timeout_can_reconnect_without_resubmitting_keys(
     expect(page.locator('[data-provider="nvidia_nim"]')).to_be_enabled()
     expect(page.locator("#messageArea")).to_contain_text("Verification unavailable.")
     assert len(submissions) == 1
-    assert set(submissions[0]["values"]) == {"NVIDIA_NIM_API_KEY"}
-    assert submissions[0]["values"]["NVIDIA_NIM_API_KEY"]["entries"] == [
-        {"value": "new-key"}
-    ]
+    assert set(object_payload(submissions[0]["values"])) == {"NVIDIA_NIM_API_KEY"}
+    assert object_payload(
+        object_payload(submissions[0]["values"])["NVIDIA_NIM_API_KEY"]
+    )["entries"] == [{"value": "new-key"}]
 
 
 def test_restart_to_another_local_origin_keeps_the_warning(

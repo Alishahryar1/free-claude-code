@@ -9,7 +9,6 @@ from free_claude_code.api.request_errors import (
     ordinary_application_error_response,
 )
 from free_claude_code.api.response_streams import (
-    ManagedStreamingResponse,
     chat_sse_streaming_response,
     terminal_execution_error_response,
     trace_terminal_execution_error,
@@ -18,6 +17,7 @@ from free_claude_code.api.stream_frames import frame_data
 from free_claude_code.application.errors import ApplicationError, InvalidRequestError
 from free_claude_code.application.execution import ProviderExecutor
 from free_claude_code.application.ports import ModelInfoLookup, ProviderResolver
+from free_claude_code.application.response_collection import collect_response
 from free_claude_code.application.routing import ModelRouter
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
@@ -60,13 +60,14 @@ class ChatHandler:
             body = self._executor.stream_chat(
                 routed, request_id=request_id, raw_log_payload=request.body
             )
-            response = await chat_sse_streaming_response(
-                body,
-                request_id=request_id,
-                pre_start_error_response=lambda error: self._error(error, request_id),
-            )
-            if request.stream or not isinstance(response, ManagedStreamingResponse):
-                return response
+            if request.stream:
+                return await chat_sse_streaming_response(
+                    body,
+                    request_id=request_id,
+                    pre_start_error_response=lambda error: self._error(
+                        error, request_id
+                    ),
+                )
             aggregate = ChatResponseAccumulator()
             decoder = AnthropicSSEDecoder()
 
@@ -76,20 +77,10 @@ class ChatHandler:
                 elif (payload := frame_data(frame)) is not None:
                     aggregate.feed(payload)
 
-            try:
-                async for chunk in response.body_iterator:
-                    text = (
-                        chunk
-                        if isinstance(chunk, str)
-                        else bytes(chunk).decode("utf-8")
-                    )
-                    for frame in decoder.feed_frames(text):
-                        consume(frame)
-                for frame in decoder.finish_frames():
-                    consume(frame)
-                return JSONResponse(content=aggregate.result())
-            finally:
-                await response.aclose()
+            for frame in await collect_response(body, protocol="chat"):
+                for event in decoder.feed_frames(frame):
+                    consume(event)
+            return JSONResponse(content=aggregate.result())
         except (Exception, BaseExceptionGroup) as error:
             return self._error(error, request_id)
 

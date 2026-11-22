@@ -1,12 +1,19 @@
 """Native Aider configuration replaces FCC argument rewriting."""
 
-import json
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 
+from free_claude_code.core.json_types import load_json_value
 from tests.cli.conftest import LaunchCapture
 from tests.cli.test_launcher_workflow import launch
+from tests.wire_payload import (
+    decode_object,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 def test_aider_receives_native_files_and_a_private_credential_reference(
@@ -17,11 +24,11 @@ def test_aider_receives_native_files_and_a_private_credential_reference(
     key_names: list[str] = []
     launch_ids: list[str] = []
 
-    def inspect(command, env):
+    def inspect(command: list[str], env: Mapping[str, str]):
         settings_path = Path(env["AIDER_MODEL_SETTINGS_FILE"])
         metadata_path = Path(env["AIDER_MODEL_METADATA_FILE"])
-        settings = json.loads(settings_path.read_text())
-        metadata = json.loads(metadata_path.read_text())
+        settings = object_array(load_json_value(settings_path.read_text()))
+        metadata = decode_object(metadata_path.read_text())
         assert settings_path.parent == metadata_path.parent
         assert env["AIDER_MODEL"] == "nvidia_nim/catalog-model:variant"
         assert env["USER_SETTING"] == "preserved"
@@ -30,15 +37,22 @@ def test_aider_receives_native_files_and_a_private_credential_reference(
         assert key_name.upper() == key_name
         assert env[key_name] == "launcher-test-token"
         key_names.append(key_name)
-        bare = next(entry for entry in settings if entry["name"] == env["AIDER_MODEL"])
-        launch_id = bare["extra_params"]["extra_headers"]["x-fcc-launch-id"]
+        bare = next(
+            entry
+            for entry in settings
+            if object_payload(entry)["name"] == env["AIDER_MODEL"]
+        )
+        launch_id = object_payload(
+            object_payload(object_payload(bare)["extra_params"])["extra_headers"]
+        )["x-fcc-launch-id"]
         assert launch_id
-        launch_ids.append(launch_id)
+        launch_ids.append(string_payload(launch_id))
         assert all(
-            entry["extra_params"]["extra_headers"] == {"x-fcc-launch-id": launch_id}
+            object_payload(object_payload(entry)["extra_params"])["extra_headers"]
+            == {"x-fcc-launch-id": launch_id}
             for entry in settings
         )
-        assert bare["extra_params"] == {
+        assert object_payload(bare)["extra_params"] == {
             "model": "anthropic/nvidia_nim/catalog-model:variant",
             "api_base": "http://127.0.0.1:8182/v1/messages",
             "api_key": f"os.environ/{key_name}",

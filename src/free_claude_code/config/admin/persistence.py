@@ -136,12 +136,14 @@ def pending_restart_fields(active: Settings, prospective: Settings) -> tuple[str
             or spec.key in voice_credentials
         ):
             continue
-        before, after = (
-            getattr(active, spec.settings_attr),
-            getattr(prospective, spec.settings_attr),
-        )
         if spec.field_type == "api_key_list":
-            before, after = first_api_key(before), first_api_key(after)
+            before: object = first_api_key(active.credential_keys(spec.settings_attr))
+            after: object = first_api_key(
+                prospective.credential_keys(spec.settings_attr)
+            )
+        else:
+            before = getattr(active, spec.settings_attr)
+            after = getattr(prospective, spec.settings_attr)
         if before != after:
             pending.append(spec.key)
     return tuple(pending)
@@ -169,7 +171,7 @@ def prepare_admin_update(
         try:
             keys = resolve_credential_edit(
                 key,
-                getattr(snapshot.settings, spec.settings_attr),
+                snapshot.settings.credential_keys(spec.settings_attr),
                 snapshot.sources[spec.settings_attr].value,
                 submitted,
                 revision_key,

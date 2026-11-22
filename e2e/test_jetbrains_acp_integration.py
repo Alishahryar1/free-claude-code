@@ -1,14 +1,16 @@
 import json
 import subprocess
+from collections.abc import Sequence
 
-from playwright.sync_api import expect
+import pytest
+from playwright.sync_api import Page, expect
 
 from free_claude_code.harnesses import jetbrains_acp_integration as jb
 from tests.harnesses.test_jetbrains_acp_integration import install
 
 
 def test_connect_retry_disconnect_and_modal_dismissal(
-    page, admin_base_url, monkeypatch
+    page: Page, admin_base_url: str, monkeypatch: pytest.MonkeyPatch
 ):
     page.goto(f"{admin_base_url}/admin/integrations")
     opener = page.locator("#openJetBrainsIntegration")
@@ -36,10 +38,16 @@ def test_connect_retry_disconnect_and_modal_dismissal(
     expect(action).to_be_enabled()
     assert not jb.config_path().exists()
     install(jb.registry_path(), jb.system_root())
+
+    def node_version(
+        args: Sequence[str], **options: object
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 0, "v24.19.0", "")
+
     monkeypatch.setattr(
         jb.subprocess,
         "run",
-        lambda args, **kw: subprocess.CompletedProcess(args, 0, "v24.19.0", ""),
+        node_version,
     )
     action.click()
     expect(dialog).not_to_be_visible()
@@ -64,7 +72,7 @@ def test_connect_retry_disconnect_and_modal_dismissal(
     assert json.loads(jb.config_path().read_text()) == {"agent_servers": {}}
 
 
-def test_unreadable_config_can_be_retried(page, admin_base_url):
+def test_unreadable_config_can_be_retried(page: Page, admin_base_url: str):
     path = jb.config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{")

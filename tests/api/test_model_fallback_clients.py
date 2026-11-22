@@ -1,7 +1,5 @@
 """Native routing and official client consumption across a model transition."""
 
-import json
-
 import httpx
 import httpx2
 import pytest
@@ -11,7 +9,7 @@ from openai import AsyncOpenAI
 from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
+from free_claude_code.core.json_types import JsonObject
 from tests.api.support import create_test_app, provider_manager_for_app
 from tests.api.test_delivered_stream_recovery import (
     assert_completed,
@@ -26,22 +24,23 @@ from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
-@pytest.fixture(autouse=True)
-def release_events(monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
-
-
-def test_native_fallback_closes_source_preserves_options_and_filters_candidates():
+def test_native_fallback_closes_source_preserves_options_and_filters_candidates() -> (
+    None
+):
     bodies = []
-    wires = []
+    wires: list[Wire] = []
 
-    def reply(request):
-        body = json.loads(request.content)
+    def reply(request: httpx.Request):
+        body = decode_object(request.content)
         bodies.append(body)
         if len(bodies) > 1:
             assert wires[-1].closed
@@ -76,8 +75,11 @@ def test_native_fallback_closes_source_preserves_options_and_filters_candidates(
         response = client.post("/v1/messages", json=request)
     assert response.status_code == 200
     assert [body["model"] for body in bodies] == ["primary", "backup"]
-    assert without_empty_reasoning(bodies[1]["messages"][:-2]) == request["messages"]
-    assert without_empty_reasoning(bodies[1]["messages"][-2]) == {
+    assert (
+        without_empty_reasoning(array_payload(bodies[1]["messages"])[:-2])
+        == request["messages"]
+    )
+    assert without_empty_reasoning(array_payload(bodies[1]["messages"])[-2]) == {
         "role": "assistant",
         "content": [{"type": "text", "text": "Hello "}],
     }
@@ -87,15 +89,15 @@ def test_native_fallback_closes_source_preserves_options_and_filters_candidates(
     events = parse_sse_text(response.text)
     assert_completed(events, "messages")
     assert public_text(events, "messages") == "Hello world."
-    assert events[0].data["message"]["model"] == request["model"]
+    assert object_payload(events[0].data["message"])["model"] == request["model"]
     assert provider_manager_for_app(app)._current.active_leases == 0
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("target", ["chat", "messages", "responses"])
 async def test_responses_sdk_consumes_fallback_and_replays_only_real_tool_history(
-    target,
-):
+    target: str,
+) -> None:
     async with (
         _harness(
             "chat",
@@ -131,14 +133,18 @@ async def test_responses_sdk_consumes_fallback_and_replays_only_real_tool_histor
             seen = [event async for event in stream]
             final = await stream.get_final_response()
         assert seen[-1].type == "response.completed"
-        items = [
+        items: list[JsonObject] = [
             item.model_dump(mode="json", exclude_none=True) for item in final.output
         ]
         call = next(item for item in items if item["type"] == "function_call")
         assert call["call_id"] == "call_probe"
         assert call["arguments"] == '{"path":"winning"}'
         assert (
-            "".join(part["text"] for item in items for part in item.get("content", []))
+            "".join(
+                string_payload(part["text"])
+                for item in items
+                for part in object_array(item.get("content", []))
+            )
             == "Before. "
         )
         history = [

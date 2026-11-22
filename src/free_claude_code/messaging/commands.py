@@ -99,7 +99,7 @@ async def _delete_message_ids(
 
     def _as_int(s: str) -> int | None:
         try:
-            return int(str(s))
+            return int(s)
         except Exception:
             return None
 
@@ -164,7 +164,7 @@ async def handle_clear_command(
 
         delete_message_ids = set(result.delete_message_ids)
         if incoming.message_id is not None:
-            delete_message_ids.add(str(incoming.message_id))
+            delete_message_ids.add(incoming.message_id)
         await _delete_message_ids(handler, incoming.chat_id, delete_message_ids)
         await handler.forget_tracked_message_ids(
             incoming.platform,
@@ -177,6 +177,6 @@ async def handle_clear_command(
 
     # Also delete the command message itself.
     if incoming.message_id is not None:
-        msg_ids.add(str(incoming.message_id))
+        msg_ids.add(incoming.message_id)
 
     await _delete_message_ids(handler, incoming.chat_id, msg_ids)

@@ -13,24 +13,22 @@ from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.gemini import GeminiProvider
 from free_claude_code.providers.open_router import OpenRouterProvider
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.support import create_test_app
 from tests.api.test_delivered_stream_recovery import text_events
 from tests.api.test_four_protocol_matrix import response_value
 from tests.api.test_gemini_continuation_replay import body, native
 from tests.providers.support import immediate_admission, make_provider_config
+from tests.wire_payload import decode_object
 
 
 @pytest.mark.parametrize("wire", ["messages", "chat", "responses", "gemini"])
-def test_fallback_into_gemini_and_followup(wire, monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
+def test_fallback_into_gemini_and_followup(
+    wire: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls = []
 
-    def chat_reply(request):
-        calls.append(("chat", json.loads(request.content)))
+    def chat_reply(request: httpx2.Request):
+        calls.append(("chat", decode_object(request.content)))
         return httpx2.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -40,8 +38,8 @@ def test_fallback_into_gemini_and_followup(wire, monkeypatch):
             ),
         )
 
-    def gemini_reply(request):
-        calls.append(("gemini", json.loads(request.content)))
+    def gemini_reply(request: httpx.Request):
+        calls.append(("gemini", decode_object(request.content)))
         event = native(
             "is 42." if sum(k == "gemini" for k, b in calls) == 1 else "FOLLOWUP_OK",
             True,

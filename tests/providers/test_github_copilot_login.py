@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import suppress
+from typing import override
 from unittest.mock import AsyncMock
 
 import pytest
@@ -15,6 +16,7 @@ class Pipe(asyncio.StreamReader):
         self.drained = asyncio.Event()
         self.feed_data(b"child output")
 
+    @override
     async def read(self, n: int = -1) -> bytes:
         data = await super().read(n)
         if not data:

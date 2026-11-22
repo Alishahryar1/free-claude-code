@@ -19,7 +19,7 @@ STOP_REASON_MAP = {
     "stop": "end_turn",
     "length": "max_tokens",
     "tool_calls": "tool_use",
-    "content_filter": "end_turn",
+    "content_filter": "refusal",
 }
 
 

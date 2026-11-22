@@ -38,7 +38,7 @@ def _child_table(
         if create:
             parent[key] = child
         return child
-    child = parent[key]
+    child: object = parent[key]
     if not isinstance(child, Table | InlineTable | OutOfOrderTableProxy):
         raise ValueError("Codex provider configuration must use TOML tables")
     return child

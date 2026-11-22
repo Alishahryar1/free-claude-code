@@ -3,7 +3,7 @@
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import Any, cast
+from typing import cast
 
 from free_claude_code.core.history_replay import (
     HistoryMode,
@@ -48,9 +48,9 @@ class HistoryModeCache:
         self._entries.clear()
 
 
-def resolve_history_overrides(body: Mapping[str, Any]) -> JsonObject:
+def resolve_history_overrides(body: Mapping[str, JsonValue]) -> JsonObject:
     """Apply SDK overrides before identifying the model or projecting history."""
-    result = deepcopy(dict(body))
+    result: JsonObject = deepcopy(dict(body))
     extra = result.get("extra_body")
     if isinstance(extra, dict):
         messages = extra.get("messages")
@@ -59,8 +59,8 @@ def resolve_history_overrides(body: Mapping[str, Any]) -> JsonObject:
         for key in ("model", "messages", "input"):
             if key in extra:
                 result[key] = extra.pop(key)
-        if not extra:
-            result.pop("extra_body", None)
+        if not bool(extra):
+            del result["extra_body"]
     return result
 
 
@@ -86,22 +86,24 @@ def _normalize_chat_override(messages: list[JsonValue]) -> None:
                 text for text, summary in readable_reasoning(native) if not summary
             )
         represented = set(full)
-        if full:
+        if len(full) > 0:
             represented.update(separator.join(full) for separator in ("", "\n", "\n\n"))
         for key in ("reasoning_content", "reasoning"):
             if isinstance(text := message.get(key), str) and text in represented:
-                message.pop(key)
+                del message[key]
 
 
-def effective_body(body: Mapping[str, Any]) -> JsonObject:
-    result = deepcopy(dict(body))
+def effective_body(body: Mapping[str, JsonValue]) -> JsonObject:
+    result: JsonObject = deepcopy(dict(body))
     extra = result.pop("extra_body", None)
     if isinstance(extra, dict):
 
-        def merge(target: dict, overlay: dict) -> None:
+        def merge(target: JsonObject, overlay: JsonObject) -> None:
             for key, value in overlay.items():
-                if isinstance(value, dict) and isinstance(target.get(key), dict):
-                    merge(target[key], value)
+                if isinstance(value, dict) and isinstance(
+                    current := target.get(key), dict
+                ):
+                    merge(current, value)
                 else:
                     target[key] = value
 
@@ -125,7 +127,7 @@ class HistoryNegotiation:
         self._key = key
         suggestion = self._cache.read(key)
         self._revision: int | None = suggestion.revision
-        self._cached_mode = suggestion.mode
+        self._cached_mode: HistoryMode | None = suggestion.mode
         self._order = list(
             dict.fromkeys(
                 [
@@ -141,7 +143,7 @@ class HistoryNegotiation:
 
     def prepare(
         self,
-        body: Mapping[str, Any],
+        body: Mapping[str, JsonValue],
         origin: ReplayOrigin,
         *,
         reasoning_field: str = "reasoning_content",
@@ -207,7 +209,7 @@ class HistoryNegotiation:
             self._revision = self._cache.update(self._key, self._revision, None)
             self._cached_mode = None
         assert self._render is not None
-        while self._order:
+        while len(self._order) > 0:
             mode = self._order.pop(0)
             effective = effective_body(self._render(mode, {}))
             if effective not in self._seen:
@@ -220,3 +222,65 @@ class HistoryNegotiation:
         if not self._accepted and self._learnable and self._revision is not None:
             self._revision = self._cache.update(self._key, self._revision, self.mode)
         self._accepted = True
+
+
+class RequestHistory:
+    """One request's history negotiation, begun when its history is first rendered.
+
+    The negotiation reads and teaches the server-lifetime ``HistoryModeCache``:
+    a rejected cached mode is forgotten, and an accepted mode is suggested to
+    later requests.
+    """
+
+    def __init__(self) -> None:
+        self._negotiation: HistoryNegotiation | None = None
+
+    def prepare(
+        self,
+        body: Mapping[str, JsonValue],
+        origin: ReplayOrigin,
+        cache: HistoryModeCache,
+        *,
+        reasoning_field: str = "reasoning_content",
+        structured_details: bool = True,
+        finalize: Callable[[JsonObject], JsonObject] | None = None,
+        continuation: bool = False,
+        native_chat: bool = False,
+    ) -> JsonObject:
+        """Render history in this request's negotiated replay mode."""
+        if self._negotiation is None:
+            self._negotiation = HistoryNegotiation(cache, origin)
+        return self._negotiation.prepare(
+            body,
+            origin,
+            reasoning_field=reasoning_field,
+            structured_details=structured_details,
+            finalize=finalize,
+            continuation=continuation,
+            native_chat=native_chat,
+        )
+
+    @property
+    def negotiating(self) -> bool:
+        return self._negotiation is not None
+
+    @property
+    def source(self) -> JsonObject | None:
+        """The normalized history this request renders, once prepared."""
+        return self._negotiation.source if self._negotiation is not None else None
+
+    @property
+    def paths(self) -> dict[HistoryPath, HistoryPath] | None:
+        """Where each rendered record came from in ``source``, once prepared."""
+        return self._negotiation.paths if self._negotiation is not None else None
+
+    def accepted(self) -> None:
+        """Record that the upstream accepted this request's history mode."""
+        if self._negotiation is not None:
+            self._negotiation.accepted()
+
+    def next_mode(self) -> JsonObject | None:
+        """Move to the next untried replay mode, or ``None`` when none is left."""
+        if self._negotiation is None:
+            return None
+        return self._negotiation.rejected()

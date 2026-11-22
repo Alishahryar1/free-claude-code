@@ -7,19 +7,10 @@ from free_claude_code.core.anthropic import (
 
 
 def _request_system_text(request_data: MessagesRequest) -> str:
-    """Return top-level and inline system text for request-shape detection."""
-    parts: list[str] = []
-    if request_data.system:
-        text = extract_text_from_content(request_data.system)
-        if text:
-            parts.append(text)
-    for message in request_data.messages:
-        if message.role != "system":
-            continue
-        text = extract_text_from_content(message.content)
-        if text:
-            parts.append(text)
-    return "\n".join(parts)
+    """Return the top-level system text for request-shape detection."""
+    if not request_data.system:
+        return ""
+    return extract_text_from_content(request_data.system)
 
 
 def detect_safety_classifier_stop_sequence(
@@ -30,9 +21,7 @@ def detect_safety_classifier_stop_sequence(
         return None
 
     messages_text = "\n".join(
-        extract_text_from_content(message.content)
-        for message in request_data.messages
-        if message.role != "system"
+        extract_text_from_content(message.content) for message in request_data.messages
     )
     if "<transcript>" not in messages_text:
         return None

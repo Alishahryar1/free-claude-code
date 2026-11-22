@@ -9,8 +9,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from tests.api.support import create_test_app, provider_manager_for_app
 from tests.providers.test_custom_provider import completion, definition, provider
+from tests.wire_payload import (
+    decode_object,
+    object_array,
+    object_payload,
+    response_object,
+    string_payload,
+)
 
 
 @pytest.mark.parametrize(
@@ -18,12 +26,12 @@ from tests.providers.test_custom_provider import completion, definition, provide
 )
 @pytest.mark.parametrize("streaming", [False, True])
 def test_chat_http_dispatch_preserves_controls_credentials_and_public_model(
-    wire, streaming
-):
+    wire: str, streaming: bool
+) -> None:
     sent = []
 
-    def reply(request):
-        sent.append((json.loads(request.content), dict(request.headers)))
+    def reply(request: httpx.Request | httpx2.Request):
+        sent.append((decode_object(request.content), dict(request.headers)))
         module = httpx if wire == "anthropic_messages" else httpx2
         return module.Response(
             200, text=completion(wire), headers={"content-type": "text/event-stream"}
@@ -58,22 +66,32 @@ def test_chat_http_dispatch_preserves_controls_credentials_and_public_model(
         if streaming:
             assert response.text.endswith("data: [DONE]\n\n")
             values = [
-                json.loads(line[6:])
+                load_json_value(line[6:])
                 for line in response.text.splitlines()
                 if line.startswith("data: ") and line != "data: [DONE]"
             ]
             assert (
                 "".join(
-                    choice.get("delta", {}).get("content") or ""
+                    string_payload(
+                        object_payload(object_payload(choice).get("delta", {})).get(
+                            "content"
+                        )
+                        or ""
+                    )
                     for value in values
-                    for choice in value.get("choices", [])
+                    for choice in object_array(object_payload(value).get("choices", []))
                 )
                 == "Hello"
             )
-            assert all(value["model"] == "public" for value in values)
+            assert all(object_payload(value)["model"] == "public" for value in values)
         else:
-            assert response.json()["model"] == "public"
-            assert response.json()["choices"][0]["message"]["content"] == "Hello"
+            assert response_object(response)["model"] == "public"
+            assert (
+                object_payload(
+                    object_array(response_object(response)["choices"])[0]["message"]
+                )["content"]
+                == "Hello"
+            )
         assert provider_manager_for_app(app)._current.active_leases == 0
     assert len(sent) == 1
     body, headers = sent[0]
@@ -95,11 +113,13 @@ def test_chat_http_dispatch_preserves_controls_credentials_and_public_model(
 @pytest.mark.parametrize(
     "strict", [{}, {"strict": None}, {"strict": False}, {"strict": True}]
 )
-def test_chat_function_strictness_survives_upstream_translation(wire, strict):
+def test_chat_function_strictness_survives_upstream_translation(
+    wire: str, strict: JsonObject
+) -> None:
     sent = []
 
-    def reply(request):
-        sent.append(json.loads(request.content))
+    def reply(request: httpx2.Request):
+        sent.append(decode_object(request.content))
         return httpx2.Response(
             200, text=completion(wire), headers={"content-type": "text/event-stream"}
         )
@@ -142,7 +162,7 @@ def test_chat_function_strictness_survives_upstream_translation(wire, strict):
         ]
 
 
-def test_chat_validation_and_auth_errors_use_openai_shape():
+def test_chat_validation_and_auth_errors_use_openai_shape() -> None:
     app = create_test_app(
         Settings(PROXY_AUTH_ENABLED=True, proxy_auth_token="ingress-key")
     )
@@ -165,8 +185,8 @@ def test_chat_validation_and_auth_errors_use_openai_shape():
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("with_tool", [False, True])
 def test_native_chat_null_tool_delta_preserves_text_and_later_calls(
-    streaming, with_tool
-):
+    streaming: bool, with_tool: bool
+) -> None:
     from tests.api.test_four_protocol_matrix import matrix_app, response_value
 
     call = {
@@ -175,11 +195,12 @@ def test_native_chat_null_tool_delta_preserves_text_and_later_calls(
         "type": "function",
         "function": {"name": "read", "arguments": "{}"},
     }
-    deltas = [
+    deltas: list[JsonObject] = [
         {"role": "assistant", "content": "hello", "tool_calls": None},
-        *([{"tool_calls": [{**call, "function": None}]}] if with_tool else []),
-        {"tool_calls": [call]} if with_tool else {"tool_calls": None},
     ]
+    if with_tool:
+        deltas.append({"tool_calls": [{**call, "function": None}]})
+    deltas.append({"tool_calls": [call] if with_tool else None})
 
     def reply(_):
         events = [
@@ -206,7 +227,7 @@ def test_native_chat_null_tool_delta_preserves_text_and_later_calls(
             text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
         )
 
-    with TestClient(matrix_app("chat", reply)) as client:
+    with TestClient(matrix_app("chat", sdk_reply=reply)) as client:
         response = client.post(
             "/v1/chat/completions",
             json={
@@ -224,8 +245,11 @@ def test_native_chat_null_tool_delta_preserves_text_and_later_calls(
         else None
     )
     if streaming:
-        first = json.loads(response.text.splitlines()[0][6:])
-        assert first["choices"][0]["delta"]["tool_calls"] is None
+        first = decode_object(response.text.splitlines()[0][6:])
+        assert (
+            object_payload(object_array(first["choices"])[0]["delta"])["tool_calls"]
+            is None
+        )
 
 
 @pytest.mark.parametrize(
@@ -252,7 +276,9 @@ def test_native_chat_null_tool_delta_preserves_text_and_later_calls(
         {"messages": [{"role": "assistant", "reasoning_details": ["bad"]}]},
     ],
 )
-def test_chat_malformed_fields_fail_before_provider_execution(changes):
+def test_chat_malformed_fields_fail_before_provider_execution(
+    changes: JsonObject,
+) -> None:
     app = create_test_app(Settings())
     with TestClient(app) as client:
         response = client.post(
@@ -301,8 +327,8 @@ def test_chat_malformed_fields_fail_before_provider_execution(changes):
     ],
 )
 def test_native_chat_nullable_fields_accumulate_later_values(
-    streaming, field, updates, expected
-):
+    streaming: bool, field: str, updates: list[JsonValue], expected: JsonValue
+) -> None:
     from tests.api.test_four_protocol_matrix import matrix_app, response_value
 
     def reply(_):
@@ -333,7 +359,7 @@ def test_native_chat_nullable_fields_accumulate_later_values(
             text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
         )
 
-    with TestClient(matrix_app("chat", reply)) as client:
+    with TestClient(matrix_app("chat", sdk_reply=reply)) as client:
         response = client.post(
             "/v1/chat/completions",
             json={
@@ -345,12 +371,139 @@ def test_native_chat_nullable_fields_accumulate_later_values(
         value = response_value(response, "chat", streaming)
     assert value["choices"][0]["message"][field] == expected
     if streaming:
-        first = json.loads(response.text.splitlines()[0][6:])
-        assert first["choices"][0]["delta"][field] is None
+        first = decode_object(response.text.splitlines()[0][6:])
+        assert object_payload(object_array(first["choices"])[0]["delta"])[field] is None
+
+
+@pytest.mark.filterwarnings(
+    "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
+)
+@pytest.mark.parametrize("choices", [[], {}])
+def test_native_chat_usage_trailer_completes_stream(choices: JsonValue) -> None:
+    from tests.api.test_four_protocol_matrix import matrix_app
+    from tests.providers.test_openai_chat_transport import _success
+
+    usage = {"prompt_tokens": 22, "completion_tokens": 4, "total_tokens": 26}
+
+    def reply(_: httpx2.Request) -> httpx2.Response:
+        return _success(usage_trailer={"choices": choices, "usage": usage})
+
+    with TestClient(matrix_app("chat", sdk_reply=reply)) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "public",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            },
+        )
+    assert response.status_code == 200, response.text
+    trailer, done = response.text.strip().split("\n\n")[-2:]
+    assert done == "data: [DONE]"
+    payload = decode_object(trailer.removeprefix("data: "))
+    assert payload["choices"] == []
+    assert payload["usage"] == usage
+
+
+@pytest.mark.filterwarnings(
+    "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
+)
+@pytest.mark.parametrize("choices", [{}, ""])
+@pytest.mark.parametrize("metadata_first", [False, True])
+def test_native_chat_keeps_metadata_only_chunks(
+    choices: JsonValue, metadata_first: bool
+) -> None:
+    from tests.api.test_four_protocol_matrix import matrix_app
+
+    envelope = {
+        "id": "chatcmpl-metadata",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "backend",
+    }
+    filter_results = [{"prompt_index": 0, "content_filter_results": {}}]
+    metadata = {
+        **envelope,
+        "choices": choices,
+        "prompt_filter_results": filter_results,
+    }
+    content = {
+        **envelope,
+        "choices": [
+            {"index": 0, "delta": {"content": "hello"}, "finish_reason": "stop"}
+        ],
+    }
+    events = [metadata, content] if metadata_first else [content, metadata]
+
+    def reply(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events)
+            + "data: [DONE]\n\n",
+        )
+
+    with TestClient(matrix_app("chat", sdk_reply=reply)) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "public",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            },
+        )
+    assert response.status_code == 200, response.text
+    assert response.text.endswith("data: [DONE]\n\n"), response.text
+    frames = response.text.strip().split("\n\n")
+    payload = decode_object(frames[0 if metadata_first else 1].removeprefix("data: "))
+    assert payload["choices"] == []
+    assert payload["prompt_filter_results"] == filter_results
+
+
+@pytest.mark.filterwarnings(
+    "ignore:Pydantic serializer warnings:UserWarning:pydantic.main"
+)
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("empty_array", [{}, ""])
+def test_native_chat_preserves_text_with_empty_delta_arrays(
+    streaming: bool, empty_array: JsonValue
+) -> None:
+    from tests.api.test_delivered_stream_recovery import text_events
+    from tests.api.test_four_protocol_matrix import matrix_app, response_value
+
+    events = text_events("chat", "hello")
+    delta = object_payload(object_array(events[0]["choices"])[0]["delta"])
+    delta.update(tool_calls=empty_array, reasoning_details=empty_array)
+
+    def reply(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events)
+            + "data: [DONE]\n\n",
+        )
+
+    with TestClient(matrix_app("chat", sdk_reply=reply)) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "public",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": streaming,
+            },
+        )
+        result = object_payload(response_value(response, "chat", streaming))
+    message = object_payload(object_array(result["choices"])[0]["message"])
+    assert message["content"] == "hello"
+    assert message["tool_calls"] == []
+    assert message["reasoning_details"] == []
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-def test_native_custom_tool_fragments_survive_public_chat_response(streaming):
+def test_native_custom_tool_fragments_survive_public_chat_response(
+    streaming: bool,
+) -> None:
     from tests.api.test_four_protocol_matrix import matrix_app, response_value
 
     chunks = [
@@ -395,7 +548,7 @@ def test_native_custom_tool_fragments_survive_public_chat_response(streaming):
             text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
         )
 
-    with TestClient(matrix_app("chat", reply)) as client:
+    with TestClient(matrix_app("chat", sdk_reply=reply)) as client:
         response = client.post(
             "/v1/chat/completions",
             json={

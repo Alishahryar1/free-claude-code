@@ -9,7 +9,6 @@ from free_claude_code.api.request_errors import (
     ordinary_application_error_response,
 )
 from free_claude_code.api.response_streams import (
-    ManagedStreamingResponse,
     gemini_sse_streaming_response,
     terminal_execution_error_response,
     trace_terminal_execution_error,
@@ -17,6 +16,7 @@ from free_claude_code.api.response_streams import (
 from free_claude_code.application.errors import ApplicationError
 from free_claude_code.application.execution import ProviderExecutor
 from free_claude_code.application.ports import ModelInfoLookup, ProviderResolver
+from free_claude_code.application.response_collection import collect_response
 from free_claude_code.application.routing import ModelRouter
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
@@ -62,29 +62,20 @@ class GeminiHandler:
                     mode="json", by_alias=True, exclude_none=True
                 ),
             )
-            response = await gemini_sse_streaming_response(
-                body,
-                request_id=request_id,
-                pre_start_error_response=lambda error: self._error(error, request_id),
-            )
-            if streaming or not isinstance(response, ManagedStreamingResponse):
-                return response
+            if streaming:
+                return await gemini_sse_streaming_response(
+                    body,
+                    request_id=request_id,
+                    pre_start_error_response=lambda error: self._error(
+                        error, request_id
+                    ),
+                )
             aggregate = GeminiResponseAccumulator()
             decoder = AnthropicSSEDecoder()
-            try:
-                async for chunk in response.body_iterator:
-                    text = (
-                        chunk
-                        if isinstance(chunk, str)
-                        else bytes(chunk).decode("utf-8")
-                    )
-                    for event in decoder.feed(text):
-                        aggregate.feed(event.data)
-                for event in decoder.finish():
+            for frame in await collect_response(body, protocol="gemini"):
+                for event in decoder.feed(frame):
                     aggregate.feed(event.data)
-                return JSONResponse(content=aggregate.result())
-            finally:
-                await response.aclose()
+            return JSONResponse(content=aggregate.result())
         except (Exception, BaseExceptionGroup) as error:
             return self._error(error, request_id)
 

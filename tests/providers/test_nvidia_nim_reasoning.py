@@ -1,8 +1,12 @@
 """NIM named reasoning across both supported ingress protocols."""
 
+from typing import Literal
+
 import pytest
 
+from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from tests.providers.test_history_transports import _harness, _saved_reply
 from tests.providers.test_nvidia_nim import _alias_provider, _alias_request
@@ -20,8 +24,12 @@ from tests.providers.test_nvidia_nim import _alias_provider, _alias_request
         (ReasoningPolicy.provider_default(), None),
     ],
 )
-async def test_named_effort_reaches_nim_without_numeric_budget(wire, policy, expected):
-    def responder(bodies):
+async def test_named_effort_reaches_nim_without_numeric_budget(
+    wire: Literal["messages", "responses"],
+    policy: ReasoningPolicy,
+    expected: str | None,
+) -> None:
+    def responder(bodies: list[JsonObject]):
         body = bodies[-1]
         assert body.get("reasoning_effort") == expected
         assert "reasoning_budget" not in body
@@ -46,12 +54,13 @@ async def test_named_effort_reaches_nim_without_numeric_budget(wire, policy, exp
         bodies,
         provider,
     ):
+        request = _alias_request(wire)
         stream = (
-            provider.stream_messages
-            if wire == "messages"
-            else provider.stream_responses
+            provider.stream_messages(request, reasoning=policy)
+            if isinstance(request, MessagesRequest)
+            else provider.stream_responses(request, reasoning=policy)
         )
-        reply = await _saved_reply(stream(_alias_request(wire), reasoning=policy), wire)
+        reply = await _saved_reply(stream, wire)
 
     assert reply
     assert len(bodies) == 1
@@ -62,8 +71,10 @@ async def test_named_effort_reaches_nim_without_numeric_budget(wire, policy, exp
 @pytest.mark.parametrize(
     "policy", [ReasoningPolicy.off(), ReasoningPolicy(effort=ReasoningEffort.MAX)]
 )
-async def test_unsupported_named_effort_is_not_silently_remapped(wire, policy):
-    def responder(bodies):
+async def test_unsupported_named_effort_is_not_silently_remapped(
+    wire: Literal["messages", "responses"], policy: ReasoningPolicy
+) -> None:
+    def responder(bodies: object):
         return 400, {
             "message": "reasoning_effort must be one of low, medium, high",
             "param": "reasoning_effort",
@@ -74,12 +85,13 @@ async def test_unsupported_named_effort_is_not_silently_remapped(wire, policy):
         bodies,
         provider,
     ):
-        stream = (
-            provider.stream_messages
-            if wire == "messages"
-            else provider.stream_responses
-        )
+        request = _alias_request(wire)
         with pytest.raises(ExecutionFailure, match="reasoning_effort"):
-            await _saved_reply(stream(_alias_request(wire), reasoning=policy), wire)
+            stream = (
+                provider.stream_messages(request, reasoning=policy)
+                if isinstance(request, MessagesRequest)
+                else provider.stream_responses(request, reasoning=policy)
+            )
+            await _saved_reply(stream, wire)
 
     assert len(bodies) == 1

@@ -4,14 +4,13 @@ import json
 import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, override
 
 import openai
-from loguru import logger
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.reasoning import (
     ReasoningEffort,
     ReasoningPolicy,
@@ -28,6 +27,7 @@ from free_claude_code.providers.openai_chat import (
     OpenAIModelListing,
     validate_extra_body_does_not_override_reasoning_fields,
 )
+from free_claude_code.providers.request_correction import Proposal
 
 from .tpm import correct_tpm_completion_budget, token_limit_message
 
@@ -104,6 +104,7 @@ class GroqChatBehavior(OpenAIChatBehavior):
         super().__init__(_PROFILE)
         self._model_reasoning_vocabularies: dict[str, frozenset[str]] = {}
 
+    @override
     def failure_override(self, error: Exception) -> ExecutionFailure | None:
         if token_limit_message(error) is None:
             return None
@@ -116,6 +117,7 @@ class GroqChatBehavior(OpenAIChatBehavior):
             False,
         )
 
+    @override
     def finalize_chat_body(
         self,
         body: dict[str, Any],
@@ -130,13 +132,15 @@ class GroqChatBehavior(OpenAIChatBehavior):
             return body
         return _rewrite_reasoning_effort(body, accepted) or body
 
+    @override
     def reasoning_disable_rejected(self, error: Exception) -> bool:
         accepted = _parse_reasoning_vocabulary(error)
         return accepted is not None and "none" not in accepted
 
+    @override
     def retry_request_body(
         self, error: Exception, body: dict[str, Any]
-    ) -> dict[str, Any] | None:
+    ) -> Proposal | None:
         accepted = _parse_reasoning_vocabulary(error)
         model = body.get("model")
         if accepted is None or not isinstance(model, str):
@@ -146,37 +150,45 @@ class GroqChatBehavior(OpenAIChatBehavior):
         if retry_body is None:
             return None
 
-        self._model_reasoning_vocabularies[model] = accepted
-        action = (
-            "omitting reasoning_effort"
+        note = (
+            "omitted reasoning_effort"
             if _REASONING_FIELD not in retry_body
-            else "adjusting reasoning_effort"
+            else "adjusted reasoning_effort"
         )
-        logger.warning("GROQ_STREAM: {} after upstream rejection", action)
-        return retry_body
+        return Proposal(
+            retry_body, note, ReasoningVocabularyLearned(self, model, accepted)
+        )
 
+    def learn_reasoning_vocabulary(self, model: str, accepted: frozenset[str]) -> None:
+        self._model_reasoning_vocabularies[model] = accepted
+
+    @override
     def retry_after_standard_corrections(
         self,
         error: Exception,
         body: JsonObject,
-        used_retry_kinds: set[str],
-    ) -> JsonObject | None:
-        if "groq_tpm" in used_retry_kinds:
-            return None
-
+    ) -> Proposal | None:
         correction = correct_tpm_completion_budget(error, body)
         if correction is None:
             return None
-        used_retry_kinds.add("groq_tpm")
-        logger.warning(
-            "GROQ_STREAM: TPM limit={} requested={}; retrying "
-            "max_completion_tokens {} -> {}",
-            correction.limit,
-            correction.requested,
-            correction.previous_max_completion_tokens,
-            correction.corrected_max_completion_tokens,
+        return Proposal(
+            correction.body,
+            f"TPM limit={correction.limit} requested={correction.requested}; "
+            f"max_completion_tokens {correction.previous_max_completion_tokens} -> "
+            f"{correction.corrected_max_completion_tokens}",
         )
-        return correction.body
+
+
+@dataclass(frozen=True, slots=True)
+class ReasoningVocabularyLearned:
+    """The reasoning efforts a Groq model accepts, named by a rejection."""
+
+    behavior: GroqChatBehavior
+    model: str
+    accepted: frozenset[str]
+
+    def apply(self) -> None:
+        self.behavior.learn_reasoning_vocabulary(self.model, self.accepted)
 
 
 class GroqProvider(OpenAIChatProvider):
@@ -209,11 +221,13 @@ def _parse_reasoning_vocabulary(error: Exception) -> frozenset[str] | None:
                 continue
             tail = candidate.text[marker.end() : marker.end() + 512]
             clause = _CLAUSE_END.split(tail, maxsplit=1)[0]
-            return frozenset(
-                match.group(1).lower()
-                for match in _VALUE_PATTERN.finditer(clause)
-                if match.group(1).lower() in _KNOWN_VALUES
-            )
+            values: set[str] = set()
+            for match in _VALUE_PATTERN.finditer(clause):
+                candidate_value: str = match[1]
+                value = candidate_value.lower()
+                if value in _KNOWN_VALUES:
+                    values.add(value)
+            return frozenset(values)
 
     for candidate in candidates:
         for phrase in _UNSUPPORTED_PHRASE.finditer(candidate.text):
@@ -253,7 +267,7 @@ def _is_bad_request(error: Exception) -> bool:
 
 
 def _error_candidates(error: Exception) -> tuple[_ErrorCandidate, ...]:
-    body = getattr(error, "body", None)
+    body: object = getattr(error, "body", None)
     if body is not None:
         return _payload_error_candidates(body)
 
@@ -272,7 +286,7 @@ def _error_candidates(error: Exception) -> tuple[_ErrorCandidate, ...]:
     return _payload_error_candidates(error_text)
 
 
-def _payload_error_candidates(value: Any) -> tuple[_ErrorCandidate, ...]:
+def _payload_error_candidates(value: object) -> tuple[_ErrorCandidate, ...]:
     if isinstance(value, str):
         parsed = _parse_json_container(value)
         if parsed is not None:
@@ -301,7 +315,7 @@ def _deduplicate_candidates(
 
 def _parse_json_container(text: str) -> Mapping[Any, Any] | list[Any] | None:
     try:
-        parsed = json.loads(text)
+        parsed = load_json_value(text)
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, (Mapping, list)) else None
@@ -327,7 +341,7 @@ def _body_error_candidates(value: Any) -> Iterator[_ErrorCandidate]:
             yield from _body_error_candidates(child)
 
 
-def _mapping_names_reasoning_field(value: Mapping[Any, Any]) -> bool:
+def _mapping_names_reasoning_field(value: Mapping[object, object]) -> bool:
     for key, parameter in value.items():
         if (
             str(key).lower() in {"param", "parameter"}

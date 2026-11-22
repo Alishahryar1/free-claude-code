@@ -6,11 +6,14 @@ import hashlib
 import html
 import secrets
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
 import httpx
 from aiohttp import web
+
+from free_claude_code.core.json_types import JsonValue
 
 OPENAI_AUTH_ISSUER = "https://auth.openai.com"
 OPENAI_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -186,15 +189,18 @@ async def request_device_authorization(
         json={"client_id": OPENAI_OAUTH_CLIENT_ID},
     )
     response.raise_for_status()
-    payload = response.json()
+    payload: JsonValue = response.json()
+    if not isinstance(payload, dict):
+        raise OpenAILoginError("OpenAI returned an invalid device-code response.")
     device_auth_id = payload.get("device_auth_id")
     user_code = payload.get("user_code", payload.get("usercode"))
     if not isinstance(device_auth_id, str) or not isinstance(user_code, str):
         raise OpenAILoginError("OpenAI returned an invalid device-code response.")
-    try:
-        interval = max(1.0, float(payload.get("interval", 5)))
-    except TypeError, ValueError:
-        interval = 5.0
+    raw_interval = payload.get("interval")
+    interval = 5.0
+    if isinstance(raw_interval, (int, float, str)):
+        with suppress(ValueError):
+            interval = max(1.0, float(raw_interval))
     return _DeviceAuthorization(
         verification_url=OPENAI_DEVICE_VERIFICATION_URL,
         user_code=user_code,
@@ -219,7 +225,11 @@ async def wait_for_device_grant(
             },
         )
         if response.is_success:
-            payload = response.json()
+            payload: JsonValue = response.json()
+            if not isinstance(payload, dict):
+                raise OpenAILoginError(
+                    "OpenAI returned an invalid device token response."
+                )
             code = payload.get("authorization_code")
             verifier = payload.get("code_verifier")
             if not isinstance(code, str) or not isinstance(verifier, str):

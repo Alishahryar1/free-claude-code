@@ -29,7 +29,7 @@ from free_claude_code.application.ports import RequestRuntimePort
 from free_claude_code.cli.process_registry import register_pid, unregister_pid
 from free_claude_code.config.model_refs import split_provider_model_ref
 from free_claude_code.config.server_urls import local_proxy_root_url
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.version import package_version
 from free_claude_code.harnesses.codex import CODEX_INSTALL_HINT, prepare_codex_launch
 from free_claude_code.harnesses.codex_model_catalog import (
@@ -273,7 +273,7 @@ class CodexAppServer:
                     del buffer[: position + 1]
                     if frame.strip():
                         await self._packet(
-                            object_value(json.loads(frame.decode("utf-8")))
+                            object_value(load_json_value(frame.decode("utf-8")))
                         )
             if buffer.strip():
                 raise ValueError("Incomplete native JSONL frame")
@@ -751,7 +751,7 @@ def _permission_settings(mode: CodeMode, defaults: JsonObject) -> JsonObject:
     )
     sandbox = object_value(defaults.get("sandbox"))
     if (
-        not isinstance(policy, str | dict)
+        not isinstance(policy, (str, dict))
         or not policy
         or not reviewer
         or (not profile and not sandbox.get("type"))

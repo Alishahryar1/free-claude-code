@@ -2,21 +2,39 @@
 
 import ipaddress
 import socket
-from urllib.parse import urlparse
+from typing import Literal
+from urllib.parse import ParseResult, urlparse
 
 from free_claude_code.application.web_tools.ports import (
     WebFetchEgressPolicy,
     WebFetchEgressViolation,
 )
 
+type StreamAddress = (
+    tuple[
+        Literal[socket.AddressFamily.AF_INET],
+        socket.SocketKind,
+        int,
+        str,
+        tuple[str, int],
+    ]
+    | tuple[
+        Literal[socket.AddressFamily.AF_INET6],
+        socket.SocketKind,
+        int,
+        str,
+        tuple[int, bytes] | tuple[str, int, int, int],
+    ]
+)
 
-def _port_for_url(parsed) -> int:
+
+def _port_for_url(parsed: ParseResult) -> int:
     if parsed.port is not None:
         return parsed.port
     return 443 if (parsed.scheme or "").lower() == "https" else 80
 
 
-def _stream_getaddrinfo_or_raise(host: str, port: int) -> list[tuple]:
+def _stream_getaddrinfo_or_raise(host: str, port: int) -> list[StreamAddress]:
     try:
         return socket.getaddrinfo(
             host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
@@ -29,7 +47,7 @@ def _stream_getaddrinfo_or_raise(host: str, port: int) -> list[tuple]:
 
 def get_validated_stream_addrinfos_for_egress(
     url: str, policy: WebFetchEgressPolicy
-) -> list[tuple]:
+) -> list[StreamAddress]:
     """Resolve and validate a URL for web_fetch, returning getaddrinfo rows for pinning.
 
     Each HTTP connect pins to only these `getaddrinfo` results so a malicious DNS
