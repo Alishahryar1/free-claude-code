@@ -13,6 +13,8 @@ def claude_proxy_values(proxy_root_url: str, auth_token: str) -> dict[str, str]:
     return {
         "ANTHROPIC_BASE_URL": proxy_root_url,
         "ANTHROPIC_AUTH_TOKEN": auth_token,
+        # Ignore provider, endpoint and auth values from Claude settings files.
+        "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST": "1",
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
         # FCC uses Claude's separate classifier requests, not Anthropic server checks.
         "CLAUDE_CODE_AUTO_MODE_SERVER": "0",
