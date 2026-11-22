@@ -35,6 +35,19 @@ def test_claude_owns_permission_selection(
     assert env["CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST"] == "1"
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_GATEWAY"],
+)
+def test_claude_launch_drops_inherited_provider_switches(
+    name: str, launch_capture: LaunchCapture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Host-managed mode ignores settings that would turn these off again.
+    monkeypatch.setenv(name, "1")
+    launch("claude", [])
+    assert name not in launch_capture.environments[0]
+
+
 @pytest.mark.parametrize("retry_value", [None, "1"])
 def test_claude_launch_extends_waiting_without_changing_retries(
     launch_capture: LaunchCapture,

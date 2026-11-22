@@ -43,7 +43,9 @@ def build_claude_proxy_env(
     return client_environment(
         base_env,
         proxy_root_url=proxy_root_url,
-        remove_prefixes=("ANTHROPIC_",),
+        # Provider switches select a non-FCC backend, and host-managed mode
+        # ignores any settings-file value that would turn them off again.
+        remove_prefixes=("ANTHROPIC_", "CLAUDE_CODE_USE_"),
         remove_keys=("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",),
         updates=claude_proxy_values(proxy_root_url, auth_token),
     )
