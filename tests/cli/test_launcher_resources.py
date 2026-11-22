@@ -140,7 +140,7 @@ def test_interrupt_kills_and_waits_for_registered_child_before_cleanup(
     assert list(launcher_temp_dir_path().iterdir()) == []
 
 
-@pytest.mark.parametrize("name", ("claude", "pi", "grok", "muse"))
+@pytest.mark.parametrize("name", ("pi", "grok", "muse"))
 def test_environment_only_harnesses_allocate_no_directory(
     name: str, launch_capture: LaunchCapture
 ) -> None:

@@ -243,6 +243,37 @@ class TestManagedClaudeSession:
             assert session.current_session_id == "sess_1"
 
     @pytest.mark.asyncio
+    async def test_start_task_passes_fcc_connection_through_settings(self) -> None:
+        """Claude settings-file env cannot send a managed task around FCC."""
+        from pathlib import Path
+
+        from free_claude_code.cli.managed.session import ManagedClaudeSession
+        from tests.wire_payload import decode_object
+
+        session = ManagedClaudeSession(
+            "/tmp", "http://localhost:8082", auth_token="freecc"
+        )
+        mock_process = AsyncMock()
+        mock_process.stdout.read.side_effect = [b""]
+        mock_process.stderr.read.return_value = b""
+        mock_process.wait.return_value = 0
+        settings: list[JsonObject] = []
+
+        async def launch(*args: str, **kwargs: object) -> AsyncMock:
+            path = Path(args[args.index("--settings") + 1])
+            settings.append(decode_object(path.read_text(encoding="utf-8")))
+            return mock_process
+
+        with patch("asyncio.create_subprocess_exec", side_effect=launch):
+            async for _ in session.start_task("Hello"):
+                pass
+
+        [launched] = settings
+        env = object_payload(launched["env"])
+        assert env["ANTHROPIC_BASE_URL"] == "http://localhost:8082"
+        assert env["ANTHROPIC_AUTH_TOKEN"] == "freecc"
+
+    @pytest.mark.asyncio
     async def test_start_task_with_session_resume(self) -> None:
         """Test resuming an existing session."""
         from free_claude_code.cli.managed.session import ManagedClaudeSession
