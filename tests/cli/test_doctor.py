@@ -578,12 +578,22 @@ def test_disconnect_mode_reports_failure_and_nonzero_exit(
     assert capsys.readouterr() == ("", "Could not disconnect Codex.\n")
 
 
-def test_probe_harness_respects_custom_timeout(monkeypatch):
-    monkeypatch.setattr(diagnostics.shutil, "which", lambda binary: "/bin/stub")
-    observed_timeout = []
+def test_probe_harness_respects_custom_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def stub_which(binary: str) -> str:
+        return "/bin/stub"
 
-    def run(args, **kwargs):
-        observed_timeout.append(kwargs.get("timeout"))
+    monkeypatch.setattr(diagnostics.shutil, "which", stub_which)
+    observed_timeout: list[float | None] = []
+
+    def run(
+        args: Sequence[str] | str, **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        raw_timeout = kwargs.get("timeout")
+        observed_timeout.append(
+            raw_timeout if isinstance(raw_timeout, (int, float)) else None
+        )
         return subprocess.CompletedProcess(args, 0, "1.2.3", "")
 
     monkeypatch.setattr(diagnostics.subprocess, "run", run)
@@ -591,10 +601,12 @@ def test_probe_harness_respects_custom_timeout(monkeypatch):
     assert observed_timeout == [15.0]
 
 
-def test_harness_report_passes_spec_timeout(monkeypatch):
-    probed = {}
+def test_harness_report_passes_spec_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    probed: dict[str, float] = {}
 
-    def probe(binary, args, timeout=5.0):
+    def probe(binary: str, args: tuple[str, ...], timeout: float = 5.0) -> JsonObject:
         probed[binary] = timeout
         return {"installed": False, "version": None, "status": "not_installed"}
 
@@ -604,14 +616,17 @@ def test_harness_report_passes_spec_timeout(monkeypatch):
     assert probed["pi"] == 5.0
 
 
-def test_collect_report_includes_harness_and_discovery_errors(monkeypatch):
+def test_collect_report_includes_harness_and_discovery_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = ManagedConfigStore()
     store.initialize({})
-    monkeypatch.setattr(diagnostics, "integration_report", lambda settings: {})
-    monkeypatch.setattr(
-        diagnostics,
-        "model_discovery_report",
-        lambda settings: {
+
+    def stub_integration_report(settings: Settings) -> dict[str, JsonObject]:
+        return {}
+
+    def stub_model_discovery_report(settings: Settings) -> JsonObject:
+        return {
             "status": "available",
             "source": "running_server",
             "providers": {
@@ -619,12 +634,10 @@ def test_collect_report_includes_harness_and_discovery_errors(monkeypatch):
                 "ollama": {"state": "unavailable"},
                 "lmstudio": {"state": "failed", "message": "Failed to connect"},
             },
-        },
-    )
-    monkeypatch.setattr(
-        diagnostics,
-        "harness_report",
-        lambda: {
+        }
+
+    def stub_harness_report() -> dict[str, JsonObject]:
+        return {
             "claude": {"installed": True, "version": "2.1.201", "status": "available"},
             "hermes": {"installed": True, "version": None, "status": "timeout"},
             "pi": {"installed": True, "version": None, "status": "failed"},
@@ -635,8 +648,13 @@ def test_collect_report_includes_harness_and_discovery_errors(monkeypatch):
                 "version": None,
                 "status": "unrecognized_version",
             },
-        },
+        }
+
+    monkeypatch.setattr(diagnostics, "integration_report", stub_integration_report)
+    monkeypatch.setattr(
+        diagnostics, "model_discovery_report", stub_model_discovery_report
     )
+    monkeypatch.setattr(diagnostics, "harness_report", stub_harness_report)
     report = diagnostics.collect_report()
     assert {
         "section": "model_discovery.lmstudio",
@@ -658,7 +676,14 @@ def test_collect_report_includes_harness_and_discovery_errors(monkeypatch):
         "section": "harnesses.grok",
         "code": "unrecognized_version",
     } in report["errors"]
-    error_sections = {err["section"] for err in report["errors"]}
+    raw_errors: object = report["errors"]
+    assert isinstance(raw_errors, list)
+    error_sections: set[str] = set()
+    for err in raw_errors:
+        if isinstance(err, dict):
+            sec = err.get("section")
+            if isinstance(sec, str):
+                error_sections.add(sec)
     assert "harnesses.claude" not in error_sections
     assert "harnesses.cline" not in error_sections
     assert "model_discovery.nvidia_nim" not in error_sections

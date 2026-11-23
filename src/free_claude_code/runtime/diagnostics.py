@@ -229,7 +229,7 @@ def integration_report(settings: Settings) -> dict[str, JsonObject]:
 
 def probe_harness(
     binary: str, args: tuple[str, ...], timeout: float = 5.0
-) -> dict[str, Any]:
+) -> JsonObject:
     path = shutil.which(binary)
     result: JsonObject = {
         "installed": path is not None,
@@ -272,8 +272,8 @@ def probe_harness(
     return result
 
 
-def harness_report() -> dict[str, Any]:
-    result = {}
+def harness_report() -> dict[str, JsonObject]:
+    result: dict[str, JsonObject] = {}
     from free_claude_code.cli.launchers.runner import HarnessSpec
 
     for name in HARNESS_NAMES:
@@ -412,7 +412,7 @@ def collect_report() -> dict[str, Any]:
             and probe.get("installed")
             and probe.get("status") != "available"
         ):
-            errors.append(
-                {"section": f"harnesses.{name}", "code": probe["status"]}
-            )
+            status = probe.get("status")
+            if isinstance(status, str):
+                errors.append({"section": f"harnesses.{name}", "code": status})
     return report
