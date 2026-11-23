@@ -83,6 +83,31 @@
       /* This tab still works when browser storage is unavailable. */
     }
   }
+  const AUTO_KEY = "fcc.autoModel";
+  const AUTO_LEVELS = [
+    ["easy", "Easy", "Short questions and small edits."],
+    ["medium", "Medium", "Everyday coding tasks."],
+    ["hard", "Hard", "Large, multi-file or debugging work."],
+  ];
+  function autoSettings() {
+    const empty = { enabled: false, tiers: { easy: "", medium: "", hard: "" } };
+    try {
+      const value = JSON.parse(localStorage.getItem(AUTO_KEY)) || {};
+      return {
+        enabled: value.enabled === true,
+        tiers: { ...empty.tiers, ...(value.tiers || {}) },
+      };
+    } catch {
+      return empty;
+    }
+  }
+  function saveAutoSettings(value) {
+    try {
+      localStorage.setItem(AUTO_KEY, JSON.stringify(value));
+    } catch {
+      /* Auto selection stays at its previous value without browser storage. */
+    }
+  }
   function get(id) {
     if (!records.has(id))
       records.set(id, {
@@ -637,30 +662,72 @@
       render();
     }
   }
-  function submit() {
-    const record = records.get(selected);
-    if (
-      !ready(record) ||
-      busy(record) ||
-      pending(record) ||
+  function autoApplies(id, record) {
+    const state = saved(id);
+    return (
+      autoSettings().enabled &&
+      !state.pending &&
+      !state.auto &&
+      !state.manualModel &&
+      record.loaded &&
+      record.runs.size === 0
+    );
+  }
+  // Choose the model once, for the first message of a new session.
+  async function applyAuto(id, record, text) {
+    const result = UI.classifyPrompt(text);
+    const target = catalog.find(
+      (model) => model.id === autoSettings().tiers[result.level],
+    );
+    const before = record.session.model;
+    if (target && target.id !== before) {
+      if (!(await updateSettings({ model: target.id }))) return false;
+    }
+    const used =
+      target ||
+      catalog.find((model) => model.id === records.get(id)?.session?.model);
+    const state = saved(id);
+    state.auto = {
+      level: result.level,
+      reason: result.reasons.slice(0, 2).join(", "),
+      model: used
+        ? `${used.provider_id}/${used.model_name}`
+        : records.get(id)?.session?.model || "",
+      configured: Boolean(target),
+    };
+    save(id, state);
+    renderControls();
+    return true;
+  }
+  async function submit() {
+    const id = selected,
+      record = records.get(id);
+    const blocked = (current) =>
+      !ready(current) ||
+      busy(current) ||
+      pending(current) ||
       !available ||
       settingsPending ||
-      selectionError(record)
-    )
-      return;
-    const state = saved(selected),
-      text = root.querySelector("#codeComposer").value;
-    if (!state.pending && !text.trim()) return;
+      selectionError(current);
+    if (blocked(record)) return;
+    const text = root.querySelector("#codeComposer").value;
+    if (!saved(id).pending && !text.trim()) return;
+    if (text.trim() && autoApplies(id, record)) {
+      if (!(await applyAuto(id, record, text)) || selected !== id) return;
+      if (blocked(records.get(id))) return;
+    }
+    const state = saved(id),
+      current = records.get(id);
     state.draft = text;
     state.pending ||= {
       operation_id: crypto.randomUUID(),
-      expected_revision: record.session.revision,
+      expected_revision: current.session.revision,
       expected_epoch: epoch,
       text,
     };
-    save(selected, state);
+    save(id, state);
     notice = "";
-    void deliver(selected);
+    void deliver(id);
   }
   async function stop() {
     const record = records.get(selected);
@@ -742,6 +809,49 @@
     activeDialog = close;
     root.append(node);
     node.showModal();
+  }
+  function autoSettingsDialog() {
+    dialog(
+      "Automatic model choice",
+      (form) => {
+        const current = autoSettings();
+        const enabled = element("input");
+        enabled.type = "checkbox";
+        enabled.checked = current.enabled;
+        label(
+          form,
+          "Choose the model automatically",
+          enabled,
+          "Applies once, to the first message of a new session. The model never changes during a conversation.",
+        );
+        const selects = {};
+        for (const [key, title, hint] of AUTO_LEVELS) {
+          const select = element("select");
+          select.append(new Option("Keep the session's model", ""));
+          for (const model of catalog)
+            select.append(
+              new Option(`${model.provider_id}/${model.model_name}`, model.id),
+            );
+          const stored = current.tiers[key];
+          if (stored && !catalog.some((model) => model.id === stored))
+            select.append(new Option(`${stored} (unavailable)`, stored));
+          select.value = stored || "";
+          selects[key] = select;
+          label(form, title, select, hint);
+        }
+        return { enabled, selects };
+      },
+      "Save",
+      async ({ enabled, selects }) => {
+        saveAutoSettings({
+          enabled: enabled.checked,
+          tiers: Object.fromEntries(
+            Object.entries(selects).map(([key, select]) => [key, select.value]),
+          ),
+        });
+        renderControls();
+      },
+    );
   }
   function newSession() {
     const id = crypto.randomUUID();
@@ -832,7 +942,7 @@
   async function updateSettings(changes) {
     const id = selected,
       record = records.get(id);
-    if (!ready(record) || settingsPending) return;
+    if (!ready(record) || settingsPending) return false;
     const revision = providerDraft?.revision ?? record.session.revision;
     providerDraft = null;
     settingsPending = true;
@@ -851,6 +961,7 @@
         session.revision > (records.get(id)?.session?.revision || 0)
       )
         get(id).session = session;
+      return true;
     } catch (error) {
       if (selected === id) {
         notice = error.message;
@@ -860,6 +971,7 @@
           restart(failure.message);
         }
       }
+      return false;
     } finally {
       if (selected === id) {
         settingsPending = false;
@@ -1071,7 +1183,12 @@
             (model) =>
               model.provider_id === provider && model.model_name === name,
           );
-          if (model) void updateSettings({ model: model.id });
+          if (model) {
+            const state = saved(selected);
+            state.manualModel = true;
+            save(selected, state);
+            void updateSettings({ model: model.id });
+          }
         },
       );
       reasoningControl = UI.selectControl(
@@ -1128,7 +1245,15 @@
         reasoningControl.select,
       ])
         control.setAttribute("aria-describedby", selectionMessage.id);
-      const deletion = button("Delete", remove, "danger-button");
+      const autoButton = button("Auto: off", autoSettingsDialog);
+      autoButton.id = "codeAuto";
+      autoButton.title =
+        "Choose the model automatically for the first message of a new session";
+      const deletion = UI.setIcon(
+        button("Delete", remove, "danger-button"),
+        "Delete",
+        "trash",
+      );
       deletion.id = "codeDelete";
       const deletionMessage = element("div", "", "code-control-error");
       deletionMessage.id = "codeDeletionError";
@@ -1149,10 +1274,14 @@
           )
             void updateSettings({ title: title.value });
         },
-        [deletionGroup],
+        [autoButton, deletionGroup],
         controls,
       );
       header.append(element("p", "", "code-folder"));
+      const autoBadge = element("p", "", "code-auto-badge");
+      autoBadge.id = "codeAutoBadge";
+      autoBadge.hidden = true;
+      header.append(autoBadge);
       const transcript = element("div", undefined, "session-transcript");
       transcript.id = "codeTranscript";
       transcript.setAttribute("aria-label", "Conversation");
@@ -1304,7 +1433,11 @@
     send.hidden = isBusy;
     stop.hidden = !isBusy;
     stop.disabled = !connected || record?.run?.stop_requested;
-    send.textContent = saved(selected).pending ? "Retry Send" : "Send";
+    UI.setIcon(
+      send,
+      saved(selected).pending ? "Retry Send" : "Send",
+      "send",
+    );
     send.classList.toggle("startup-busy", selectionLoading(record));
     send.setAttribute("aria-busy", String(selectionLoading(record)));
     send.disabled =
@@ -1319,13 +1452,25 @@
     input.disabled = !record?.loaded || record?.session?.status !== "ready";
     root.querySelector(".session-title").disabled =
       !ready(record) || settingsPending;
+    const autoButton = root.querySelector("#codeAuto"),
+      autoBadge = root.querySelector("#codeAutoBadge"),
+      auto = saved(selected).auto;
+    autoButton.textContent = autoSettings().enabled ? "Auto: on" : "Auto: off";
+    autoBadge.hidden = !auto;
+    if (auto)
+      autoBadge.textContent = auto.configured
+        ? `Auto → ${auto.level}${auto.reason ? `: ${auto.reason}` : ""} · ${auto.model}`
+        : `Auto → ${auto.level}: no model set for this level, kept ${auto.model}`;
     const deletion = root.querySelector("#codeDelete");
-    deletion.textContent =
+    UI.setIcon(
+      deletion,
       record?.session?.status === "delete_uncertain"
         ? "Check deletion"
         : record?.session?.status === "deleting"
           ? "Deleting…"
-          : "Delete";
+          : "Delete",
+      "trash",
+    );
     deletion.disabled =
       !synchronized ||
       !record?.loaded ||

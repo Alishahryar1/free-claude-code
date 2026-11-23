@@ -2157,3 +2157,116 @@ def test_code_composer_fits_viewport_and_preserves_focus(
         + page.locator("#codeComposer").bounding_box()["height"]
         <= height
     )
+
+
+HARD_PROMPT = (
+    "Please refactor the whole architecture of the importer.\n"
+    "Traceback (most recent call last):\n"
+    "ValueError: boom\n"
+    "See src/a.py, src/b.py and src/c.py."
+)
+
+
+def configure_auto(page, tiers, enabled=True):
+    page.evaluate(
+        "value => localStorage.setItem('fcc.autoModel', JSON.stringify(value))",
+        {"enabled": enabled, "tiers": tiers},
+    )
+
+
+def add_strong_model(code_control):
+    harness = code_control.harness
+    harness.configurations["provider/strong"] = "capabilities-2"
+    harness.context_windows["provider/strong"] = None
+
+
+AUTO_TIERS = {
+    "easy": "provider/model",
+    "medium": "provider/model",
+    "hard": "provider/strong",
+}
+
+
+def test_prompt_difficulty_classifier(page, admin_base_url):
+    page.goto(f"{admin_base_url}/admin/code")
+    levels = page.evaluate(
+        """prompts => prompts.map(text => window.SessionUI.classifyPrompt(text).level)""",
+        [
+            "fix a typo in the readme",
+            "Add a loading spinner to the save button and keep the existing style "
+            "so that it matches the other buttons we already have in the toolbar of the page, "
+            "and make sure it is announced to screen readers while the save is running.",
+            "Please refactor the whole architecture of the importer.\n"
+            "Traceback (most recent call last):\nValueError: boom",
+            "გადააკეთე მთელი პროექტის არქიტექტურა და ოპტიმიზაცია გაუკეთე",
+        ],
+    )
+    assert levels == ["easy", "medium", "hard", "hard"]
+
+
+def test_auto_model_chooses_once_for_first_message(
+    page, admin_base_url, tmp_path, code_control
+):
+    add_strong_model(code_control)
+    page.goto(f"{admin_base_url}/admin/code")
+    configure_auto(page, AUTO_TIERS)
+    create_session(page, admin_base_url, tmp_path)
+    expect(page.locator("#codeAuto")).to_have_text("Auto: on")
+    expect(page.locator("#codeModel")).to_have_value("model")
+    expect(page.locator("#codeAutoBadge")).to_be_hidden()
+
+    send(page, HARD_PROMPT)
+
+    expect(page.locator("#codeModel")).to_have_value("strong")
+    expect(page.locator("#codeAutoBadge")).to_contain_text("Auto → hard")
+    expect(page.locator("#codeAutoBadge")).to_contain_text("provider/strong")
+    connection = code_control.connection()
+    code_control.run(connection.finish("turn-1"))
+    expect(page.locator("#codeStop")).to_be_hidden()
+
+    configure_auto(page, {**AUTO_TIERS, "hard": "provider/model"})
+    send(page, "fix typo")
+
+    expect(page.locator("#codeModel")).to_have_value("strong")
+    expect(page.locator("#codeAutoBadge")).to_contain_text("Auto → hard")
+
+
+def test_auto_model_is_off_by_default_and_respects_manual_choice(
+    page, admin_base_url, tmp_path, code_control
+):
+    add_strong_model(code_control)
+    page.goto(f"{admin_base_url}/admin/code")
+    create_session(page, admin_base_url, tmp_path)
+    expect(page.locator("#codeAuto")).to_have_text("Auto: off")
+    send(page, HARD_PROMPT)
+    expect(page.locator("#codeModel")).to_have_value("model")
+    expect(page.locator("#codeAutoBadge")).to_be_hidden()
+
+    second = tmp_path / "second"
+    second.mkdir()
+    configure_auto(page, {**AUTO_TIERS, "hard": "provider/strong"})
+    create_session(page, admin_base_url, second)
+    page.locator("#codeModel").fill("model")
+    page.get_by_role("option", name="model", exact=True).click()
+    send(page, HARD_PROMPT)
+    expect(page.locator("#codeModel")).to_have_value("model")
+    expect(page.locator("#codeAutoBadge")).to_be_hidden()
+
+
+def test_auto_model_settings_dialog_saves_choices(
+    page, admin_base_url, tmp_path, code_control
+):
+    add_strong_model(code_control)
+    create_session(page, admin_base_url, tmp_path)
+    page.locator("#codeAuto").click()
+    dialog = page.get_by_role("dialog", name="Automatic model choice")
+    dialog.get_by_label("Choose the model automatically").check()
+    dialog.get_by_label("Hard").select_option("provider/strong")
+    dialog.get_by_role("button", name="Save", exact=True).click()
+    expect(dialog).to_have_count(0)
+    expect(page.locator("#codeAuto")).to_have_text("Auto: on")
+    stored = page.evaluate("JSON.parse(localStorage.getItem('fcc.autoModel'))")
+    assert stored == {
+        "enabled": True,
+        "tiers": {"easy": "", "medium": "", "hard": "provider/strong"},
+    }

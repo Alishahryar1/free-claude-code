@@ -12,6 +12,98 @@
     element.addEventListener("click", action);
     return element;
   }
+  const ICONS = {
+    send: ["M12 19V5", "M5 12l7-7 7 7"],
+    trash: [
+      "M3 6h18",
+      "M8 6V4h8v2",
+      "M19 6l-1 14H6L5 6",
+      "M10 11v6",
+      "M14 11v6",
+    ],
+  };
+  function icon(name) {
+    const ns = "http://www.w3.org/2000/svg",
+      svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2.2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("focusable", "false");
+    for (const d of ICONS[name]) {
+      const path = document.createElementNS(ns, "path");
+      path.setAttribute("d", d);
+      svg.append(path);
+    }
+    return svg;
+  }
+  // Icon-only button: the label stays as its accessible name and tooltip.
+  function setIcon(element, label, name) {
+    element.classList.add("icon-button");
+    if (element.dataset.icon !== name) {
+      element.replaceChildren(icon(name));
+      element.dataset.icon = name;
+    }
+    if (element.getAttribute("aria-label") !== label) {
+      element.setAttribute("aria-label", label);
+      element.title = label;
+    }
+    return element;
+  }
+  // Rule-based difficulty estimate for a first prompt. Deliberately simple and
+  // transparent: every point added comes with a human-readable reason.
+  const HARD_WORDS = [
+    /\brefactor/i, /\barchitect/i, /\bredesign/i, /\bmigrat/i, /\brewrite\b/i,
+    /\bfrom scratch\b/i, /\bwhole (project|codebase|repo)/i, /\bentire (project|codebase|repo)/i,
+    /\bperformance\b/i, /\boptimi[sz]/i, /\bconcurren/i, /\brace condition/i,
+    /\bsecurity\b/i, /\broot cause\b/i, /\binvestigate\b/i, /\bdebug/i,
+    /არქიტექტურ/, /რეფაქტორ/, /მთელი პროექტ/, /ბაგ/, /ოპტიმიზაც/, /დააპროექტ/,
+    /გადააკეთე/, /გადაწერე/, /მიგრაც/, /უსაფრთხოებ/,
+  ];
+  const EASY_WORDS = [
+    /\btypo\b/i, /\brename\b/i, /\bexplain\b/i, /\bwhat (is|does)\b/i,
+    /\bcomment\b/i, /\bformat\b/i, /\btranslate\b/i, /\bsummari[sz]e\b/i,
+    /განმარტ/, /რა არის/, /თარგმნე/, /კომენტარ/, /სახელი გადაარქვი/,
+  ];
+  function classifyPrompt(text) {
+    const value = String(text || "");
+    let score = 0;
+    const reasons = [];
+    const add = (points, reason) => {
+      score += points;
+      if (points > 0 && reason) reasons.push(reason);
+    };
+    const length = value.trim().length;
+    if (length > 1200) add(4, "long request");
+    else if (length > 500) add(3, "detailed request");
+    else if (length > 200) add(2, "multi-sentence request");
+    else if (length > 120) add(1, "")
+    if (/```/.test(value)) add(1, "code block");
+    if (
+      /Traceback \(most recent call last\)|^\s+at .+\(.+:\d+:\d+\)|\b\w*(Error|Exception):/m.test(
+        value,
+      )
+    )
+      add(2, "stack trace");
+    const files = new Set(
+      value.match(/[\w./\\-]+\.(py|js|jsx|ts|tsx|java|go|rs|cs|cpp|c|h|html|css|scss|json|ya?ml|md|sql|vue|php)\b/gi) || [],
+    );
+    if (files.size >= 3) add(2, `${files.size} files mentioned`);
+    else if (files.size >= 1) add(1, "file mentioned");
+    const hard = HARD_WORDS.filter((pattern) => pattern.test(value));
+    if (hard.length)
+      add(hard.length >= 3 ? 5 : hard.length * 2, "complex task wording");
+    else if (length < 80) score -= 1;
+    const bullets = value.split("\n").filter((line) => /^\s*(\d+[.)]|[-*•])\s+\S/.test(line));
+    if (bullets.length >= 3) add(1, "multiple steps");
+    if (EASY_WORDS.some((pattern) => pattern.test(value))) score -= 1;
+    const level = score >= 5 ? "hard" : score >= 2 ? "medium" : "easy";
+    if (!reasons.length) reasons.push(level === "easy" ? "short, simple request" : "everyday task");
+    return { level, score, reasons };
+  }
   function libraryHeader(title, description, create) {
     const header = node("header", "session-library-header"),
       copy = node("div");
@@ -151,7 +243,11 @@
     textarea.placeholder = placeholder;
     textarea.setAttribute("aria-label", "Message");
     const actions = node("div", "session-composer-actions");
-    const send = button("Send", "primary-button", onSend),
+    const send = setIcon(
+        button("Send", "primary-button", onSend),
+        "Send",
+        "send",
+      ),
       stop = button("Stop", "danger-button", onStop);
     send.id = `${id}Send`;
     stop.id = `${id}Stop`;
@@ -192,6 +288,9 @@
     );
   }
   window.SessionUI = {
+    classifyPrompt,
+    icon,
+    setIcon,
     libraryHeader,
     search,
     card,

@@ -856,3 +856,57 @@
 .code-context-usage {
   font-family: var(--term-font);
 }
+
+/* Icon-only buttons (send, delete) */
+.session-root .icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 34px;
+  min-width: 0;
+  height: 34px;
+  min-height: 0;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  line-height: 0;
+}
+
+.session-root .icon-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.session-composer-actions .icon-button {
+  width: 32px;
+  height: 32px;
+}
+
+.session-root .icon-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.session-root .icon-button.startup-busy svg {
+  display: none;
+}
+
+.session-root .icon-button.startup-busy {
+  gap: 0;
+}
+
+/* Automatic model choice */
+.session-header-row .secondary-button#codeAuto {
+  min-height: 34px;
+  padding: 4px 12px;
+  font-family: var(--term-font);
+  font-size: 12px;
+}
+
+.code-auto-badge {
+  margin: 6px 0 0;
+  color: var(--accent);
+  font-family: var(--term-font);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}

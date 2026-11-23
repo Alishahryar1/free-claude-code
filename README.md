@@ -39,6 +39,7 @@ It keeps the routing engine of Free Claude Code (streaming, tool use, retries, f
 - **Sessions sidebar.** Every code session is listed on the left with search, a running indicator, and a **+ New** button. Switch sessions in one click, with no back arrow in between.
 - **Terminal-style chat.** Monospace text, a `❯` prompt for your messages, `●` for replies, and collapsible tool and thinking blocks.
 - **Quick model switching.** Provider, model, reasoning effort, harness, and permission mode sit in the chat header, so you can change the model without leaving the session.
+- **Automatic model choice.** Turn on **Auto** in the chat header and pick a model for each difficulty level (easy, medium, hard). When you send the first message of a new session, CellCode estimates its difficulty with simple, transparent rules (length, stack traces, files mentioned, complex wording) and selects the matching model. A badge shows what it chose and why. The model is never changed again during that conversation, and choosing a model by hand skips Auto for that session.
 - **Settings in one menu.** Providers, Model Config, Messaging, and Integrations live in the **Menu** dropdown at the top right. They are also reachable directly at `/admin/providers`, `/admin/model_config`, `/admin/messaging`, and `/admin/integrations`.
 - **Works on small screens.** The sidebar becomes a slide-in drawer.
 
@@ -83,8 +84,8 @@ Free-tier availability and limits are controlled by each provider and may change
 Install [uv](https://docs.astral.sh/uv/) (it fetches the Python version the project needs), then run directly from the checkout:
 
 ```bash
-git clone https://github.com/roma-nurashvili/Arcane-Code.git
-cd Arcane-Code
+git clone https://github.com/roma-nurashvili/CellCode.git
+cd CellCode
 uv sync
 ```
 
@@ -640,7 +641,7 @@ For a problem after installation, run the command below and paste its output int
 fcc-doctor
 ```
 
-- [Report CellCode bugs or request features](https://github.com/roma-nurashvili/Arcane-Code/issues)
+- [Report CellCode bugs or request features](https://github.com/roma-nurashvili/CellCode/issues)
 - [Upstream project: Free Claude Code](https://github.com/Alishahryar1/free-claude-code)
 - [Contributing guide](CONTRIBUTING.md)
 
