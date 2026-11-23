@@ -4,24 +4,33 @@ from copy import deepcopy
 
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.continuation_stream import ContinuationStream
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_delivery import current_stream_delivery
 from free_claude_code.core.stream_output import completed_output
 from free_claude_code.providers.request_correction import (
     Correction,
     RequestCorrector,
 )
+from free_claude_code.providers.request_correction.rejection import Rejection
 from tests.api.test_delivered_stream_recovery import public_text, text_events
 from tests.api.test_hidden_stream_retries import delivered
 from tests.api.test_tool_call_buffer import _call, _frames, _response, _start
 from tests.api.test_tool_call_buffer_transports import _tools
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 @pytest.mark.asyncio
-async def test_completion_proof_survives_replay_hold_until_later_text():
+async def test_completion_proof_survives_replay_hold_until_later_text() -> None:
     observed = []
 
     async def source():
@@ -53,9 +62,9 @@ async def test_completion_proof_survives_replay_hold_until_later_text():
 @pytest.mark.parametrize("preceding_text", [False, True])
 @pytest.mark.parametrize("snapshot_only", [False, True])
 async def test_continuation_preserves_call_completed_by_terminal_snapshot(
-    preceding_text, snapshot_only
-):
-    def reply(bodies):
+    preceding_text: bool, snapshot_only: bool
+) -> None:
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
         tool = deepcopy(tool_events("responses", '{"path":"file"}'))
@@ -64,9 +73,14 @@ async def test_continuation_preserves_call_completed_by_terminal_snapshot(
             for event in tool:
                 if "output_index" in event:
                     event["output_index"] = 1
-            tool[-1]["response"]["output"].insert(0, text[-2]["item"])
+            array_payload(object_payload(tool[-1]["response"])["output"]).insert(
+                0, text[-2]["item"]
+            )
+            start = text[:-1]
+        else:
+            start = tool[:1]
         events = [
-            *(text[:-1] if preceding_text else tool[:1]),
+            *start,
             *(
                 [e for e in tool[1:-1] if e["type"] != "response.output_item.done"]
                 if not snapshot_only
@@ -88,12 +102,16 @@ async def test_continuation_preserves_call_completed_by_terminal_snapshot(
     events = parse_sse_text(raw)
     assert len(bodies) == 2
     assert events[-1].event == "response.completed", events[-1].data
-    output = events[-1].data["response"]["output"]
-    calls = [item for item in output if item["type"] == "function_call"]
+    output = object_payload(events[-1].data["response"])["output"]
+    calls = [
+        item
+        for item in array_payload(output)
+        if object_payload(item)["type"] == "function_call"
+    ]
     assert len(calls) == 1
-    assert calls[0]["call_id"] == "call_probe"
-    assert calls[0]["arguments"] == '{"path":"file"}'
-    assert calls[0]["status"] == "completed"
+    assert object_payload(calls[0])["call_id"] == "call_probe"
+    assert object_payload(calls[0])["arguments"] == '{"path":"file"}'
+    assert object_payload(calls[0])["status"] == "completed"
     assert public_text(events, "responses") == "Hello " + (
         "world." if preceding_text else ""
     )
@@ -101,10 +119,12 @@ async def test_continuation_preserves_call_completed_by_terminal_snapshot(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("activity", ["metadata", "withheld_tools", "text"])
-async def test_body_correction_depends_on_current_attempt_publication(activity):
+async def test_body_correction_depends_on_current_attempt_publication(
+    activity: str,
+) -> None:
     visible = activity == "text"
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
         if len(bodies) == 2:
@@ -129,7 +149,7 @@ async def test_body_correction_depends_on_current_attempt_publication(activity):
             ]
         return 200, text_events("responses", "world again.")
 
-    history = [
+    history: list[JsonObject] = [
         {
             "type": "reasoning",
             "id": "rs_old",
@@ -150,7 +170,7 @@ async def test_body_correction_depends_on_current_attempt_publication(activity):
 
 
 @pytest.mark.asyncio
-async def test_released_tool_packet_is_complete_before_upstream_resumes():
+async def test_released_tool_packet_is_complete_before_upstream_resumes() -> None:
     resumed = []
     states = []
 
@@ -169,7 +189,7 @@ async def test_released_tool_packet_is_complete_before_upstream_resumes():
         packet = parse_sse_text(str(await anext(iterator)))
         assert packet[0].event == "response.output_item.added"
         assert packet[-1].event == "response.output_item.done"
-        assert states[0].prefix.has_calls
+        assert states[0].prefix is not None and states[0].prefix.has_calls
         assert resumed == []
         with pytest.raises(StopAsyncIteration):
             await anext(iterator)
@@ -180,15 +200,15 @@ async def test_released_tool_packet_is_complete_before_upstream_resumes():
 
 @pytest.mark.asyncio
 async def test_public_transform_failure_preserves_returned_packets_and_emits_error(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     original = ContinuationStream.prepare
     closed = []
 
-    def prepare(self, payload):
+    def prepare(self: ContinuationStream, payload: JsonObject):
         if payload["type"] == "response.output_text.done":
             raise ValueError("public transform failed")
-        return original(self, payload)
+        return original(self, object_payload(payload))
 
     monkeypatch.setattr(ContinuationStream, "prepare", prepare)
 
@@ -228,8 +248,10 @@ async def test_public_transform_failure_preserves_returned_packets_and_emits_err
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text", ["Hello world.", "world.", "Hello ", ""])
-async def test_terminal_only_text_uses_the_same_overlap_and_progress_rule(text):
-    def reply(bodies):
+async def test_terminal_only_text_uses_the_same_overlap_and_progress_rule(
+    text: str,
+) -> None:
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
         events = text_events("responses", text)
@@ -245,26 +267,36 @@ async def test_terminal_only_text_uses_the_same_overlap_and_progress_rule(text):
         "response.completed" if "world" in text else "response.failed"
     )
     if "world" in text:
-        output = events[-1].data["response"]["output"]
+        output = object_payload(events[-1].data["response"])["output"]
         assert (
-            "".join(part["text"] for item in output for part in item.get("content", []))
+            "".join(
+                string_payload(part["text"])
+                for item in array_payload(output)
+                for part in object_array(object_payload(item).get("content", []))
+            )
             == "Hello world."
         )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["reasoning", "web_search_call", "message"])
-async def test_final_only_native_state_is_checked_before_continuation_publication(kind):
-    def reply(bodies):
+async def test_final_only_native_state_is_checked_before_continuation_publication(
+    kind: str,
+) -> None:
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
         events = text_events("responses", "")
-        item = {"id": "native_unreplayable", "type": kind, "status": "completed"}
+        item: JsonObject = {
+            "id": "native_unreplayable",
+            "type": kind,
+            "status": "completed",
+        }
         if kind == "reasoning":
             item.update(encrypted_content="opaque", summary=[])
         elif kind == "message":
             item.update(role="assistant", content=[{"type": "future_native_part"}])
-        events[-1]["response"]["output"] = [item]
+        object_payload(events[-1]["response"])["output"] = [item]
         return 200, [events[0], events[-1]]
 
     async with _harness("responses", reply, max_attempts=3) as (send, bodies, _):
@@ -277,8 +309,8 @@ async def test_final_only_native_state_is_checked_before_continuation_publicatio
 
 
 @pytest.mark.asyncio
-async def test_filtered_snapshot_does_not_change_overlap_target_identity():
-    def reply(bodies):
+async def test_filtered_snapshot_does_not_change_overlap_target_identity() -> None:
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("responses", "Hello ", complete=False)
         text = text_events("responses", "Hello world.")
@@ -287,7 +319,9 @@ async def test_filtered_snapshot_does_not_change_overlap_target_identity():
                 event["output_index"] = 1
         call = _call("responses", 0)[0]
         terminal = text[-1]
-        terminal["response"]["output"].insert(0, call[1]["item"])
+        array_payload(object_payload(terminal["response"])["output"]).insert(
+            0, call[1]["item"]
+        )
         events = [*text[:-1], {"type": call[0], **call[1]}, terminal]
         return 200, [{**event, "sequence_number": i} for i, event in enumerate(events)]
 
@@ -299,12 +333,15 @@ async def test_filtered_snapshot_does_not_change_overlap_target_identity():
     assert "call_0" not in raw
     assert public_text(events, "responses") == "Hello world."
     assert [
-        item["content"][0]["text"] for item in events[-1].data["response"]["output"]
+        object_array(object_payload(item)["content"])[0]["text"]
+        for item in array_payload(object_payload(events[-1].data["response"])["output"])
     ] == ["Hello ", "world."]
 
 
 @pytest.mark.asyncio
-async def test_attempt_resets_are_atomic_and_old_closures_do_not_commit_new_attempt():
+async def test_attempt_resets_are_atomic_and_old_closures_do_not_commit_new_attempt() -> (
+    None
+):
     attempts = []
 
     async def source():
@@ -341,12 +378,12 @@ async def test_attempt_resets_are_atomic_and_old_closures_do_not_commit_new_atte
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("visible", [False, True])
 async def test_shared_correction_guard_uses_public_attempt_effects(
-    monkeypatch, protocol, wire, visible
-):
+    monkeypatch: pytest.MonkeyPatch, protocol: str, wire: WireProtocol, visible: bool
+) -> None:
     marker = "injected request correction"
     proposals = []
 
-    def correction(self, rejection):
+    def correction(self: object, rejection: Rejection):
         if marker not in str(rejection.error):
             return None
         proposals.append(True)
@@ -354,7 +391,7 @@ async def test_shared_correction_guard_uses_public_attempt_effects(
 
     monkeypatch.setattr(RequestCorrector, "correct", correction)
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events(protocol, "Hello ", complete=False)
         if len(bodies) == 2:

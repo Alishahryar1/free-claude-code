@@ -10,6 +10,7 @@ import pytest
 from free_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.failure_reporting import finalize_provider_failure
 from free_claude_code.providers.groq import GroqProvider
@@ -36,7 +37,9 @@ _ITPM_MESSAGE = (
 
 @pytest.mark.parametrize("wrapped", [False, True])
 @pytest.mark.parametrize("message", [_ITPM_MESSAGE, "Token allowance exceeded"])
-def test_token_limit_failure_is_actionable_without_parsing_prose(wrapped, message):
+def test_token_limit_failure_is_actionable_without_parsing_prose(
+    wrapped: bool, message: str
+) -> None:
     error = _status_error(detail=_detail(message), wrapped=wrapped)
     failure = finalize_provider_failure(
         error,
@@ -96,11 +99,11 @@ def _status_error(
         _status_error(detail="not JSON"),
     ],
 )
-def test_unrelated_or_ambiguous_errors_defer_to_shared_policy(error):
+def test_unrelated_or_ambiguous_errors_defer_to_shared_policy(error: Exception) -> None:
     assert GroqChatBehavior().failure_override(error) is None
 
 
-def _body(max_completion_tokens: object = _ORIGINAL_MAX) -> dict:
+def _body(max_completion_tokens: JsonValue = _ORIGINAL_MAX) -> JsonObject:
     return {
         "model": _MODEL,
         "messages": [{"role": "user", "content": "hello"}],
@@ -180,7 +183,7 @@ def test_exact_tpm_rejection_corrects_only_completion_budget(wrapped: bool) -> N
 @pytest.mark.parametrize(
     "quota", ["input tokens per minute (ITPM)", "output tokens per minute (OTPM)"]
 )
-def test_separate_token_quotas_do_not_use_combined_tpm_arithmetic(quota):
+def test_separate_token_quotas_do_not_use_combined_tpm_arithmetic(quota: str) -> None:
     error = _status_error(detail=_detail(f"{quota}: Limit 8000, Requested 26206"))
     assert correct_tpm_completion_budget(error, _body()) is None
     failure = GroqChatBehavior().failure_override(error)
@@ -289,7 +292,7 @@ def test_separate_token_quotas_do_not_use_combined_tpm_arithmetic(quota):
 )
 def test_non_authoritative_tpm_rejection_is_not_corrected(
     error: Exception,
-    body: dict,
+    body: JsonObject,
 ) -> None:
     assert correct_tpm_completion_budget(error, body) is None
 

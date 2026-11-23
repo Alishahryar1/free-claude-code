@@ -19,7 +19,9 @@ import pytest
         ),
     ],
 )
-def test_entrypoint_import_does_not_load_optional_runtime(module, forbidden):
+def test_entrypoint_import_does_not_load_optional_runtime(
+    module: str, forbidden: tuple[str, ...]
+) -> None:
     script = f"""
 import importlib
 import sys
@@ -32,7 +34,9 @@ assert not set({forbidden!r}).intersection(sys.modules), sorted(set({forbidden!r
     assert result.returncode == 0, result.stderr
 
 
-def test_sdk_preparation_runs_in_worker_and_provider_construction_runs_on_owner_loop():
+def test_sdk_preparation_runs_in_worker_and_provider_construction_runs_on_owner_loop() -> (
+    None
+):
     script = """
 import asyncio
 import sys
@@ -67,7 +71,7 @@ asyncio.run(main())
     assert result.returncode == 0, result.stderr
 
 
-def test_tokenizer_initializes_offline_with_an_empty_cache():
+def test_tokenizer_initializes_offline_with_an_empty_cache() -> None:
     script = """
 import os
 import tempfile

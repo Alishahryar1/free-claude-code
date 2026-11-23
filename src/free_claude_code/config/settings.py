@@ -85,6 +85,11 @@ class Settings(BaseModel):
             None,
         )
 
+    def credential_keys(self, field: str) -> ApiKeyList:
+        """Read a validated key-list field selected by the provider catalog."""
+        keys: ApiKeyList = getattr(self, field)
+        return keys
+
     @model_validator(mode="after")
     def validate_provider_references(self) -> Settings:
         ids = [item.provider_id for item in self.custom_providers]
@@ -99,7 +104,7 @@ class Settings(BaseModel):
             "model_haiku",
             "model_fallbacks",
         ):
-            value = getattr(self, field)
+            value: str | tuple[ModelFallback, ...] | None = getattr(self, field)
             refs = value if isinstance(value, tuple) else (value,) if value else ()
             for ref in refs:
                 model_ref = ref.model if isinstance(ref, ModelFallback) else ref
@@ -114,7 +119,7 @@ class Settings(BaseModel):
                     if definition is not None:
                         keys = definition.api_keys
                     elif descriptor is not None and descriptor.credential_attr:
-                        keys = getattr(self, descriptor.credential_attr)
+                        keys = self.credential_keys(descriptor.credential_attr)
                     else:
                         raise ValueError(
                             f"MODEL_FALLBACKS: {provider_id} has no API key list."

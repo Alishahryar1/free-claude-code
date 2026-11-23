@@ -218,7 +218,8 @@ class SessionState:
             raise CodeConflictError(
                 "Finish this turn and its prompts before changing settings."
             )
-        if "mode" in changes and changes["mode"] not in get_args(CodeMode.__value__):
+        mode_type: object = getattr(CodeMode, "__value__", CodeMode)
+        if "mode" in changes and changes["mode"] not in get_args(mode_type):
             raise CodeValidationError("Choose an available permission mode.")
         return updates
 
@@ -352,7 +353,7 @@ class SessionState:
 
     def matches_turn(self, event: HarnessEvent, *, known_turn: bool) -> bool:
         run = self._run
-        return bool(
+        return (
             run is not None
             and self.busy
             and run.submission_started
@@ -487,7 +488,7 @@ class SessionState:
             raw=raw,
             complete=update.complete or bool(existing and existing.complete),
         )
-        if item == existing:
+        if existing is not None and item == existing:
             return existing, False
         self._items[item.id] = item
         self._dirty.add(item.id)

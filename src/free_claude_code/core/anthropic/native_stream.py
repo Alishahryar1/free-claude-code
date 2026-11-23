@@ -56,7 +56,7 @@ class NativeMessagesStreamState:
             json.dumps(dict(payload), ensure_ascii=False, allow_nan=False).encode(
                 "utf-8"
             )
-        except (ValueError, UnicodeError, RecursionError) as exc:
+        except (ValueError, RecursionError) as exc:
             raise NativeMessagesError(
                 "Native Messages event is not representable JSON."
             ) from exc
@@ -183,7 +183,7 @@ class NativeMessagesStreamState:
             if target is None:
                 if kind == "citations_delta" and block.body["type"] == "text":
                     citation = delta.get("citation")
-                    citations = block.body.get("citations")
+                    citations: JsonValue = block.body.get("citations")
                     if citations is None:
                         citations = []
                     if not isinstance(citation, Mapping) or not isinstance(

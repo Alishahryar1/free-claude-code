@@ -5,7 +5,7 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from copy import deepcopy
-from typing import Any
+from typing import Any, override
 
 import httpx2
 import pytest
@@ -22,7 +22,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     thinking_content,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesToolPolicy,
@@ -42,6 +42,13 @@ from tests.providers.support import (
     without_empty_reasoning,
 )
 from tests.public_stream import delivered
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 @pytest.mark.asyncio
@@ -61,13 +68,15 @@ from tests.public_stream import delivered
     ],
     ids=["mandatory", "unsupported_value"],
 )
-async def test_tolerant_classifier_corrects_required_reasoning(stream_error, error):
+async def test_tolerant_classifier_corrects_required_reasoning(
+    stream_error: bool, error: JsonObject
+) -> None:
     bodies = []
 
-    def handler(request):
-        body = json.loads(request.content)
+    def handler(request: httpx2.Request):
+        body = decode_object(request.content)
         bodies.append(body)
-        if body.get("reasoning", {}).get("effort") == "none":
+        if object_payload(body.get("reasoning", {})).get("effort") == "none":
             if stream_error:
                 return httpx2.Response(
                     200,
@@ -96,7 +105,7 @@ async def test_tolerant_classifier_corrects_required_reasoning(stream_error, err
         ]
         assert text_content(parse_sse_text("".join(output))) == "<severity>0</severity>"
         assert len(bodies) == 2
-        assert bodies[0]["reasoning"]["effort"] == "none"
+        assert object_payload(bodies[0]["reasoning"])["effort"] == "none"
         assert "max_output_tokens" not in bodies[0]
         assert "reasoning" not in bodies[1]
     finally:
@@ -120,7 +129,7 @@ def _completed_response(
     input_tokens: int = 8,
     cached_tokens: int = 3,
     output_tokens: int = 2,
-) -> dict[str, object]:
+) -> JsonObject:
     return {
         "id": "resp_test",
         "created_at": 0,
@@ -272,7 +281,7 @@ async def test_default_transport_keeps_native_tool_capabilities() -> None:
     ]
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        payload = json.loads(request.content)
+        payload = decode_object(request.content)
         assert (
             payload["tools"] == tools
             and without_empty_reasoning(payload["input"]) == history
@@ -300,8 +309,8 @@ async def test_tool_adaptation_retries_start_with_fresh_event_state() -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal attempts
         attempts += 1
-        wire = json.loads(request.content)
-        assert wire["tools"][0]["type"] == "function"
+        wire = decode_object(request.content)
+        assert object_array(wire["tools"])[0]["type"] == "function"
         created = {
             "type": "response.created",
             "sequence_number": 100 if attempts == 1 else 0,
@@ -349,6 +358,7 @@ async def test_concurrent_requests_do_not_share_tool_identities() -> None:
         def __init__(self, content: str) -> None:
             self.content = content
 
+        @override
         async def __aiter__(self):
             await asyncio.wait_for(both_started.wait(), timeout=5)
             yield self.content.encode()
@@ -358,7 +368,7 @@ async def test_concurrent_requests_do_not_share_tool_identities() -> None:
         started += 1
         if started == 2:
             both_started.set()
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         call = {
             "type": "function_call",
             "id": "fc_same_item",
@@ -430,15 +440,30 @@ async def test_concurrent_requests_do_not_share_tool_identities() -> None:
     custom_events, function_events = [
         parse_sse_text("".join(output)) for output in chunks
     ]
-    assert custom_events[-1].data["response"]["output"][0]["type"] == "custom_tool_call"
-    assert function_events[-1].data["response"]["output"][0]["type"] == "function_call"
+    assert (
+        object_array(object_payload(custom_events[-1].data["response"])["output"])[0][
+            "type"
+        ]
+        == "custom_tool_call"
+    )
+    assert (
+        object_array(object_payload(function_events[-1].data["response"])["output"])[0][
+            "type"
+        ]
+        == "function_call"
+    )
     for events, item_id in (
         (custom_events, "ctc_same_item"),
         (function_events, "fc_same_item"),
     ):
-        assert events[-1].data["response"]["output"][0]["id"] == item_id
+        assert (
+            object_array(object_payload(events[-1].data["response"])["output"])[0]["id"]
+            == item_id
+        )
         assert [
-            event.data["item"]["id"] for event in events if "item" in event.data
+            object_payload(event.data["item"])["id"]
+            for event in events
+            if "item" in event.data
         ] == [
             item_id,
             item_id,
@@ -495,9 +520,11 @@ async def test_chat_custom_history_replays_with_native_wire_compatible_ids(
             usage=ChatStreamUsage(input_tokens=3, output_tokens=2),
         )
     )
-    item = parse_sse_text("".join(frames))[-1].data["response"]["output"][0]
+    item = array_payload(
+        object_payload(parse_sse_text("".join(frames))[-1].data["response"])["output"]
+    )[0]
     if legacy:
-        item["id"] = "fc_legacy"
+        object_payload(item)["id"] = "fc_legacy"
     continuation = OpenAIResponsesRequest(
         model="example",
         tools=request.tools,
@@ -511,10 +538,10 @@ async def test_chat_custom_history_replays_with_native_wire_compatible_ids(
         ],
     )
     original = continuation.model_dump()
-    captured: list[dict[str, object]] = []
+    captured: list[JsonObject] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        captured.append(json.loads(request.content))
+        captured.append(decode_object(request.content))
         return httpx2.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -533,18 +560,16 @@ async def test_chat_custom_history_replays_with_native_wire_compatible_ids(
     finally:
         await client.close()
     assert len(captured) == 1
-    history = without_empty_reasoning(captured[0]["input"])
-    assert isinstance(history, list)
-    call, result = history
+    call, result = object_array(without_empty_reasoning(captured[0]["input"]))
     assert call["type"] == expected_type
     assert call["call_id"] == "call_edit"
     assert call["name"] == "edit"
     if keep_id:
-        assert call["id"] == item["id"]
+        assert call["id"] == object_payload(item)["id"]
     else:
         assert "id" not in call
     if adapt_custom:
-        assert json.loads(call["arguments"]) == {"input": "patch"}
+        assert load_json_value(string_payload(call["arguments"])) == {"input": "patch"}
         assert result == {
             "type": "function_call_output",
             "call_id": "call_edit",
@@ -562,7 +587,7 @@ async def test_chat_custom_history_replays_with_native_wire_compatible_ids(
 
 @pytest.mark.asyncio
 async def test_native_responses_preserves_request_and_upstream_event_identity() -> None:
-    captured: list[dict[str, object]] = []
+    captured: list[JsonObject] = []
     created_response = {
         **_completed_response(model="upstream-model"),
         "created_at": 1788587503,
@@ -586,9 +611,9 @@ async def test_native_responses_preserves_request_and_upstream_event_identity() 
     }
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        payload = json.loads(request.content)
+        payload = decode_object(request.content)
         assert isinstance(payload, dict)
-        captured.append(payload)
+        captured.append(object_payload(payload))
         return httpx2.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -626,26 +651,26 @@ async def test_native_responses_preserves_request_and_upstream_event_identity() 
         "response.output_text.delta",
         "response.completed",
     ]
-    assert events[0].data["response"]["id"] == "resp_test"
-    assert events[0].data["response"]["model"] == "public-model"
+    assert object_payload(events[0].data["response"])["id"] == "resp_test"
+    assert object_payload(events[0].data["response"])["model"] == "public-model"
     for event in (events[0], events[2]):
-        timestamp = event.data["response"]["created_at"]
+        timestamp = object_payload(event.data["response"])["created_at"]
         assert type(timestamp) is int
         assert timestamp == 1788587503
     assert events[1].data == delta
-    assert events[2].data["response"]["model"] == "public-model"
-    assert type(events[2].data["response"]["completed_at"]) is int
-    assert events[2].data["response"]["completed_at"] == 1788587504
+    assert object_payload(events[2].data["response"])["model"] == "public-model"
+    assert type(object_payload(events[2].data["response"])["completed_at"]) is int
+    assert object_payload(events[2].data["response"])["completed_at"] == 1788587504
 
 
 @pytest.mark.asyncio
 async def test_native_responses_applies_resolved_reasoning_override() -> None:
-    captured: list[dict[str, object]] = []
+    captured: list[JsonObject] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        payload = json.loads(request.content)
+        payload = decode_object(request.content)
         assert isinstance(payload, dict)
-        captured.append(payload)
+        captured.append(object_payload(payload))
         return httpx2.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -736,7 +761,7 @@ async def test_native_response_failed_retries_before_public_commitment() -> None
         "response.completed",
     ]
     assert "resp_attempt_1" not in body
-    assert events[0].data["response"]["id"] == "resp_attempt_2"
+    assert object_payload(events[0].data["response"])["id"] == "resp_attempt_2"
 
 
 @pytest.mark.asyncio
@@ -831,7 +856,7 @@ async def test_top_level_context_error_is_canonical_and_not_retried(
 async def test_native_committed_truncation_emits_one_failed_terminal() -> None:
     attempts = 0
     committed = "x" * 70_000
-    created = {
+    created: JsonObject = {
         "type": "response.created",
         "sequence_number": 0,
         "response": {
@@ -864,9 +889,9 @@ async def test_native_committed_truncation_emits_one_failed_terminal() -> None:
     assert attempts == 1
     assert [event.event for event in events][-1] == "response.failed"
     assert sum(event.event == "response.failed" for event in events) == 1
-    assert events[-1].data["response"]["id"] == "resp_test"
-    assert events[-1].data["response"]["model"] == "public-model"
-    assert events[-1].data["response"]["status"] == "failed"
+    assert object_payload(events[-1].data["response"])["id"] == "resp_test"
+    assert object_payload(events[-1].data["response"])["model"] == "public-model"
+    assert object_payload(events[-1].data["response"])["status"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -885,7 +910,7 @@ async def test_interrupted_discovery_can_continue_through_native_transport() -> 
     error = {"code": "server_error", "message": "Original upstream timeout"}
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        body = json.loads(request.content)
+        body = decode_object(request.content)
         bodies.append(body)
         created = {
             "type": "response.created",
@@ -962,13 +987,20 @@ async def test_interrupted_discovery_can_continue_through_native_transport() -> 
             ]
         else:
             assert len(bodies) == 3
-            assert body["input"][-2]["type"] == "function_call"
-            assert body["input"][-2]["call_id"] == "retry_search"
-            result = body["input"][-1]
-            assert result["type"] == "function_call_output"
-            assert result["call_id"] == "retry_search"
-            assert json.loads(result["output"])[0]["name"] == "agents__spawn_agent"
-            assert "agents__spawn_agent" in [tool["name"] for tool in body["tools"]]
+            assert object_array(body["input"])[-2]["type"] == "function_call"
+            assert object_array(body["input"])[-2]["call_id"] == "retry_search"
+            result = array_payload(body["input"])[-1]
+            assert object_payload(result)["type"] == "function_call_output"
+            assert object_payload(result)["call_id"] == "retry_search"
+            assert (
+                object_array(
+                    load_json_value(string_payload(object_payload(result)["output"]))
+                )[0]["name"]
+                == "agents__spawn_agent"
+            )
+            assert "agents__spawn_agent" in [
+                object_payload(tool)["name"] for tool in array_payload(body["tools"])
+            ]
             events = [created, _completed_event()]
         return httpx2.Response(
             200, headers={"content-type": "text/event-stream"}, text=_sse(*events)
@@ -992,19 +1024,21 @@ async def test_interrupted_discovery_can_continue_through_native_transport() -> 
         assert first.model_dump() == original
         failed = events[-1].data["response"]
         assert events[-1].event == "response.failed"
-        assert failed["error"] == error
-        assert failed["output"][0] == sibling
-        assert len(failed["output"]) == 1
+        assert object_payload(failed)["error"] == error
+        assert array_payload(object_payload(failed)["output"])[0] == sibling
+        assert len(array_payload(object_payload(failed)["output"])) == 1
         assert len(bodies) == 1
-        history.extend([*failed["output"], retry])
+        history.extend([*object_array(object_payload(failed)["output"]), retry])
         second = OpenAIResponsesRequest(model="example", input=history, tools=[SEARCH])
         original = deepcopy(history)
         events = parse_sse_text("".join(await _collect_native(transport, second)))
         assert history == original
         assert events[-1].event == "response.completed"
-        complete = events[-1].data["response"]["output"][0]
-        assert complete["type"] == "tool_search_call"
-        assert complete["arguments"] == {"query": "agent"}
+        complete = object_array(object_payload(events[-1].data["response"])["output"])[
+            0
+        ]
+        assert object_payload(complete)["type"] == "tool_search_call"
+        assert object_payload(complete)["arguments"] == {"query": "agent"}
         history.extend(
             [
                 complete,
@@ -1140,12 +1174,12 @@ async def test_native_response_stops_at_terminal_before_trailing_ping() -> None:
 
 @pytest.mark.asyncio
 async def test_standard_responses_preserves_public_fields_and_usage() -> None:
-    captured: list[dict[str, object]] = []
+    captured: list[JsonObject] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        payload = json.loads(request.content)
+        payload = decode_object(request.content)
         assert isinstance(payload, dict)
-        captured.append(payload)
+        captured.append(object_payload(payload))
         return httpx2.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -1256,12 +1290,12 @@ async def test_standard_responses_maps_reasoning_and_tool_calls(
     parsed = parse_sse_text("".join(chunks))
     assert_anthropic_stream_contract(parsed)
     assert thinking_content(parsed) == "thinking"
-    assert parsed[-2].data["delta"]["stop_reason"] == stop_reason
+    assert object_payload(parsed[-2].data["delta"])["stop_reason"] == stop_reason
     tool_start = next(
         event.data["content_block"]
         for event in parsed
         if event.event == "content_block_start"
-        and event.data["content_block"]["type"] == "tool_use"
+        and object_payload(event.data["content_block"])["type"] == "tool_use"
     )
     assert tool_start == {
         "type": "tool_use",
@@ -1273,9 +1307,9 @@ async def test_standard_responses_maps_reasoning_and_tool_calls(
         event.data["delta"]
         for event in parsed
         if event.event == "content_block_delta"
-        and event.data["delta"]["type"] == "input_json_delta"
+        and object_payload(event.data["delta"])["type"] == "input_json_delta"
     )
-    assert tool_delta["partial_json"] == '{"path":"README.md"}'
+    assert object_payload(tool_delta)["partial_json"] == '{"path":"README.md"}'
 
 
 @pytest.mark.asyncio
@@ -1341,7 +1375,7 @@ async def test_standard_responses_preserves_refusal_text_and_terminal(
 
     parsed = parse_sse_text("".join(chunks))
     assert_anthropic_stream_contract(parsed)
-    assert parsed[-2].data["delta"]["stop_reason"] == (
+    assert object_payload(parsed[-2].data["delta"])["stop_reason"] == (
         "max_tokens" if incomplete else "refusal"
     )
     assert text_content(parsed) == refusal
@@ -1422,6 +1456,7 @@ async def test_sdk_stream_interruptions_retry_before_commit(
     error_type: type[Exception],
 ) -> None:
     class InterruptedBody(httpx2.AsyncByteStream):
+        @override
         async def __aiter__(self):
             if buffered:
                 yield _sse(
@@ -1522,11 +1557,13 @@ class _BlockingBody(httpx2.AsyncByteStream):
         self.entered = asyncio.Event()
         self.closed = asyncio.Event()
 
+    @override
     async def __aiter__(self):
         self.entered.set()
         await asyncio.Event().wait()
         yield b""
 
+    @override
     async def aclose(self) -> None:
         self.closed.set()
 
@@ -1572,11 +1609,11 @@ async def test_startup_rejects_fields_responses_cannot_represent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_claude_artifact_pattern_is_portable_on_the_sdk_wire():
+async def test_claude_artifact_pattern_is_portable_on_the_sdk_wire() -> None:
     captured = []
 
-    def handler(request):
-        body = json.loads(request.content)
+    def handler(request: httpx2.Request):
+        body = decode_object(request.content)
         captured.append(body)
         return httpx2.Response(
             200,
@@ -1606,9 +1643,13 @@ async def test_claude_artifact_pattern_is_portable_on_the_sdk_wire():
     finally:
         await client.close()
     assert len(captured) == 1
-    properties = captured[0]["tools"][0]["parameters"]["properties"]
-    assert properties["slug"]["pattern"] == "^[a-z]+$"
-    regex = re.compile(properties["name"]["pattern"])
+    properties = object_payload(object_array(captured[0]["tools"])[0]["parameters"])[
+        "properties"
+    ]
+    assert object_payload(object_payload(properties)["slug"])["pattern"] == "^[a-z]+$"
+    regex = re.compile(
+        string_payload(object_payload(object_payload(properties)["name"])["pattern"])
+    )
     assert regex.fullmatch("demo")
     assert not regex.fullmatch("bad\U000e0001name")
     assert request.tools is not None

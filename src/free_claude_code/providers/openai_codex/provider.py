@@ -5,7 +5,7 @@ import sys
 import uuid
 from collections.abc import AsyncIterator, Mapping
 from importlib.metadata import PackageNotFoundError, version
-from typing import Any
+from typing import override
 
 import httpx2
 from openai import AsyncOpenAI
@@ -115,7 +115,7 @@ class OpenAICodexProvider(BaseProvider):
         """Discover models visible to the currently connected ChatGPT account."""
         return _model_infos(await self._list_models_payload())
 
-    async def _list_models_payload(self) -> Any:
+    async def _list_models_payload(self) -> object:
         """Admit each catalog GET while borrowing request-scoped SDK credentials."""
         execution = self._admission.start_execution(model=None)
         endpoint = RequestEndpoint(self._endpoint())
@@ -211,6 +211,7 @@ class OpenAICodexProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_chat(
         self,
         request: ChatRequest,
@@ -233,6 +234,7 @@ class OpenAICodexProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_gemini(
         self,
         request: GeminiRequest,
@@ -297,7 +299,7 @@ async def _endpoint_required() -> str:
     )
 
 
-def _model_infos(payload: Any) -> frozenset[ProviderModelInfo]:
+def _model_infos(payload: object) -> frozenset[ProviderModelInfo]:
     if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
         raise ValueError("OpenAI model-list response is missing the models array.")
     infos: set[ProviderModelInfo] = set()

@@ -6,6 +6,7 @@ import re
 import subprocess
 import tomllib
 from pathlib import Path
+from typing import NotRequired, TypedDict
 
 RELEASE_FILES = {".python-version", "pyproject.toml", "uv.lock"}
 RELEASE_DIRS = ("assets/", "scripts/", "src/")
@@ -63,18 +64,44 @@ def next_version(previous: str, kind: str) -> str:
     raise ValueError(f"Invalid release kind: {kind}")
 
 
+class _ProjectMetadata(TypedDict):
+    name: str
+    dynamic: NotRequired[list[str]]
+    version: NotRequired[str]
+
+
+class _LockedPackage(TypedDict):
+    name: str
+    source: dict[str, str]
+    version: NotRequired[str]
+
+
+class _CommitRef(TypedDict):
+    sha: str
+
+
+class _PullRequest(TypedDict):
+    head: _CommitRef
+    base: _CommitRef
+    title: str
+
+
 def check_packaging(head: str) -> None:
-    project = tomllib.loads(git("show", f"{head}:pyproject.toml"))["project"]
+    project: _ProjectMetadata = tomllib.loads(git("show", f"{head}:pyproject.toml"))[
+        "project"
+    ]
     if (
         project["name"] != "free-claude-code"
         or "version" in project
         or "version" not in project.get("dynamic", [])
     ):
         raise ValueError("FCC must declare a dynamic version without project.version")
-    lock = tomllib.loads(git("show", f"{head}:uv.lock"))
+    packages: list[_LockedPackage] = tomllib.loads(git("show", f"{head}:uv.lock"))[
+        "package"
+    ]
     roots = [
         p
-        for p in lock["package"]
+        for p in packages
         if p["name"] == "free-claude-code" and p.get("source") == {"editable": "."}
     ]
     if len(roots) != 1 or "version" in roots[0]:
@@ -91,16 +118,24 @@ def check(base: str, head: str, title: str) -> None:
     print(f"Version policy passed: {kind or 'no release'}")
 
 
+class _Arguments(argparse.Namespace):
+    base: str | None
+    head: str
+    title: str | None
+    pr_json: Path | None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base")
     parser.add_argument("--head", required=True)
     parser.add_argument("--title")
     parser.add_argument("--pr-json", type=Path)
-    args = parser.parse_args()
+    args = _Arguments()
+    parser.parse_args(namespace=args)
     try:
         if args.pr_json:
-            pr = json.loads(args.pr_json.read_text(encoding="utf-8"))
+            pr: _PullRequest = json.loads(args.pr_json.read_text(encoding="utf-8"))
             if pr["head"]["sha"] != git(
                 "rev-parse", "--verify", "--end-of-options", f"{args.head}^{{commit}}"
             ):

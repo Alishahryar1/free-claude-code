@@ -6,7 +6,7 @@
 [![Python 3.14](https://img.shields.io/badge/python-3.14-3776ab.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Package Manager: uv](assets/package-manager-uv.svg)](https://github.com/astral-sh/uv)
 [![Testing: Pytest](https://img.shields.io/badge/Testing-Pytest-ad1457.svg?style=for-the-badge)](https://github.com/pytest-dev/pytest)
-[![Type Checker: Ty](https://img.shields.io/badge/Type%20Checker-ty-fdd835.svg?style=for-the-badge)](https://github.com/astral-sh/ty)
+[![Type Checker: Pyrefly](https://img.shields.io/badge/Type%20Checker-pyrefly-fdd835.svg?style=for-the-badge)](https://github.com/pyrefly-org/pyrefly)
 [![Formatter: Ruff](https://img.shields.io/badge/Formatter-ruff-bf4b00.svg?style=for-the-badge)](https://github.com/astral-sh/ruff)
 [![Logging: Loguru](https://img.shields.io/badge/logging-loguru-00695c.svg?style=for-the-badge)](https://github.com/Delgan/loguru)
 

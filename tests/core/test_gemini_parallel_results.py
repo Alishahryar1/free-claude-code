@@ -15,13 +15,15 @@ from free_claude_code.core.history_replay import (
     encode_replay,
     prepare_history,
 )
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import object_array, object_payload
 
 ORIGIN = ReplayOrigin(
     "gemini", "gemini", "https://google.invalid/v1beta", "test-key", "models/test"
 )
 
 
-def parallel_turn(shared_name=False):
+def parallel_turn(shared_name: bool = False):
     native: dict[str, Any] = {
         "role": "model",
         "parts": [
@@ -74,8 +76,8 @@ def parallel_turn(shared_name=False):
 @pytest.mark.parametrize("reverse_results", [False, True])
 @pytest.mark.parametrize("shared_name", [False, True])
 def test_parallel_results_share_one_turn_before_followup(
-    separate_messages, reverse_results, shared_name
-):
+    separate_messages: bool, reverse_results: bool, shared_name: bool
+) -> None:
     native, assistant, results = parallel_turn(shared_name)
     ordered = list(reversed(results)) if reverse_results else results
     result_messages = (
@@ -122,7 +124,7 @@ def test_parallel_results_share_one_turn_before_followup(
     assert request.model_dump() == before
 
 
-def test_trailing_prompt_and_image_result_keep_their_own_positions():
+def test_trailing_prompt_and_image_result_keep_their_own_positions() -> None:
     native, assistant, results = parallel_turn()
     results[1] = {
         "type": "tool_result",
@@ -155,14 +157,18 @@ def test_trailing_prompt_and_image_result_keep_their_own_positions():
             )
         ),
     )
-    response_turn = body["contents"][1]
-    assert [part["functionResponse"]["id"] for part in response_turn["parts"]] == [
+    contents: list[JsonObject] = body["contents"]
+    response_turn = contents[1]
+    assert [
+        object_payload(part["functionResponse"])["id"]
+        for part in object_array(response_turn["parts"])
+    ] == [
         "a",
         "b",
     ]
-    assert response_turn["parts"][1]["functionResponse"]["parts"] == [
-        {"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}
-    ]
+    assert object_payload(object_array(response_turn["parts"])[1]["functionResponse"])[
+        "parts"
+    ] == [{"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}]
     assert body["contents"][2] == {"role": "user", "parts": [{"text": "Summarize"}]}
     prepared = cast(
         dict[str, Any], prepare_history(body, ORIGIN, scope=HistoryMode.ALL)
@@ -170,7 +176,7 @@ def test_trailing_prompt_and_image_result_keep_their_own_positions():
     assert prepared["contents"][0] == native
 
 
-def test_result_groups_do_not_cross_assistant_turns():
+def test_result_groups_do_not_cross_assistant_turns() -> None:
     _, assistant, results = parallel_turn()
     turn = [assistant, *[{"role": "user", "content": [r]} for r in results]]
     body = cast(
@@ -179,7 +185,8 @@ def test_result_groups_do_not_cross_assistant_turns():
             MessagesRequest(model="models/test", messages=[*turn, *deepcopy(turn)])
         ),
     )
-    assert [content["role"] for content in body["contents"]] == [
+    contents: list[JsonObject] = body["contents"]
+    assert [content["role"] for content in contents] == [
         "model",
         "user",
         "model",
@@ -187,12 +194,13 @@ def test_result_groups_do_not_cross_assistant_turns():
     ]
     for index in (1, 3):
         assert [
-            part["functionResponse"]["id"] for part in body["contents"][index]["parts"]
+            object_payload(part["functionResponse"])["id"]
+            for part in object_array(contents[index]["parts"])
         ] == ["a", "b"]
 
 
 @pytest.mark.parametrize("invalid", ["missing", "duplicate", "unknown", "interleaved"])
-def test_invalid_result_batches_are_rejected(invalid):
+def test_invalid_result_batches_are_rejected(invalid: str) -> None:
     _, assistant, results = parallel_turn()
     messages = [assistant, {"role": "user", "content": [results[0]]}]
     if invalid == "duplicate":
@@ -212,7 +220,7 @@ def test_invalid_result_batches_are_rejected(invalid):
         messages_to_gemini(MessagesRequest(model="models/test", messages=messages))
 
 
-def test_pending_call_projection_retains_partial_results():
+def test_pending_call_projection_retains_partial_results() -> None:
     _, assistant, results = parallel_turn()
     body = cast(
         dict[str, Any],

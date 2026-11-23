@@ -2,15 +2,22 @@
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Iterator,
+    Mapping,
+)
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, cast
+from typing import Any, cast, override
 
 import httpx2
 from loguru import logger
-from openai import AsyncOpenAI
-from openai.types.chat.chat_completion_chunk import ChoiceDelta
+from openai import AsyncOpenAI, Omit
+from openai.types.chat.chat_completion_chunk import ChatCompletionChunk, ChoiceDelta
 from openai.types.chat.completion_create_params import CompletionCreateParamsStreaming
 
 from free_claude_code.application.errors import InvalidRequestError
@@ -27,6 +34,7 @@ from free_claude_code.core.anthropic.streaming import (
 from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.chat_completions.response import NativeChatRelay
 from free_claude_code.core.chat_completions.tool_calls import (
+    ChatSourceOutput,
     ChatToolCallBuffer,
     CompletedChatBatch,
     CompletedChatCall,
@@ -41,7 +49,15 @@ from free_claude_code.core.gemini import GeminiConversionError, GeminiRequest
 from free_claude_code.core.gemini.replay import CallReplay, apply_call_replay
 from free_claude_code.core.gemini.request import build_gemini_chat_request
 from free_claude_code.core.history_replay import ReplayOrigin
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import (
+    JsonObject,
+    JsonTree,
+    JsonValue,
+    json_object,
+    json_objects,
+    json_text,
+    normalize_empty_array_field,
+)
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesChatRequest,
@@ -138,7 +154,7 @@ from .usage import (
 
 OpenAIAsyncCredentialProvider = Callable[[], Awaitable[str]]
 PreparedBodyValidator = Callable[[Mapping[str, Any]], Awaitable[None]]
-_ExtraReasoningEvents = Callable[[Any, ChatStreamOutput], Iterator[str]]
+_ExtraReasoningEvents = Callable[[JsonObject, ChatStreamOutput], Iterator[str]]
 _ChatOutputFactory = Callable[[], ChatStreamOutput]
 
 
@@ -152,7 +168,7 @@ def _iter_visible_text_events(
 
 @dataclass(frozen=True, slots=True)
 class _OpenAIChatCompletion:
-    finish_reason: Any
+    finish_reason: str | None
     output_tokens: int
     input_tokens: int
     provider_input_tokens: int | None
@@ -169,7 +185,10 @@ def _reserved_anthropic_tool_ids(request: MessagesRequest) -> frozenset[str]:
     )
 
 
-def _sdk_create_body(create_body: dict[str, Any]) -> dict[str, Any]:
+type _SDKRequestBody = dict[str, JsonTree[Omit]]
+
+
+def _sdk_create_body(create_body: Mapping[str, JsonTree[Omit]]) -> _SDKRequestBody:
     """Move fields the SDK does not declare into ``extra_body``."""
     sdk_fields = CompletionCreateParamsStreaming.__annotations__
     passthrough = {"extra_body", "extra_headers"}
@@ -178,13 +197,13 @@ def _sdk_create_body(create_body: dict[str, Any]) -> dict[str, Any]:
         for key, value in create_body.items()
         if key not in sdk_fields and key not in passthrough
     }
-    sent = {
+    sent: _SDKRequestBody = {
         key: value
         for key, value in create_body.items()
         if key in sdk_fields or key in passthrough
     }
     if extras:
-        sent["extra_body"] = {**extras, **sent.get("extra_body", {})}
+        sent["extra_body"] = {**extras, **json_object(sent.get("extra_body", {}))}
     return sent
 
 
@@ -256,10 +275,10 @@ class _ChatStreamPresenter:
             structured_details=profile.structured_reasoning_details
         )
         self._output.reasoning_replay = self._structured_reasoning
-        self._finish_reason: Any = None
+        self._finish_reason: str | None = None
         self._refused = False
         self._raw_stop_seen = False
-        self._usage_info: Any = None
+        self._usage_info: object = None
         self._tool_argument_aliases: dict[str, dict[str, str]] = {}
         self._started = False
         self._aliases_bound = False
@@ -272,7 +291,7 @@ class _ChatStreamPresenter:
         return self._output
 
     @property
-    def usage_info(self) -> Any:
+    def usage_info(self) -> object:
         return self._usage_info
 
     @property
@@ -289,7 +308,7 @@ class _ChatStreamPresenter:
     def normal_stop_seen(self) -> bool:
         return self._raw_stop_seen or self._finish_reason is not None
 
-    def observe_upstream_chunk(self, chunk: Any) -> None:
+    def observe_upstream_chunk(self, chunk: ChatCompletionChunk) -> None:
         if chunk.choices and chunk.choices[0].finish_reason is not None:
             self._raw_stop_seen = True
 
@@ -305,20 +324,21 @@ class _ChatStreamPresenter:
         self._aliases_bound = True
         self._tool_argument_aliases = aliases
 
-    def feed(self, chunk: Any) -> Iterator[StreamOutput]:
+    def feed(self, chunk: ChatCompletionChunk) -> Iterator[StreamOutput]:
         if not self._started or self._upstream_finished:
             raise RuntimeError("stream presenter is not accepting chunks")
 
         if chunk.choices and chunk.choices[0].finish_reason is not None:
             self._finish_reason = chunk.choices[0].finish_reason
-        yield from self._present(
-            self._tool_buffer.feed(chunk.model_dump(mode="json", exclude_unset=True))
-        )
+        payload: JsonObject = chunk.model_dump(mode="json", exclude_unset=True)
+        yield from self._present(self._tool_buffer.feed(payload))
 
     def abandon(self) -> Iterator[StreamOutput]:
         yield from self._present(self._tool_buffer.abandon())
 
-    def _present(self, items) -> Iterator[StreamOutput]:
+    def _present(
+        self, items: Iterable[ChatSourceOutput | CompletedChatBatch]
+    ) -> Iterator[StreamOutput]:
         for item in items:
             if isinstance(item, CompletedChatCall):
                 call = finalize_chat_call(
@@ -335,45 +355,62 @@ class _ChatStreamPresenter:
                         "Custom Chat calls cannot be represented in this protocol",
                         False,
                     )
-                extra = call.body.get("extra_content")
+                function = json_object(function)
+                tool_id = call.body["id"]
+                name = function["name"]
+                arguments = function["arguments"]
+                if (
+                    not isinstance(tool_id, str)
+                    or not isinstance(name, str)
+                    or not isinstance(arguments, str)
+                ):
+                    raise ExecutionFailure(
+                        FailureKind.UPSTREAM,
+                        502,
+                        "Invalid completed Chat tool call",
+                        False,
+                    )
+                raw_extra = call.body.get("extra_content")
+                extra = raw_extra if isinstance(raw_extra, dict) else None
                 if extra:
-                    self._record_extra_content(call.body["id"], extra)
+                    self._record_extra_content(tool_id, extra)
                 frames = [
                     *self._output.close_content_blocks(),
                     *self._output.emit_complete_tool(
                         call.index,
                         CompletedToolCall(
-                            call.body["id"],
-                            function["name"],
-                            function["arguments"],
+                            tool_id,
+                            name,
+                            arguments,
                             extra,
                         ),
                     ),
                 ]
                 yield completed_output(frames)
             else:
+                assert isinstance(item, dict)
                 frames = tuple(self._feed_frame(item))
                 if frames:
                     yield StreamOutput(frames)
 
-    def _feed_frame(self, chunk: dict[str, Any]) -> Iterator[str]:
+    def _feed_frame(self, chunk: JsonObject) -> Iterator[str]:
 
         chunk_usage = chunk.get("usage")
         if chunk_usage is not None:
             self._usage_info = chunk_usage
 
-        if not chunk.get("choices"):
+        choices = json_objects(chunk.get("choices") or [])
+        choice = next(choices, None)
+        if choice is None:
             return
 
-        choice = chunk["choices"][0]
         raw_delta = choice.get("delta")
-        if choice.get("finish_reason") is not None:
-            self._finish_reason = choice["finish_reason"]
+        finish_reason = choice.get("finish_reason")
+        if isinstance(finish_reason, str):
+            self._finish_reason = finish_reason
         if raw_delta is None:
             return
-        # This is already SDK-decoded source data. Preserve its permissive extras
-        # for provider reasoning hooks without validating unrelated usage fields.
-        delta = ChoiceDelta.model_construct(**raw_delta)
+        delta = json_object(raw_delta)
 
         if choice.get("finish_reason"):
             logger.debug(
@@ -393,11 +430,13 @@ class _ChatStreamPresenter:
 
         yield from self._extra_reasoning_events(delta, self._output)
 
-        if isinstance(self._output, AnthropicChatStreamOutput) and delta.refusal:
+        refusal = delta.get("refusal")
+        if isinstance(self._output, AnthropicChatStreamOutput) and refusal:
             self._refused = True
-            yield from _iter_visible_text_events(self._output, delta.refusal)
-        if delta.content:
-            for part in self._think_parser.feed(delta.content):
+            yield from _iter_visible_text_events(self._output, json_text(refusal))
+        content = delta.get("content")
+        if content:
+            for part in self._think_parser.feed(json_text(content)):
                 if part.type == ContentType.THINKING:
                     if not self._output_reasoning:
                         continue
@@ -485,6 +524,21 @@ class _ChatStreamPresenter:
         self._completed = True
 
 
+def _native_chunk_payload(chunk: ChatCompletionChunk) -> JsonObject:
+    """Normalize empty provider arrays at the native Chat SDK boundary."""
+    payload: JsonObject = chunk.model_dump(mode="json", exclude_unset=True)
+    normalize_empty_array_field(payload, "choices")
+    if isinstance(choices := payload.get("choices"), list):
+        for choice in choices:
+            if not isinstance(choice, dict) or not isinstance(
+                delta := choice.get("delta"), dict
+            ):
+                continue
+            for field in ("tool_calls", "reasoning_details"):
+                normalize_empty_array_field(delta, field)
+    return payload
+
+
 class _NativeChatStreamPresenter(_ChatStreamPresenter):
     """Use the existing attempt owner without translating native Chat chunks."""
 
@@ -497,40 +551,51 @@ class _NativeChatStreamPresenter(_ChatStreamPresenter):
         self._generated = False
 
     @property
+    @override
     def generated_output(self) -> bool:
         return self._generated
 
     @property
+    @override
     def normal_stop_seen(self) -> bool:
         return self._relay.normal_stop_seen
 
-    def observe_upstream_chunk(self, chunk: Any) -> None:
+    @override
+    def observe_upstream_chunk(self, chunk: ChatCompletionChunk) -> None:
         pass
 
+    @override
     def start_events(self) -> Iterator[str]:
         self._started = True
         return iter(())
 
-    def feed(self, chunk: Any) -> Iterator[StreamOutput]:
-        payload = chunk.model_dump(mode="json", exclude_unset=True)
-        if getattr(chunk, "usage", None) is not None:
+    @override
+    def feed(self, chunk: ChatCompletionChunk) -> Iterator[StreamOutput]:
+        payload = _native_chunk_payload(chunk)
+        if chunk.usage is not None:
             self._usage_info = chunk.usage
-        for choice in payload.get("choices", []):
-            if choice.get("finish_reason") is not None:
-                self._finish_reason = choice["finish_reason"]
-            delta = choice.get("delta") or {}
+        for choice in json_objects(payload.get("choices", [])):
+            finish_reason = choice.get("finish_reason")
+            if isinstance(finish_reason, str):
+                self._finish_reason = finish_reason
+            delta = json_object(choice.get("delta") or {})
             self._generated |= any(
                 value for key, value in delta.items() if key != "role"
             )
         yield from self._present(self._tool_buffer.feed(payload))
 
-    def _present(self, items) -> Iterator[StreamOutput]:
+    @override
+    def _present(
+        self, items: Iterable[ChatSourceOutput | CompletedChatBatch]
+    ) -> Iterator[StreamOutput]:
         for item in items:
             if isinstance(item, CompletedChatBatch):
                 yield completed_output(self._relay.feed(frame) for frame in item.frames)
             else:
+                assert isinstance(item, dict)
                 yield StreamOutput((self._relay.feed(item),))
 
+    @override
     def finish_upstream(self) -> Iterator[str]:
         if not self._relay.normal_stop_seen:
             raise TruncatedProviderStreamError(
@@ -539,6 +604,7 @@ class _NativeChatStreamPresenter(_ChatStreamPresenter):
         self._upstream_finished = True
         return iter(())
 
+    @override
     def prepare_completion(self, *, pad_empty: bool) -> Iterator[str]:
         provider_input = usage_int(self._usage_info, "prompt_tokens")
         self._completion = _OpenAIChatCompletion(
@@ -549,6 +615,7 @@ class _NativeChatStreamPresenter(_ChatStreamPresenter):
         )
         return iter(())
 
+    @override
     def terminal_events(self, *, usage: ChatStreamUsage) -> Iterator[str]:
         yield from self._relay.finish()
 
@@ -599,8 +666,8 @@ class OpenAIChatTransport:
         request_id: str | None = None,
     ) -> None:
         """Log streaming transport failures (metadata-only unless verbose is enabled)."""
-        response = getattr(error, "response", None)
-        http_status = (
+        response: object = getattr(error, "response", None)
+        http_status: object = (
             getattr(response, "status_code", None) if response is not None else None
         )
         cause_types = exception_cause_types(error)
@@ -639,7 +706,7 @@ class OpenAIChatTransport:
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
         model_info: ProviderModelInfo | None = None,
-    ) -> dict[str, Any]:
+    ) -> JsonObject:
         """Build a provider request from the immutable profile."""
         request, reasoning = self._prepare_messages_reasoning(
             request, reasoning, model_info
@@ -692,7 +759,7 @@ class OpenAIChatTransport:
 
     async def _prepare_create(
         self,
-        body: dict,
+        body: dict[str, Any],
         operation_kind: ProviderOperationKind,
         *,
         history: RequestHistory,
@@ -702,7 +769,7 @@ class OpenAIChatTransport:
         on_origin: Callable[[ReplayOrigin], None] | None = None,
         call_replay: tuple[CallReplay, ...] = (),
         native_chat: bool = False,
-    ) -> tuple[dict, dict[str, Any], AsyncOpenAI]:
+    ) -> tuple[dict[str, Any], dict[str, Any], AsyncOpenAI]:
         """Return the intended body, the body to send, and the client to send it."""
         body = self._output_caps.clamp(body)
         body, replaced = self._text_only.strip(body)
@@ -714,11 +781,8 @@ class OpenAIChatTransport:
                 body.get("model"),
                 replaced,
             )
-        create_body = cast(
-            dict[str, Any],
-            resolve_history_overrides(
-                body if native_chat else self._behavior.prepare_create_body(body)
-            ),
+        create_body = resolve_history_overrides(
+            body if native_chat else self._behavior.prepare_create_body(body)
         )
         client = self._client
         if endpoint is not None:
@@ -728,10 +792,10 @@ class OpenAIChatTransport:
             # A borrowed view pins the same credential for provenance and
             # inference, without owning or closing the provider's HTTP pool.
             client = self._client.with_options(api_key=await self._api_key_provider())
+        sdk_headers: dict[str, JsonTree[Omit]] | None = None
         if extra_headers or endpoint is not None:
-            create_body = create_body.copy()
-            create_body["extra_headers"] = {
-                **(create_body.get("extra_headers") or {}),
+            sdk_headers = {
+                **json_object(create_body.get("extra_headers") or {}),
                 **(extra_headers or {}),
                 **(
                     request_client.openai_headers()
@@ -748,49 +812,46 @@ class OpenAIChatTransport:
         )
         if on_origin is not None:
             on_origin(origin)
-        create_body = cast(
-            dict[str, Any],
-            history.prepare(
-                create_body,
-                origin,
-                self._history_cache,
-                reasoning_field=self._profile.request_policy.reasoning_replay.value,
-                structured_details=self._profile.structured_reasoning_details,
-                native_chat=native_chat,
-                continuation=operation_kind is ProviderOperationKind.CONTINUATION,
-                finalize=lambda projected, origin=origin: (
-                    self._behavior.prepare_history_body(
-                        cast(
-                            dict[str, Any],
-                            apply_call_replay(projected, origin, call_replay),
-                        )
-                        if call_replay
-                        else projected,
-                        origin,
+        prepared = history.prepare(
+            create_body,
+            origin,
+            self._history_cache,
+            reasoning_field=self._profile.request_policy.reasoning_replay.value,
+            structured_details=self._profile.structured_reasoning_details,
+            native_chat=native_chat,
+            continuation=operation_kind is ProviderOperationKind.CONTINUATION,
+            finalize=lambda projected, origin=origin: (
+                self._behavior.prepare_history_body(
+                    cast(
+                        dict[str, Any],
+                        apply_call_replay(projected, origin, call_replay),
                     )
-                ),
+                    if call_replay
+                    else projected,
+                    origin,
+                )
             ),
         )
-        return body, create_body, client
+        sdk_body: _SDKRequestBody = dict(prepared)
+        if sdk_headers is not None:
+            sdk_body["extra_headers"] = sdk_headers
+        return body, sdk_body, client
 
     async def _open_stream(
         self,
         scope: ProviderAttemptScope,
         client: AsyncOpenAI,
         create_body: dict[str, Any],
-        body: dict,
+        body: dict[str, Any],
         *,
         history: RequestHistory,
-        on_event: Callable[[Any], None] | None = None,
+        on_event: Callable[[ChatCompletionChunk], None] | None = None,
         native_chat: bool = False,
-    ) -> Any:
+    ) -> AsyncIterator[ChatCompletionChunk]:
         """Open one streaming chat completion owned by an admitted attempt."""
 
-        def observed(event: Any) -> None:
-            if (
-                getattr(event, "choices", None)
-                or getattr(event, "usage", None) is not None
-            ):
+        def observed(event: ChatCompletionChunk) -> None:
+            if event.choices or event.usage is not None:
                 history.accepted()
             if on_event is not None:
                 on_event(event)
@@ -1062,7 +1123,7 @@ class _OpenAIChatStreamRunner:
 
     async def run(self) -> AsyncIterator[StreamOutput]:
         """Convert the upstream OpenAI-chat stream into Anthropic SSE."""
-        model = self._body["model"]
+        model: JsonValue = self._body["model"]
         extra_body = self._body.get("extra_body")
         # The SDK merges allowed extra_body fields over the top-level request.
         if isinstance(extra_body, dict) and isinstance(extra_body.get("model"), str):
@@ -1104,6 +1165,8 @@ class _OpenAIChatStreamRunner:
             operation_kind = ProviderOperationKind.CONTINUATION
         if not self._native_chat:
             request_stream_usage(body)
+        messages = body.get("messages")
+        tools = body.get("tools")
         return run_attempts(
             AttemptPlan(
                 body=body,
@@ -1130,8 +1193,8 @@ class _OpenAIChatStreamRunner:
                 gateway_model=self._response_model,
                 refreshable=self._endpoint,
                 sent_fields={
-                    "message_count": len(body.get("messages", [])),
-                    "tool_count": len(body.get("tools", [])),
+                    "message_count": len(messages) if isinstance(messages, list) else 0,
+                    "tool_count": len(tools) if isinstance(tools, list) else 0,
                 },
                 sent_payload=lambda: {"body": provider_chat_body_snapshot(body)},
             )
@@ -1139,7 +1202,7 @@ class _OpenAIChatStreamRunner:
 
     def _new_stream_presenter(self, *, output_reasoning: bool) -> _ChatStreamPresenter:
         def extra_reasoning_events(
-            delta: Any, output: ChatStreamOutput
+            delta: JsonObject, output: ChatStreamOutput
         ) -> Iterator[str]:
             yield from self._transport._behavior.extra_reasoning_events(
                 delta,
@@ -1187,9 +1250,11 @@ class _ChatAttempt(TransportAttempt):
         self._validating = False
 
     @property
+    @override
     def normal_stop_seen(self) -> bool:
         return self._presenter.normal_stop_seen
 
+    @override
     async def prepare(self) -> None:
         runner = self._runner
         (
@@ -1208,6 +1273,7 @@ class _ChatAttempt(TransportAttempt):
             native_chat=runner._native_chat,
         )
 
+    @override
     async def stream(self, scope: ProviderAttemptScope) -> AsyncIterator[StreamOutput]:
         assert self._client is not None
         runner = self._runner
@@ -1254,9 +1320,7 @@ class _ChatAttempt(TransportAttempt):
                 completion.provider_input_tokens - runner._input_tokens,
             )
         usage = ChatStreamUsage(
-            finish_reason=str(completion.finish_reason)
-            if completion.finish_reason is not None
-            else None,
+            finish_reason=completion.finish_reason,
             reported={
                 key: value
                 for key, value in (
@@ -1308,67 +1372,65 @@ class _ChatAttempt(TransportAttempt):
             if event:
                 yield StreamOutput((event,))
 
+    @override
     def resolvable(self, error: Exception) -> bool:
         # A local check sent nothing upstream; the permit is abandoned without
         # teaching correction or recovery state about a rejection.
         return not self._validating
 
+    @override
     def abandon(self, error: Exception) -> Iterator[StreamOutput]:
         return iter(self._presenter.abandon())
 
+    @override
     def failure_payload(
         self, error: Exception, failure: ExecutionFailure
     ) -> JsonObject | None:
         return self._presenter.output.failure_payload(failure)
 
+    @override
     def completed_fields(self) -> dict[str, Any]:
         completion = self._presenter.completion
         return {
-            "finish_reason": (
-                None
-                if completion.finish_reason is None
-                else str(completion.finish_reason)
-            ),
+            "finish_reason": completion.finish_reason,
             "output_tokens": completion.output_tokens,
             "prompt_tokens": completion.input_tokens,
             "prompt_tokens_estimate": self._runner._input_tokens,
         }
 
-    def _observe(self, chunk: Any) -> None:
+    def _observe(self, chunk: ChatCompletionChunk) -> None:
         self._presenter.observe_upstream_chunk(chunk)
         source = self.context.source
         continuing = self.context.continuing
         if self._runner._native_chat:
             source.observe(
                 "chat",
-                chunk.model_dump(mode="json", exclude_unset=True),
+                _native_chunk_payload(chunk),
                 continuing=continuing,
             )
             return
+        choices: list[JsonObject] = []
+        # The SDK can leave choices unset on a usage-only trailer.
+        for choice in chunk.choices or ():
+            # The SDK can keep a provider's empty stop delta as a raw value.
+            delta: object = choice.delta
+            metadata: JsonObject = {}
+            if isinstance(delta, ChoiceDelta):
+                extras: JsonObject = delta.model_extra or {}
+                metadata = {
+                    "reasoning_details": extras.get("reasoning_details"),
+                    "audio": bool(delta.audio),
+                }
+            choices.append({"delta": metadata})
         source.observe(
             "chat",
             {
                 "usage": {
                     key: value
                     for key in ("prompt_tokens", "completion_tokens", "total_tokens")
-                    if (value := usage_int(getattr(chunk, "usage", None), key))
-                    is not None
+                    if (value := usage_int(chunk.usage, key)) is not None
                 },
-                "choices": [
-                    {
-                        "delta": {
-                            "reasoning_details": getattr(
-                                getattr(choice, "delta", None),
-                                "reasoning_details",
-                                None,
-                            ),
-                            "audio": getattr(
-                                getattr(choice, "delta", None), "audio", None
-                            ),
-                        }
-                    }
-                    for choice in (getattr(chunk, "choices", None) or ())
-                ],
+                "choices": choices,
             },
             continuing=continuing,
         )

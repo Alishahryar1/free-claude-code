@@ -7,6 +7,8 @@ import pytest
 
 from free_claude_code.config.provider_catalog import SAMBANOVA_DEFAULT_BASE
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from free_claude_code.providers.base import ProviderConfig
+from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.request_factory import make_messages_request
 from tests.providers.support import (
     SDKStreamDouble,
@@ -15,9 +17,10 @@ from tests.providers.support import (
     profiled_provider,
     sdk_chat_chunk,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
-def make_request(**overrides):
+def make_request(**overrides: object):
     return make_messages_request("Meta-Llama-3.3-70B-Instruct", **overrides)
 
 
@@ -30,17 +33,19 @@ def sambanova_config():
 
 
 @pytest.fixture
-def sambanova_provider(sambanova_config):
+def sambanova_provider(sambanova_config: ProviderConfig):
     return profiled_provider(
         "sambanova", sambanova_config, admission=immediate_admission()
     )
 
 
-def test_default_base_url_constant():
+def test_default_base_url_constant() -> None:
     assert SAMBANOVA_DEFAULT_BASE == "https://api.sambanova.ai/v1"
 
 
-def test_init_uses_default_base_url_and_api_key(sambanova_config):
+def test_init_uses_default_base_url_and_api_key(
+    sambanova_config: ProviderConfig,
+) -> None:
     with patch(
         "free_claude_code.providers.openai_chat.client.AsyncOpenAI"
     ) as mock_openai:
@@ -53,7 +58,7 @@ def test_init_uses_default_base_url_and_api_key(sambanova_config):
     mock_openai.assert_called_once()
 
 
-def test_init_strips_trailing_slash(sambanova_config):
+def test_init_strips_trailing_slash(sambanova_config: ProviderConfig) -> None:
     config = replace(sambanova_config, base_url=f"{SAMBANOVA_DEFAULT_BASE}/")
 
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
@@ -64,17 +69,19 @@ def test_init_strips_trailing_slash(sambanova_config):
     assert provider._base_url == SAMBANOVA_DEFAULT_BASE
 
 
-def test_build_request_body_basic(sambanova_provider):
+def test_build_request_body_basic(sambanova_provider: OpenAIChatProvider) -> None:
     """Basic request body conversion attaches system message and keeps max_tokens."""
     body = sambanova_provider._chat._build_request_body(make_request())
 
     assert body["model"] == "Meta-Llama-3.3-70B-Instruct"
-    assert body["messages"][0]["role"] == "system"
+    assert object_payload(array_payload(body["messages"])[0])["role"] == "system"
     assert body["max_tokens"] == 100
     assert "max_completion_tokens" not in body
 
 
-def test_build_request_body_preserves_caller_extra_body(sambanova_provider):
+def test_build_request_body_preserves_caller_extra_body(
+    sambanova_provider: OpenAIChatProvider,
+) -> None:
     req = make_request(extra_body={"metadata": {"user": "u1"}})
 
     body = sambanova_provider._chat._build_request_body(req)
@@ -95,8 +102,10 @@ def test_build_request_body_preserves_caller_extra_body(sambanova_provider):
     ),
 )
 def test_build_request_body_uses_only_documented_reasoning_efforts(
-    sambanova_provider, reasoning, expected
-):
+    sambanova_provider: OpenAIChatProvider,
+    reasoning: ReasoningPolicy,
+    expected: str | None,
+) -> None:
     body = sambanova_provider._chat._build_request_body(
         make_request(),
         reasoning=reasoning,
@@ -106,7 +115,7 @@ def test_build_request_body_uses_only_documented_reasoning_efforts(
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_text(sambanova_provider):
+async def test_stream_messages_text(sambanova_provider: OpenAIChatProvider) -> None:
     """Text content deltas are emitted as text blocks."""
     mock_chunk = MagicMock()
     mock_chunk.choices = [
@@ -141,7 +150,9 @@ async def test_stream_messages_text(sambanova_provider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_tool_call(sambanova_provider):
+async def test_stream_messages_tool_call(
+    sambanova_provider: OpenAIChatProvider,
+) -> None:
     mock_tc = MagicMock()
     mock_tc.index = 0
     mock_tc.id = "call_1"
@@ -181,7 +192,9 @@ async def test_stream_messages_tool_call(sambanova_provider):
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_reasoning_content(sambanova_provider):
+async def test_stream_messages_reasoning_content(
+    sambanova_provider: OpenAIChatProvider,
+) -> None:
     """reasoning_content deltas are emitted as thinking blocks."""
     mock_chunk = MagicMock()
     mock_chunk.choices = [
@@ -217,7 +230,7 @@ async def test_stream_messages_reasoning_content(sambanova_provider):
 
 
 @pytest.mark.asyncio
-async def test_cleanup(sambanova_provider):
+async def test_cleanup(sambanova_provider: OpenAIChatProvider) -> None:
     sambanova_provider._client = AsyncMock()
 
     await sambanova_provider.cleanup()

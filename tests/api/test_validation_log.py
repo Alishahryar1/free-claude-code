@@ -3,7 +3,7 @@
 from free_claude_code.api.validation_log import summarize_request_validation_body
 
 
-def test_summarize_lists_block_metadata_without_echoing_string_content():
+def test_summarize_lists_block_metadata_without_echoing_string_content() -> None:
     body = {
         "messages": [
             {
@@ -26,7 +26,7 @@ def test_summarize_lists_block_metadata_without_echoing_string_content():
     assert "secret" not in blob
 
 
-def test_summarize_handles_non_dict_messages_and_missing_tools():
+def test_summarize_handles_non_dict_messages_and_missing_tools() -> None:
     body = {"messages": ["not_a_dict"]}
     summary, tool_names = summarize_request_validation_body(body)
     assert summary == [{"message_kind": "str"}]

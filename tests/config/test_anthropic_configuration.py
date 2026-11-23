@@ -10,7 +10,7 @@ from free_claude_code.providers.runtime.config import (
 )
 
 
-def test_save_remove_workspace_optional_and_local_token_independent():
+def test_save_remove_workspace_optional_and_local_token_independent() -> None:
     store = ManagedConfigStore()
     store.initialize({})
     values = dict(store.read({}).managed) | {
@@ -36,7 +36,7 @@ def test_save_remove_workspace_optional_and_local_token_independent():
     assert not has_provider_configuration(descriptor, store.read({}).settings)
 
 
-def test_claude_launch_does_not_inherit_anthropic_account_credentials():
+def test_claude_launch_does_not_inherit_anthropic_account_credentials() -> None:
     env = build_claude_proxy_env(
         proxy_root_url="http://localhost:8082",
         auth_token="proxy-token",

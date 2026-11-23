@@ -44,7 +44,7 @@ def _read(path: Path) -> JsonObject:
         source = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return {}
-    value = json.loads(
+    value: JsonValue = json.loads(
         source, object_pairs_hook=_unique_object, parse_constant=_reject_constant
     )
     if not isinstance(value, dict):

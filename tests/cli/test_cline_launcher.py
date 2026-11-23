@@ -1,6 +1,7 @@
 """Contract tests for the installed `fcc-cline` launcher."""
 
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -12,6 +13,8 @@ from free_claude_code.cli.launchers.cline_config import (
     build_cline_config,
 )
 from free_claude_code.core.model_capabilities import ModelInputModality
+from tests.cli.conftest import LaunchCapture
+from tests.wire_payload import decode_object, object_payload
 
 
 def test_cline_config_uses_responses_and_only_known_metadata() -> None:
@@ -136,22 +139,32 @@ def test_cline_config_rejects_empty_model_catalog() -> None:
         )
 
 
-def test_cline_native_configuration_is_available_to_child(launch_capture) -> None:
+def test_cline_native_configuration_is_available_to_child(
+    launch_capture: LaunchCapture,
+) -> None:
     from tests.cli.test_launcher_workflow import launch
 
     launch_ids = []
     hub_paths = []
 
-    def inspect(command, env):
+    def inspect(command: list[str], env: Mapping[str, str]):
         providers_path = Path(env["CLINE_PROVIDER_SETTINGS_PATH"])
-        providers = json.loads(providers_path.read_text())
-        models = json.loads(providers_path.with_name("models.json").read_text())
-        settings = providers["providers"][CLINE_PROVIDER_ID]["settings"]
-        assert settings["baseUrl"] == "http://127.0.0.1:8182/v1"
-        assert settings["apiKey"] == "launcher-test-token"
-        launch_ids.append(settings["headers"]["x-fcc-launch-id"])
+        providers = decode_object(providers_path.read_text())
+        models = decode_object(providers_path.with_name("models.json").read_text())
+        settings = object_payload(
+            object_payload(providers["providers"])[CLINE_PROVIDER_ID]
+        )["settings"]
+        assert object_payload(settings)["baseUrl"] == "http://127.0.0.1:8182/v1"
+        assert object_payload(settings)["apiKey"] == "launcher-test-token"
+        launch_ids.append(
+            object_payload(object_payload(settings)["headers"])["x-fcc-launch-id"]
+        )
         assert launch_ids[-1]
-        assert settings["model"] in models["providers"][CLINE_PROVIDER_ID]["models"]
+        assert object_payload(settings)["model"] in object_payload(
+            object_payload(object_payload(models["providers"])[CLINE_PROVIDER_ID])[
+                "models"
+            ]
+        )
         assert env["CLINE_SESSION_BACKEND_MODE"] == "local"
         assert command[:3] == ["cline", "--provider", "openai-native"]
         hub_path = Path(env["CLINE_HUB_DISCOVERY_PATH"])
@@ -176,14 +189,14 @@ def test_cline_native_configuration_is_available_to_child(launch_capture) -> Non
 
 
 def test_cline_hub_discovery_path_overrides_stale_inherited_value(
-    launch_capture, monkeypatch: pytest.MonkeyPatch
+    launch_capture: LaunchCapture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from tests.cli.test_launcher_workflow import launch
 
     monkeypatch.setenv("CLINE_HUB_DISCOVERY_PATH", "stale-user-hub-discovery.json")
     dir_existed_at_start = []
 
-    def inspect(command, env):
+    def inspect(command: object, env: Mapping[str, str]):
         hub_dir = Path(env["CLINE_HUB_DISCOVERY_PATH"]).parent
         dir_existed_at_start.append(hub_dir.is_dir())
 

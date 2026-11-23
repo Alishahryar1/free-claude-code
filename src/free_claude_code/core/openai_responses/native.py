@@ -10,7 +10,7 @@ from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.reasoning import ReasoningPolicy
 
 from .errors import openai_error_from_failure
-from .events import format_response_sse_event
+from .events import _canonical_position, format_response_sse_event
 from .ids import tool_item_id_for_kind
 from .models import OpenAIResponsesRequest
 from .reasoning import responses_reasoning_config, responses_reasoning_policy
@@ -99,6 +99,13 @@ class NativeResponsesRelay:
                 f"event {self._terminal_type!r}."
             )
         data = cast(JsonObject, deepcopy(dict(payload)))
+        # Recovery and output assembly use indexes as integer positions.
+        for field in ("output_index", "content_index", "summary_index"):
+            if (
+                field in data
+                and (index := _canonical_position(data[field])) is not None
+            ):
+                data[field] = index
         response = data.get("response")
         if isinstance(response, dict):
             response["model"] = self._public_model

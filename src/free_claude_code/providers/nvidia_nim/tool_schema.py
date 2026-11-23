@@ -1,6 +1,6 @@
 """NVIDIA NIM tool schema sanitization and private argument aliases."""
 
-from typing import Any
+from free_claude_code.core.json_types import JsonObject, JsonValue
 
 _SCHEMA_VALUE_KEYS = frozenset(
     {
@@ -26,14 +26,14 @@ _NIM_TOOL_PARAMETER_ALIAS_PREFIX = "_fcc_arg_"
 _NIM_UNSAFE_TOOL_PARAMETER_NAMES = frozenset({"type"})
 
 
-def sanitize_nim_tool_schemas(body: dict[str, Any]) -> None:
+def sanitize_nim_tool_schemas(body: JsonObject) -> None:
     """Sanitize only tool parameter schemas, preserving tool calls/history."""
     tools = body.get("tools")
     if not isinstance(tools, list):
         return
 
     tool_argument_aliases: dict[str, dict[str, str]] = {}
-    sanitized_tools: list[Any] = []
+    sanitized_tools: list[JsonValue] = []
     for tool in tools:
         if not isinstance(tool, dict):
             sanitized_tools.append(tool)
@@ -45,13 +45,14 @@ def sanitize_nim_tool_schemas(body: dict[str, Any]) -> None:
             parameters = function.get("parameters")
             if isinstance(parameters, dict):
                 _, sanitized_parameters = _sanitize_nim_schema_node(parameters)
-                sanitized_parameters, argument_aliases = _alias_nim_tool_parameters(
-                    sanitized_parameters
-                )
-                sanitized_function["parameters"] = sanitized_parameters
-                tool_name = function.get("name")
-                if argument_aliases and isinstance(tool_name, str) and tool_name:
-                    tool_argument_aliases[tool_name] = argument_aliases
+                if isinstance(sanitized_parameters, dict):
+                    aliased_parameters, argument_aliases = _alias_nim_tool_parameters(
+                        sanitized_parameters
+                    )
+                    sanitized_function["parameters"] = aliased_parameters
+                    tool_name = function.get("name")
+                    if argument_aliases and isinstance(tool_name, str) and tool_name:
+                        tool_argument_aliases[tool_name] = argument_aliases
             sanitized_tool["function"] = sanitized_function
         sanitized_tools.append(sanitized_tool)
 
@@ -63,7 +64,7 @@ def sanitize_nim_tool_schemas(body: dict[str, Any]) -> None:
 
 
 def nim_tool_argument_aliases_from_body(
-    body: dict[str, Any],
+    body: JsonObject,
 ) -> dict[str, dict[str, str]]:
     """Return validated private NIM tool argument aliases from a built body."""
     raw_aliases = body.get(NIM_TOOL_ARGUMENT_ALIASES_KEY)
@@ -84,7 +85,7 @@ def nim_tool_argument_aliases_from_body(
     return aliases
 
 
-def body_without_nim_tool_argument_aliases(body: dict[str, Any]) -> dict[str, Any]:
+def body_without_nim_tool_argument_aliases(body: JsonObject) -> JsonObject:
     """Return a request body with private alias metadata stripped before upstream I/O."""
     if NIM_TOOL_ARGUMENT_ALIASES_KEY not in body:
         return body
@@ -93,19 +94,19 @@ def body_without_nim_tool_argument_aliases(body: dict[str, Any]) -> dict[str, An
     return upstream_body
 
 
-def _sanitize_nim_schema_node(value: Any) -> tuple[bool, Any]:
+def _sanitize_nim_schema_node(value: JsonValue) -> tuple[bool, JsonValue]:
     """Remove boolean JSON Schema subschemas that hosted NIM rejects."""
     if isinstance(value, bool):
         return False, None
     if isinstance(value, dict):
-        sanitized: dict[str, Any] = {}
+        sanitized: JsonObject = {}
         for key, item in value.items():
             if key in _SCHEMA_VALUE_KEYS:
                 keep, sanitized_item = _sanitize_nim_schema_node(item)
                 if keep:
                     sanitized[key] = sanitized_item
             elif key in _SCHEMA_LIST_KEYS and isinstance(item, list):
-                sanitized_items: list[Any] = []
+                sanitized_items: list[JsonValue] = []
                 for schema_item in item:
                     keep, sanitized_item = _sanitize_nim_schema_node(schema_item)
                     if keep:
@@ -113,7 +114,7 @@ def _sanitize_nim_schema_node(value: Any) -> tuple[bool, Any]:
                 if sanitized_items:
                     sanitized[key] = sanitized_items
             elif key in _SCHEMA_MAP_KEYS and isinstance(item, dict):
-                sanitized_map: dict[str, Any] = {}
+                sanitized_map: JsonObject = {}
                 for map_key, schema_item in item.items():
                     keep, sanitized_item = _sanitize_nim_schema_node(schema_item)
                     if keep:
@@ -153,7 +154,7 @@ def _make_nim_tool_parameter_alias(name: str, reserved: set[str]) -> str:
     return alias
 
 
-def _collect_nim_tool_property_names(value: Any) -> set[str]:
+def _collect_nim_tool_property_names(value: JsonValue) -> set[str]:
     names: set[str] = set()
     if isinstance(value, dict):
         properties = value.get("properties")
@@ -172,12 +173,12 @@ def _collect_nim_tool_property_names(value: Any) -> set[str]:
 
 
 def _alias_nim_schema_property_names(
-    value: Any,
+    value: JsonValue,
     *,
     reserved: set[str],
     alias_to_original: dict[str, str],
     original_to_alias: dict[str, str],
-) -> Any:
+) -> JsonValue:
     if isinstance(value, list):
         return [
             _alias_nim_schema_property_names(
@@ -192,10 +193,10 @@ def _alias_nim_schema_property_names(
         return value
 
     local_aliases: dict[str, str] = {}
-    aliased_value: dict[str, Any] = {}
+    aliased_value: JsonObject = {}
     properties = value.get("properties")
     if isinstance(properties, dict):
-        aliased_properties: dict[str, Any] = {}
+        aliased_properties: JsonObject = {}
         for property_name, property_schema in properties.items():
             aliased_schema = _alias_nim_schema_property_names(
                 property_schema,
@@ -239,8 +240,8 @@ def _alias_nim_schema_property_names(
 
 
 def _alias_nim_tool_parameters(
-    parameters: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, str]]:
+    parameters: JsonObject,
+) -> tuple[JsonObject, dict[str, str]]:
     alias_to_original: dict[str, str] = {}
     original_to_alias: dict[str, str] = {}
     reserved = _collect_nim_tool_property_names(parameters)
@@ -250,6 +251,6 @@ def _alias_nim_tool_parameters(
         alias_to_original=alias_to_original,
         original_to_alias=original_to_alias,
     )
-    if not alias_to_original:
+    if not isinstance(aliased_parameters, dict) or not alias_to_original:
         return parameters, {}
     return aliased_parameters, alias_to_original

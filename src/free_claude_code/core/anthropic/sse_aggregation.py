@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 
 from .content import streamed_tool_arguments
 from .stream_contracts import SSEEvent
@@ -32,7 +33,7 @@ async def aggregate_anthropic_sse_to_message(
     """
     decoder = AnthropicSSEDecoder()
     message: dict[str, Any] = {}
-    blocks: dict[int, dict[str, Any]] = {}
+    blocks: dict[int, JsonObject] = {}
     parts: dict[int, list[str]] = {}
     error: dict[str, Any] | None = None
     complete = False
@@ -71,9 +72,9 @@ async def aggregate_anthropic_sse_to_message(
                 )
             elif dtype == "citations_delta":
                 citation = delta.get("citation")
-                citations = blocks[idx].get("citations")
+                citations: object = blocks[idx].get("citations")
                 if citations is None:
-                    citations = []
+                    citations = list[JsonValue]()
                 if isinstance(citation, dict) and isinstance(citations, list):
                     blocks[idx]["citations"] = [*citations, dict(citation)]
         elif ptype == "message_delta":
@@ -91,7 +92,7 @@ async def aggregate_anthropic_sse_to_message(
                     else {}
                 )
                 merged.update(
-                    {k: v for k, v in usage.items() if isinstance(v, int | dict)}
+                    {k: v for k, v in usage.items() if isinstance(v, (int, dict))}
                 )
                 message["usage"] = merged
         elif ptype == "error":
@@ -125,13 +126,13 @@ async def aggregate_anthropic_sse_to_message(
             block.setdefault("signature", "")
         elif btype == "tool_use" and error is None:
             try:
-                value = json.loads(
+                value = load_json_value(
                     streamed_tool_arguments(accumulated, block.get("input"))
                 )
                 if not isinstance(value, dict):
                     raise ValueError("Tool input must be an object.")
                 json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
-            except (ValueError, UnicodeError, RecursionError) as exc:
+            except (ValueError, RecursionError) as exc:
                 raise ExecutionFailure(
                     FailureKind.UPSTREAM,
                     502,

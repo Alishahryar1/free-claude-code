@@ -1,11 +1,10 @@
 """Provider connection provenance and precise historical request corrections."""
 
 import hashlib
-import json
 import re
 from collections.abc import Iterator, Mapping
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit, urlunsplit
 
 from free_claude_code.application.errors import InvalidRequestError
@@ -25,7 +24,14 @@ from free_claude_code.core.history_replay import (
     readable_reasoning,
     resolve_messages_replay,
 )
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import (
+    JsonObject,
+    JsonValue,
+    json_array,
+    json_index,
+    json_object,
+    load_json_value,
+)
 
 from .endpoint_types import HttpEndpoint
 
@@ -33,7 +39,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
 
-def validate_history(body: Mapping[str, Any]) -> None:
+def validate_history(body: Mapping[str, JsonValue]) -> None:
     """Reject malformed persisted carriers before credentials or inference."""
     try:
         for protocol in ("responses", "messages", "chat"):
@@ -55,14 +61,15 @@ def normalize_messages_history(request: MessagesRequest) -> MessagesRequest:
             if message.role != "assistant":
                 messages.append(message)
                 continue
-            body = message.model_dump(mode="json")
+            body: JsonObject = message.model_dump(mode="json")
             blocks = body["content"]
             if isinstance(blocks, list):
-                blocks = resolve_messages_replay(cast(list[JsonValue], blocks))
+                blocks = resolve_messages_replay(blocks)
             if message.reasoning_content is not None:
                 if isinstance(blocks, str):
                     blocks = [{"type": "text", "text": blocks}] if blocks else []
                 full: list[str] = []
+                blocks = json_array(blocks)
                 for block in blocks:
                     if not isinstance(block, dict):
                         continue
@@ -88,7 +95,7 @@ def normalize_messages_history(request: MessagesRequest) -> MessagesRequest:
             body["content"] = blocks
             normalized = normalize_history_source({"messages": [body]}, "messages")
             messages.append(
-                Message.model_validate(cast(list[JsonValue], normalized["messages"])[0])
+                Message.model_validate(json_array(normalized["messages"])[0])
             )
     except HistoryReplayError as error:
         raise InvalidRequestError(str(error)) from error
@@ -157,12 +164,12 @@ def replay_origin(
 
 def history_retry_body(
     error: Exception,
-    body: Mapping[str, Any],
+    body: Mapping[str, JsonValue],
     protocol: HistoryProtocol,
     *,
-    source: Mapping[str, Any] | None = None,
+    source: Mapping[str, JsonValue] | None = None,
     source_paths: Mapping[HistoryPath, HistoryPath] | None = None,
-) -> dict[str, Any] | None:
+) -> JsonObject | None:
     """Repair one explicitly rejected historical record on an independent copy."""
     body = normalize_history_source(body, protocol)
     if source is not None:
@@ -171,11 +178,13 @@ def history_retry_body(
     if detail.status_code not in {None, 200, 400, 422}:
         return None
     try:
-        payload = json.loads(detail.body_text or "")
+        payload = load_json_value(detail.body_text or "")
     except ValueError:
         payload = {
             "message": detail.exception_text or str(error),
-            "code": getattr(error, "code", None),
+            "code": code
+            if isinstance(code := getattr(error, "code", None), str)
+            else None,
         }
     candidates = list(_reasoning_records(body, protocol))
     for record in _error_records(payload):
@@ -188,10 +197,10 @@ def history_retry_body(
                 re.I,
             )
         )
-        invalid_native = code in {
+        invalid_native = code in (
             "invalid_encrypted_content",
             "invalid_signature",
-        } or bool(
+        ) or bool(
             re.search(
                 r"invalid signature in thinking block|referenced reasoning item .+ (?:not found|expired)",
                 message,
@@ -213,17 +222,17 @@ def history_retry_body(
             if mapped is None:
                 continue
             path = mapped
-        result: dict[str, Any] = deepcopy(dict(source if source is not None else body))
-        parent: Any = result
+        result: JsonObject = deepcopy(dict(source if source is not None else body))
+        parent: JsonValue = result
         for key in path[:-1]:
-            parent = parent[key]
+            parent = _history_child(parent, key)
         source_parent = parent
         source_key = path[-1]
         target_key = source_key
         replay = None
         carrier_key = None
-        holder = None
-        stored = parent[source_key]
+        holder: JsonObject | None = None
+        stored = _history_child(parent, source_key)
         if isinstance(stored, dict):
             for field in ("data", "signature", "encrypted_content"):
                 carrier = stored.get(field)
@@ -237,18 +246,19 @@ def history_retry_body(
                         and original in details
                     ):
                         replay, carrier_key, holder = candidate, field, native
-                        parent, target_key = cast(Any, details), details.index(original)
+                        parent, target_key = details, details.index(original)
                     elif native == original:
-                        replay, carrier_key, holder = candidate, field, {"item": native}
-                        parent, target_key = cast(Any, holder), "item"
+                        replay, carrier_key = candidate, field
+                        holder = {"item": native}
+                        parent, target_key = holder, "item"
                     break
         if invalid_id:
             value = original.get("id")
             if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9_-]+", value):
                 continue
             corrected = "rs_" + hashlib.sha256(value.encode()).hexdigest()[:24]
-            parent[target_key]["id"] = corrected
-            for item in result.get("input", []):
+            json_object(_history_child(parent, target_key))["id"] = corrected
+            for item in json_array(result.get("input", [])):
                 if (
                     isinstance(item, dict)
                     and item.get("type") == "item_reference"
@@ -265,41 +275,71 @@ def history_retry_body(
                 )
             )
             if protocol == "responses" and context:
-                parent[target_key] = {"role": "assistant", "content": context}
+                _replace_history_child(
+                    parent, target_key, {"role": "assistant", "content": context}
+                )
             elif protocol == "messages" and context:
-                parent[target_key] = {"type": "text", "text": context}
+                _replace_history_child(
+                    parent, target_key, {"type": "text", "text": context}
+                )
             else:
-                del parent[target_key]
+                _delete_history_child(parent, target_key)
                 if protocol == "chat":
-                    assistant = result["messages"][path[1]]
+                    assistant = json_object(
+                        json_array(result["messages"])[json_index(path[1])]
+                    )
                     if context:
-                        assistant["content"] = (
-                            (assistant.get("content") or "") + "\n\n" + context
-                        )
+                        content = assistant.get("content") or ""
+                        if not isinstance(content, str):
+                            raise TypeError("Expected text in Chat reasoning history")
+                        assistant["content"] = content + "\n\n" + context
                     if not parent and replay is None:
                         assistant.pop("reasoning_details", None)
-        if replay is not None and holder is not None and carrier_key is not None:
+        if (
+            replay is not None
+            and holder is not None
+            and carrier_key is not None
+            and isinstance(stored, dict)
+        ):
             if target_key == "item":
                 replacement = holder.get("item")
                 if replacement is None:
-                    del source_parent[source_key]
+                    _delete_history_child(source_parent, source_key)
                 elif invalid_id:
                     stored[carrier_key] = encode_replay(
-                        ReplayRecord(replay.origin, cast(JsonObject, replacement))
+                        ReplayRecord(replay.origin, json_object(replacement))
                     )
                 else:
-                    source_parent[source_key] = replacement
+                    _replace_history_child(source_parent, source_key, replacement)
             else:
-                stored[carrier_key] = encode_replay(
-                    ReplayRecord(replay.origin, cast(JsonObject, holder))
-                )
+                stored[carrier_key] = encode_replay(ReplayRecord(replay.origin, holder))
         return result
     return None
 
 
+def _history_child(parent: JsonValue, key: str | int) -> JsonValue:
+    if isinstance(key, int):
+        return json_array(parent)[key]
+    return json_object(parent)[key]
+
+
+def _replace_history_child(parent: JsonValue, key: str | int, value: JsonValue) -> None:
+    if isinstance(key, int):
+        json_array(parent)[key] = value
+    else:
+        json_object(parent)[key] = value
+
+
+def _delete_history_child(parent: JsonValue, key: str | int) -> None:
+    if isinstance(key, int):
+        del json_array(parent)[key]
+    else:
+        del json_object(parent)[key]
+
+
 def _reasoning_records(
-    body: Mapping[str, Any], protocol: HistoryProtocol
-) -> Iterator[tuple[tuple[str | int, ...], Mapping[str, Any]]]:
+    body: Mapping[str, JsonValue], protocol: HistoryProtocol
+) -> Iterator[tuple[tuple[str | int, ...], Mapping[str, JsonValue]]]:
     if protocol == "responses":
         items = body.get("input")
         if isinstance(items, Mapping):
@@ -308,7 +348,7 @@ def _reasoning_records(
             if isinstance(item, Mapping) and item.get("type") == "reasoning":
                 yield ("input", index), item
         return
-    for index, message in enumerate(body.get("messages", [])):
+    for index, message in enumerate(json_array(body.get("messages", []))):
         if not isinstance(message, Mapping) or message.get("role") != "assistant":
             continue
         field = "content" if protocol == "messages" else "reasoning_details"
@@ -318,12 +358,12 @@ def _reasoning_records(
         for block_index, block in enumerate(blocks):
             if isinstance(block, Mapping) and (
                 protocol == "chat"
-                or block.get("type") in {"thinking", "redacted_thinking"}
+                or block.get("type") in ("thinking", "redacted_thinking")
             ):
                 yield ("messages", index, field, block_index), block
 
 
-def _error_records(payload: object) -> Iterator[Mapping[str, Any]]:
+def _error_records(payload: JsonValue) -> Iterator[Mapping[str, JsonValue]]:
     if isinstance(payload, Mapping):
         if isinstance(payload.get("message"), str):
             yield payload
@@ -331,7 +371,7 @@ def _error_records(payload: object) -> Iterator[Mapping[str, Any]]:
             nested = payload.get(key)
             if key == "raw" and isinstance(nested, str):
                 try:
-                    nested = json.loads(nested)
+                    nested = load_json_value(nested)
                 except ValueError:
                     continue
             yield from _error_records(nested)
@@ -341,9 +381,9 @@ def _error_records(payload: object) -> Iterator[Mapping[str, Any]]:
 
 
 def _rejected_record(
-    error: Mapping[str, Any],
-    candidates: list[tuple[tuple[str | int, ...], Mapping[str, Any]]],
-) -> tuple[tuple[str | int, ...], Mapping[str, Any]] | None:
+    error: Mapping[str, JsonValue],
+    candidates: list[tuple[tuple[str | int, ...], Mapping[str, JsonValue]]],
+) -> tuple[tuple[str | int, ...], Mapping[str, JsonValue]] | None:
     location = str(error.get("param") or error.get("loc") or error.get("message") or "")
     match = re.search(
         r"(?:input|messages)(?:\[\d+\]|\.\d+)(?:(?:\.content|\.reasoning_details)(?:\[\d+\]|\.\d+))?",
@@ -352,33 +392,33 @@ def _rejected_record(
     if match:
         path = tuple(
             int(part) if part.isdigit() else part
-            for part in re.findall(r"[a-z_]+|\d+", match[0])
+            for part in (token[0] for token in re.finditer(r"[a-z_]+|\d+", match[0]))
         )
         return next((entry for entry in candidates if entry[0] == path), None)
     message = str(error.get("message", ""))
     named_ids = {
         value
-        for match in re.findall(
+        for match in re.finditer(
             r"\b(?:for item|reasoning item|and item)\s+"
             r"(?:'([^']+)'|\"([^\"]+)\"|([A-Za-z0-9_-]+))(?=\s|[.,:]|$)",
             message,
             re.I,
         )
-        for value in match
+        for value in match.groups()
         if value
     }
     identified = [
         entry
         for entry in candidates
-        if isinstance(entry[1].get("id"), str)
+        if isinstance(item_id := entry[1].get("id"), str)
         and (
-            entry[1]["id"] in named_ids
+            item_id in named_ids
             or f"'{entry[1]['id']}'" in message
             or f'"{entry[1]["id"]}"' in message
         )
     ]
     if len(identified) == 1 and (
-        not named_ids or named_ids == {identified[0][1]["id"]}
+        not named_ids or named_ids == {str(identified[0][1]["id"])}
     ):
         return identified[0]
     if named_ids or identified:

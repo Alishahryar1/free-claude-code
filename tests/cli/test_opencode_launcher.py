@@ -1,6 +1,7 @@
 """OpenCode launcher contract tests."""
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,12 @@ import pytest
 from free_claude_code.application.model_catalog import CatalogModel
 from free_claude_code.cli.launchers.opencode_config import build_opencode_config
 from free_claude_code.core.model_capabilities import ModelInputModality
+from tests.cli.conftest import LaunchCapture
+from tests.wire_payload import (
+    decode_object,
+    object_array,
+    object_payload,
+)
 
 
 def test_opencode_config_uses_native_responses_and_model_budgets() -> None:
@@ -174,19 +181,38 @@ def test_opencode_config_rejects_empty_model_catalog() -> None:
         )
 
 
-def test_opencode_child_receives_private_catalog_and_overlay(launch_capture) -> None:
+def test_opencode_child_receives_private_catalog_and_overlay(
+    launch_capture: LaunchCapture,
+) -> None:
     from tests.cli.test_launcher_workflow import launch
 
-    def inspect(command, env):
-        config = json.loads(Path(env["OPENCODE_CONFIG"]).read_text())
-        overlay = json.loads(env["OPENCODE_CONFIG_CONTENT"])
-        provider = config["providers"]["free-claude-code"]
-        assert provider["settings"]["baseURL"] == "http://127.0.0.1:8182/v1"
+    def inspect(command: object, env: Mapping[str, str]):
+        config = decode_object(Path(env["OPENCODE_CONFIG"]).read_text())
+        overlay = decode_object(env["OPENCODE_CONFIG_CONTENT"])
+        provider = object_payload(config["providers"])["free-claude-code"]
+        assert (
+            object_payload(object_payload(provider)["settings"])["baseURL"]
+            == "http://127.0.0.1:8182/v1"
+        )
         for key in ("headerTimeout", "chunkTimeout", "timeout"):
-            assert provider["settings"][key] is False
-            assert overlay["providers"]["free-claude-code"]["settings"][key] is False
-        assert "nvidia_nim/catalog-model:variant" in provider["models"]
-        assert overlay["experimental"]["policies"][-1]["resource"] == "free-claude-code"
+            assert object_payload(object_payload(provider)["settings"])[key] is False
+            assert (
+                object_payload(
+                    object_payload(
+                        object_payload(overlay["providers"])["free-claude-code"]
+                    )["settings"]
+                )[key]
+                is False
+            )
+        assert "nvidia_nim/catalog-model:variant" in object_payload(
+            object_payload(provider)["models"]
+        )
+        assert (
+            object_array(object_payload(overlay["experimental"])["policies"])[-1][
+                "resource"
+            ]
+            == "free-claude-code"
+        )
         assert env["FCC_OPENCODE_API_KEY"] == "launcher-test-token"
 
     launch_capture.on_start = inspect
@@ -195,7 +221,7 @@ def test_opencode_child_receives_private_catalog_and_overlay(launch_capture) -> 
 
 @pytest.mark.parametrize("key", ("OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT"))
 def test_existing_opencode_process_configuration_is_not_replaced(
-    key, launch_capture, monkeypatch
+    key: str, launch_capture: LaunchCapture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from tests.cli.test_launcher_workflow import launch
 
@@ -218,7 +244,7 @@ def test_existing_opencode_process_configuration_is_not_replaced(
     ],
 )
 def test_opencode_owns_a_private_server_without_rewriting_positionals(
-    args, expected, launch_capture
+    args: list[str], expected: list[str], launch_capture: LaunchCapture
 ) -> None:
     from tests.cli.test_launcher_workflow import launch
 
@@ -237,7 +263,7 @@ def test_opencode_owns_a_private_server_without_rewriting_positionals(
     ],
 )
 def test_opencode_rejects_caller_control_of_server_lifetime(
-    option, launch_capture, capsys
+    option: str, launch_capture: LaunchCapture, capsys: pytest.CaptureFixture[str]
 ) -> None:
     from tests.cli.test_launcher_workflow import launch
 

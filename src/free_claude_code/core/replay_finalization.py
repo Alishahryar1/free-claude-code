@@ -2,7 +2,6 @@
 
 from collections.abc import Callable, Iterator
 from dataclasses import replace
-from typing import Any
 
 from .continuation_request import ContinuationRequest
 from .history_replay import (
@@ -13,34 +12,43 @@ from .history_replay import (
     encode_replay,
     is_replay,
 )
+from .json_types import (
+    DecimalJsonObject,
+    JsonObject,
+    json_array,
+    json_object,
+    json_objects,
+)
 from .recovery_limits import RECOVERY_RETENTION_BYTES
 from .stream_recovery import DeliveredPrefix
 
 
-def _carrier_fields(payload: dict[str, Any]) -> Iterator[tuple[dict[str, Any], str]]:
+def _carrier_fields(
+    payload: DecimalJsonObject,
+) -> Iterator[tuple[DecimalJsonObject, str]]:
     block = payload.get("content_block")
     if isinstance(block, dict):
         if block.get("type") == "redacted_thinking":
             yield block, "data"
         elif block.get("type") == "thinking":
             yield block, "signature"
-    for item in [
-        payload.get("item"),
-        *((payload.get("response") or {}).get("output") or []),
-    ]:
+    response = json_object(payload.get("response") or {})
+    for item in [payload.get("item"), *json_array(response.get("output") or [])]:
         if isinstance(item, dict) and item.get("type") == "reasoning":
             yield item, "encrypted_content"
-    for choice in payload.get("choices") or []:
-        for detail in (choice.get("delta") or {}).get("reasoning_details") or []:
+    for choice in json_objects(payload.get("choices") or []):
+        delta = json_object(choice.get("delta") or {})
+        for detail in json_array(delta.get("reasoning_details") or []):
             if isinstance(detail, dict) and detail.get("type") == "reasoning.encrypted":
                 yield detail, "data"
-    for candidate in payload.get("candidates", []):
-        for part in candidate.get("content", {}).get("parts", []):
+    for candidate in json_objects(payload.get("candidates", [])):
+        content = json_object(candidate.get("content", {}))
+        for part in json_objects(content.get("parts", [])):
             yield part, "thoughtSignature"
 
 
 def finalize_replay(
-    payload: dict[str, Any],
+    payload: DecimalJsonObject,
     prefix: Callable[[], DeliveredPrefix],
     sealed: dict[str, str],
 ) -> bool:
@@ -80,10 +88,13 @@ def finalize_replay(
             raise HistoryReplayError(
                 "Continuation replay requires one public assistant turn."
             )
+        # Gemini history is projected through the native JSON model before replay.
+        turn: JsonObject = history[0]
+        echo = tuple(json_objects(turn["parts"]))
         encoded = (encode_gemini_replay if native else encode_replay)(
             replace(
                 record,
-                continuation=replace(continuation, echo=tuple(history[0]["parts"])),
+                continuation=replace(continuation, echo=echo),
             )
         )
         if (

@@ -1,7 +1,9 @@
 """NVIDIA NIM / Riva offline ASR for voice notes (provider-owned transport)."""
 
 import asyncio
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Protocol
 
 from loguru import logger
 
@@ -87,13 +89,23 @@ class NvidiaNimTranscriber:
             response = asr_service.offline_recognize(data, config)
 
             transcript = ""
-            results = getattr(response, "results", None)
+            results: Sequence[_ASRResult] | None = getattr(response, "results", None)
             if results and results[0].alternatives:
                 transcript = results[0].alternatives[0].transcript
             logger.debug("NIM transcription: {} chars", len(transcript))
             return transcript or "(no speech detected)"
         finally:
             auth.channel.close()
+
+
+class _ASRAlternative(Protocol):
+    @property
+    def transcript(self) -> str: ...
+
+
+class _ASRResult(Protocol):
+    @property
+    def alternatives(self) -> Sequence[_ASRAlternative]: ...
 
 
 async def _wait_for_thread_exit(worker: asyncio.Task[str]) -> None:

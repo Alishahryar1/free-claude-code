@@ -5,6 +5,7 @@ import sys
 from collections.abc import AsyncIterator, Mapping
 from contextlib import suppress
 from dataclasses import replace
+from typing import override
 
 import httpx
 import httpx2
@@ -50,6 +51,7 @@ class _BorrowedMessagesPool(httpx.AsyncBaseTransport):
     def __init__(self, pool: httpx.AsyncBaseTransport) -> None:
         self._pool = pool
 
+    @override
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         return await self._pool.handle_async_request(request)
 
@@ -161,6 +163,7 @@ class GitHubCopilotProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_chat(
         self,
         request: ChatRequest,
@@ -183,6 +186,7 @@ class GitHubCopilotProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_gemini(
         self,
         request: GeminiRequest,

@@ -4,9 +4,16 @@ import json
 from typing import cast
 
 import pytest
-from playwright.sync_api import Locator, Page, expect
+from playwright.sync_api import Locator, Page, Route, expect
 
 from e2e.provider_support import close_provider, open_provider
+from free_claude_code.core.json_types import load_json_value
+from tests.wire_payload import (
+    array_payload,
+    object_payload,
+    response_object,
+    string_payload,
+)
 
 
 def _open_models(page: Page, admin_base_url: str) -> None:
@@ -457,7 +464,7 @@ def test_fallback_drag_indicators_only_offer_unique_positions_that_change_order(
                 steps=5,
             )
             expect(indicators).to_have_count(1)
-            current_y = indicators.evaluate(
+            current_y: float = indicators.evaluate(
                 "el => { const r = el.getBoundingClientRect(); return el.dataset.dropPosition === 'before' ? r.top : r.bottom; }"
             )
             if line_y is None:
@@ -495,7 +502,7 @@ def test_fallback_model_edits_validate_without_losing_saved_configuration(
         editor.get_by_role("button", name="Add fallback", exact=True).click()
     with page.expect_response("**/admin/api/config/apply") as saved:
         page.locator("#applyButton").click()
-    assert saved.value.json()["applied"] is True
+    assert response_object(saved.value)["applied"] is True
     expect(page.locator("#dirtyState")).to_have_text("No changes")
     original = _fallbacks(editor)
     model = editor.get_by_role("combobox", name="Fallback model 1", exact=True)
@@ -504,11 +511,19 @@ def test_fallback_model_edits_validate_without_losing_saved_configuration(
     model.press("Tab")
     with page.expect_response("**/admin/api/config/apply") as rejected:
         page.locator("#applyButton").click()
-    assert rejected.value.json()["applied"] is False
+    assert response_object(rejected.value)["applied"] is False
     expect(model).to_have_value(invalid_model)
-    fields = page.request.get(f"{admin_base_url}/admin/api/config").json()["fields"]
-    persisted = next(field for field in fields if field["key"] == "MODEL_FALLBACKS")
-    assert json.loads(persisted["value"]) == original
+    fields = response_object(page.request.get(f"{admin_base_url}/admin/api/config"))[
+        "fields"
+    ]
+    persisted = next(
+        field
+        for field in array_payload(fields)
+        if object_payload(field)["key"] == "MODEL_FALLBACKS"
+    )
+    assert (
+        load_json_value(string_payload(object_payload(persisted)["value"])) == original
+    )
 
 
 def test_editable_fallbacks_keep_focus_and_live_model_suggestions(
@@ -547,7 +562,7 @@ def test_editable_fallbacks_keep_focus_and_live_model_suggestions(
     assert _fallbacks(editor) == [
         {"model": "open_router/new-model", "reasoning": "client", "api_key_number": 1}
     ]
-    registered = page.evaluate("state.modelComboboxes.size")
+    registered: int = page.evaluate("state.modelComboboxes.size")
     for _ in range(3):
         editor.locator("#field-MODEL_FALLBACKS-add").fill("groq/discarded")
         editor.get_by_role("button", name="Add fallback", exact=True).click()
@@ -622,7 +637,7 @@ def test_model_suggestions_keep_server_order_after_provider_check_and_late_respo
     page.unroute("**/admin/api/models")
     pending = []
 
-    def hold_catalog(route):
+    def hold_catalog(route: Route):
         pending.append(route)
         page.evaluate("count => { window.heldCatalogLoads = count; }", len(pending))
 

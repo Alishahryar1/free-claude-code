@@ -16,7 +16,9 @@ from tests.providers.support import (
 
 
 @pytest.mark.asyncio
-async def test_model_catalog_extracts_strict_optional_reasoning_boolean() -> None:
+async def test_model_catalog_extracts_strict_optional_reasoning_boolean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     provider = profiled_provider(
         "nararoute",
         make_provider_config(
@@ -25,15 +27,19 @@ async def test_model_catalog_extracts_strict_optional_reasoning_boolean() -> Non
         ),
         admission=immediate_admission(provider_name="nararoute"),
     )
-    provider._client.models.list = AsyncMock(
-        return_value=SimpleNamespace(
-            data=[
-                {"id": "reasoning", "reasoning": True},
-                {"id": "plain", "reasoning": False},
-                {"id": "unknown"},
-                {"id": "malformed", "reasoning": "true"},
-            ]
-        )
+    monkeypatch.setattr(
+        provider._client.models,
+        "list",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                data=[
+                    {"id": "reasoning", "reasoning": True},
+                    {"id": "plain", "reasoning": False},
+                    {"id": "unknown"},
+                    {"id": "malformed", "reasoning": "true"},
+                ]
+            )
+        ),
     )
     try:
         infos = await provider.list_model_infos()

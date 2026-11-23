@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING
 
+from free_claude_code.messaging.trees.snapshot import TreeSnapshot
+
 from ..models import MessageScope
 from .identity import TreeIdentity
 from .repository import TreeRepository
@@ -27,7 +29,8 @@ class TreeTransaction:
         self.before[identity] = None
 
     async def commit(self) -> None:
-        changed, removed = [], []
+        changed: list[TreeSnapshot] = []
+        removed: list[TreeIdentity] = []
         for identity, previous in self.before.items():
             current = self.repository.get_tree(identity)
             if current is None:

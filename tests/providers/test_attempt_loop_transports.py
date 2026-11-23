@@ -5,20 +5,27 @@ see: upstream requests, admission outcomes, raised failures and traces.
 """
 
 import json
-from collections.abc import Iterator
-from typing import Any
+from collections.abc import AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
 from loguru import logger
 
+from tests.wire_payload import object_payload
+
+if TYPE_CHECKING:
+    from loguru import Message
+
 from free_claude_code.config.provider_catalog import GEMINI_DEFAULT_BASE
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_delivery import (
     StreamDeliveryState,
     bind_stream_delivery,
 )
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.trace import TRACE_PAYLOAD_BINDING
 from free_claude_code.providers.gemini import GeminiProvider
 from free_claude_code.providers.gemini.transport import GeminiTransport
@@ -35,6 +42,7 @@ from tests.providers.test_stream_failure_resolution_transports import (
     _gemini,
     _outcomes,
 )
+from tests.wire_payload import decode_object
 
 HISTORY = [{"role": "user", "content": "greet"}]
 HARNESSED = ["chat", "messages", "responses"]
@@ -44,8 +52,8 @@ HARNESSED = ["chat", "messages", "responses"]
 def traces() -> Iterator[list[dict[str, Any]]]:
     payloads: list[dict[str, Any]] = []
 
-    def sink(message: Any) -> None:
-        payload = message.record["extra"].get(TRACE_PAYLOAD_BINDING)
+    def sink(message: Message) -> None:
+        payload: object = message.record["extra"].get(TRACE_PAYLOAD_BINDING)
         if isinstance(payload, dict):
             payloads.append(payload)
 
@@ -75,7 +83,7 @@ def _lifecycle(payloads: list[dict[str, Any]]) -> tuple[int, int]:
     return len(sent), len(completed)
 
 
-async def _drain(stream) -> int | None:
+async def _drain(stream: AsyncIterator[StreamOutput]) -> int | None:
     """Drain a stream; return the raised failure's status, if any."""
     with bind_stream_delivery(StreamDeliveryState()):
         try:
@@ -111,7 +119,9 @@ LIFECYCLE_TRACES = {
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", HARNESSED)
-async def test_successful_request_lifecycle_traces(protocol, traces):
+async def test_successful_request_lifecycle_traces(
+    protocol: str, traces: list[JsonObject]
+) -> None:
     async with _harness(
         protocol, lambda _bodies: (200, text_events(protocol, "hi"))
     ) as (send, _bodies, _):
@@ -122,10 +132,13 @@ async def test_successful_request_lifecycle_traces(protocol, traces):
 
 
 @pytest.mark.asyncio
-async def test_gemini_successful_request_lifecycle_traces(traces):
-    await _drain_gemini(
-        _gemini(lambda _request: gemini_sse([{"text": "ok"}]), max_attempts=2)
-    )
+async def test_gemini_successful_request_lifecycle_traces(
+    traces: list[JsonObject],
+) -> None:
+    def callback(_request: object):
+        return gemini_sse([{"text": "ok"}])
+
+    await _drain_gemini(_gemini(callback, max_attempts=2))
 
     assert _lifecycle(traces) == LIFECYCLE_TRACES["gemini"]
     assert _outcomes(traces) == [("generation", "accepted")]
@@ -133,12 +146,14 @@ async def test_gemini_successful_request_lifecycle_traces(traces):
 
 # A credential failure is not a provider call: it opens no attempt and is
 # terminal on every transport. (credential exchanges, admission outcomes)
-ENDPOINT_FAILURE = (1, [])
+ENDPOINT_FAILURE: tuple[int, list[tuple[str, str]]] = (1, [])
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", HARNESSED)
-async def test_endpoint_failure_opens_no_attempt(protocol, traces):
+async def test_endpoint_failure_opens_no_attempt(
+    protocol: str, traces: list[JsonObject]
+) -> None:
     context = _UnreachableEndpoint()
     async with _harness(
         protocol,
@@ -153,7 +168,9 @@ async def test_endpoint_failure_opens_no_attempt(protocol, traces):
 
 
 @pytest.mark.asyncio
-async def test_gemini_endpoint_failure_opens_no_attempt(traces):
+async def test_gemini_endpoint_failure_opens_no_attempt(
+    traces: list[JsonObject],
+) -> None:
     context = _UnreachableEndpoint()
     sent: list[httpx.Request] = []
 
@@ -188,7 +205,9 @@ EXHAUSTED_STATUS = {"chat": 503, "responses": 503, "messages": 529, "gemini": 52
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", HARNESSED)
-async def test_exhausted_attempts_resolve_each_failure_once(protocol, traces):
+async def test_exhausted_attempts_resolve_each_failure_once(
+    protocol: str, traces: list[JsonObject]
+) -> None:
     async with _harness(
         protocol, lambda _bodies: (503, {"message": "busy"}), max_attempts=2
     ) as (send, bodies, _):
@@ -201,7 +220,9 @@ async def test_exhausted_attempts_resolve_each_failure_once(protocol, traces):
 
 
 @pytest.mark.asyncio
-async def test_gemini_exhausted_attempts_resolve_each_failure_once(traces):
+async def test_gemini_exhausted_attempts_resolve_each_failure_once(
+    traces: list[JsonObject],
+) -> None:
     calls = []
 
     def reply(_request):
@@ -225,8 +246,10 @@ OFF_FIELD = {"chat": "reasoning", "messages": "thinking", "responses": "reasonin
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", HARNESSED)
-async def test_continuation_still_drops_a_rejected_reasoning_control(protocol):
-    def reply(bodies):
+async def test_continuation_still_drops_a_rejected_reasoning_control(
+    protocol: str,
+) -> None:
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events(protocol, "Hello ", complete=False)
         if len(bodies) == 2:
@@ -244,11 +267,11 @@ async def test_continuation_still_drops_a_rejected_reasoning_control(protocol):
 
 
 @pytest.mark.asyncio
-async def test_gemini_continuation_drops_a_rejected_reasoning_control():
+async def test_gemini_continuation_drops_a_rejected_reasoning_control() -> None:
     bodies: list[dict[str, Any]] = []
 
-    def reply(request):
-        bodies.append(json.loads(request.content))
+    def reply(request: httpx.Request):
+        bodies.append(decode_object(request.content))
         if len(bodies) == 1:
             partial = {
                 "candidates": [
@@ -287,7 +310,8 @@ async def test_gemini_continuation_drops_a_rejected_reasoning_control():
     finally:
         await provider.cleanup()
 
+    configs: list[JsonObject] = [body["generationConfig"] for body in bodies]
     assert [
-        "thinkingBudget" in body["generationConfig"].get("thinkingConfig", {})
-        for body in bodies
+        "thinkingBudget" in object_payload(config.get("thinkingConfig", {}))
+        for config in configs
     ] == [True, True, False]

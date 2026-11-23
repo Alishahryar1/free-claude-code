@@ -35,7 +35,7 @@ def retry_delay(
     ``noise`` is the caller's jitter draw, between 0 and ``timing.jitter``.
     """
     exponent = max(0, attempt - 1)
-    backoff = min(timing.base_delay * (2**exponent), timing.max_delay)
+    backoff = min(timing.base_delay * (2.0**exponent), timing.max_delay)
     return max(backoff + noise, retry_after or 0.0)
 
 

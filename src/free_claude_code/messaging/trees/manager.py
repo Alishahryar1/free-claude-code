@@ -170,7 +170,7 @@ class TreeQueueManager:
         parent_reference_id: str | None = None,
     ) -> QueueDecision:
         """Publish one admission before its processor can begin."""
-        node_id = str(incoming.message_id)
+        node_id = incoming.message_id
         scope = incoming.scope
         prompt = incoming.text or ""
         async with self._transaction() as transaction:
@@ -354,6 +354,7 @@ class TreeQueueManager:
 
     async def _finish_claim(self, tree: MessageTree, claim: NodeClaim) -> None:
         """Serialize successor task publication with aggregate detachment."""
+        tree_is_published = False
         try:
             async with self._transaction(worker=claim) as transaction:
                 if self._closing or tree in self._interrupted:

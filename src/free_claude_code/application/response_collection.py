@@ -1,6 +1,5 @@
 """Collect one replaceable private response without claiming public delivery."""
 
-import json
 import sys
 from collections.abc import AsyncIterator, Iterable
 from typing import Literal
@@ -8,6 +7,12 @@ from typing import Literal
 from free_claude_code.core.anthropic.errors import anthropic_failure_from_error
 from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import (
+    json_index,
+    json_object,
+    json_objects,
+    load_json_value,
+)
 from free_claude_code.core.stream_delivery import (
     StreamDeliveryState,
     bind_stream_delivery,
@@ -86,7 +91,7 @@ def _validate(
     frames: Iterable[str], *, protocol: WireProtocol, native_json: bool
 ) -> None:
     if native_json:
-        data = json.loads("".join(frames))
+        data = load_json_value("".join(frames))
         if (
             not isinstance(data, dict)
             or data.get("type") != "message"
@@ -107,12 +112,13 @@ def _validate(
             for event in AnthropicSSEDecoder().feed(raw):
                 data = event.data
                 kind = data.get("type")
-                if kind in {"error", "response.error", "response.failed"} or data.get(
+                if kind in ("error", "response.error", "response.failed") or data.get(
                     "error"
                 ):
-                    error = (
-                        data.get("error") or data.get("response", {}).get("error") or {}
-                    )
+                    error = data.get("error")
+                    if not error:
+                        error = json_object(data.get("response", {})).get("error")
+                    error = json_object(error or {})
                     if protocol == "messages":
                         raise anthropic_failure_from_error(error)
                     raise _failure(
@@ -121,19 +127,20 @@ def _validate(
                 if protocol == "messages":
                     if kind == "message_delta":
                         message_reason |= (
-                            data.get("delta", {}).get("stop_reason") is not None
+                            json_object(data.get("delta", {})).get("stop_reason")
+                            is not None
                         )
                     terminal |= kind == "message_stop" and message_reason
                 elif protocol == "responses":
-                    terminal |= kind in {"response.completed", "response.incomplete"}
+                    terminal |= kind in ("response.completed", "response.incomplete")
                 elif protocol == "gemini":
                     terminal |= any(
                         candidate.get("finishReason")
-                        for candidate in data.get("candidates", [])
+                        for candidate in json_objects(data.get("candidates", []))
                     )
                 else:
-                    for choice in data.get("choices", []):
-                        index = choice.get("index", 0)
+                    for choice in json_objects(data.get("choices", [])):
+                        index = json_index(choice.get("index", 0))
                         choices[index] = (
                             choices.get(index, False)
                             or choice.get("finish_reason") is not None

@@ -22,17 +22,17 @@ def _models_payload(*model_ids: str) -> dict[str, Any]:
     }
 
 
-def _catalog_models(catalog: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+def _catalog_models(catalog: Mapping[str, object]) -> list[Mapping[str, object]]:
     models = catalog["models"]
     assert isinstance(models, list)
-    catalog_models: list[Mapping[str, Any]] = []
+    catalog_models: list[Mapping[str, object]] = []
     for model in models:
         assert isinstance(model, Mapping)
-        catalog_models.append(cast(Mapping[str, Any], model))
+        catalog_models.append(cast(Mapping[str, object], model))
     return catalog_models
 
 
-def _slugs(catalog: Mapping[str, Any]) -> list[str]:
+def _slugs(catalog: Mapping[str, object]) -> list[str]:
     slugs: list[str] = []
     for model in _catalog_models(catalog):
         slug = model["slug"]

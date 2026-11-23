@@ -3,7 +3,7 @@
 import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
@@ -19,21 +19,24 @@ from .discord_inbound import (
     get_audio_attachment,
     parse_allowed_channels,
 )
-from .discord_io import DiscordMessenger
+from .discord_io import DiscordLibrary, DiscordMessenger
 from .ports import InboundMessageHandler
 from .voice_flow import VoiceNoteFlow
 
-_discord_module: Any = None
+if TYPE_CHECKING:
+    from discord import Attachment, Message
+
 try:
     import discord as _discord_import
 
     _discord_module = _discord_import
     DISCORD_AVAILABLE = True
 except ImportError:
+    _discord_module = None
     DISCORD_AVAILABLE = False
 
 
-def _get_discord() -> Any:
+def _get_discord() -> DiscordLibrary:
     """Return the discord module or raise a setup error."""
     if not DISCORD_AVAILABLE or _discord_module is None:
         raise ImportError(
@@ -59,7 +62,7 @@ if DISCORD_AVAILABLE and _discord_module is not None:
         async def on_ready(self) -> None:
             self._runtime._mark_connected()
 
-        async def on_message(self, message: Any) -> None:
+        async def on_message(self, message: Message) -> None:
             await self._runtime._handle_client_message(message)
 else:
     _DiscordClient = None
@@ -100,7 +103,7 @@ class DiscordRuntime:
         self._connected = False
         self._accepting_messages = False
         self._ready = asyncio.Event()
-        self._inbound_tasks: set[asyncio.Task[Any]] = set()
+        self._inbound_tasks: set[asyncio.Task[object]] = set()
         self._limiter = limiter
         self._start_task: asyncio.Task[None] | None = None
         self.outbound = DiscordMessenger(
@@ -116,7 +119,7 @@ class DiscordRuntime:
         self._log_raw_messaging_content = log_raw_messaging_content
         self._log_api_error_tracebacks = log_api_error_tracebacks
 
-    async def _handle_client_message(self, message: Any) -> None:
+    async def _handle_client_message(self, message: Message) -> None:
         """Adapter entry point used by the internal Discord client."""
         if not self._accepting_messages:
             return
@@ -158,7 +161,7 @@ class DiscordRuntime:
         return await self._voice_flow.cancel_pending_voices_in_scope(scope)
 
     async def _handle_voice_note(
-        self, message: Any, attachment: Any, channel_id: str
+        self, message: Message, attachment: Attachment, channel_id: str
     ) -> bool:
         """Handle a Discord audio attachment."""
         return await self._voice_flow.handle(
@@ -168,7 +171,7 @@ class DiscordRuntime:
             queue_delete_messages=self.outbound.queue_delete_messages,
         )
 
-    async def _on_discord_message(self, message: Any) -> None:
+    async def _on_discord_message(self, message: Message) -> None:
         """Handle incoming Discord messages."""
         if message.author.bot:
             return

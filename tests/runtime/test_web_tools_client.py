@@ -1,20 +1,34 @@
 """Outbound request, parsing, and resource ownership with no network access."""
 
 import asyncio
+from collections.abc import Callable, Coroutine, Mapping
+from typing import override
 
 import httpx
 import pytest
+from aiohttp.abc import AbstractResolver
 
 from free_claude_code.core.web_tools import WebSearchResult
 from free_claude_code.runtime.web_tools import client as web_client
 
 
-def _httpx_clients(monkeypatch, handler):
+def _httpx_clients(
+    monkeypatch: pytest.MonkeyPatch,
+    handler: Callable[[httpx.Request], httpx.Response]
+    | Callable[[httpx.Request], Coroutine[None, None, httpx.Response]],
+):
     original_client = httpx.AsyncClient
     clients = []
 
-    def construct(**kwargs):
-        client = original_client(transport=httpx.MockTransport(handler), **kwargs)
+    def construct(
+        *, timeout: float, follow_redirects: bool, headers: Mapping[str, str]
+    ):
+        client = original_client(
+            timeout=timeout,
+            follow_redirects=follow_redirects,
+            headers=headers,
+            transport=httpx.MockTransport(handler),
+        )
         clients.append(client)
         return client
 
@@ -23,8 +37,10 @@ def _httpx_clients(monkeypatch, handler):
 
 
 @pytest.mark.asyncio
-async def test_search_request_parsing_limit_and_client_closure(monkeypatch):
-    def handle(request):
+async def test_search_request_parsing_limit_and_client_closure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handle(request: httpx.Request):
         assert str(request.url).startswith("https://lite.duckduckgo.com/lite/")
         assert request.url.params["q"] == "query & details"
         assert "free-claude-code/" in request.headers["User-Agent"]
@@ -47,24 +63,26 @@ async def test_search_request_parsing_limit_and_client_closure(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_during_body", [False, True])
 async def test_search_cancellation_closes_client_and_open_response(
-    monkeypatch, cancel_during_body
-):
+    monkeypatch: pytest.MonkeyPatch, cancel_during_body: bool
+) -> None:
     entered = asyncio.Event()
 
     class Body(httpx.AsyncByteStream):
         closed = False
 
+        @override
         async def __aiter__(self):
             entered.set()
             await asyncio.Event().wait()
             yield b""
 
+        @override
         async def aclose(self):
             self.closed = True
 
     body = Body()
 
-    async def handle(request):
+    async def handle(request: object):
         if not cancel_during_body:
             entered.set()
             await asyncio.Event().wait()
@@ -86,19 +104,22 @@ async def test_search_cancellation_closes_client_and_open_response(
 
 
 @pytest.mark.asyncio
-async def test_fetch_cancellation_closes_response_session_and_connector(monkeypatch):
+async def test_fetch_cancellation_closes_response_session_and_connector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from contextlib import asynccontextmanager
     from types import SimpleNamespace
 
     from free_claude_code.application.web_tools.ports import WebFetchEgressPolicy
 
     entered = asyncio.Event()
-    response_closed, session_closed = [], []
+    response_closed: list[bool] = []
+    session_closed: list[bool] = []
     connectors = []
     original_connector = web_client.TCPConnector
 
-    def connector(**kwargs):
-        value = original_connector(**kwargs)
+    def connector(*, resolver: AbstractResolver, force_close: bool):
+        value = original_connector(resolver=resolver, force_close=force_close)
         connectors.append(value)
         return value
 
@@ -108,7 +129,7 @@ async def test_fetch_cancellation_closes_response_session_and_connector(monkeypa
         yield b""
 
     @asynccontextmanager
-    async def response(url, *, allow_redirects):
+    async def response(url: str, *, allow_redirects: bool):
         assert url == "https://8.8.8.8/"
         assert allow_redirects is False
         try:
@@ -124,7 +145,7 @@ async def test_fetch_cancellation_closes_response_session_and_connector(monkeypa
             response_closed.append(True)
 
     @asynccontextmanager
-    async def session(**kwargs):
+    async def session(**kwargs: object):
         assert kwargs["connector"] is connectors[-1]
         try:
             yield SimpleNamespace(get=response)
@@ -195,8 +216,13 @@ async def test_fetch_cancellation_closes_response_session_and_connector(monkeypa
     ],
 )
 async def test_fetch_charset_and_content_type_handling(
-    monkeypatch, headers, charset, body, expected_title, expected_data
-):
+    monkeypatch: pytest.MonkeyPatch,
+    headers: dict[str, str],
+    charset: str | None,
+    body: bytes,
+    expected_title: str,
+    expected_data: str,
+) -> None:
     from contextlib import asynccontextmanager
     from types import SimpleNamespace
 
@@ -211,7 +237,7 @@ async def test_fetch_charset_and_content_type_handling(
         raise RuntimeError("Cannot compute fallback encoding of a not yet read body")
 
     @asynccontextmanager
-    async def response(url, *, allow_redirects):
+    async def response(url: str, *, allow_redirects: bool):
         assert url == "https://8.8.8.8/"
         assert allow_redirects is False
         yield SimpleNamespace(
@@ -225,7 +251,7 @@ async def test_fetch_charset_and_content_type_handling(
         )
 
     @asynccontextmanager
-    async def session(**kwargs):
+    async def session(**kwargs: object):
         yield SimpleNamespace(get=response)
 
     monkeypatch.setattr(web_client, "ClientSession", session)
@@ -252,5 +278,5 @@ async def test_fetch_charset_and_content_type_handling(
         ("invalid\x00null", "utf-8"),
     ],
 )
-def test_text_encoding(charset, expected):
+def test_text_encoding(charset: str | None, expected: str) -> None:
     assert web_client._text_encoding(charset) == expected

@@ -1,14 +1,17 @@
 import asyncio
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.messaging.models import IncomingMessage, MessageScope
 from free_claude_code.messaging.trees import MessagingStore, TreeIdentity
 from free_claude_code.messaging.trees.node import MessageNode, MessageState
 from free_claude_code.messaging.trees.runtime import MessageTree
 from free_claude_code.messaging.workflow import MessagingWorkflow
+from tests.fixture_types import MessagingStoreFactory
 
 TELEGRAM_CHAT_1 = MessageScope(platform="telegram", chat_id="chat_1")
 
@@ -57,10 +60,10 @@ def _successful_session(session_id: str):
 
 @pytest.mark.asyncio
 async def test_reply_to_old_status_message_after_restore_routes_to_parent(
-    messaging_store_factory,
-    tmp_path,
-    mock_platform,
-    mock_cli_manager,
+    messaging_store_factory: MessagingStoreFactory,
+    tmp_path: Path,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
 ) -> None:
     store_path = tmp_path / "sessions.json"
     await _write_completed_root(
@@ -98,11 +101,11 @@ async def test_reply_to_old_status_message_after_restore_routes_to_parent(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wrapped", [False, True])
 async def test_legacy_session_json_restores_through_workflow_and_routes_reply(
-    messaging_store_factory,
+    messaging_store_factory: MessagingStoreFactory,
     wrapped: bool,
-    tmp_path,
-    mock_platform,
-    mock_cli_manager,
+    tmp_path: Path,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
 ) -> None:
     legacy_tree = {
         "root_id": "A",
@@ -128,7 +131,7 @@ async def test_legacy_session_json_restores_through_workflow_and_routes_reply(
         },
     }
     conversation = {"trees": {"A": legacy_tree}}
-    payload = (
+    payload: JsonObject = (
         {"conversation": conversation, "message_log": {}}
         if wrapped
         else {
@@ -171,10 +174,10 @@ async def test_legacy_session_json_restores_through_workflow_and_routes_reply(
 
 @pytest.mark.asyncio
 async def test_save_tree_snapshot_restores_status_lookup_without_manual_index(
-    messaging_store_factory,
-    tmp_path,
-    mock_platform,
-    mock_cli_manager,
+    messaging_store_factory: MessagingStoreFactory,
+    tmp_path: Path,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
 ) -> None:
     store_path = tmp_path / "sessions.json"
     await _write_completed_root(
@@ -192,10 +195,10 @@ async def test_save_tree_snapshot_restores_status_lookup_without_manual_index(
 
 @pytest.mark.asyncio
 async def test_reply_clear_purges_removed_status_mapping_from_persisted_store(
-    messaging_store_factory,
-    tmp_path,
-    mock_platform,
-    mock_cli_manager,
+    messaging_store_factory: MessagingStoreFactory,
+    tmp_path: Path,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
 ) -> None:
     store_path = tmp_path / "sessions.json"
     store = await messaging_store_factory(storage_path=str(store_path))
@@ -251,10 +254,10 @@ async def test_reply_clear_purges_removed_status_mapping_from_persisted_store(
 
 @pytest.mark.asyncio
 async def test_restore_repairs_interrupted_status_after_delivery_starts(
-    messaging_store_factory,
-    tmp_path,
-    mock_platform,
-    mock_cli_manager,
+    messaging_store_factory: MessagingStoreFactory,
+    tmp_path: Path,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
 ) -> None:
     store_path = tmp_path / "sessions.json"
     await _write_interrupted_root(
@@ -282,9 +285,10 @@ async def test_restore_repairs_interrupted_status_after_delivery_starts(
 
 @pytest.mark.asyncio
 async def test_workflow_close_stops_cli_and_waits_for_claim_cleanup(
-    mock_platform,
-    mock_cli_manager,
-    mock_session_store,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    mock_session_store: AsyncMock,
 ) -> None:
     workflow = MessagingWorkflow(mock_platform, mock_cli_manager, mock_session_store)
     cleanup_release = asyncio.Event()
@@ -301,7 +305,9 @@ async def test_workflow_close_stops_cli_and_waits_for_claim_cleanup(
         await cleanup_release.wait()
 
     mock_cli_manager.stop_all = AsyncMock(side_effect=stop_all)
-    workflow.tree_queue.wait_idle = AsyncMock(side_effect=wait_idle)
+    monkeypatch.setattr(
+        workflow.tree_queue, "wait_idle", AsyncMock(side_effect=wait_idle)
+    )
 
     close_task = asyncio.create_task(workflow.close())
     await wait_started.wait()

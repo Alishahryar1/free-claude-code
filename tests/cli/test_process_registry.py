@@ -2,8 +2,10 @@ import os
 import subprocess
 from unittest.mock import patch
 
+import pytest
 
-def test_process_registry_register_pid_zero_noop():
+
+def test_process_registry_register_pid_zero_noop() -> None:
     """register_pid(0) is a no-op (early return)."""
     from free_claude_code.cli import process_registry as pr
 
@@ -12,7 +14,7 @@ def test_process_registry_register_pid_zero_noop():
     assert len(pr._pids) == before
 
 
-def test_process_registry_unregister_pid_zero_noop():
+def test_process_registry_unregister_pid_zero_noop() -> None:
     """unregister_pid(0) is a no-op."""
     from free_claude_code.cli import process_registry as pr
 
@@ -22,7 +24,7 @@ def test_process_registry_unregister_pid_zero_noop():
     pr.unregister_pid(99999)
 
 
-def test_process_registry_ensure_atexit_idempotent():
+def test_process_registry_ensure_atexit_idempotent() -> None:
     """Second call to ensure_atexit_registered is idempotent."""
     from free_claude_code.cli import process_registry as pr
 
@@ -31,14 +33,16 @@ def test_process_registry_ensure_atexit_idempotent():
     # Should not raise; atexit handler registered once
 
 
-def test_process_registry_kill_all_exception_logged_no_raise(monkeypatch):
+def test_process_registry_kill_all_exception_logged_no_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Exception in os.kill/taskkill is logged but does not raise."""
     from free_claude_code.cli import process_registry as pr
 
     monkeypatch.setattr(pr, "_pids", {99999})
     monkeypatch.setattr(os, "name", "posix", raising=False)
 
-    def _kill_raises(pid, sig):
+    def _kill_raises(pid: object, sig: object):
         raise ProcessLookupError("no such process")
 
     with patch("os.kill", _kill_raises):
@@ -46,14 +50,14 @@ def test_process_registry_kill_all_exception_logged_no_raise(monkeypatch):
     # Should not raise
 
 
-def test_process_registry_register_unregister_does_not_crash():
+def test_process_registry_register_unregister_does_not_crash() -> None:
     from free_claude_code.cli import process_registry as pr
 
     pr.register_pid(12345)
     pr.unregister_pid(12345)
 
 
-def test_process_registry_kill_all_best_effort_empty_is_noop():
+def test_process_registry_kill_all_best_effort_empty_is_noop() -> None:
     from free_claude_code.cli import process_registry as pr
 
     # Ensure no exception on empty set
@@ -61,8 +65,8 @@ def test_process_registry_kill_all_best_effort_empty_is_noop():
 
 
 def test_process_registry_kill_all_best_effort_windows_noop_when_taskkill_missing(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from free_claude_code.cli import process_registry as pr
 
     # Simulate windows path in a stable way.
@@ -72,20 +76,26 @@ def test_process_registry_kill_all_best_effort_windows_noop_when_taskkill_missin
     # If taskkill isn't callable, we still should not crash.
     import subprocess
 
-    def _boom(*args, **kwargs):
+    def _boom(*args: object, **kwargs: object):
         raise FileNotFoundError("taskkill missing")
 
     monkeypatch.setattr(subprocess, "run", _boom)
     pr.kill_all_best_effort()
 
 
-def test_process_registry_kill_pid_tree_windows_uses_taskkill(monkeypatch):
+def test_process_registry_kill_pid_tree_windows_uses_taskkill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from free_claude_code.cli import process_registry as pr
 
-    calls = []
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
     monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     monkeypatch.setattr(os, "name", "nt", raising=False)
-    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: calls.append((a, kw)))
+
+    def record_call(*args: object, **kwargs: object) -> None:
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(subprocess, "run", record_call)
 
     pr.kill_pid_tree_best_effort(12345)
 

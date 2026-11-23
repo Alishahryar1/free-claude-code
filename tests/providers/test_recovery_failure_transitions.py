@@ -1,19 +1,23 @@
 """What one retryable failure does to its model's recovery episode."""
 
 import asyncio
+from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from httpx import HTTPStatusError
 
 from free_claude_code.providers import admission
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
+    ProviderAttempt,
     ProviderExecution,
     ProviderExecutionState,
     ProviderOperationKind,
 )
 from free_claude_code.providers.recovery_errors import ProviderRecoveryExhausted
+from tests.mock_calls import keyword_arguments
 from tests.providers.test_provider_admission import _status_error
 
 _RECOVERY_EVENTS = {
@@ -25,9 +29,14 @@ _RECOVERY_EVENTS = {
 }
 
 
+@dataclass
+class _Clock:
+    value: float
+
+
 @pytest.fixture
-def clock(monkeypatch):
-    now = SimpleNamespace(value=100.0)
+def clock(monkeypatch: pytest.MonkeyPatch):
+    now = _Clock(100.0)
     monkeypatch.setattr(admission, "time", SimpleNamespace(monotonic=lambda: now.value))
     return now
 
@@ -46,7 +55,7 @@ async def _attempt(execution: ProviderExecution):
     return await execution.open_attempt(ProviderOperationKind.GENERATION)
 
 
-async def _fail(attempt, error):
+async def _fail(attempt: ProviderAttempt, error: HTTPStatusError):
     """Fail one attempt and return its decision and the recovery traces it made."""
     with patch.object(admission, "trace_event") as trace:
         decision = await attempt.fail(error)
@@ -54,13 +63,15 @@ async def _fail(attempt, error):
     rows = [
         call.kwargs
         for call in trace.call_args_list
-        if call.kwargs["event"] in _RECOVERY_EVENTS
+        if keyword_arguments(call)["event"] in _RECOVERY_EVENTS
     ]
     return decision, rows
 
 
 @pytest.mark.asyncio
-async def test_first_failure_opens_an_episode_led_by_the_failing_execution(clock):
+async def test_first_failure_opens_an_episode_led_by_the_failing_execution(
+    clock: _Clock,
+) -> None:
     controller = _controller()
     execution = controller.start_execution(model="m")
     error = _status_error(503)
@@ -82,7 +93,9 @@ async def test_first_failure_opens_an_episode_led_by_the_failing_execution(clock
 
 
 @pytest.mark.asyncio
-async def test_failed_probe_schedules_the_next_probe_with_more_backoff(clock):
+async def test_failed_probe_schedules_the_next_probe_with_more_backoff(
+    clock: _Clock,
+) -> None:
     controller = _controller()
     execution = controller.start_execution(model="m")
     await _fail(await _attempt(execution), _status_error(503))
@@ -105,7 +118,7 @@ async def test_failed_probe_schedules_the_next_probe_with_more_backoff(clock):
 
 
 @pytest.mark.asyncio
-async def test_failure_outside_the_probe_waits_for_the_leader(clock):
+async def test_failure_outside_the_probe_waits_for_the_leader(clock: _Clock) -> None:
     controller = _controller()
     leader = controller.start_execution(model="m")
     follower = controller.start_execution(model="m")
@@ -124,7 +137,9 @@ async def test_failure_outside_the_probe_waits_for_the_leader(clock):
 
 
 @pytest.mark.asyncio
-async def test_last_attempt_without_an_episode_opens_an_exhausted_one(clock):
+async def test_last_attempt_without_an_episode_opens_an_exhausted_one(
+    clock: _Clock,
+) -> None:
     controller = _controller(max_attempts=1)
     execution = controller.start_execution(model="m", request_id="req")
     error = _status_error(503)
@@ -147,7 +162,9 @@ async def test_last_attempt_without_an_episode_opens_an_exhausted_one(clock):
 
 
 @pytest.mark.asyncio
-async def test_last_probe_exhausts_the_episode_and_fails_its_waiters(clock):
+async def test_last_probe_exhausts_the_episode_and_fails_its_waiters(
+    clock: _Clock,
+) -> None:
     controller = _controller(max_attempts=2)
     leader = controller.start_execution(model="m")
     follower = controller.start_execution(model="m")
@@ -175,7 +192,9 @@ async def test_last_probe_exhausts_the_episode_and_fails_its_waiters(clock):
 
 
 @pytest.mark.asyncio
-async def test_last_attempt_outside_the_probe_leaves_the_episode_alone(clock):
+async def test_last_attempt_outside_the_probe_leaves_the_episode_alone(
+    clock: _Clock,
+) -> None:
     controller = _controller(max_attempts=1)
     leader = controller.start_execution(model="m")
     other = controller.start_execution(model="m")
@@ -201,7 +220,9 @@ async def test_last_attempt_outside_the_probe_leaves_the_episode_alone(clock):
 
 
 @pytest.mark.asyncio
-async def test_failure_after_the_episode_closed_takes_the_episode_failure(clock):
+async def test_failure_after_the_episode_closed_takes_the_episode_failure(
+    clock: _Clock,
+) -> None:
     controller = _controller(max_attempts=2)
     leader = controller.start_execution(model="m")
     stale = controller.start_execution(model="m")
@@ -217,11 +238,12 @@ async def test_failure_after_the_episode_closed_takes_the_episode_failure(clock)
     assert not decision.retry_allowed
     assert rows == []
     assert isinstance(decision.error, ProviderRecoveryExhausted)
+    assert isinstance(decision.error, ProviderRecoveryExhausted)
     assert decision.error.last_error is error
 
 
 @pytest.mark.asyncio
-async def test_long_retry_after_starts_a_reported_cooldown(clock):
+async def test_long_retry_after_starts_a_reported_cooldown(clock: _Clock) -> None:
     controller = _controller()
     execution = controller.start_execution(model="m", request_id="req")
     error = _status_error(429, retry_after="3600")
@@ -239,11 +261,12 @@ async def test_long_retry_after_starts_a_reported_cooldown(clock):
     assert episode.terminal_until == 3700.0
     assert episode.reports_cooldown
     assert isinstance(decision.error, ProviderRecoveryExhausted)
+    assert isinstance(decision.error, ProviderRecoveryExhausted)
     assert decision.error.retry_not_before == 3700.0
 
 
 @pytest.mark.asyncio
-async def test_retry_after_at_the_ceiling_still_backs_off(clock):
+async def test_retry_after_at_the_ceiling_still_backs_off(clock: _Clock) -> None:
     controller = _controller()
     execution = controller.start_execution(model="m")
 
@@ -259,8 +282,8 @@ async def test_retry_after_at_the_ceiling_still_backs_off(clock):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("leader_in_flight", [False, True])
 async def test_cooldown_over_an_open_episode_fails_only_an_idle_leader(
-    clock, leader_in_flight
-):
+    clock: _Clock, leader_in_flight: bool
+) -> None:
     controller = _controller()
     leader = controller.start_execution(model="m")
     other = controller.start_execution(model="m")
@@ -268,6 +291,7 @@ async def test_cooldown_over_an_open_episode_fails_only_an_idle_leader(
     source = await _attempt(other)
     await _fail(first, _status_error(503))
     generation = controller._episodes["m"].generation
+    probe = None
     if leader_in_flight:
         clock.value = 102.0
         probe = await _attempt(leader)
@@ -281,8 +305,9 @@ async def test_cooldown_over_an_open_episode_fails_only_an_idle_leader(
     assert episode.terminal_until == clock.value + 600
     assert episode.reports_cooldown
     assert episode.leader is None
+    assert isinstance(decision.error, ProviderRecoveryExhausted)
     assert decision.error.retry_not_before == clock.value + 600
-    if leader_in_flight:
+    if probe is not None:
         assert leader.state is ProviderExecutionState.ACTIVE
         await probe.accept()
         await probe.aclose()
@@ -292,7 +317,7 @@ async def test_cooldown_over_an_open_episode_fails_only_an_idle_leader(
 
 
 @pytest.mark.asyncio
-async def test_longer_cooldown_extends_an_earlier_one(clock):
+async def test_longer_cooldown_extends_an_earlier_one(clock: _Clock) -> None:
     controller = _controller()
     first = await _attempt(controller.start_execution(model="m"))
     second = await _attempt(controller.start_execution(model="m"))
@@ -305,11 +330,12 @@ async def test_longer_cooldown_extends_an_earlier_one(clock):
     episode = controller._episodes["m"]
     assert episode.terminal_until == 700.0
     assert episode.last_error is error
+    assert isinstance(decision.error, ProviderRecoveryExhausted)
     assert decision.error.retry_not_before == 700.0
 
 
 @pytest.mark.asyncio
-async def test_shorter_cooldown_takes_the_covering_one(clock):
+async def test_shorter_cooldown_takes_the_covering_one(clock: _Clock) -> None:
     controller = _controller()
     first = await _attempt(controller.start_execution(model="m"))
     second = await _attempt(controller.start_execution(model="m"))
@@ -319,14 +345,16 @@ async def test_shorter_cooldown_takes_the_covering_one(clock):
     decision, rows = await _fail(second, _status_error(429, retry_after="120"))
 
     assert rows == []
+    assert isinstance(decision.error, ProviderRecoveryExhausted)
     assert decision.error.last_error is error
+    assert isinstance(decision.error, ProviderRecoveryExhausted)
     assert decision.error.retry_not_before == 700.0
 
 
 @pytest.mark.asyncio
 async def test_cooldown_inside_an_exhausted_window_reports_that_window(
-    clock, monkeypatch
-):
+    clock: _Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
     controller = ProviderAdmissionController(
         provider_name="TEST",
         max_attempts=1,
@@ -334,7 +362,11 @@ async def test_cooldown_inside_an_exhausted_window_reports_that_window(
         max_delay=60.0,
         jitter=10.0,
     )
-    monkeypatch.setattr(admission.random, "uniform", lambda low, high: high)
+
+    def replace_uniform(low: object, high: float):
+        return high
+
+    monkeypatch.setattr(admission.random, "uniform", replace_uniform)
     first = await _attempt(controller.start_execution(model="m"))
     second = await _attempt(controller.start_execution(model="m"))
     exhausted_error = _status_error(503)
@@ -349,12 +381,14 @@ async def test_cooldown_inside_an_exhausted_window_reports_that_window(
     assert episode.terminal_until == 170.0
     assert episode.reports_cooldown
     assert episode.last_error is exhausted_error
+    assert isinstance(decision.error, ProviderRecoveryExhausted)
     assert decision.error.last_error is exhausted_error
+    assert isinstance(decision.error, ProviderRecoveryExhausted)
     assert decision.error.retry_not_before == 170.0
 
 
 @pytest.mark.asyncio
-async def test_transitions_finish_without_yielding(clock):
+async def test_transitions_finish_without_yielding(clock: _Clock) -> None:
     controller = _controller()
     execution = controller.start_execution(model="m")
     attempt = await _attempt(execution)

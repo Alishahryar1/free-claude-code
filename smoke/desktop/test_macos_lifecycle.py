@@ -1,6 +1,5 @@
 """The installed native app keeps FCC's server, menu, and subprocess contracts."""
 
-import json
 import plistlib
 import socket
 import subprocess
@@ -12,20 +11,27 @@ import httpx
 import pytest
 
 from free_claude_code.cli.commands import ServerStatus
+from smoke.desktop.conftest import InstalledDesktop
 from smoke.desktop.support import bundle_pids, capture, launched, wait_report
+from tests.wire_payload import (
+    decode_object,
+    object_payload,
+    response_object,
+    string_payload,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS")
 
 
-def wait_status(port, *, previous=None):
+def wait_status(port: int, *, previous: str | None = None):
     deadline = time.monotonic() + 30
     with httpx.Client(trust_env=False, timeout=1) as client:
         while time.monotonic() < deadline:
             try:
                 response = client.get(f"http://127.0.0.1:{port}/admin/api/status")
                 response.raise_for_status()
-                status = response.json()
+                status = response_object(response)
                 if status["status"] == "running" and status["instance_id"] != previous:
                     return status
             except httpx.HTTPError, ValueError:
@@ -34,17 +40,18 @@ def wait_status(port, *, previous=None):
     raise AssertionError("FCC did not serve a new running instance")
 
 
-def command(output, action):
+def command(output: Path, action: str):
     pending = output.with_suffix(".next-command")
     pending.write_text(action)
     pending.replace(output.with_suffix(".command"))
 
 
-def test_installed_native_app_lifecycle(installed_desktop):
+def test_installed_native_app_lifecycle(installed_desktop: InstalledDesktop):
     installed = installed_desktop
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1", 0))
-        port = reservation.getsockname()[1]
+        address: tuple[str, int] = reservation.getsockname()
+        port = address[1]
     env = installed["launch_env"] | {"PORT": str(port), "FCC_NATIVE_CASE": "lifecycle"}
     output = installed["output"] / "lifecycle.json"
     with launched(installed["app"], output, env) as process:
@@ -108,7 +115,7 @@ def test_installed_native_app_lifecycle(installed_desktop):
                 if second.poll() is None:
                     second.kill()
                     second.wait()
-        duplicate_report = json.loads(duplicate.read_text())
+        duplicate_report = decode_object(duplicate.read_text())
         assert duplicate_report["pid"] != report["pid"]
         assert duplicate_report["loop_finished"]
         assert bundle_pids(installed["app"]) == {report["pid"]}
@@ -116,19 +123,20 @@ def test_installed_native_app_lifecycle(installed_desktop):
 
         command(output, "subprocess")
         report = wait_report(output, lambda r: "subprocess" in r, process)
-        children = report["subprocess"]
+        children = object_payload(report["subprocess"])
+        child = object_payload(children["child"])
         assert children["folder"] == str(installed["home"])
-        assert children["child"]["executable"] == str(installed["python"])
-        assert children["child"]["prefix"] == str(installed["venv"])
-        assert Path(children["child"]["package"]).is_relative_to(installed["venv"])
+        assert child["executable"] == str(installed["python"])
+        assert child["prefix"] == str(installed["venv"])
+        assert Path(string_payload(child["package"])).is_relative_to(installed["venv"])
 
         command(output, "Restart Server")
-        restarted = wait_status(port, previous=initial["instance_id"])
+        restarted = wait_status(port, previous=string_payload(initial["instance_id"]))
         assert restarted["instance_id"] != initial["instance_id"]
         assert process.poll() is None
         command(output, "Quit")
         assert process.wait(timeout=30) == 0
-        report = json.loads(output.read_text())
+        report = decode_object(output.read_text())
         assert report["actions"] == ["Restart Server", "Quit"]
         assert report["loop_finished"]
     with socket.socket() as freed:

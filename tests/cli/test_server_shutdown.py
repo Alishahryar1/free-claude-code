@@ -13,6 +13,7 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.runtime.application import RestartCallback
 from free_claude_code.runtime.asgi import RuntimeASGIApp
 from free_claude_code.runtime.bootstrap import build_asgi_app
+from tests.wire_payload import object_payload, response_object
 
 
 @pytest.mark.asyncio
@@ -25,7 +26,8 @@ async def test_supervisor_drains_admin_event_feed_without_forced_cancellation(
 ) -> None:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
+        address: tuple[str, int] = listener.getsockname()
+    port = address[1]
     settings = Settings().model_copy(
         update={
             "host": "127.0.0.1",
@@ -49,9 +51,13 @@ async def test_supervisor_drains_admin_event_feed_without_forced_cancellation(
         return app
 
     monkeypatch.setattr(commands, "load_server_settings", lambda: settings)
+
+    def callback(*args: object, **kwargs: object):
+        return None
+
     monkeypatch.setattr(
         "free_claude_code.runtime.bootstrap.configure_logging",
-        lambda *args, **kwargs: None,
+        callback,
     )
     monkeypatch.setattr("free_claude_code.runtime.bootstrap.build_asgi_app", create_app)
     monkeypatch.setattr(commands, "kill_all_best_effort", lambda: None)
@@ -59,6 +65,7 @@ async def test_supervisor_drains_admin_event_feed_without_forced_cancellation(
     supervisor = commands.ServerSupervisor(console_logging=False)
     thread = threading.Thread(target=supervisor.run, daemon=True)
     thread.start()
+    new_status = None
     stream_error: Exception | None = None
     try:
         async with asyncio.timeout(5):
@@ -67,17 +74,17 @@ async def test_supervisor_drains_admin_event_feed_without_forced_cancellation(
                 await asyncio.sleep(0.01)
         async with httpx.AsyncClient(timeout=3, trust_env=False) as client:
             status_url = f"http://127.0.0.1:{port}/admin/api/status"
-            old_instance = (await client.get(status_url)).json()["instance_id"]
+            old_instance = response_object(await client.get(status_url))["instance_id"]
             # HTTP startup precedes background Code storage initialization.
             bootstrap_url = f"http://127.0.0.1:{port}/admin/api/code/bootstrap"
             async with asyncio.timeout(30):
                 while True:
                     response = await client.get(bootstrap_url)
                     assert response.status_code == 200, response.text
-                    storage = response.json()["storage"]
-                    if storage["state"] == "ready":
+                    storage = response_object(response)["storage"]
+                    if object_payload(storage)["state"] == "ready":
                         break
-                    assert storage["state"] == "starting", storage
+                    assert object_payload(storage)["state"] == "starting", storage
                     assert thread.is_alive()
                     await asyncio.sleep(0.01)
             events_url = f"http://127.0.0.1:{port}/admin/api/code/events"
@@ -109,7 +116,7 @@ async def test_supervisor_drains_admin_event_feed_without_forced_cancellation(
                     ):
                         assert thread.is_alive()
                         await asyncio.sleep(0.01)
-                new_status = (await client.get(status_url)).json()
+                new_status = response_object(await client.get(status_url))
                 assert new_status["status"] == "running"
                 assert new_status["instance_id"] != old_instance
     finally:
@@ -130,4 +137,5 @@ async def test_supervisor_drains_admin_event_feed_without_forced_cancellation(
     ]
     assert starts[0]["instance_id"] == old_instance
     if restart:
+        assert new_status is not None
         assert starts[1]["instance_id"] == new_status["instance_id"]

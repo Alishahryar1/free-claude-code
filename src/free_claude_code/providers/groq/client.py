@@ -4,13 +4,13 @@ import json
 import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, override
 
 import openai
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.reasoning import (
     ReasoningEffort,
     ReasoningPolicy,
@@ -104,6 +104,7 @@ class GroqChatBehavior(OpenAIChatBehavior):
         super().__init__(_PROFILE)
         self._model_reasoning_vocabularies: dict[str, frozenset[str]] = {}
 
+    @override
     def failure_override(self, error: Exception) -> ExecutionFailure | None:
         if token_limit_message(error) is None:
             return None
@@ -116,6 +117,7 @@ class GroqChatBehavior(OpenAIChatBehavior):
             False,
         )
 
+    @override
     def finalize_chat_body(
         self,
         body: dict[str, Any],
@@ -130,10 +132,12 @@ class GroqChatBehavior(OpenAIChatBehavior):
             return body
         return _rewrite_reasoning_effort(body, accepted) or body
 
+    @override
     def reasoning_disable_rejected(self, error: Exception) -> bool:
         accepted = _parse_reasoning_vocabulary(error)
         return accepted is not None and "none" not in accepted
 
+    @override
     def retry_request_body(
         self, error: Exception, body: dict[str, Any]
     ) -> Proposal | None:
@@ -158,6 +162,7 @@ class GroqChatBehavior(OpenAIChatBehavior):
     def learn_reasoning_vocabulary(self, model: str, accepted: frozenset[str]) -> None:
         self._model_reasoning_vocabularies[model] = accepted
 
+    @override
     def retry_after_standard_corrections(
         self,
         error: Exception,
@@ -216,11 +221,13 @@ def _parse_reasoning_vocabulary(error: Exception) -> frozenset[str] | None:
                 continue
             tail = candidate.text[marker.end() : marker.end() + 512]
             clause = _CLAUSE_END.split(tail, maxsplit=1)[0]
-            return frozenset(
-                match.group(1).lower()
-                for match in _VALUE_PATTERN.finditer(clause)
-                if match.group(1).lower() in _KNOWN_VALUES
-            )
+            values: set[str] = set()
+            for match in _VALUE_PATTERN.finditer(clause):
+                candidate_value: str = match[1]
+                value = candidate_value.lower()
+                if value in _KNOWN_VALUES:
+                    values.add(value)
+            return frozenset(values)
 
     for candidate in candidates:
         for phrase in _UNSUPPORTED_PHRASE.finditer(candidate.text):
@@ -260,7 +267,7 @@ def _is_bad_request(error: Exception) -> bool:
 
 
 def _error_candidates(error: Exception) -> tuple[_ErrorCandidate, ...]:
-    body = getattr(error, "body", None)
+    body: object = getattr(error, "body", None)
     if body is not None:
         return _payload_error_candidates(body)
 
@@ -279,7 +286,7 @@ def _error_candidates(error: Exception) -> tuple[_ErrorCandidate, ...]:
     return _payload_error_candidates(error_text)
 
 
-def _payload_error_candidates(value: Any) -> tuple[_ErrorCandidate, ...]:
+def _payload_error_candidates(value: object) -> tuple[_ErrorCandidate, ...]:
     if isinstance(value, str):
         parsed = _parse_json_container(value)
         if parsed is not None:
@@ -308,7 +315,7 @@ def _deduplicate_candidates(
 
 def _parse_json_container(text: str) -> Mapping[Any, Any] | list[Any] | None:
     try:
-        parsed = json.loads(text)
+        parsed = load_json_value(text)
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, (Mapping, list)) else None
@@ -334,7 +341,7 @@ def _body_error_candidates(value: Any) -> Iterator[_ErrorCandidate]:
             yield from _body_error_candidates(child)
 
 
-def _mapping_names_reasoning_field(value: Mapping[Any, Any]) -> bool:
+def _mapping_names_reasoning_field(value: Mapping[object, object]) -> bool:
     for key, parameter in value.items():
         if (
             str(key).lower() in {"param", "parameter"}

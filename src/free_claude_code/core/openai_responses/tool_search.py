@@ -5,13 +5,13 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import cast
 
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import DecimalJsonValue, JsonObject, JsonValue
 
 from .errors import ResponsesConversionError
 from .tools import optional_str, required_str
 
 
-def is_client_search(value: Mapping[str, JsonValue]) -> bool:
+def is_client_search(value: Mapping[str, DecimalJsonValue]) -> bool:
     return value.get("execution") == "client" and value.get("type") in {
         "tool_search",
         "tool_search_call",

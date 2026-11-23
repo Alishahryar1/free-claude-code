@@ -1,13 +1,14 @@
 """OpenRouter provider implementation."""
 
-import json
 from collections.abc import Mapping
+from typing import override
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.diagnostics import extract_upstream_error_detail
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import load_json_value
 from free_claude_code.core.reasoning import ReasoningEffort
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
@@ -37,9 +38,11 @@ _REQUEST_POLICY = OpenAIChatRequestPolicy(
 class OpenRouterChatBehavior(OpenAIChatBehavior):
     """OpenRouter Chat adaptation without HTTP ownership."""
 
+    @override
     def media_rejected(self, error: Exception) -> bool:
         return super().media_rejected(error) or _image_routing_rejected(error)
 
+    @override
     def failure_override(self, error: Exception) -> ExecutionFailure | None:
         if not _image_routing_rejected(error):
             return None
@@ -51,12 +54,13 @@ class OpenRouterChatBehavior(OpenAIChatBehavior):
             False,
         )
 
+    @override
     def reasoning_disable_rejected(self, error: Exception) -> bool:
         detail = extract_upstream_error_detail(error)
         if detail.status_code not in {None, 200}:
             return False
         try:
-            payload = json.loads(detail.body_text or "")
+            payload = load_json_value(detail.body_text or "")
         except ValueError:
             return False
         if not isinstance(payload, dict):
@@ -89,6 +93,7 @@ class OpenRouterProvider(OpenAIChatProvider):
             history_cache=history_cache,
         )
 
+    @override
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
         """Advertise OpenRouter tool models with reasoning capability metadata."""
         payload = await self._list_models_payload()

@@ -100,13 +100,17 @@ dev = [
     "pytest>=9.1.1,<9.2",
     "pytest-asyncio>=1.5.0",
     "pytest-cov>=7.1.0",
-    "ty>=0.0.104",
+    "pyrefly==1.5.0",
     "ruff>=0.17.5",
     "pytest-xdist>=3.8.0",
     "pytest-playwright>=0.10.0",
     "pyyaml>=6.0.3",
     "pytest-split>=0.11.0",
     "google-genai>=3.3.0",
+    "types-jsonschema>=4.26.0.20261006",
+    "types-pyperclip>=1.11.0.20260508",
+    "types-pyyaml>=6.0.12.20261113",
+    "types-simplejson>=4.3.0.20261112",
 ]
 
 [tool.ruff]
@@ -165,15 +169,25 @@ markers = [
     "xdist_group(name): group smoke provider items under pytest-xdist --dist=loadgroup",
 ]
 
-[tool.ty.environment]
+[tool.pyrefly]
+preset = "strict"
+min-severity = "warn"
+enabled-ignores = []
 python-version = "3.14"
-
-[tool.ty.analysis]
+search-path = ["src", "."]
 # Optional voice_local extra: torch, transformers, librosa for local whisper transcription
-allowed-unresolved-imports = [
+ignore-missing-imports = [
     "torch",
+    "torch.**",
     "transformers",
+    "transformers.**",
     "librosa",
+    "librosa.**",
     "pystray",
+    "pystray.**",
     "PIL",
+    "PIL.**",
 ]
+
+[tool.pyrefly.errors]
+explicit-any-use = "error"

@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -16,6 +17,7 @@ from free_claude_code.config.api_keys import normalize_api_keys
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.async_tasks import run_sync_owned
+from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.runtime.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime
@@ -38,7 +40,7 @@ def _settings():
 
 
 @pytest.mark.asyncio
-async def test_http_and_admin_serve_while_selected_catalog_is_held():
+async def test_http_and_admin_serve_while_selected_catalog_is_held() -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     provider = MagicMock(spec=BaseProvider)
 
@@ -92,7 +94,7 @@ async def test_http_and_admin_serve_while_selected_catalog_is_held():
 
 
 @pytest.mark.asyncio
-async def test_independent_provider_and_cancelled_waiter_share_initialization():
+async def test_independent_provider_and_cancelled_waiter_share_initialization() -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     slow, fast = MagicMock(spec=BaseProvider), MagicMock(spec=BaseProvider)
 
@@ -107,7 +109,7 @@ async def test_independent_provider_and_cancelled_waiter_share_initialization():
     )
 
     async def construct(
-        provider_id,
+        provider_id: str,
         _settings,
         _admission_registry,
         _api_key_number,
@@ -150,7 +152,9 @@ async def test_independent_provider_and_cancelled_waiter_share_initialization():
 
 
 @pytest.mark.asyncio
-async def test_wait_timeout_does_not_cancel_initializer_and_settled_work_still_works():
+async def test_wait_timeout_does_not_cancel_initializer_and_settled_work_still_works() -> (
+    None
+):
     release = asyncio.Event()
     task = asyncio.create_task(release.wait())
     wait = InitializationWait(0.01)
@@ -160,7 +164,7 @@ async def test_wait_timeout_does_not_cancel_initializer_and_settled_work_still_w
         assert not task.done()
         release.set()
         await task
-        assert await wait.wait(task) is True
+        assert await wait.wait(task)
     finally:
         release.set()
         await task
@@ -168,7 +172,9 @@ async def test_wait_timeout_does_not_cancel_initializer_and_settled_work_still_w
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("refresh", [False, True])
-async def test_failed_discovery_construction_recovers_in_same_generation(refresh):
+async def test_failed_discovery_construction_recovers_in_same_generation(
+    refresh: bool,
+) -> None:
     provider = MagicMock(spec=BaseProvider)
     provider.list_model_infos = AsyncMock(
         return_value=frozenset({ProviderModelInfo("one")})
@@ -214,8 +220,8 @@ async def test_failed_discovery_construction_recovers_in_same_generation(refresh
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_recovery_wait_uses_remaining_budget_without_orphaning_waiter(
-    monkeypatch, cancel
-):
+    monkeypatch: pytest.MonkeyPatch, cancel: bool
+) -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     provider = MagicMock(spec=BaseProvider)
     attempts = 0
@@ -279,7 +285,7 @@ async def test_recovery_wait_uses_remaining_budget_without_orphaning_waiter(
 
 
 @pytest.mark.asyncio
-async def test_cancellation_drains_the_actual_worker():
+async def test_cancellation_drains_the_actual_worker() -> None:
     entered, release = threading.Event(), threading.Event()
 
     def worker():
@@ -299,11 +305,15 @@ async def test_cancellation_drains_the_actual_worker():
 
 
 @pytest.mark.asyncio
-async def test_late_retired_discovery_cannot_replace_current_metadata():
+async def test_late_retired_discovery_cannot_replace_current_metadata() -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     providers = []
 
-    def factory(settings, admission_registry, history_cache=None):
+    def factory(
+        settings: Settings,
+        admission_registry: ProviderAdmissionRegistry,
+        history_cache: object = None,
+    ):
         provider = MagicMock(spec=BaseProvider)
         providers.append(provider)
         ordinal = len(providers)
@@ -356,8 +366,8 @@ async def test_late_retired_discovery_cannot_replace_current_metadata():
 
 @pytest.mark.asyncio
 async def test_catalog_publication_exposes_configured_models_before_discovery(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     path = tmp_path / "catalog.json"
     path.write_text("prior complete catalog", encoding="utf-8")
@@ -409,11 +419,17 @@ async def test_catalog_publication_exposes_configured_models_before_discovery(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("retained_request", [False, True])
-async def test_catalog_wait_follows_replacement(tmp_path, retained_request):
+async def test_catalog_wait_follows_replacement(
+    tmp_path: Path, retained_request: bool
+) -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     count = 0
 
-    def runtime(settings, admission_registry, history_cache=None):
+    def runtime(
+        settings: Settings,
+        admission_registry: ProviderAdmissionRegistry,
+        history_cache: object = None,
+    ):
         nonlocal count
         count += 1
         old = count == 1
@@ -475,7 +491,9 @@ async def test_catalog_wait_follows_replacement(tmp_path, retained_request):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
-async def test_catalog_waiter_exit_preserves_shared_discovery(monkeypatch, cancel):
+async def test_catalog_waiter_exit_preserves_shared_discovery(
+    monkeypatch: pytest.MonkeyPatch, cancel: bool
+) -> None:
     existing_tasks = asyncio.all_tasks()
     entered, release = asyncio.Event(), asyncio.Event()
     provider = MagicMock(spec=BaseProvider)

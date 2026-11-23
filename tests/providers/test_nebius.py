@@ -22,6 +22,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload
 
 _MODEL = "Qwen/Qwen3-30B-A3B"
 
@@ -92,7 +93,7 @@ def test_replays_reasoning_content(nebius_provider: OpenAIChatProvider) -> None:
         reasoning=reasoning_for(request),
     )
 
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "assistant",
         "content": "The answer is 42.",
         "reasoning_content": "Work through it.",
@@ -107,9 +108,10 @@ def test_replays_reasoning_content(nebius_provider: OpenAIChatProvider) -> None:
 
 @pytest.mark.asyncio
 async def test_lists_only_text_output_models(
+    monkeypatch: pytest.MonkeyPatch,
     nebius_provider: OpenAIChatProvider,
 ) -> None:
-    nebius_provider._client.get = AsyncMock(
+    mock_get = AsyncMock(
         return_value={
             "data": [
                 {
@@ -123,6 +125,7 @@ async def test_lists_only_text_output_models(
             ]
         }
     )
+    monkeypatch.setattr(nebius_provider._client, "get", mock_get)
 
     model_infos = await nebius_provider.list_model_infos()
 
@@ -134,7 +137,7 @@ async def test_lists_only_text_output_models(
             )
         }
     )
-    nebius_provider._client.get.assert_awaited_once_with(
+    mock_get.assert_awaited_once_with(
         "/models",
         cast_to=object,
         options={"params": {"verbose": "true"}},
@@ -180,11 +183,12 @@ async def test_lists_only_text_output_models(
 )
 @pytest.mark.asyncio
 async def test_rejects_malformed_or_unusable_catalog_atomically(
+    monkeypatch: pytest.MonkeyPatch,
     nebius_provider: OpenAIChatProvider,
     payload: object,
     message: str,
 ) -> None:
-    nebius_provider._client.get = AsyncMock(return_value=payload)
+    monkeypatch.setattr(nebius_provider._client, "get", AsyncMock(return_value=payload))
 
     with pytest.raises(ModelListResponseError, match=message):
         await nebius_provider.list_model_infos()

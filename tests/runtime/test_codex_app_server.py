@@ -6,26 +6,36 @@ import tomllib
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Unpack
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from typing_extensions import TypedDict
 
 from free_claude_code.application.code_sessions import CodeService
 from free_claude_code.application.code_sessions.models import (
     CodeConflictError,
+    CodeMode,
+    CodeSession,
     CodeUnavailableError,
+    HarnessEvent,
 )
+from free_claude_code.application.code_sessions.ports import EventSink
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.application.ports import ModelCatalogSnapshot, RequestRuntimePort
 from free_claude_code.config.paths import launcher_temp_dir_path
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.gateway_model_ids import no_thinking_gateway_model_id
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
 from free_claude_code.runtime.codex_app_server import (
     CodexAppServer,
     CodexHarnessFactory,
 )
+from tests.assertions import require_present
 from tests.code_sessions_support import FakeHarness, close_code_database
+from tests.fixture_types import DatabaseFactory, ProgressChanges
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 
 @dataclass
@@ -37,19 +47,33 @@ class FactoryPeer:
     process: asyncio.subprocess.Process | None = None
 
 
+class ProcessOptions(TypedDict, total=False, closed=True):
+    cwd: str
+    env: dict[str, str]
+    stdin: int
+    stdout: int
+    stderr: int
+    creationflags: int
+    start_new_session: bool
+
+
 @pytest.fixture
-def factory_peer(tmp_path, monkeypatch):
+def factory_peer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     peer = FactoryPeer()
     spawn = asyncio.create_subprocess_exec
 
-    async def start(*command, **kwargs):
+    async def start(
+        *command: str,
+        **kwargs: Unpack[ProcessOptions],
+    ):
         if command[0] != "test-codex":
             return await spawn(*command, **kwargs)
-        peer.command, peer.env = command, dict(kwargs["env"])
+        peer.command, peer.env = command, dict(kwargs.get("env", {}))
         config = tomllib.loads(
             "\n".join(command[i + 1] for i, arg in enumerate(command) if arg == "-c")
         )
-        path = config.get("model_catalog_json")
+        path: object = config.get("model_catalog_json")
+        assert path is None or isinstance(path, str)
         peer.catalog = Path(path) if path else None
         peer.process = await spawn(
             sys.executable,
@@ -86,8 +110,8 @@ def factory_runtime():
 
 @pytest.mark.asyncio
 async def test_factory_open_preserves_setup_and_catalog_until_process_exit(
-    tmp_path, factory_peer, factory_runtime
-):
+    tmp_path: Path, factory_peer: FactoryPeer, factory_runtime: MagicMock
+) -> None:
     env = dict(os.environ) | {
         "CODEX_HOME": str(tmp_path / "codex-home"),
         "CODEX_THREAD_ID": "parent-thread",
@@ -129,27 +153,34 @@ async def test_factory_open_preserves_setup_and_catalog_until_process_exit(
         assert "127.0.0.1" in factory_peer.env["NO_PROXY"].split(",")
         assert env == before
         assert factory_peer.catalog is not None
-        catalog = json.loads(factory_peer.catalog.read_text())
-        assert any(model["slug"] == config["model"] for model in catalog["models"])
+        catalog = decode_object(factory_peer.catalog.read_text())
+        assert any(
+            object_payload(model)["slug"] == config["model"]
+            for model in array_payload(catalog["models"])
+        )
         assert "factory-token" not in factory_peer.catalog.read_text()
         assert native.process.returncode is None
     finally:
         await native.close()
     assert native.process.returncode == 0
-    assert json.loads((tmp_path / "catalog-at-exit.json").read_text()) == catalog
+    assert load_json_value((tmp_path / "catalog-at-exit.json").read_text()) == catalog
     assert not factory_peer.catalog.parent.exists()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["reject", "cancel"])
 async def test_factory_initialization_failure_reaps_before_catalog_cleanup(
-    tmp_path, monkeypatch, factory_peer, factory_runtime, failure
-):
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    factory_peer: FactoryPeer,
+    factory_runtime: MagicMock,
+    failure: str,
+) -> None:
     factory_peer.mode = "factory-fail" if failure == "reject" else "factory-wait"
     initialized = asyncio.Event()
     write = CodexAppServer._write
 
-    async def observe_write(native, message):
+    async def observe_write(native: CodexAppServer, message: JsonObject):
         await write(native, message)
         if message.get("method") == "initialize":
             initialized.set()
@@ -169,13 +200,15 @@ async def test_factory_initialization_failure_reaps_before_catalog_cleanup(
         if not opening.done():
             opening.cancel()
         await asyncio.gather(opening, return_exceptions=True)
-    assert factory_peer.process.returncode == 0
+    assert require_present(factory_peer.process).returncode == 0
     assert json.loads((tmp_path / "catalog-at-exit.json").read_text())["models"]
-    assert not factory_peer.catalog.parent.exists()
+    assert not require_present(factory_peer.catalog).parent.exists()
 
 
 @pytest.mark.asyncio
-async def test_history_open_needs_no_fcc_setup_or_inventory(tmp_path, factory_peer):
+async def test_history_open_needs_no_fcc_setup_or_inventory(
+    tmp_path: Path, factory_peer: FactoryPeer
+) -> None:
     runtime = MagicMock(spec=RequestRuntimePort)
     for name in (
         "current_settings",
@@ -201,22 +234,22 @@ async def test_history_open_needs_no_fcc_setup_or_inventory(tmp_path, factory_pe
 
 @pytest.mark.asyncio
 async def test_child_warning_during_shutdown_allows_connection_replacement(
-    database_factory, tmp_path, monkeypatch
-):
+    database_factory: DatabaseFactory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     harness = FakeHarness()
     prepare = harness.prepare
-    connections = []
+    connections: list[CodexAppServer] = []
     releases = []
     warning = asyncio.Event()
 
-    async def selection_for(model, effort, mode):
+    async def selection_for(model: str, effort: str | None, mode: CodeMode):
         selection = await prepare(model, effort, mode)
 
-        async def open_native(cwd, sink):
+        async def open_native(cwd: str, sink: EventSink):
             release = tmp_path / f"release-{len(connections)}"
             releases.append(release)
 
-            async def receive(event):
+            async def receive(event: HarnessEvent):
                 await sink(event)
                 if event.kind == "notice" and event.thread_id == "child":
                     warning.set()
@@ -294,8 +327,8 @@ async def test_child_warning_during_shutdown_allows_connection_replacement(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("profile", [None, {"id": "custom"}])
 async def test_complete_mode_overrides_restore_native_defaults(
-    tmp_path, monkeypatch, profile
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profile: JsonObject | None
+) -> None:
     defaults = {
         "approvalPolicy": {"granular": {"sandbox_approval": True, "rules": False}},
         "approvalsReviewer": "user",
@@ -351,7 +384,7 @@ async def test_complete_mode_overrides_restore_native_defaults(
     for mode in ("ask", "auto_review", "full_access", "config"):
         selection = await harness.prepare(harness.model, "high", mode)
         await native.start_turn("hello", selection, "input", thread.permission_defaults)
-        params = rpc.call_args.args[1]
+        params: dict[str, object] = rpc.call_args.args[1]
         assert {
             key: value
             for key, value in params.items()
@@ -363,8 +396,8 @@ async def test_complete_mode_overrides_restore_native_defaults(
 
 @pytest.mark.asyncio
 async def test_missing_native_permission_settings_rejects_thread_preparation(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     native = CodexAppServer([], {}, str(tmp_path), AsyncMock())
     monkeypatch.setattr(
         native, "rpc", AsyncMock(return_value={"thread": {"id": "native", "turns": []}})
@@ -373,12 +406,12 @@ async def test_missing_native_permission_settings_rejects_thread_preparation(
         await native.create_thread()
 
 
-async def connect(tmp_path, mode):
+async def connect(tmp_path: Path, mode: str):
     events = []
     completed = asyncio.Event()
     prompted = asyncio.Event()
 
-    async def receive(event):
+    async def receive(event: HarnessEvent):
         events.append(event)
         if event.kind == "turn_completed":
             completed.set()
@@ -398,13 +431,15 @@ async def connect(tmp_path, mode):
 
 
 @pytest.mark.asyncio
-async def test_jsonl_sink_preserves_usage_before_turn_completion(tmp_path):
+async def test_jsonl_sink_preserves_usage_before_turn_completion(
+    tmp_path: Path,
+) -> None:
     events = []
     usage_received = asyncio.Event()
     release_usage = asyncio.Event()
     completed = asyncio.Event()
 
-    async def receive(event):
+    async def receive(event: HarnessEvent):
         events.append(event.kind)
         if event.kind == "context_usage":
             usage_received.set()
@@ -447,7 +482,7 @@ async def test_jsonl_sink_preserves_usage_before_turn_completion(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_jsonl_large_unicode_events_can_precede_rpc_ack(tmp_path):
+async def test_jsonl_large_unicode_events_can_precede_rpc_ack(tmp_path: Path) -> None:
     native, events, completed, _ = await connect(tmp_path, "large")
     try:
         assert (await native.create_thread()).id == "native-1"
@@ -471,16 +506,16 @@ async def test_jsonl_large_unicode_events_can_precede_rpc_ack(tmp_path):
 
 @pytest.mark.asyncio
 async def test_terminal_storage_failure_drains_the_native_dispatcher(
-    database_factory, tmp_path, monkeypatch
-):
+    database_factory: DatabaseFactory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     harness = FakeHarness()
     prepare = harness.prepare
     connections = []
 
-    async def select(model, effort, mode):
+    async def select(model: str, effort: str | None, mode: CodeMode):
         selection = await prepare(model, effort, mode)
 
-        async def open_native(cwd, sink):
+        async def open_native(cwd: str, sink: EventSink):
             native = CodexAppServer(
                 [
                     sys.executable,
@@ -507,7 +542,9 @@ async def test_terminal_storage_failure_drains_the_native_dispatcher(
     save = store.save_progress
     rejected = []
 
-    async def reject_terminal(session, revision, **values):
+    async def reject_terminal(
+        session: CodeSession, revision: int, **values: Unpack[ProgressChanges]
+    ):
         run = values.get("run")
         if run is not None and run.status == "completed":
             rejected.append(run)
@@ -530,6 +567,7 @@ async def test_terminal_storage_failure_drains_the_native_dispatcher(
         assert len(rejected) == 1 and len(connections) == 1
         native = connections[0]
         assert native.process.returncode is not None
+        assert native._reader is not None and native._dispatcher is not None
         assert native._reader.done() and native._dispatcher.done()
         saved = await store.latest_run(session.id)
         assert saved is not None and saved.status == "running"
@@ -541,7 +579,9 @@ async def test_terminal_storage_failure_drains_the_native_dispatcher(
 
 
 @pytest.mark.asyncio
-async def test_server_rpc_during_start_preserves_numeric_zero_id(tmp_path):
+async def test_server_rpc_during_start_preserves_numeric_zero_id(
+    tmp_path: Path,
+) -> None:
     native, events, completed, prompted = await connect(tmp_path, "prompt")
     try:
         await native.create_thread()
@@ -564,7 +604,9 @@ async def test_server_rpc_during_start_preserves_numeric_zero_id(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cancelled_creation_waiter_retains_late_native_identity(tmp_path):
+async def test_cancelled_creation_waiter_retains_late_native_identity(
+    tmp_path: Path,
+) -> None:
     native, _, _, _ = await connect(tmp_path, "delayed-create")
     try:
         creation = asyncio.create_task(native.create_thread())
@@ -579,7 +621,7 @@ async def test_cancelled_creation_waiter_retains_late_native_identity(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_eof_completes_pending_calls_and_cleanup(tmp_path):
+async def test_eof_completes_pending_calls_and_cleanup(tmp_path: Path) -> None:
     native, _, _, _ = await connect(tmp_path, "large")
     try:
         with pytest.raises(CodeUnavailableError):
@@ -592,12 +634,12 @@ async def test_eof_completes_pending_calls_and_cleanup(tmp_path):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["test/malformed", "test/malformed-flood"])
 async def test_malformed_frame_reports_closed_only_after_process_termination(
-    tmp_path, method
-):
+    tmp_path: Path, method: str
+) -> None:
     closed = asyncio.Event()
     returncodes = []
 
-    async def receive(event):
+    async def receive(event: HarnessEvent):
         if event.kind == "closed":
             returncodes.append(native.process.returncode)
             closed.set()
@@ -626,7 +668,9 @@ async def test_malformed_frame_reports_closed_only_after_process_termination(
 
 
 @pytest.mark.asyncio
-async def test_spawned_agent_prompt_is_visible_in_its_registered_root_session(tmp_path):
+async def test_spawned_agent_prompt_is_visible_in_its_registered_root_session(
+    tmp_path: Path,
+) -> None:
     native, events, completed, prompted = await connect(tmp_path, "child-prompt")
     try:
         await native.create_thread()
@@ -639,8 +683,8 @@ async def test_spawned_agent_prompt_is_visible_in_its_registered_root_session(tm
         await asyncio.wait_for(prompted.wait(), 3)
         event = next(event for event in events if event.kind == "prompt")
         assert event.thread_id == "native-1"
-        assert event.prompt.turn_id is None
-        assert event.prompt.raw["threadId"] == "child-1"
+        assert require_present(event.prompt).turn_id is None
+        assert require_present(event.prompt).raw["threadId"] == "child-1"
         await native.respond(0, native.prepare_answer(0, {"choice": "0"}))
         await asyncio.wait_for(completed.wait(), 3)
     finally:
@@ -650,9 +694,9 @@ async def test_spawned_agent_prompt_is_visible_in_its_registered_root_session(tm
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reasoning", [True, False])
 async def test_turn_start_resets_sticky_effort_and_preserves_client_identity(
-    tmp_path, monkeypatch, reasoning
-):
-    async def receive(event):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reasoning: bool
+) -> None:
+    async def receive(event: object):
         pass
 
     native = CodexAppServer(
@@ -666,7 +710,7 @@ async def test_turn_start_resets_sticky_effort_and_preserves_client_identity(
     native.thread_id = "thread"
     requests = []
 
-    async def rpc(method, params):
+    async def rpc(method: str, params: JsonObject):
         assert method == "turn/start"
         requests.append(params)
         return {"turn": {"id": "turn"}}

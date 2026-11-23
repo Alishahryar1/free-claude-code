@@ -10,14 +10,16 @@ from free_claude_code.core.history_replay import (
     encode_gemini_replay,
     encode_replay,
 )
+from free_claude_code.core.json_types import DecimalJsonObject
 from free_claude_code.core.replay_finalization import finalize_replay
 from free_claude_code.core.stream_delivery import StreamDeliveryState
 from free_claude_code.core.stream_output import StreamOutput
 from tests.core.test_gemini_continuation_records import recovered
 from tests.stream_packets import packets
+from tests.wire_payload import object_array, object_payload, string_payload
 
 
-def test_terminal_snapshot_reuses_sealed_carrier():
+def test_terminal_snapshot_reuses_sealed_carrier() -> None:
     draft = encode_replay(recovered(echo=False))
     delivered = DeliveredResponse("messages")
     delivered.observe(
@@ -27,17 +29,17 @@ def test_terminal_snapshot_reuses_sealed_carrier():
             "content_block": {"type": "text", "text": "prefix suffix"},
         }
     )
-    cache = {}
-    added = {
+    cache: dict[str, str] = {}
+    added: DecimalJsonObject = {
         "type": "response.output_item.added",
         "item": {"type": "reasoning", "encrypted_content": draft},
     }
     assert finalize_replay(added, delivered.snapshot, cache)
-    sealed = added["item"]["encrypted_content"]
+    sealed = string_payload(object_payload(added["item"])["encrypted_content"])
     continuation = decode_replay(sealed).continuation
     assert continuation is not None
     assert continuation.echo == ({"text": "prefix suffix"},)
-    completed = {
+    completed: DecimalJsonObject = {
         "type": "response.completed",
         "response": {"output": [{"type": "reasoning", "encrypted_content": draft}]},
     }
@@ -47,10 +49,15 @@ def test_terminal_snapshot_reuses_sealed_carrier():
         raise AssertionError("Replay was already finalized")
 
     assert finalize_replay(completed, unexpected, cache)
-    assert completed["response"]["output"][0]["encrypted_content"] == sealed
+    assert (
+        object_array(object_payload(completed["response"])["output"])[0][
+            "encrypted_content"
+        ]
+        == sealed
+    )
 
 
-def test_carrier_looking_answer_text_is_not_interpreted():
+def test_carrier_looking_answer_text_is_not_interpreted() -> None:
     payload = {
         "type": "content_block_delta",
         "delta": {"type": "text_delta", "text": "fcc:history:v1:not-a-carrier"},
@@ -59,10 +66,10 @@ def test_carrier_looking_answer_text_is_not_interpreted():
     def unexpected():
         raise AssertionError("Ordinary text is not replay metadata")
 
-    assert not finalize_replay(payload, unexpected, {})
+    assert not finalize_replay(object_payload(payload), unexpected, {})
 
 
-def test_missing_public_prefix_prevents_draft_publication():
+def test_missing_public_prefix_prevents_draft_publication() -> None:
     payload = {
         "content_block": {
             "type": "redacted_thinking",
@@ -70,12 +77,16 @@ def test_missing_public_prefix_prevents_draft_publication():
         }
     }
     with pytest.raises(HistoryReplayError):
-        finalize_replay(payload, DeliveredResponse("messages").snapshot, {})
+        finalize_replay(
+            object_payload(payload), DeliveredResponse("messages").snapshot, {}
+        )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("publish_carrier", [False, True])
-async def test_disconnected_public_stream_releases_replay_state(publish_carrier):
+async def test_disconnected_public_stream_releases_replay_state(
+    publish_carrier: bool,
+) -> None:
     import json
 
     closed = []

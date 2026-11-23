@@ -20,6 +20,7 @@ from loguru import logger
 from openai import Omit
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
+from free_claude_code.core.json_types import JsonValue, json_object, json_objects
 from free_claude_code.core.reasoning import ReasoningEffort
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
@@ -127,11 +128,12 @@ class LMStudioProvider(OpenAIChatProvider):
                         },
                     },
                 )
+                payload: JsonValue = response.json()
                 loaded = [
-                    model.get("loaded_context_length")
-                    for model in response.json().get("data", [])
+                    length
+                    for model in json_objects(json_object(payload).get("data", []))
                     if model.get("state") == "loaded"
-                    and isinstance(model.get("loaded_context_length"), int)
+                    and isinstance(length := model.get("loaded_context_length"), int)
                 ]
                 # ponytail: single-model setups in practice; with several loaded
                 # models the most generous ceiling still makes a valid backstop.

@@ -7,11 +7,14 @@ from pathlib import Path
 import pytest
 
 from free_claude_code.harnesses import antigravity
+from tests.cli.conftest import LaunchCapture
 from tests.cli.test_launcher_workflow import launch
 from tests.harnesses.antigravity_support import write_previous_connection
 
 
-def test_default_model_and_credentials_keep_native_home(launch_capture, monkeypatch):
+def test_default_model_and_credentials_keep_native_home(
+    launch_capture: LaunchCapture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     for key, value in {
         "GEMINI_API_KEY": "personal-key",
         "GOOGLE_GEMINI_BASE_URL": "https://personal.invalid",
@@ -51,7 +54,9 @@ def test_default_model_and_credentials_keep_native_home(launch_capture, monkeypa
         ["--print", "literal --settings={} and --disconnect"],
     ],
 )
-def test_native_arguments_follow_global_settings(args, launch_capture):
+def test_native_arguments_follow_global_settings(
+    args: list[str], launch_capture: LaunchCapture
+) -> None:
     launch("agy", args)
     command = launch_capture.commands[0]
     assert command[:2] == ["agy", "--settings"]
@@ -63,11 +68,13 @@ def test_native_arguments_follow_global_settings(args, launch_capture):
     assert "--dangerously-skip-permissions" not in command
 
 
-def test_old_connection_is_retired_before_native_start(launch_capture):
+def test_old_connection_is_retired_before_native_start(
+    launch_capture: LaunchCapture,
+) -> None:
     path, state = antigravity.config_path(), antigravity.state_path()
     original = write_previous_connection(path, state)
 
-    def inspect(command, env):
+    def inspect(command: object, env: object):
         assert json.loads(path.read_text()) == original
         assert not state.exists()
 
@@ -78,7 +85,9 @@ def test_old_connection_is_retired_before_native_start(launch_capture):
     assert path.read_bytes() == before
 
 
-def test_catalog_failure_does_not_retire_connection(launch_capture):
+def test_catalog_failure_does_not_retire_connection(
+    launch_capture: LaunchCapture,
+) -> None:
     path, state = antigravity.config_path(), antigravity.state_path()
     write_previous_connection(path, state)
     before = path.read_bytes(), state.read_bytes()
@@ -88,7 +97,9 @@ def test_catalog_failure_does_not_retire_connection(launch_capture):
     assert not launch_capture.commands
 
 
-def test_cleanup_failure_stops_launch_and_keeps_record(launch_capture, capsys):
+def test_cleanup_failure_stops_launch_and_keeps_record(
+    launch_capture: LaunchCapture, capsys: pytest.CaptureFixture[str]
+) -> None:
     path, state = antigravity.config_path(), antigravity.state_path()
     write_previous_connection(path, state)
     path.write_text("{broken")
@@ -99,10 +110,12 @@ def test_cleanup_failure_stops_launch_and_keeps_record(launch_capture, capsys):
     assert "/admin/integrations" not in capsys.readouterr().err
 
 
-def test_native_start_failure_removes_temporary_settings(launch_capture):
+def test_native_start_failure_removes_temporary_settings(
+    launch_capture: LaunchCapture,
+) -> None:
     files = []
 
-    def fail(command, env):
+    def fail(command: list[str], env: object):
         path = Path(command[command.index("--settings") + 1])
         assert path.exists()
         files.append(path)
@@ -114,7 +127,9 @@ def test_native_start_failure_removes_temporary_settings(launch_capture):
 
 
 @pytest.mark.parametrize("output", ["1.4.7", "1.5.8", "1.5.9-beta.1", "unknown"])
-def test_unsupported_native_version_stops_before_fcc(output, launch_capture):
+def test_unsupported_native_version_stops_before_fcc(
+    output: str, launch_capture: LaunchCapture
+) -> None:
     launch_capture.versions["agy"] = output
     launch("agy", [], exit_code=126)
     assert not launch_capture.requests and not launch_capture.commands

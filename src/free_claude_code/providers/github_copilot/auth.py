@@ -116,7 +116,7 @@ class CopilotAuthManager:
         self._closed = False
         try:
             self._read_state()
-        except OSError, ValueError, UnicodeError:
+        except OSError, ValueError:
             self._enabled = False
             self._identity = None
             self._last_error = (

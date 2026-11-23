@@ -1,6 +1,7 @@
 """Credential evidence must not consume inference or reject ambiguous failures."""
 
 import asyncio
+from collections.abc import Callable, Coroutine
 
 import httpx
 import pytest
@@ -8,10 +9,11 @@ import pytest
 from free_claude_code.config.admin.credentials import CredentialSubmission
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.providers import credential_validation as validation
 
 # Minimal published response shapes, independent of the implementation registry.
-CASES = [
+CASES: list[tuple[str, str, JsonValue, int | None]] = [
     ("anthropic", "https://api.anthropic.com/v1/models?limit=1", {"data": []}, 401),
     (
         "open_router",
@@ -111,7 +113,7 @@ CASES = [
 ]
 
 
-def _settings(provider_id):
+def _settings(provider_id: str):
     descriptor = PROVIDER_CATALOG[provider_id]
     assert descriptor.credential_env is not None
     return Settings.model_validate(
@@ -119,26 +121,35 @@ def _settings(provider_id):
     )
 
 
-async def _check_credentials(settings, keys):
+async def _check_credentials(settings: Settings, keys: tuple[str, ...]):
     owners = {
         d.credential_env: d.credential_attr
         for d in PROVIDER_CATALOG.values()
         if d.credential_env and d.credential_attr
     }
     submissions = tuple(
-        CredentialSubmission(key, getattr(settings, owners[key]))
+        CredentialSubmission(key, settings.credential_keys(owners[key]))
         for key in dict.fromkeys(keys)
         if key in owners
     )
     return await validation.check_credentials(settings, submissions)
 
 
-def _mock_http(monkeypatch, handler):
+def _mock_http(
+    monkeypatch: pytest.MonkeyPatch,
+    handler: Callable[[httpx.Request], httpx.Response]
+    | Callable[[httpx.Request], Coroutine[None, None, httpx.Response]],
+):
     clients = []
     real_client = httpx.AsyncClient
 
-    def factory(**kwargs):
-        client = real_client(**kwargs, transport=httpx.MockTransport(handler))
+    def factory(*, proxy: str | None, timeout: float, follow_redirects: bool):
+        client = real_client(
+            proxy=proxy,
+            timeout=timeout,
+            follow_redirects=follow_redirects,
+            transport=httpx.MockTransport(handler),
+        )
         clients.append(client)
         return client
 
@@ -149,13 +160,17 @@ def _mock_http(monkeypatch, handler):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("provider_id", "url", "payload", "rejection"), CASES)
 async def test_documented_probe_acceptance_and_rejection(
-    monkeypatch, provider_id, url, payload, rejection
-):
+    monkeypatch: pytest.MonkeyPatch,
+    provider_id: str,
+    url: str,
+    payload: JsonValue,
+    rejection: int | None,
+) -> None:
     requests = []
     status = 200
     body = payload
 
-    def respond(request):
+    def respond(request: httpx.Request):
         requests.append(request)
         assert request.method == "GET"
         assert str(request.url) == url
@@ -199,11 +214,14 @@ async def test_documented_probe_acceptance_and_rejection(
 @pytest.mark.parametrize("status", [400, 402, 403, 404, 429, 500, 503])
 @pytest.mark.parametrize("provider_id", ["groq", "xkiro", "anthropic"])
 async def test_ambiguous_errors_warn_without_retry(
-    monkeypatch, status, caplog, provider_id
-):
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    caplog: pytest.LogCaptureFixture,
+    provider_id: str,
+) -> None:
     requests = []
 
-    def respond(request):
+    def respond(request: httpx.Request):
         requests.append(request)
         return httpx.Response(status, json={"error": "secret-not-a-known-format"})
 
@@ -220,15 +238,18 @@ async def test_ambiguous_errors_warn_without_retry(
 @pytest.mark.parametrize("status", [200, 401, 302])
 @pytest.mark.parametrize("provider_id", ["groq", "xkiro", "anthropic"])
 async def test_non_api_responses_do_not_verify_or_reject(
-    monkeypatch, status, provider_id
-):
-    _mock_http(
-        monkeypatch,
-        lambda request: httpx.Response(
+    monkeypatch: pytest.MonkeyPatch, status: int, provider_id: str
+) -> None:
+    def callback(request: object):
+        return httpx.Response(
             status,
             text="<html>Sign in</html>",
             headers={"Location": "https://other.invalid/"},
-        ),
+        )
+
+    _mock_http(
+        monkeypatch,
+        callback,
     )
     key = PROVIDER_CATALOG[provider_id].credential_env
     assert key is not None
@@ -237,8 +258,10 @@ async def test_non_api_responses_do_not_verify_or_reject(
 
 
 @pytest.mark.asyncio
-async def test_unsupported_shared_credentials_never_send_http(monkeypatch):
-    def unexpected(request):
+async def test_unsupported_shared_credentials_never_send_http(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected(request: object):
         pytest.fail("Public catalogs must not be used to verify a credential")
 
     _mock_http(monkeypatch, unexpected)
@@ -267,9 +290,9 @@ async def test_unsupported_shared_credentials_never_send_http(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_probe_timeout_preserves_finished_rejection_and_closes_clients(
-    monkeypatch,
-):
-    async def respond(request):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def respond(request: httpx.Request):
         if request.url.host == "api.groq.com":
             return httpx.Response(401, json={"error": "invalid key"})
         await asyncio.Event().wait()
@@ -289,10 +312,12 @@ async def test_probe_timeout_preserves_finished_rejection_and_closes_clients(
 
 
 @pytest.mark.asyncio
-async def test_external_cancellation_propagates_and_closes_clients(monkeypatch):
+async def test_external_cancellation_propagates_and_closes_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     started = asyncio.Event()
 
-    async def respond(request):
+    async def respond(request: object):
         started.set()
         await asyncio.Event().wait()
         raise AssertionError("unreachable")
@@ -307,10 +332,12 @@ async def test_external_cancellation_propagates_and_closes_clients(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_connection_failure_is_safe_and_does_not_retry(monkeypatch):
+async def test_connection_failure_is_safe_and_does_not_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls = 0
 
-    def respond(request):
+    def respond(request: httpx.Request):
         nonlocal calls
         calls += 1
         raise httpx.ConnectError("secret-not-a-known-format", request=request)
@@ -332,9 +359,12 @@ async def test_connection_failure_is_safe_and_does_not_retry(monkeypatch):
     ],
 )
 async def test_recognized_restricted_key_warns_instead_of_rejecting(
-    monkeypatch, provider_id, payload
-):
-    _mock_http(monkeypatch, lambda request: httpx.Response(200, json=payload))
+    monkeypatch: pytest.MonkeyPatch, provider_id: str, payload: JsonObject
+) -> None:
+    def callback(request: object):
+        return httpx.Response(200, json=payload)
+
+    _mock_http(monkeypatch, callback)
     key = PROVIDER_CATALOG[provider_id].credential_env
     assert key is not None
     result = await _check_credentials(_settings(provider_id), (key,))
@@ -343,14 +373,16 @@ async def test_recognized_restricted_key_warns_instead_of_rejecting(
 
 
 @pytest.mark.asyncio
-async def test_checks_are_concurrent_but_bounded(monkeypatch):
+async def test_checks_are_concurrent_but_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     first_wave = asyncio.Event()
     release = asyncio.Event()
     active = 0
     peak = 0
     started = []
 
-    async def check(settings, key, probe, credential):
+    async def check(settings: object, key: str, probe: object, credential: object):
         nonlocal active, peak
         active += 1
         peak = max(peak, active)
@@ -382,8 +414,10 @@ async def test_checks_are_concurrent_but_bounded(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_programming_errors_do_not_become_permission_to_save(monkeypatch):
-    def broken(request):
+async def test_programming_errors_do_not_become_permission_to_save(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken(request: object):
         raise RuntimeError("unexpected bug")
 
     clients = _mock_http(monkeypatch, broken)
@@ -402,19 +436,24 @@ async def test_programming_errors_do_not_become_permission_to_save(monkeypatch):
         {"object": "usage", "windows": [], "free_tokens": None},
     ],
 )
-async def test_xkiro_unexpected_usage_remains_unverified(monkeypatch, payload):
-    _mock_http(monkeypatch, lambda request: httpx.Response(200, json=payload))
+async def test_xkiro_unexpected_usage_remains_unverified(
+    monkeypatch: pytest.MonkeyPatch, payload: JsonObject
+) -> None:
+    def callback(request: object):
+        return httpx.Response(200, json=payload)
+
+    _mock_http(monkeypatch, callback)
     result = await _check_credentials(_settings("xkiro"), ("XKIRO_API_KEY",))
     assert result[0].status == validation.CredentialStatus.UNVERIFIED
 
 
 @pytest.mark.asyncio
 async def test_anthropic_probe_uses_workspace_and_version_without_inference(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     requests = []
 
-    def respond(request):
+    def respond(request: httpx.Request):
         requests.append(request)
         return httpx.Response(200, json={"data": []})
 

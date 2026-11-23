@@ -6,12 +6,15 @@ evidence reach the upstream or the client unchanged.
 """
 
 import json
-from collections.abc import Iterator
-from typing import Any
+from collections.abc import Iterator, Mapping
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
 from loguru import logger
+
+if TYPE_CHECKING:
+    from loguru import Message
 
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
@@ -22,16 +25,18 @@ from free_claude_code.core.stream_delivery import (
     bind_stream_delivery,
 )
 from free_claude_code.core.trace import TRACE_PAYLOAD_BINDING
+from free_claude_code.providers.anthropic.provider import AnthropicProvider
 from tests.providers.test_anthropic_messages_transport import Wire, _events, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
+from tests.wire_payload import object_payload
 
 
 @pytest.fixture
 def traces() -> Iterator[list[dict[str, Any]]]:
     payloads: list[dict[str, Any]] = []
 
-    def sink(message: Any) -> None:
-        payload = message.record["extra"].get(TRACE_PAYLOAD_BINDING)
+    def sink(message: Message) -> None:
+        payload: object = message.record["extra"].get(TRACE_PAYLOAD_BINDING)
         if isinstance(payload, dict):
             payloads.append(payload)
 
@@ -42,12 +47,22 @@ def traces() -> Iterator[list[dict[str, Any]]]:
         logger.remove(handle)
 
 
-async def _forward(p, body, **kwargs) -> list[str]:
+async def _forward(
+    p: AnthropicProvider,
+    body: JsonObject,
+    *,
+    request_id: str | None = None,
+    response_model: str | None = None,
+    request_headers: Mapping[str, str] | None = None,
+) -> list[str]:
     with bind_stream_delivery(StreamDeliveryState()):
         return [
             frame
             async for chunk in p.stream_native_messages(
-                NativeMessagesRequest(body), **kwargs
+                NativeMessagesRequest(body),
+                request_id=request_id,
+                response_model=response_model,
+                request_headers=request_headers,
             )
             for frame in chunk.frames
         ]
@@ -61,10 +76,10 @@ def _stream(*chunks: bytes) -> httpx.Response:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_client_protocol_headers_reach_upstream(streaming):
+async def test_client_protocol_headers_reach_upstream(streaming: bool) -> None:
     received: list[httpx.Request] = []
 
-    def handle(request):
+    def handle(request: httpx.Request):
         received.append(request)
         if streaming:
             return _stream(_sse(*_events()))
@@ -90,17 +105,18 @@ async def test_client_protocol_headers_reach_upstream(streaming):
 
 
 @pytest.mark.asyncio
-async def test_context_window_stop_reaches_the_client_as_a_stop():
-    p = provider(
-        lambda request: _stream(_sse(*_events(stop="model_context_window_exceeded")))
-    )
+async def test_context_window_stop_reaches_the_client_as_a_stop() -> None:
+    def callback(request: object):
+        return _stream(_sse(*_events(stop="model_context_window_exceeded")))
+
+    p = provider(callback)
     try:
         frames = await _forward(p, native_body(True))
     finally:
         await p.cleanup()
 
     stops = [
-        event.data["delta"]["stop_reason"]
+        object_payload(event.data["delta"])["stop_reason"]
         for event in parse_sse_text("".join(frames))
         if event.data["type"] == "message_delta"
     ]
@@ -108,12 +124,18 @@ async def test_context_window_stop_reaches_the_client_as_a_stop():
 
 
 @pytest.mark.asyncio
-async def test_error_event_failure_carries_upstream_evidence(traces):
+async def test_error_event_failure_carries_upstream_evidence(
+    traces: list[JsonObject],
+) -> None:
     error: JsonObject = {
         "type": "error",
         "error": {"type": "invalid_request_error", "message": "native evidence"},
     }
-    p = provider(lambda request: _stream(_sse(_events()[0], error)))
+
+    def callback(request: object):
+        return _stream(_sse(_events()[0], error))
+
+    p = provider(callback)
     try:
         with pytest.raises(ExecutionFailure) as caught:
             await _forward(p, native_body(True), request_id="local-request")

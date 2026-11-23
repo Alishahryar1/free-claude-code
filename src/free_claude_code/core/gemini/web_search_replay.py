@@ -1,7 +1,13 @@
 """Carry completed Messages WebSearch turns into Gemini history."""
 
 from collections.abc import Iterable, Iterator
-from typing import Any, cast
+
+from free_claude_code.core.json_types import (
+    JsonObject,
+    json_objects,
+    json_text,
+    optional_string,
+)
 
 from ..anthropic.content import get_block_attr, get_block_type
 from ..anthropic.server_tool_types import HIDDEN_WEB_SEARCH_NAME
@@ -14,7 +20,7 @@ from ..history_replay import (
 from .errors import GeminiConversionError
 
 
-def signed_gemini_turn(blocks: Iterable[Any]) -> ReplayRecord | None:
+def signed_gemini_turn(blocks: Iterable[object]) -> ReplayRecord | None:
     for block in blocks:
         if get_block_type(block) == "redacted_thinking" and is_replay(
             carrier := get_block_attr(block, "data")
@@ -26,19 +32,20 @@ def signed_gemini_turn(blocks: Iterable[Any]) -> ReplayRecord | None:
 
 
 def restore_web_search_history(
-    messages: Iterable[dict[str, Any]],
-) -> Iterator[dict[str, Any]]:
+    messages: Iterable[JsonObject],
+) -> Iterator[JsonObject]:
     for message in messages:
         blocks = message.get("content")
         if message["role"] != "assistant" or not isinstance(blocks, list):
             yield message
             continue
-        search_ids = [block["id"] for block in blocks if _is_search(block)]
+        blocks = list(json_objects(blocks))
+        search_ids = [json_text(block["id"]) for block in blocks if _is_search(block)]
         if not search_ids:
             yield message
             continue
         result_blocks = [block for block in blocks if _is_search_result(block)]
-        by_id = {block["tool_use_id"]: block for block in result_blocks}
+        by_id = {json_text(block["tool_use_id"]): block for block in result_blocks}
         if (
             len(by_id) != len(result_blocks)
             or len(by_id) != len(search_ids)
@@ -64,24 +71,24 @@ def restore_web_search_history(
         yield {"role": "user", "content": search_results}
 
 
-def _is_search(block: dict[str, Any]) -> bool:
+def _is_search(block: JsonObject) -> bool:
     return block.get("type") == "server_tool_use" and block.get("name") == "web_search"
 
 
-def _is_search_result(block: dict[str, Any]) -> bool:
+def _is_search_result(block: JsonObject) -> bool:
     return block.get("type") == "web_search_tool_result"
 
 
 def _restore_turn(
-    blocks: list[dict[str, Any]],
+    blocks: list[JsonObject],
     record: ReplayRecord,
-    by_id: dict[str, dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    by_id: dict[str, JsonObject],
+) -> tuple[list[JsonObject], list[JsonObject]]:
     error = "Signed Gemini WebSearch history does not match its original calls."
-    native_calls: list[dict[str, Any]] = [
-        part["functionCall"]
-        for part in cast(list[dict[str, Any]], record.native["parts"])
-        if isinstance(part.get("functionCall"), dict)
+    native_calls = [
+        call
+        for part in json_objects(record.native["parts"])
+        if isinstance(call := part.get("functionCall"), dict)
     ]
     visible_calls = [
         block
@@ -90,8 +97,8 @@ def _restore_turn(
     ]
     if len(native_calls) != len(visible_calls):
         raise GeminiConversionError(error)
-    lifted: dict[str, dict[str, Any]] = {}
-    results = []
+    lifted: dict[str, JsonObject] = {}
+    results: list[JsonObject] = []
     for visible, native in zip(visible_calls, native_calls, strict=True):
         if not _is_search(visible):
             # The existing history replay validator checks ordinary calls and
@@ -99,7 +106,8 @@ def _restore_turn(
             continue
         name = native.get("name")
         args = native.get("args")
-        use_id = visible["id"]
+        use_id = json_text(visible["id"])
+        visible_input = visible.get("input")
         if (
             not isinstance(name, str)
             or not (
@@ -111,12 +119,13 @@ def _restore_turn(
             )
             or not isinstance(args, dict)
             or not isinstance(query := args.get("query"), str)
-            or query.strip() != visible["input"].get("query")
+            or not isinstance(visible_input, dict)
+            or query.strip() != visible_input.get("query")
         ):
             raise GeminiConversionError(error)
         # Gemini may omit a call ID. The replay validator removes the portable
         # alias from both the call and result when restoring the native turn.
-        call_id = native.get("id") or use_id
+        call_id = optional_string(native.get("id")) or use_id
         lifted[use_id] = {
             "type": "tool_use",
             "id": call_id,
@@ -136,7 +145,7 @@ def _restore_turn(
         )
     return (
         [
-            lifted[block["id"]] if _is_search(block) else block
+            lifted[json_text(block["id"])] if _is_search(block) else block
             for block in blocks
             if not _is_search_result(block)
         ],

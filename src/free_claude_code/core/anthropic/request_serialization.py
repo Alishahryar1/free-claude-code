@@ -1,8 +1,9 @@
 """Shared Anthropic request serialization helpers."""
 
 import json
-from typing import Any
+from collections.abc import Mapping
 
+from ..json_types import JsonObject
 from .models import MessagesRequest
 
 _MESSAGES_REQUEST_FIELDS = (
@@ -26,9 +27,9 @@ _MESSAGES_REQUEST_FIELDS = (
 )
 
 
-def dump_messages_request(request: MessagesRequest) -> dict[str, Any]:
+def dump_messages_request(request: MessagesRequest) -> JsonObject:
     """Return JSON-ready public Messages fields without FCC routing state."""
-    raw = request.model_dump(exclude_none=True)
+    raw: JsonObject = request.model_dump(exclude_none=True)
     return {
         field: raw[field]
         for field in _MESSAGES_REQUEST_FIELDS
@@ -36,7 +37,7 @@ def dump_messages_request(request: MessagesRequest) -> dict[str, Any]:
     }
 
 
-def serialize_tool_result_content(content: Any) -> str:
+def serialize_tool_result_content(content: object) -> str:
     """Serialize Anthropic ``tool_result.content`` into provider-safe text."""
     if content is None:
         return ""
@@ -58,7 +59,7 @@ def serialize_tool_result_content(content: Any) -> str:
 
 
 def is_noop_context_management(
-    context_management: dict[str, Any] | None,
+    context_management: Mapping[str, object] | None,
 ) -> bool:
     if not context_management:
         return True

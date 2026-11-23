@@ -1,23 +1,36 @@
+from pathlib import Path
+
 import pytest
-from playwright.sync_api import expect
+from playwright.sync_api import Page, Route, expect
 
 from e2e.provider_support import api_key_input, close_provider, open_provider
 from e2e.test_code_sessions import create_session
+from free_claude_code.core.json_types import JsonValue
+from tests.wire_payload import (
+    array_payload,
+    int_payload,
+    object_payload,
+    response_object,
+)
 
 
 @pytest.mark.parametrize(
     "admin_base_url", [{"NVIDIA_NIM_API_KEY": "e2e-nim-key"}], indirect=True
 )
 def test_discovery_error_is_visible_in_provider_card_and_refresh_result(
-    page, admin_base_url
+    page: Page, admin_base_url: str
 ):
     proxy_message = "The network proxy rejected or failed the connection. Check your proxy settings."
     http_message = "The model-list request returned HTTP 403."
 
-    def status(route):
-        data = route.fetch().json()
-        data["startup"]["providers"]["nvidia_nim"] = "failed"
-        data["startup"]["provider_errors"] = {"nvidia_nim": proxy_message}
+    def status(route: Route):
+        data = response_object(route.fetch())
+        object_payload(object_payload(data["startup"])["providers"])["nvidia_nim"] = (
+            "failed"
+        )
+        object_payload(data["startup"])["provider_errors"] = {
+            "nvidia_nim": proxy_message
+        }
         route.fulfill(json=data)
 
     page.route("**/admin/api/status", status)
@@ -42,7 +55,9 @@ def test_discovery_error_is_visible_in_provider_card_and_refresh_result(
     expect(card).to_contain_text(http_message)
 
 
-def test_provider_and_messaging_progress_preserve_settings(page, admin_base_url):
+def test_provider_and_messaging_progress_preserve_settings(
+    page: Page, admin_base_url: str
+):
     starting = True
     provider_tests = []
     page.on(
@@ -54,12 +69,14 @@ def test_provider_and_messaging_progress_preserve_settings(page, admin_base_url)
         ),
     )
 
-    def status(route):
-        data = route.fetch().json()
-        data["startup"]["providers"]["open_router"] = (
+    def status(route: Route):
+        data = response_object(route.fetch())
+        object_payload(object_payload(data["startup"])["providers"])["open_router"] = (
             "starting" if starting else "ready"
         )
-        data["startup"]["messaging"] = {"state": "starting" if starting else "ready"}
+        object_payload(data["startup"])["messaging"] = {
+            "state": "starting" if starting else "ready"
+        }
         route.fulfill(json=data)
 
     page.route("**/admin/api/status", status)
@@ -104,13 +121,13 @@ def test_provider_and_messaging_progress_preserve_settings(page, admin_base_url)
 
 
 def test_codex_connect_waits_for_catalog_and_recovers_from_publication_error(
-    page, admin_base_url
+    page: Page, admin_base_url: str
 ):
     phase = "starting"
 
-    def status(route):
-        data = route.fetch().json()
-        data["startup"]["catalog_file"] = phase
+    def status(route: Route):
+        data = response_object(route.fetch())
+        object_payload(data["startup"])["catalog_file"] = phase
         route.fulfill(json=data)
 
     page.route("**/admin/api/status", status)
@@ -142,22 +159,24 @@ def test_codex_connect_waits_for_catalog_and_recovers_from_publication_error(
 
 
 def test_initial_code_catalog_wait_keeps_history_and_draft(
-    page, admin_base_url, tmp_path
+    page: Page, admin_base_url: str, tmp_path: Path
 ):
     starting = True
 
-    def bootstrap(route):
-        data = route.fetch().json()
+    def bootstrap(route: Route):
+        data = response_object(route.fetch())
         if starting:
-            data["models"] = []
-            data["startup"]["catalog"] = "starting"
-            data["startup"]["providers"]["provider"] = "starting"
+            data["models"] = list[JsonValue]()
+            object_payload(data["startup"])["catalog"] = "starting"
+            object_payload(object_payload(data["startup"])["providers"])["provider"] = (
+                "starting"
+            )
         route.fulfill(json=data)
 
-    def status(route):
-        data = route.fetch().json()
+    def status(route: Route):
+        data = response_object(route.fetch())
         if starting:
-            data["startup"]["catalog"] = "starting"
+            object_payload(data["startup"])["catalog"] = "starting"
         route.fulfill(json=data)
 
     page.route("**/admin/api/code/bootstrap", bootstrap)
@@ -177,7 +196,7 @@ def test_initial_code_catalog_wait_keeps_history_and_draft(
 
 
 def test_failed_catalog_refresh_preserves_synchronized_session(
-    page, admin_base_url, tmp_path
+    page: Page, admin_base_url: str, tmp_path: Path
 ):
     page.add_init_script("""{
       const Feed = window.EventSource;
@@ -190,7 +209,7 @@ def test_failed_catalog_refresh_preserves_synchronized_session(
     composer = page.locator("#codeComposer")
     composer.fill("Keep the draft during a failed catalog read")
     expect(page.locator("#codeSend")).to_be_enabled()
-    feeds = page.evaluate("window.codeFeedCount")
+    feeds: int = page.evaluate("window.codeFeedCount")
     page.route(
         "**/admin/api/code/bootstrap",
         lambda route: route.fulfill(status=503, json={"detail": "Catalog unavailable"}),
@@ -202,19 +221,22 @@ def test_failed_catalog_refresh_preserves_synchronized_session(
 
 
 def test_code_catalog_cannot_roll_back_after_a_newer_startup_status(
-    page, admin_base_url, tmp_path
+    page: Page, admin_base_url: str, tmp_path: Path
 ):
     create_session(page, admin_base_url, tmp_path)
     composer = page.locator("#codeComposer")
     composer.fill("Preserve my selected model")
     expect(page.locator("#codeSend")).to_be_enabled()
     page.wait_for_function("!state.startupRequest && !state.startupTimer")
-    data = page.request.get(f"{admin_base_url}/admin/api/code/bootstrap").json()
-    status = page.request.get(f"{admin_base_url}/admin/api/status").json()
-    status["startup"].update(generation_id=10, catalog_revision=10)
+    data = response_object(
+        page.request.get(f"{admin_base_url}/admin/api/code/bootstrap")
+    )
+    status = response_object(page.request.get(f"{admin_base_url}/admin/api/status"))
+    object_payload(status["startup"]).update(generation_id=10, catalog_revision=10)
     stale = data | {
         "models": [],
-        "startup": data["startup"] | {"generation_id": 9, "catalog_revision": 9},
+        "startup": object_payload(data["startup"])
+        | {"generation_id": 9, "catalog_revision": 9},
     }
     page.route("**/admin/api/code/bootstrap", lambda route: route.fulfill(json=stale))
     assert (
@@ -222,7 +244,7 @@ def test_code_catalog_cannot_roll_back_after_a_newer_startup_status(
     )
     expect(composer).to_have_value("Preserve my selected model")
     expect(page.locator("#codeSend")).to_be_enabled()
-    data["startup"].update(generation_id=10, catalog_revision=10)
+    object_payload(data["startup"]).update(generation_id=10, catalog_revision=10)
     page.unroute("**/admin/api/code/bootstrap")
     page.route("**/admin/api/code/bootstrap", lambda route: route.fulfill(json=data))
     assert (
@@ -232,28 +254,34 @@ def test_code_catalog_cannot_roll_back_after_a_newer_startup_status(
 
 
 def test_code_catalog_coalesces_notifications_and_catches_up_to_latest_version(
-    page, admin_base_url, tmp_path
+    page: Page, admin_base_url: str, tmp_path: Path
 ):
     create_session(page, admin_base_url, tmp_path)
     page.wait_for_function("!state.startupRequest && !state.startupTimer")
     assert page.evaluate("window.CodeSessions.refresh()") is True
-    data = page.request.get(f"{admin_base_url}/admin/api/code/bootstrap").json()
-    status = page.request.get(f"{admin_base_url}/admin/api/status").json()
-    generation = status["startup"]["generation_id"] + 1
-    status["startup"].update(generation_id=generation, catalog_revision=1)
-    first = data | {"startup": data["startup"] | status["startup"]}
+    data = response_object(
+        page.request.get(f"{admin_base_url}/admin/api/code/bootstrap")
+    )
+    status = response_object(page.request.get(f"{admin_base_url}/admin/api/status"))
+    generation = int_payload(object_payload(status["startup"])["generation_id"]) + 1
+    object_payload(status["startup"]).update(
+        generation_id=generation, catalog_revision=1
+    )
+    first = data | {
+        "startup": object_payload(data["startup"]) | object_payload(status["startup"])
+    }
     latest = data | {
-        "startup": first["startup"] | {"catalog_revision": 5},
+        "startup": object_payload(first["startup"]) | {"catalog_revision": 5},
         "models": [
-            *data["models"],
-            data["models"][0]
+            *array_payload(data["models"]),
+            object_payload(array_payload(data["models"])[0])
             | {"id": "extra/later", "provider_id": "extra", "model_name": "later"},
         ],
     }
     pending = []
     calls = 0
 
-    def bootstrap(route):
+    def bootstrap(route: Route):
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -266,7 +294,7 @@ def test_code_catalog_coalesces_notifications_and_catches_up_to_latest_version(
     page.evaluate("status => { void window.CodeSessions.refresh(status); }", status)
     page.wait_for_function("window.heldCatalogVersion === true")
     for revision in range(2, 6):
-        status["startup"]["catalog_revision"] = revision
+        object_payload(status["startup"])["catalog_revision"] = revision
         page.evaluate("status => { void window.CodeSessions.refresh(status); }", status)
     assert calls == 1
     pending.pop().fulfill(json=first)

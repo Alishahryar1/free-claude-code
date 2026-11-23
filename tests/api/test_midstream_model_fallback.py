@@ -1,12 +1,19 @@
 """Model fallback continues the public response through real provider transports."""
 
+from collections.abc import Mapping, Sequence
+
 import pytest
 
 from free_claude_code.application.model_fallback import stream_model_candidates
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.application.routing import ProviderModelCandidate
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_delivery import current_stream_delivery
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
+from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.open_router import OpenRouterProvider
 from free_claude_code.providers.recovery_policy import RecoveryTiming
 from tests.api.test_delivered_stream_recovery import (
@@ -26,15 +33,31 @@ from tests.providers.support import (
     make_provider_config,
     without_empty_reasoning,
 )
-from tests.providers.test_history_transports import _events_for, _harness
+from tests.providers.test_history_transports import _events_for, _harness, _Send
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
-async def delivered_candidates(senders, wire, *, tools=None, history=None):
+async def delivered_candidates(
+    senders: Sequence[_Send],
+    wire: WireProtocol,
+    *,
+    tools: list[JsonObject] | None = None,
+    history: Sequence[Mapping[str, JsonValue]] | None = None,
+):
     if history is None:
         history = [{"role": "user", "content": "greet"}]
 
-    async def open_candidate(index, candidate, continuation=None):
+    async def open_candidate(
+        index: int,
+        candidate: ProviderModelCandidate,
+        continuation: ContinuationSeed | None = None,
+    ):
         return senders[index](
             wire,
             history,
@@ -67,7 +90,9 @@ async def delivered_candidates(senders, wire, *, tools=None, history=None):
     "case",
     ["full", "summary", "summary_empty_text", "text_empty_part", "summary_whitespace"],
 )
-async def test_messages_fallback_accepts_partial_output_slots(wire, case):
+async def test_messages_fallback_accepts_partial_output_slots(
+    wire: WireProtocol, case: str
+) -> None:
     prefix = (
         "Half"
         if case == "text_empty_part"
@@ -105,11 +130,11 @@ async def test_messages_fallback_accepts_partial_output_slots(wire, case):
     assert len(bodies) == 1
     assert_completed(events, wire)
     assert public_text(events, wire) == prefix + "Recovered."
-    for message in bodies[0]["messages"]:
+    for message in object_array(bodies[0]["messages"]):
         if message.get("role") == "assistant":
             assert all(
                 block.get("text") != ""
-                for block in message["content"]
+                for block in object_array(message["content"])
                 if block.get("type") == "text"
             )
     assert ("Find 17." in str(bodies[0]["messages"])) is (case != "text_empty_part")
@@ -119,7 +144,9 @@ async def test_messages_fallback_accepts_partial_output_slots(wire, case):
 @pytest.mark.parametrize("source", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("target", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_exhausted_model_continues_on_next_candidate(source, target, wire):
+async def test_exhausted_model_continues_on_next_candidate(
+    source: str, target: str, wire: WireProtocol
+) -> None:
     async with (
         _harness(
             source,
@@ -143,7 +170,9 @@ async def test_exhausted_model_continues_on_next_candidate(source, target, wire)
     assert_completed(events, wire)
     assert public_text(events, wire) == "Hello there. Done."
     body = second_bodies[0]
-    history = without_empty_reasoning(body.get("messages", body.get("input")))
+    history = object_array(
+        without_empty_reasoning(body.get("messages", body.get("input")))
+    )
     assert history[0]["role"] == "user" and "greet" in str(history[0]["content"])
     assert assistant_history_text(history) == "Hello there. "
     assert sum(row.get("role") == "user" for row in history) == 2
@@ -151,9 +180,11 @@ async def test_exhausted_model_continues_on_next_candidate(source, target, wire)
     if wire == "responses":
         assert (
             "".join(
-                part.get("text", "")
-                for item in events[-1].data["response"]["output"]
-                for part in item.get("content", [])
+                string_payload(object_payload(part).get("text", ""))
+                for item in array_payload(
+                    object_payload(events[-1].data["response"])["output"]
+                )
+                for part in object_array(object_payload(item).get("content", []))
             )
             == "Hello there. Done."
         )
@@ -162,7 +193,9 @@ async def test_exhausted_model_continues_on_next_candidate(source, target, wire)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("target", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_fallback_preserves_readable_reasoning_without_a_heading(target, wire):
+async def test_fallback_preserves_readable_reasoning_without_a_heading(
+    target: str, wire: WireProtocol
+) -> None:
     interrupted = followed_by_text(reasoning_events(closed=False), "Hello ")
     async with (
         _harness("responses", lambda _: (200, interrupted), max_attempts=1) as (
@@ -180,10 +213,14 @@ async def test_fallback_preserves_readable_reasoning_without_a_heading(target, w
 
     assert len(bodies) == 1
     history = bodies[0].get("messages", bodies[0].get("input"))
-    content = history[-1]["content"]
-    instruction = content if isinstance(content, str) else content[0]["text"]
-    assert "Find 17." not in instruction
-    assert "Find 17." in str(history[:-1])
+    content = object_payload(array_payload(history)[-1])["content"]
+    instruction = (
+        content
+        if isinstance(content, str)
+        else object_payload(array_payload(content)[0])["text"]
+    )
+    assert "Find 17." not in string_payload(instruction)
+    assert "Find 17." in str(array_payload(history)[:-1])
     events = parse_sse_text(raw)
     assert_completed(events, wire)
     assert public_text(events, wire) == "Hello world."
@@ -192,7 +229,9 @@ async def test_fallback_preserves_readable_reasoning_without_a_heading(target, w
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_normal_completion_never_opens_another_candidate(protocol, wire):
+async def test_normal_completion_never_opens_another_candidate(
+    protocol: str, wire: WireProtocol
+) -> None:
     async with (
         _harness(protocol, lambda _: (200, text_events(protocol, "Done."))) as (
             first,
@@ -216,7 +255,9 @@ async def test_normal_completion_never_opens_another_candidate(protocol, wire):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_each_model_receives_the_latest_prefix_and_its_own_budget(wire):
+async def test_each_model_receives_the_latest_prefix_and_its_own_budget(
+    wire: WireProtocol,
+) -> None:
     async with (
         _harness(
             "chat",
@@ -246,7 +287,9 @@ async def test_each_model_receives_the_latest_prefix_and_its_own_budget(wire):
         (second_bodies[1], "One two "),
         (third_bodies[0], "One two three "),
     ]:
-        history = without_empty_reasoning(body.get("messages", body.get("input")))
+        history = object_array(
+            without_empty_reasoning(body.get("messages", body.get("input")))
+        )
         assert sum(row.get("role") == "user" for row in history) == 2
         assert assistant_history_text(history) == expected
     events = parse_sse_text(raw)
@@ -271,8 +314,8 @@ async def test_each_model_receives_the_latest_prefix_and_its_own_budget(wire):
     ],
 )
 async def test_permanent_rejection_advances_without_erasing_incoming_prefix(
-    wire, status, error
-):
+    wire: WireProtocol, status: int, error: JsonObject
+) -> None:
     async with (
         _harness(
             "chat",
@@ -296,7 +339,7 @@ async def test_permanent_rejection_advances_without_erasing_incoming_prefix(
         2 if status == 400 else 1,
         1,
     ]
-    assert "Hello " in str(third_bodies[0]["messages"][-2])
+    assert "Hello " in str(array_payload(third_bodies[0]["messages"])[-2])
     assert_completed(parse_sse_text(raw), wire)
     assert public_text(parse_sse_text(raw), wire) == "Hello world."
 
@@ -305,7 +348,9 @@ async def test_permanent_rejection_advances_without_erasing_incoming_prefix(
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("visible", [False, True])
-async def test_abandoned_calls_never_cross_model_boundary(protocol, wire, visible):
+async def test_abandoned_calls_never_cross_model_boundary(
+    protocol: str, wire: WireProtocol, visible: bool
+) -> None:
     failed_events = partial_tool(protocol)
     if visible:
         failed_events = after_text(protocol, failed_events)
@@ -324,32 +369,40 @@ async def test_abandoned_calls_never_cross_model_boundary(protocol, wire, visibl
         raw = await delivered_candidates([first, second], wire, tools=_tools(wire))
     assert len(first_bodies) == len(second_bodies) == 1
     assert "call_abandoned" not in raw and "abandoned" not in str(second_bodies[0])
-    assert len(second_bodies[0]["messages"]) == (3 if visible else 1)
+    assert len(object_array(second_bodies[0]["messages"])) == (3 if visible else 1)
     events = parse_sse_text(raw)
     assert_completed(events, wire)
     assert public_text(events, wire) == ("Before. " if visible else "")
     if wire == "messages":
         assert (
             "".join(
-                event.data.get("delta", {}).get("partial_json", "") for event in events
+                string_payload(
+                    object_payload(event.data.get("delta", {})).get("partial_json", "")
+                )
+                for event in events
             )
             == '{"path":"winning"}'
         )
     else:
         calls = [
             item
-            for item in events[-1].data["response"]["output"]
-            if item["type"] == "function_call"
+            for item in array_payload(
+                object_payload(events[-1].data["response"])["output"]
+            )
+            if object_payload(item)["type"] == "function_call"
         ]
-        assert len(calls) == 1 and calls[0]["arguments"] == '{"path":"winning"}'
+        assert (
+            len(calls) == 1
+            and object_payload(calls[0])["arguments"] == '{"path":"winning"}'
+        )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_first_fallback_call_rejects_native_state_without_trying_next_model(
-    protocol, wire
-):
+    protocol: str, wire: WireProtocol
+) -> None:
     async with (
         _harness(
             "chat",
@@ -380,8 +433,8 @@ async def test_first_fallback_call_rejects_native_state_without_trying_next_mode
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("text", ["", "Hello "])
 async def test_first_fallback_call_cannot_complete_without_new_output(
-    protocol, wire, text
-):
+    protocol: str, wire: WireProtocol, text: str
+) -> None:
     async with (
         _harness(
             "chat",
@@ -409,8 +462,8 @@ async def test_first_fallback_call_cannot_complete_without_new_output(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("permanent", [False, True])
 async def test_released_calls_handoff_only_for_retryable_failure(
-    protocol, wire, permanent
-):
+    protocol: str, wire: WireProtocol, permanent: bool
+) -> None:
     completed = tool_events(protocol, '{"path":"kept"}')
     failed_events = completed[:-2] if protocol == "messages" else completed[:-1]
     if permanent:
@@ -426,7 +479,7 @@ async def test_released_calls_handoff_only_for_retryable_failure(
                 **completed[-1],
                 "type": "response.failed",
                 "response": {
-                    **completed[-1]["response"],
+                    **object_payload(completed[-1]["response"]),
                     "status": "failed",
                     "error": error,
                 },
@@ -464,7 +517,9 @@ async def test_released_calls_handoff_only_for_retryable_failure(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_source_native_state_prevents_model_fallback(protocol, wire):
+async def test_source_native_state_prevents_model_fallback(
+    protocol: str, wire: WireProtocol
+) -> None:
     async with (
         _harness(
             protocol, lambda _: (200, _events_for(protocol)[:-1]), max_attempts=1
@@ -486,8 +541,8 @@ async def test_source_native_state_prevents_model_fallback(protocol, wire):
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("later_failure", [False, True])
 async def test_hidden_hosted_activity_remains_a_model_boundary_after_local_retry(
-    wire, later_failure
-):
+    wire: WireProtocol, later_failure: bool
+) -> None:
     hidden = [
         *partial_tool("responses"),
         {
@@ -502,7 +557,7 @@ async def test_hidden_hosted_activity_remains_a_model_boundary_after_local_retry
         },
     ]
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, hidden
         if later_failure:
@@ -537,9 +592,9 @@ async def test_hidden_hosted_activity_remains_a_model_boundary_after_local_retry
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("partial", [False, True])
 async def test_exhausted_model_allows_another_model_on_same_client(
-    protocol, wire, partial
-):
-    def reply(bodies):
+    protocol: str, wire: WireProtocol, partial: bool
+) -> None:
+    def reply(bodies: list[JsonObject]):
         if bodies[-1]["model"] == "model-1":
             return 200, text_events(protocol, "world.")
         if partial and len(bodies) == 1:
@@ -567,8 +622,8 @@ async def test_exhausted_model_allows_another_model_on_same_client(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_shared_cooldown_skips_candidate_with_zero_calls_and_keeps_seed(
-    monkeypatch, wire
-):
+    monkeypatch: pytest.MonkeyPatch, wire: WireProtocol
+) -> None:
     shared = ProviderAdmissionController(
         provider_name="shared",
         rate_limit=1000,
@@ -580,14 +635,14 @@ async def test_shared_cooldown_skips_candidate_with_zero_calls_and_keeps_seed(
     executions = []
     start = shared.start_execution
 
-    def capture(**kwargs):
-        execution = start(**kwargs)
+    def capture(*, request_id: str | None = None, model: str | None = None):
+        execution = start(request_id=request_id, model=model)
         executions.append(execution)
         return execution
 
     monkeypatch.setattr(shared, "start_execution", capture)
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, text_events("chat", "Hello ", complete=False)
         return 503, {"type": "server_error", "message": "Unavailable"}
@@ -608,12 +663,27 @@ async def test_shared_cooldown_skips_candidate_with_zero_calls_and_keeps_seed(
         ),
     ):
 
-        def same_model(*args, **kwargs):
-            return first(*args, **{**kwargs, "model": "provider-model"})
+        def same_model(
+            wire: str,
+            history: object,
+            *,
+            tools: object = None,
+            model: str = "requested",
+            continuation: ContinuationSeed | None = None,
+            reasoning: ReasoningPolicy | None = None,
+            endpoint_context: EndpointContext | None = None,
+        ):
+            return first(
+                wire,
+                history,
+                tools=tools,
+                model="provider-model",
+                continuation=continuation,
+            )
 
         raw = await delivered_candidates([first, same_model, third], wire)
     assert [execution.attempts_started for execution in executions] == [2, 0]
     assert len(shared_bodies) == 2 and len(third_bodies) == 1
-    assert "Hello " in str(third_bodies[0]["messages"][-2])
+    assert "Hello " in str(array_payload(third_bodies[0]["messages"])[-2])
     assert_completed(parse_sse_text(raw), wire)
     assert public_text(parse_sse_text(raw), wire) == "Hello world."

@@ -58,7 +58,7 @@ def is_stream_usage_rejection(error: Exception) -> bool:
     return any(word in text for word in _USAGE_REJECTION_WORDS)
 
 
-def usage_int(usage_info: Any, key: str) -> int | None:
+def usage_int(usage_info: object, key: str) -> int | None:
     """Extract an integer usage field from OpenAI SDK objects or plain dicts."""
     if usage_info is None:
         return None
@@ -73,7 +73,7 @@ def usage_int(usage_info: Any, key: str) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-def nested_usage_int(usage_info: Any, parent: str, key: str) -> int | None:
+def nested_usage_int(usage_info: object, parent: str, key: str) -> int | None:
     """Extract one nested integer from SDK usage objects or plain mappings."""
     if usage_info is None:
         return None
@@ -95,23 +95,23 @@ def nested_usage_int(usage_info: Any, parent: str, key: str) -> int | None:
 def _is_bad_request_like(error: Exception) -> bool:
     if isinstance(error, openai.BadRequestError):
         return True
-    status = getattr(error, "status_code", None)
+    status: object = getattr(error, "status_code", None)
     if status is None:
-        response = getattr(error, "response", None)
+        response: object = getattr(error, "response", None)
         status = (
             getattr(response, "status_code", None) if response is not None else None
         )
-    return status in (400, 422)
+    return isinstance(status, int) and status in (400, 422)
 
 
 def _error_text(error: Exception) -> str:
     parts = [str(error)]
-    body = getattr(error, "body", None)
+    body: object = getattr(error, "body", None)
     if body is not None:
         parts.append(json.dumps(body, default=str))
-    response = getattr(error, "response", None)
+    response: object = getattr(error, "response", None)
     if response is not None:
-        text = getattr(response, "text", None)
+        text: object = getattr(response, "text", None)
         if isinstance(text, str) and text:
             parts.append(text)
     return " ".join(parts).lower()

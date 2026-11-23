@@ -20,16 +20,19 @@ from free_claude_code.providers.recovery_policy import (
     retry_after_seconds,
     retry_delay,
 )
+from free_claude_code.providers.recovery_policy.decision import Transition
 
 TIMING = RecoveryTiming(base_delay=2.0, max_delay=60.0, jitter=1.0)
 NOW = 100.0
 
 
-def _failed(attempt=1, *, can_retry=True, retry_after=None) -> FailedAttempt:
+def _failed(
+    attempt: int = 1, *, can_retry: bool = True, retry_after: int | None = None
+) -> FailedAttempt:
     return FailedAttempt(attempt=attempt, can_retry=can_retry, retry_after=retry_after)
 
 
-def _open(*, probing=False, leader_idle=False) -> EpisodeView:
+def _open(*, probing: bool = False, leader_idle: bool = False) -> EpisodeView:
     return EpisodeView(
         terminal_until=None,
         reports_cooldown=False,
@@ -156,7 +159,9 @@ def _closed(until: float, *, cooldown: bool) -> EpisodeView:
         ),
     ],
 )
-def test_on_failure(failed, episode, expected) -> None:
+def test_on_failure(
+    failed: FailedAttempt, episode: EpisodeView | None, expected: Transition
+) -> None:
     assert on_failure(failed, episode, now=NOW, timing=TIMING, noise=0.5) == expected
 
 
@@ -172,7 +177,9 @@ def test_on_failure(failed, episode, expected) -> None:
         (1, 1.0, 0.5, 2.5),
     ],
 )
-def test_retry_delay(attempt, retry_after, noise, expected) -> None:
+def test_retry_delay(
+    attempt: int, retry_after: float | None, noise: float, expected: float
+) -> None:
     assert retry_delay(attempt, retry_after, TIMING, noise=noise) == expected
 
 
@@ -184,7 +191,7 @@ def test_retry_delay(attempt, retry_after, noise, expected) -> None:
         ({"base_delay": 0, "max_delay": 0, "jitter": -1}, "jitter"),
     ],
 )
-def test_timing_rejects_invalid_bounds(kwargs, message) -> None:
+def test_timing_rejects_invalid_bounds(kwargs: dict[str, float], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         RecoveryTiming(**kwargs)
 
@@ -209,5 +216,5 @@ NOW_UTC = datetime(2026, 1, 1, 12, tzinfo=UTC)
         (7, None),
     ],
 )
-def test_retry_after_seconds(value, expected) -> None:
+def test_retry_after_seconds(value: int | str | None, expected: float | None) -> None:
     assert retry_after_seconds(value, now=NOW_UTC) == expected

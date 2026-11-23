@@ -30,6 +30,7 @@ from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.providers.runtime.model_cache import ProviderModelCache
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.mock_calls import positional_arguments
 from tests.providers.support import (
     immediate_admission,
     make_provider_config,
@@ -133,7 +134,7 @@ async def test_nim_lists_openai_compatible_model_infos() -> None:
     ],
 )
 async def test_nim_exclusions_apply_only_to_hosted_nim_discovery(
-    provider_id, provider_base_url, filtered
+    provider_id: str, provider_base_url: str, filtered: bool
 ) -> None:
     config = make_provider_config(api_key="test-key", base_url=provider_base_url)
     with patch("free_claude_code.providers.openai_chat.client.AsyncOpenAI"):
@@ -175,7 +176,7 @@ async def test_nim_exclusions_apply_only_to_hosted_nim_discovery(
 
 
 @pytest.mark.asyncio
-async def test_super_migration_and_hosted_discovery_publish_ultra_catalog():
+async def test_super_migration_and_hosted_discovery_publish_ultra_catalog() -> None:
     old = "nvidia/nemotron-3-super-120b-a12b"
     new = "nvidia/nemotron-3-ultra-550b-a55b"
     config = make_provider_config(api_key="test-key", base_url=NVIDIA_NIM_DEFAULT_BASE)
@@ -607,7 +608,11 @@ async def test_runtime_warm_reports_query_failures_without_blocking() -> None:
     assert result.refreshed_provider_ids == ("nvidia_nim",)
     assert result.failed_provider_ids == ("open_router",)
     assert runtime.cached_model_ids() == {"nvidia_nim": frozenset({"nim-model"})}
-    logged = " ".join(str(arg) for call in warning.call_args_list for arg in call.args)
+    logged = " ".join(
+        str(arg)
+        for call in warning.call_args_list
+        for arg in positional_arguments(call)
+    )
     assert "open_router" in logged
     assert "The provider returned an invalid model list." in logged
     assert "bad model-list shape" not in logged

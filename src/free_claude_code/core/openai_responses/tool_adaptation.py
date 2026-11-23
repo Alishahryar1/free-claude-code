@@ -532,7 +532,7 @@ class ResponsesToolAdapter:
                         "custom",
                     ):
                         if identity is None:
-                            edits = []
+                            edits.clear()
                     else:
                         edits = [edit for edit in edits if edit.namespace == namespace]
                     scoped = [edit for edit in edits if edit.scope == scope]
@@ -638,7 +638,8 @@ class ResponsesToolEventAdapter:
                     and isinstance(original_item, dict)
                     and original_item.get("type") == "function_call"
                 ):
-                    item["arguments"] = {}
+                    arguments: JsonObject = {}
+                    item["arguments"] = arguments
             if (
                 isinstance(original_item, dict)
                 and original_item.get("type") == "function_call"
@@ -694,8 +695,9 @@ class ResponsesToolEventAdapter:
                         # the provider's error or prevent safe model fallback.
                 response["output"] = restored
             if "tools" in response:
+                original_empty_tools: list[JsonObject] = []
                 response["tools"] = (
-                    deepcopy(self._tools.original.tools or [])
+                    deepcopy(self._tools.original.tools) or original_empty_tools
                     if self._tools._policy.client_tool_search
                     or self._tools._policy.flatten_namespaces
                     else self._tools.restore_tools(response["tools"])

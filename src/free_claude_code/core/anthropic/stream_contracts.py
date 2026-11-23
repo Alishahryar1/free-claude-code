@@ -7,7 +7,8 @@ import json
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
+
+from free_claude_code.core.json_types import JsonObject, load_json_value
 
 from .server_tool_types import (
     SERVER_TOOL_USE,
@@ -43,7 +44,7 @@ _ALLOWED_BLOCK_START_TYPES = frozenset(
 @dataclass(frozen=True, slots=True)
 class SSEEvent:
     event: str
-    data: dict[str, Any]
+    data: JsonObject
     raw: str
 
 
@@ -93,9 +94,9 @@ def _append_event(
     if event_names is not None and current_event and current_event not in event_names:
         return
     data_text = "\n".join(data_parts)
-    data: dict[str, Any]
+    data: JsonObject
     try:
-        parsed = json.loads(data_text) if data_text else {}
+        parsed = load_json_value(data_text) if data_text else {}
         data = parsed if isinstance(parsed, dict) else {"value": parsed}
     except json.JSONDecodeError:
         data = {"raw": data_text}

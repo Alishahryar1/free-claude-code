@@ -23,15 +23,22 @@ def require_files(names: set[str], expected: set[str]) -> None:
 
 
 def validate(directory: Path, version: str) -> None:
-    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))[
-        "project"
-    ]
+    project: dict[str, object] = tomllib.loads(
+        Path("pyproject.toml").read_text(encoding="utf-8")
+    )["project"]
     name = project["name"]
+    if not isinstance(name, str):
+        raise ValueError("Release source must declare a project name")
     if not re.fullmatch(
         r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version
     ):
         raise ValueError("Expected a stable MAJOR.MINOR.PATCH release version")
-    if "version" in project or "version" not in project.get("dynamic", []):
+    dynamic = project.get("dynamic")
+    if (
+        "version" in project
+        or not isinstance(dynamic, list)
+        or "version" not in dynamic
+    ):
         raise ValueError("Release source must use dynamic version metadata")
     stem = f"{name.replace('-', '_')}-{version}"
     wheel_path = directory / f"{stem}-py3-none-any.whl"
@@ -113,11 +120,17 @@ def validate(directory: Path, version: str) -> None:
     print(f"Validated {wheel_path.name} and {sdist_path.name}")
 
 
+class _Arguments(argparse.Namespace):
+    directory: Path
+    version: str
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     parser.add_argument("--version", required=True)
-    args = parser.parse_args()
+    args = _Arguments()
+    parser.parse_args(namespace=args)
     try:
         validate(args.directory, args.version)
     except (

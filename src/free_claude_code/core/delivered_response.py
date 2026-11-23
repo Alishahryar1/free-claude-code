@@ -1,7 +1,9 @@
 """Bounded, request-local evidence of output released to a stream consumer."""
 
+from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any, Literal
+from decimal import Decimal
+from typing import Literal
 
 import simplejson
 
@@ -11,6 +13,15 @@ from .history_replay import (
     protected_reasoning,
     readable_reasoning,
     unprotected_replay,
+)
+from .json_types import (
+    DecimalJsonObject,
+    DecimalJsonValue,
+    json_array,
+    json_index,
+    json_object,
+    json_objects,
+    json_text,
 )
 from .openai_responses import is_client_call
 from .recovery_limits import RECOVERY_RETENTION_BYTES
@@ -25,7 +36,7 @@ def is_structured_text_format(value: object) -> bool:
     )
 
 
-def responses_text_constraint(data: dict[str, Any]) -> str | None:
+def responses_text_constraint(data: Mapping[str, DecimalJsonValue]) -> str | None:
     """Identify public text contracts that cannot survive synthetic completion."""
     response = data.get("response")
     response = response if isinstance(response, dict) else {}
@@ -35,12 +46,12 @@ def responses_text_constraint(data: dict[str, Any]) -> str | None:
     part = data.get("part")
     if data.get("logprobs") or (isinstance(part, dict) and part.get("logprobs")):
         return "text_logprobs"
-    items = [data.get("item"), *(response.get("output") or [])]
+    items = [data.get("item"), *json_array(response.get("output") or [])]
     if any(
         part.get("logprobs")
         for item in items
         if isinstance(item, dict)
-        for part in item.get("content") or []
+        for part in json_objects(item.get("content") or [])
     ):
         return "text_logprobs"
     return None
@@ -53,11 +64,11 @@ class DeliveredResponse:
         self, wire_api: Literal["messages", "responses", "gemini", "chat"]
     ) -> None:
         self.wire_api = wire_api
-        self.items: dict[int, dict[str, Any]] = {}
+        self.items: dict[int, DecimalJsonObject] = {}
         self.closed: set[int] = set()
         self._text_closed: set[tuple[int, str, int]] = set()
         self._part_closed: set[tuple[int, str, int]] = set()
-        self.header: dict[str, Any] = {}
+        self.header: DecimalJsonObject = {}
         self.unsafe_reason: str | None = None
         self._text_constraint: str | None = None
         self._bytes = 0
@@ -91,7 +102,9 @@ class DeliveredResponse:
     def retention_exhausted(self) -> bool:
         return self._limited
 
-    def observe(self, data: dict[str, Any], *, count_progress: bool = True) -> None:
+    def observe(
+        self, data: Mapping[str, DecimalJsonValue], *, count_progress: bool = True
+    ) -> None:
         if self.wire_api == "chat":
             self._chat(data, count_progress=count_progress)
             return
@@ -103,20 +116,27 @@ class DeliveredResponse:
             self.unsafe_reason = "unknown_event"
             return
         if kind in {"message_start", "response.created"} and not self.header:
-            self.header = deepcopy(data.get("message", data.get("response", {})))
+            self.header = deepcopy(
+                json_object(data.get("message", data.get("response", {})))
+            )
         delta = data.get("delta", "")
         text = (
             delta
             if isinstance(delta, str)
             else "".join(
-                delta.get(field, "") for field in ("text", "thinking", "partial_json")
+                json_text(delta.get(field, ""))
+                for field in ("text", "thinking", "partial_json")
             )
             if isinstance(delta, dict)
             else ""
         )
-        block = data.get("content_block", {})
+        started_tool_use = False
         if kind == "content_block_start":
-            text += block.get("text", "") + block.get("thinking", "")
+            block = json_object(data.get("content_block", {}))
+            started_tool_use = block.get("type") == "tool_use"
+            text += json_text(block.get("text", "")) + json_text(
+                block.get("thinking", "")
+            )
             if (
                 block.get("type") == "redacted_thinking"
                 and (record := unprotected_replay(block.get("data"))) is not None
@@ -125,12 +145,12 @@ class DeliveredResponse:
         if count_progress and (
             text
             or self._new_snapshot_text(data)
-            or data.get("part", {}).get("refusal")
+            or json_object(data.get("part", {})).get("refusal")
             or (kind == "response.refusal.done" and data.get("refusal"))
-            or (kind == "content_block_start" and block.get("type") == "tool_use")
+            or started_tool_use
             or (
                 kind == "response.output_item.done"
-                and is_client_call(data.get("item", {}))
+                and is_client_call(json_object(data.get("item", {})))
             )
         ):
             self.progress += 1
@@ -142,7 +162,9 @@ class DeliveredResponse:
         if self._limited:
             self._limited_output_tokens += estimate_text_tokens(text)
 
-    def _chat(self, data: dict[str, Any], *, count_progress: bool) -> None:
+    def _chat(
+        self, data: Mapping[str, DecimalJsonValue], *, count_progress: bool
+    ) -> None:
         if "error" in data:
             return
         if not self.header:
@@ -153,8 +175,8 @@ class DeliveredResponse:
             }
         if data.get("usage") is not None:
             self.header["usage"] = deepcopy(data["usage"])
-        for choice in data.get("choices", []):
-            delta = choice.get("delta") or {}
+        for choice in json_objects(data.get("choices", [])):
+            delta = json_object(choice.get("delta") or {})
             if count_progress and any(
                 value for key, value in delta.items() if key != "role"
             ):
@@ -184,18 +206,20 @@ class DeliveredResponse:
             ):
                 self.unsafe_reason = "unsupported_output"
             if choice.get("finish_reason") is not None:
-                self.closed.add(choice["index"])
+                self.closed.add(json_index(choice["index"]))
         if not self._retain(data):
             self._chat_response = None
             return
         assert self._chat_response is not None
         self._chat_response.feed(data)
         self.items = {
-            index: choice["message"]
+            index: json_object(choice["message"])
             for index, choice in self._chat_response.choices.items()
         }
 
-    def _gemini(self, data: dict[str, Any], *, count_progress: bool) -> None:
+    def _gemini(
+        self, data: Mapping[str, DecimalJsonValue], *, count_progress: bool
+    ) -> None:
         if not self.header:
             self.header = {
                 key: data[key] for key in ("responseId", "modelVersion") if key in data
@@ -208,7 +232,7 @@ class DeliveredResponse:
         for part in parts:
             if not self._retain(part):
                 self._limited_output_tokens += estimate_text_tokens(
-                    part.get("text", "")
+                    json_text(part.get("text", ""))
                 )
                 continue
             if part.get("thoughtSignature"):
@@ -228,27 +252,33 @@ class DeliveredResponse:
                 and set(previous) <= {"text", "thought"}
                 and part.get("thought", False) == previous.get("thought", False)
             ):
-                previous["text"] += part["text"]
+                previous["text"] = json_text(previous["text"]) + json_text(part["text"])
             else:
                 self.items[index] = deepcopy(part)
                 self.closed.add(index)
 
-    def _new_snapshot_text(self, data: dict[str, Any]) -> bool:
+    def _new_snapshot_text(self, data: Mapping[str, DecimalJsonValue]) -> bool:
         """Cumulative text is progress only when it adds published characters."""
         kind = data.get("type")
-        recorded = self.items.get(data.get("output_index"), {})
-        previous = recorded.get("content") or []
-        if kind in {"response.output_item.added", "response.output_item.done"}:
-            item = data.get("item", {})
+        index = data.get("output_index")
+        recorded = self.items.get(index, {}) if isinstance(index, int) else {}
+        previous = json_array(recorded.get("content") or [])
+        if kind in ("response.output_item.added", "response.output_item.done"):
+            item = json_object(data.get("item", {}))
             if item.get("type") != "message":
                 return False
-            parts = enumerate(item.get("content") or [])
-        elif kind in {"response.content_part.added", "response.content_part.done"}:
-            parts = [(data.get("content_index", 0), data.get("part", {}))]
+            parts = enumerate(json_objects(item.get("content") or []))
+        elif kind in ("response.content_part.added", "response.content_part.done"):
+            parts = [
+                (
+                    json_index(data.get("content_index", 0)),
+                    json_object(data.get("part", {})),
+                )
+            ]
         elif kind == "response.output_text.done":
             parts = [
                 (
-                    data.get("content_index", 0),
+                    json_index(data.get("content_index", 0)),
                     {"type": "output_text", "text": data.get("text", "")},
                 )
             ]
@@ -256,12 +286,16 @@ class DeliveredResponse:
             return False
         return any(
             part.get("type") == "output_text"
-            and len(part.get("text", ""))
-            > len(previous[index].get("text", "") if index < len(previous) else "")
+            and len(json_text(part.get("text", "")))
+            > len(
+                json_text(json_object(previous[index]).get("text", ""))
+                if index < len(previous)
+                else ""
+            )
             for index, part in parts
         )
 
-    def _messages(self, kind: str, data: dict[str, Any]) -> None:
+    def _messages(self, kind: str, data: Mapping[str, DecimalJsonValue]) -> None:
         index = data.get("index")
         if not isinstance(index, int):
             if kind not in {
@@ -274,7 +308,7 @@ class DeliveredResponse:
                 self.unsafe_reason = "unknown_event"
             return
         if kind == "content_block_start":
-            block = data.get("content_block", {})
+            block = json_object(data.get("content_block", {}))
             if not self._retain(block):
                 return
             self.items[index] = deepcopy(block)
@@ -294,7 +328,7 @@ class DeliveredResponse:
                 if unprotected_replay(value) is None:
                     self.unsafe_reason = "opaque_reasoning"
         elif kind == "content_block_delta":
-            delta = data.get("delta", {})
+            delta = json_object(data.get("delta", {}))
             if not self._retain(delta):
                 return
             block = self.items.get(index)
@@ -305,12 +339,14 @@ class DeliveredResponse:
                 "text_delta": "text",
                 "thinking_delta": "thinking",
                 "input_json_delta": "partial_json",
-            }.get(delta.get("type"))
+            }.get(json_text(delta.get("type", "")))
             if field:
-                block[field] = block.get(field, "") + delta.get(field, "")
+                block[field] = json_text(block.get(field, "")) + json_text(
+                    delta.get(field, "")
+                )
             elif delta.get("type") == "signature_delta":
-                block["signature"] = block.get("signature", "") + delta.get(
-                    "signature", ""
+                block["signature"] = json_text(block.get("signature", "")) + json_text(
+                    delta.get("signature", "")
                 )
                 if unprotected_replay(block["signature"]) is None:
                     self.unsafe_reason = "opaque_delta"
@@ -319,7 +355,7 @@ class DeliveredResponse:
         elif kind == "content_block_stop":
             self.closed.add(index)
 
-    def _responses(self, kind: str, data: dict[str, Any]) -> None:
+    def _responses(self, kind: str, data: Mapping[str, DecimalJsonValue]) -> None:
         self._text_constraint = self._text_constraint or responses_text_constraint(data)
         index = data.get("output_index")
         if not isinstance(index, int):
@@ -336,7 +372,7 @@ class DeliveredResponse:
                 self.unsafe_reason = "unknown_event"
             return
         if kind in {"response.output_item.added", "response.output_item.done"}:
-            item = data.get("item", {})
+            item = json_object(data.get("item", {}))
             if not self._retain(item):
                 return
             self.items[index] = deepcopy(item)
@@ -349,7 +385,10 @@ class DeliveredResponse:
                 and unprotected_replay(item["encrypted_content"]) is None
             ):
                 self.unsafe_reason = "opaque_reasoning"
-            if any(part.get("type") == "refusal" for part in item.get("content") or []):
+            if any(
+                part.get("type") == "refusal"
+                for part in json_objects(item.get("content") or [])
+            ):
                 self.unsafe_reason = "refusal"
             if kind.endswith(".done"):
                 self.closed.add(index)
@@ -359,7 +398,7 @@ class DeliveredResponse:
             "response.content_part.done",
             "response.reasoning_summary_part.done",
         }:
-            part = data.get("part", {})
+            part = json_object(data.get("part", {}))
             if not self._retain(part) or (
                 kind.endswith(".done")
                 and not self._retain(
@@ -376,10 +415,11 @@ class DeliveredResponse:
                 self.unsafe_reason = "missing_item"
                 return
             field = "summary" if "reasoning" in kind else "content"
-            position = data.get(
-                "summary_index" if field == "summary" else "content_index", 0
+            position = json_index(
+                data.get("summary_index" if field == "summary" else "content_index", 0)
             )
-            parts = item[field] = item.get(field) or []
+            parts = json_array(item.get(field) or [])
+            item[field] = parts
             while len(parts) <= position:
                 parts.append({})
             parts[position] = deepcopy(part)
@@ -405,7 +445,7 @@ class DeliveredResponse:
         }:
             done = kind.endswith(".done")
             text_field = "refusal" if "refusal" in kind else "text"
-            delta = data.get(text_field if done else "delta", "")
+            delta = json_text(data.get(text_field if done else "delta", ""))
             if not self._retain(delta) or (
                 done
                 and not self._retain(
@@ -422,10 +462,11 @@ class DeliveredResponse:
                 self.unsafe_reason = "missing_item"
                 return
             field = "summary" if "reasoning_summary" in kind else "content"
-            position = data.get(
-                "summary_index" if field == "summary" else "content_index", 0
+            position = json_index(
+                data.get("summary_index" if field == "summary" else "content_index", 0)
             )
-            parts = item[field] = item.get(field) or []
+            parts = json_array(item.get(field) or [])
+            item[field] = parts
             while len(parts) <= position:
                 parts.append(
                     {
@@ -439,8 +480,9 @@ class DeliveredResponse:
                         text_field: "",
                     }
                 )
-            parts[position][text_field] = (
-                delta if done else parts[position].get(text_field, "") + delta
+            part = json_object(parts[position])
+            part[text_field] = (
+                delta if done else json_text(part.get(text_field, "")) + delta
             )
             if done:
                 self._text_closed.add((index, field, position))
@@ -471,18 +513,20 @@ class DeliveredResponse:
             kind = item.get("type")
             if self.wire_api == "chat":
                 if isinstance(item.get("content"), str):
-                    text.append(item["content"])
+                    text.append(json_text(item["content"]))
                 thinking.extend(value for value, _ in readable_reasoning(item))
 
             elif self.wire_api == "gemini":
                 if "text" in item:
-                    (thinking if item.get("thought") else text).append(item["text"])
+                    (thinking if item.get("thought") else text).append(
+                        json_text(item["text"])
+                    )
 
             elif self.wire_api == "messages":
                 if kind == "text":
-                    text.append(item.get("text", ""))
+                    text.append(json_text(item.get("text", "")))
                 elif kind == "thinking":
-                    thinking.append(item.get("thinking", ""))
+                    thinking.append(json_text(item.get("thinking", "")))
                 elif (
                     kind == "redacted_thinking"
                     and (record := unprotected_replay(item.get("data"))) is not None
@@ -492,7 +536,10 @@ class DeliveredResponse:
                     )
 
             elif kind == "message":
-                text.extend(part.get("text", "") for part in item.get("content") or [])
+                text.extend(
+                    json_text(part.get("text", ""))
+                    for part in json_objects(item.get("content") or [])
+                )
             elif kind == "reasoning":
                 record = unprotected_replay(item.get("encrypted_content"))
                 thinking.extend(
@@ -516,7 +563,7 @@ class DeliveredResponse:
             ),
         )
 
-    def output_tokens(self, output: list[dict[str, Any]] | None = None) -> int:
+    def output_tokens(self, output: list[DecimalJsonObject] | None = None) -> int:
         if output is None and self._limited:
             return self._limited_output_tokens
         return estimate_text_tokens(
@@ -541,10 +588,10 @@ class DeliveredResponse:
             if item.get("type") in {"thinking", "redacted_thinking", "reasoning"}
         )
 
-    def closing_events(self) -> list[dict[str, Any]]:
+    def closing_events(self) -> list[DecimalJsonObject]:
         if self.wire_api in {"gemini", "chat"}:
             return []
-        events: list[dict[str, Any]] = []
+        events: list[DecimalJsonObject] = []
         for index, item in sorted(self.items.items()):
             if index in self.closed:
                 continue
@@ -552,7 +599,9 @@ class DeliveredResponse:
                 events.append({"type": "content_block_stop", "index": index})
             else:
                 for field in ("content", "summary"):
-                    for position, part in enumerate(item.get(field) or []):
+                    for position, part in enumerate(
+                        json_objects(item.get(field) or [])
+                    ):
                         key = (index, field, position)
                         if key in self._part_closed:
                             continue
@@ -597,7 +646,7 @@ class DeliveredResponse:
                 )
         return events
 
-    def handoff_events(self) -> list[dict[str, Any]]:
+    def handoff_events(self) -> list[DecimalJsonObject]:
         """Signal handoff; the public writer fills output and usage after closure."""
         if self.wire_api == "chat":
             return [
@@ -630,9 +679,12 @@ class DeliveredResponse:
         }
         return [{"type": "response.completed", "response": response}]
 
-    def usage(self, output: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-        initial = deepcopy(self.header.get("usage") or {})
-        input_tokens = initial.get("input_tokens", 0)
+    def usage(self, output: list[DecimalJsonObject] | None = None) -> DecimalJsonObject:
+        initial = deepcopy(json_object(self.header.get("usage") or {}))
+        reported_input = initial.get("input_tokens")
+        input_tokens = (
+            reported_input if isinstance(reported_input, (int, float, Decimal)) else 0
+        )
         output_tokens = self.output_tokens(output)
         return {
             **initial,

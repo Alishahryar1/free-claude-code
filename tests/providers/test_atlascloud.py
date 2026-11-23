@@ -25,6 +25,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload, object_payload
 
 _MODEL = "deepseek-ai/deepseek-v4-flash"
 
@@ -97,7 +98,12 @@ def test_encodes_only_efforts_every_model_accepts(
     assert body.get("reasoning_effort") == expected
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
     assert body["model"] == _MODEL
-    assert body["tools"][0]["function"]["name"] == "read_file"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "read_file"
+    )
     assert "thinking" not in body
     assert "extra_body" not in body
 
@@ -139,7 +145,7 @@ def test_replays_reasoning_content_with_tool_history(
         reasoning=reasoning_for(request),
     )
 
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "assistant",
         "content": "I will inspect it.",
         "reasoning_content": "Read it first.",
@@ -154,7 +160,7 @@ def test_replays_reasoning_content_with_tool_history(
             }
         ],
     }
-    assert body["messages"][2] == {
+    assert array_payload(body["messages"])[2] == {
         "role": "tool",
         "tool_call_id": "toolu_1",
         "content": "print('hello')",
@@ -169,9 +175,10 @@ def test_replays_reasoning_content_with_tool_history(
 
 @pytest.mark.asyncio
 async def test_model_catalog_maps_context_output_and_input_modalities(
+    monkeypatch: pytest.MonkeyPatch,
     atlascloud_provider: OpenAIChatProvider,
 ) -> None:
-    atlascloud_provider._client.get = AsyncMock(
+    mock_get = AsyncMock(
         return_value={
             "data": [
                 {
@@ -191,6 +198,7 @@ async def test_model_catalog_maps_context_output_and_input_modalities(
             ]
         }
     )
+    monkeypatch.setattr(atlascloud_provider._client, "get", mock_get)
 
     model_infos = await atlascloud_provider.list_model_infos()
 
@@ -211,7 +219,7 @@ async def test_model_catalog_maps_context_output_and_input_modalities(
             ),
         }
     )
-    atlascloud_provider._client.get.assert_awaited_once_with(
+    mock_get.assert_awaited_once_with(
         "/models",
         cast_to=object,
     )
@@ -227,11 +235,14 @@ async def test_model_catalog_maps_context_output_and_input_modalities(
     ],
 )
 async def test_rejects_malformed_or_empty_catalog_atomically(
+    monkeypatch: pytest.MonkeyPatch,
     atlascloud_provider: OpenAIChatProvider,
     payload: object,
     message: str,
 ) -> None:
-    atlascloud_provider._client.get = AsyncMock(return_value=payload)
+    monkeypatch.setattr(
+        atlascloud_provider._client, "get", AsyncMock(return_value=payload)
+    )
 
     with pytest.raises(ModelListResponseError, match=message):
         await atlascloud_provider.list_model_infos()

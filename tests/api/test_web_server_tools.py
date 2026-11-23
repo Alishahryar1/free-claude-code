@@ -2,11 +2,12 @@ import asyncio
 import json
 import socket
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping
-from typing import Any
+from typing import Any, override
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from aiohttp.abc import AbstractResolver
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import free_claude_code.runtime.web_tools.constants as web_tool_constants
@@ -57,6 +58,7 @@ from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.gemini.native_request import messages_to_gemini
 from free_claude_code.core.history_replay import ReplayOrigin, prepare_history
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.openai_responses.errors import ResponsesConversionError
 from free_claude_code.core.openai_responses.provider_input import (
@@ -79,7 +81,14 @@ from free_claude_code.runtime.web_tools.client import (
     _read_response_body_capped,
 )
 from free_claude_code.runtime.web_tools.egress import enforce_web_fetch_egress
+from tests.mock_calls import positional_arguments
 from tests.web_tools_support import StubWebToolsClient
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 _STRICT_EGRESS = WebFetchEgressPolicy(
     allow_private_network_targets=False,
@@ -108,6 +117,7 @@ class FixedProviderModelRouter(ModelRouter):
         self._fixed_provider_id = provider_id
         self._fixed_provider_model = provider_model
 
+    @override
     def resolve_messages_request(
         self, request: MessagesRequest
     ) -> RoutedMessagesRequest:
@@ -409,9 +419,13 @@ def _automatic_search_service(
     settings: Settings | None = None,
 ) -> MessagesHandler:
     effective_settings = settings or Settings()
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return provider
+
     return MessagesHandler(
         effective_settings,
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: provider),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         model_router=FixedProviderModelRouter(
             effective_settings,
             _PROVIDER_IDS[0],
@@ -421,7 +435,7 @@ def _automatic_search_service(
     )
 
 
-def test_web_server_tool_not_detected_when_tool_only_listed():
+def test_web_server_tool_not_detected_when_tool_only_listed() -> None:
     """Listing web_search without forcing it must not skip the upstream provider."""
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
@@ -433,7 +447,7 @@ def test_web_server_tool_not_detected_when_tool_only_listed():
     assert not is_web_server_tool_request(request)
 
 
-def test_web_server_tool_detected_when_tool_choice_forces_it():
+def test_web_server_tool_detected_when_tool_choice_forces_it() -> None:
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -445,7 +459,7 @@ def test_web_server_tool_detected_when_tool_choice_forces_it():
     assert is_web_server_tool_request(request)
 
 
-def test_web_server_tool_not_detected_when_forced_name_missing_from_tools():
+def test_web_server_tool_not_detected_when_forced_name_missing_from_tools() -> None:
     request = MessagesRequest(
         model="claude-haiku-4-5-20251001",
         max_tokens=100,
@@ -694,13 +708,17 @@ def test_rejects_web_search_domain_wildcards_and_url_parts(domain: str) -> None:
 @pytest.mark.parametrize("provider_id", _PROVIDER_IDS)
 async def test_service_rejects_forced_server_tool_when_local_handler_is_disabled(
     provider_id: str,
-):
+) -> None:
     """Every provider needs FCC's local handler for forced server tools."""
     settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": False})
     assert settings.enable_web_server_tools is False
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return MagicMock()
+
     service = MessagesHandler(
         settings,
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: MagicMock()),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         model_router=FixedProviderModelRouter(settings, provider_id),
         web_tools=StubWebToolsClient(),
     )
@@ -772,7 +790,9 @@ async def test_automatic_web_search_uses_model_query_and_filters_domains(
     )
     seen_queries: list[str] = []
 
-    async def fake_search(self, query: str) -> list[WebSearchResult]:
+    async def fake_search(
+        self: HTTPWebToolsClient, query: str
+    ) -> list[WebSearchResult]:
         seen_queries.append(query)
         return [
             WebSearchResult(title="Allowed", url="https://docs.example.com/page"),
@@ -809,20 +829,24 @@ async def test_automatic_web_search_uses_model_query_and_filters_domains(
     assert sum(event.event == "message_start" for event in events) == 1
     assert sum(event.event == "message_stop" for event in events) == 1
     starts = [event for event in events if event.event == "content_block_start"]
-    assert [start.data["content_block"]["type"] for start in starts] == [
+    assert [
+        object_payload(start.data["content_block"])["type"] for start in starts
+    ] == [
         "server_tool_use",
         "web_search_tool_result",
         "text",
     ]
-    assert starts[0].data["content_block"]["input"] == {"query": "model selected query"}
+    assert object_payload(starts[0].data["content_block"])["input"] == {
+        "query": "model selected query"
+    }
     assert (
-        starts[1].data["content_block"]["tool_use_id"]
-        == starts[0].data["content_block"]["id"]
+        object_payload(starts[1].data["content_block"])["tool_use_id"]
+        == object_payload(starts[0].data["content_block"])["id"]
     )
     message_start = next(
         event.data["message"] for event in events if event.event == "message_start"
     )
-    assert message_start["model"] == "claude-haiku-4-5-20251001"
+    assert object_payload(message_start)["model"] == "claude-haiku-4-5-20251001"
     final_usage = next(
         event.data["usage"] for event in events if event.event == "message_delta"
     )
@@ -886,25 +910,32 @@ async def test_automatic_web_search_keeps_client_tool_and_its_result(
         body = _json_body(response)
     assert body["stop_reason"] == "tool_use"
     call_id = "call_1" if selection == "search-first" else "call_0"
-    assert [block for block in body["content"] if block["type"] == "tool_use"] == [
+    assert [
+        block
+        for block in array_payload(body["content"])
+        if object_payload(block)["type"] == "tool_use"
+    ] == [
         {"type": "tool_use", "id": call_id, "name": retrieve.name, "input": arguments}
     ]
     assert HIDDEN_WEB_SEARCH_NAME not in json.dumps(body)
     assert provider.requests[0].tools is not None
     assert provider.requests[0].tools[1] == retrieve
     assert provider.requests[0].tool_choice == {"type": "any"}
-    wire = build_responses_provider_request(
+    wire: JsonObject = build_responses_provider_request(
         provider.requests[0], reasoning=ReasoningPolicy.off()
     )
-    assert [tool["name"] for tool in wire["tools"]] == [
+    tools = object_array(wire["tools"])
+    assert [tool["name"] for tool in tools] == [
         HIDDEN_WEB_SEARCH_NAME,
         retrieve.name,
     ]
-    assert wire["tools"][1]["parameters"] == retrieve.input_schema
+    assert tools[1]["parameters"] == retrieve.input_schema
     assert wire["tool_choice"] == "required"
     if selection != "client":
         search.assert_awaited_once_with("selected")
-        assert body["usage"]["server_tool_use"] == {"web_search_requests": 1}
+        assert object_payload(body["usage"])["server_tool_use"] == {
+            "web_search_requests": 1
+        }
     else:
         search.assert_not_awaited()
 
@@ -979,9 +1010,9 @@ async def test_automatic_web_search_uses_distinct_name_from_client_tool(
     search.assert_awaited_once_with("selected")
     body = _json_body(response)
     assert [
-        (block["name"], block["input"])
-        for block in body["content"]
-        if block["type"] == "tool_use"
+        (object_payload(block)["name"], object_payload(block)["input"])
+        for block in array_payload(body["content"])
+        if object_payload(block)["type"] == "tool_use"
     ] == [(HIDDEN_WEB_SEARCH_NAME, {"ref": "client-owned"})]
     assert private_name not in json.dumps(body)
 
@@ -1005,13 +1036,13 @@ async def test_automatic_web_search_restores_signed_gemini_turn(
         tool_defaults={},
         include_thoughts=True,
     )
-    search_call: dict[str, object] = {
+    search_call: JsonObject = {
         "name": HIDDEN_WEB_SEARCH_NAME,
         "args": {"query": " local hours "},
     }
     if search_id is not None:
         search_call["id"] = search_id
-    calls: list[dict[str, object]] = [
+    calls: list[JsonObject] = [
         {"functionCall": search_call},
         {
             "functionCall": {
@@ -1024,7 +1055,7 @@ async def test_automatic_web_search_restores_signed_gemini_turn(
     if not search_first:
         calls.reverse()
     calls[0]["thoughtSignature"] = "native-thought-signature"
-    native_parts = [{"text": "I'll look that up"}, *calls]
+    native_parts: list[JsonObject] = [{"text": "I'll look that up"}, *calls]
     provider = ScriptedSelectionProvider(
         presenter.feed(
             {
@@ -1057,7 +1088,9 @@ async def test_automatic_web_search_restores_signed_gemini_turn(
     body = _json_body(response)
     assert body["stop_reason"] == "tool_use"
     assert [
-        block["name"] for block in body["content"] if block["type"] == "tool_use"
+        object_payload(block)["name"]
+        for block in array_payload(body["content"])
+        if object_payload(block)["type"] == "tool_use"
     ] == ["retrieve"]
     request.messages.extend(
         [
@@ -1078,19 +1111,22 @@ async def test_automatic_web_search_restores_signed_gemini_turn(
     )
     plan = plan_automatic_web_search(request, web_tools_enabled=True)
     assert plan is not None
-    wire: Any = prepare_history(messages_to_gemini(plan.request), origin)
-    model_turn, result_turn = wire["contents"][-2:]
-    assert model_turn["parts"] == native_parts
-    responses = [part["functionResponse"] for part in result_turn["parts"]]
+    wire = prepare_history(messages_to_gemini(plan.request), origin)
+    model_turn, result_turn = array_payload(wire["contents"])[-2:]
+    assert object_payload(model_turn)["parts"] == native_parts
+    responses = [
+        object_payload(part)["functionResponse"]
+        for part in array_payload(object_payload(result_turn)["parts"])
+    ]
     names = [HIDDEN_WEB_SEARCH_NAME, "retrieve"]
-    assert [result["name"] for result in responses] == (
+    assert [object_payload(result)["name"] for result in responses] == (
         names if search_first else names[::-1]
     )
     search_response, client_response = responses if search_first else responses[::-1]
-    assert search_response.get("id") == search_id
+    assert object_payload(search_response).get("id") == search_id
     assert "https://example.com/found" in json.dumps(search_response)
-    assert client_response["id"] == "client_id"
-    assert client_response["response"] == {"output": "retrieved body"}
+    assert object_payload(client_response)["id"] == "client_id"
+    assert object_payload(client_response)["response"] == {"output": "retrieved body"}
 
 
 @pytest.mark.asyncio
@@ -1237,7 +1273,9 @@ async def test_automatic_web_search_aggregates_when_stream_false(
         _provider_tool_events(arguments={"query": "json query"})
     )
 
-    async def fake_search(self, _query: str) -> list[WebSearchResult]:
+    async def fake_search(
+        self: HTTPWebToolsClient, _query: str
+    ) -> list[WebSearchResult]:
         return [WebSearchResult(title="JSON result", url="https://example.com/json")]
 
     monkeypatch.setattr(
@@ -1252,13 +1290,24 @@ async def test_automatic_web_search_aggregates_when_stream_false(
 
     assert isinstance(response, JSONResponse)
     body = _json_body(response)
-    assert [block["type"] for block in body["content"]] == [
+    assert [
+        object_payload(block)["type"] for block in array_payload(body["content"])
+    ] == [
         "server_tool_use",
         "web_search_tool_result",
         "text",
     ]
-    assert body["content"][1]["content"][0]["url"] == "https://example.com/json"
-    assert body["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    assert (
+        object_payload(
+            array_payload(object_payload(array_payload(body["content"])[1])["content"])[
+                0
+            ]
+        )["url"]
+        == "https://example.com/json"
+    )
+    assert object_payload(body["usage"])["server_tool_use"] == {
+        "web_search_requests": 1
+    }
     assert len(provider.requests) == 1
 
 
@@ -1269,7 +1318,9 @@ async def test_automatic_web_search_runs_multiple_calls_in_one_message(
     provider = ScriptedSelectionProvider(_provider_tool_events(additional_calls=1))
     seen_queries: list[str] = []
 
-    async def fake_search(self, query: str) -> list[WebSearchResult]:
+    async def fake_search(
+        self: HTTPWebToolsClient, query: str
+    ) -> list[WebSearchResult]:
         seen_queries.append(query)
         return [
             WebSearchResult(title=f"{query} first", url="https://example.com/1"),
@@ -1285,24 +1336,41 @@ async def test_automatic_web_search_runs_multiple_calls_in_one_message(
 
     assert isinstance(response, JSONResponse)
     body = _json_body(response)
-    assert [block["type"] for block in body["content"]] == [
+    assert [
+        object_payload(block)["type"] for block in array_payload(body["content"])
+    ] == [
         "server_tool_use",
         "web_search_tool_result",
         "server_tool_use",
         "web_search_tool_result",
         "text",
     ]
-    first_use, first_result, second_use, second_result, _ = body["content"]
-    assert [first_use["input"]["query"], second_use["input"]["query"]] == [
+    first_use, first_result, second_use, second_result, _ = object_array(
+        body["content"]
+    )
+    assert [
+        object_payload(object_payload(first_use)["input"])["query"],
+        object_payload(object_payload(second_use)["input"])["query"],
+    ] == [
         "selected",
         "extra-0",
     ]
-    assert first_use["id"] != second_use["id"]
-    assert first_result["tool_use_id"] == first_use["id"]
-    assert second_result["tool_use_id"] == second_use["id"]
-    assert len(first_result["content"]) == len(second_result["content"]) == 2
+    assert object_payload(first_use)["id"] != object_payload(second_use)["id"]
+    assert (
+        object_payload(first_result)["tool_use_id"] == object_payload(first_use)["id"]
+    )
+    assert (
+        object_payload(second_result)["tool_use_id"] == object_payload(second_use)["id"]
+    )
+    assert (
+        len(array_payload(object_payload(first_result)["content"]))
+        == len(array_payload(object_payload(second_result)["content"]))
+        == 2
+    )
     assert set(seen_queries) == {"selected", "extra-0"}
-    assert body["usage"]["server_tool_use"] == {"web_search_requests": 2}
+    assert object_payload(body["usage"])["server_tool_use"] == {
+        "web_search_requests": 2
+    }
 
 
 @pytest.mark.asyncio
@@ -1311,7 +1379,9 @@ async def test_automatic_web_search_streams_ordered_multiple_calls(
 ) -> None:
     provider = ScriptedSelectionProvider(_provider_tool_events(additional_calls=1))
 
-    async def fake_search(self, query: str) -> list[WebSearchResult]:
+    async def fake_search(
+        self: HTTPWebToolsClient, query: str
+    ) -> list[WebSearchResult]:
         return [WebSearchResult(title=query, url=f"https://example.com/{query}")]
 
     monkeypatch.setattr(
@@ -1326,7 +1396,9 @@ async def test_automatic_web_search_streams_ordered_multiple_calls(
     assert_anthropic_stream_contract(events)
     starts = [event for event in events if event.event == "content_block_start"]
     assert [event.data["index"] for event in starts] == list(range(5))
-    assert [event.data["content_block"]["type"] for event in starts] == [
+    assert [
+        object_payload(event.data["content_block"])["type"] for event in starts
+    ] == [
         "server_tool_use",
         "web_search_tool_result",
         "server_tool_use",
@@ -1336,7 +1408,7 @@ async def test_automatic_web_search_streams_ordered_multiple_calls(
     assert sum(event.event == "message_start" for event in events) == 1
     assert sum(event.event == "message_stop" for event in events) == 1
     assert next(
-        event.data["usage"]["server_tool_use"]
+        object_payload(event.data["usage"])["server_tool_use"]
         for event in events
         if event.event == "message_delta"
     ) == {"web_search_requests": 2}
@@ -1360,13 +1432,22 @@ async def test_automatic_web_search_max_uses_limits_current_request(
 
     assert isinstance(response, JSONResponse)
     body = _json_body(response)
-    assert body["content"][1]["content"][0]["title"] == "found"
-    assert body["content"][3]["content"] == {
+    assert (
+        object_payload(
+            array_payload(object_payload(array_payload(body["content"])[1])["content"])[
+                0
+            ]
+        )["title"]
+        == "found"
+    )
+    assert object_payload(array_payload(body["content"])[3])["content"] == {
         "type": "web_search_tool_result_error",
         "error_code": "max_uses_exceeded",
     }
     search.assert_awaited_once_with("selected")
-    assert body["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    assert object_payload(body["usage"])["server_tool_use"] == {
+        "web_search_requests": 1
+    }
 
 
 @pytest.mark.asyncio
@@ -1390,7 +1471,9 @@ async def test_automatic_web_search_keeps_limit_across_client_tool_results(
     first = await api.create(request)
     assert isinstance(first, JSONResponse)
     initial = _json_body(first)
-    assert initial["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    assert object_payload(initial["usage"])["server_tool_use"] == {
+        "web_search_requests": 1
+    }
     result_blocks = [
         {"type": "tool_result", "tool_use_id": "call_1", "content": "retrieved"}
     ]
@@ -1408,8 +1491,15 @@ async def test_automatic_web_search_keeps_limit_across_client_tool_results(
     second = await api.create(request)
     assert isinstance(second, JSONResponse)
     continued = _json_body(second)
-    assert continued["usage"]["server_tool_use"] == {"web_search_requests": 0}
-    assert continued["content"][1]["content"]["error_code"] == "max_uses_exceeded"
+    assert object_payload(continued["usage"])["server_tool_use"] == {
+        "web_search_requests": 0
+    }
+    assert (
+        object_payload(
+            object_payload(array_payload(continued["content"])[1])["content"]
+        )["error_code"]
+        == "max_uses_exceeded"
+    )
     search.assert_awaited_once_with("selected")
 
     request.messages.extend(
@@ -1422,7 +1512,9 @@ async def test_automatic_web_search_keeps_limit_across_client_tool_results(
     )
     third = await api.create(request)
     assert isinstance(third, JSONResponse)
-    assert _json_body(third)["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    assert object_payload(_json_body(third)["usage"])["server_tool_use"] == {
+        "web_search_requests": 1
+    }
     assert search.await_count == 2
 
 
@@ -1432,7 +1524,9 @@ async def test_automatic_web_search_keeps_other_results_when_one_search_fails(
 ) -> None:
     provider = ScriptedSelectionProvider(_provider_tool_events(additional_calls=1))
 
-    async def fake_search(self, query: str) -> list[WebSearchResult]:
+    async def fake_search(
+        self: HTTPWebToolsClient, query: str
+    ) -> list[WebSearchResult]:
         if query == "extra-0":
             raise RuntimeError("search unavailable")
         return [WebSearchResult(title="found", url="https://example.com/")]
@@ -1446,12 +1540,21 @@ async def test_automatic_web_search_keeps_other_results_when_one_search_fails(
 
     assert isinstance(response, JSONResponse)
     body = _json_body(response)
-    assert body["content"][1]["content"][0]["title"] == "found"
-    assert body["content"][3]["content"] == {
+    assert (
+        object_payload(
+            array_payload(object_payload(array_payload(body["content"])[1])["content"])[
+                0
+            ]
+        )["title"]
+        == "found"
+    )
+    assert object_payload(array_payload(body["content"])[3])["content"] == {
         "type": "web_search_tool_result_error",
         "error_code": "unavailable",
     }
-    assert body["usage"]["server_tool_use"] == {"web_search_requests": 2}
+    assert object_payload(body["usage"])["server_tool_use"] == {
+        "web_search_requests": 2
+    }
 
 
 @pytest.mark.asyncio
@@ -1484,7 +1587,9 @@ async def test_automatic_web_search_bounds_parallel_local_searches(
     peak = 0
     started: list[str] = []
 
-    async def fake_search(self, query: str) -> list[WebSearchResult]:
+    async def fake_search(
+        self: HTTPWebToolsClient, query: str
+    ) -> list[WebSearchResult]:
         nonlocal active, peak
         active += 1
         peak = max(peak, active)
@@ -1512,7 +1617,7 @@ async def test_automatic_web_search_bounds_parallel_local_searches(
         release.set()
         response = await asyncio.wait_for(pending, 1)
         assert isinstance(response, JSONResponse)
-        assert _json_body(response)["usage"]["server_tool_use"] == {
+        assert object_payload(_json_body(response)["usage"])["server_tool_use"] == {
             "web_search_requests": 5
         }
         assert len(started) == 5
@@ -1531,7 +1636,9 @@ async def test_automatic_web_search_cancellation_stops_parallel_searches(
     started: set[str] = set()
     cancelled: set[str] = set()
 
-    async def fake_search(self, query: str) -> list[WebSearchResult]:
+    async def fake_search(
+        self: HTTPWebToolsClient, query: str
+    ) -> list[WebSearchResult]:
         started.add(query)
         if len(started) == 2:
             both_started.set()
@@ -1569,7 +1676,9 @@ async def test_automatic_web_search_can_search_again_after_completed_history(
         _provider_tool_events(arguments={"query": "first"})
     )
 
-    async def fake_search(self, query: str) -> list[WebSearchResult]:
+    async def fake_search(
+        self: HTTPWebToolsClient, query: str
+    ) -> list[WebSearchResult]:
         return [WebSearchResult(title=query, url=f"https://example.com/{query}")]
 
     monkeypatch.setattr(
@@ -1592,12 +1701,22 @@ async def test_automatic_web_search_can_search_again_after_completed_history(
 
     assert isinstance(second, JSONResponse)
     assert second.status_code == 200
-    assert _json_body(second)["content"][1]["content"][0]["title"] == "second"
+    assert (
+        object_payload(
+            array_payload(
+                object_payload(array_payload(_json_body(second)["content"])[1])[
+                    "content"
+                ]
+            )[0]
+        )["title"]
+        == "second"
+    )
     assert len(provider.requests) == 2
+    forwarded = provider.requests[1].messages[1].content
+    assert isinstance(forwarded, list)
     assert all(
-        getattr(block, "type", None)
-        not in {"server_tool_use", "web_search_tool_result"}
-        for block in provider.requests[1].messages[1].content
+        block.type not in {"server_tool_use", "web_search_tool_result"}
+        for block in forwarded
     )
     assert "https://example.com/first" in str(provider.requests[1].messages[1].content)
     assert getattr(second_request.messages[1].content[0], "type", None) == (
@@ -1769,7 +1888,7 @@ async def test_automatic_web_search_preserves_provider_failure_before_public_com
     assert isinstance(response, JSONResponse)
     assert response.status_code == 429
     assert response.headers["x-should-retry"] == "false"
-    assert _json_body(response)["error"]["type"] == "rate_limit_error"
+    assert object_payload(_json_body(response)["error"])["type"] == "rate_limit_error"
     search.assert_not_awaited()
     assert provider.close_count == 1
 
@@ -1801,7 +1920,7 @@ async def test_automatic_web_search_converts_internal_post_start_failure_to_json
     assert response.headers["x-should-retry"] == "false"
     assert response.headers["content-type"].startswith("application/json")
     body = _json_body(response)
-    assert body["error"]["type"] == "overloaded_error"
+    assert object_payload(body["error"])["type"] == "overloaded_error"
     assert body["request_id"] == "req_selection_post_start_failure"
     search.assert_not_awaited()
     assert provider.close_count == 1
@@ -1841,16 +1960,16 @@ async def test_automatic_web_search_cancellation_closes_provider_stream() -> Non
         "http://169.254.169.254/latest/meta-data/",
     ],
 )
-def test_enforce_web_fetch_egress_blocks_internal_or_disallowed(url: str):
+def test_enforce_web_fetch_egress_blocks_internal_or_disallowed(url: str) -> None:
     with pytest.raises(WebFetchEgressViolation):
         enforce_web_fetch_egress(url, _STRICT_EGRESS)
 
 
-def test_enforce_web_fetch_egress_allows_global_literal_ip():
+def test_enforce_web_fetch_egress_allows_global_literal_ip() -> None:
     enforce_web_fetch_egress("http://8.8.8.8/", _STRICT_EGRESS)
 
 
-def test_enforce_web_fetch_egress_skips_private_checks_when_opted_in():
+def test_enforce_web_fetch_egress_skips_private_checks_when_opted_in() -> None:
     enforce_web_fetch_egress(
         "http://127.0.0.1/",
         WebFetchEgressPolicy(
@@ -1874,8 +1993,8 @@ def _stream_cm(response: httpx.Response) -> MagicMock:
     return cm
 
 
-def _json_body(response: JSONResponse) -> dict[str, Any]:
-    payload = json.loads(bytes(response.body).decode("utf-8"))
+def _json_body(response: JSONResponse) -> JsonObject:
+    payload = load_json_value(bytes(response.body).decode("utf-8"))
     assert isinstance(payload, dict)
     return payload
 
@@ -1941,11 +2060,13 @@ def _aiohttp_client_session_patch(
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_pins_validated_addresses_for_every_redirect(monkeypatch):
+async def test_web_fetch_pins_validated_addresses_for_every_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     addresses = iter(["8.8.8.8", "1.1.1.1"])
     resolved_hosts = []
 
-    def resolve(host, port, **kwargs):
+    def resolve(host: str, port: int, **kwargs: object):
         resolved_hosts.append(host)
         return [
             (
@@ -1965,7 +2086,7 @@ async def test_web_fetch_pins_validated_addresses_for_every_redirect(monkeypatch
     client_cm, _ = _aiohttp_client_session_patch(redirect, final)
     connectors = []
 
-    def connector(**kwargs):
+    def connector(**kwargs: object):
         value = MagicMock()
         value.close = AsyncMock()
         connectors.append((kwargs["resolver"], value))
@@ -1990,13 +2111,14 @@ async def test_web_fetch_pins_validated_addresses_for_every_redirect(monkeypatch
     for (resolver, value), expected in zip(
         connectors, ["8.8.8.8", "1.1.1.1"], strict=True
     ):
+        assert isinstance(resolver, AbstractResolver)
         pinned = await resolver.resolve("ignored.example", 443)
         assert [row["host"] for row in pinned] == [expected]
         value.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_run_web_fetch_follows_redirect_when_each_hop_is_allowed():
+async def test_run_web_fetch_follows_redirect_when_each_hop_is_allowed() -> None:
     res_redirect = _aiohttp_response(
         302, url="http://8.8.8.8/start", location="/final", body=b""
     )
@@ -2015,7 +2137,9 @@ async def test_run_web_fetch_follows_redirect_when_each_hop_is_allowed():
 
 
 @pytest.mark.asyncio
-async def test_run_web_fetch_truncates_large_body_to_byte_cap(monkeypatch):
+async def test_run_web_fetch_truncates_large_body_to_byte_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     huge = b"x" * 5000
     res_ok = _aiohttp_response(200, url="http://8.8.8.8/big", body=huge)
     client_cm, _ = _aiohttp_client_session_patch(res_ok)
@@ -2033,7 +2157,7 @@ async def test_run_web_fetch_truncates_large_body_to_byte_cap(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_web_fetch_redirect_to_blocked_host_raises():
+async def test_run_web_fetch_redirect_to_blocked_host_raises() -> None:
     res_redirect = _aiohttp_response(
         302,
         url="http://8.8.8.8/start",
@@ -2054,7 +2178,7 @@ async def test_run_web_fetch_redirect_to_blocked_host_raises():
 
 
 @pytest.mark.asyncio
-async def test_run_web_fetch_redirect_without_location_raises():
+async def test_run_web_fetch_redirect_without_location_raises() -> None:
     res_bad = _aiohttp_response(302, url="http://8.8.8.8/here", body=b"")
     client_cm, _ = _aiohttp_client_session_patch(res_bad)
     with (
@@ -2068,7 +2192,7 @@ async def test_run_web_fetch_redirect_without_location_raises():
 
 
 @pytest.mark.asyncio
-async def test_run_web_fetch_excess_redirects_raises():
+async def test_run_web_fetch_excess_redirects_raises() -> None:
     res1 = _aiohttp_response(302, url="http://8.8.8.8/a", location="/b", body=b"")
     res2 = _aiohttp_response(302, url="http://8.8.8.8/b", location="/c", body=b"")
     client_cm, _ = _aiohttp_client_session_patch(res1, res2)
@@ -2086,8 +2210,12 @@ async def test_run_web_fetch_excess_redirects_raises():
 
 
 @pytest.mark.asyncio
-async def test_streams_web_search_server_tool_result(monkeypatch):
-    async def fake_search(self, query: str) -> list[WebSearchResult]:
+async def test_streams_web_search_server_tool_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_search(
+        self: HTTPWebToolsClient, query: str
+    ) -> list[WebSearchResult]:
         assert query == "DeepSeek V4 model release 2026"
         return [
             WebSearchResult(title="DeepSeek V4 Released", url="https://example.com/v4")
@@ -2122,37 +2250,45 @@ async def test_streams_web_search_server_tool_result(monkeypatch):
     events = parse_sse_text(raw)
     assert_anthropic_stream_contract(events)
     starts = [e for e in events if e.event == "content_block_start"]
-    assert starts[0].data["content_block"]["type"] == "server_tool_use"
-    assert starts[0].data["content_block"]["name"] == "web_search"
-    tool_use_id = starts[0].data["content_block"]["id"]
-    assert starts[1].data["content_block"]["type"] == "web_search_tool_result"
-    assert starts[1].data["content_block"]["tool_use_id"] == tool_use_id
-    assert starts[1].data["content_block"]["content"][0]["url"] == (
-        "https://example.com/v4"
+    assert object_payload(starts[0].data["content_block"])["type"] == "server_tool_use"
+    assert object_payload(starts[0].data["content_block"])["name"] == "web_search"
+    tool_use_id = object_payload(starts[0].data["content_block"])["id"]
+    assert (
+        object_payload(starts[1].data["content_block"])["type"]
+        == "web_search_tool_result"
     )
+    assert object_payload(starts[1].data["content_block"])["tool_use_id"] == tool_use_id
+    assert object_array(object_payload(starts[1].data["content_block"])["content"])[0][
+        "url"
+    ] == ("https://example.com/v4")
     text_deltas = [
         e
         for e in events
         if e.event == "content_block_delta"
-        and e.data.get("delta", {}).get("type") == "text_delta"
+        and object_payload(e.data.get("delta", {})).get("type") == "text_delta"
     ]
     assert text_deltas, "summary must be streamed as text_delta"
     assert "example.com" in text_content(events)
     cli_text: list[str] = []
     for ev in events:
+        parts: list[JsonObject] = parse_cli_event(ev.data)
         cli_text.extend(
-            str(p.get("text", ""))
-            for p in parse_cli_event(ev.data)
-            if p.get("type") == "text_delta"
+            str(p.get("text", "")) for p in parts if p.get("type") == "text_delta"
         )
     assert "example.com" in "".join(cli_text)
     deltas = [e for e in events if e.event == "message_delta"]
-    assert deltas[-1].data["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    assert object_payload(deltas[-1].data["usage"])["server_tool_use"] == {
+        "web_search_requests": 1
+    }
 
 
 @pytest.mark.asyncio
-async def test_service_streams_forced_web_search_by_default(monkeypatch):
-    async def fake_search(self, _query: str) -> list[WebSearchResult]:
+async def test_service_streams_forced_web_search_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_search(
+        self: HTTPWebToolsClient, _query: str
+    ) -> list[WebSearchResult]:
         return [
             WebSearchResult(title="DeepSeek V4 Released", url="https://example.com/v4")
         ]
@@ -2193,13 +2329,17 @@ async def test_service_streams_forced_web_search_by_default(monkeypatch):
         for event in parse_sse_text(raw)
         if event.event == "message_start"
     )
-    assert message_start["model"] == request.model
+    assert object_payload(message_start)["model"] == request.model
     provider_resolver.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_service_aggregates_forced_web_search_when_stream_false(monkeypatch):
-    async def fake_search(self, _query: str) -> list[WebSearchResult]:
+async def test_service_aggregates_forced_web_search_when_stream_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_search(
+        self: HTTPWebToolsClient, _query: str
+    ) -> list[WebSearchResult]:
         return [
             WebSearchResult(title="DeepSeek V4 Released", url="https://example.com/v4")
         ]
@@ -2229,24 +2369,39 @@ async def test_service_aggregates_forced_web_search_when_stream_false(monkeypatc
     assert isinstance(response, JSONResponse)
     assert response.headers["content-type"].startswith("application/json")
     body = _json_body(response)
-    assert [block["type"] for block in body["content"]] == [
+    assert [
+        object_payload(block)["type"] for block in array_payload(body["content"])
+    ] == [
         "server_tool_use",
         "web_search_tool_result",
         "text",
     ]
-    assert body["content"][1]["content"][0]["url"] == "https://example.com/v4"
-    assert "DeepSeek V4 Released" in body["content"][2]["text"]
-    assert body["usage"]["server_tool_use"] == {"web_search_requests": 1}
+    assert (
+        object_payload(
+            array_payload(object_payload(array_payload(body["content"])[1])["content"])[
+                0
+            ]
+        )["url"]
+        == "https://example.com/v4"
+    )
+    assert "DeepSeek V4 Released" in string_payload(
+        object_payload(array_payload(body["content"])[2])["text"]
+    )
+    assert object_payload(body["usage"])["server_tool_use"] == {
+        "web_search_requests": 1
+    }
     provider_resolver.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(monkeypatch):
+async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Only the latest user message supplies the URL (not earlier transcript text)."""
     target = "https://new-only.example.com/page"
 
     async def fake_fetch(
-        self, url: str, *, egress: WebFetchEgressPolicy
+        self: HTTPWebToolsClient, url: str, *, egress: WebFetchEgressPolicy
     ) -> WebFetchResult:
         assert url == target
         return WebFetchResult(url=url, title="T", media_type="text/plain", data="x")
@@ -2282,9 +2437,11 @@ async def test_forced_web_fetch_ignores_stale_url_from_prior_user_turns(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_service_aggregates_forced_web_fetch_when_stream_false(monkeypatch):
+async def test_service_aggregates_forced_web_fetch_when_stream_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def fake_fetch(
-        self, url: str, *, egress: WebFetchEgressPolicy
+        self: HTTPWebToolsClient, url: str, *, egress: WebFetchEgressPolicy
     ) -> WebFetchResult:
         return WebFetchResult(
             url=url,
@@ -2316,21 +2473,32 @@ async def test_service_aggregates_forced_web_fetch_when_stream_false(monkeypatch
     assert isinstance(response, JSONResponse)
     assert response.headers["content-type"].startswith("application/json")
     body = _json_body(response)
-    assert [block["type"] for block in body["content"]] == [
+    assert [
+        object_payload(block)["type"] for block in array_payload(body["content"])
+    ] == [
         "server_tool_use",
         "web_fetch_tool_result",
         "text",
     ]
-    assert body["content"][1]["content"]["content"]["title"] == "Example Article"
-    assert body["content"][2]["text"] == "Article body"
-    assert body["usage"]["server_tool_use"] == {"web_fetch_requests": 1}
+    assert (
+        object_payload(
+            object_payload(
+                object_payload(array_payload(body["content"])[1])["content"]
+            )["content"]
+        )["title"]
+        == "Example Article"
+    )
+    assert object_payload(array_payload(body["content"])[2])["text"] == "Article body"
+    assert object_payload(body["usage"])["server_tool_use"] == {"web_fetch_requests": 1}
     provider_resolver.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_streams_web_fetch_server_tool_result(monkeypatch):
+async def test_streams_web_fetch_server_tool_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def fake_fetch(
-        self, url: str, *, egress: WebFetchEgressPolicy
+        self: HTTPWebToolsClient, url: str, *, egress: WebFetchEgressPolicy
     ) -> WebFetchResult:
         assert url == "https://example.com/article"
         return WebFetchResult(
@@ -2362,36 +2530,46 @@ async def test_streams_web_fetch_server_tool_result(monkeypatch):
     events = parse_sse_text(raw)
     assert_anthropic_stream_contract(events)
     starts = [e for e in events if e.event == "content_block_start"]
-    assert starts[0].data["content_block"]["type"] == "server_tool_use"
-    tool_use_id = starts[0].data["content_block"]["id"]
-    assert starts[1].data["content_block"]["type"] == "web_fetch_tool_result"
-    assert starts[1].data["content_block"]["tool_use_id"] == tool_use_id
-    assert starts[1].data["content_block"]["content"]["content"]["title"] == (
-        "Example Article"
+    assert object_payload(starts[0].data["content_block"])["type"] == "server_tool_use"
+    tool_use_id = object_payload(starts[0].data["content_block"])["id"]
+    assert (
+        object_payload(starts[1].data["content_block"])["type"]
+        == "web_fetch_tool_result"
     )
+    assert object_payload(starts[1].data["content_block"])["tool_use_id"] == tool_use_id
+    assert object_payload(
+        object_payload(object_payload(starts[1].data["content_block"])["content"])[
+            "content"
+        ]
+    )["title"] == ("Example Article")
     assert any(
         e.event == "content_block_delta"
-        and e.data.get("delta", {}).get("type") == "text_delta"
+        and object_payload(e.data.get("delta", {})).get("type") == "text_delta"
         for e in events
     )
     assert "Article body" in text_content(events)
     cli_text: list[str] = []
     for ev in events:
+        parts: list[JsonObject] = parse_cli_event(ev.data)
         cli_text.extend(
-            str(p.get("text", ""))
-            for p in parse_cli_event(ev.data)
-            if p.get("type") == "text_delta"
+            str(p.get("text", "")) for p in parts if p.get("type") == "text_delta"
         )
     assert "Article body" in "".join(cli_text)
     deltas = [e for e in events if e.event == "message_delta"]
-    assert deltas[-1].data["usage"]["server_tool_use"] == {"web_fetch_requests": 1}
+    assert object_payload(deltas[-1].data["usage"])["server_tool_use"] == {
+        "web_fetch_requests": 1
+    }
 
 
 @pytest.mark.asyncio
-async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
+async def test_streams_web_fetch_error_summary_generic_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     secret = "sensitive-upstream-token"
 
-    async def boom(self, _url: str, *, egress: WebFetchEgressPolicy) -> WebFetchResult:
+    async def boom(
+        self: object, _url: str, *, egress: WebFetchEgressPolicy
+    ) -> WebFetchResult:
         raise ValueError(secret)
 
     monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.fetch", boom)
@@ -2430,18 +2608,19 @@ async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
     assert_anthropic_stream_contract(err_events)
     assert any(
         e.event == "content_block_delta"
-        and e.data.get("delta", {}).get("type") == "text_delta"
+        and object_payload(e.data.get("delta", {})).get("type") == "text_delta"
         for e in err_events
     )
     cli_err_text: list[str] = []
     for ev in err_events:
+        parts: list[JsonObject] = parse_cli_event(ev.data)
         cli_err_text.extend(
-            str(p.get("text", ""))
-            for p in parse_cli_event(ev.data)
-            if p.get("type") == "text_delta"
+            str(p.get("text", "")) for p in parts if p.get("type") == "text_delta"
         )
     assert "Web tool request failed." in "".join(cli_err_text)
-    log_blob = " ".join(str(a) for c in log_warn.call_args_list for a in c.args)
+    log_blob = " ".join(
+        str(a) for c in log_warn.call_args_list for a in positional_arguments(c)
+    )
     assert secret not in log_blob
     assert "example.com" in log_blob
     assert "/sensitive-path" not in log_blob
@@ -2449,9 +2628,11 @@ async def test_streams_web_fetch_error_summary_generic_by_default(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_streams_web_fetch_error_summary_verbose_includes_exception_class(
-    monkeypatch,
-):
-    async def boom(self, _url: str, *, egress: WebFetchEgressPolicy) -> WebFetchResult:
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def boom(
+        self: object, _url: str, *, egress: WebFetchEgressPolicy
+    ) -> WebFetchResult:
         raise OSError(5, "oops")
 
     monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.fetch", boom)
@@ -2478,10 +2659,10 @@ async def test_streams_web_fetch_error_summary_verbose_includes_exception_class(
 
 
 @pytest.mark.asyncio
-async def test_read_response_body_capped_truncates_single_oversized_chunk():
+async def test_read_response_body_capped_truncates_single_oversized_chunk() -> None:
     cap = 500
 
-    async def aiter_bytes(chunk_size=None):
+    async def aiter_bytes(chunk_size: object = None):
         yield b"z" * (cap * 20)
 
     response = MagicMock()
@@ -2493,11 +2674,13 @@ async def test_read_response_body_capped_truncates_single_oversized_chunk():
 
 
 @pytest.mark.asyncio
-async def test_drain_response_body_capped_stops_after_first_chunk_when_oversized():
+async def test_drain_response_body_capped_stops_after_first_chunk_when_oversized() -> (
+    None
+):
     cap = 300
     chunk_calls = {"n": 0}
 
-    async def aiter_bytes(chunk_size=None):
+    async def aiter_bytes(chunk_size: object = None):
         chunk_calls["n"] += 1
         yield b"y" * (cap * 10)
 
@@ -2514,9 +2697,13 @@ async def test_service_rejects_listed_server_tools_for_every_provider(
     provider_id: str,
 ) -> None:
     settings = Settings.model_validate({"ENABLE_WEB_SERVER_TOOLS": False})
+
+    def resolve_provider(_: str, _api_key_number: int):
+        return MagicMock()
+
     service = MessagesHandler(
         settings,
-        provider_resolver=AsyncMock(side_effect=lambda _, _api_key_number: MagicMock()),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         model_router=FixedProviderModelRouter(settings, provider_id),
         web_tools=StubWebToolsClient(),
     )
@@ -2558,7 +2745,7 @@ async def test_automatic_selection_stays_private_until_provider_finishes() -> No
 @pytest.mark.parametrize("tool_name", ["web_search", "web_fetch"])
 @pytest.mark.parametrize("close_before_outbound", [False, True])
 async def test_local_tool_start_precedes_outbound_and_cancellation_closes_operation(
-    monkeypatch, tool_name: str, close_before_outbound: bool
+    monkeypatch: pytest.MonkeyPatch, tool_name: str, close_before_outbound: bool
 ) -> None:
     entered, closed = asyncio.Event(), asyncio.Event()
 
@@ -2616,7 +2803,7 @@ async def test_local_tool_start_precedes_outbound_and_cancellation_closes_operat
 )
 @pytest.mark.parametrize("stream", [False, True])
 async def test_local_failures_remain_completed_tool_results(
-    monkeypatch, tool_name: str, automatic: bool, stream: bool
+    monkeypatch: pytest.MonkeyPatch, tool_name: str, automatic: bool, stream: bool
 ) -> None:
     async def fail(*_args, **_kwargs):
         raise OSError("private upstream detail")
@@ -2660,16 +2847,19 @@ async def test_local_failures_remain_completed_tool_results(
         assert isinstance(response, JSONResponse)
         assert response.status_code == 200
         message = _json_body(response)
-        result, usage = message["content"][1], message["usage"]
+        result, usage = array_payload(message["content"])[1], message["usage"]
         assert message["stop_reason"] == "end_turn"
-    assert result["type"] == f"{tool_name}_tool_result"
+    assert object_payload(result)["type"] == f"{tool_name}_tool_result"
     expected_error = (
         "web_search_tool_result_error"
         if tool_name == "web_search"
         else "web_fetch_tool_error"
     )
-    assert result["content"] == {"type": expected_error, "error_code": "unavailable"}
-    assert usage["server_tool_use"] == {f"{tool_name}_requests": 1}
+    assert object_payload(result)["content"] == {
+        "type": expected_error,
+        "error_code": "unavailable",
+    }
+    assert object_payload(usage)["server_tool_use"] == {f"{tool_name}_requests": 1}
     assert len(provider.requests) == int(automatic)
 
 

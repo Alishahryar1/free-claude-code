@@ -12,7 +12,9 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.config.provider_catalog import XAI_DEFAULT_BASE
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
+from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.openai_chat import OpenAIChatProvider
 from tests.providers.support import (
@@ -23,6 +25,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 @pytest.fixture
@@ -86,20 +89,31 @@ def test_build_request_body_preserves_common_chat_tools_and_images(
 
     assert body["model"] == "grok-4.5"
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
-    assert body["messages"][0] == {"role": "system", "content": "Be concise."}
-    user_content = body["messages"][1]["content"]
-    assert user_content[0] == {"type": "text", "text": "Inspect this image."}
-    assert user_content[1] == {
+    assert array_payload(body["messages"])[0] == {
+        "role": "system",
+        "content": "Be concise.",
+    }
+    user_content = object_payload(array_payload(body["messages"])[1])["content"]
+    assert array_payload(user_content)[0] == {
+        "type": "text",
+        "text": "Inspect this image.",
+    }
+    assert array_payload(user_content)[1] == {
         "type": "image_url",
         "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
     }
-    assert body["tools"][0]["function"]["name"] == "inspect_image"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "inspect_image"
+    )
 
 
 @pytest.mark.parametrize("reasoning", [REASONING_OFF, REASONING_ON])
 def test_build_request_body_does_not_invent_catalog_wide_reasoning_control(
     xai_provider: OpenAIChatProvider,
-    reasoning,
+    reasoning: ReasoningPolicy,
 ) -> None:
     request = MessagesRequest.model_validate(
         {
@@ -111,7 +125,7 @@ def test_build_request_body_does_not_invent_catalog_wide_reasoning_control(
     body = xai_provider._chat._build_request_body(request, reasoning=reasoning)
 
     assert "reasoning_effort" not in body
-    assert "reasoning" not in body.get("extra_body", {})
+    assert "reasoning" not in object_payload(body.get("extra_body", {}))
 
 
 def test_build_request_body_replays_prior_reasoning_content(
@@ -139,7 +153,7 @@ def test_build_request_body_replays_prior_reasoning_content(
         reasoning=reasoning_for(request),
     )
 
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "assistant",
         "content": "The answer is 42.",
         "reasoning_content": "Work through it.",
@@ -154,9 +168,10 @@ def test_build_request_body_replays_prior_reasoning_content(
 
 @pytest.mark.asyncio
 async def test_lists_language_models_and_routable_aliases(
+    monkeypatch: pytest.MonkeyPatch,
     xai_provider: OpenAIChatProvider,
 ) -> None:
-    xai_provider._client.get = AsyncMock(
+    mock_get = AsyncMock(
         return_value={
             "models": [
                 {
@@ -172,7 +187,9 @@ async def test_lists_language_models_and_routable_aliases(
             ]
         }
     )
-    xai_provider._client.models.list = AsyncMock()
+    monkeypatch.setattr(xai_provider._client, "get", mock_get)
+    mock_list = AsyncMock()
+    monkeypatch.setattr(xai_provider._client.models, "list", mock_list)
 
     model_infos = await xai_provider.list_model_infos()
 
@@ -198,11 +215,11 @@ async def test_lists_language_models_and_routable_aliases(
             ),
         }
     )
-    xai_provider._client.get.assert_awaited_once_with(
+    mock_get.assert_awaited_once_with(
         "/language-models",
         cast_to=object,
     )
-    xai_provider._client.models.list.assert_not_awaited()
+    mock_list.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -251,11 +268,12 @@ async def test_language_model_catalog_uses_configured_base_url_and_auth(
 )
 @pytest.mark.asyncio
 async def test_rejects_malformed_language_model_catalog_atomically(
+    monkeypatch: pytest.MonkeyPatch,
     xai_provider: OpenAIChatProvider,
-    payload: dict,
+    payload: JsonObject,
     message: str,
 ) -> None:
-    xai_provider._client.get = AsyncMock(return_value=payload)
+    monkeypatch.setattr(xai_provider._client, "get", AsyncMock(return_value=payload))
 
     with pytest.raises(ModelListResponseError, match=message):
         await xai_provider.list_model_infos()
@@ -263,6 +281,7 @@ async def test_rejects_malformed_language_model_catalog_atomically(
 
 @pytest.mark.asyncio
 async def test_language_model_catalog_uses_shared_retry_admission(
+    monkeypatch: pytest.MonkeyPatch,
     xai_provider: OpenAIChatProvider,
 ) -> None:
     request = httpx.Request("GET", "https://api.x.ai/v1/language-models")
@@ -272,14 +291,15 @@ async def test_language_model_catalog_uses_shared_retry_admission(
         request=request,
         response=response,
     )
-    xai_provider._client.get = AsyncMock(
+    mock_get_next = AsyncMock(
         side_effect=[
             rate_limit_error,
             {"models": [{"id": "grok-4.5", "aliases": []}]},
         ]
     )
+    monkeypatch.setattr(xai_provider._client, "get", mock_get_next)
 
     model_infos = await xai_provider.list_model_infos()
 
     assert model_infos == frozenset({ProviderModelInfo("grok-4.5")})
-    assert xai_provider._client.get.await_count == 2
+    assert mock_get_next.await_count == 2

@@ -1,6 +1,8 @@
 import json
 from collections.abc import Mapping, Sequence
 
+import pytest
+
 import free_claude_code.core.openai_responses.tokens as responses_tokens
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -43,7 +45,9 @@ def test_responses_token_estimate_increases_with_input_content() -> None:
     )
 
 
-def test_structured_estimate_never_serializes_an_unbounded_value(monkeypatch) -> None:
+def test_structured_estimate_never_serializes_an_unbounded_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     original_dumps = json.dumps
 
     def guarded_dumps(value: object, *, ensure_ascii: bool = True) -> str:

@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Literal, NotRequired, Protocol, TypedDict, cast, overload
 
 from .check_version_policy import (
     VERSION,
@@ -17,6 +18,27 @@ from .check_version_policy import (
     release_kind,
     release_paths,
 )
+
+
+class _ReleaseAsset(TypedDict):
+    name: str
+    state: str
+    size: int
+    digest: NotRequired[str | None]
+
+
+class _Release(TypedDict):
+    id: int
+    tag_name: str
+    prerelease: bool
+    draft: bool
+    assets: list[_ReleaseAsset]
+
+
+class _ReleaseNotes(TypedDict):
+    name: str
+    body: str
+
 
 # Reserve the version of the unpublished Windows signing draft.
 WITHDRAWN_RELEASE = ("v6.19.38", "fda456aea40f7d3297003fafc710460afbb27cea")
@@ -42,13 +64,24 @@ class Publisher:
     def gh(self, *args: str) -> str:
         return command(["gh", "release", *args, "--repo", self.repository])
 
-    def release_api(self, suffix: str, *args: str) -> dict:
+    @overload
+    def release_api(
+        self, suffix: Literal["/generate-notes"], *args: str
+    ) -> _ReleaseNotes: ...
+
+    @overload
+    def release_api(self, suffix: int | Literal[""], *args: str) -> _Release: ...
+
+    def release_api(
+        self, suffix: int | Literal["", "/generate-notes"], *args: str
+    ) -> _Release | _ReleaseNotes:
+        path = f"/{suffix}" if isinstance(suffix, int) else suffix
         return json.loads(
-            command(["gh", "api", f"repos/{self.repository}/releases{suffix}", *args])
+            command(["gh", "api", f"repos/{self.repository}/releases{path}", *args])
         )
 
-    def releases(self) -> dict:
-        pages = json.loads(
+    def releases(self) -> dict[str, _Release]:
+        pages: list[list[_Release]] = json.loads(
             command(
                 [
                     "gh",
@@ -186,7 +219,7 @@ class Publisher:
         self, tag: str, release_id: int, version: str, source: Path, dist: Path
     ) -> None:
         names = set(distribution_names(version))
-        assets = self.release_api(f"/{release_id}")["assets"]
+        assets = self.release_api(release_id)["assets"]
         if any(asset["name"] not in names for asset in assets):
             raise ValueError(f"Unexpected assets on {tag}")
         complete = (
@@ -207,7 +240,7 @@ class Publisher:
             command(["uv", "build", "--no-sources", "--out-dir", str(dist)], cwd=source)
             self.validate(source, dist, version)
             self.gh("upload", tag, *(str(dist / name) for name in sorted(names)))
-            assets = self.release_api(f"/{release_id}")["assets"]
+            assets = self.release_api(release_id)["assets"]
         if {asset["name"] for asset in assets} != names or len(assets) != 2:
             raise ValueError(f"Incomplete staged distributions for {tag}")
         for asset in assets:
@@ -222,17 +255,27 @@ class Publisher:
         self.validate(source, dist, version)
 
 
+class _TextProcessFailure(Protocol):
+    stderr: str | None
+
+
+class _Arguments(argparse.Namespace):
+    repository: str
+    commit: str
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--commit", required=True)
-    args = parser.parse_args()
+    args = _Arguments()
+    parser.parse_args(namespace=args)
     try:
         Publisher(args.repository).publish(args.commit)
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as error:
         print(f"Release failed: {error}", file=sys.stderr)
         if isinstance(error, subprocess.CalledProcessError):
-            print(error.stderr, file=sys.stderr)
+            print(cast(_TextProcessFailure, error).stderr, file=sys.stderr)
         return 1
     return 0
 

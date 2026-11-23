@@ -1,17 +1,29 @@
 """Rendered contracts for Admin asset generation consistency."""
 
+from typing import TypedDict
 from urllib.parse import urlsplit
 
 import pytest
 from playwright.sync_api import Error, Page, Request, expect
 
 from e2e.form_support import assert_autofill_opt_out
+from e2e.layout import visible_bounds
 from e2e.provider_support import api_key_input, open_provider
 from free_claude_code.core.version import package_version
 
 
+class _Measurements(TypedDict):
+    top: float
+    bottom: float
+    bar: float
+    endGap: float | None
+    headingGap: float
+
+
 @pytest.mark.parametrize("width", [1280, 900, 390])
-def test_admin_page_spacing_matches_visible_action_bar(page, admin_base_url, width):
+def test_admin_page_spacing_matches_visible_action_bar(
+    page: Page, admin_base_url: str, width: int
+):
     page.set_viewport_size({"width": width, "height": 720})
     page.goto(f"{admin_base_url}/admin/providers")
     expect(page.locator("#messageArea")).to_have_text("")
@@ -23,8 +35,8 @@ def test_admin_page_spacing_matches_visible_action_bar(page, admin_base_url, wid
         page.evaluate(
             "() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
         )
-        measurements = page.evaluate("""() => {
-          const main = document.getElementById('adminViews');
+        measurements: _Measurements = page.evaluate("""() => {
+          const main = document.querySelector('.main');
           const style = getComputedStyle(main);
           const bar = document.querySelector('.action-bar');
           const last = document.querySelector('.admin-view:not([hidden]) .form-sections > :last-child');
@@ -50,12 +62,12 @@ def test_admin_page_spacing_matches_visible_action_bar(page, admin_base_url, wid
         expect(page.locator("#pageTitle")).to_have_text(title)
         assert_spacing()
 
-    original_height = page.locator(".action-bar").bounding_box()["height"]
+    original_height = visible_bounds(page.locator(".action-bar"))["height"]
     page.locator("#messageArea").evaluate(
         "node => node.textContent = 'A longer validation message that wraps onto multiple lines. '.repeat(20)"
     )
     assert_spacing()
-    assert page.locator(".action-bar").bounding_box()["height"] > original_height
+    assert visible_bounds(page.locator(".action-bar"))["height"] > original_height
     page.set_viewport_size({"width": 700 if width > 900 else 1200, "height": 720})
     assert_spacing()
 
@@ -69,8 +81,8 @@ def test_admin_page_spacing_matches_visible_action_bar(page, admin_base_url, wid
     assert_spacing()
 
 
-def test_settings_text_fields_opt_out_of_autofill(page, admin_base_url):
-    page.goto(f"{admin_base_url}/admin/providers")
+def test_settings_text_fields_opt_out_of_autofill(page: Page, admin_base_url: str):
+    page.goto(f"{admin_base_url}/admin")
     expect(page.locator("#messageArea")).to_have_text("")
     for title in ("Providers", "Model Config", "Messaging", "Integrations"):
         page.locator("#settingsMenuButton").click()
@@ -93,7 +105,7 @@ def test_settings_text_fields_opt_out_of_autofill(page, admin_base_url):
 
 
 def test_selected_admin_tab_survives_refresh_and_browser_navigation(
-    page, admin_base_url
+    page: Page, admin_base_url: str
 ):
     page.goto(f"{admin_base_url}/admin/providers")
     for title, path in (
@@ -118,7 +130,9 @@ def test_selected_admin_tab_survives_refresh_and_browser_navigation(
     expect(page.locator("#pageTitle")).to_have_text("Providers")
 
 
-def test_admin_removes_chat_drafts_and_preserves_other_storage(page, admin_base_url):
+def test_admin_removes_chat_drafts_and_preserves_other_storage(
+    page: Page, admin_base_url: str
+):
     page.add_init_script("""(() => {
       for (let index = 0; index < 16; index++) {
         sessionStorage.setItem(`fcc.chat.draft.${index}`, `old draft ${index}`);
@@ -150,7 +164,7 @@ def test_admin_removes_chat_drafts_and_preserves_other_storage(page, admin_base_
     ).to_be_enabled()
 
 
-def test_admin_storage_denial_keeps_admin_usable(page, admin_base_url):
+def test_admin_storage_denial_keeps_admin_usable(page: Page, admin_base_url: str):
     errors = []
     warnings = []
     page.on("pageerror", lambda error: errors.append(str(error)))

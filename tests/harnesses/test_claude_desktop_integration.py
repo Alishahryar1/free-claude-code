@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,17 +8,21 @@ import pytest
 
 from free_claude_code.config.paths import claude_desktop_disconnect_path
 from free_claude_code.core.gateway_model_ids import desktop_model_id
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.harnesses import claude_desktop_integration as desktop
 from free_claude_code.harnesses.claude_desktop_integration import (
     check_unmanaged,
     config_root,
 )
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 URL = "http://127.0.0.1:8000"
 TOKEN = "desktop-test-token"
 
 
-def test_connect_preserves_pending_windows_migration(tmp_path, monkeypatch):
+def test_connect_preserves_pending_windows_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     root = tmp_path / "Local/Claude-3p"
     legacy = tmp_path / "Roaming/Claude-3p"
     record = claude_desktop_disconnect_path()
@@ -58,8 +63,12 @@ def test_connect_preserves_pending_windows_migration(tmp_path, monkeypatch):
     [("win32", False, False), ("win32", True, True), ("darwin", False, True)],
 )
 def test_connect_allowed_without_pending_migration(
-    tmp_path, monkeypatch, platform, existing_root, existing_legacy
-):
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    existing_root: bool,
+    existing_legacy: bool,
+) -> None:
     root = tmp_path / "current"
     legacy = tmp_path / "legacy"
     monkeypatch.setattr(desktop.sys, "platform", platform)
@@ -83,7 +92,13 @@ def test_connect_allowed_without_pending_migration(
         ("linux", "XDG_CONFIG_HOME", "local/Claude-3p"),
     ],
 )
-def test_platform_config_root(monkeypatch, tmp_path, platform, variable, suffix):
+def test_platform_config_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    platform: str,
+    variable: str | None,
+    suffix: str,
+) -> None:
     monkeypatch.setattr(desktop.sys, "platform", platform)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     if variable:
@@ -92,10 +107,10 @@ def test_platform_config_root(monkeypatch, tmp_path, platform, variable, suffix)
 
 
 @pytest.mark.parametrize("state", ["absent", "empty", "policy", "unreadable"])
-def test_windows_policy_boundary(monkeypatch, state):
+def test_windows_policy_boundary(monkeypatch: pytest.MonkeyPatch, state: str) -> None:
     opened = []
 
-    def open_key(hive, path):
+    def open_key(hive: int, path: str):
         opened.append((hive, path))
         if state == "absent":
             raise FileNotFoundError
@@ -104,6 +119,10 @@ def test_windows_policy_boundary(monkeypatch, state):
         return nullcontext("test-key")
 
     monkeypatch.setattr(desktop.sys, "platform", "win32")
+
+    def callback(key: object):
+        return (0, int(state == "policy"), 0)
+
     monkeypatch.setitem(
         desktop.sys.modules,
         "winreg",
@@ -111,7 +130,7 @@ def test_windows_policy_boundary(monkeypatch, state):
             HKEY_LOCAL_MACHINE=1,
             HKEY_CURRENT_USER=2,
             OpenKey=open_key,
-            QueryInfoKey=lambda key: (0, int(state == "policy"), 0),
+            QueryInfoKey=callback,
         ),
     )
     if state in {"policy", "unreadable"}:
@@ -125,24 +144,24 @@ def test_windows_policy_boundary(monkeypatch, state):
         ]
 
 
-def read(path):
-    return json.loads(path.read_text())
+def read(path: Path):
+    return load_json_value(path.read_text())
 
 
-def write(path, value):
+def write(path: Path, value: JsonValue):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value))
 
 
-def profile(root):
+def profile(root: Path):
     return root / "configLibrary" / f"{desktop.FCC_ID}.json"
 
 
-def meta(root):
+def meta(root: Path):
     return root / "configLibrary" / "_meta.json"
 
 
-def mode(root):
+def mode(root: Path):
     return root / "claude_desktop_config.json"
 
 
@@ -150,14 +169,16 @@ def token_record():
     return claude_desktop_disconnect_path().with_name("claude-desktop-token.json")
 
 
-def seal(root):
+def seal(root: Path):
     """Replace the stored key the way Claude Desktop encrypts it in place."""
     config = read(profile(root))
     config["inferenceGatewayApiKey"] = "__sealed__:v1:opaque"
     write(profile(root), config)
 
 
-def test_fresh_connection_and_disconnect_preserve_native_library(tmp_path):
+def test_fresh_connection_and_disconnect_preserve_native_library(
+    tmp_path: Path,
+) -> None:
     root = tmp_path / "desktop"
     assert (
         desktop.configure(
@@ -225,8 +246,8 @@ def test_fresh_connection_and_disconnect_preserve_native_library(tmp_path):
     ],
 )
 def test_connection_defaults_missing_egress_and_preserves_explicit_policy(
-    tmp_path, reconnect, egress
-):
+    tmp_path: Path, reconnect: bool, egress: JsonObject
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     config = read(profile(tmp_path))
@@ -266,7 +287,9 @@ def test_connection_defaults_missing_egress_and_preserves_explicit_policy(
         ],
     ],
 )
-def test_model_override_survives_refresh_and_connect(tmp_path, reconnect, models):
+def test_model_override_survives_refresh_and_connect(
+    tmp_path: Path, reconnect: bool, models: JsonValue
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     config = read(profile(tmp_path))
@@ -295,7 +318,7 @@ def test_model_override_survives_refresh_and_connect(tmp_path, reconnect, models
     assert "inferenceModels" not in read(profile(tmp_path))
 
 
-def test_refresh_rotates_credentials_without_reactivating(tmp_path):
+def test_refresh_rotates_credentials_without_reactivating(tmp_path: Path) -> None:
     desktop.configure(
         tmp_path, URL, TOKEN, True, disconnect_path=claude_desktop_disconnect_path()
     )
@@ -331,7 +354,9 @@ def test_refresh_rotates_credentials_without_reactivating(tmp_path):
     assert read(mode(tmp_path))["unrelated"] is True
 
 
-def test_refresh_repairs_registered_profile_header_without_changing_selection(tmp_path):
+def test_refresh_repairs_registered_profile_header_without_changing_selection(
+    tmp_path: Path,
+) -> None:
     desktop.configure(
         tmp_path, URL, TOKEN, True, disconnect_path=claude_desktop_disconnect_path()
     )
@@ -359,7 +384,9 @@ def test_refresh_repairs_registered_profile_header_without_changing_selection(tm
     "failure",
     ["intent", "default", "selection", "mode", "profile", "metadata", "record"],
 )
-def test_disconnect_recovers_every_failure_boundary(tmp_path, monkeypatch, failure):
+def test_disconnect_recovers_every_failure_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     write(
@@ -373,8 +400,8 @@ def test_disconnect_recovers_every_failure_boundary(tmp_path, monkeypatch, failu
     default.unlink()
     atomic, unlink = desktop.atomic_write_text, Path.unlink
 
-    def fail_write(path, content):
-        value = json.loads(content)
+    def fail_write(path: Path, content: str):
+        value = decode_object(content)
         step = (
             "intent"
             if path == record
@@ -383,19 +410,22 @@ def test_disconnect_recovers_every_failure_boundary(tmp_path, monkeypatch, failu
             else "mode"
             if path == mode(tmp_path)
             else "selection"
-            if any(e["id"] == desktop.FCC_ID for e in value.get("entries", []))
+            if any(
+                object_payload(e)["id"] == desktop.FCC_ID
+                for e in array_payload(value.get("entries", []))
+            )
             else "metadata"
         )
         if step == failure:
             raise PermissionError("test")
         atomic(path, content)
 
-    def fail_unlink(path, *args, **kwargs):
+    def fail_unlink(path: Path, missing_ok: bool = False):
         if (failure == "profile" and path == profile(tmp_path)) or (
             failure == "record" and path == record
         ):
             raise PermissionError("test")
-        return unlink(path, *args, **kwargs)
+        return unlink(path, missing_ok=missing_ok)
 
     with monkeypatch.context() as patch:
         patch.setattr(desktop, "atomic_write_text", fail_write)
@@ -428,7 +458,7 @@ def test_disconnect_recovers_every_failure_boundary(tmp_path, monkeypatch, failu
     assert {p: p.read_bytes() for p in tmp_path.rglob("*.json")} == before
 
 
-def test_other_profiles_and_unknown_settings_are_preserved(tmp_path):
+def test_other_profiles_and_unknown_settings_are_preserved(tmp_path: Path) -> None:
     other = "11111111-1111-4111-8111-111111111111"
     other_path = tmp_path / "configLibrary" / f"{other}.json"
     write(other_path, {"inferenceProvider": "gateway", "secret": "other-secret"})
@@ -469,22 +499,34 @@ def test_other_profiles_and_unknown_settings_are_preserved(tmp_path):
     assert other_path.read_bytes() == before
 
 
+def callback(root: Path):
+    return root / "configLibrary" / f"{desktop.DEFAULT_ID}.json"
+
+
+def callback_2(root: object):
+    return token_record()
+
+
 @pytest.mark.parametrize(
     "failed_write",
     [
-        lambda root: root / "configLibrary" / f"{desktop.DEFAULT_ID}.json",
+        callback,
         profile,
-        lambda root: token_record(),
+        callback_2,
         meta,
         mode,
     ],
     ids=["default", "profile", "fingerprint", "meta", "mode"],
 )
-def test_connect_partial_write_is_retryable(tmp_path, monkeypatch, failed_write):
+def test_connect_partial_write_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_write: Callable[[Path], Path],
+) -> None:
     atomic = desktop.atomic_write_text
     failed = failed_write(tmp_path)
 
-    def fail(path, content):
+    def fail(path: Path, content: str):
         if path == failed:
             raise PermissionError("test")
         atomic(path, content)
@@ -503,8 +545,8 @@ def test_connect_partial_write_is_retryable(tmp_path, monkeypatch, failed_write)
 
 @pytest.mark.parametrize("missing_header", [False, True])
 def test_disconnect_recovers_orphan_after_delete_failure(
-    tmp_path, monkeypatch, missing_header
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing_header: bool
+) -> None:
     desktop.configure(
         tmp_path, URL, TOKEN, True, disconnect_path=claude_desktop_disconnect_path()
     )
@@ -514,10 +556,10 @@ def test_disconnect_recovers_orphan_after_delete_failure(
         write(profile(tmp_path), config)
     unlink = Path.unlink
 
-    def fail(path, *args, **kwargs):
+    def fail(path: Path, missing_ok: bool = False):
         if path == profile(tmp_path):
             raise PermissionError("test")
-        return unlink(path, *args, **kwargs)
+        return unlink(path, missing_ok=missing_ok)
 
     monkeypatch.setattr(Path, "unlink", fail)
     with pytest.raises(PermissionError):
@@ -537,7 +579,7 @@ def test_disconnect_recovers_orphan_after_delete_failure(
     assert not profile(tmp_path).exists()
 
 
-def test_disconnect_last_entry_creates_default(tmp_path):
+def test_disconnect_last_entry_creates_default(tmp_path: Path) -> None:
     desktop.configure(
         tmp_path, URL, TOKEN, True, disconnect_path=claude_desktop_disconnect_path()
     )
@@ -575,7 +617,9 @@ def test_disconnect_last_entry_creates_default(tmp_path):
         },
     ],
 )
-def test_invalid_metadata_is_never_overwritten(tmp_path, metadata):
+def test_invalid_metadata_is_never_overwritten(
+    tmp_path: Path, metadata: JsonValue
+) -> None:
     write(meta(tmp_path), metadata)
     before = meta(tmp_path).read_bytes()
     with pytest.raises(ValueError):
@@ -586,7 +630,7 @@ def test_invalid_metadata_is_never_overwritten(tmp_path, metadata):
     assert not profile(tmp_path).exists()
 
 
-def test_reserved_profile_collision_is_not_overwritten(tmp_path):
+def test_reserved_profile_collision_is_not_overwritten(tmp_path: Path) -> None:
     write(profile(tmp_path), {"inferenceProvider": "bedrock"})
     with pytest.raises(ValueError):
         desktop.configure(
@@ -596,7 +640,7 @@ def test_reserved_profile_collision_is_not_overwritten(tmp_path):
 
 
 @pytest.mark.parametrize("url,token", [("http://192.0.2.1:8000", TOKEN), (URL, "")])
-def test_invalid_gateway_does_not_write(tmp_path, url, token):
+def test_invalid_gateway_does_not_write(tmp_path: Path, url: str, token: str) -> None:
     with pytest.raises(ValueError):
         desktop.configure(
             tmp_path, url, token, True, disconnect_path=claude_desktop_disconnect_path()
@@ -604,7 +648,9 @@ def test_invalid_gateway_does_not_write(tmp_path, url, token):
     assert not list(tmp_path.rglob("*.json"))
 
 
-def test_disconnect_selects_empty_profile_not_other_forced_gateway(tmp_path):
+def test_disconnect_selects_empty_profile_not_other_forced_gateway(
+    tmp_path: Path,
+) -> None:
     other = "11111111-1111-4111-8111-111111111111"
     other_path = tmp_path / "configLibrary" / f"{other}.json"
     write(
@@ -628,16 +674,18 @@ def test_disconnect_selects_empty_profile_not_other_forced_gateway(tmp_path):
     assert other_path.read_bytes() == before
 
 
-def test_unlink_failure_remains_retryable_after_status_reload(tmp_path, monkeypatch):
+def test_unlink_failure_remains_retryable_after_status_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     desktop.configure(
         tmp_path, URL, TOKEN, True, disconnect_path=claude_desktop_disconnect_path()
     )
     unlink = Path.unlink
 
-    def fail(path, *args, **kwargs):
+    def fail(path: Path, missing_ok: bool = False):
         if path == profile(tmp_path):
             raise PermissionError("busy")
-        return unlink(path, *args, **kwargs)
+        return unlink(path, missing_ok=missing_ok)
 
     monkeypatch.setattr(Path, "unlink", fail)
     with pytest.raises(PermissionError):
@@ -659,12 +707,14 @@ def test_unlink_failure_remains_retryable_after_status_reload(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("change", ["selection", "hybrid", "default"])
-def test_retry_preserves_a_later_external_choice(tmp_path, monkeypatch, change):
+def test_retry_preserves_a_later_external_choice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     atomic = desktop.atomic_write_text
 
-    def fail_mode(path, content):
+    def fail_mode(path: Path, content: str):
         if path == mode(tmp_path):
             raise PermissionError("test")
         atomic(path, content)
@@ -706,7 +756,9 @@ def test_retry_preserves_a_later_external_choice(tmp_path, monkeypatch, change):
     assert not profile(tmp_path).exists()
 
 
-def test_sealed_key_for_current_token_stays_connected_and_untouched(tmp_path):
+def test_sealed_key_for_current_token_stays_connected_and_untouched(
+    tmp_path: Path,
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     seal(tmp_path)
@@ -717,7 +769,7 @@ def test_sealed_key_for_current_token_stays_connected_and_untouched(tmp_path):
     assert profile(tmp_path).read_bytes() == before
 
 
-def test_sealed_key_for_an_old_token_is_replaced(tmp_path):
+def test_sealed_key_for_an_old_token_is_replaced(tmp_path: Path) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     seal(tmp_path)
@@ -734,7 +786,9 @@ def test_sealed_key_for_an_old_token_is_replaced(tmp_path):
 
 
 @pytest.mark.parametrize("fingerprint", [None, "not json", {"sha256": "other"}])
-def test_sealed_key_without_a_matching_fingerprint_is_replaced(tmp_path, fingerprint):
+def test_sealed_key_without_a_matching_fingerprint_is_replaced(
+    tmp_path: Path, fingerprint: JsonValue
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     seal(tmp_path)
@@ -755,14 +809,14 @@ def test_sealed_key_without_a_matching_fingerprint_is_replaced(tmp_path, fingerp
 
 
 def test_failed_fingerprint_write_never_vouches_for_a_rotated_key(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     seal(tmp_path)
     atomic = desktop.atomic_write_text
 
-    def fail_fingerprint(path, content):
+    def fail_fingerprint(path: Path, content: str):
         if path == token_record():
             raise PermissionError("test")
         atomic(path, content)
@@ -783,7 +837,7 @@ def test_failed_fingerprint_write_never_vouches_for_a_rotated_key(
     assert read(profile(tmp_path))["inferenceGatewayApiKey"] == TOKEN
 
 
-def test_disconnect_removes_token_fingerprint(tmp_path):
+def test_disconnect_removes_token_fingerprint(tmp_path: Path) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     assert token_record().exists()
@@ -806,7 +860,9 @@ def test_disconnect_removes_token_fingerprint(tmp_path):
         {"root": "ROOT", "return_to_sign_in": 1},
     ],
 )
-def test_invalid_disconnect_record_never_mutates_native_files(tmp_path, record_value):
+def test_invalid_disconnect_record_never_mutates_native_files(
+    tmp_path: Path, record_value: JsonValue
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     if isinstance(record_value, dict) and record_value.get("root") == "ROOT":
@@ -821,7 +877,9 @@ def test_invalid_disconnect_record_never_mutates_native_files(tmp_path, record_v
     assert {p: p.read_bytes() for p in tmp_path.rglob("*.json")} == before
 
 
-def test_default_collision_fails_before_record_or_native_mutation(tmp_path):
+def test_default_collision_fails_before_record_or_native_mutation(
+    tmp_path: Path,
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     write(
@@ -834,7 +892,7 @@ def test_default_collision_fails_before_record_or_native_mutation(tmp_path):
     assert {p: p.read_bytes() for p in tmp_path.rglob("*.json")} == before
 
 
-def test_unrelated_invalid_profile_is_not_read_on_disconnect(tmp_path):
+def test_unrelated_invalid_profile_is_not_read_on_disconnect(tmp_path: Path) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     other = "11111111-1111-4111-8111-111111111111"
@@ -847,7 +905,9 @@ def test_unrelated_invalid_profile_is_not_read_on_disconnect(tmp_path):
     assert other_path.read_text(encoding="utf-8") == "not json"
 
 
-def test_pending_removal_handles_missing_profile_and_later_fcc_selection(tmp_path):
+def test_pending_removal_handles_missing_profile_and_later_fcc_selection(
+    tmp_path: Path,
+) -> None:
     record = claude_desktop_disconnect_path()
     desktop.configure(tmp_path, URL, TOKEN, True, disconnect_path=record)
     profile(tmp_path).unlink()

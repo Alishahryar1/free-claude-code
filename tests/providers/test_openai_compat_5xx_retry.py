@@ -37,7 +37,7 @@ def _connection_error(message: str = "connect failed") -> openai.APIConnectionEr
 
 @pytest.mark.parametrize("status_code", [500, 502, 503, 504])
 @pytest.mark.asyncio
-async def test_nim_stream_retries_on_openai_5xx_then_streams(status_code):
+async def test_nim_stream_retries_on_openai_5xx_then_streams(status_code: int) -> None:
     config = make_provider_config(
         api_key="test_key",
         base_url="https://test.api.nvidia.com/v1",
@@ -83,7 +83,7 @@ async def test_nim_stream_retries_on_openai_5xx_then_streams(status_code):
 
 
 @pytest.mark.asyncio
-async def test_nim_stream_retries_on_pre_stream_connection_error_then_streams():
+async def test_nim_stream_retries_on_pre_stream_connection_error_then_streams() -> None:
     config = make_provider_config(
         api_key="test_key",
         base_url="https://test.api.nvidia.com/v1",
@@ -126,7 +126,7 @@ async def test_nim_stream_retries_on_pre_stream_connection_error_then_streams():
 
 
 @pytest.mark.asyncio
-async def test_nim_stream_connection_error_exhausted_emits_cause_chain():
+async def test_nim_stream_connection_error_exhausted_emits_cause_chain() -> None:
     config = make_provider_config(
         api_key="test_key",
         base_url="https://test.api.nvidia.com/v1",
@@ -180,9 +180,9 @@ async def test_nim_stream_connection_error_exhausted_emits_cause_chain():
 )
 @pytest.mark.asyncio
 async def test_nim_stream_openai_5xx_exhausted_emits_user_message(
-    status_code,
-    expect_substr,
-):
+    status_code: int,
+    expect_substr: str,
+) -> None:
     config = make_provider_config(
         api_key="test_key",
         base_url="https://test.api.nvidia.com/v1",

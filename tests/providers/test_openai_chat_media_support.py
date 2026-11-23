@@ -6,6 +6,7 @@ import httpx2
 import openai
 import pytest
 
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_chat import ChatToolResultImages
 from free_claude_code.providers.openai_chat.media_support import (
     TextOnlyModels,
@@ -14,6 +15,7 @@ from free_claude_code.providers.openai_chat.media_support import (
     without_media,
 )
 from free_claude_code.providers.request_correction import Rejection
+from tests.wire_payload import array_payload, object_array
 
 VLLM = (
     "ValueError: Received multimodal data but multimodal processing is not "
@@ -50,7 +52,7 @@ def _in_stream(body: object) -> openai.APIError:
         ),
     ],
 )
-def test_media_rejections_are_recognized(error):
+def test_media_rejections_are_recognized(error: Exception) -> None:
     assert is_media_rejection(error)
 
 
@@ -68,11 +70,11 @@ def test_media_rejections_are_recognized(error):
         ValueError(VLLM),
     ],
 )
-def test_other_failures_are_not_media_rejections(error):
+def test_other_failures_are_not_media_rejections(error: Exception) -> None:
     assert not is_media_rejection(error)
 
 
-def test_each_media_part_becomes_a_note_in_place():
+def test_each_media_part_becomes_a_note_in_place() -> None:
     audio = {"type": "input_audio", "input_audio": {"data": "YQ==", "format": "wav"}}
     video = {"type": "video_url", "video_url": {"url": "https://v.invalid/a.mp4"}}
     text = {"type": "text", "text": "Read these"}
@@ -102,14 +104,14 @@ def test_each_media_part_becomes_a_note_in_place():
     assert body["messages"][1]["content"][1] is IMAGE
 
 
-def test_note_asks_the_model_to_tell_the_user():
+def test_note_asks_the_model_to_tell_the_user() -> None:
     assert omitted_media_note("image") == (
         "[image omitted: this model cannot accept image input. "
         "Tell the user the image was not seen.]"
     )
 
 
-def test_relocated_tool_images_keep_their_history_marker():
+def test_relocated_tool_images_keep_their_history_marker() -> None:
     parts: list[Any] = [{"type": "text", "text": "Image-bearing output:"}, IMAGE]
     relocated = ChatToolResultImages(role="user", content=parts)
     body = {"model": "m", "messages": [relocated]}
@@ -117,9 +119,10 @@ def test_relocated_tool_images_keep_their_history_marker():
     stripped = without_media(body)
 
     assert stripped is not None
-    message = stripped[0]["messages"][0]
+    corrected: JsonObject = stripped[0]
+    message = object_array(corrected["messages"])[0]
     assert type(message) is ChatToolResultImages
-    assert message["content"][1] == {
+    assert array_payload(message["content"])[1] == {
         "type": "text",
         "text": omitted_media_note("image"),
     }
@@ -138,11 +141,11 @@ def test_relocated_tool_images_keep_their_history_marker():
         {"model": "m"},
     ],
 )
-def test_a_body_without_media_is_left_alone(body):
+def test_a_body_without_media_is_left_alone(body: JsonObject) -> None:
     assert without_media(body) is None
 
 
-def test_correction_teaches_only_the_rejected_model():
+def test_correction_teaches_only_the_rejected_model() -> None:
     memory = TextOnlyModels()
     with_image: dict[str, Any] = {"messages": [{"role": "user", "content": [IMAGE]}]}
     rejected: dict[str, Any] = {"model": "text-only", **with_image}
@@ -165,7 +168,7 @@ def test_correction_teaches_only_the_rejected_model():
     assert memory.strip(other) == (other, 0)
 
 
-def test_correction_without_media_proposes_nothing():
+def test_correction_without_media_proposes_nothing() -> None:
     memory = TextOnlyModels()
     body: dict[str, Any] = {
         "model": "m",

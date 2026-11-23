@@ -35,12 +35,13 @@ def dump_threads_after(
         timer.join()
 
 
-def pytest_addoption(parser) -> None:
+def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addini("thread_dump_timeout", "Print slow-test thread stacks", default="0")
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    if float(config.getini("thread_dump_timeout")) > 0:
+    timeout: str = config.getini("thread_dump_timeout")
+    if float(timeout) > 0:
         # Windows xdist workers preserve stderr here and redirect descriptor 2 to NUL.
         # Keep a stable output descriptor across pytest's per-test capture changes.
         config.stash[_output] = os.fdopen(
@@ -59,7 +60,8 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_protocol(item: pytest.Item):
-    timeout = float(item.config.getini("thread_dump_timeout"))
+    setting: str = item.config.getini("thread_dump_timeout")
+    timeout = float(setting)
     if timeout <= 0:
         return (yield)
     with dump_threads_after(timeout, item.config.stash[_output], item.nodeid):

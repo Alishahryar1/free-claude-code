@@ -25,7 +25,7 @@ def _ctx() -> RenderCtx:
     )
 
 
-def test_transcript_order_thinking_tool_text():
+def test_transcript_order_thinking_tool_text() -> None:
     t = TranscriptBuffer()
     t.apply({"type": "thinking_chunk", "text": "think1"})
     t.apply({"type": "tool_use", "id": "tool_1", "name": "ls", "input": {"path": "."}})
@@ -35,7 +35,7 @@ def test_transcript_order_thinking_tool_text():
     assert out.find("think1") < out.find("Tool call:") < out.find("done")
 
 
-def test_transcript_can_hide_tool_results():
+def test_transcript_can_hide_tool_results() -> None:
     t = TranscriptBuffer(show_tool_results=False)
     t.apply({"type": "tool_use", "id": "tool_1", "name": "ls", "input": {"path": "."}})
     t.apply({"type": "tool_result", "tool_use_id": "tool_1", "content": "secret"})
@@ -46,7 +46,7 @@ def test_transcript_can_hide_tool_results():
     assert "secret" not in out
 
 
-def test_transcript_subagent_suppresses_thinking_and_text_inside():
+def test_transcript_subagent_suppresses_thinking_and_text_inside() -> None:
     t = TranscriptBuffer()
 
     # Enter subagent context (Task tool call).
@@ -85,7 +85,7 @@ def test_transcript_subagent_suppresses_thinking_and_text_inside():
     assert "after" in out
 
 
-def test_transcript_subagent_closes_on_whitespace_tool_ids():
+def test_transcript_subagent_closes_on_whitespace_tool_ids() -> None:
     t = TranscriptBuffer()
 
     # Provider emitted a Task tool_use id with leading whitespace.
@@ -119,7 +119,7 @@ def test_transcript_subagent_closes_on_whitespace_tool_ids():
     assert "\n  🤖 *Subagent:* `Next`" not in out
 
 
-def test_transcript_subagent_closes_on_task_result_id_suffix_match():
+def test_transcript_subagent_closes_on_task_result_id_suffix_match() -> None:
     t = TranscriptBuffer()
     t.apply(
         {
@@ -144,7 +144,7 @@ def test_transcript_subagent_closes_on_task_result_id_suffix_match():
     assert "\n  🤖 *Subagent:* `Next`" not in out
 
 
-def test_transcript_unmatched_non_task_tool_result_does_not_pop_subagent():
+def test_transcript_unmatched_non_task_tool_result_does_not_pop_subagent() -> None:
     state = SubagentState()
     state.push("task_1", SubagentSegment("Outer"))
 
@@ -152,7 +152,7 @@ def test_transcript_unmatched_non_task_tool_result_does_not_pop_subagent():
     assert state.open_ids == ("task_1",)
 
 
-def test_transcript_sequential_tasks_mismatched_results_no_depth_drift():
+def test_transcript_sequential_tasks_mismatched_results_no_depth_drift() -> None:
     t = TranscriptBuffer()
     t.apply(
         {
@@ -188,7 +188,7 @@ def test_transcript_sequential_tasks_mismatched_results_no_depth_drift():
     assert "still hidden inside task three" not in out
 
 
-def test_transcript_synthetic_task_start_closes_on_functions_task_result_id():
+def test_transcript_synthetic_task_start_closes_on_functions_task_result_id() -> None:
     t = TranscriptBuffer()
     t.apply(
         {
@@ -215,7 +215,7 @@ def test_transcript_synthetic_task_start_closes_on_functions_task_result_id():
     assert "\n  🤖 *Subagent:* `Next`" not in out
 
 
-def test_transcript_synthetic_task_not_closed_by_unknown_non_task_result_id():
+def test_transcript_synthetic_task_not_closed_by_unknown_non_task_result_id() -> None:
     t = TranscriptBuffer()
     t.apply(
         {
@@ -233,7 +233,7 @@ def test_transcript_synthetic_task_not_closed_by_unknown_non_task_result_id():
     assert "hidden while synthetic task is open" not in out
 
 
-def test_transcript_overlapping_tasks_are_flat_not_nested():
+def test_transcript_overlapping_tasks_are_flat_not_nested() -> None:
     t = TranscriptBuffer()
     t.apply(
         {
@@ -261,7 +261,7 @@ def test_transcript_overlapping_tasks_are_flat_not_nested():
     assert "\n  🤖 *Subagent:* `B`" not in out
 
 
-def test_transcript_truncates_by_dropping_oldest_segments():
+def test_transcript_truncates_by_dropping_oldest_segments() -> None:
     t = TranscriptBuffer()
 
     # Create many segments by opening/closing distinct text blocks.
@@ -279,7 +279,7 @@ def test_transcript_truncates_by_dropping_oldest_segments():
     assert escape_md_v2("segment_0") not in out
 
 
-def test_transcript_render_many_segments_completes_quickly():
+def test_transcript_render_many_segments_completes_quickly() -> None:
     """Render with 200+ segments exercises O(n) truncation (deque popleft)."""
     t = TranscriptBuffer()
     for i in range(200):
@@ -293,7 +293,7 @@ def test_transcript_render_many_segments_completes_quickly():
     assert "seg_0 " not in out  # oldest segment dropped
 
 
-def test_transcript_reused_index_closes_previous_open_block():
+def test_transcript_reused_index_closes_previous_open_block() -> None:
     t = TranscriptBuffer()
     # Open a text block at index 0, but never close it.
     t.apply({"type": "text_start", "index": 0})
@@ -308,7 +308,7 @@ def test_transcript_reused_index_closes_previous_open_block():
     assert out.find("alpha") < out.find("Tool call:") < out.find("omega")
 
 
-def test_transcript_render_segment_exception_skipped():
+def test_transcript_render_segment_exception_skipped() -> None:
     """When a segment's render() raises, that segment is skipped and rest is rendered."""
 
     class StaticSegment(Segment):
@@ -336,7 +336,7 @@ def test_transcript_render_segment_exception_skipped():
     assert "after" in out
 
 
-def test_transcript_render_status_only_exceeds_limit():
+def test_transcript_render_status_only_exceeds_limit() -> None:
     """When all segments dropped, status-only output; long status returned as-is."""
     t = TranscriptBuffer()
     t.apply({"type": "text_chunk", "text": "x" * 5000})
@@ -346,7 +346,7 @@ def test_transcript_render_status_only_exceeds_limit():
     assert "... (truncated)" in msg or long_status in msg
 
 
-def test_transcript_truncation_preserves_last_segment_tail():
+def test_transcript_truncation_preserves_last_segment_tail() -> None:
     """When all segments exceed limit, preserve tail of last segment (not just marker+status)."""
     t = TranscriptBuffer()
     t.apply({"type": "thinking_chunk", "text": "Thinking..."})
