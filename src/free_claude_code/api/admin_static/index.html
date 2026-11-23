@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Free Claude Code Admin</title>
+    <title>CellCode</title>
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="/admin/assets/__FCC_VERSION__/admin.css" />
     <link rel="stylesheet" href="/admin/assets/__FCC_VERSION__/code_sessions.css" />
@@ -18,28 +18,36 @@
             href="https://github.com/Alishahryar1/free-claude-code"
             target="_blank"
             rel="noopener noreferrer"
-            aria-label="Open Free Claude Code on GitHub"
+            aria-label="Open the original Free Claude Code project on GitHub"
           >
             <img src="/admin/assets/__FCC_VERSION__/app-icon.svg" alt="" />
           </a>
           <div>
-            <h1>Free Claude Code</h1>
+            <h1>CellCode</h1>
             <p>Server Control · v__FCC_VERSION__</p>
           </div>
         </div>
-        <nav id="sectionNav" class="section-nav" aria-label="Admin views"></nav>
+        <div id="sessionSidebar" class="session-sidebar" aria-label="Code sessions"></div>
       </aside>
+      <div id="sidebarBackdrop" class="sidebar-backdrop" hidden></div>
 
       <main class="main">
         <header class="topbar">
+          <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-label="Toggle sessions sidebar" aria-controls="sessionSidebar" aria-expanded="false">&#9776;</button>
           <div class="page-heading">
-            <h2 id="pageTitle">Providers</h2>
+            <h2 id="pageTitle">Code sessions</h2>
             <span id="startupMessage" class="startup-message" role="status" hidden></span>
+          </div>
+          <div class="settings-menu-wrap">
+            <button id="settingsMenuButton" class="secondary-button settings-menu-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="settingsMenu">Menu <span aria-hidden="true">&#9662;</span></button>
+            <div id="settingsMenu" class="settings-menu" role="menu" hidden>
+              <nav id="sectionNav" class="section-nav" aria-label="Admin views"></nav>
+            </div>
           </div>
         </header>
 
         <div id="adminViews" class="admin-views">
-          <section id="view-providers" class="admin-view active" data-view="providers">
+          <section id="view-providers" class="admin-view" data-view="providers" hidden>
             <div id="providerGroups"></div>
             <div
               id="providersSections"
@@ -234,7 +242,7 @@
             </dialog>
           </section>
 
-          <section id="view-code" class="admin-view" data-view="code" hidden>
+          <section id="view-code" class="admin-view active" data-view="code">
             <div id="codeRoot" class="code-root session-root" aria-live="off"></div>
           </section>
         </div>

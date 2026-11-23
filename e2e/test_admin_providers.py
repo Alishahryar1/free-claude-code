@@ -22,6 +22,7 @@ def test_retired_provider_is_absent_and_default_setup_remains_available(
     card.locator("[data-provider-settings]").click()
     expect(page.get_by_role("button", name="Add key", exact=True)).to_be_focused()
     close_provider(page)
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Model Config", exact=True).click()
     expect(page.locator("#field-MODEL")).to_have_value(
         "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
@@ -35,7 +36,7 @@ def _open_admin(
 ) -> None:
     page.set_viewport_size(viewport)
     page.emulate_media(reduced_motion="reduce")
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     expect(page.locator("#messageArea")).to_have_text("")
 
 
@@ -73,7 +74,6 @@ def test_missing_provider_configuration_opens_modal_and_focuses_exact_field(
     expect(key_input).to_be_focused()
     if desktop:
         sidebar = page.locator(".sidebar")
-        expect(sidebar).to_have_css("position", "sticky")
         assert (
             round(
                 float(
@@ -91,7 +91,11 @@ def test_desktop_sidebar_stays_pinned_at_document_bottom(
     _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
     sidebar = page.locator(".sidebar")
 
-    page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
+    page.evaluate(
+        "() => { const views = document.getElementById('adminViews');"
+        " views.scrollTop = views.scrollHeight; }"
+    )
+    assert page.evaluate("document.documentElement.scrollHeight <= window.innerHeight")
 
     sidebar_top = float(
         sidebar.evaluate("element => element.getBoundingClientRect().top")
@@ -124,6 +128,7 @@ def test_configured_provider_check_keeps_readiness_and_adds_models(
     )
 
     close_provider(page)
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Model Config", exact=True).click()
     fable = page.get_by_role(
         "combobox",
@@ -390,7 +395,7 @@ def test_local_availability_failure_does_not_fail_admin_loading(
         lambda route: pending.append(route),
     )
     with page.expect_request("**/admin/api/providers/lmstudio/local-status"):
-        page.goto(f"{admin_base_url}/admin")
+        page.goto(f"{admin_base_url}/admin/providers")
     open_provider(page, "nvidia_nim")
     expect(api_key_input(page, "NVIDIA_NIM_API_KEY")).to_be_editable()
     close_provider(page)

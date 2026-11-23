@@ -13,7 +13,8 @@ def admin_client_files(tmp_path):
 def test_damaged_legacy_history_warns_without_blocking_settings(
     page, admin_base_url, admin_client_files
 ):
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Messaging", exact=True).click()
     notice = page.locator("#startupMessage")
     expect(notice).to_be_visible()
@@ -23,5 +24,6 @@ def test_damaged_legacy_history_warns_without_blocking_settings(
     # A preserved source is not a second writer, and the server stays usable.
     response = page.request.get(f"{admin_base_url}/health")
     assert response.ok
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Providers", exact=True).click()
     expect(notice).to_be_hidden()

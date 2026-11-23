@@ -22,7 +22,7 @@ def add_key(dialog, value):
 def test_keyboard_reorder_replace_remove_and_reopen_preserve_saved_keys(
     page: Page, admin_base_url: str, tmp_path
 ):
-    page.goto(admin_base_url + "/admin")
+    page.goto(admin_base_url + "/admin/providers")
     dialog = open_provider(page, "nvidia_nim")
     for value in ("first-secret", "second-secret", "third-secret"):
         add_key(dialog, value)
@@ -61,7 +61,7 @@ def test_keyboard_reorder_replace_remove_and_reopen_preserve_saved_keys(
 def test_adding_row_finishes_move_before_next_keyboard_cancel(
     page: Page, admin_base_url: str, tmp_path
 ):
-    page.goto(admin_base_url + "/admin")
+    page.goto(admin_base_url + "/admin/providers")
     dialog = open_provider(page, "nvidia_nim")
     add_key(dialog, "draft-first")
     add_key(dialog, "draft-second")
@@ -95,7 +95,7 @@ def test_adding_row_finishes_move_before_next_keyboard_cancel(
 def test_actual_drag_reorders_without_exposing_saved_values(
     page: Page, admin_base_url: str, tmp_path
 ):
-    page.goto(admin_base_url + "/admin")
+    page.goto(admin_base_url + "/admin/providers")
     dialog = open_provider(page, "nvidia_nim")
     for value in ("drag-first", "drag-second", "drag-third"):
         add_key(dialog, value)
@@ -124,7 +124,7 @@ def test_actual_drag_reorders_without_exposing_saved_values(
 def test_blank_duplicates_and_cancel_preserve_the_whole_draft(
     page: Page, admin_base_url: str
 ):
-    page.goto(admin_base_url + "/admin")
+    page.goto(admin_base_url + "/admin/providers")
     dialog = open_provider(page, "nvidia_nim")
     add_key(dialog, "same-key")
     add_key(dialog, " same-key ")
@@ -160,7 +160,7 @@ def test_warning_save_refreshes_masks_and_is_clean_then_rechecks_retained_rows(
     monkeypatch.setattr(
         "free_claude_code.runtime.application.check_credentials", warnings
     )
-    page.goto(admin_base_url + "/admin")
+    page.goto(admin_base_url + "/admin/providers")
     page.locator("#field-HTTP_READ_TIMEOUT").fill("181")
     dialog = open_provider(page, "nvidia_nim")
     add_key(dialog, "warning-first")
@@ -192,7 +192,7 @@ def test_warning_save_refreshes_masks_and_is_clean_then_rechecks_retained_rows(
 def test_process_owned_list_disables_all_editing_controls(
     page: Page, admin_base_url: str
 ):
-    page.goto(admin_base_url + "/admin")
+    page.goto(admin_base_url + "/admin/providers")
     dialog = open_provider(page, "nvidia_nim")
     expect(dialog.locator(".api-key-row input")).to_have_count(2)
     for control in dialog.locator(
@@ -204,7 +204,7 @@ def test_process_owned_list_disables_all_editing_controls(
 def test_conflict_preserves_draft_and_reopening_loads_fresh_references(
     page: Page, admin_base_url: str
 ):
-    page.goto(admin_base_url + "/admin")
+    page.goto(admin_base_url + "/admin/providers")
     dialog = open_provider(page, "nvidia_nim")
     add_key(dialog, "stale-draft")
     page.route(
@@ -235,7 +235,7 @@ def test_conflict_preserves_draft_and_reopening_loads_fresh_references(
 def test_either_shared_provider_edits_the_same_ordered_list(
     page: Page, admin_base_url: str, tmp_path, provider_pair, key
 ):
-    page.goto(admin_base_url + "/admin")
+    page.goto(admin_base_url + "/admin/providers")
     dialog = open_provider(page, provider_pair[0])
     add_key(dialog, "shared-first")
     add_key(dialog, "shared-second")
@@ -259,7 +259,7 @@ def test_long_list_scrolls_and_escape_cancels_only_the_keyboard_move(
     page: Page, admin_base_url: str, tmp_path
 ):
     page.set_viewport_size({"width": 1280, "height": 720})
-    page.goto(admin_base_url + "/admin")
+    page.goto(admin_base_url + "/admin/providers")
     dialog = open_provider(page, "nvidia_nim")
     for number in range(33):
         add_key(dialog, f"long-list-key-{number}")
@@ -305,7 +305,7 @@ def test_custom_warning_save_and_rename_retain_masked_rows(
     monkeypatch.setattr(
         "free_claude_code.runtime.application.check_credentials", unavailable
     )
-    page.goto(admin_base_url + "/admin")
+    page.goto(admin_base_url + "/admin/providers")
     page.get_by_role("button", name="Add provider", exact=True).click()
     dialog = page.locator("#providerDialog")
     dialog.get_by_label("Name", exact=True).fill("Warning gateway")
@@ -350,7 +350,7 @@ def test_saved_warning_followed_by_reload_failure_requires_fresh_masks(
     monkeypatch.setattr(
         "free_claude_code.runtime.application.check_credentials", unavailable
     )
-    page.goto(admin_base_url + "/admin")
+    page.goto(admin_base_url + "/admin/providers")
     dialog = open_provider(page, "nvidia_nim")
     add_key(dialog, "saved-before-reload-failed")
     page.route(

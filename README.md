@@ -1,13 +1,8 @@
 <div align="center">
 
-<h1>
-  <picture>
-    <source media="(prefers-color-scheme: light)" srcset="assets/free-claude-code-wordmark-light.svg">
-    <img src="assets/free-claude-code-wordmark-dark.svg" alt="Free Claude Code" width="610">
-  </picture>
-</h1>
+<img src="assets/cellcode-logo.png" alt="CellCode" width="610">
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-2e7d32.svg?style=for-the-badge)](https://github.com/Alishahryar1/free-claude-code/blob/main/LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-2e7d32.svg?style=for-the-badge)](LICENSE)
 [![Python 3.14](https://img.shields.io/badge/python-3.14-3776ab.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Package Manager: uv](assets/package-manager-uv.svg)](https://github.com/astral-sh/uv)
 [![Testing: Pytest](https://img.shields.io/badge/Testing-Pytest-ad1457.svg?style=for-the-badge)](https://github.com/pytest-dev/pytest)
@@ -15,13 +10,37 @@
 [![Formatter: Ruff](https://img.shields.io/badge/Formatter-ruff-bf4b00.svg?style=for-the-badge)](https://github.com/astral-sh/ruff)
 [![Logging: Loguru](https://img.shields.io/badge/logging-loguru-00695c.svg?style=for-the-badge)](https://github.com/Delgan/loguru)
 
-[Quick Start](#quick-start) · [Providers](#choose-a-provider) · [Integrations](#integrations) · [API](#use-the-api-directly) · [Phone](#use-from-your-phone) · [Manage](#manage-your-installation)
+**One workbench for coding agents and AI models from every provider.**
+
+[Quick Start](#quick-start) · [Workbench](#the-cellcode-workbench) · [Providers](#choose-a-provider) · [Integrations](#integrations) · [API](#use-the-api-directly) · [Phone](#use-from-your-phone) · [Manage](#manage-your-installation)
 
 </div>
 
 <p align="center">
-  <em>Independent open-source project. Not affiliated with or endorsed by Anthropic. Claude and Claude Code are trademarks of Anthropic.</em>
+  <em>CellCode is an independent fork of <a href="https://github.com/Alishahryar1/free-claude-code">Free Claude Code</a> by Ali Khokhar, released under the AGPL-3.0. Not affiliated with or endorsed by Anthropic. Claude and Claude Code are trademarks of Anthropic.</em>
 </p>
+
+## What Is CellCode
+
+CellCode connects coding agents such as Claude Code, Codex, Aider, and Cline to models from many providers, free, paid, subscription, or local, and gives you one place to work with them.
+
+It keeps the routing engine of Free Claude Code (streaming, tool use, retries, fallbacks, and every supported provider) and replaces its admin interface with a workbench. Chats come first, the way they do in an editor, and provider setup moves out of the way.
+
+> In the sections below, **FCC** means the underlying Free Claude Code engine. The commands (`fcc-server`, `fcc-claude`, `fcc-doctor`, and so on) keep their original names.
+
+## The CellCode Workbench
+
+<div align="center">
+  <img src="assets/browser-code-session.png" alt="CellCode workbench: session list on the left, terminal-style chat in the center" width="700">
+  <p><em>Sessions on the left, a terminal-style chat in the center.</em></p>
+</div>
+
+- **Chat first.** The app opens on the chat area, with your sessions already listed. There is no landing page of provider cards.
+- **Sessions sidebar.** Every code session is listed on the left with search, a running indicator, and a **+ New** button. Switch sessions in one click, with no back arrow in between.
+- **Terminal-style chat.** Monospace text, a `❯` prompt for your messages, `●` for replies, and collapsible tool and thinking blocks.
+- **Quick model switching.** Provider, model, reasoning effort, harness, and permission mode sit in the chat header, so you can change the model without leaving the session.
+- **Settings in one menu.** Providers, Model Config, Messaging, and Integrations live in the **Menu** dropdown at the top right. They are also reachable directly at `/admin/providers`, `/admin/model_config`, `/admin/messaging`, and `/admin/integrations`.
+- **Works on small screens.** The sidebar becomes a slide-in drawer.
 
 ## Features
 
@@ -59,7 +78,20 @@ Free-tier availability and limits are controlled by each provider and may change
 
 <a id="install"></a>
 
-### 1. Install
+### 1. Get CellCode
+
+Install [uv](https://docs.astral.sh/uv/) (it fetches the Python version the project needs), then run directly from the checkout:
+
+```bash
+git clone https://github.com/roma-nurashvili/Arcane-Code.git
+cd Arcane-Code
+uv sync
+```
+
+<details>
+<summary><strong>Upstream installers (without the CellCode interface)</strong></summary>
+
+The one-line installers below install the **original Free Claude Code release**, not this fork. Use them if you only want the upstream admin interface.
 
 macOS/Linux:
 
@@ -75,35 +107,23 @@ Windows PowerShell:
 
 When prompted, choose at least one coding agent and optionally enable [RTK](https://github.com/rtk-ai/rtk) + [Headroom](https://github.com/headroomlabs-ai/headroom) token optimization for supported agents.
 
-### 2. Start FCC
+</details>
 
-#### Windows
-
-Open **Free Claude Code** from your desktop or Start menu.
-
-#### macOS
-
-Open **Free Claude Code** from your desktop or Applications folder.
-
-#### Linux
-
-Run:
+### 2. Start CellCode
 
 ```bash
-fcc-server
+uv run fcc-server
 ```
 
-FCC opens the Admin UI after starting. On Windows and macOS, use the tray or
-menu-bar icon to open Admin, restart, or quit. When using `fcc-server`, keep its
-terminal open.
+The server opens the workbench in your browser. Keep its terminal open. Use `uv run` for Python commands in this checkout rather than a global Python interpreter.
 
 <a id="nvidia-nim-provider"></a>
 
 ### 3. Configure NVIDIA NIM
 
 1. Create an API key at [build.nvidia.com/settings/api-keys](https://build.nvidia.com/settings/api-keys).
-2. Open the Admin UI URL from the server log.
-3. Open NVIDIA NIM in **Providers**, click **Add key**, paste the key, and click **Save**.
+2. Open the workbench URL from the server log, then choose **Menu → Providers**.
+3. Open NVIDIA NIM, click **Add key**, paste the key, and click **Save**.
 4. Leave `MODEL` on the default `nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b`, or search the model dropdown and select another model.
 5. Click **Apply** to save your model selection.
 
@@ -111,7 +131,7 @@ To protect the local proxy with a bearer token, enable **Proxy Authentication**
 in Admin.
 
 <div align="center">
-  <img src="assets/admin-page.png" alt="Free Claude Code Admin UI" width="700">
+  <img src="assets/admin-page.png" alt="Provider settings page" width="700">
 </div>
 
 ### 4. Run Your Coding Agent
@@ -550,6 +570,8 @@ After installing local support, restart `fcc-server`. In **Admin UI → Messagin
 
 ## Manage Your Installation
 
+> These instructions manage the **upstream release** set up by the official installers. A CellCode checkout is updated with `git pull` followed by `uv sync`, and removed by deleting its folder.
+
 Run `fcc-server --version` to check the installed version without starting FCC.
 
 ### Update
@@ -618,7 +640,8 @@ For a problem after installation, run the command below and paste its output int
 fcc-doctor
 ```
 
-- [Report bugs or request features](https://github.com/Alishahryar1/free-claude-code/issues)
+- [Report CellCode bugs or request features](https://github.com/roma-nurashvili/Arcane-Code/issues)
+- [Upstream project: Free Claude Code](https://github.com/Alishahryar1/free-claude-code)
 - [Contributing guide](CONTRIBUTING.md)
 
 ## Maintainers
@@ -628,3 +651,5 @@ See [MAINTAINERS.md](MAINTAINERS.md) for the project's maintainers and their are
 ## License
 
 GNU Affero General Public License version 3 only (`AGPL-3.0-only`). See [LICENSE](LICENSE) for details.
+
+Copyright (c) 2026 Ali Khokhar for the original Free Claude Code. CellCode modifications: the workbench interface, branding, and related tests, by Roma Nurashvili. As the AGPL requires, the source of this modified version stays available under the same license.

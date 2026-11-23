@@ -9,7 +9,7 @@ from e2e.provider_support import api_key_input, close_provider, open_provider
 def test_provider_titles_link_to_websites_and_every_logo_loads(
     page: Page, admin_base_url: str
 ) -> None:
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     expect(page.locator("#messageArea")).to_have_text("")
     cards = page.locator(".provider-card")
     expect(cards.first).to_be_visible()
@@ -55,7 +55,7 @@ def test_provider_website_opens_in_new_tab_and_preserves_pending_settings(
         "https://build.nvidia.com/**",
         lambda route: route.fulfill(content_type="text/html", body="Provider website"),
     )
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     timeout = page.locator("#field-HTTP_READ_TIMEOUT")
     timeout.fill("181")
     with page.expect_popup() as opened:
@@ -74,7 +74,7 @@ def test_provider_card_buttons_align_at_the_bottom_of_each_desktop_row(
     page: Page, admin_base_url: str
 ) -> None:
     page.set_viewport_size({"width": 1440, "height": 1000})
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     expect(page.locator("#messageArea")).to_have_text("")
     positions = page.locator(
         '[data-provider-group="cloud"] .provider-card'
@@ -95,7 +95,7 @@ def test_provider_card_buttons_align_at_the_bottom_of_each_desktop_row(
 def test_provider_groups_sort_each_subgroup_and_keep_setup_separate_from_health(
     page: Page, admin_base_url: str
 ) -> None:
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     expect(page.locator("#messageArea")).to_have_text("")
     groups = page.locator("[data-provider-group]")
     assert groups.locator("h3").all_text_contents() == [
@@ -135,7 +135,7 @@ def test_provider_groups_sort_each_subgroup_and_keep_setup_separate_from_health(
 def test_modal_groups_all_provider_fields_and_discards_cancelled_edits(
     page: Page, admin_base_url: str, dismiss: str
 ) -> None:
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     dialog = open_provider(page, "azure_openai")
     for key in ("AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_PROXY"):
         expect(dialog.locator(f"#field-{key}")).to_be_visible()
@@ -191,6 +191,7 @@ def test_modal_save_applies_only_its_changes_and_preserves_other_page_edits(
     page.goto(f"{admin_base_url}/admin/model_config")
     model = page.locator("#field-MODEL_SONNET")
     model.fill("open_router/pending-model")
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Providers", exact=True).click()
     dialog = open_provider(page, "nvidia_nim")
     api_key_input(page, "NVIDIA_NIM_API_KEY").fill("new-key")
@@ -203,5 +204,6 @@ def test_modal_save_applies_only_its_changes_and_preserves_other_page_edits(
         {"value": "new-key"}
     ]
     expect(page.locator("#dirtyState")).to_have_text("1 unsaved change")
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Model Config", exact=True).click()
     expect(model).to_have_value("open_router/pending-model")

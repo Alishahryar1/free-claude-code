@@ -28,6 +28,13 @@ const MASKED_SECRET = "********";
 const NULL_VALUE = "__FCC_NULL__";
 const VIEW_GROUPS = [
   {
+    id: "code",
+    label: "Code sessions",
+    title: "Code sessions",
+    sections: [],
+    containerId: "codeRoot",
+  },
+  {
     id: "providers",
     label: "Providers",
     title: "Providers",
@@ -55,20 +62,55 @@ const VIEW_GROUPS = [
     sections: [],
     containerId: "view-integrations",
   },
-  {
-    id: "code",
-    label: "Code sessions",
-    title: "Code sessions",
-    sections: [],
-    containerId: "codeRoot",
-  },
 ];
 
 function viewFromLocation() {
-  return window.location.pathname.split("/")[2] || "providers";
+  return window.location.pathname.split("/")[2] || "code";
 }
 
 const byId = (id) => document.getElementById(id);
+
+let lastCodePath = window.location.pathname.startsWith("/admin/code") ? window.location.pathname : "/admin/code";
+
+function closeSettingsMenu() {
+  byId("settingsMenu").hidden = true;
+  byId("settingsMenuButton").setAttribute("aria-expanded", "false");
+}
+
+function setupSettingsMenu() {
+  const toggle = byId("settingsMenuButton");
+  const menu = byId("settingsMenu");
+  toggle.addEventListener("click", () => {
+    menu.hidden = !menu.hidden;
+    toggle.setAttribute("aria-expanded", String(!menu.hidden));
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!menu.hidden && !menu.contains(event.target) && !toggle.contains(event.target)) closeSettingsMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !menu.hidden) {
+      closeSettingsMenu();
+      toggle.focus();
+    }
+  });
+}
+
+function setupSidebarToggle() {
+  const shell = document.querySelector(".app-shell");
+  const toggle = byId("sidebarToggle");
+  const backdrop = byId("sidebarBackdrop");
+  const set = (open) => {
+    shell.classList.toggle("sidebar-open", open);
+    toggle.setAttribute("aria-expanded", String(open));
+    backdrop.hidden = !open;
+  };
+  toggle.addEventListener("click", () => set(!shell.classList.contains("sidebar-open")));
+  backdrop.addEventListener("click", () => set(false));
+  window.addEventListener("fcc:close-sidebar", () => set(false));
+}
+
+setupSettingsMenu();
+setupSidebarToggle();
 
 function sourceLabel(source) {
   const labels = {
@@ -253,6 +295,7 @@ function renderNav() {
       button.setAttribute("aria-current", "page");
     }
     button.addEventListener("click", () => {
+      closeSettingsMenu();
       navigateToView(view.id);
     });
     nav.appendChild(button);
@@ -271,7 +314,6 @@ function setActiveView(viewId, { scroll = false } = {}) {
   const sessionActive = activeView.id === "code";
   document.querySelector(".app-shell").classList.toggle("session-active", sessionActive);
   document.querySelector(".main").classList.toggle("session-main", sessionActive);
-  document.querySelector(".topbar").hidden = sessionActive;
   document.querySelector(".action-bar").hidden = sessionActive || activeView.id === "integrations";
 
   document.querySelectorAll(".nav-link").forEach((link) => {
@@ -291,10 +333,12 @@ function setActiveView(viewId, { scroll = false } = {}) {
   });
 
   if (scroll) {
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    byId("adminViews").scrollTo({ top: 0, behavior: "smooth" });
   }
-  if (activeView.id === "code") window.CodeSessions.activate(window.location.pathname);
-  else window.CodeSessions.deactivate();
+  if (activeView.id === "code") {
+    lastCodePath = window.location.pathname;
+    window.CodeSessions.activate(lastCodePath);
+  } else window.CodeSessions.deactivate();
   if (activeView.id === "integrations") {
     refreshClaudeIntegration();
     refreshClaudeOnboarding();
@@ -307,7 +351,7 @@ function setActiveView(viewId, { scroll = false } = {}) {
 }
 
 function navigateToView(viewId) {
-  const target = viewId === "providers" ? "/admin" : `/admin/${viewId}`;
+  const target = viewId === "code" ? lastCodePath : `/admin/${viewId}`;
   if (window.location.pathname + window.location.search !== target) {
     window.history.pushState({}, "", target);
   }

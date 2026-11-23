@@ -11,18 +11,21 @@ from e2e.provider_support import close_provider, open_provider
 
 def _open_models(page: Page, admin_base_url: str) -> None:
     page.emulate_media(reduced_motion="reduce")
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     expect(page.locator("#messageArea")).to_have_text("")
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Model Config", exact=True).click()
 
 
 def _refresh_openrouter_models(page: Page) -> None:
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Providers", exact=True).click()
     card = page.locator('[data-provider="open_router"]')
     dialog = open_provider(page, "open_router")
     dialog.get_by_role("button", name="Refresh models", exact=True).click()
     expect(card.locator(".provider-check-result")).to_have_text("3 models available")
     close_provider(page)
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Model Config", exact=True).click()
 
 
@@ -319,6 +322,7 @@ def test_fallback_editor_pairs_match_existing_controls_and_save_effort(
     assert saved.value.json()["applied"] is True
     expect(page.locator("#dirtyState")).to_have_text("No changes")
     page.reload()
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Model Config", exact=True).click()
     expect(
         editor.get_by_label(
@@ -598,11 +602,13 @@ def test_model_suggestions_keep_server_order_after_provider_check_and_late_respo
         "**/admin/api/providers/open_router/test",
         lambda route: route.fulfill(json={"ok": True, "models": ["new-model"]}),
     )
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Providers", exact=True).click()
     dialog = open_provider(page, "open_router")
     with page.expect_request("**/admin/api/models"):
         dialog.get_by_role("button", name="Refresh models", exact=True).click()
     close_provider(page)
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Model Config", exact=True).click()
     expect(field.locator("input")).to_have_value("open_router/custom-unsaved")
     field.locator("input").fill("")

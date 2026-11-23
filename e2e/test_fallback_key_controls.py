@@ -62,6 +62,7 @@ def test_numbered_rows_edit_reorder_save_and_reopen(page: Page, admin_base_url: 
     assert saved.value.json()["applied"] is True
     expect(page.locator("#dirtyState")).to_have_text("No changes")
     page.reload()
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Model Config", exact=True).click()
     assert _fallbacks(editor) == expected
     expect(editor.get_by_label("API key for groq/model-a", exact=True)).to_have_value(
@@ -177,6 +178,7 @@ def test_provider_reload_keeps_draft_and_marks_removed_number_unavailable(
     page: Page, admin_base_url: str
 ):
     _open_models(page, admin_base_url)
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Providers", exact=True).click()
     dialog = open_provider(page, "nvidia_nim")
     for value in ("first", "second", "third"):
@@ -184,18 +186,21 @@ def test_provider_reload_keeps_draft_and_marks_removed_number_unavailable(
     dialog.get_by_role("button", name="Save", exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(page.locator("#applyButton")).to_have_text("Apply")
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Model Config", exact=True).click()
     editor = page.locator('.field[data-key="MODEL_FALLBACKS"]')
     editor.locator("#field-MODEL_FALLBACKS-add").fill("nvidia_nim/draft")
     editor.get_by_label("Fallback API key", exact=True).select_option("3")
     editor.get_by_role("button", name="Add fallback", exact=True).click()
     page.locator("#field-MODEL_SONNET").fill("groq/unsaved")
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Providers", exact=True).click()
     dialog = open_provider(page, "nvidia_nim")
     dialog.get_by_role("button", name="Remove Key 3", exact=True).click()
     dialog.get_by_role("button", name="Save", exact=True).click()
     expect(dialog).not_to_be_visible()
     expect(page.locator("#applyButton")).to_have_text("Apply")
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Model Config", exact=True).click()
     expect(page.locator("#field-MODEL_SONNET")).to_have_value("groq/unsaved")
     key = editor.get_by_label("API key for nvidia_nim/draft", exact=True)

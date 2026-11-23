@@ -21,7 +21,7 @@ def test_saved_unverified_notice_names_the_credential_owners(
     monkeypatch.setattr(
         "free_claude_code.runtime.application.check_credentials", check_credentials
     )
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     dialog = open_provider(page, provider_id)
     api_key_input(page, key).fill("e2e-saved-unverified")
     dialog.get_by_role("button", name="Save", exact=True).click()
@@ -47,7 +47,7 @@ def test_apply_is_the_only_config_action_and_retains_invalid_edits(
         lambda request: record_config_mutation(request.method, request.url),
     )
     page.emulate_media(reduced_motion="reduce")
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     expect(page.locator("#messageArea")).to_have_text("")
 
     expect(page.get_by_role("button", name="Validate", exact=True)).to_have_count(0)
@@ -102,11 +102,13 @@ def test_key_rejection_retains_edits_and_restores_focus(
         )
 
     page.route("**/admin/api/config/apply", reject_key)
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     expect(page.locator("#messageArea")).to_have_text("")
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Model Config", exact=True).click()
     other = page.locator("#field-MODEL_SONNET")
     other.fill("open_router/other-edit")
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Providers", exact=True).click()
     open_provider(page, "mistral")
     key = api_key_input(page, "MISTRAL_API_KEY")
@@ -167,7 +169,7 @@ def test_unverified_warning_survives_apply(
             json={"status": "running", "instance_id": "new-server"}
         ),
     )
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     expect(page.locator("#messageArea")).to_have_text("")
     open_provider(page, "nvidia_nim")
     api_key_input(page, "NVIDIA_NIM_API_KEY").fill("new-key")
@@ -211,7 +213,7 @@ def test_apply_network_error_unlocks_form_and_keeps_edits(
     page: Page, admin_base_url: str
 ):
     page.route("**/admin/api/config/apply", lambda route: route.abort())
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     expect(page.locator("#messageArea")).to_have_text("")
     open_provider(page, "nvidia_nim")
     key = api_key_input(page, "NVIDIA_NIM_API_KEY")
@@ -242,7 +244,7 @@ def test_restart_waits_for_a_new_running_server(page: Page, admin_base_url: str)
             }
         ),
     )
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     expect(page.locator("#messageArea")).to_have_text("")
     page.wait_for_function("!state.startupRequest && !state.startupTimer")
     page.route(status_url, lambda route: route.fulfill(json=status))
@@ -308,7 +310,7 @@ def test_restart_timeout_can_reconnect_without_resubmitting_keys(
 
     page.route("**/admin/api/config/apply", apply_result)
     page.route("**/admin/api/status", status_result)
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     expect(page.locator("#messageArea")).to_have_text("")
     page.clock.install()
     open_provider(page, "nvidia_nim")
@@ -371,7 +373,7 @@ def test_restart_to_another_local_origin_keeps_the_warning(
             json={"status": "running", "instance_id": "new-server"},
         ),
     )
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     expect(page.locator("#messageArea")).to_have_text("")
     open_provider(page, "nvidia_nim")
     api_key_input(page, "NVIDIA_NIM_API_KEY").fill("new-key")

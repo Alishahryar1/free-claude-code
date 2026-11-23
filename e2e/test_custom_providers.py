@@ -36,7 +36,7 @@ def add_provider(page: Page, name: str) -> str:
 def test_custom_provider_save_rename_and_remove_preserve_unrelated_draft(
     page: Page, admin_base_url: str
 ):
-    page.goto(admin_base_url + "/admin")
+    page.goto(admin_base_url + "/admin/providers")
     expect(page.locator("#messageArea")).to_have_text("")
     page.locator("#field-HTTP_READ_TIMEOUT").fill("181")
     provider_id = add_provider(page, "Work gateway")
@@ -62,12 +62,13 @@ def test_custom_provider_save_rename_and_remove_preserve_unrelated_draft(
 def test_custom_provider_sorting_selection_and_blocked_removal(
     page: Page, admin_base_url: str
 ):
-    page.goto(admin_base_url + "/admin")
+    page.goto(admin_base_url + "/admin/providers")
     add_provider(page, "Zulu gateway")
     selected = add_provider(page, "Alpha gateway")
     expect(page.locator("#providers-custom .provider-title")).to_have_text(
         ["Alpha gateway", "Zulu gateway"]
     )
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Model Config", exact=True).click()
     model = page.locator("#field-MODEL_HAIKU")
     model.fill("Alpha gateway")
@@ -75,6 +76,7 @@ def test_custom_provider_sorting_selection_and_blocked_removal(
     expect(model).to_have_value(f"{selected}/org/model-one")
     page.locator("#applyButton").click()
     expect(page.locator("#dirtyState")).to_have_text("No changes")
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Providers", exact=True).click()
     page.locator(f'[data-provider="{selected}"]').get_by_role(
         "button", name="Edit", exact=True
@@ -85,7 +87,7 @@ def test_custom_provider_sorting_selection_and_blocked_removal(
 
 
 def test_custom_dialog_cancel_and_format_changes(page: Page, admin_base_url: str):
-    page.goto(admin_base_url + "/admin")
+    page.goto(admin_base_url + "/admin/providers")
     page.get_by_role("button", name="Add provider", exact=True).click()
     dialog = page.locator("#providerDialog")
     dialog.get_by_label("Reasoning format", exact=True).select_option("thinking")
@@ -108,7 +110,7 @@ def test_custom_dialog_cancel_and_format_changes(page: Page, admin_base_url: str
 def test_duplicate_custom_provider_keeps_failed_save_draft(
     page: Page, admin_base_url: str
 ):
-    page.goto(admin_base_url + "/admin")
+    page.goto(admin_base_url + "/admin/providers")
     add_provider(page, "Gateway")
     page.get_by_role("button", name="Add provider", exact=True).click()
     dialog = page.locator("#providerDialog")
@@ -127,7 +129,7 @@ def test_duplicate_custom_provider_keeps_failed_save_draft(
 def test_saved_nonchat_format_opens_clean_and_can_switch_to_native_chat_fields(
     page: Page, admin_base_url: str
 ):
-    page.goto(admin_base_url + "/admin")
+    page.goto(admin_base_url + "/admin/providers")
     provider_id = add_provider(page, "Protocol gateway")
     card = page.locator(f'[data-provider="{provider_id}"]')
     card.get_by_role("button", name="Edit", exact=True).click()

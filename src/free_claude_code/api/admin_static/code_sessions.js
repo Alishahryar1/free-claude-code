@@ -38,6 +38,7 @@
   const sends = new Set();
   let api,
     root,
+    sidebar,
     feed,
     epoch,
     connected = false,
@@ -234,9 +235,11 @@
         notice = data.message;
     }
     if (
-      !selected &&
-      (type === "session.deleted" ||
-        data.session?.revision !== previousRevision)
+      type === "session.deleted" ||
+      (!selected && data.session?.revision !== previousRevision) ||
+      (data.session &&
+        data.session.revision !== previousRevision &&
+        !visibleIds.includes(data.session_id))
     )
       void refreshLibrary();
     render(outputChanged);
@@ -313,7 +316,7 @@
     listAgain = true;
     if (listFlight) return listFlight;
     listFlight = (async () => {
-      while (listAgain && !selected) {
+      while (listAgain) {
         listAgain = false;
         try {
           await list();
@@ -549,7 +552,10 @@
   function navigate(id) {
     const path = id ? `/admin/code/${id}` : "/admin/code";
     history.pushState({}, "", path);
-    activate(path);
+    window.dispatchEvent(new Event("fcc:close-sidebar"));
+    if (root?.closest(".admin-view")?.hidden)
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    else activate(path);
   }
   function activate(path) {
     viewActive = true;
@@ -572,7 +578,10 @@
       notice = "";
       render();
       if (connected && epoch) {
-        const reading = id ? detail(id) : refreshLibrary();
+        const reading = Promise.all([
+          id ? detail(id) : Promise.resolve(),
+          !id || !visibleIds.length ? refreshLibrary() : Promise.resolve(),
+        ]);
         const token = viewToken;
         void reading.catch((error) => {
           if (token === viewToken) restart(error.message);
@@ -917,6 +926,89 @@
     parent.append(node);
     return node;
   }
+  function buildSidebar() {
+    if (!sidebar || sidebar.dataset.built) return;
+    sidebar.dataset.built = "true";
+    const create = button("+ New", newSession, "primary-button");
+    create.id = "codeNew";
+    create.title = "New code session";
+    const header = element("div", undefined, "session-sidebar-header");
+    header.append(element("h2", "Sessions"), create);
+    const search = UI.search("Search titles and folders", query, (value) => {
+      query = value;
+      visibleIds = [];
+      nextCursor = null;
+      ++libraryToken;
+      render();
+      void refreshLibrary();
+    });
+    const library = element("div", undefined, "session-list");
+    library.id = "codeLibrary";
+    const more = button(
+      "Load more",
+      async () => {
+        libraryLoading = true;
+        render();
+        try {
+          await list(nextCursor);
+        } catch (error) {
+          restart(error.message);
+        }
+        libraryLoading = false;
+        render();
+      },
+      "secondary-button session-load-more",
+    );
+    more.id = "codeMore";
+    sidebar.append(header, search, library, more);
+  }
+  function renderLibrary() {
+    if (!sidebar?.dataset.built) return;
+    const library = sidebar.querySelector("#codeLibrary");
+    for (const child of [...library.children])
+      if (!child.dataset.id || !visibleIds.includes(child.dataset.id))
+        child.remove();
+    for (const record of visibleIds
+      .map((id) => records.get(id))
+      .filter((record) => record?.session)
+      .sort(
+        (a, b) =>
+          b.session.updated_at - a.session.updated_at ||
+          b.id.localeCompare(a.id),
+      )) {
+      let card = library.querySelector(`[data-id="${CSS.escape(record.id)}"]`);
+      if (!card) {
+        card = UI.card("", "", "", () => navigate(record.id));
+        card.dataset.id = record.id;
+      }
+      card.children[0].textContent = record.session.title;
+      card.children[1].textContent = record.session.cwd;
+      card.children[2].textContent = busy(record)
+        ? "Running"
+        : record.session.error || record.session.model;
+      card.classList.toggle("active", record.id === selected);
+      card.classList.toggle("busy", busy(record));
+      if (record.id === selected) card.setAttribute("aria-current", "true");
+      else card.removeAttribute("aria-current");
+      library.append(card);
+    }
+    if (!library.children.length)
+      library.append(
+        element(
+          "div",
+          synchronized
+            ? query
+              ? "No matching sessions."
+              : "No sessions yet."
+            : "Loading sessions…",
+          "session-empty",
+        ),
+      );
+    sidebar.querySelector("#codeNew").disabled = !synchronized;
+    const more = sidebar.querySelector("#codeMore");
+    more.hidden = !nextCursor;
+    more.disabled = !synchronized || libraryLoading;
+  }
   function shell() {
     clearActivity();
     dismissDialog();
@@ -1046,8 +1138,8 @@
       const deletionGroup = element("div");
       deletionGroup.append(deletion, deletionMessage);
       const header = UI.header(
-        "← Code sessions",
-        () => navigate(null),
+        null,
+        null,
         record.session?.title || "Code session",
         "Code title",
         (title) => {
@@ -1110,47 +1202,25 @@
       UI.resizeComposer(composer.querySelector("textarea"));
     } else {
       const create = button("New code session", newSession, "primary-button");
-      create.id = "codeNew";
-      const header = UI.libraryHeader(
-        "Code sessions",
-        "Work with Codex in a project folder.",
+      create.id = "codeNewWelcome";
+      const welcome = element("div", undefined, "session-welcome");
+      welcome.append(
+        element("h2", "Code sessions"),
+        element(
+          "p",
+          "Pick a session from the sidebar, or start a new one in a project folder.",
+        ),
         create,
+        message,
       );
-      const search = UI.search("Search titles and folders", query, (value) => {
-        query = value;
-        visibleIds = [];
-        nextCursor = null;
-        ++libraryToken;
-        render();
-        void refreshLibrary();
-      });
-      const more = button(
-        "Load more sessions",
-        async () => {
-          libraryLoading = true;
-          render();
-          try {
-            await list(nextCursor);
-          } catch (error) {
-            restart(error.message);
-          }
-          libraryLoading = false;
-          render();
-        },
-        "secondary-button session-load-more",
-      );
-      more.id = "codeMore";
-      const library = element("div", undefined, "session-list");
-      library.id = "codeLibrary";
-      const wrapper = element("div", undefined, "session-library");
-      wrapper.append(header, search, message, library, more);
-      root.append(wrapper);
+      root.append(welcome);
     }
     rendered = selected || "library";
   }
 
   function render(outputChanged = false) {
     if (!root) return;
+    renderLibrary();
     if (rendered !== (selected || "library")) shell();
     const message = root.querySelector("#codeNotice");
     message.textContent =
@@ -1160,48 +1230,8 @@
       (!connected ? "Connecting…" : !synchronized ? "Synchronizing…" : "");
     message.hidden = !message.textContent;
     if (!selected) {
-      const library = root.querySelector("#codeLibrary");
-      for (const child of [...library.children])
-        if (!child.dataset.id || !visibleIds.includes(child.dataset.id))
-          child.remove();
-      for (const record of visibleIds
-        .map((id) => records.get(id))
-        .filter((record) => record?.session)
-        .sort(
-          (a, b) =>
-            b.session.updated_at - a.session.updated_at ||
-            b.id.localeCompare(a.id),
-        )) {
-        let card = library.querySelector(
-          `[data-id="${CSS.escape(record.id)}"]`,
-        );
-        if (!card) {
-          card = UI.card("", "", "", () => navigate(record.id));
-          card.dataset.id = record.id;
-        }
-        card.children[0].textContent = record.session.title;
-        card.children[1].textContent = record.session.cwd;
-        card.children[2].textContent = busy(record)
-          ? "Running"
-          : record.session.error || record.session.model;
-        library.append(card);
-      }
-      if (!library.children.length)
-        library.append(
-          element(
-            "div",
-            synchronized
-              ? query
-                ? "No matching sessions."
-                : "Start your first code session."
-              : "Loading sessions…",
-            "session-empty",
-          ),
-        );
-      root.querySelector("#codeNew").disabled = !synchronized;
-      const more = root.querySelector("#codeMore");
-      more.hidden = !nextCursor;
-      more.disabled = !synchronized || libraryLoading;
+      const create = root.querySelector("#codeNewWelcome");
+      if (create) create.disabled = !synchronized;
       return;
     }
     const record = records.get(selected),
@@ -1714,6 +1744,8 @@
     initialize(client) {
       api = client;
       root = document.getElementById("codeRoot");
+      sidebar = document.getElementById("sessionSidebar");
+      buildSidebar();
       if (desiredPath) activate(desiredPath);
     },
     activate,

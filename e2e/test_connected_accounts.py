@@ -175,7 +175,7 @@ def accounts(page: Page, admin_base_url: str) -> _Accounts:
 
 
 def _open(page: Page, admin_base_url: str) -> None:
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     expect(page.locator("#messageArea")).to_have_text("")
 
 
@@ -183,7 +183,7 @@ def test_account_modes_wait_for_status_and_recover_after_load_failure(
     page: Page, admin_base_url: str, accounts: _Accounts
 ) -> None:
     accounts.hold_status.add("github_copilot")
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     copilot = page.locator('[data-provider="github_copilot"]')
     openai = page.locator('[data-provider="openai"]')
     expect(copilot.get_by_role("button", name="Loading…", exact=True)).to_be_disabled()
@@ -411,7 +411,7 @@ def test_late_account_response_cannot_replace_discovered_model_count(
         route.fulfill(json=data)
 
     page.route("**/admin/api/status", status)
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     page.wait_for_function("state.startup?.startup?.providers?.openai === 'ready'")
     pending = accounts.take_pending_status(page)
     accounts.hold_status.clear()
@@ -425,7 +425,7 @@ def test_auth_status_refresh_preserves_proxy_edit_and_selection(
     page: Page, admin_base_url: str, accounts: _Accounts
 ) -> None:
     accounts.hold_status.add("openai")
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     dialog = open_provider(page, "openai")
     proxy = dialog.locator("#field-OPENAI_PROXY")
     proxy.fill("http://pending-proxy:8080")
@@ -467,7 +467,7 @@ def test_slow_initial_account_check_does_not_erase_a_later_save_warning(
             }
         ),
     )
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     dialog = open_provider(page, "nvidia_nim")
     pending = accounts.take_pending_status(page)
     assert not accounts.pending_status

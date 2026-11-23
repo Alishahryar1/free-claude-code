@@ -43,7 +43,7 @@ def test_optional_local_absence_is_neutral_and_manual_test_reports_error(
         f"**/admin/api/providers/{provider_id}/local-status",
         lambda route: route.fulfill(json=timeout_probe(provider_id)),
     )
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     primary = page.locator(f'[data-provider-check-result="{provider_id}"]')
     detail = page.locator(f'[data-provider-availability-result="{provider_id}"]')
     expect(primary).to_have_text("Local server unavailable")
@@ -79,7 +79,7 @@ def test_selected_local_provider_keeps_endpoint_diagnostics_and_manual_ownership
         f"**/admin/api/providers/{provider_id}/local-status",
         lambda route: route.fulfill(json=timeout_probe(provider_id)),
     )
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     primary = page.locator(f'[data-provider-check-result="{provider_id}"]')
     detail = page.locator(f'[data-provider-availability-result="{provider_id}"]')
     expect(primary).to_contain_text("timed out")
@@ -119,7 +119,7 @@ def test_availability_detail_clears_on_dialog_switch_and_configuration_reload(
         "**/admin/api/providers/lmstudio/local-status",
         lambda route: route.fulfill(json=timeout_probe("lmstudio")),
     )
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     detail = page.locator('[data-provider-availability-result="lmstudio"]')
     expect(detail).to_contain_text("1500 ms")
     dialog = open_provider(page, "lmstudio")

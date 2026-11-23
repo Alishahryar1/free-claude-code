@@ -22,7 +22,7 @@ def test_code_bootstrap_cannot_stall_other_pages_status(page, admin_base_url):
 
     page.route("**/admin/api/status", status)
     page.route("**/admin/api/code/bootstrap", hold)
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     page.wait_for_function("window.heldBootstrap === true")
     expect(page.locator('[data-provider-check-result="open_router"]')).to_have_text(
         "Checking models…"
@@ -55,7 +55,7 @@ def test_partial_catalog_keeps_code_selection_and_send_usable(
 
 
 def test_saved_settings_finish_before_unrelated_account_check(page, admin_base_url):
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     expect(page.locator("#messageArea")).to_have_text("")
     open_provider(page, "nvidia_nim")
     api_key_input(page, "NVIDIA_NIM_API_KEY").fill("test-new-key")
@@ -85,7 +85,7 @@ def test_saved_settings_finish_before_unrelated_account_check(page, admin_base_u
 def test_provider_refresh_finishes_before_optional_model_suggestions(
     page, admin_base_url
 ):
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     dialog = open_provider(page, "open_router")
     button = dialog.get_by_role("button", name="Refresh models", exact=True)
     expect(button).to_be_enabled()
@@ -106,7 +106,8 @@ def test_provider_refresh_finishes_before_optional_model_suggestions(
 
 
 def test_refresh_all_finishes_without_waiting_for_code(page, admin_base_url):
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Model Config", exact=True).click()
     button = page.locator("[data-startup-catalog]")
     expect(button).to_be_enabled()
@@ -150,7 +151,9 @@ def test_each_integration_finishes_without_slowest_card(
     page.goto(f"{admin_base_url}/admin/integrations")
     for visit in range(2):
         if visit:
+            page.locator("#settingsMenuButton").click()
             page.get_by_role("button", name="Providers", exact=True).click()
+            page.locator("#settingsMenuButton").click()
             page.get_by_role("button", name="Integrations", exact=True).click()
         page.wait_for_function("count => window.heldChecks === count", arg=visit + 1)
         expect(page.locator(f"#{held_button}")).to_have_text("Loading…")
@@ -202,7 +205,7 @@ def test_local_cards_render_before_slowest_check(page, admin_base_url):
             "**/admin/api/providers/llamacpp/local-status"
         ) as llamacpp_response,
     ):
-        page.goto(f"{admin_base_url}/admin")
+        page.goto(f"{admin_base_url}/admin/providers")
         page.wait_for_function("window.heldLocalCheck === true")
     lmstudio_response.value.finished()
     llamacpp_response.value.finished()

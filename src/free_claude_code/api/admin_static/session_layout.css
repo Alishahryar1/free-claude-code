@@ -3,71 +3,21 @@
   padding: 0;
   overflow: hidden;
 }
-.session-main .admin-views,
+.session-main .admin-views {
+  padding: 0;
+  overflow: hidden;
+}
 .session-main .admin-view,
 .session-root {
   height: 100%;
   min-height: 0;
 }
 .session-root {
-  padding: 36px clamp(16px, 3vw, 42px) 16px;
-}
-.session-library {
-  height: 100%;
-  overflow: auto;
+  padding: 0;
 }
 .session-markdown table {
   display: block;
   overflow-x: auto;
-}
-@media (max-width: 900px) {
-  .app-shell.session-active {
-    height: 100dvh;
-    min-height: 0;
-    overflow: hidden;
-  }
-  .app-shell.session-active .sidebar {
-    flex: 0 0 auto;
-  }
-  .main.session-main {
-    flex: 1 1 0;
-    height: auto;
-    min-height: 0;
-  }
-  .session-root {
-    padding: 24px 20px 12px;
-  }
-}
-@media (max-width: 700px) {
-  .session-root {
-    padding: 16px 12px 8px;
-  }
-}
-@media (max-width: 600px) {
-  .app-shell.session-active .sidebar {
-    padding: 10px 12px;
-    gap: 8px;
-  }
-  .app-shell.session-active .brand {
-    flex-direction: row;
-    justify-content: flex-start;
-    text-align: left;
-  }
-  .app-shell.session-active .brand-mark {
-    width: 34px;
-    height: 34px;
-  }
-  .app-shell.session-active .section-nav {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 4px;
-  }
-  .app-shell.session-active .nav-link {
-    justify-content: center;
-    min-height: 34px;
-    padding: 6px 4px;
-    text-align: center;
-    font-size: 11px;
-  }
 }
 
 .session-shell {
@@ -549,4 +499,360 @@
     margin-left: 0;
     margin-right: 0;
   }
+}
+
+/* Workbench: sessions sidebar */
+.session-sidebar {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.session-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 4px;
+}
+
+.session-sidebar-header h2 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.session-sidebar-header .primary-button {
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.session-sidebar .session-search,
+.session-sidebar .session-list,
+.session-sidebar .session-load-more {
+  max-width: none;
+  margin: 0;
+}
+
+.session-sidebar .session-search {
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.session-sidebar .session-list {
+  flex: 1 1 0;
+  align-content: start;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.session-sidebar .session-card {
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-color: transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+}
+
+.session-sidebar .session-card:hover {
+  background: var(--panel-strong);
+}
+
+.session-sidebar .session-card.active {
+  border-color: var(--accent-border);
+  background: var(--accent-muted);
+}
+
+.session-sidebar .session-card strong,
+.session-sidebar .session-card p,
+.session-sidebar .session-card span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-sidebar .session-card strong {
+  font-size: 13px;
+}
+
+.session-sidebar .session-card p,
+.session-sidebar .session-card span {
+  font-size: 11px;
+}
+
+.session-sidebar .session-card.busy span {
+  color: var(--accent);
+}
+
+.session-sidebar .session-empty {
+  min-height: 80px;
+  font-size: 13px;
+}
+
+.session-sidebar .session-load-more {
+  flex: 0 0 auto;
+}
+
+/* Workbench: chat area */
+.session-welcome {
+  display: grid;
+  height: 100%;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.session-welcome h2 {
+  margin: 0;
+  color: var(--text-strong);
+}
+
+.session-welcome p {
+  margin: 0;
+}
+
+.session-header {
+  padding: 10px clamp(16px, 3vw, 40px) 12px;
+}
+
+.session-title {
+  font-size: 15px;
+}
+
+.session-controls {
+  margin-top: 8px;
+}
+
+.session-transcript {
+  padding: 20px clamp(16px, 3vw, 40px) 24px;
+}
+
+.session-notice {
+  max-width: none;
+  margin: 8px clamp(16px, 3vw, 40px) 0;
+}
+
+.session-welcome .session-notice {
+  margin: 0;
+}
+
+.session-composer {
+  margin: 8px clamp(16px, 3vw, 40px) 16px;
+}
+
+.code-folder {
+  margin-top: 6px;
+}
+
+/* Terminal look for the chat area */
+.session-root {
+  --term-font: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  --term-bg: #07080c;
+  --term-dim: #6b7280;
+}
+
+.session-shell {
+  background: var(--term-bg);
+  font-family: var(--term-font);
+  font-size: 13px;
+}
+
+.session-header {
+  border-bottom-color: var(--line);
+  background: var(--bg);
+}
+
+.session-title,
+.code-folder {
+  font-family: var(--term-font);
+}
+
+.code-folder {
+  color: var(--term-dim);
+}
+
+.session-control,
+.session-control select,
+.session-model-input {
+  font-family: var(--term-font);
+}
+
+.session-control select,
+.session-model-input {
+  min-height: 32px;
+  font-size: 12px;
+}
+
+.session-transcript {
+  background: var(--term-bg);
+  line-height: 1.6;
+}
+
+.session-message {
+  max-width: none;
+  margin: 0 0 14px;
+  border-radius: 0;
+}
+
+.session-message-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.user-message {
+  max-width: none;
+  margin-left: 0;
+  padding: 6px 0 6px 0;
+  background: transparent;
+  color: var(--text-strong);
+}
+
+.user-message .session-message-plain {
+  position: relative;
+  padding-left: 2ch;
+}
+
+.user-message .session-message-plain::before {
+  content: "\276F";
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.assistant-message {
+  padding: 0;
+}
+
+.code-item[data-kind="text"] .code-prose {
+  position: relative;
+  padding-left: 2ch;
+}
+
+.code-item[data-kind="text"] .code-prose::before {
+  content: "\25CF";
+  position: absolute;
+  left: 0;
+  color: var(--text-strong);
+}
+
+.session-markdown,
+.session-message-plain {
+  line-height: 1.6;
+}
+
+.session-markdown pre {
+  border-radius: 4px;
+  background: #0d1017;
+  font-family: var(--term-font);
+  font-size: 12px;
+}
+
+.session-markdown code {
+  font-family: var(--term-font);
+  font-size: 0.95em;
+}
+
+.code-tool {
+  border: 0;
+  border-left: 2px solid var(--line-strong);
+  border-radius: 0;
+  background: transparent;
+  padding: 2px 0 2px 12px;
+  color: var(--term-dim);
+}
+
+.code-tool summary {
+  font-weight: 500;
+}
+
+.code-tool[open] {
+  border-left-color: var(--accent-border);
+}
+
+.code-tool .code-item-detail,
+.code-item[data-kind="tool"] .code-prose {
+  font-family: var(--term-font);
+  font-size: 12px;
+}
+
+.session-thinking {
+  border-left-color: var(--line);
+  font-style: italic;
+}
+
+.code-activity {
+  font-family: var(--term-font);
+}
+
+.code-activity::before {
+  content: "\2733  ";
+  color: var(--accent);
+}
+
+.code-prompt {
+  border-radius: 4px;
+  background: #0d1017;
+}
+
+.session-composer {
+  position: relative;
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: var(--term-bg);
+  padding: 10px clamp(16px, 3vw, 40px) 12px;
+}
+
+.session-composer:focus-within {
+  border-color: var(--accent-border);
+  background: var(--term-bg);
+  box-shadow: none;
+}
+
+.session-composer::before {
+  content: "\276F";
+  position: absolute;
+  top: 14px;
+  left: clamp(16px, 3vw, 40px);
+  color: var(--accent);
+  font-family: var(--term-font);
+  font-weight: 700;
+}
+
+.session-composer textarea {
+  padding-left: 2ch;
+  font-family: var(--term-font);
+  font-size: 13px;
+}
+
+.session-composer-actions .primary-button,
+.session-composer-actions .danger-button {
+  min-height: 28px;
+  padding: 4px 12px;
+  font-family: var(--term-font);
+  font-size: 12px;
+}
+
+.code-context-usage {
+  font-family: var(--term-font);
 }

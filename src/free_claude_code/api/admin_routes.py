@@ -109,6 +109,7 @@ def admin_page_response() -> HTMLResponse:
 
 
 @router.get("/admin", include_in_schema=False)
+@router.get("/admin/providers", include_in_schema=False)
 @router.get("/admin/model_config", include_in_schema=False)
 @router.get("/admin/messaging", include_in_schema=False)
 @router.get("/admin/integrations", include_in_schema=False)

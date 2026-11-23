@@ -74,7 +74,9 @@ def test_notices_require_a_live_changed_completion(page, notice):
     expect(message).to_be_visible()
     expect(message).not_to_have_class("message-area error")
     expect(button).to_be_enabled()
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Providers", exact=True).click()
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Integrations", exact=True).click()
     expect(button).to_be_enabled()
     expect(message).to_be_hidden()
@@ -174,14 +176,18 @@ def test_busy_status_recovery_preserves_notice_without_replaying_it(
         page.evaluate("window.integrationStatusIntercepted = true")
 
     page.route(f"**/admin/api/integrations/{integration}", hold_status)
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Providers", exact=True).click()
     with page.expect_request(f"**/admin/api/integrations/{integration}"):
+        page.locator("#settingsMenuButton").click()
         page.get_by_role("button", name="Integrations", exact=True).click()
     page.wait_for_function("window.integrationStatusIntercepted === true")
     observe("ready", changed=True)
     expect(message).to_be_visible()
     if revisit_while_busy:
+        page.locator("#settingsMenuButton").click()
         page.get_by_role("button", name="Providers", exact=True).click()
+        page.locator("#settingsMenuButton").click()
         page.get_by_role("button", name="Integrations", exact=True).click()
         expect(message).to_be_hidden()
     # Release a stale read after the completion poll. The subsequent recovery GET
@@ -211,7 +217,9 @@ def test_busy_status_recovery_preserves_notice_without_replaying_it(
         expect(message).to_be_hidden()
     else:
         expect(message).to_be_visible()
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Providers", exact=True).click()
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Integrations", exact=True).click()
     expect(message).to_be_hidden()
 
@@ -223,8 +231,10 @@ def test_new_server_and_off_page_completions_stay_quiet(page, notice):
     expect(button).to_be_enabled()
     expect(message).to_be_hidden()
     observe("starting", instance="second")
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Providers", exact=True).click()
     observe("ready", changed=True, instance="second")
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Integrations", exact=True).click()
     expect(button).to_be_enabled()
     expect(message).to_be_hidden()
@@ -239,8 +249,10 @@ def test_missed_transition_during_status_read_is_reconciled(page, notice):
 
     pattern = f"**/admin/api/integrations/{integration}"
     page.route(pattern, hold_status)
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Providers", exact=True).click()
     with page.expect_request(pattern):
+        page.locator("#settingsMenuButton").click()
         page.get_by_role("button", name="Integrations", exact=True).click()
     expect(button).to_be_disabled()
     page.wait_for_function("!state.startupRequest && state.startupTimer === null")

@@ -220,7 +220,14 @@ def _catalog_proxy_env_keys() -> tuple[str, ...]:
 
 
 @pytest.mark.parametrize(
-    "path", ["/admin", "/admin/model_config", "/admin/messaging", "/admin/integrations"]
+    "path",
+    [
+        "/admin",
+        "/admin/providers",
+        "/admin/model_config",
+        "/admin/messaging",
+        "/admin/integrations",
+    ],
 )
 def test_admin_page_is_loopback_only(monkeypatch, tmp_path, path):
     _set_home(monkeypatch, tmp_path)
@@ -245,7 +252,10 @@ def test_admin_page_uses_installed_version(monkeypatch, tmp_path):
     assert 'href="https://github.com/Alishahryar1/free-claude-code"' in response.text
     assert 'target="_blank"' in response.text
     assert 'rel="noopener noreferrer"' in response.text
-    assert 'aria-label="Open Free Claude Code on GitHub"' in response.text
+    assert (
+        'aria-label="Open the original Free Claude Code project on GitHub"'
+        in response.text
+    )
     assert 'src="/admin/assets/9.8.7/app-icon.svg"' in response.text
     assert 'href="/admin/assets/9.8.7/admin.css"' in response.text
     assert 'href="/admin/assets/9.8.7/code_sessions.css"' in response.text

@@ -15,6 +15,14 @@ from free_claude_code.runtime.codex_protocol import CodexProtocol
 from tests.code_sessions_support import CodexPackets
 
 
+def close_session(page) -> None:
+    """Deselect the open session; the sidebar keeps listing sessions."""
+    page.evaluate(
+        "history.pushState({}, '', '/admin/code');"
+        " window.dispatchEvent(new PopStateEvent('popstate'))"
+    )
+
+
 def test_model_picker_uses_application_order_and_keeps_configured_selection(
     page,
     admin_base_url,
@@ -633,13 +641,14 @@ def test_settings_apply_preserves_open_creation_and_picker(
         page.evaluate("window.applyRequestIntercepted = true")
 
     page.route("**/admin/api/config/apply", capture_apply)
-    page.goto(f"{admin_base_url}/admin")
+    page.goto(f"{admin_base_url}/admin/providers")
     expect(page.locator("#messageArea")).to_have_text("")
     page.locator("#field-PORT").fill("8081")
     page.get_by_role("button", name="Apply", exact=True).click()
     expect(page.locator("#messageArea")).to_have_text("Applying…")
     page.wait_for_function("window.applyRequestIntercepted === true")
     assert len(pending) == 1
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Code sessions", exact=True).click()
     page.get_by_role("button", name="New code session", exact=True).click()
     form = page.get_by_role("dialog", name="New code session", exact=True)
@@ -1041,9 +1050,11 @@ def test_thinking_respects_prompts_refresh_navigation_and_stop(
     page.evaluate("window.replayCodeReady()")
     expect(page.locator("#codeStop")).to_be_enabled()
     expect(page.locator("#codeActivity")).to_be_visible()
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Providers", exact=True).click()
     page.clock.run_for(1000)
     assert page.locator("#codeActivity").evaluate("node => node.hidden")
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Code sessions", exact=True).click()
     # Return through the library if the main tab opens the library route.
     if page.url != url:
@@ -1547,8 +1558,9 @@ def test_hidden_code_removal_preserves_providers_and_deleted_history(
     session_id = url.rsplit("/", 1)[1]
     if source == "detail404":
         hold_deleted_detail(page, code_control, session_id)
+    page.locator("#settingsMenuButton").click()
     page.get_by_role("button", name="Providers", exact=True).click()
-    providers_url = f"{admin_base_url}/admin"
+    providers_url = f"{admin_base_url}/admin/providers"
     expect(page).to_have_url(providers_url)
     open_provider(page, "mistral")
     field = api_key_input(page, "MISTRAL_API_KEY")
@@ -1597,6 +1609,7 @@ def test_visible_code_removal_replaces_history(
     if source != "event":
         hold_deleted_detail(page, code_control, session_id)
     if source == "returned_detail404":
+        page.locator("#settingsMenuButton").click()
         page.get_by_role("button", name="Providers", exact=True).click()
         page.go_back()
         expect(page).to_have_url(url)
@@ -1613,7 +1626,7 @@ def test_visible_code_removal_replaces_history(
     assert page.evaluate("history.length") == history_length
     if source == "returned_detail404":
         page.go_forward()
-        expect(page).to_have_url(f"{admin_base_url}/admin")
+        expect(page).to_have_url(f"{admin_base_url}/admin/providers")
         page.go_back()
         expect(page).to_have_url(f"{admin_base_url}/admin/code")
     reads = []
@@ -1636,7 +1649,7 @@ def test_code_removal_does_not_redirect_another_code_session(
     )
     if source == "detail404":
         hold_deleted_detail(page, code_control, session_id)
-    page.get_by_role("button", name="← Code sessions", exact=True).click()
+    close_session(page)
     page.locator(f'#codeLibrary [data-id="{other.id}"]').click()
     other_url = f"{admin_base_url}/admin/code/{other.id}"
     expect(page).to_have_url(other_url)
@@ -1824,7 +1837,7 @@ def test_library_reconnect_retires_missed_completion_and_loads_real_outcome(
     )
     expect(page.get_by_text("Preserved output", exact=True)).to_be_visible()
     page.locator("#codeComposer").fill("Next draft")
-    page.get_by_role("button", name="← Code sessions", exact=True).click()
+    close_session(page)
     card = page.locator("#codeLibrary .session-card")
     expect(card).to_contain_text("Running")
     page.evaluate("window.dropCodeEvents = ['run.updated', 'session.updated']")
@@ -1868,7 +1881,7 @@ def test_new_run_survives_delayed_reconnect_reads(
     url = create_session(page, admin_base_url, tmp_path)
     send(page, "First run")
     connection = code_control.connection()
-    page.get_by_role("button", name="← Code sessions", exact=True).click()
+    close_session(page)
     expect(page.locator("#codeLibrary .session-card")).to_contain_text("Running")
     if not snapshot_active:
         page.evaluate("window.dropCodeEvents = ['run.updated', 'session.updated']")
@@ -1905,7 +1918,7 @@ def test_stale_ready_snapshot_preserves_newer_activity(
     connection = code_control.connection()
     code_control.run(connection.finish("turn-1"))
     expect(page.locator("#codeStop")).to_be_hidden()
-    page.get_by_role("button", name="← Code sessions", exact=True).click()
+    close_session(page)
     page.evaluate("window.codeFeed.onerror(new Event('error'))")
     expect(page.locator("#codeNew")).to_be_enabled()
     if source == "detail":
@@ -1918,7 +1931,7 @@ def test_stale_ready_snapshot_preserves_newer_activity(
         page.locator("#codeLibrary .session-card").click()
         expect(page.locator("#codeStop")).to_be_visible()
         expect(page.get_by_text("Newer run", exact=True)).to_be_visible()
-        page.get_by_role("button", name="← Code sessions", exact=True).click()
+        close_session(page)
     else:
         page.wait_for_function(
             "id => window.lastCodeRun?.id === id && window.lastCodeRun.status === 'running'",

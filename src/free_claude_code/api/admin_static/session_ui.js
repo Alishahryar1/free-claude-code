@@ -69,11 +69,8 @@
     title.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.isComposing) title.blur();
     });
-    row.append(
-      button(backLabel, "session-back-button", back),
-      title,
-      ...actions,
-    );
+    if (back) row.append(button(backLabel, "session-back-button", back));
+    row.append(title, ...actions);
     element.append(row, controls);
     return element;
   }
