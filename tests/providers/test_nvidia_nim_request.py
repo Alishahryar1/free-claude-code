@@ -546,7 +546,7 @@ class TestBuildRequestBody:
         body = {
             "model": "test",
             "reasoning_effort": "medium",
-            "messages": [],
+            "messages": [{"role": "user", "content": "hi"}],
         }
 
         cloned = clone_body_without_reasoning_effort(body)
@@ -555,16 +555,20 @@ class TestBuildRequestBody:
         assert "reasoning_effort" not in cloned
         assert body["reasoning_effort"] == "medium"
 
-    def test_clone_body_without_reasoning_effort_returns_none_when_unchanged(self) -> None:
-        body = {"model": "test", "messages": []}
+    def test_clone_body_without_reasoning_effort_returns_none_when_unchanged(
+        self,
+    ) -> None:
+        body = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}
 
         assert clone_body_without_reasoning_effort(body) is None
 
-    def test_clone_body_without_reasoning_effort_returns_none_when_disabled_none(self) -> None:
+    def test_clone_body_without_reasoning_effort_returns_none_when_disabled_none(
+        self,
+    ) -> None:
         body = {
             "model": "test",
             "reasoning_effort": "none",
-            "messages": [],
+            "messages": [{"role": "user", "content": "hi"}],
         }
 
         assert clone_body_without_reasoning_effort(body) is None
@@ -572,7 +576,7 @@ class TestBuildRequestBody:
         extra_body = {
             "model": "test",
             "extra_body": {"reasoning_effort": "none"},
-            "messages": [],
+            "messages": [{"role": "user", "content": "hi"}],
         }
 
         assert clone_body_without_reasoning_effort(extra_body) is None

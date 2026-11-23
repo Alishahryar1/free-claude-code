@@ -25,7 +25,11 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatProfile,
     OpenAIChatProvider,
 )
-from free_claude_code.providers.request_correction import CorrectionStep, Proposal, Rejection
+from free_claude_code.providers.request_correction import (
+    CorrectionStep,
+    Proposal,
+    Rejection,
+)
 
 from .models import HOSTED_MODEL_EXCLUSIONS
 from .request_options import (
@@ -244,7 +248,7 @@ def _is_bad_request(error: Exception) -> bool:
 
 def _error_text(error: Exception) -> str:
     error_text = str(error)
-    error_body = getattr(error, "body", None)
+    error_body: object = getattr(error, "body", None)
     if error_body is not None:
         error_text = f"{error_text} {json.dumps(error_body, default=str)}"
     return error_text.lower()
@@ -272,7 +276,8 @@ def _is_nim_reasoning_rejection(
     for body in bodies:
         param = body.get("param")
         if param == "reasoning_effort":
-            message = str(body.get("message", "")).lower()
+            raw_msg = body.get("message")
+            message = raw_msg.lower() if isinstance(raw_msg, str) else ""
             return "must be one of" not in message
         if isinstance(param, str) and param:
             return False

@@ -911,9 +911,9 @@ async def test_stream_messages_retries_without_chat_template_kwargs_issue_993(
 )
 @pytest.mark.asyncio
 async def test_stream_messages_retries_without_reasoning_effort_issue_2374(
-    provider_config,
-    error_message,
-):
+    provider_config: ProviderConfig,
+    error_message: str,
+) -> None:
     provider = NvidiaNimProvider(
         provider_config,
         admission=immediate_admission(),
@@ -964,8 +964,8 @@ async def test_stream_messages_retries_without_reasoning_effort_issue_2374(
 
 @pytest.mark.asyncio
 async def test_stream_messages_consecutive_rejections_chat_template_then_reasoning(
-    provider_config,
-):
+    provider_config: ProviderConfig,
+) -> None:
     provider = NvidiaNimProvider(
         provider_config,
         admission=immediate_admission(),
@@ -1015,13 +1015,19 @@ async def test_stream_messages_consecutive_rejections_chat_template_then_reasoni
     call1 = mock_create.call_args_list[1].kwargs
     call2 = mock_create.call_args_list[2].kwargs
 
-    assert call0.get("extra_body", {}).get("chat_template") == "custom_template"
+    extra0: object = call0.get("extra_body")
+    assert isinstance(extra0, dict)
+    assert extra0.get("chat_template") == "custom_template"
     assert call0.get("reasoning_effort") == "medium"
 
-    assert "chat_template" not in call1.get("extra_body", {})
+    extra1: object = call1.get("extra_body")
+    extra1_dict = extra1 if isinstance(extra1, dict) else {}
+    assert "chat_template" not in extra1_dict
     assert call1.get("reasoning_effort") == "medium"
 
-    assert "chat_template" not in call2.get("extra_body", {})
+    extra2: object = call2.get("extra_body")
+    extra2_dict = extra2 if isinstance(extra2, dict) else {}
+    assert "chat_template" not in extra2_dict
     assert "reasoning_effort" not in call2
 
     event_text = "".join(events)
@@ -1031,8 +1037,8 @@ async def test_stream_messages_consecutive_rejections_chat_template_then_reasoni
 
 @pytest.mark.asyncio
 async def test_stream_messages_consecutive_rejections_reasoning_then_chat_template(
-    provider_config,
-):
+    provider_config: ProviderConfig,
+) -> None:
     provider = NvidiaNimProvider(
         provider_config,
         admission=immediate_admission(),
@@ -1082,13 +1088,19 @@ async def test_stream_messages_consecutive_rejections_reasoning_then_chat_templa
     call1 = mock_create.call_args_list[1].kwargs
     call2 = mock_create.call_args_list[2].kwargs
 
-    assert call0.get("extra_body", {}).get("chat_template") == "custom_template"
+    extra0: object = call0.get("extra_body")
+    assert isinstance(extra0, dict)
+    assert extra0.get("chat_template") == "custom_template"
     assert call0.get("reasoning_effort") == "medium"
 
-    assert call1.get("extra_body", {}).get("chat_template") == "custom_template"
+    extra1: object = call1.get("extra_body")
+    assert isinstance(extra1, dict)
+    assert extra1.get("chat_template") == "custom_template"
     assert "reasoning_effort" not in call1
 
-    assert "chat_template" not in call2.get("extra_body", {})
+    extra2: object = call2.get("extra_body")
+    extra2_dict = extra2 if isinstance(extra2, dict) else {}
+    assert "chat_template" not in extra2_dict
     assert "reasoning_effort" not in call2
 
     event_text = "".join(events)
@@ -1098,8 +1110,8 @@ async def test_stream_messages_consecutive_rejections_reasoning_then_chat_templa
 
 @pytest.mark.asyncio
 async def test_stream_messages_strict_off_does_not_retry_when_none_rejected(
-    provider_config,
-):
+    provider_config: ProviderConfig,
+) -> None:
     provider = NvidiaNimProvider(
         provider_config,
         admission=immediate_admission(),
@@ -1128,8 +1140,8 @@ async def test_stream_messages_strict_off_does_not_retry_when_none_rejected(
 
 @pytest.mark.asyncio
 async def test_stream_messages_prefer_off_retries_when_none_rejected(
-    provider_config,
-):
+    provider_config: ProviderConfig,
+) -> None:
     provider = NvidiaNimProvider(
         provider_config,
         admission=immediate_admission(),
@@ -1172,7 +1184,7 @@ async def test_stream_messages_prefer_off_retries_when_none_rejected(
     assert "OK" in event_text
 
 
-def test_reasoning_disable_rejected_requires_bad_request():
+def test_reasoning_disable_rejected_requires_bad_request() -> None:
     behavior = NvidiaNimChatBehavior()
     bad_req = _make_bad_request_error("reasoning_effort is not supported")
     internal_err = _make_internal_server_error("reasoning_effort error")
@@ -1181,7 +1193,7 @@ def test_reasoning_disable_rejected_requires_bad_request():
     assert behavior.reasoning_disable_rejected(internal_err) is False
 
 
-def test_reasoning_disable_rejected_excludes_other_rejected_fields():
+def test_reasoning_disable_rejected_excludes_other_rejected_fields() -> None:
     behavior = NvidiaNimChatBehavior()
     template_err = _make_bad_request_error(
         "chat_template is not supported for Mistral tokenizers."
@@ -1204,8 +1216,8 @@ def test_reasoning_disable_rejected_excludes_other_rejected_fields():
 
 @pytest.mark.asyncio
 async def test_stream_messages_prefer_off_does_not_strip_reasoning_on_chat_template_error(
-    provider_config,
-):
+    provider_config: ProviderConfig,
+) -> None:
     provider = NvidiaNimProvider(
         provider_config,
         admission=immediate_admission(),
@@ -1246,15 +1258,14 @@ async def test_stream_messages_prefer_off_does_not_strip_reasoning_on_chat_templ
 
     assert mock_create.await_count == 2
     assert mock_create.call_args_list[0].kwargs["reasoning_effort"] == "none"
-    assert (
-        mock_create.call_args_list[0].kwargs.get("extra_body", {}).get("chat_template")
-        == "custom_template"
-    )
+    call0_extra: object = mock_create.call_args_list[0].kwargs.get("extra_body")
+    assert isinstance(call0_extra, dict)
+    assert call0_extra.get("chat_template") == "custom_template"
 
     assert mock_create.call_args_list[1].kwargs["reasoning_effort"] == "none"
-    assert "chat_template" not in mock_create.call_args_list[1].kwargs.get(
-        "extra_body", {}
-    )
+    call1_extra: object = mock_create.call_args_list[1].kwargs.get("extra_body")
+    call1_extra_dict = call1_extra if isinstance(call1_extra, dict) else {}
+    assert "chat_template" not in call1_extra_dict
 
     event_text = "".join(events)
     assert "event: error" not in event_text
@@ -1263,8 +1274,8 @@ async def test_stream_messages_prefer_off_does_not_strip_reasoning_on_chat_templ
 
 @pytest.mark.asyncio
 async def test_stream_messages_prefer_off_does_not_strip_reasoning_on_server_error(
-    provider_config,
-):
+    provider_config: ProviderConfig,
+) -> None:
     provider = NvidiaNimProvider(
         provider_config,
         admission=immediate_admission(),
