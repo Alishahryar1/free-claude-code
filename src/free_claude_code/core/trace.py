@@ -9,7 +9,7 @@ INFO log level excludes these detailed request traces.
 import asyncio
 import sys
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
-from typing import Any, Protocol
+from typing import Protocol
 
 from loguru import logger
 
@@ -44,10 +44,10 @@ _SECRET_VALUE_KEYS = frozenset(
 )
 
 
-def sanitize_trace_value(obj: Any) -> Any:
+def sanitize_trace_value(obj: object) -> object:
     """Recursively copy JSON-like structures redacting credential-shaped keys."""
     if isinstance(obj, Mapping):
-        out: dict[str, Any] = {}
+        out: dict[str, object] = {}
         for k, v in obj.items():
             name = str(k).lower()
             if name in _SECRET_VALUE_KEYS or name.replace("-", "_").endswith(
@@ -64,19 +64,19 @@ def sanitize_trace_value(obj: Any) -> Any:
             else:
                 out[str(k)] = sanitize_trace_value(v)
         return out
-    if isinstance(obj, tuple | list):
+    if isinstance(obj, (tuple, list)):
         return [sanitize_trace_value(x) for x in obj]
     return obj
 
 
 def trace_event(
-    lazy_fields: Callable[[], Mapping[str, Any]] | None = None,
+    lazy_fields: Callable[[], Mapping[str, object]] | None = None,
     /,
     *,
     stage: str,
     event: str,
     source: str,
-    **fields: Any,
+    **fields: object,
 ) -> None:
     """Defer sanitization and the optional field factory until DEBUG is enabled."""
     logger.opt(lazy=True).debug(
@@ -119,7 +119,7 @@ async def close_stream_input(
 
 def extract_claude_session_id_from_headers(headers: Mapping[str, str]) -> str | None:
     """Best-effort session id forwarded by Claude Code / SDK via HTTP."""
-    lowered = {str(k).lower(): v for k, v in headers.items() if isinstance(v, str)}
+    lowered = {k.lower(): v for k, v in headers.items() if isinstance(v, str)}
     for key in (
         "anthropic-session-id",
         "x-anthropic-session-id",
@@ -141,7 +141,7 @@ async def traced_async_stream[T: str | _FramedOutput](
     interrupted_event: str,
     chunk_event: str | None = None,
     chunk_interval: int = 250,
-    extra: Mapping[str, Any] | None = None,
+    extra: Mapping[str, object] | None = None,
 ) -> AsyncGenerator[T]:
     """Emit TRACE rows when a text stream completes, fails, cancels, or periodically."""
     common = dict(extra or {})
@@ -225,7 +225,7 @@ async def traced_async_stream[T: str | _FramedOutput](
         )
 
 
-def provider_chat_body_snapshot(body: Mapping[str, Any]) -> dict[str, Any]:
+def provider_chat_body_snapshot(body: Mapping[str, object]) -> object:
     """Sanitized OpenAI-compat chat body subset for traces (conversation text verbatim)."""
     keys = ("model", "messages", "tools", "tool_choice", "temperature", "max_tokens")
     snap = {k: body[k] for k in keys if k in body and body[k] is not None}

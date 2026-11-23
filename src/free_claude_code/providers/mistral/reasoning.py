@@ -4,10 +4,21 @@ import json
 import sys
 from collections.abc import AsyncIterator, Mapping, Sequence
 from copy import deepcopy
-from typing import Any
+from typing import TypeGuard
 
 import openai
+from openai.types.chat.chat_completion_chunk import (
+    ChatCompletionChunk,
+    Choice,
+    ChoiceDelta,
+)
 
+from free_claude_code.core.json_types import (
+    JsonObject,
+    JsonValue,
+    load_json_value,
+    wire_field,
+)
 from free_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
 from free_claude_code.providers.http import close_provider_stream
 
@@ -24,7 +35,7 @@ _REJECTION_WORDS = ("unsupported", "unknown", "invalid", "forbidden", "extra")
 
 
 def apply_mistral_reasoning_request_shape(
-    body: dict[str, Any], *, reasoning: ReasoningPolicy
+    body: JsonObject, *, reasoning: ReasoningPolicy
 ) -> None:
     """Apply Mistral's native reasoning request shape in-place."""
     if reasoning.control is ReasoningControl.OFF:
@@ -35,7 +46,7 @@ def apply_mistral_reasoning_request_shape(
         body.pop("reasoning_effort", None)
 
 
-def apply_mistral_history_shape(body: dict[str, Any]) -> None:
+def apply_mistral_history_shape(body: JsonObject) -> None:
     """Encode the already projected scalar, including an empty included slot."""
     messages = body.get("messages")
     if not isinstance(messages, list):
@@ -52,8 +63,8 @@ def apply_mistral_history_shape(body: dict[str, Any]) -> None:
 
 
 def clone_body_without_mistral_reasoning(
-    body: dict[str, Any],
-) -> dict[str, Any] | None:
+    body: JsonObject,
+) -> JsonObject | None:
     """Return a body clone with Mistral reasoning fields removed."""
     cloned = deepcopy(body)
     removed = cloned.pop("reasoning_effort", None) is not None
@@ -65,22 +76,22 @@ def clone_body_without_mistral_reasoning(
 
 def is_mistral_reasoning_rejection(error: Exception) -> bool:
     """Return whether an upstream error rejects Mistral reasoning request fields."""
-    status_code = getattr(error, "status_code", None)
+    status_code = wire_field(error, "status_code")
     if not isinstance(error, openai.BadRequestError) and status_code not in (400, 422):
         return False
 
-    error_body = getattr(error, "body", None)
+    error_body = wire_field(error, "body")
     if _contains_reasoning_rejection(error_body):
         return True
 
     error_text_parts = [str(error)]
-    response = getattr(error, "response", None)
+    response = wire_field(error, "response")
     if response is not None:
         try:
-            response_text = response.text
+            response_text = wire_field(response, "text")
         except Exception:
             response_text = None
-        if response_text:
+        if isinstance(response_text, str) and response_text:
             if _contains_reasoning_rejection(_json_payload(response_text)):
                 return True
             error_text_parts.append(response_text)
@@ -91,10 +102,12 @@ def is_mistral_reasoning_rejection(error: Exception) -> bool:
     return _reasoning_rejection_text(" ".join(error_text_parts))
 
 
-def normalize_mistral_stream(stream: Any) -> AsyncIterator[Any]:
+def normalize_mistral_stream(
+    stream: AsyncIterator[ChatCompletionChunk],
+) -> AsyncIterator[ChatCompletionChunk]:
     """Yield OpenAI-chat chunks with Mistral native thinking chunks normalized."""
 
-    async def _iter() -> AsyncIterator[Any]:
+    async def _iter() -> AsyncIterator[ChatCompletionChunk]:
         try:
             async for chunk in stream:
                 yield normalize_mistral_chunk(chunk)
@@ -109,16 +122,16 @@ def normalize_mistral_stream(stream: Any) -> AsyncIterator[Any]:
     return _iter()
 
 
-def normalize_mistral_chunk(chunk: Any) -> Any:
+def normalize_mistral_chunk(chunk: ChatCompletionChunk) -> ChatCompletionChunk:
     """Normalize one Mistral OpenAI-compatible stream chunk."""
-    choices = getattr(chunk, "choices", None)
+    choices = chunk.choices
     if not choices:
         return chunk
 
-    normalized_choices: list[Any] = []
+    normalized_choices: list[Choice] = []
     changed = False
     for choice in choices:
-        delta = getattr(choice, "delta", None)
+        delta: ChoiceDelta | None = getattr(choice, "delta", None)
         normalized_delta = _normalize_mistral_delta(delta)
         if normalized_delta is delta:
             normalized_choices.append(choice)
@@ -131,11 +144,11 @@ def normalize_mistral_chunk(chunk: Any) -> Any:
     return chunk.model_copy(update={"choices": normalized_choices})
 
 
-def _normalize_mistral_delta(delta: Any) -> Any:
+def _normalize_mistral_delta(delta: ChoiceDelta | None) -> ChoiceDelta | None:
     if delta is None:
         return delta
 
-    content = _field(delta, "content")
+    content = wire_field(delta, "content")
     text, reasoning, changed = _split_mistral_content(content)
     native_reasoning = _extract_native_reasoning(delta)
     if native_reasoning:
@@ -144,7 +157,7 @@ def _normalize_mistral_delta(delta: Any) -> Any:
             text = content
         changed = True
 
-    existing_reasoning = _field(delta, "reasoning_content")
+    existing_reasoning = wire_field(delta, "reasoning_content")
     if isinstance(existing_reasoning, str) and existing_reasoning:
         reasoning = "\n".join(part for part in (existing_reasoning, reasoning) if part)
 
@@ -157,21 +170,21 @@ def _normalize_mistral_delta(delta: Any) -> Any:
 
 
 def _content_with_prepended_thinking(
-    content: Any, reasoning: str
-) -> list[dict[str, Any]]:
+    content: object, reasoning: str
+) -> list[JsonObject]:
     chunks = [_thinking_chunk(reasoning)]
     chunks.extend(_content_to_mistral_text_chunks(content))
     return chunks
 
 
-def _content_to_mistral_text_chunks(content: Any) -> list[dict[str, Any]]:
+def _content_to_mistral_text_chunks(content: object) -> list[JsonObject]:
     if isinstance(content, str):
         return [_text_chunk(content)] if content else []
     if not _is_sequence(content):
         text = _clean_text(content)
         return [_text_chunk(text)] if text else []
 
-    chunks: list[dict[str, Any]] = []
+    chunks: list[JsonObject] = []
     for chunk in content:
         chunk_type = _chunk_type(chunk)
         if _is_thinking_chunk_type(chunk_type):
@@ -182,7 +195,7 @@ def _content_to_mistral_text_chunks(content: Any) -> list[dict[str, Any]]:
     return chunks
 
 
-def _split_mistral_content(content: Any) -> tuple[str | None, str | None, bool]:
+def _split_mistral_content(content: object) -> tuple[str | None, str | None, bool]:
     if not _is_sequence(content):
         return None, None, False
 
@@ -206,16 +219,16 @@ def _split_mistral_content(content: Any) -> tuple[str | None, str | None, bool]:
     )
 
 
-def _extract_native_reasoning(delta: Any) -> str | None:
+def _extract_native_reasoning(delta: object) -> str | None:
     for name in ("thinking", "reasoning"):
-        value = _field(delta, name)
+        value = wire_field(delta, name)
         text = _chunk_reasoning(value)
         if text:
             return text
     return None
 
 
-def _contains_reasoning_rejection(value: Any) -> bool:
+def _contains_reasoning_rejection(value: object) -> bool:
     if value is None:
         return False
     if isinstance(value, Mapping):
@@ -237,7 +250,7 @@ def _contains_reasoning_rejection(value: Any) -> bool:
     return False
 
 
-def _is_reasoning_field_path(value: Any) -> bool:
+def _is_reasoning_field_path(value: object) -> bool:
     if not _is_sequence(value):
         return False
     parts = [str(part).lower() for part in value]
@@ -289,28 +302,28 @@ def _reasoning_rejection_text(value: str) -> bool:
     )
 
 
-def _json_payload(value: str) -> Any:
+def _json_payload(value: str) -> JsonValue:
     try:
-        return json.loads(value)
+        return load_json_value(value)
     except json.JSONDecodeError:
         return None
 
 
-def _thinking_chunk(reasoning: str) -> dict[str, Any]:
+def _thinking_chunk(reasoning: str) -> JsonObject:
     return {
         "type": "thinking",
         "thinking": [_text_chunk(reasoning)],
     }
 
 
-def _text_chunk(text: str) -> dict[str, str]:
+def _text_chunk(text: str) -> JsonObject:
     return {"type": "text", "text": text}
 
 
-def _chunk_reasoning(chunk: Any) -> str | None:
+def _chunk_reasoning(chunk: object) -> str | None:
     if isinstance(chunk, str):
         return chunk or None
-    thinking = _field(chunk, "thinking")
+    thinking = wire_field(chunk, "thinking")
     if thinking is not None:
         text = _chunk_text(thinking)
         if text:
@@ -319,22 +332,22 @@ def _chunk_reasoning(chunk: Any) -> str | None:
     return text or None
 
 
-def _chunk_text(chunk: Any) -> str:
+def _chunk_text(chunk: object) -> str:
     if isinstance(chunk, str):
         return chunk
     if _is_sequence(chunk):
         return "".join(_chunk_text(part) for part in chunk)
-    text = _field(chunk, "text")
+    text = wire_field(chunk, "text")
     if isinstance(text, str):
         return text
-    content = _field(chunk, "content")
+    content = wire_field(chunk, "content")
     if isinstance(content, str):
         return content
     return ""
 
 
-def _chunk_type(chunk: Any) -> str | None:
-    value = _field(chunk, "type")
+def _chunk_type(chunk: object) -> str | None:
+    value = wire_field(chunk, "type")
     if isinstance(value, str):
         return value
     return None
@@ -344,19 +357,13 @@ def _is_thinking_chunk_type(chunk_type: str | None) -> bool:
     return chunk_type in {"thinking", "reasoning"}
 
 
-def _clean_text(value: Any) -> str | None:
+def _clean_text(value: object) -> str | None:
     if isinstance(value, str):
         return value if value else None
     return None
 
 
-def _field(item: Any, name: str) -> Any:
-    if isinstance(item, Mapping):
-        return item.get(name)
-    return getattr(item, name, None)
-
-
-def _is_sequence(value: Any) -> bool:
+def _is_sequence(value: object) -> TypeGuard[Sequence[object]]:
     return isinstance(value, Sequence) and not isinstance(
         value, str | bytes | bytearray
     )

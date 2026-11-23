@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,6 +11,7 @@ import pytest
 from free_claude_code.config.paths import launcher_temp_dir_path
 from tests.cli.conftest import LaunchCapture
 from tests.cli.test_launcher_workflow import launch
+from tests.wire_payload import decode_object, object_payload, string_payload
 
 
 def test_hermes_uses_native_defaults_and_keeps_user_commands(
@@ -17,20 +19,32 @@ def test_hermes_uses_native_defaults_and_keeps_user_commands(
 ) -> None:
     launch_ids = []
 
-    def inspect(command, env):
-        config = json.loads(
+    def inspect(command: object, env: Mapping[str, str]):
+        config = decode_object(
             (Path(env["HERMES_MANAGED_DIR"]) / "config.yaml").read_text()
         )
         provider = env["HERMES_INFERENCE_PROVIDER"]
-        assert provider == config["model"]["provider"]
-        assert env["HERMES_INFERENCE_MODEL"] == config["model"]["default"]
-        (entry,) = config["providers"].values()
-        assert entry["transport"] == "codex_responses"
-        assert entry["api"] == "http://127.0.0.1:8182/v1"
-        assert env[entry["key_env"]] == "launcher-test-token"
-        launch_ids.append(config["model"]["default_headers"]["x-fcc-launch-id"])
+        assert provider == object_payload(config["model"])["provider"]
+        assert (
+            env["HERMES_INFERENCE_MODEL"] == object_payload(config["model"])["default"]
+        )
+        (entry,) = object_payload(config["providers"]).values()
+        assert object_payload(entry)["transport"] == "codex_responses"
+        assert object_payload(entry)["api"] == "http://127.0.0.1:8182/v1"
+        assert (
+            env[string_payload(object_payload(entry)["key_env"])]
+            == "launcher-test-token"
+        )
+        launch_ids.append(
+            object_payload(object_payload(config["model"])["default_headers"])[
+                "x-fcc-launch-id"
+            ]
+        )
         assert launch_ids[-1]
-        assert all(aux["provider"] == provider for aux in config["auxiliary"].values())
+        assert all(
+            object_payload(aux)["provider"] == provider
+            for aux in object_payload(config["auxiliary"]).values()
+        )
         assert "launcher-test-token" not in json.dumps(config)
 
     launch_capture.on_start = inspect
@@ -61,7 +75,7 @@ def test_hermes_failed_activation_cleans_configuration(
 ) -> None:
     original = launch_capture.probe
 
-    def probe(command, **kwargs):
+    def probe(command: list[str], **kwargs: object):
         if "config" in command:
             return subprocess.CompletedProcess(command, 0, output, "")
         return original(command, **kwargs)
@@ -85,7 +99,7 @@ def test_hermes_activation_timeout_stops_and_cleans(
 ) -> None:
     original = launch_capture.probe
 
-    def probe(command, **kwargs):
+    def probe(command: list[str], **kwargs: object):
         if "config" in command:
             assert kwargs["timeout"] == 15.0
             raise subprocess.TimeoutExpired(command, 15)

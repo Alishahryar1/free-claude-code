@@ -4,7 +4,7 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_register_real_session_id_moves_pending_to_active_and_maps():
+async def test_register_real_session_id_moves_pending_to_active_and_maps() -> None:
     from free_claude_code.cli.managed.manager import ManagedClaudeSessionManager
 
     with patch(
@@ -37,7 +37,7 @@ async def test_register_real_session_id_moves_pending_to_active_and_maps():
 
 
 @pytest.mark.asyncio
-async def test_register_real_session_id_missing_temp_id_returns_false():
+async def test_register_real_session_id_missing_temp_id_returns_false() -> None:
     from free_claude_code.cli.managed.manager import ManagedClaudeSessionManager
 
     manager = ManagedClaudeSessionManager(
@@ -48,7 +48,7 @@ async def test_register_real_session_id_missing_temp_id_returns_false():
 
 
 @pytest.mark.asyncio
-async def test_remove_session_pending_stops_and_returns_true():
+async def test_remove_session_pending_stops_and_returns_true() -> None:
     from free_claude_code.cli.managed.manager import ManagedClaudeSessionManager
 
     with patch(
@@ -70,7 +70,7 @@ async def test_remove_session_pending_stops_and_returns_true():
 
 
 @pytest.mark.asyncio
-async def test_remove_session_active_removes_temp_mapping():
+async def test_remove_session_active_removes_temp_mapping() -> None:
     from free_claude_code.cli.managed.manager import ManagedClaudeSessionManager
 
     with patch(
@@ -97,7 +97,7 @@ async def test_remove_session_active_removes_temp_mapping():
 
 
 @pytest.mark.asyncio
-async def test_stop_all_reports_and_retains_stop_exceptions():
+async def test_stop_all_reports_and_retains_stop_exceptions() -> None:
     from free_claude_code.cli.managed.manager import ManagedClaudeSessionManager
 
     manager = ManagedClaudeSessionManager(

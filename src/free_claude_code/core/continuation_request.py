@@ -1,9 +1,10 @@
 """Convert the delivered native suffix without rewriting the client conversation."""
 
-import json
 from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any, Literal, cast
+
+from free_claude_code.core.json_types import json_objects, json_text, load_json_value
 
 from .anthropic.content import streamed_tool_arguments
 from .anthropic.conversion import AnthropicToOpenAIConverter, ReasoningReplayMode
@@ -21,7 +22,7 @@ from .gemini.request import (
     build_gemini_responses_request,
 )
 from .history_replay import HistoryPath
-from .json_types import JsonObject, JsonValue
+from .json_types import DecimalJsonValue, JsonObject, JsonValue
 from .openai_responses import (
     OpenAIResponsesRequest,
     build_responses_chat_request,
@@ -50,11 +51,13 @@ class ContinuationRequest:
             if self.protocol == "gemini"
             else "messages"
         )
-        history = result.get(field, [])
+        history: DecimalJsonValue = result.get(field, [])
         if isinstance(history, str):
             history = [{"role": "user", "content": history}]
         elif isinstance(history, dict):
             history = [history]
+        if not isinstance(history, list):
+            raise TypeError(f"Expected a continuation history array for {field}")
         if self._injected_rows:
             # Targeted opaque-state corrections cannot delete this readable suffix.
             history = history[: -self._injected_rows]
@@ -95,13 +98,14 @@ class ContinuationRequest:
         """Project the delivered prefix into this upstream's history format."""
         if not seed.items:
             return []
-        items = deepcopy(list(seed.items))
-        model = str(body.get("model", "continuation"))
+        items = [deepcopy(dict(item)) for item in seed.items]
+        raw_model: object = body.get("model", "continuation")
+        model = str(raw_model)
         options = NativeMessagesOptions(model, int(body.get("max_tokens") or 1))
         if seed.wire_api == "chat":
             if self.protocol == "chat":
                 return items
-            request = ChatRequest(model=model, messages=items)
+            request = ChatRequest.model_validate({"model": model, "messages": items})
             if self.protocol == "messages":
                 return cast(list[Any], chat_messages_body(request)["messages"])
             if self.protocol == "responses":
@@ -128,9 +132,9 @@ class ContinuationRequest:
                 # Completed public tool blocks retain their streamed JSON deltas.
                 for item in items:
                     if item.get("type") == "tool_use" and "partial_json" in item:
-                        item["input"] = json.loads(
+                        item["input"] = load_json_value(
                             streamed_tool_arguments(
-                                cast(str, item.pop("partial_json")), item.get("input")
+                                json_text(item.pop("partial_json")), item.get("input")
                             )
                         )
                 return cast(
@@ -138,7 +142,11 @@ class ContinuationRequest:
                     messages_to_gemini(
                         MessagesRequest(
                             model=model,
-                            messages=[Message(role="assistant", content=items)],
+                            messages=[
+                                Message.model_validate(
+                                    {"role": "assistant", "content": items}
+                                )
+                            ],
                         ),
                         allow_pending_calls=allow_pending_calls,
                     )["contents"],
@@ -146,7 +154,9 @@ class ContinuationRequest:
             return cast(
                 list[Any],
                 responses_to_gemini(
-                    OpenAIResponsesRequest(model=model, input=items),
+                    OpenAIResponsesRequest.model_validate(
+                        {"model": model, "input": items}
+                    ),
                     allow_pending_calls=allow_pending_calls,
                 )["contents"],
             )
@@ -158,14 +168,14 @@ class ContinuationRequest:
                 # inserts paragraph separators between blocks; an interrupted
                 # response must instead retain the exact characters delivered.
                 text = "".join(
-                    cast(str, item["text"])
+                    json_text(item["text"])
                     for item in items
                     if item.get("type") == "text"
                 )
                 items = [item for item in items if item.get("type") != "text"]
                 if text:
                     items.append({"type": "text", "text": text})
-            messages = [Message(role="assistant", content=items)]
+            messages = [Message.model_validate({"role": "assistant", "content": items})]
             if self.protocol == "chat":
                 return AnthropicToOpenAIConverter.convert_messages(
                     messages, structured_reasoning_details=True
@@ -179,7 +189,7 @@ class ContinuationRequest:
             for item in items:
                 item.pop("status", None)
                 if self.protocol == "chat" and item.get("type") == "message":
-                    parts = cast(list[dict[str, Any]], item.get("content") or [])
+                    parts = list(json_objects(item.get("content") or []))
                     text = "".join(
                         str(part.get("text") or "")
                         for part in parts
@@ -193,7 +203,9 @@ class ContinuationRequest:
                     item["content"] = content
             if self.protocol == "responses":
                 return items
-            request = OpenAIResponsesRequest(model=model, input=items)
+            request = OpenAIResponsesRequest.model_validate(
+                {"model": model, "input": items}
+            )
             if self.protocol == "chat":
                 return cast(
                     list[Any],

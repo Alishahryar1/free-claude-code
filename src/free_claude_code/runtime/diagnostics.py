@@ -1,7 +1,6 @@
 """Shareable local diagnostics, without starting or changing FCC."""
 
 import importlib
-import json
 import platform
 import re
 import shutil
@@ -19,6 +18,7 @@ from free_claude_code.config.paths import (
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG, ProviderAuthKind
 from free_claude_code.config.server_urls import local_proxy_root_url
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.core.version import package_version
 from free_claude_code.harnesses import (
     claude_desktop_integration,
@@ -43,6 +43,7 @@ RUNTIME_FIELDS = (
     "provider_rate_limit",
     "provider_rate_window",
     "provider_max_concurrency",
+    "provider_max_attempts",
     "http_read_timeout",
     "http_write_timeout",
     "http_connect_timeout",
@@ -148,13 +149,13 @@ def _url_summary(value: str | None) -> dict[str, Any]:
 
 def settings_report(settings: Settings, accounts: dict[str, str]) -> dict[str, Any]:
     referenced = referenced_provider_ids(settings)
-    providers = {}
+    providers: dict[str, JsonObject] = {}
     for name, descriptor in sorted(PROVIDER_CATALOG.items()):
         account = accounts.get(name, "unavailable")
         configured = has_provider_configuration(descriptor, settings)
         if descriptor.auth_kind is ProviderAuthKind.CONNECTED_ACCOUNT:
             configured = account == "connected" if account != "unavailable" else None
-        row = {"configured": configured, "referenced": name in referenced}
+        row: JsonObject = {"configured": configured, "referenced": name in referenced}
         if descriptor.auth_kind is ProviderAuthKind.CONNECTED_ACCOUNT:
             row["saved_connection"] = account or "unavailable"
         for key, attr in (
@@ -162,7 +163,8 @@ def settings_report(settings: Settings, accounts: dict[str, str]) -> dict[str, A
             ("proxy", descriptor.proxy_attr),
         ):
             if attr:
-                row[key] = _url_summary(getattr(settings, attr))
+                value: object = getattr(settings, attr)
+                row[key] = _url_summary(value if isinstance(value, str) else None)
         if name == "vertex":
             row["location"] = settings.vertex_location
         providers[name] = row
@@ -189,7 +191,7 @@ def settings_report(settings: Settings, accounts: dict[str, str]) -> dict[str, A
     }
 
 
-def integration_report(settings: Settings) -> dict[str, Any]:
+def integration_report(settings: Settings) -> dict[str, JsonObject]:
     url, token = local_proxy_root_url(settings), settings.proxy_auth_token
     readers = {
         "vscode-chat": lambda: vscode_chat_integration.status(
@@ -213,7 +215,7 @@ def integration_report(settings: Settings) -> dict[str, Any]:
             jetbrains_acp_integration.config_path(), url, token
         ),
     }
-    result: dict[str, Any] = {}
+    result: dict[str, JsonObject] = {}
     for name, read in readers.items():
         try:
             status = read()
@@ -229,7 +231,11 @@ def probe_harness(
     binary: str, args: tuple[str, ...], timeout: float = 5.0
 ) -> dict[str, Any]:
     path = shutil.which(binary)
-    result = {"installed": path is not None, "version": None, "status": "not_installed"}
+    result: JsonObject = {
+        "installed": path is not None,
+        "version": None,
+        "status": "not_installed",
+    }
     if path is None:
         return result
     try:
@@ -248,7 +254,7 @@ def probe_harness(
             return result
         output = probe.stdout.strip()
         if binary == "grok":
-            payload = json.loads(output)
+            payload = load_json_value(output)
             output = (
                 payload.get("currentVersion", "") if isinstance(payload, dict) else ""
             )
@@ -268,8 +274,13 @@ def probe_harness(
 
 def harness_report() -> dict[str, Any]:
     result = {}
+    from free_claude_code.cli.launchers.runner import HarnessSpec
+
     for name in HARNESS_NAMES:
-        spec = importlib.import_module(f"free_claude_code.cli.launchers.{name}").SPEC
+        module = importlib.import_module(f"free_claude_code.cli.launchers.{name}")
+        spec: object = getattr(module, "SPEC", None)
+        if not isinstance(spec, HarnessSpec):
+            raise TypeError(f"Invalid harness specification for {name}")
         args = (
             tuple(spec.compatibility_check.args)
             if spec.compatibility_check
@@ -298,7 +309,7 @@ def model_discovery_report(settings: Settings) -> dict[str, Any]:
             follow_redirects=False,
         )
         response.raise_for_status()
-        payload = response.json()
+        payload: JsonValue = response.json()
     except httpx.HTTPError, httpx.InvalidURL, ValueError:
         return unavailable
     if not isinstance(payload, dict) or payload.get("status") != "running":
@@ -325,7 +336,12 @@ def model_discovery_report(settings: Settings) -> dict[str, Any]:
 
 
 def collect_report() -> dict[str, Any]:
-    report = {
+    configuration = {
+        "source": "saved_config_with_process_overrides",
+        "status": "available",
+    }
+    errors: list[dict[str, str]] = []
+    report: JsonObject = {
         "version": package_version(),
         "system": {
             "os": platform.system(),
@@ -334,10 +350,7 @@ def collect_report() -> dict[str, Any]:
             "python_version": platform.python_version(),
             "python_implementation": platform.python_implementation(),
         },
-        "configuration": {
-            "source": "saved_config_with_process_overrides",
-            "status": "available",
-        },
+        "configuration": configuration,
         "providers": None,
         "runtime": None,
         "model_routing": None,
@@ -346,7 +359,7 @@ def collect_report() -> dict[str, Any]:
         "integrations": None,
         "harnesses": {},
         "model_discovery": {"status": "unavailable", "source": "running_server"},
-        "errors": [],
+        "errors": errors,
     }
     store = ManagedConfigStore()
     try:
@@ -354,11 +367,11 @@ def collect_report() -> dict[str, Any]:
             raise FileNotFoundError
         settings = store.read().settings
     except FileNotFoundError:
-        report["configuration"]["status"] = "missing"
+        configuration["status"] = "missing"
     except ValueError:
-        report["configuration"]["status"] = "invalid"
+        configuration["status"] = "invalid"
     except OSError:
-        report["configuration"]["status"] = "unavailable"
+        configuration["status"] = "unavailable"
     else:
         accounts = {"openai": saved_connection_state()}
         copilot = CopilotAuthManager().status().state.value
@@ -367,15 +380,14 @@ def collect_report() -> dict[str, Any]:
         )
         report.update(settings_report(settings, accounts))
         report["model_discovery"] = model_discovery_report(settings)
-        report["integrations"] = integration_report(settings)
+        integrations = integration_report(settings)
+        report["integrations"] = integrations
         for name, state in accounts.items():
             if state not in {"connected", "disconnected"}:
-                report["errors"].append(
-                    {"section": f"providers.{name}", "code": "unavailable"}
-                )
-        for name, status in report["integrations"].items():
+                errors.append({"section": f"providers.{name}", "code": "unavailable"})
+        for name, status in integrations.items():
             if status["status"] != "available":
-                report["errors"].append(
+                errors.append(
                     {"section": f"integrations.{name}", "code": "unavailable"}
                 )
         discovery = report.get("model_discovery")
@@ -384,16 +396,14 @@ def collect_report() -> dict[str, Any]:
             if isinstance(providers, dict):
                 for provider_id, info in providers.items():
                     if isinstance(info, dict) and info.get("state") == "failed":
-                        report["errors"].append(
+                        errors.append(
                             {
                                 "section": f"model_discovery.{provider_id}",
                                 "code": "failed",
                             }
                         )
-    if report["configuration"]["status"] != "available":
-        report["errors"].append(
-            {"section": "configuration", "code": report["configuration"]["status"]}
-        )
+    if configuration["status"] != "available":
+        errors.append({"section": "configuration", "code": configuration["status"]})
     harnesses = harness_report()
     report["harnesses"] = harnesses
     for name, probe in harnesses.items():
@@ -402,7 +412,7 @@ def collect_report() -> dict[str, Any]:
             and probe.get("installed")
             and probe.get("status") != "available"
         ):
-            report["errors"].append(
+            errors.append(
                 {"section": f"harnesses.{name}", "code": probe["status"]}
             )
     return report

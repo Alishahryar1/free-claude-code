@@ -15,6 +15,7 @@ from free_claude_code.core.anthropic.sse_aggregation import (
 )
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_lines
 from free_claude_code.core.json_types import JsonObject, JsonValue
+from tests.wire_payload import object_payload
 
 _START: JsonObject = {
     "type": "message_start",
@@ -88,9 +89,9 @@ def test_relay_preserves_native_identity_and_extensions_without_mutating_input()
 ):
     relay = NativeMessagesRelay(public_model="public")
     result = parse_sse_lines(relay.feed("message_start", _START).splitlines())[0].data
-    assert result["message"]["model"] == "public"
-    assert result["message"]["id"] == "upstream-id"
-    assert result["message"]["native_extension"] == "kept"
+    assert object_payload(result["message"])["model"] == "public"
+    assert object_payload(result["message"])["id"] == "upstream-id"
+    assert object_payload(result["message"])["native_extension"] == "kept"
     assert cast(JsonObject, _START["message"])["model"] == "upstream"
     block: JsonObject = {
         "type": "content_block_start",

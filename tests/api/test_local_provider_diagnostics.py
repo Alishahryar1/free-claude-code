@@ -1,3 +1,5 @@
+from collections.abc import Callable
+from typing import Protocol
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -7,22 +9,34 @@ from fastapi.testclient import TestClient
 from free_claude_code.api import admin_routes
 from free_claude_code.config.admin.state import ConfigValueState
 from tests.api.support import create_test_app, runtime_for_app
+from tests.wire_payload import response_object
+
+
+class LocalProbe(Protocol):
+    def __call__(
+        self,
+        handler: Callable[[httpx.Request], httpx.Response],
+        provider_id: str = "lmstudio",
+    ) -> tuple[httpx.Response, list[httpx.Request]]: ...
 
 
 @pytest.fixture
-def local_probe(monkeypatch):
+def local_probe(monkeypatch: pytest.MonkeyPatch):
     requests: list[httpx.Request] = []
     async_client = httpx.AsyncClient
     clock = iter((10.0, 10.0125))
     monkeypatch.setattr(admin_routes, "perf_counter", lambda: next(clock))
 
-    def probe(handler, provider_id="lmstudio"):
-        def reply(request):
+    def probe(
+        handler: Callable[[httpx.Request], httpx.Response],
+        provider_id: str = "lmstudio",
+    ):
+        def reply(request: httpx.Request):
             requests.append(request)
             return handler(request)
 
-        def client(*args, **kwargs):
-            return async_client(*args, transport=httpx.MockTransport(reply), **kwargs)
+        def client(*, timeout: float):
+            return async_client(timeout=timeout, transport=httpx.MockTransport(reply))
 
         monkeypatch.setattr(admin_routes.httpx, "AsyncClient", client)
         app = create_test_app()
@@ -45,10 +59,19 @@ def local_probe(monkeypatch):
     ),
 )
 def test_local_probe_reports_the_requested_endpoint_and_elapsed_time(
-    monkeypatch, local_probe, provider_id, env_key, provider_url, probe_path
-):
+    monkeypatch: pytest.MonkeyPatch,
+    local_probe: LocalProbe,
+    provider_id: str,
+    env_key: str,
+    provider_url: str,
+    probe_path: str,
+) -> None:
     monkeypatch.setenv(env_key, provider_url)
-    response, requests = local_probe(lambda _: httpx.Response(200), provider_id)
+
+    def callback(_: object):
+        return httpx.Response(200)
+
+    response, requests = local_probe(callback, provider_id)
 
     assert [(request.method, str(request.url)) for request in requests] == [
         ("GET", f"{provider_url}{probe_path}")
@@ -67,19 +90,19 @@ def test_local_probe_reports_the_requested_endpoint_and_elapsed_time(
 
 @pytest.mark.parametrize("status_code", (200, 204, 302, 401, 404, 429, 503))
 def test_local_probe_preserves_http_status_without_returning_response_content(
-    local_probe, status_code
-):
+    local_probe: LocalProbe, status_code: int
+) -> None:
     private = "private-response-credential-marker"
-    response, requests = local_probe(
-        lambda _: httpx.Response(
-            status_code,
-            text=private,
-            headers={"x-private-token": private},
+
+    def callback(_: object):
+        return httpx.Response(
+            status_code, text=private, headers={"x-private-token": private}
         )
-    )
+
+    response, requests = local_probe(callback)
 
     assert len(requests) == 1
-    payload = response.json()
+    payload = response_object(response)
     reachable = 200 <= status_code < 300
     assert payload["status"] == ("reachable" if reachable else "offline")
     assert payload["label"] == ("Reachable" if reachable else "Offline")
@@ -102,7 +125,9 @@ def test_local_probe_preserves_http_status_without_returning_response_content(
         (RuntimeError, "unexpected_error"),
     ),
 )
-def test_local_probe_returns_safe_failure_categories(local_probe, failure, error_type):
+def test_local_probe_returns_safe_failure_categories(
+    local_probe: LocalProbe, failure: type[Exception], error_type: str
+) -> None:
     private = "CREDENTIAL[unrecognized-format-987654321]"
 
     def fail(_request):
@@ -111,7 +136,7 @@ def test_local_probe_returns_safe_failure_categories(local_probe, failure, error
     response, requests = local_probe(fail)
 
     assert len(requests) == 1
-    payload = response.json()
+    payload = response_object(response)
     assert payload["status"] == "offline"
     assert payload["label"] == "Offline"
     assert payload["error_type"] == error_type
@@ -123,7 +148,9 @@ def test_local_probe_returns_safe_failure_categories(local_probe, failure, error
 
 
 @pytest.mark.parametrize("provider_url", ("", " \t "))
-def test_missing_local_url_has_no_network_probe_or_elapsed_time(provider_url):
+def test_missing_local_url_has_no_network_probe_or_elapsed_time(
+    provider_url: str,
+) -> None:
     app = create_test_app()
     runtime = runtime_for_app(app)
     values = {
@@ -152,7 +179,7 @@ def test_missing_local_url_has_no_network_probe_or_elapsed_time(provider_url):
     clock.assert_not_called()
 
 
-def test_remote_admin_cannot_trigger_a_local_provider_probe():
+def test_remote_admin_cannot_trigger_a_local_provider_probe() -> None:
     with patch.object(admin_routes.httpx, "AsyncClient") as client:
         response = TestClient(
             create_test_app(),

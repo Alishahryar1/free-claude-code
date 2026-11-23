@@ -3,10 +3,12 @@
 import pytest
 
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses.tool_calls import ResponsesToolCallBuffer
+from tests.wire_payload import object_payload
 
 
-def item(index, status="completed", arguments="{}"):
+def item(index: int, status: str = "completed", arguments: str = "{}"):
     return {
         "type": "function_call",
         "id": f"fc_{index}",
@@ -17,7 +19,7 @@ def item(index, status="completed", arguments="{}"):
     }
 
 
-def test_argument_done_does_not_release_call_and_incomplete_item_is_discarded():
+def test_argument_done_does_not_release_call_and_incomplete_item_is_discarded() -> None:
     buffer = ResponsesToolCallBuffer()
     assert (
         buffer.feed(
@@ -44,10 +46,10 @@ def test_argument_done_does_not_release_call_and_incomplete_item_is_discarded():
         "response.incomplete",
         {"response": {"output": [item(0, "incomplete")], "status": "incomplete"}},
     )
-    assert output[-1][-1][1]["response"]["output"] == []
+    assert object_payload(output[-1][-1][1]["response"])["output"] == []
 
 
-def test_completed_call_survives_another_unfinished_call_on_failure():
+def test_completed_call_survives_another_unfinished_call_on_failure() -> None:
     buffer = ResponsesToolCallBuffer()
     for index in (0, 1):
         assert (
@@ -65,7 +67,7 @@ def test_completed_call_survives_another_unfinished_call_on_failure():
     assert output[-1][-1][1]["item"] == item(1)
 
 
-def test_terminal_snapshot_completes_missing_incremental_call_once():
+def test_terminal_snapshot_completes_missing_incremental_call_once() -> None:
     buffer = ResponsesToolCallBuffer()
     output = buffer.feed(
         "response.completed", {"response": {"status": "completed", "output": [item(0)]}}
@@ -79,7 +81,9 @@ def test_terminal_snapshot_completes_missing_incremental_call_once():
     assert [payload["item"] for payload in done] == [item(0)]
 
 
-def test_fragment_metadata_keeps_its_event_and_does_not_overwrite_other_fragments():
+def test_fragment_metadata_keeps_its_event_and_does_not_overwrite_other_fragments() -> (
+    None
+):
     buffer = ResponsesToolCallBuffer()
     events = [
         (
@@ -105,7 +109,7 @@ def test_fragment_metadata_keeps_its_event_and_does_not_overwrite_other_fragment
     ]
     output = []
     for kind, data in events:
-        output.extend(buffer.feed(kind, data))
+        output.extend(buffer.feed(kind, object_payload(data)))
     assert [
         (kind, data["extension"])
         for group in output
@@ -114,26 +118,28 @@ def test_fragment_metadata_keeps_its_event_and_does_not_overwrite_other_fragment
     ] == [(kind, data["extension"]) for kind, data in events]
 
 
-def test_failed_snapshot_keeps_only_explicit_completed_calls():
+def test_failed_snapshot_keeps_only_explicit_completed_calls() -> None:
     buffer = ResponsesToolCallBuffer()
     groups = buffer.feed(
         "response.failed",
         {"response": {"status": "failed", "output": [item(0, "incomplete"), item(1)]}},
     )
     assert [
-        data["item"]["id"]
+        object_payload(data["item"])["id"]
         for group in groups
         for kind, data in group
         if kind == "response.output_item.done"
     ] == ["fc_1"]
-    assert groups[-1][-1][1]["response"]["output"] == [item(1)]
+    assert object_payload(groups[-1][-1][1]["response"])["output"] == [item(1)]
 
 
 @pytest.mark.parametrize("completed", [False, True])
 @pytest.mark.parametrize(
     "kind", ["response.output_item.done", "response.function_call_arguments.delta"]
 )
-def test_explicit_index_cannot_change_for_known_item(completed, kind):
+def test_explicit_index_cannot_change_for_known_item(
+    completed: bool, kind: str
+) -> None:
     buffer = ResponsesToolCallBuffer()
     buffer.feed(
         "response.output_item.added",
@@ -147,7 +153,7 @@ def test_explicit_index_cannot_change_for_known_item(completed, kind):
         else {"output_index": 1, "item_id": "fc_0", "delta": "{}"}
     )
     with pytest.raises(ExecutionFailure):
-        buffer.feed(kind, payload)
+        buffer.feed(kind, object_payload(payload))
 
 
 @pytest.mark.parametrize(
@@ -176,7 +182,7 @@ def test_explicit_index_cannot_change_for_known_item(completed, kind):
         },
     ],
 )
-def test_all_client_call_types_wait_for_item_completion(tool):
+def test_all_client_call_types_wait_for_item_completion(tool: JsonObject) -> None:
     buffer = ResponsesToolCallBuffer()
     final = {"id": "tool", "call_id": "call", "status": "completed", **tool}
     initial = {**final, "status": "in_progress"}
@@ -202,20 +208,22 @@ def test_all_client_call_types_wait_for_item_completion(tool):
         },
     ],
 )
-def test_server_tools_are_not_gated_as_client_calls(tool):
+def test_server_tools_are_not_gated_as_client_calls(tool: JsonObject) -> None:
     buffer = ResponsesToolCallBuffer()
     payload = {
         "output_index": 0,
         "item": {"id": "server", "status": "in_progress", **tool},
     }
-    assert buffer.feed("response.output_item.added", payload)
+    assert buffer.feed("response.output_item.added", object_payload(payload))
 
 
 @pytest.mark.parametrize(
     "field,value",
     [("call_id", "different"), ("name", "different"), ("type", "custom_tool_call")],
 )
-def test_completion_cannot_change_an_observed_execution_identity(field, value):
+def test_completion_cannot_change_an_observed_execution_identity(
+    field: str, value: str
+) -> None:
     buffer = ResponsesToolCallBuffer()
     buffer.feed(
         "response.output_item.added",
@@ -228,7 +236,7 @@ def test_completion_cannot_change_an_observed_execution_identity(field, value):
         )
 
 
-def test_distinct_response_items_cannot_share_an_execution_call_id():
+def test_distinct_response_items_cannot_share_an_execution_call_id() -> None:
     buffer = ResponsesToolCallBuffer()
     buffer.feed("response.output_item.done", {"output_index": 0, "item": item(0)})
     with pytest.raises(ExecutionFailure):
@@ -258,8 +266,8 @@ def test_distinct_response_items_cannot_share_an_execution_call_id():
     ],
 )
 def test_every_snapshot_preserves_accepted_call_execution_fields(
-    kind, status, field, value
-):
+    kind: str, status: str, field: str, value: str
+) -> None:
     buffer = ResponsesToolCallBuffer()
     original = item(0)
     buffer.feed("response.output_item.done", {"output_index": 0, "item": original})
@@ -280,18 +288,20 @@ def test_every_snapshot_preserves_accepted_call_execution_fields(
     ],
 )
 @pytest.mark.parametrize("status", ["completed", "incomplete", "in_progress"])
-def test_unchanged_accepted_call_is_not_reemitted_by_a_snapshot(kind, status):
+def test_unchanged_accepted_call_is_not_reemitted_by_a_snapshot(
+    kind: str, status: str
+) -> None:
     buffer = ResponsesToolCallBuffer()
     buffer.feed("response.output_item.done", {"output_index": 0, "item": item(0)})
-    snapshot = {
+    snapshot: JsonObject = {
         "response": {"status": kind.split(".")[-1], "output": [item(0, status)]}
     }
     groups = buffer.feed(kind, snapshot)
     assert [event for group in groups for event, _ in group] == [kind]
-    assert groups[0][0][1]["response"]["output"] == [item(0, status)]
+    assert object_payload(groups[0][0][1]["response"])["output"] == [item(0, status)]
 
 
-def test_repeated_item_done_cannot_change_a_call_into_a_non_call():
+def test_repeated_item_done_cannot_change_a_call_into_a_non_call() -> None:
     buffer = ResponsesToolCallBuffer()
     buffer.feed("response.output_item.done", {"output_index": 0, "item": item(0)})
     with pytest.raises(ExecutionFailure, match="changed an already completed"):

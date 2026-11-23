@@ -43,7 +43,7 @@ type _TraversalStep = (
 def estimate_responses_input_tokens(request: OpenAIResponsesRequest) -> int:
     """Estimate only request fields that contribute model input tokens."""
 
-    values: tuple[object, ...] = (
+    values: tuple[JsonValue, ...] = (
         request.instructions,
         request.input,
         request.tools,

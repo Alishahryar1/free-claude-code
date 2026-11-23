@@ -6,11 +6,15 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager, suppress
 from pathlib import Path
 
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import decode_object, int_payload
 
-def pid_alive(pid):
+
+def pid_alive(pid: int):
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -18,31 +22,36 @@ def pid_alive(pid):
     return True
 
 
-def wait_exit(pid):
+def wait_exit(pid: int):
     deadline = time.monotonic() + 10
     while pid_alive(pid) and time.monotonic() < deadline:
         time.sleep(0.1)
     assert not pid_alive(pid), f"Test process {pid} did not exit"
 
 
-def wait_report(output, predicate, process, timeout=30):
+def wait_report(
+    output: Path,
+    predicate: Callable[[JsonObject], object],
+    process: subprocess.Popen[str] | subprocess.Popen[bytes],
+    timeout: float = 30,
+) -> JsonObject:
     deadline = time.monotonic() + timeout
-    report = {}
+    report: JsonObject = {}
     while time.monotonic() < deadline:
         if output.exists():
-            report = json.loads(output.read_text())
+            report = decode_object(output.read_text())
             assert "error" not in report, report.get("error")
             if predicate(report):
                 return report
         # Launch Services can stop tracking the old shell wrapper after exec.
         assert process.poll() is None or (
-            report.get("pid") and pid_alive(report["pid"])
+            report.get("pid") and pid_alive(int_payload(report["pid"]))
         ), f"Launcher exited before observation: {report}"
         time.sleep(0.1)
     raise AssertionError(f"Native observation timed out: {report}")
 
 
-def capture(output):
+def capture(output: Path):
     result = subprocess.run(
         ["/usr/sbin/screencapture", "-x", str(output.with_suffix(".png"))],
         capture_output=True,
@@ -69,7 +78,7 @@ def process_paths():
     return result
 
 
-def bundle_pids(app):
+def bundle_pids(app: Path):
     return {
         pid
         for pid, executable in process_paths().items()
@@ -78,7 +87,14 @@ def bundle_pids(app):
 
 
 @contextmanager
-def launched(app, output, env, *, args=(), wait=True):
+def launched(
+    app: Path,
+    output: Path,
+    env: dict[str, str],
+    *,
+    args: Sequence[str] = (),
+    wait: bool = True,
+) -> Generator[subprocess.Popen[str]]:
     existing = set(process_paths())
     for path in (
         output,
@@ -103,11 +119,14 @@ def launched(app, output, env, *, args=(), wait=True):
             if wait or process.poll() is None:
                 owned = bundle_pids(app)
                 if output.exists():
-                    report = json.loads(output.read_text())
+                    report = decode_object(output.read_text())
                     pid = report.get("pid")
-                    executable = process_paths().get(pid)
+                    executable = (
+                        process_paths().get(pid) if isinstance(pid, int) else None
+                    )
                     if (
-                        executable == report.get("process_executable")
+                        isinstance(pid, int)
+                        and executable == report.get("process_executable")
                         and executable
                         and Path(executable).is_relative_to(Path(env["HOME"]).parent)
                     ):

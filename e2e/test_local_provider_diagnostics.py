@@ -11,12 +11,14 @@ from free_claude_code.providers.runtime import ProviderRuntime
 
 
 @pytest.fixture
-def admin_client_files(monkeypatch):
+def admin_client_files(monkeypatch: pytest.MonkeyPatch):
     # The fixture invokes this hook before startup. Only the external provider
     # boundary fails; the manager, status API, and browser remain real.
     resolve = ProviderRuntime.resolve_provider
 
-    async def timeout_local(runtime, provider_id, api_key_number=1):
+    async def timeout_local(
+        runtime: ProviderRuntime, provider_id: str, api_key_number: int = 1
+    ):
         if provider_id in {"lmstudio", "llamacpp", "ollama"}:
             raise httpx.ReadTimeout("private-provider-error")
         return await resolve(runtime, provider_id, api_key_number)
@@ -24,7 +26,7 @@ def admin_client_files(monkeypatch):
     monkeypatch.setattr(ProviderRuntime, "resolve_provider", timeout_local)
 
 
-def timeout_probe(provider_id):
+def timeout_probe(provider_id: str):
     return {
         "provider_id": provider_id,
         "status": "offline",

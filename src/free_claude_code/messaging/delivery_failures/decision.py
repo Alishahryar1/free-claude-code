@@ -86,7 +86,7 @@ def decide(failure: DeliveryFailure, state: CallState) -> Decision:
             return RateLimited(failure.retry_after)
         case FailureKind.NETWORK:
             if state.attempts < MAX_ATTEMPTS:
-                return Retry(float(2 ** (state.attempts - 1)))
+                return Retry(2.0 ** (state.attempts - 1))
             return Raise()
         case FailureKind.REJECTED:
             return Raise()

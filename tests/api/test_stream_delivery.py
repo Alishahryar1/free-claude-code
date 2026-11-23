@@ -2,16 +2,23 @@
 
 import asyncio
 import json
+from collections.abc import AsyncIterator, Mapping
 from decimal import Decimal
+from typing import override
 
 import pytest
 import simplejson
 from starlette.responses import StreamingResponse
 
 from free_claude_code.api.response_streams import anthropic_sse_streaming_response
+from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import DecimalJsonObject, JsonObject
+from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_delivery import current_stream_delivery
-from free_claude_code.core.stream_output import completed_output
+from free_claude_code.core.stream_output import StreamOutput, completed_output
+from free_claude_code.core.stream_recovery import ContinuationSeed
 from tests.api.test_response_streams import _json_error, _serve
 from tests.api.test_tool_call_buffer import _call, _end, _frames, _response, _start
 from tests.api.test_web_server_tools import (
@@ -20,9 +27,10 @@ from tests.api.test_web_server_tools import (
     _automatic_search_service,
     _provider_text_events,
 )
+from tests.wire_payload import object_payload
 
 
-async def drained(body, wire):
+async def drained(body: AsyncIterator[StreamOutput], wire: str):
     response = await _response(wire, body)
     try:
         return "".join([str(chunk) async for chunk in response.body_iterator])
@@ -34,7 +42,9 @@ async def drained(body, wire):
 @pytest.mark.parametrize(
     "ending", ["activity", "empty", "stop", "error", "raise", "eof"]
 )
-async def test_messages_start_is_published_only_with_committed_activity(ending):
+async def test_messages_start_is_published_only_with_committed_activity(
+    ending: str,
+) -> None:
     start = _frames("messages", [_start("messages")])[0]
     harmless = ': keepalive\r\n\r\nevent: ping\r\ndata: {"type":"ping"}\r\n\r\n'
     activity = (
@@ -78,7 +88,9 @@ async def test_messages_start_is_published_only_with_committed_activity(ending):
 
 
 @pytest.mark.asyncio
-async def test_messages_deferral_preserves_duplicate_starts_within_one_attempt():
+async def test_messages_deferral_preserves_duplicate_starts_within_one_attempt() -> (
+    None
+):
     raw = "".join(
         _frames("messages", [_start("messages"), _start("messages"), *_end("messages")])
     )
@@ -94,8 +106,8 @@ async def test_messages_deferral_preserves_duplicate_starts_within_one_attempt()
 @pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\x85"])
 @pytest.mark.parametrize("ending", ["\r", "\n", "\r\n"])
 async def test_unicode_metadata_preserves_bytes_and_retry_eligibility(
-    wire, separator, ending
-):
+    wire: str, separator: str, ending: str
+) -> None:
     start = _start(wire)
     start[1]["message" if wire == "messages" else "response"]["extension"] = (
         "before" + separator + "after"
@@ -114,14 +126,14 @@ async def test_unicode_metadata_preserves_bytes_and_retry_eligibility(
     assert released == [False]
     assert result.startswith(raw)
     payload = parse_sse_text(result)[0].data
-    assert payload["message" if wire == "messages" else "response"]["extension"] == (
-        "before" + separator + "after"
-    )
+    assert object_payload(payload["message" if wire == "messages" else "response"])[
+        "extension"
+    ] == ("before" + separator + "after")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\x85"])
-async def test_unicode_comment_does_not_release_content(separator):
+async def test_unicode_comment_does_not_release_content(separator: str) -> None:
     raw = ": before" + separator + "after\r\n\r\n"
     released = []
 
@@ -140,7 +152,7 @@ async def test_unicode_comment_does_not_release_content(separator):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("separator", ["\u2028", "\u2029", "\x85"])
-async def test_unicode_meaningful_frame_still_releases_content(separator):
+async def test_unicode_meaningful_frame_still_releases_content(separator: str) -> None:
     raw = _frames("messages", [_start("messages")])[0]
     raw += 'event: future\ndata: {"type":"future","text":"a' + separator + 'b"}\n\n'
     released = []
@@ -168,7 +180,9 @@ async def test_unicode_meaningful_frame_still_releases_content(separator):
         },
     ],
 )
-async def test_opaque_frame_closes_eligibility_and_preserves_payload_fields(payload):
+async def test_opaque_frame_closes_eligibility_and_preserves_payload_fields(
+    payload: JsonObject,
+) -> None:
     raw = _frames("responses", [_start("responses")])[0]
     raw += "event: future\ndata: " + json.dumps(payload) + "\n\n"
     seen = []
@@ -179,14 +193,15 @@ async def test_opaque_frame_closes_eligibility_and_preserves_payload_fields(payl
 
     output = await drained(source(), "responses")
     assert json.loads(output.split("data: ")[-1]) == {**payload, "sequence_number": 1}
+    assert seen[0] is not None
     assert seen[0].content_released
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("separator", ["", "\u2028", "\u2029", "\x85"])
 async def test_public_sequence_preserves_decimal_extensions_and_call_ids(
-    separator,
-):
+    separator: str,
+) -> None:
     async def source():
         state = current_stream_delivery()
         assert state is not None
@@ -213,10 +228,16 @@ async def test_public_sequence_preserves_decimal_extensions_and_call_ids(
         )
 
     output = await drained(source(), "responses")
-    payload = simplejson.loads(output.split("data: ")[-1], use_decimal=True)
+    payload: DecimalJsonObject = simplejson.loads(
+        output.split("data: ")[-1], use_decimal=True
+    )
     assert payload["sequence_number"] == 1
-    assert payload["response_id"] == payload["response"]["id"] == "resp_old"
-    assert payload["response"]["created_at"] == 7
+    assert (
+        payload["response_id"]
+        == object_payload(payload["response"])["id"]
+        == "resp_old"
+    )
+    assert object_payload(payload["response"])["created_at"] == 7
     assert payload["call_id"] == "resp_new"
     assert payload["native"] == Decimal("1.234567890123456789")
     assert payload["extension"] == "a" + separator + "b"
@@ -225,7 +246,7 @@ async def test_public_sequence_preserves_decimal_extensions_and_call_ids(
 
 
 @pytest.mark.asyncio
-async def test_classifier_resets_projection_when_hidden_attempt_is_replaced():
+async def test_classifier_resets_projection_when_hidden_attempt_is_replaced() -> None:
     async def source():
         state = current_stream_delivery()
         assert state is not None
@@ -265,7 +286,7 @@ async def test_classifier_resets_projection_when_hidden_attempt_is_replaced():
 
 
 @pytest.mark.asyncio
-async def test_prefetch_read_and_close_can_migrate_tasks_without_context_leak():
+async def test_prefetch_read_and_close_can_migrate_tasks_without_context_leak() -> None:
     seen = []
     closed = []
 
@@ -298,15 +319,36 @@ async def test_prefetch_read_and_close_can_migrate_tasks_without_context_leak():
 
 
 @pytest.mark.asyncio
-async def test_private_web_search_masks_public_observer_during_read_and_close():
+async def test_private_web_search_masks_public_observer_during_read_and_close() -> None:
     seen = []
     closed = []
 
     class ObservedSelection(ScriptedSelectionProvider):
-        async def stream_messages(self, *args, **kwargs):
+        @override
+        async def stream_messages(
+            self,
+            request: MessagesRequest,
+            *,
+            input_tokens: int,
+            request_id: str,
+            response_model: str,
+            reasoning: ReasoningPolicy,
+            request_headers: Mapping[str, str] | None = None,
+            model_info: ProviderModelInfo | None = None,
+            continuation: ContinuationSeed | None = None,
+        ):
             seen.append(current_stream_delivery())
             try:
-                async for frame in super().stream_messages(*args, **kwargs):
+                async for frame in super().stream_messages(
+                    request,
+                    input_tokens=input_tokens,
+                    request_id=request_id,
+                    response_model=response_model,
+                    reasoning=reasoning,
+                    request_headers=request_headers,
+                    model_info=model_info,
+                    continuation=continuation,
+                ):
                     yield frame
             finally:
                 closed.append(current_stream_delivery())
@@ -327,12 +369,12 @@ async def test_private_web_search_masks_public_observer_during_read_and_close():
 
 
 @pytest.mark.asyncio
-async def test_concurrent_responses_do_not_share_delivery_or_call_aliases():
+async def test_concurrent_responses_do_not_share_delivery_or_call_aliases() -> None:
     states = {}
     both = asyncio.Event()
     other_done = asyncio.Event()
 
-    async def source(label):
+    async def source(label: str):
         state = current_stream_delivery()
         assert state is not None
         states[label] = state

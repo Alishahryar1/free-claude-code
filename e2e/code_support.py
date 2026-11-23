@@ -1,17 +1,23 @@
 """Explicit barriers for Code browser tests, on the application's own loop."""
 
 import asyncio
-from collections.abc import Coroutine
+from collections.abc import Awaitable
+from pathlib import Path
 from unittest.mock import patch
 
 from free_claude_code.application.code_sessions import CodeService
+from free_claude_code.application.code_sessions.models import (
+    CodeItem,
+    CodeRun,
+    CodeSession,
+)
 from free_claude_code.runtime.code_sessions_sqlite import SQLiteCodeStore
 from free_claude_code.runtime.sqlite_database import SQLiteDatabase
 from tests.code_sessions_support import FakeHarness
 
 
 class CodeControl:
-    def __init__(self, directory):
+    def __init__(self, directory: Path):
         self.harness = FakeHarness()
         self.folder_picker = FolderPickerControl()
         self.database = SQLiteDatabase(directory / "fcc.db", directory / "code.lock")
@@ -21,9 +27,15 @@ class CodeControl:
         )
         self.loop: asyncio.AbstractEventLoop | None = None
 
-    def run[T](self, work: Coroutine[object, object, T]) -> T:
+    def run[T](self, work: Awaitable[T]) -> T:
         assert self.loop is not None
-        return asyncio.run_coroutine_threadsafe(work, self.loop).result(timeout=10)
+
+        async def complete() -> T:
+            return await work
+
+        return asyncio.run_coroutine_threadsafe(complete(), self.loop).result(
+            timeout=10
+        )
 
     def connection(self):
         self.run(self.harness.started.wait())
@@ -33,7 +45,9 @@ class CodeControl:
         self.admission = asyncio.Event()
         original = self.service._store.admit_run
 
-        async def admit(session, run, item, expected_revision):
+        async def admit(
+            session: CodeSession, run: CodeRun, item: CodeItem, expected_revision: int
+        ):
             await self.admission.wait()
             return await original(session, run, item, expected_revision)
 
@@ -45,14 +59,17 @@ class CodeControl:
         self.admission_patch.stop()
 
 
+type FolderSelection = tuple[str | None, asyncio.Future[str | None], asyncio.Event]
+
+
 class FolderPickerControl:
     """Substitute the native dialog while retaining its real runtime owner."""
 
     def __init__(self):
-        self.calls = asyncio.Queue()
+        self.calls: asyncio.Queue[FolderSelection] = asyncio.Queue()
 
-    async def select(self, initial_path, stop):
-        result = asyncio.get_running_loop().create_future()
+    async def select(self, initial_path: str | None, stop: asyncio.Event) -> str | None:
+        result: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
         closed = asyncio.Event()
         self.calls.put_nowait((initial_path, result, closed))
         stopped = asyncio.create_task(stop.wait())
@@ -64,10 +81,10 @@ class FolderPickerControl:
             await asyncio.gather(stopped, return_exceptions=True)
             closed.set()
 
-    async def finish(self, call, path):
+    async def finish(self, call: FolderSelection, path: str | None):
         call[1].set_result(path)
         await call[2].wait()
 
-    async def fail(self, call):
+    async def fail(self, call: FolderSelection):
         call[1].set_exception(RuntimeError("No desktop available"))
         await call[2].wait()

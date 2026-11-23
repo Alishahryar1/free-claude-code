@@ -6,7 +6,7 @@ import pytest
 from free_claude_code.harnesses import claude_onboarding
 
 
-def test_missing_state_status_does_not_create_files(tmp_path):
+def test_missing_state_status_does_not_create_files(tmp_path: Path) -> None:
     path = tmp_path / "missing" / ".claude.json"
     assert claude_onboarding.status(path) == {
         "completed": False,
@@ -18,7 +18,9 @@ def test_missing_state_status_does_not_create_files(tmp_path):
 
 
 @pytest.mark.parametrize("flag", [None, False, 1, "true", True])
-def test_complete_preserves_values_and_is_idempotent(tmp_path, flag):
+def test_complete_preserves_values_and_is_idempotent(
+    tmp_path: Path, flag: bool | int | str | None
+) -> None:
     path = tmp_path / ".claude.json"
     path.write_text(
         json.dumps(
@@ -43,7 +45,7 @@ def test_complete_preserves_values_and_is_idempotent(tmp_path, flag):
 
 
 @pytest.mark.parametrize("source", ["{invalid", "[]", '{"a":1,"a":2}', '{"a":NaN}'])
-def test_invalid_state_is_never_overwritten(tmp_path, source):
+def test_invalid_state_is_never_overwritten(tmp_path: Path, source: str) -> None:
     path = tmp_path / ".claude.json"
     path.write_text(source)
     for operation in (claude_onboarding.status, claude_onboarding.complete):
@@ -52,11 +54,13 @@ def test_invalid_state_is_never_overwritten(tmp_path, source):
         assert path.read_text() == source
 
 
-def test_failed_write_preserves_original_and_removes_temporary(tmp_path, monkeypatch):
+def test_failed_write_preserves_original_and_removes_temporary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     path = tmp_path / ".claude.json"
     path.write_text('{"theme":"dark"}')
 
-    def fail(self, target):
+    def fail(self: object, target: object):
         raise PermissionError("denied")
 
     monkeypatch.setattr(Path, "replace", fail)
@@ -66,7 +70,7 @@ def test_failed_write_preserves_original_and_removes_temporary(tmp_path, monkeyp
     assert list(tmp_path.iterdir()) == [path]
 
 
-def test_symlink_is_preserved(tmp_path):
+def test_symlink_is_preserved(tmp_path: Path) -> None:
     target, link = tmp_path / "state.json", tmp_path / ".claude.json"
     target.write_text('{"theme":"dark"}')
     try:
@@ -86,6 +90,6 @@ def test_symlink_is_preserved(tmp_path):
     }
 
 
-def test_default_state_path(tmp_path, monkeypatch):
+def test_default_state_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     assert claude_onboarding.state_path() == tmp_path / ".claude.json"

@@ -17,6 +17,7 @@ from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     build_responses_messages_request,
 )
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 def _stream(*, tools: list[JsonObject] | None = None) -> AnthropicToResponsesStream:
@@ -35,10 +36,7 @@ def _feed(
     stream: AnthropicToResponsesStream, kind: str, **fields: JsonValue
 ) -> list[JsonObject]:
     chunks = stream.feed(kind, {"type": kind, **fields})
-    return [
-        cast(JsonObject, event.data)
-        for event in parse_sse_lines("".join(chunks).splitlines())
-    ]
+    return [event.data for event in parse_sse_lines("".join(chunks).splitlines())]
 
 
 def _start(stream: AnthropicToResponsesStream) -> list[JsonObject]:
@@ -344,10 +342,13 @@ def test_failure_retains_partial_text_without_completing_partial_tool_arguments(
         )
     ]
     assert [event["type"] for event in events] == ["response.failed"]
-    output = events[0]["response"]["output"]
-    assert [item["status"] for item in output] == ["incomplete", "incomplete"]
-    assert output[0]["content"][0]["text"] == "partial text"
-    assert output[1]["arguments"] == ""
+    output = object_payload(events[0]["response"])["output"]
+    assert [object_payload(item)["status"] for item in array_payload(output)] == [
+        "incomplete",
+        "incomplete",
+    ]
+    assert object_array(object_array(output)[0]["content"])[0]["text"] == "partial text"
+    assert object_array(output)[1]["arguments"] == ""
     assert stream.terminal_failure(failure) == []
     with pytest.raises(NativeMessagesError, match="terminal"):
         _feed(stream, "message_stop")
@@ -379,9 +380,12 @@ def test_malformed_custom_tool_wrapper_cannot_become_completed_output(
     failed = parse_sse_lines("".join(stream.terminal_failure(failure)).splitlines())[
         -1
     ].data
-    output = failed["response"]["output"]
-    assert len(output) == 1
-    assert output[0]["call_id"] == "c" and output[0]["status"] == "incomplete"
+    output = object_payload(failed["response"])["output"]
+    assert len(array_payload(output)) == 1
+    assert (
+        object_array(output)[0]["call_id"] == "c"
+        and object_array(output)[0]["status"] == "incomplete"
+    )
 
 
 def test_terminal_usage_omits_missing_cache_and_provisional_thinking_details() -> None:

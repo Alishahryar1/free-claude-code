@@ -2,12 +2,15 @@
 
 import asyncio
 import json
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
+from typing import Literal, overload, override
 from unittest.mock import patch
 
 import httpx2
 import pytest
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, AsyncStream
+from openai.types.chat import ChatCompletionChunk
 from starlette.responses import StreamingResponse
 
 from free_claude_code.api.response_streams import (
@@ -17,8 +20,10 @@ from free_claude_code.api.response_streams import (
 from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.chat_completions.response import chat_failure
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
@@ -26,6 +31,7 @@ from free_claude_code.providers.admission import (
 from free_claude_code.providers.mistral import MistralProvider
 from free_claude_code.providers.mistral.reasoning import normalize_mistral_stream
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
+from free_claude_code.providers.openai_chat.provider import OpenAIChatProvider
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 from free_claude_code.providers.openai_stream import OpenAIStreamAdapter
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
@@ -41,8 +47,8 @@ from tests.providers.test_openai_responses_transport import (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["chat", "responses"])
-async def test_sdk_reader_only_discards_identifiable_pings(kind):
-    payloads = [
+async def test_sdk_reader_only_discards_identifiable_pings(kind: str) -> None:
+    payloads: list[JsonObject] = [
         {},
         {"choices": []},
         {"choices": [{"index": 0, "delta": {"role": "assistant"}}]},
@@ -75,16 +81,20 @@ async def test_sdk_reader_only_discards_identifiable_pings(kind):
             )
         ),
     ) as client:
-        stream = (
-            await client.chat.completions.create(
-                model="model", messages=[], stream=True
+        if kind == "chat":
+            adapter = OpenAIStreamAdapter(
+                await client.chat.completions.create(
+                    model="model", messages=[], stream=True
+                ),
+                read_timeout_s=1,
             )
-            if kind == "chat"
-            else await client.responses.create(
-                model="model", input="hello", stream=True
+        else:
+            adapter = OpenAIStreamAdapter(
+                await client.responses.create(
+                    model="model", input="hello", stream=True
+                ),
+                read_timeout_s=1,
             )
-        )
-        adapter = OpenAIStreamAdapter(stream, read_timeout_s=1)
         try:
             result = [event.model_dump(exclude_unset=True) async for event in adapter]
         finally:
@@ -93,7 +103,14 @@ async def test_sdk_reader_only_discards_identifiable_pings(kind):
 
 
 class ResponseBody(httpx2.AsyncByteStream):
-    def __init__(self, prefix=b"", suffix=b"", *, close_error=None, block_close=False):
+    def __init__(
+        self,
+        prefix: bytes = b"",
+        suffix: bytes = b"",
+        *,
+        close_error: Exception | None = None,
+        block_close: bool = False,
+    ):
         self.prefix = prefix
         self.suffix = suffix
         self.read_started = asyncio.Event()
@@ -104,6 +121,7 @@ class ResponseBody(httpx2.AsyncByteStream):
         self.block_close = block_close
         self.close_count = 0
 
+    @override
     async def __aiter__(self):
         if self.prefix:
             yield self.prefix
@@ -111,6 +129,7 @@ class ResponseBody(httpx2.AsyncByteStream):
         await self.read_release.wait()
         yield self.suffix
 
+    @override
     async def aclose(self):
         self.close_count += 1
         self.close_started.set()
@@ -120,7 +139,7 @@ class ResponseBody(httpx2.AsyncByteStream):
             raise self.close_error
 
 
-def _chat_chunk(text, *, finish_reason=None):
+def _chat_chunk(text: bool | int | str, *, finish_reason: str | None = None):
     return _sse(
         {
             "id": "chat_test",
@@ -134,7 +153,7 @@ def _chat_chunk(text, *, finish_reason=None):
     ).encode()
 
 
-def _chunks(kind, text):
+def _chunks(kind: str, text: str):
     if kind == "responses":
         return _sse(_text_delta(text)).encode(), _sse(_completed_event()).encode()
     return _chat_chunk(text), _chat_chunk(
@@ -142,14 +161,57 @@ def _chunks(kind, text):
     ) + b"data: [DONE]\n\n"
 
 
-def _response(body):
+def _response(body: ResponseBody):
     return httpx2.Response(
         200, headers={"content-type": "text/event-stream"}, stream=body
     )
 
 
+@overload
 @asynccontextmanager
-async def _harness(kind, handler):
+def _harness(
+    kind: Literal["chat", "mistral", "nim"],
+    handler: Callable[[httpx2.Request], httpx2.Response],
+) -> AsyncGenerator[
+    tuple[OpenAIChatProvider, AsyncOpenAI, ProviderAdmissionController]
+]: ...
+
+
+@overload
+@asynccontextmanager
+def _harness(
+    kind: Literal["responses"],
+    handler: Callable[[httpx2.Request], httpx2.Response],
+) -> AsyncGenerator[
+    tuple[OpenAIResponsesTransport, AsyncOpenAI, ProviderAdmissionController]
+]: ...
+
+
+@overload
+@asynccontextmanager
+def _harness(
+    kind: Literal["chat", "mistral", "nim", "responses"],
+    handler: Callable[[httpx2.Request], httpx2.Response],
+) -> AsyncGenerator[
+    tuple[
+        OpenAIChatProvider | OpenAIResponsesTransport,
+        AsyncOpenAI,
+        ProviderAdmissionController,
+    ]
+]: ...
+
+
+@asynccontextmanager
+async def _harness(
+    kind: Literal["chat", "mistral", "nim", "responses"],
+    handler: Callable[[httpx2.Request], httpx2.Response],
+) -> AsyncGenerator[
+    tuple[
+        OpenAIChatProvider | OpenAIResponsesTransport,
+        AsyncOpenAI,
+        ProviderAdmissionController,
+    ]
+]:
     client = AsyncOpenAI(
         api_key="test",
         base_url="https://provider.invalid/v1",
@@ -165,18 +227,25 @@ async def _harness(kind, handler):
         max_delay=0.0,
         jitter=0.0,
     )
-    retained_sdk_streams = []
+    retained_sdk_streams: list[AsyncStream[object]] = []
     endpoint = client.responses if kind == "responses" else client.chat.completions
-    create = endpoint.create
 
-    async def retain_stream(**kwargs):
-        stream = await create(**kwargs)
-        retained_sdk_streams.append(stream)
-        return stream
+    def retaining_streams[**P, Result](
+        create: Callable[P, Awaitable[Result]],
+    ) -> Callable[P, Awaitable[Result]]:
+        async def retain(*args: P.args, **kwargs: P.kwargs) -> Result:
+            stream = await create(*args, **kwargs)
+            assert isinstance(stream, AsyncStream)
+            retained_sdk_streams.append(stream)
+            return stream
+
+        return retain
 
     try:
         with (
-            patch.object(endpoint, "create", side_effect=retain_stream),
+            patch.object(
+                endpoint, "create", side_effect=retaining_streams(endpoint.create)
+            ),
             patch(
                 "free_claude_code.providers.openai_chat.provider.create_chat_client",
                 return_value=client,
@@ -207,24 +276,34 @@ async def _harness(kind, handler):
         await client.close()
 
 
-def _public_stream(provider, wire):
-    kwargs = {}
+def _public_stream(
+    provider: OpenAIChatProvider | OpenAIResponsesTransport,
+    wire: Literal["messages", "responses"],
+) -> AsyncIterator[StreamOutput]:
     if isinstance(provider, OpenAIResponsesTransport):
-        kwargs = {
-            "input_tokens": 1,
-            "request_id": "lifecycle",
-            "response_model": "model",
-            "reasoning": DEFAULT_REASONING_POLICY,
-        }
-    request = (
-        make_messages_request("model")
-        if wire == "messages"
-        else OpenAIResponsesRequest(model="model", input="hello")
+        if wire == "messages":
+            return provider.stream_messages(
+                make_messages_request("model"),
+                input_tokens=1,
+                request_id="lifecycle",
+                response_model="model",
+                reasoning=DEFAULT_REASONING_POLICY,
+            )
+        return provider.stream_responses(
+            OpenAIResponsesRequest(model="model", input="hello"),
+            input_tokens=1,
+            request_id="lifecycle",
+            response_model="model",
+            reasoning=DEFAULT_REASONING_POLICY,
+        )
+    if wire == "messages":
+        return provider.stream_messages(make_messages_request("model"))
+    return provider.stream_responses(
+        OpenAIResponsesRequest(model="model", input="hello")
     )
-    return getattr(provider, f"stream_{wire}")(request, **kwargs)
 
 
-async def _assert_admission_available(admission):
+async def _assert_admission_available(admission: ProviderAdmissionController):
     async with asyncio.timeout(1):
         attempt = await admission.start_execution().open_attempt(
             ProviderOperationKind.GENERATION
@@ -236,13 +315,17 @@ async def _assert_admission_available(admission):
 @pytest.mark.parametrize("kind", ["chat", "mistral", "nim", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("termination", ["close", "cancel", "complete"])
-async def test_sdk_body_lifetime(kind, wire, termination):
+async def test_sdk_body_lifetime(
+    kind: Literal["chat", "mistral", "nim", "responses"],
+    wire: Literal["messages", "responses"],
+    termination: str,
+) -> None:
     prefix, suffix = _chunks(kind, "x" * 70_000)
     body = ResponseBody(prefix if termination != "cancel" else b"", suffix)
     if termination == "complete":
         body.read_release.set()
 
-    def handler(request):
+    def handler(request: httpx2.Request):
         if request.url.path.endswith("/health"):
             return httpx2.Response(200, json={"ok": True})
         return _response(body)
@@ -257,7 +340,7 @@ async def test_sdk_body_lifetime(kind, wire, termination):
         task = None
         try:
             if termination == "cancel":
-                task = asyncio.create_task(anext(stream))
+                task = asyncio.ensure_future(anext(stream))
                 await asyncio.wait_for(body.read_started.wait(), timeout=2)
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
@@ -289,9 +372,13 @@ async def test_sdk_body_lifetime(kind, wire, termination):
 
 
 @pytest.mark.asyncio
-async def test_cancelled_normalizer_construction_cleanup_releases_admission():
+async def test_cancelled_normalizer_construction_cleanup_releases_admission() -> None:
     body = ResponseBody(block_close=True)
-    async with _harness("chat", lambda request: _response(body)) as (
+
+    def callback(request: object):
+        return _response(body)
+
+    async with _harness("chat", callback) as (
         provider,
         client,
         admission,
@@ -325,12 +412,18 @@ async def test_cancelled_normalizer_construction_cleanup_releases_admission():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_cancelled_retry_cleanup_releases_recovery_ownership(wire):
+async def test_cancelled_retry_cleanup_releases_recovery_ownership(
+    wire: Literal["messages", "responses"],
+) -> None:
     failed_body = ResponseBody(block_close=True)
     healthy_body = ResponseBody(*_chunks("chat", "recovered"))
     healthy_body.read_release.set()
     bodies = iter((failed_body, healthy_body))
-    async with _harness("chat", lambda request: _response(next(bodies))) as (
+
+    def callback(request: object):
+        return _response(next(bodies))
+
+    async with _harness("chat", callback) as (
         provider,
         client,
         admission,
@@ -372,7 +465,7 @@ async def test_cancelled_retry_cleanup_releases_recovery_ownership(wire):
 
 
 @pytest.mark.asyncio
-async def test_mistral_cleanup_preserves_normalization_error():
+async def test_mistral_cleanup_preserves_normalization_error() -> None:
     body = ResponseBody(
         _chat_chunk("hello"), close_error=RuntimeError("cleanup secret-token")
     )
@@ -416,7 +509,7 @@ async def test_mistral_cleanup_preserves_normalization_error():
 
 
 class _RejectingNormalizedStream:
-    def __init__(self, source):
+    def __init__(self, source: OpenAIStreamAdapter[ChatCompletionChunk]):
         self.source = source
 
     def __aiter__(self):
@@ -434,11 +527,13 @@ class _RejectingNormalizedStream:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_normalization_failure_closes_response_before_retry(wire):
+async def test_normalization_failure_closes_response_before_retry(
+    wire: Literal["messages", "responses"],
+) -> None:
     body = ResponseBody(_chat_chunk("reject normalization"))
     requests = 0
 
-    def handler(request):
+    def handler(request: object):
         nonlocal requests
         requests += 1
         if requests == 1:
@@ -452,10 +547,16 @@ async def test_normalization_failure_closes_response_before_retry(wire):
         )
 
     async with _harness("nim", handler) as (provider, client, admission):
+
+        def side_effect_2(
+            stream: OpenAIStreamAdapter[ChatCompletionChunk], body: object
+        ):
+            return _RejectingNormalizedStream(stream)
+
         with patch.object(
             provider._behavior,
             "normalize_stream",
-            side_effect=lambda stream, body: _RejectingNormalizedStream(stream),
+            side_effect=side_effect_2,
         ):
             async with asyncio.timeout(2):
                 output = "".join(
@@ -475,12 +576,12 @@ async def test_normalization_failure_closes_response_before_retry(wire):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_rejected_first_stopped_chunk_returns_error_and_releases_admission(
-    wire,
-):
+    wire: Literal["messages", "responses"],
+) -> None:
     body = ResponseBody(_chat_chunk("reject normalization", finish_reason="length"))
     requests = 0
 
-    def handler(request):
+    def handler(request: object):
         nonlocal requests
         requests += 1
         if requests == 1:
@@ -496,10 +597,16 @@ async def test_rejected_first_stopped_chunk_returns_error_and_releases_admission
     async with _harness("nim", handler) as (provider, client, admission):
         options = {"pre_start_error_response": _json_error, "request_id": "raw-stop"}
         source = _public_stream(provider, wire)
+
+        def side_effect_2(
+            stream: OpenAIStreamAdapter[ChatCompletionChunk], body: object
+        ):
+            return _RejectingNormalizedStream(stream)
+
         with patch.object(
             provider._behavior,
             "normalize_stream",
-            side_effect=lambda stream, body: _RejectingNormalizedStream(stream),
+            side_effect=side_effect_2,
         ):
             async with asyncio.timeout(2):
                 response = await (
@@ -524,12 +631,16 @@ async def test_rejected_first_stopped_chunk_returns_error_and_releases_admission
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reject_normalization", [False, True])
 async def test_sdk_observer_runs_before_normalization_without_owning_cleanup(
-    reject_normalization,
-):
+    reject_normalization: bool,
+) -> None:
     text = "reject normalization" if reject_normalization else "hello"
     body = ResponseBody(_chat_chunk(text, finish_reason="stop"))
-    seen = []
-    async with _harness("nim", lambda _: _response(body)) as (_, client, admission):
+    seen: list[ChatCompletionChunk] = []
+
+    def callback(_: object):
+        return _response(body)
+
+    async with _harness("nim", callback) as (_, client, admission):
         sdk_stream = await client.chat.completions.create(
             model="model", messages=[], stream=True
         )
@@ -554,11 +665,11 @@ async def test_sdk_observer_runs_before_normalization_without_owning_cleanup(
 
 
 @pytest.mark.asyncio
-async def test_chunk_transform_runs_before_observer_and_returns_same_event():
+async def test_chunk_transform_runs_before_observer_and_returns_same_event() -> None:
     body = ResponseBody(_chat_chunk(0, finish_reason="stop"))
     seen = []
 
-    def transform(chunk):
+    def transform(chunk: ChatCompletionChunk):
         choice = chunk.choices[0]
         return chunk.model_copy(
             update={
@@ -572,7 +683,10 @@ async def test_chunk_transform_runs_before_observer_and_returns_same_event():
             }
         )
 
-    async with _harness("chat", lambda _: _response(body)) as (_, client, _):
+    def callback(_: object):
+        return _response(body)
+
+    async with _harness("chat", callback) as (_, client, _):
         sdk_stream = await client.chat.completions.create(
             model="model", messages=[], stream=True
         )
@@ -594,7 +708,9 @@ async def test_chunk_transform_runs_before_observer_and_returns_same_event():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_chunk_transform_failure_releases_response_without_retry(wire):
+async def test_chunk_transform_failure_releases_response_without_retry(
+    wire: Literal["messages", "responses"],
+) -> None:
     body = ResponseBody(_chat_chunk(True))
     requests = 0
 
@@ -620,12 +736,12 @@ async def test_chunk_transform_failure_releases_response_without_retry(wire):
 
 
 @pytest.mark.asyncio
-async def test_normalizer_construction_failure_closes_response_before_retry():
+async def test_normalizer_construction_failure_closes_response_before_retry() -> None:
     bodies = [ResponseBody(), ResponseBody(*_chunks("chat", "recovered"))]
     bodies[1].read_release.set()
     remaining = iter(bodies)
 
-    def handler(request):
+    def handler(request: object):
         body = next(remaining)
         if body is bodies[1]:
             assert bodies[0].close_count == 1
@@ -635,7 +751,9 @@ async def test_normalizer_construction_failure_closes_response_before_retry():
         normalize = provider._behavior.normalize_stream
         calls = 0
 
-        def fail_once(stream, body):
+        def fail_once(
+            stream: OpenAIStreamAdapter[ChatCompletionChunk], body: Mapping[str, object]
+        ):
             nonlocal calls
             calls += 1
             if calls == 1:

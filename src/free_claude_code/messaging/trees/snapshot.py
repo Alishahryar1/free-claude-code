@@ -5,6 +5,8 @@ from typing import Any
 
 from loguru import logger
 
+from free_claude_code.core.json_types import JsonValue
+
 from ..models import MessageScope
 from .identity import TreeIdentity
 from .node import MessageNode, MessageState
@@ -62,13 +64,13 @@ class TreeSnapshot:
     def lookup_ids(self) -> set[str]:
         lookup_ids: set[str] = set()
         for node_key, node_data in self.nodes.items():
-            lookup_ids.add(str(node_key))
+            lookup_ids.add(node_key)
             if not isinstance(node_data, dict):
                 continue
-            node_id = node_data.get("node_id")
+            node_id: object = node_data.get("node_id")
             if node_id is not None:
                 lookup_ids.add(str(node_id))
-            status_message_id = node_data.get("status_message_id")
+            status_message_id: object = node_data.get("status_message_id")
             if status_message_id is not None:
                 lookup_ids.add(str(status_message_id))
         return lookup_ids
@@ -133,7 +135,7 @@ class ConversationSnapshot:
 
 def _legacy_scope(
     root_id: str,
-    nodes: dict[str, Any],
+    nodes: dict[str, JsonValue],
 ) -> MessageScope | None:
     """Derive scope from pre-scope snapshots without retaining a runtime shim."""
     root = nodes.get(root_id)
@@ -175,7 +177,8 @@ def node_to_snapshot(node: MessageNode) -> dict[str, Any]:
 
 
 def node_from_snapshot(data: dict[str, Any], scope: MessageScope) -> MessageNode:
-    state = MessageState(data["state"])
+    state_value: str = data["state"]
+    state = MessageState(state_value)
     status_message_id = _optional_id(
         data.get("status_message_id"),
         "status_message_id",
@@ -203,7 +206,7 @@ def node_from_snapshot(data: dict[str, Any], scope: MessageScope) -> MessageNode
     )
 
 
-def _required_id(value: Any, field_name: str) -> str:
+def _required_id(value: object, field_name: str) -> str:
     normalized = _optional_id(value, field_name)
     if normalized is None:
         raise ValueError(f"Tree snapshot {field_name} is required")

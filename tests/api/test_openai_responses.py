@@ -1,5 +1,6 @@
 import json
 from collections.abc import AsyncIterator
+from typing import override
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -31,17 +32,25 @@ from tests.api.support import create_test_app, provider_manager_for_app
 from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_custom_provider import completion, definition
 from tests.providers.test_custom_provider import provider as custom_provider
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+    response_object,
+    string_payload,
+)
 
 _PUBLIC_MODEL = "nvidia_nim/test-model"
 _UPSTREAM_MODEL = "test-model"
 _RESPONSE_ID = "resp_test"
 
 
-def test_responses_route_carries_generation_model_limit_to_messages_egress():
+def test_responses_route_carries_generation_model_limit_to_messages_egress() -> None:
     bodies = []
 
-    def reply(request):
-        bodies.append(json.loads(request.content))
+    def reply(request: httpx.Request):
+        bodies.append(decode_object(request.content))
         return httpx.Response(
             200,
             text=completion("anthropic_messages"),
@@ -94,6 +103,7 @@ class PreStartFailingProvider(FakeProvider):
     def __init__(self) -> None:
         super().__init__([])
 
+    @override
     async def stream_responses(
         self,
         request_data: OpenAIResponsesRequest,
@@ -141,7 +151,12 @@ def test_responses_probe_endpoints_return_204(
         ),
     ],
 )
-def test_retired_response_id_uses_replacement(responses_client, prefix, ref, upstream):
+def test_retired_response_id_uses_replacement(
+    responses_client: tuple[TestClient, FakeProvider],
+    prefix: str,
+    ref: str,
+    upstream: str,
+) -> None:
     client, provider = responses_client
     original = f"{prefix}{ref}"
     response = client.post("/v1/responses", json={"model": original, "input": "hello"})
@@ -176,9 +191,11 @@ def test_create_response_stream_routes_native_request_through_provider(
         "response.output_text.delta",
         "response.completed",
     ]
-    assert events[-1].data["response"]["output"][0]["content"][0]["text"] == (
-        "Hello from provider"
-    )
+    assert object_array(
+        object_array(object_payload(events[-1].data["response"])["output"])[0][
+            "content"
+        ]
+    )[0]["text"] == ("Hello from provider")
     assert len(provider.requests) == 1
     routed = provider.requests[0]
     assert routed.model == _UPSTREAM_MODEL
@@ -207,10 +224,20 @@ def test_create_response_stream_preserves_output_limit_as_incomplete() -> None:
     events = parse_sse_text(response.text)
     assert events[-1].event == "response.incomplete"
     incomplete = events[-1].data["response"]
-    assert incomplete["id"] == events[0].data["response"]["id"]
-    assert incomplete["status"] == "incomplete"
-    assert incomplete["incomplete_details"] == {"reason": "max_output_tokens"}
-    assert incomplete["output"][0]["content"][0]["text"] == "partial output"
+    assert (
+        object_payload(incomplete)["id"]
+        == object_payload(events[0].data["response"])["id"]
+    )
+    assert object_payload(incomplete)["status"] == "incomplete"
+    assert object_payload(incomplete)["incomplete_details"] == {
+        "reason": "max_output_tokens"
+    }
+    assert (
+        object_array(object_array(object_payload(incomplete)["output"])[0]["content"])[
+            0
+        ]["text"]
+        == "partial output"
+    )
 
 
 def test_create_response_startup_rejection_stays_an_ordinary_http_error() -> None:
@@ -309,9 +336,9 @@ def test_create_response_pre_start_provider_error_returns_openai_error() -> None
     assert response.status_code == 429
     assert response.headers["x-should-retry"] == "false"
     assert response.headers["x-request-id"] == response.headers["request-id"]
-    payload = response.json()
-    assert payload["error"]["type"] == "rate_limit_error"
-    assert payload["error"]["message"] == "upstream is busy"
+    payload = response_object(response)
+    assert object_payload(payload["error"])["type"] == "rate_limit_error"
+    assert object_payload(payload["error"])["message"] == "upstream is busy"
     request_id = response.headers["request-id"]
     assert provider.stream_kwargs[0]["request_id"] == request_id
     terminal_trace = next(
@@ -357,9 +384,15 @@ def test_create_response_relays_provider_owned_post_start_failure() -> None:
     assert response.status_code == 200
     events = parse_sse_text(response.text)
     assert [event.event for event in events] == ["response.created", "response.failed"]
-    assert events[-1].data["response"]["id"] == events[0].data["response"]["id"]
-    assert events[-1].data["response"]["status"] == "failed"
-    assert events[-1].data["response"]["error"]["message"] == "socket closed"
+    assert (
+        object_payload(events[-1].data["response"])["id"]
+        == object_payload(events[0].data["response"])["id"]
+    )
+    assert object_payload(events[-1].data["response"])["status"] == "failed"
+    assert (
+        object_payload(object_payload(events[-1].data["response"])["error"])["message"]
+        == "socket closed"
+    )
 
 
 def test_create_response_stream_forwards_quota_prompt() -> None:
@@ -376,7 +409,12 @@ def test_create_response_stream_forwards_quota_prompt() -> None:
 
     assert response.status_code == 200
     completed = parse_sse_text(response.text)[-1].data["response"]
-    assert completed["output"][0]["content"][0]["text"] == "Provider response"
+    assert (
+        object_array(object_array(object_payload(completed)["output"])[0]["content"])[
+            0
+        ]["text"]
+        == "Provider response"
+    )
     assert provider.requests[0].input == "quota check"
 
 
@@ -391,9 +429,11 @@ def test_create_response_stream_false_returns_openai_error(
     )
 
     assert response.status_code == 400
-    payload = response.json()
-    assert payload["error"]["type"] == "invalid_request_error"
-    assert "streaming only" in payload["error"]["message"]
+    payload = response_object(response)
+    assert object_payload(payload["error"])["type"] == "invalid_request_error"
+    assert "streaming only" in string_payload(
+        object_payload(payload["error"])["message"]
+    )
     assert provider.requests == []
 
 
@@ -455,7 +495,10 @@ def test_create_response_relays_interleaved_reasoning_order() -> None:
     events = parse_sse_text(response.text)
     assert "response.reasoning_text.delta" in [event.event for event in events]
     completed = events[-1].data["response"]
-    assert [item["type"] for item in completed["output"]] == [
+    assert [
+        object_payload(item)["type"]
+        for item in array_payload(object_payload(completed)["output"])
+    ] == [
         "reasoning",
         "message",
         "function_call",
@@ -497,7 +540,9 @@ def test_create_response_relays_function_call() -> None:
         )
 
     assert response.status_code == 200
-    completed_call = parse_sse_text(response.text)[-1].data["response"]["output"][0]
+    completed_call = array_payload(
+        object_payload(parse_sse_text(response.text)[-1].data["response"])["output"]
+    )[0]
     assert completed_call == call
 
 
@@ -640,9 +685,11 @@ def test_create_response_relays_provider_error_lifecycle() -> None:
     events = parse_sse_text(response.text)
     assert [event.event for event in events] == ["response.created", "response.failed"]
     failed = events[-1].data["response"]
-    assert failed["id"] == events[0].data["response"]["id"]
-    assert failed["status"] == "failed"
-    assert failed["error"] == error
+    assert (
+        object_payload(failed)["id"] == object_payload(events[0].data["response"])["id"]
+    )
+    assert object_payload(failed)["status"] == "failed"
+    assert object_payload(failed)["error"] == error
 
 
 def test_create_response_preserves_prior_reasoning_and_tool_history() -> None:
@@ -771,7 +818,9 @@ def test_create_response_relays_encrypted_reasoning() -> None:
         )
 
     assert response.status_code == 200
-    assert parse_sse_text(response.text)[-1].data["response"]["output"] == [reasoning]
+    assert object_payload(parse_sse_text(response.text)[-1].data["response"])[
+        "output"
+    ] == [reasoning]
 
 
 def test_create_response_provider_rejects_unsupported_tool(
@@ -792,9 +841,11 @@ def test_create_response_provider_rejects_unsupported_tool(
     )
 
     assert response.status_code == 400
-    payload = response.json()
-    assert payload["error"]["type"] == "invalid_request_error"
-    assert "Unsupported Responses tool type" in payload["error"]["message"]
+    payload = response_object(response)
+    assert object_payload(payload["error"])["type"] == "invalid_request_error"
+    assert "Unsupported Responses tool type" in string_payload(
+        object_payload(payload["error"])["message"]
+    )
 
 
 def _event(event_type: str, payload: JsonObject) -> str:

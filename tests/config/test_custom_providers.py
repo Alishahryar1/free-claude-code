@@ -14,7 +14,7 @@ from free_claude_code.config.settings import Settings
 ID = "custom_" + "a" * 32
 
 
-def definition(**changes):
+def definition(**changes: object):
     return CustomProviderDefinition.model_validate(
         {
             "provider_id": ID,
@@ -26,7 +26,7 @@ def definition(**changes):
     )
 
 
-def test_private_storage_round_trip_and_routing():
+def test_private_storage_round_trip_and_routing() -> None:
     original = definition(model_ids=[" org/model ", "org/model"])
     encoded = encode_custom_providers((original,))
     settings = Settings.model_validate(
@@ -50,18 +50,18 @@ def test_private_storage_round_trip_and_routing():
         "https://example.org/#fragment",
     ],
 )
-def test_invalid_api_bases_are_rejected(url):
+def test_invalid_api_bases_are_rejected(url: str) -> None:
     with pytest.raises(ValidationError):
         definition(base_url=url)
 
 
 @pytest.mark.parametrize("prefix", ["", "anthropic/", "claude-3-freecc-no-thinking/"])
-def test_unknown_custom_reference_never_falls_back(prefix):
+def test_unknown_custom_reference_never_falls_back(prefix: str) -> None:
     with pytest.raises(UnknownProviderError):
         ModelRouter(Settings()).resolve(f"{prefix}{ID}/missing")
 
 
-def test_duplicate_names_and_missing_route_targets_are_rejected():
+def test_duplicate_names_and_missing_route_targets_are_rejected() -> None:
     with pytest.raises(ValidationError):
         Settings(
             custom_providers=[
@@ -73,13 +73,13 @@ def test_duplicate_names_and_missing_route_targets_are_rejected():
         Settings(model=f"{ID}/missing")
 
 
-def test_format_and_reasoning_must_match():
+def test_format_and_reasoning_must_match() -> None:
     with pytest.raises(ValidationError):
         definition(api_format="anthropic_messages", reasoning_format="openai_effort")
 
 
 @pytest.mark.parametrize("saved", ["disabled", "think_tags"])
-def test_saved_chat_prose_formats_normalize_without_mutating_input(saved):
+def test_saved_chat_prose_formats_normalize_without_mutating_input(saved: str) -> None:
     payload = {
         "provider_id": ID,
         "display_name": "Legacy",
@@ -92,5 +92,5 @@ def test_saved_chat_prose_formats_normalize_without_mutating_input(saved):
 
 
 @pytest.mark.parametrize("api_format", ["openai_responses", "anthropic_messages"])
-def test_nonchat_unused_history_sentinel_is_preserved(api_format):
+def test_nonchat_unused_history_sentinel_is_preserved(api_format: str) -> None:
     assert definition(api_format=api_format).reasoning_history_format == "disabled"

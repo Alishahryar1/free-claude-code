@@ -13,6 +13,7 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
 )
+from tests.wire_payload import array_payload, object_payload
 
 AZURE_OPENAI_BASE_URL = "https://example-resource.openai.azure.com/openai/v1/"
 AZURE_OPENAI_DEPLOYMENT = "gpt-5.1"
@@ -68,11 +69,19 @@ def test_request_uses_deployment_name_modern_token_field_tools_and_reasoning() -
     )
 
     assert body["model"] == AZURE_OPENAI_DEPLOYMENT
-    assert body["messages"][0] == {"role": "system", "content": "System prompt"}
+    assert array_payload(body["messages"])[0] == {
+        "role": "system",
+        "content": "System prompt",
+    }
     assert body["max_completion_tokens"] == 100
     assert "max_tokens" not in body
     assert body["reasoning_effort"] == "high"
-    assert body["tools"][0]["function"]["name"] == "read_file"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "read_file"
+    )
 
 
 @pytest.mark.parametrize(
@@ -119,19 +128,23 @@ def test_reasoning_history_replays_in_native_field() -> None:
 
     body = _provider()._chat._build_request_body(request)
     assistant = next(
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     )
 
-    assert assistant["content"] == "I found the file."
-    assert assistant["reasoning_content"] == "Inspect the repository."
-    assert assistant["reasoning_content"] == "Inspect the repository."
-    assert "reasoning" not in assistant
+    assert object_payload(assistant)["content"] == "I found the file."
+    assert object_payload(assistant)["reasoning_content"] == "Inspect the repository."
+    assert object_payload(assistant)["reasoning_content"] == "Inspect the repository."
+    assert "reasoning" not in object_payload(assistant)
 
 
 @pytest.mark.asyncio
-async def test_model_discovery_does_not_advertise_model_ids_as_deployments() -> None:
+async def test_model_discovery_does_not_advertise_model_ids_as_deployments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     provider = _provider()
-    provider._client.models.list = AsyncMock(
+    mock_list = AsyncMock(
         return_value=SimpleNamespace(
             data=[
                 SimpleNamespace(id="gpt-5.1"),
@@ -139,6 +152,7 @@ async def test_model_discovery_does_not_advertise_model_ids_as_deployments() -> 
             ]
         )
     )
+    monkeypatch.setattr(provider._client.models, "list", mock_list)
 
     assert await provider.list_model_infos() == frozenset()
-    provider._client.models.list.assert_awaited_once_with()
+    mock_list.assert_awaited_once_with()

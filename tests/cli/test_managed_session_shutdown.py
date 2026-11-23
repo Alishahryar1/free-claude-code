@@ -5,6 +5,7 @@ import pytest
 
 from free_claude_code.cli.managed.manager import ManagedClaudeSessionManager
 from free_claude_code.cli.managed.session import ManagedClaudeSession
+from free_claude_code.core.json_types import JsonObject
 
 
 def _manager() -> ManagedClaudeSessionManager:
@@ -210,7 +211,7 @@ async def test_normal_sequential_starts_remain_allowed_before_stop() -> None:
 async def _collect_session_events(
     session: ManagedClaudeSession,
     prompt: str,
-) -> list[dict]:
+) -> list[JsonObject]:
     return [event async for event in session.start_task(prompt)]
 
 

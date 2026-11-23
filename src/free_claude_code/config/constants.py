@@ -5,6 +5,9 @@ DEFAULT_MODEL = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
 # Client context allocation when the provider reports no model limit.
 DEFAULT_MODEL_CONTEXT_TOKENS = 200_000
 
+# Total upstream tries per model for one request, including the first.
+PROVIDER_MAX_ATTEMPTS_DEFAULT = 5
+
 # HTTP client connect timeout (seconds).
 HTTP_CONNECT_TIMEOUT_DEFAULT = 30.0
 

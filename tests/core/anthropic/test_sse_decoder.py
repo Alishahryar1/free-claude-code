@@ -6,7 +6,7 @@ import pytest
 from free_claude_code.core.anthropic.streaming import AnthropicSSEDecoder
 
 
-def test_decoder_handles_every_split_and_crlf_boundaries():
+def test_decoder_handles_every_split_and_crlf_boundaries() -> None:
     wire = (
         'event: first\r\ndata: {"type":"first"}\r\n\r\n'
         'event: second\ndata: {"type":"second"}\n\n'
@@ -19,7 +19,7 @@ def test_decoder_handles_every_split_and_crlf_boundaries():
         assert decoder.finish() == ()
 
 
-def test_decoder_returns_one_unterminated_final_event():
+def test_decoder_returns_one_unterminated_final_event() -> None:
     decoder = AnthropicSSEDecoder()
 
     assert decoder.feed('event: final\ndata: {"value": 1}') == ()
@@ -32,7 +32,9 @@ def test_decoder_returns_one_unterminated_final_event():
 
 
 @pytest.mark.parametrize("ending", ["\n\n", ""])
-def test_event_filter_skips_json_and_preserves_unnamed_events_at_every_split(ending):
+def test_event_filter_skips_json_and_preserves_unnamed_events_at_every_split(
+    ending: str,
+) -> None:
     wire = (
         'event: delta\r\ndata: {"text":"ignored"}\r\n\r\n'
         'data: {"type":"error"}\nevent: error\n\n'
@@ -61,13 +63,13 @@ def test_event_filter_skips_json_and_preserves_unnamed_events_at_every_split(end
         assert decoder.finish() == ()
 
 
-def test_event_filter_decodes_selected_unterminated_event():
+def test_event_filter_decodes_selected_unterminated_event() -> None:
     decoder = AnthropicSSEDecoder(event_names=frozenset({"error"}))
     assert decoder.feed('event: error\ndata: {"type":"error"}') == ()
     assert [event.data for event in decoder.finish()] == [{"type": "error"}]
 
 
-def test_decoder_handles_many_tiny_fragments_without_losing_frames():
+def test_decoder_handles_many_tiny_fragments_without_losing_frames() -> None:
     wire = "".join(
         f'event: delta\ndata: {{"index":{index}}}\n\n' for index in range(250)
     )

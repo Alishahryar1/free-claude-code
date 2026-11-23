@@ -11,7 +11,7 @@ from collections.abc import (
     Sequence,
 )
 from functools import partial
-from typing import cast
+from typing import cast, override
 
 import httpx2
 from openai import AsyncOpenAI, AsyncStream
@@ -31,7 +31,7 @@ from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.gemini import GeminiConversionError, GeminiRequest
 from free_claude_code.core.gemini.request import build_gemini_responses_request
 from free_claude_code.core.gemini.responses_stream import GeminiResponsesStream
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, normalize_empty_array_field
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesConversionError,
@@ -547,9 +547,11 @@ class _ResponsesAttempt(TransportAttempt):
         self._stopped = False
 
     @property
+    @override
     def normal_stop_seen(self) -> bool:
         return self._stopped
 
+    @override
     async def prepare(self) -> None:
         transport = self._transport
         endpoint = self._endpoint
@@ -577,6 +579,7 @@ class _ResponsesAttempt(TransportAttempt):
         self._presenter = self._presenter_factory(not self.context.continuing, origin)
         self._start_events = tuple(self._presenter.start())
 
+    @override
     async def stream(self, scope: ProviderAttemptScope) -> AsyncIterator[StreamOutput]:
         assert self._client is not None and self._presenter is not None
         transport = self._transport
@@ -605,6 +608,8 @@ class _ResponsesAttempt(TransportAttempt):
                 if self._start_events:
                     yield StreamOutput(self._start_events)
             payload = cast(JsonObject, upstream_event.to_dict(mode="json"))
+            if isinstance(response := payload.get("response"), dict):
+                normalize_empty_array_field(response, "output")
             failed = upstream_event.type in {
                 "response.failed",
                 "error",
@@ -649,9 +654,11 @@ class _ResponsesAttempt(TransportAttempt):
                 "Provider Responses stream ended without a terminal event."
             )
 
+    @override
     def resolution_error(self, error: Exception) -> Exception:
         return _effective_error(error)
 
+    @override
     def abandon(self, error: Exception) -> Iterator[StreamOutput]:
         if self._presenter is None:
             return
@@ -659,6 +666,7 @@ class _ResponsesAttempt(TransportAttempt):
             if frames := _present(self._presenter, group):
                 yield completed_output(frames)
 
+    @override
     def failure_payload(
         self, error: Exception, failure: ExecutionFailure
     ) -> JsonObject | None:
@@ -666,6 +674,7 @@ class _ResponsesAttempt(TransportAttempt):
             return None
         return self._presenter.failure_payload(error, failure)
 
+    @override
     def handoff(self) -> Iterator[StreamOutput]:
         if isinstance(self._presenter, GeminiResponsesStream):
             for event in self._presenter.handoff():

@@ -5,14 +5,17 @@ import os
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import pytest
 
+from free_claude_code.core.json_types import load_json_value
 from scripts.ci_timings import effective_durations
+from tests.wire_payload import decode_object
 
 
 @pytest.fixture
-def suite(tmp_path):
+def suite(tmp_path: Path):
     (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
     (tmp_path / "conftest.py").write_text(
         "import json\n"
@@ -39,7 +42,7 @@ def suite(tmp_path):
     return tmp_path
 
 
-def run_pytest(suite, *args):
+def run_pytest(suite: Path, *args: str):
     return subprocess.run(
         [
             sys.executable,
@@ -60,13 +63,13 @@ def run_pytest(suite, *args):
     )
 
 
-def collect(suite, *args):
+def collect(suite: Path, *args: str):
     result = run_pytest(suite, "--collect-only", "-q", *args)
     assert result.returncode == 0, result.stdout + result.stderr
-    return json.loads((suite / "items.json").read_text())
+    return load_json_value((suite / "items.json").read_text())
 
 
-def split_args(count, group):
+def split_args(count: int, group: int):
     return [
         "--splits",
         str(count),
@@ -77,7 +80,9 @@ def split_args(count, group):
 
 
 @pytest.mark.parametrize("count", [2, 3, 5])
-def test_shards_partition_all_items_once_and_run_with_workstealing(suite, count):
+def test_shards_partition_all_items_once_and_run_with_workstealing(
+    suite: Path, count: int
+) -> None:
     baseline = collect(suite)
     assert len(baseline) == 16
     assert collect(suite, *split_args(1, 1)) == baseline
@@ -114,15 +119,15 @@ def test_shards_partition_all_items_once_and_run_with_workstealing(suite, count)
 
 
 @pytest.mark.parametrize("count,group", [(0, 1), (5, 0), (5, 6), (17, 17)])
-def test_invalid_or_empty_shards_fail(suite, count, group):
+def test_invalid_or_empty_shards_fail(suite: Path, count: int, group: int) -> None:
     result = run_pytest(suite, *split_args(count, group))
     assert result.returncode == (5 if count == 17 else 4), result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("weights", ["uneven", "zero", "mixed"])
 def test_recorded_timings_partition_once_and_only_store_fresh_measurements(
-    suite, weights
-):
+    suite: Path, weights: str
+) -> None:
     baseline = collect(suite)
     durations = dict.fromkeys(baseline, 0.0)
     if weights != "zero":
@@ -132,8 +137,8 @@ def test_recorded_timings_partition_once_and_only_store_fresh_measurements(
         durations.pop(baseline[-1])  # A newly added test has no prior timing.
     durations["test_deleted.py::test_old"] = 50.0
     frozen = effective_durations(durations)
-    selected = []
-    measured = {}
+    selected: list[str] = []
+    measured: dict[str, float] = {}
     for group in range(1, 4):
         path = suite / "durations.json"
         path.write_text(json.dumps(frozen))
@@ -152,10 +157,12 @@ def test_recorded_timings_partition_once_and_only_store_fresh_measurements(
             "--clean-durations",
         )
         assert result.returncode == 0, result.stdout + result.stderr
-        fresh = json.loads(path.read_text())
+        fresh = decode_object(path.read_text())
         assert set(fresh) == set(members)
         assert not measured.keys() & fresh.keys()
-        measured.update(fresh)
+        for node_id, elapsed in fresh.items():
+            assert isinstance(elapsed, (int, float))
+            measured[node_id] = elapsed
     assert len(selected) == len(set(selected)) == len(baseline)
     assert set(measured) == set(baseline)
     assert all(value >= 0 for value in measured.values())

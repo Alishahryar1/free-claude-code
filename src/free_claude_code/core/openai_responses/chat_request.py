@@ -14,7 +14,7 @@ from free_claude_code.core.history_replay import (
     tool_history_context,
     unprotected_replay,
 )
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.core.openai_chat import (
     IMAGE_TOOL_RESULT_MARKER,
     ChatToolResultImages,
@@ -72,7 +72,8 @@ class _PendingReasoning:
         return not self.items
 
     def take(self) -> list[Mapping[str, JsonValue]]:
-        items, self.items = self.items, []
+        items = self.items
+        self.items = []
         return items
 
 
@@ -158,9 +159,14 @@ class _ResponsesChatInputBuilder:
         if not tool_names.has_aliases:
             return
         for message in self._discovery_outputs:
-            tools = json.loads(cast(str, message["content"]))
+            tools = load_json_value(
+                required_str(message["content"], "discovery output")
+            )
+            assert isinstance(tools, list)
             for tool in tools:
-                tool["name"] = tool_names.encode(tool["name"])
+                assert isinstance(tool, dict)
+                name = required_str(tool.get("name"), "discovery tool name")
+                tool["name"] = tool_names.encode(name)
             message["content"] = json.dumps(tools)
 
     def _add_message(self, item: Mapping[str, JsonValue]) -> None:
@@ -429,7 +435,7 @@ def build_responses_chat_request(
     if request.metadata is not None:
         body["metadata"] = request.metadata
 
-    extra = request.model_extra or {}
+    extra: JsonObject = request.model_extra or {}
     for field_name in _CHAT_OPTION_FIELDS:
         value = extra.get(field_name)
         if value is not None:
@@ -615,7 +621,7 @@ def _chat_function_tool(tool: Mapping[str, JsonValue]) -> tuple[dict[str, object
     name = required_str(tool.get("name"), "tool.name")
     parameters = tool.get("parameters")
     if parameters is None:
-        parameters = {"type": "object", "properties": {}}
+        parameters = {"type": "object", "properties": dict[str, JsonValue]()}
     if not isinstance(parameters, Mapping):
         raise ResponsesConversionError(
             f"Responses tool {name!r} parameters must be an object"

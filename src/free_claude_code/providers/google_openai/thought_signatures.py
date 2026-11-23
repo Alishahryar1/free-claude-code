@@ -1,17 +1,18 @@
 """Google thought-signature replay for OpenAI-compatible tool calls."""
 
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from typing import Any
 
 from free_claude_code.core.history_replay import is_replay
+from free_claude_code.core.json_types import JsonObject, JsonValue, json_text
 
 GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR = "skip_thought_signature_validator"
 
 
 def apply_google_thought_signatures(
-    body: dict[str, Any],
+    body: JsonObject,
     *,
-    tool_call_extra_content_by_id: dict[str, dict[str, Any]] | None = None,
+    tool_call_extra_content_by_id: Mapping[str, JsonObject] | None = None,
 ) -> None:
     """Restore Google tool-call signatures required for conversation replay."""
 
@@ -23,7 +24,7 @@ def apply_google_thought_signatures(
     _apply_missing_current_turn_signatures(messages)
 
 
-def _thought_signature_from_extra_content(extra_content: Any) -> str | None:
+def _thought_signature_from_extra_content(extra_content: JsonValue) -> str | None:
     if not isinstance(extra_content, dict):
         return None
     google = extra_content.get("google")
@@ -33,23 +34,23 @@ def _thought_signature_from_extra_content(extra_content: Any) -> str | None:
     return signature if isinstance(signature, str) and signature else None
 
 
-def _tool_call_thought_signature(tool_call: dict[str, Any]) -> str | None:
+def _tool_call_thought_signature(tool_call: JsonObject) -> str | None:
     return _thought_signature_from_extra_content(tool_call.get("extra_content"))
 
 
-def _set_thought_signature(tool_call: dict[str, Any], signature: str) -> None:
+def _set_thought_signature(tool_call: JsonObject, signature: str) -> None:
     extra_content = tool_call.get("extra_content")
     if not isinstance(extra_content, dict):
-        extra_content = {}
+        extra_content = dict[str, JsonValue]()
         tool_call["extra_content"] = extra_content
     google = extra_content.get("google")
     if not isinstance(google, dict):
-        google = {}
+        google = dict[str, JsonValue]()
         extra_content["google"] = google
     google["thought_signature"] = signature
 
 
-def apply_native_message_signatures(messages: list[Any]) -> None:
+def apply_native_message_signatures(messages: Sequence[JsonValue]) -> None:
     """Translate caller-native signatures, leaving FCC provenance carriers intact."""
     for message in messages:
         if not isinstance(message, dict) or message.get("role") != "assistant":
@@ -71,7 +72,7 @@ def apply_native_message_signatures(messages: list[Any]) -> None:
         if len(opaque) == 1 and not _thought_signature_from_extra_content(
             message.get("extra_content")
         ):
-            _set_thought_signature(message, opaque[0]["data"])
+            _set_thought_signature(message, json_text(opaque[0]["data"]))
         retained = [detail for detail in details if detail not in opaque]
         if retained:
             message["reasoning_details"] = retained
@@ -79,7 +80,7 @@ def apply_native_message_signatures(messages: list[Any]) -> None:
             message.pop("reasoning_details", None)
 
 
-def _message_has_standard_user_content(message: dict[str, Any]) -> bool:
+def _message_has_standard_user_content(message: JsonObject) -> bool:
     if message.get("role") != "user":
         return False
     content = message.get("content")
@@ -88,14 +89,14 @@ def _message_has_standard_user_content(message: dict[str, Any]) -> bool:
     if isinstance(content, list):
         return any(
             isinstance(part, dict)
-            and isinstance(part.get("text"), str)
-            and bool(part["text"].strip())
+            and isinstance(text := part.get("text"), str)
+            and bool(text.strip())
             for part in content
         )
     return False
 
 
-def _current_turn_start_index(messages: list[Any]) -> int:
+def _current_turn_start_index(messages: Sequence[JsonValue]) -> int:
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]
         if isinstance(message, dict) and _message_has_standard_user_content(message):
@@ -104,7 +105,8 @@ def _current_turn_start_index(messages: list[Any]) -> int:
 
 
 def _apply_cached_tool_call_signatures(
-    messages: list[Any], tool_call_extra_content_by_id: dict[str, dict[str, Any]]
+    messages: Sequence[JsonValue],
+    tool_call_extra_content_by_id: Mapping[str, JsonObject],
 ) -> None:
     if not tool_call_extra_content_by_id:
         return
@@ -132,7 +134,7 @@ def _apply_cached_tool_call_signatures(
                 tool_call["extra_content"] = deepcopy(cached_extra_content)
 
 
-def _apply_missing_current_turn_signatures(messages: list[Any]) -> None:
+def _apply_missing_current_turn_signatures(messages: Sequence[JsonValue]) -> None:
     start_index = _current_turn_start_index(messages)
     for message in messages[start_index + 1 :]:
         if not isinstance(message, dict) or message.get("role") != "assistant":

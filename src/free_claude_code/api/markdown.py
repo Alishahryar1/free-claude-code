@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from html import escape
+from typing import override
 from urllib.parse import urlsplit
 
 from markdown_it import MarkdownIt
@@ -39,6 +40,7 @@ class _ProseRenderer(RendererHTML):
             token.attrSet("rel", "noopener noreferrer")
         return self.renderToken(tokens, idx, options, env)
 
+    @override
     def image(
         self,
         tokens: Sequence[Token],

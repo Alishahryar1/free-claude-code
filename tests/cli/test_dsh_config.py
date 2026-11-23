@@ -6,8 +6,10 @@ from pathlib import Path
 import pytest
 
 from free_claude_code.application.model_catalog import CatalogModel
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.harnesses.dsh_config import build_dsh_launch_config
+from tests.wire_payload import object_payload
 
 
 def _models() -> tuple[CatalogModel, ...]:
@@ -40,7 +42,7 @@ def _models() -> tuple[CatalogModel, ...]:
     )
 
 
-def _row_by_id(patch: tuple[dict, ...], row_id: str) -> dict:
+def _row_by_id(patch: tuple[JsonObject, ...], row_id: str) -> JsonObject:
     return next(row for row in patch if row["id"] == row_id)
 
 
@@ -64,7 +66,9 @@ def test_dsh_config_pins_responses_models_retries_and_private_state(
     }
 
     llm = _row_by_id(launch, "llm-pi-ai")
-    provider = llm["config"]["providers"]["free-claude-code"]
+    provider = object_payload(object_payload(llm["config"])["providers"])[
+        "free-claude-code"
+    ]
     assert provider == {
         "displayName": "Free Claude Code",
         "apiKeyEnv": "FCC_DSH_API_KEY",

@@ -1,9 +1,11 @@
 import json
 import tomllib
+from pathlib import Path
 
 import pytest
 
 from free_claude_code.harnesses import claude_integration, codex_integration
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 URL = "http://127.0.0.1:8000"
 TOKEN = "test-integration-token"
@@ -31,7 +33,7 @@ base_url = "https://example.com/v1"
 @pytest.mark.parametrize(
     "source", [None, '{"hasCompletedOnboarding":false}', "{invalid"]
 )
-def test_refresh_ignores_global_onboarding(tmp_path, source):
+def test_refresh_ignores_global_onboarding(tmp_path: Path, source: str | None) -> None:
     settings, state = tmp_path / "settings.json", tmp_path / ".claude.json"
     settings.write_text(json.dumps(OLD_CLAUDE))
     if source is not None:
@@ -43,16 +45,18 @@ def test_refresh_ignores_global_onboarding(tmp_path, source):
         assert state.read_text() == source
 
 
-def test_refresh_upgrades_original_claude_directly_and_only_once(tmp_path):
+def test_refresh_upgrades_original_claude_directly_and_only_once(
+    tmp_path: Path,
+) -> None:
     settings, state = tmp_path / "settings.json", tmp_path / ".claude.json"
     settings.write_text(json.dumps(OLD_CLAUDE))
     state.write_text('{"theme":"dark"}')
     assert claude_integration.configure(settings, URL, TOKEN)["connected"] is True
     assert claude_integration.refresh_connected(settings, URL, TOKEN) is True
-    saved = json.loads(settings.read_text())
+    saved = decode_object(settings.read_text())
     env = {
-        entry["name"]: entry["value"]
-        for entry in saved["claudeCode.environmentVariables"]
+        object_payload(entry)["name"]: object_payload(entry)["value"]
+        for entry in array_payload(saved["claudeCode.environmentVariables"])
     }
     assert env["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] == "1"
     assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0"
@@ -66,15 +70,19 @@ def test_refresh_upgrades_original_claude_directly_and_only_once(tmp_path):
 
 
 @pytest.mark.parametrize("change", ["missing", "disconnected", "url", "token"])
-def test_refresh_does_not_claim_unrecognized_claude(tmp_path, change):
+def test_refresh_does_not_claim_unrecognized_claude(
+    tmp_path: Path, change: str
+) -> None:
     settings, state = tmp_path / "settings.json", tmp_path / ".claude.json"
-    document = json.loads(json.dumps(OLD_CLAUDE))
+    document = decode_object(json.dumps(OLD_CLAUDE))
     if change == "disconnected":
         document.pop("claudeCode.disableLoginPrompt")
     elif change in {"url", "token"}:
-        document["claudeCode.environmentVariables"][0 if change == "url" else 1][
-            "value"
-        ] = "other"
+        object_payload(
+            array_payload(document["claudeCode.environmentVariables"])[
+                0 if change == "url" else 1
+            ]
+        )["value"] = "other"
     if change != "missing":
         settings.write_text(json.dumps(document))
     before = settings.read_bytes() if settings.exists() else None
@@ -85,13 +93,15 @@ def test_refresh_does_not_claim_unrecognized_claude(tmp_path, change):
     assert state.read_text() == "{invalid"
 
 
-def test_refresh_claude_retry_finishes_partial_write(tmp_path, monkeypatch):
+def test_refresh_claude_retry_finishes_partial_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     settings, state = tmp_path / "settings.json", tmp_path / ".claude.json"
     settings.write_text(json.dumps(OLD_CLAUDE))
     before = settings.read_bytes()
     write = claude_integration.atomic_write_text
 
-    def fail_settings(path, content):
+    def fail_settings(path: Path, content: str):
         if path == settings:
             raise PermissionError("denied")
         write(path, content)
@@ -106,7 +116,9 @@ def test_refresh_claude_retry_finishes_partial_write(tmp_path, monkeypatch):
     assert claude_integration.configure(settings, URL, TOKEN)["connected"] is True
 
 
-def test_refresh_codex_merges_latest_settings_without_changing_model(tmp_path):
+def test_refresh_codex_merges_latest_settings_without_changing_model(
+    tmp_path: Path,
+) -> None:
     path, catalog = tmp_path / "config.toml", tmp_path / "catalog.json"
     path.write_text(OLD_CODEX)
     assert codex_integration.recognizes_connection(path, URL) is True
@@ -135,7 +147,9 @@ def test_refresh_codex_merges_latest_settings_without_changing_model(tmp_path):
         OLD_CODEX.replace("localhost:8000", "localhost:9999"),
     ],
 )
-def test_refresh_codex_leaves_unrecognized_settings_alone(tmp_path, source):
+def test_refresh_codex_leaves_unrecognized_settings_alone(
+    tmp_path: Path, source: str | None
+) -> None:
     path = tmp_path / "config.toml"
     if source is not None:
         path.write_text(source)
@@ -149,7 +163,9 @@ def test_refresh_codex_leaves_unrecognized_settings_alone(tmp_path, source):
 
 
 @pytest.mark.parametrize("integration", ["claude", "codex"])
-def test_refresh_rejects_malformed_input_without_writing(tmp_path, integration):
+def test_refresh_rejects_malformed_input_without_writing(
+    tmp_path: Path, integration: str
+) -> None:
     path = tmp_path / "settings"
     path.write_text("{invalid")
     with pytest.raises(ValueError):

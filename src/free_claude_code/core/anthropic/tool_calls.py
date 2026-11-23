@@ -3,13 +3,14 @@
 import json
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any
+
+from free_claude_code.core.json_types import JsonObject, json_object
 
 from ..failures import ExecutionFailure, FailureKind
 from ..stream_recovery import SourceRecoverySnapshot, StreamFailureContext
 from ..tool_call_buffer import OrderedToolCallBuffer
 
-type SourceEvent = tuple[str, dict[str, Any]]
+type SourceEvent = tuple[str, JsonObject]
 type SourceEmission = tuple[SourceEvent, ...]
 
 
@@ -27,7 +28,7 @@ class MessagesToolCallBuffer:
         self._call_ids: set[str] = set()
         self._stop_reason: object = None
 
-    def feed(self, kind: str, payload: dict[str, Any]) -> list[SourceEmission]:
+    def feed(self, kind: str, payload: JsonObject) -> list[SourceEmission]:
         data = deepcopy(payload)
         data["type"] = kind
         size = len(json.dumps(data, ensure_ascii=False).encode("utf-8"))
@@ -51,7 +52,7 @@ class MessagesToolCallBuffer:
             pending = _PendingTool()
             self._buffer.reserve(index, pending)
             self._tools[index] = pending
-        if index in self._tools:
+        if isinstance(index, int) and index in self._tools:
             pending = self._tools[index]
             if pending.stopped:
                 raise _failure("Messages tool changed after block stop")
@@ -59,7 +60,7 @@ class MessagesToolCallBuffer:
             pending.events.append((kind, data))
             pending.stopped = kind == "content_block_stop"
         else:
-            if index in self._seen:
+            if isinstance(index, int) and index in self._seen:
                 raise _failure("Messages tool changed after completion")
             delta = data.get("delta")
             if (
@@ -76,7 +77,9 @@ class MessagesToolCallBuffer:
                 for key, pending in self._tools.items():
                     if successful and pending.stopped:
                         block = pending.events[0][1]["content_block"]
-                        identity = validate_tool_identity(block, self._call_ids)
+                        identity = validate_tool_identity(
+                            json_object(block), self._call_ids
+                        )
                         self._buffer.budget.add(len(identity.encode("utf-8")), 0)
                         self._call_ids.add(identity)
                         self._buffer.complete(key)
@@ -108,7 +111,7 @@ class MessagesToolCallBuffer:
         ]
 
 
-def validate_tool_identity(block: dict[str, Any], seen: set[str]) -> str:
+def validate_tool_identity(block: JsonObject, seen: set[str]) -> str:
     """Validate a complete tool's execution identity for SSE and native JSON."""
     identity = block.get("id")
     name = block.get("name")

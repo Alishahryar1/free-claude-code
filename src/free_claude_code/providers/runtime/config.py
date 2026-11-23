@@ -1,7 +1,7 @@
 """Provider configuration construction from neutral catalog metadata."""
 
 from free_claude_code.application.errors import ApplicationUnavailableError
-from free_claude_code.config.api_keys import selected_api_key
+from free_claude_code.config.api_keys import ApiKeyList, selected_api_key
 from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.config.provider_catalog import ProviderDescriptor
 from free_claude_code.config.settings import Settings
@@ -21,9 +21,8 @@ def provider_credential(
 ) -> str | None:
     """Return the configured credential for a provider descriptor."""
     if descriptor.credential_attr:
-        credential = selected_api_key(
-            getattr(settings, descriptor.credential_attr), api_key_number
-        )
+        keys: ApiKeyList = getattr(settings, descriptor.credential_attr)
+        credential = selected_api_key(keys, api_key_number)
         if api_key_number != 1 and credential is None:
             raise ApplicationUnavailableError(
                 f"{descriptor.display_name} Key {api_key_number} is not configured. "

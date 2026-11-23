@@ -1,4 +1,4 @@
-"""Explicit ownership of Antigravity's persistent Gemini-provider settings."""
+"""Session settings and retirement of previously saved Antigravity connections."""
 
 import json
 from collections.abc import Generator
@@ -16,11 +16,6 @@ from free_claude_code.harnesses.config_file import atomic_write_text
 _LABEL_PREFIX = "FCC: "
 _MODEL_PREFIX = "gemini-api://models/"
 _NATIVE_TOOLS = "TOOL_FORMATTER_TYPE_NONE"
-
-
-class DisconnectedError(ValueError):
-    def __init__(self) -> None:
-        super().__init__("Antigravity CLI is disconnected from FCC.")
 
 
 def config_path() -> Path:
@@ -49,7 +44,7 @@ def _read(path: Path) -> JsonObject:
         source = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return {}
-    value = json.loads(
+    value: JsonValue = json.loads(
         source, object_pairs_hook=_unique_object, parse_constant=_reject_constant
     )
     if not isinstance(value, dict):
@@ -115,16 +110,6 @@ def _locked(state: Path) -> Generator[None]:
         lock.release()
 
 
-def _write_state(state: Path, path: Path, connection: _Connection) -> None:
-    value: JsonObject = {
-        "settings_path": str(path),
-        "previous_provider": dict(connection.previous_provider),
-        "model_keys": sorted(connection.model_keys),
-    }
-    if _read(state) != value:
-        atomic_write_text(state, json.dumps(value, indent=2) + "\n", private=True)
-
-
 def _write_native(path: Path, before: JsonObject, after: JsonObject) -> None:
     if _read(path) != before:
         raise ValueError("Antigravity settings changed during configuration; retry")
@@ -142,6 +127,14 @@ def _owned(key: str, value: JsonValue) -> bool:
         and isinstance(label, str)
         and label.startswith(_LABEL_PREFIX)
     )
+
+
+def session_settings(catalog: ModelCatalog) -> JsonObject:
+    """Build the provider and catalog overlay for one native process."""
+    return {
+        "modelProvider": "gemini",
+        "customModelsConfig": {"customModels": _catalog_models(catalog)},
+    }
 
 
 def _catalog_models(catalog: ModelCatalog) -> JsonObject:
@@ -168,78 +161,7 @@ def _catalog_models(catalog: ModelCatalog) -> JsonObject:
     }
 
 
-def configure(
-    path: Path, state: Path, catalog: ModelCatalog, *, connect: bool = False
-) -> None:
-    """Connect explicitly, or refresh a recognized connection without changing mode."""
-    path, state = path.resolve(), state.resolve()
-    with _locked(state):
-        document = _read(path)
-        models = _models(document)
-        provider = _provider(document)
-        connection = _connection(state, path)
-        if not connect and (
-            connection is None or provider.get("modelProvider") != "gemini"
-        ):
-            raise DisconnectedError()
-        owned_keys = connection.model_keys if connection is not None else frozenset()
-        generated = _catalog_models(catalog)
-        for key in generated.keys() & models.keys():
-            if key not in owned_keys or not _owned(key, models[key]):
-                raise ValueError(
-                    f"Antigravity model '{key}' belongs to your configuration. "
-                    "Rename that entry before connecting or refreshing FCC."
-                )
-        previous = (
-            connection.previous_provider
-            if connection is not None and provider.get("modelProvider") == "gemini"
-            else provider
-        )
-        retained = {
-            key: value
-            for key, value in models.items()
-            if key not in owned_keys or not _owned(key, value)
-        }
-        config = document.get("customModelsConfig", {})
-        assert isinstance(config, dict)
-        updated: JsonObject = {
-            **document,
-            "modelProvider": "gemini",
-            "customModelsConfig": {**config, "customModels": {**retained, **generated}},
-        }
-        desired_keys = frozenset(generated)
-        # Keep both sets recoverable if the native write or final record write fails.
-        _write_state(state, path, _Connection(previous, owned_keys | desired_keys))
-        _write_native(path, document, updated)
-        _write_state(state, path, _Connection(previous, desired_keys))
-
-
-def status(path: Path, state: Path) -> JsonObject:
-    """Recognize existing connections without a catalog or native settings writes."""
-    path, state = path.resolve(), state.resolve()
-    connected = can_disconnect = False
-    try:
-        state.stat()
-    except FileNotFoundError:
-        pass
-    else:
-        with _locked(state):
-            connection = _connection(state, path)
-            can_disconnect = connection is not None
-            document = _read(path)
-            _models(document)
-            connected = (
-                connection is not None
-                and _provider(document).get("modelProvider") == "gemini"
-            )
-    return {
-        "connected": connected,
-        "can_disconnect": can_disconnect,
-        "paths": {"settings": str(path), "connection": str(state)},
-    }
-
-
-def disconnect(path: Path, state: Path) -> bool:
+def cleanup_previous_connection(path: Path, state: Path) -> bool:
     """Remove recognized FCC models and restore only the still-selected FCC mode."""
     path, state = path.resolve(), state.resolve()
     try:

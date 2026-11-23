@@ -11,6 +11,7 @@ from free_claude_code.core.openai_responses.native import (
     build_native_responses_request,
 )
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
+from tests.wire_payload import object_payload
 
 
 def _event_payload(frame: str) -> tuple[str, dict[str, object]]:
@@ -240,7 +241,7 @@ def test_native_request_applies_fcc_reasoning_override(
 
 def test_native_relay_preserves_payload_and_assigns_public_model_and_sequence() -> None:
     relay = NativeResponsesRelay(public_model="gateway-model")
-    created = {
+    created: JsonObject = {
         "type": "response.created",
         "sequence_number": 7,
         "response": {
@@ -295,7 +296,7 @@ def test_native_relay_preserves_payload_and_assigns_public_model_and_sequence() 
         "response.completed",
     ]
     assert event_types_and_payloads[0][1]["response"] == {
-        **created["response"],
+        **object_payload(created["response"]),
         "model": "gateway-model",
     }
     assert event_types_and_payloads[1][1] == {**item, "sequence_number": 1}
@@ -309,7 +310,7 @@ def test_native_relay_preserves_payload_and_assigns_public_model_and_sequence() 
         **completed["response"],
         "model": "gateway-model",
     }
-    assert created["response"]["model"] == "upstream-model"
+    assert object_payload(created["response"])["model"] == "upstream-model"
     assert relay.response_id == "resp_upstream"
     assert relay.terminal_type == "response.completed"
 

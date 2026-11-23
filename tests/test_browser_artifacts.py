@@ -25,8 +25,14 @@ from e2e.artifacts import discard_passed_artifacts
     ],
 )
 def test_artifact_retention(
-    tmp_path, outcome, tracing, screenshot, zip_count, png_count
-):
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+    tracing: str,
+    screenshot: str,
+    zip_count: int,
+    png_count: int,
+) -> None:
     options = {
         "--tracing": tracing,
         "--screenshot": screenshot,
@@ -44,11 +50,11 @@ def test_artifact_retention(
     page = Mock()
     context.pages = [page]
 
-    def save_trace(*, path=None):
+    def save_trace(*, path: Path | None = None):
         if path is not None:
             Path(path).write_bytes(b"trace")
 
-    def save_screenshot(*, path, **_kwargs):
+    def save_screenshot(*, path: Path, **_kwargs):
         Path(path).write_bytes(b"screenshot")
 
     context.tracing.stop.side_effect = save_trace
@@ -56,7 +62,7 @@ def test_artifact_retention(
     staging = TemporaryDirectory(dir=tmp_path)
     with staging:
         recorder = ArtifactsRecorder(config, request, str(output), Mock(), staging)
-        recorder = discard_passed_artifacts(recorder, request)
+        recorder = discard_passed_artifacts(recorder, request, monkeypatch)
         recorder.on_did_create_browser_context(context)
         recorder.on_will_close_browser_context(context)
         recorder.did_finish_test(failed=outcome != "passed")

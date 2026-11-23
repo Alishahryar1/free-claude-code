@@ -10,7 +10,7 @@ from free_claude_code.core.rate_limit import StrictSlidingWindowLimiter
 
 
 @pytest.mark.asyncio
-async def test_strict_window_allows_burst_then_blocks():
+async def test_strict_window_allows_burst_then_blocks() -> None:
     lim = StrictSlidingWindowLimiter(rate_limit=2, rate_window=0.2)
     await lim.acquire()
     await lim.acquire()
@@ -20,7 +20,7 @@ async def test_strict_window_allows_burst_then_blocks():
 
 
 @pytest.mark.asyncio
-async def test_strict_window_async_context_manager():
+async def test_strict_window_async_context_manager() -> None:
     lim = StrictSlidingWindowLimiter(rate_limit=1, rate_window=0.15)
 
     async def run():
@@ -34,7 +34,7 @@ async def test_strict_window_async_context_manager():
 
 
 @pytest.mark.asyncio
-async def test_rejected_conditional_acquisition_does_not_consume_capacity():
+async def test_rejected_conditional_acquisition_does_not_consume_capacity() -> None:
     lim = StrictSlidingWindowLimiter(rate_limit=1, rate_window=60)
 
     assert await lim.acquire_if(lambda: False) is False
@@ -69,7 +69,7 @@ async def test_conditional_acquisition_records_predicate_commit_time(
     assert sleep_delays == [10.0]
 
 
-def test_strict_window_rejects_invalid_config():
+def test_strict_window_rejects_invalid_config() -> None:
     with pytest.raises(ValueError):
         StrictSlidingWindowLimiter(rate_limit=0, rate_window=1.0)
     with pytest.raises(ValueError):

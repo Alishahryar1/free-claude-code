@@ -1,5 +1,6 @@
 """Chat client requests keep their native contract at each destination."""
 
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Any, cast
 
@@ -12,9 +13,11 @@ from free_claude_code.core.chat_completions.request import (
     chat_responses_body,
 )
 from free_claude_code.core.gemini.native_request import chat_to_gemini
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import object_array
 
 
-def test_chat_preserves_native_fields_and_nulls():
+def test_chat_preserves_native_fields_and_nulls() -> None:
     body = {
         "model": "model",
         "messages": [
@@ -31,7 +34,9 @@ def test_chat_preserves_native_fields_and_nulls():
 
 
 @pytest.mark.parametrize("destination", [chat_messages_body, chat_responses_body])
-def test_chat_tool_history_and_thinking_survive_conversion(destination):
+def test_chat_tool_history_and_thinking_survive_conversion(
+    destination: Callable[[ChatRequest], JsonObject],
+) -> None:
     body = {
         "model": "model",
         "messages": [
@@ -70,7 +75,9 @@ def test_chat_tool_history_and_thinking_survive_conversion(destination):
 
 
 @pytest.mark.parametrize("destination", [chat_messages_body, chat_responses_body])
-def test_translated_chat_rejects_unrepresentable_options(destination):
+def test_translated_chat_rejects_unrepresentable_options(
+    destination: Callable[[ChatRequest], JsonObject],
+) -> None:
     with pytest.raises(ChatConversionError, match="logprobs"):
         destination(
             ChatRequest(
@@ -81,7 +88,7 @@ def test_translated_chat_rejects_unrepresentable_options(destination):
         )
 
 
-def test_rich_tool_output_uses_responses_input_part_types():
+def test_rich_tool_output_uses_responses_input_part_types() -> None:
     request = ChatRequest(
         model="model",
         messages=[
@@ -98,7 +105,8 @@ def test_rich_tool_output_uses_responses_input_part_types():
             }
         ],
     )
-    output = cast(dict[str, Any], chat_responses_body(request))["input"][0]["output"]
+    body: JsonObject = chat_responses_body(request)
+    output = object_array(body["input"])[0]["output"]
     assert output == [
         {"type": "input_text", "text": "result"},
         {"type": "input_image", "image_url": "data:image/png;base64,AA=="},
@@ -106,7 +114,9 @@ def test_rich_tool_output_uses_responses_input_part_types():
 
 
 @pytest.mark.parametrize("destination", [chat_messages_body, chat_responses_body])
-def test_cross_protocol_stream_options_cannot_be_silently_discarded(destination):
+def test_cross_protocol_stream_options_cannot_be_silently_discarded(
+    destination: Callable[[ChatRequest], JsonObject],
+) -> None:
     request = ChatRequest(
         model="model",
         messages=[{"role": "user", "content": "hello"}],
@@ -117,7 +127,9 @@ def test_cross_protocol_stream_options_cannot_be_silently_discarded(destination)
 
 
 @pytest.mark.parametrize("destination", [chat_messages_body, chat_responses_body])
-def test_nullable_chat_assistant_fields_are_absent_in_translation(destination):
+def test_nullable_chat_assistant_fields_are_absent_in_translation(
+    destination: Callable[[ChatRequest], JsonObject],
+) -> None:
     request = ChatRequest(
         model="model",
         messages=[
@@ -138,7 +150,9 @@ def test_nullable_chat_assistant_fields_are_absent_in_translation(destination):
 @pytest.mark.parametrize(
     "destination", [chat_messages_body, chat_responses_body, chat_to_gemini]
 )
-def test_allowed_tools_rejects_unsupported_translation_clearly(destination):
+def test_allowed_tools_rejects_unsupported_translation_clearly(
+    destination: Callable[[ChatRequest], JsonObject],
+) -> None:
     request = ChatRequest(
         model="model",
         messages=[{"role": "user", "content": "hello"}],
@@ -155,7 +169,9 @@ def test_allowed_tools_rejects_unsupported_translation_clearly(destination):
 
 
 @pytest.mark.parametrize("destination", [chat_messages_body, chat_to_gemini])
-def test_refusal_history_keeps_its_text_across_other_protocols(destination):
+def test_refusal_history_keeps_its_text_across_other_protocols(
+    destination: Callable[[ChatRequest], JsonObject],
+) -> None:
     request = ChatRequest(
         model="model",
         messages=[

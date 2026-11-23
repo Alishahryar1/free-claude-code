@@ -2,7 +2,6 @@
 
 import contextlib
 import http.server
-import json
 import os
 import shutil
 import subprocess
@@ -10,46 +9,42 @@ import sys
 import threading
 import zipfile
 from pathlib import Path
+from typing import override
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-RELEASE_URL = "https://raw.githubusercontent.com/Alishahryar1/free-claude-code"
+RAW_URL = "https://raw.githubusercontent.com/Alishahryar1/free-claude-code"
+RELEASES_URL = "https://github.com/Alishahryar1/free-claude-code/releases"
 SCRIPTS = ("fcc-update", "fcc-update.cmd")
+INSTALLED = "1.0.0"
+LATEST = {"current": INSTALLED, "newer-installed": "0.9.0"}
 
 
 @contextlib.contextmanager
-def installer_server(body, status, outcome):
+def installer_server(body: str, status: int, latest: str):
     requests = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             requests.append(self.path)
-            payload = body.replace(
-                RELEASE_URL, f"http://127.0.0.1:{server.server_port}"
-            ).encode("utf-8")
+            base = f"http://127.0.0.1:{server.server_port}"
+            payload = (
+                body.replace(RAW_URL, base)
+                .replace(RELEASES_URL, base + "/releases")
+                .encode("utf-8")
+            )
             response_status = status
             if self.path == "/releases/latest":
-                version = {"current": "1.0.0", "newer-installed": "0.9.0"}.get(
-                    outcome, "2.0.0rc1" if outcome == "invalid-release" else "2.0.0"
-                )
-                self.send_response(503 if outcome == "check-error" else 302)
-                self.send_header("Location", f"/releases/tag/v{version}")
+                self.send_response(302)
+                self.send_header("Location", f"/releases/tag/v{latest}")
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-            if self.path == "/v2.0.0/pyproject.toml":
+            if self.path.startswith("/releases/tag/"):
+                payload, response_status = b"release page", 200
+            elif self.path.endswith("/pyproject.toml"):
                 payload = b'[project]\nrequires-python = "==3.15.2"\n[tool.uv]\nrequired-version = ">=0.14.2"\n'
-            elif self.path.startswith("/metadata/"):
-                version = {"current": "1.0.0", "newer-installed": "0.9.0"}.get(
-                    outcome, "2.0.0rc1" if outcome == "invalid-release" else "2.0.0"
-                )
-                payload = json.dumps(
-                    {"info": {"version": version}, "urls": [{"yanked": False}]}
-                ).encode()
-                response_status = 503 if outcome == "check-error" else 200
-            elif self.path.startswith("/releases/tag/"):
-                payload = b"release page"
                 response_status = 200
             self.send_response(response_status)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -57,7 +52,8 @@ def installer_server(body, status, outcome):
             self.end_headers()
             self.wfile.write(payload)
 
-        def log_message(self, format, *args):
+        @override
+        def log_message(self, format: object, *args: object):
             pass
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -73,14 +69,13 @@ def installer_server(body, status, outcome):
         thread.join()
 
 
-def fixture_wheel(area, url, outcome):
-    wheel = area / "free_claude_code-1.0.0-py3-none-any.whl"
-    dist = "free_claude_code-1.0.0"
+def fixture_wheel(area: Path, url: str):
+    wheel = area / f"free_claude_code-{INSTALLED}-py3-none-any.whl"
+    dist = f"free_claude_code-{INSTALLED}"
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr(
             f"{dist}.dist-info/METADATA",
-            "Metadata-Version: 2.1\nName: free-claude-code\nVersion: 1.0.0\n"
-            "Requires-Dist: httpx>=0.28.1\nRequires-Dist: packaging>=26.3\n",
+            f"Metadata-Version: 2.1\nName: free-claude-code\nVersion: {INSTALLED}\n",
         )
         archive.writestr(
             f"{dist}.dist-info/WHEEL",
@@ -88,44 +83,10 @@ def fixture_wheel(area, url, outcome):
         )
         for name in SCRIPTS:
             source = (ROOT / "scripts/update" / name).read_text(encoding="utf-8")
-            if outcome == "legacy-installer":
-                source = source.replace(
-                    "_FCC_INSTALLER_RELEASE=$release_version ", ""
-                ).replace("$env:_FCC_INSTALLER_RELEASE = $release; ", "")
             archive.writestr(
-                f"{dist}.data/scripts/{name}", source.replace(RELEASE_URL, url)
+                f"{dist}.data/scripts/{name}", source.replace(RAW_URL, url)
             )
-        archive.writestr(
-            f"{dist}.dist-info/entry_points.txt",
-            "[console_scripts]\n_fcc-update-check = free_claude_code.updater.check:main\n",
-        )
-        for name in ("__init__.py", "updater/__init__.py", "updater/check.py"):
-            source = (ROOT / "src/free_claude_code" / name).read_text(encoding="utf-8")
-            if (
-                name == "updater/check.py"
-                and outcome.startswith("checker-")
-                and outcome != "checker-missing"
-            ):
-                invalid = {
-                    "checker-invalid": "2.0.0/../main",
-                    "checker-multiline": "2.0.0\n3.0.0",
-                    "checker-empty": "",
-                    "checker-exit": "2.0.0",
-                }[outcome]
-                exit_code = 37 if outcome == "checker-exit" else 10
-                source = (
-                    f"def main():\n    print({invalid!r})\n    return {exit_code}\n"
-                )
-            archive.writestr(
-                f"free_claude_code/{name}",
-                source.replace(
-                    "https://pypi.org/pypi/free-claude-code/{version}/json",
-                    url + "/metadata/{version}/json",
-                ).replace(
-                    "https://github.com/Alishahryar1/free-claude-code/releases/",
-                    url + "/releases/",
-                ),
-            )
+        archive.writestr("free_claude_code/__init__.py", "")
         archive.writestr(
             f"{dist}.dist-info/RECORD",
             "".join(f"{name},,\n" for name in archive.namelist())
@@ -138,99 +99,81 @@ def fixture_wheel(area, url, outcome):
     "outcome",
     [
         "success",
-        "real-installer",
-        "legacy-installer",
         "exit",
         "error",
         "download-error",
+        "real-installer",
         "current",
         "newer-installed",
-        "check-error",
-        "invalid-release",
-        "checker-invalid",
-        "checker-multiline",
-        "checker-empty",
-        "checker-exit",
-        "checker-missing",
     ],
 )
 def test_installed_update_delegates_and_survives_replacement(
-    tmp_path, outcome, powershell_module_paths
+    tmp_path: Path, outcome: str, powershell_module_paths: dict[str, str]
 ):
     uv = shutil.which("uv")
     if uv is None:
         pytest.skip("uv is required for native script lifecycle coverage")
     area = tmp_path / "José 测试 & (spaces) ! apostrophe'"
     area.mkdir()
-    env = dict(os.environ)
+    env = {
+        key: value for key, value in os.environ.items() if key != "FCC_INSTALL_VERSION"
+    }
     env.update(
         UV_TOOL_DIR=str(area / "tools"),
         UV_TOOL_BIN_DIR=str(area / "bin"),
         UV_CACHE_DIR=str(area / "cache"),
         UV_NO_CONFIG="1",
         UV_PYTHON_DOWNLOADS="never",
-        FCC_INSTALL_VERSION="9.9.9",
         FCC_TEST_LAUNCHER=str(
             area / "bin" / ("fcc-update.cmd" if os.name == "nt" else "fcc-update")
         ),
-        FCC_TEST_CHECKER=str(
-            area
-            / "bin"
-            / ("_fcc-update-check.exe" if os.name == "nt" else "_fcc-update-check")
-        ),
     )
+    real_installer = outcome in {"real-installer", "current", "newer-installed"}
     if os.name == "nt":
         powershell = shutil.which("powershell")
         if powershell is None:
             pytest.skip("Windows PowerShell is required for the native update wrapper")
         env["PSMODULEPATH"] = powershell_module_paths[powershell]
-        body = """param([switch] $VoiceLocal, [string] $TorchBackend)
+        body = """param([switch] $Update, [switch] $VoiceLocal, [string] $TorchBackend)
 $answer = Read-Host 'Continue'
-Write-Output "installer:$VoiceLocal|$TorchBackend|$answer|$env:FCC_INSTALL_VERSION"
+Write-Output "installer:$Update|$VoiceLocal|$TorchBackend|$answer|$env:FCC_INSTALL_VERSION"
 [IO.File]::WriteAllText($env:FCC_TEST_LAUNCHER, 'exit /b 99')
-[IO.File]::WriteAllText($env:FCC_TEST_CHECKER, 'replaced after checker exited')
 """
         arguments = "-VoiceLocal -TorchBackend cu130"
-        expected = "installer:True|cu130|yes|2.0.0"
-        body += {
-            "success": "",
-            "exit": "exit 23",
-            "error": "throw 'installer failed'",
-            "download-error": "",
-        }.get(outcome, "")
+        expected = "installer:True|True|cu130|yes|"
+        body += {"exit": "exit 23", "error": "throw 'installer failed'"}.get(
+            outcome, ""
+        )
     else:
         body = """read -r answer
-printf 'installer:%s|%s|%s|%s|%s\\n' "$1" "$2" "$3" "$answer" "$FCC_INSTALL_VERSION"
+printf 'installer:%s|%s|%s|%s|%s|%s\\n' "$1" "$2" "$3" "$4" "$answer" "${FCC_INSTALL_VERSION-}"
 printf 'exit 99\\n' > "$FCC_TEST_LAUNCHER"
-printf 'replaced after checker exited' > "$FCC_TEST_CHECKER"
 """
         arguments = ["--voice-local", "--torch-backend", "cu130"]
-        expected = "installer:--voice-local|--torch-backend|cu130|yes|2.0.0"
-        body += {
-            "success": "",
-            "exit": "exit 23",
-            "error": "exit 1",
-            "download-error": "",
-        }.get(outcome, "")
-    if outcome in {"real-installer", "legacy-installer"}:
+        expected = "installer:--update|--voice-local|--torch-backend|cu130|yes|"
+        body += {"exit": "exit 23", "error": "exit 1"}.get(outcome, "")
+    if real_installer:
         suffix = "ps1" if os.name == "nt" else "sh"
         source = (ROOT / f"scripts/install.{suffix}").read_text(encoding="utf-8")
         if os.name == "nt":
+            # The real installer binds the options the stub reports.
             body = body.split("\n", 1)[1]
             body += 'Write-Output "marker:[$env:_FCC_INSTALLER_RELEASE]"\nreturn\n'
             boundary = "\nInitialize-InstallLog\n"
+            expected = "installer:True|True|cu130|yes|2.0.0"
         else:
             body += 'printf "marker:[%s]\\n" "${_FCC_INSTALLER_RELEASE-}"\nexit 0\n'
             boundary = "\ninitialize_install_log\n"
+            expected = (
+                "installer:--update|--voice-local|--torch-backend|cu130|yes|2.0.0"
+            )
         assert source.count(boundary) == 1
         body = source.replace(boundary, "\n" + body + boundary)
+    latest = LATEST.get(outcome, "2.0.0")
     with installer_server(
-        body, 503 if outcome == "download-error" else 200, outcome
-    ) as (
-        url,
-        requests,
-    ):
-        wheel = fixture_wheel(area, url, outcome)
+        body, 503 if outcome == "download-error" else 200, latest
+    ) as (url, requests):
+        wheel = fixture_wheel(area, url)
         result = subprocess.run(
             [
                 uv,
@@ -245,8 +188,6 @@ printf 'replaced after checker exited' > "$FCC_TEST_CHECKER"
             timeout=90,
         )
         assert result.returncode == 0, result.stderr
-        if outcome == "checker-missing":
-            Path(env["FCC_TEST_CHECKER"]).unlink()
         launcher = env["FCC_TEST_LAUNCHER"]
         command = (
             f'"{os.environ.get("COMSPEC", "cmd.exe")}" /d /s /c ""{launcher}" {arguments}"'
@@ -262,50 +203,46 @@ printf 'replaced after checker exited' > "$FCC_TEST_CHECKER"
             text=True,
             timeout=30,
         )
-        skipped = outcome in {
-            "current",
-            "newer-installed",
-            "check-error",
-            "invalid-release",
-        } or outcome.startswith("checker-")
-        selected = {"current": "1.0.0", "newer-installed": "0.9.0"}.get(
-            outcome, "2.0.0rc1" if outcome == "invalid-release" else "2.0.0"
-        )
-        discovery = [] if outcome.startswith("checker-") else ["/releases/latest"]
-        if discovery and outcome != "check-error":
-            discovery.append(f"/releases/tag/v{selected}")
-            if outcome != "invalid-release":
-                discovery.append(f"/metadata/{selected}/json")
-        install_requests = (
-            []
-            if skipped
-            else [f"/v2.0.0/scripts/install.{'ps1' if os.name == 'nt' else 'sh'}"]
-        )
-        if outcome == "legacy-installer":
-            install_requests *= 2
-        if outcome in {"real-installer", "legacy-installer"}:
-            install_requests.append("/v2.0.0/pyproject.toml")
-            assert "marker:[]" in result.stdout, result.stdout + result.stderr
-            assert result.stdout.count(expected) == 1
-            assert "Installer log:" not in result.stdout
-        assert requests == discovery + install_requests, result.stdout + result.stderr
-        if skipped:
-            expected_exit = 37 if outcome == "checker-exit" else 1
-            if outcome in {"current", "newer-installed"}:
-                expected_exit = 0
-            if outcome == "checker-missing":
+        output = result.stdout + result.stderr
+        suffix = "ps1" if os.name == "nt" else "sh"
+        main_installer = [f"/main/scripts/install.{suffix}"]
+        if not real_installer:
+            assert requests == main_installer, output
+            if outcome == "download-error":
                 assert result.returncode != 0
+                assert "installer:" not in result.stdout
             else:
-                assert result.returncode == expected_exit
-            assert "installer:" not in result.stdout
-        elif outcome == "download-error":
-            assert result.returncode != 0
-            assert "installer:" not in result.stdout
+                assert expected in result.stdout, output
+                assert result.returncode == {"exit": 23, "error": 1}.get(outcome, 0), (
+                    output
+                )
         else:
-            assert expected in result.stdout, result.stdout + result.stderr
-            assert result.returncode == {"exit": 23, "error": 1}.get(outcome, 0), (
-                result.stderr
-            )
+            selected = [
+                "/releases/latest",
+                f"/releases/tag/v{latest}",
+                f"/v{latest}/scripts/install.{suffix}",
+            ]
+            assert result.returncode == 0, output
+            if outcome == "real-installer":
+                assert requests == [
+                    *main_installer,
+                    *selected,
+                    "/v2.0.0/pyproject.toml",
+                ], output
+                assert f"FCC update available: {INSTALLED} -> 2.0.0." in output
+                assert "marker:[]" in result.stdout, output
+                assert result.stdout.count(expected) == 1, output
+                assert "Installer log:" not in result.stdout
+            else:
+                assert requests == [*main_installer, *selected], output
+                message = (
+                    f"FCC {INSTALLED} is already up to date."
+                    if outcome == "current"
+                    else f"FCC {INSTALLED} is newer than the published version {latest}. No update needed."
+                )
+                assert message in result.stdout, output
+                assert "installer:" not in result.stdout
+                assert "marker:" not in result.stdout
         result = subprocess.run(
             [uv, "tool", "uninstall", "free-claude-code"],
             env=env,
@@ -314,4 +251,3 @@ printf 'replaced after checker exited' > "$FCC_TEST_CHECKER"
         )
         assert result.returncode == 0, result.stderr
         assert not any((area / "bin" / name).exists() for name in SCRIPTS)
-        assert not any((area / "bin").glob("_fcc-update-check*"))

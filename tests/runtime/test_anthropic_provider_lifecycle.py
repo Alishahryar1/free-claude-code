@@ -6,6 +6,7 @@ import pytest
 from free_claude_code.config.api_keys import normalize_api_keys
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
+from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.anthropic import AnthropicProvider
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.providers.runtime.config import build_provider_config
@@ -15,12 +16,16 @@ from tests.providers.test_anthropic_discovery import metadata
 
 
 @pytest.mark.asyncio
-async def test_workspace_replacement_retires_http_and_capabilities_with_lease():
+async def test_workspace_replacement_retires_http_and_capabilities_with_lease() -> None:
     owners = []
     requests = []
 
-    def factory(settings, registry, history_cache=None):
-        def handle(request):
+    def factory(
+        settings: Settings,
+        registry: ProviderAdmissionRegistry,
+        history_cache: object = None,
+    ):
+        def handle(request: httpx.Request):
             requests.append(request)
             if settings.anthropic_workspace_id == "new":
                 return httpx.Response(403, json={"error": {"type": "permission_error"}})

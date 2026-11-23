@@ -5,6 +5,8 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from free_claude_code.core.json_types import JsonObject
+
 from .anthropic.content import get_block_attr, get_block_type
 from .anthropic.models import MessagesRequest
 
@@ -63,7 +65,7 @@ class OpenAIToolNameCodec:
 
 
 def encode_openai_chat_tool_names(
-    body: dict[str, object], codec: OpenAIToolNameCodec
+    body: JsonObject | dict[str, object], codec: OpenAIToolNameCodec
 ) -> None:
     """Encode canonical Chat tool-name locations at the provider boundary."""
     if not codec.has_aliases:

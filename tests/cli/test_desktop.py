@@ -1,6 +1,7 @@
 """Desktop shell lifecycle and singleton contracts."""
 
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -44,7 +45,8 @@ def test_supervisor_accepts_restart_during_scheduled_startup() -> None:
         patch("free_claude_code.cli.commands.kill_all_best_effort"),
     ):
         assert supervisor.schedule_run() is True
-        assert supervisor.status is ServerStatus.STARTING
+        initial_status = supervisor.status
+        assert initial_status is ServerStatus.STARTING
         assert supervisor.request_restart() is True
         supervisor.run(open_admin_browser=False)
 
@@ -95,7 +97,7 @@ def test_desktop_controller_owns_server_thread_and_graceful_quit() -> None:
             self.run_thread_id: int | None = None
             self.stop_count = 0
 
-        def run(self, setup) -> None:
+        def run(self, setup: Callable[[], None]) -> None:
             setup()
             self.run_thread_id = threading.get_ident()
             assert supervisor.started.wait(2)
@@ -168,7 +170,7 @@ def test_restart_during_server_startup_is_accepted_without_waiting() -> None:
             self.started = threading.Event()
             self.stopped = threading.Event()
 
-        def run(self, setup) -> None:
+        def run(self, setup: Callable[[], None]) -> None:
             setup()
             self.started.set()
             assert self.stopped.wait(2)
@@ -210,6 +212,13 @@ def test_restart_during_server_startup_is_accepted_without_waiting() -> None:
     assert not controller_thread.is_alive()
 
 
+def _start_desktop_from_mock(shell: MagicMock) -> None:
+    assert shell.call_args is not None
+    start: object = shell.call_args.args[3]
+    assert callable(start)
+    start()
+
+
 def test_second_desktop_launch_opens_existing_admin_without_new_server() -> None:
     from free_claude_code.cli import desktop
 
@@ -218,21 +227,22 @@ def test_second_desktop_launch_opens_existing_admin_without_new_server() -> None
     instance_lock.acquire.return_value = False
 
     controller = MagicMock()
+    mock_supervisor = MagicMock()
     with (
         patch.object(desktop, "load_server_settings", return_value=settings),
         patch.object(desktop, "InterprocessFileLock", return_value=instance_lock),
         patch.object(desktop, "open_admin_when_ready", return_value=True) as open_admin,
-        patch.object(desktop, "ServerSupervisor") as supervisor,
+        patch.object(
+            desktop, "ServerSupervisor", return_value=mock_supervisor
+        ) as supervisor,
         patch.object(desktop, "DesktopController", return_value=controller) as shell,
     ):
-        controller.run.side_effect = lambda: shell.call_args.args[3]()
+        controller.run.side_effect = lambda: _start_desktop_from_mock(shell)
         desktop.launch_desktop(MagicMock())
 
-    open_admin.assert_called_once_with(
-        settings, stop_event=supervisor.return_value.stop_event
-    )
+    open_admin.assert_called_once_with(settings, stop_event=mock_supervisor.stop_event)
     supervisor.assert_called_once_with(console_logging=False)
-    supervisor.return_value.run.assert_not_called()
+    mock_supervisor.run.assert_not_called()
     instance_lock.release.assert_not_called()
 
 
@@ -246,18 +256,23 @@ def test_automatically_started_duplicate_does_not_open_admin(
     instance_lock = MagicMock()
     instance_lock.acquire.return_value = loser != "singleton"
     controller = MagicMock()
+    mock_supervisor = MagicMock()
     with (
         patch.object(desktop, "load_server_settings", return_value=settings),
         patch.object(desktop, "InterprocessFileLock", return_value=instance_lock),
         patch.object(desktop, "open_admin_when_ready") as open_admin,
-        patch.object(desktop, "ServerSupervisor") as supervisor,
+        patch.object(desktop, "ServerSupervisor", return_value=mock_supervisor),
         patch.object(desktop, "DesktopController", return_value=controller) as shell,
     ):
-        controller.run.side_effect = lambda: shell.call_args.args[3]()
+        controller.run.side_effect = lambda: _start_desktop_from_mock(shell)
         if loser == "existing_server":
-            supervisor.return_value.run.side_effect = lambda **kwargs: kwargs[
-                "existing_server"
-            ](settings)
+
+            def attach_to_existing(
+                *, existing_server: Callable[[Settings], bool], **options: object
+            ) -> bool:
+                return existing_server(settings)
+
+            mock_supervisor.run.side_effect = attach_to_existing
         desktop.launch_desktop(MagicMock(), auto_started=True)
 
     open_admin.assert_not_called()
@@ -275,26 +290,31 @@ def test_desktop_attaches_to_terminal_server_instead_of_binding_twice(
     instance_lock.acquire.return_value = True
 
     controller = MagicMock()
+    mock_supervisor = MagicMock()
     with (
         patch.object(desktop, "load_server_settings", return_value=settings),
         patch.object(desktop, "InterprocessFileLock", return_value=instance_lock),
         patch.object(
             desktop, "open_admin_when_ready", return_value=endpoint_ready
         ) as open_admin,
-        patch.object(desktop, "ServerSupervisor") as supervisor,
+        patch.object(
+            desktop, "ServerSupervisor", return_value=mock_supervisor
+        ) as supervisor,
         patch.object(desktop, "DesktopController", return_value=controller) as shell,
     ):
-        controller.run.side_effect = lambda: shell.call_args.args[3]()
-        supervisor.return_value.run.side_effect = lambda **kwargs: kwargs[
-            "existing_server"
-        ](settings)
+        controller.run.side_effect = lambda: _start_desktop_from_mock(shell)
+
+        def attach_to_existing(
+            *, existing_server: Callable[[Settings], bool], **options: object
+        ) -> bool:
+            return existing_server(settings)
+
+        mock_supervisor.run.side_effect = attach_to_existing
         desktop.launch_desktop(MagicMock())
 
-    open_admin.assert_called_once_with(
-        settings, stop_event=supervisor.return_value.stop_event
-    )
+    open_admin.assert_called_once_with(settings, stop_event=mock_supervisor.stop_event)
     supervisor.assert_called_once_with(console_logging=False)
-    supervisor.return_value.run.assert_called_once()
+    mock_supervisor.run.assert_called_once()
     instance_lock.release.assert_called_once_with()
     controller.quit.assert_called_once_with()
 
@@ -315,7 +335,7 @@ def test_fresh_desktop_launch_uses_console_free_supervisor() -> None:
         patch.object(desktop, "DesktopController", return_value=controller) as shell,
     ):
         tray_factory = MagicMock()
-        controller.run.side_effect = lambda: shell.call_args.args[3]()
+        controller.run.side_effect = lambda: _start_desktop_from_mock(shell)
         desktop.launch_desktop(tray_factory)
 
     owner.assert_called_once_with(console_logging=False)
@@ -324,19 +344,20 @@ def test_fresh_desktop_launch_uses_console_free_supervisor() -> None:
     instance_lock.release.assert_called_once_with()
 
 
-def test_desktop_lock_failure_closes_tray_without_starting_server():
+def test_desktop_lock_failure_closes_tray_without_starting_server() -> None:
     from free_claude_code.cli import desktop
 
     instance_lock = MagicMock()
     instance_lock.acquire.side_effect = PermissionError("locked directory")
     controller = MagicMock()
+    mock_supervisor = MagicMock()
     with (
         patch.object(desktop, "load_server_settings", return_value=_settings()),
         patch.object(desktop, "InterprocessFileLock", return_value=instance_lock),
-        patch.object(desktop, "ServerSupervisor") as supervisor,
+        patch.object(desktop, "ServerSupervisor", return_value=mock_supervisor),
         patch.object(desktop, "DesktopController", return_value=controller) as shell,
     ):
-        controller.run.side_effect = lambda: shell.call_args.args[3]()
+        controller.run.side_effect = lambda: _start_desktop_from_mock(shell)
         desktop.launch_desktop(MagicMock())
     controller.quit.assert_called_once()
-    supervisor.return_value.run.assert_not_called()
+    mock_supervisor.run.assert_not_called()

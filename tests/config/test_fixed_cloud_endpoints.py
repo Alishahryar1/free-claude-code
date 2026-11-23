@@ -5,6 +5,7 @@ from free_claude_code.config.loader import compose_settings_snapshot
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.providers.runtime.config import build_provider_config
 from tests.api.support import create_test_app
+from tests.wire_payload import array_payload, object_payload, response_object
 
 
 @pytest.mark.parametrize(
@@ -17,7 +18,9 @@ from tests.api.support import create_test_app
     ],
 )
 @pytest.mark.parametrize("source", ["managed", "process", "both"])
-def test_retired_url_cannot_override_cloud_endpoint(provider_id, retired_key, source):
+def test_retired_url_cannot_override_cloud_endpoint(
+    provider_id: str, retired_key: str, source: str
+) -> None:
     descriptor = PROVIDER_CATALOG[provider_id]
     assert descriptor.credential_env is not None
     managed = {descriptor.credential_env: "test-key"}
@@ -32,13 +35,16 @@ def test_retired_url_cannot_override_cloud_endpoint(provider_id, retired_key, so
     assert config.api_key == "test-key"
 
 
-def test_admin_exposes_only_resource_region_and_local_base_urls():
+def test_admin_exposes_only_resource_region_and_local_base_urls() -> None:
     with TestClient(
         create_test_app(), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)
     ) as client:
         response = client.get("/admin/api/config")
     assert response.status_code == 200
-    keys = {field["key"] for field in response.json()["fields"]}
+    keys = {
+        object_payload(field)["key"]
+        for field in array_payload(response_object(response)["fields"])
+    }
     assert not keys.intersection(
         {
             "TOKENROUTER_BASE_URL",

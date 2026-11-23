@@ -1,14 +1,18 @@
 import asyncio
 import json
 import threading
+from collections.abc import Sequence
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
 
+from free_claude_code.application.model_catalog import CatalogModel
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import load_json_value
 from free_claude_code.harnesses import vscode_chat_integration as vscode
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.runtime.runtime import ProviderRuntime
@@ -20,10 +24,11 @@ from tests.runtime.catalog_support import (
     finish_publication,
     pause_next_write,
 )
+from tests.wire_payload import array_payload, object_array, object_payload
 
 
 @pytest_asyncio.fixture
-async def runtime(request):
+async def runtime(request: pytest.FixtureRequest):
     settings = Settings(
         model="nvidia_nim/one",
         nvidia_nim_api_keys="test",
@@ -35,7 +40,7 @@ async def runtime(request):
         return_value=frozenset({ProviderModelInfo("one")})
     )
 
-    async def construct(provider_id, *_):
+    async def construct(provider_id: str, *_):
         if provider_id in {"lmstudio", "llamacpp", "ollama"}:
             raise ConnectionError()
         return provider
@@ -64,7 +69,7 @@ async def runtime(request):
         await app.close()
 
 
-async def settle(runtime):
+async def settle(runtime: ApplicationRuntime):
     await finish_discovery(runtime.provider_manager)
     task = runtime._integrations._vscode_update.task
     if task:
@@ -72,7 +77,9 @@ async def settle(runtime):
 
 
 @pytest.mark.asyncio
-async def test_catalog_updates_connected_file_and_disconnect_stays_removed(runtime):
+async def test_catalog_updates_connected_file_and_disconnect_stays_removed(
+    runtime: ApplicationRuntime,
+) -> None:
     await runtime.connect_vscode_chat()
     await settle(runtime)
     path = vscode.config_path()
@@ -81,18 +88,23 @@ async def test_catalog_updates_connected_file_and_disconnect_stays_removed(runti
     )
     await finish_publication(runtime.provider_manager)
     await settle(runtime)
-    models = json.loads(path.read_text())[0]["models"]
-    assert {m["id"] for m in models} == {"nvidia_nim/one", "nvidia_nim/two"}
+    models = object_array(load_json_value(path.read_text()))[0]["models"]
+    assert {m["id"] for m in object_array(models)} == {
+        "nvidia_nim/one",
+        "nvidia_nim/two",
+    }
     assert (await runtime.vscode_chat_status())["connected"]
     await runtime.disconnect_vscode_chat()
     runtime._integrations.catalog_changed()
     await settle(runtime)
-    assert json.loads(path.read_text()) == []
+    assert load_json_value(path.read_text()) == []
     assert not (await runtime.vscode_chat_status())["connected"]
 
 
 @pytest.mark.asyncio
-async def test_update_arriving_during_write_is_not_lost(runtime, monkeypatch):
+async def test_update_arriving_during_write_is_not_lost(
+    runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
     await runtime.connect_vscode_chat()
     await settle(runtime)
     entered, release = asyncio.Event(), threading.Event()
@@ -100,13 +112,22 @@ async def test_update_arriving_during_write_is_not_lost(runtime, monkeypatch):
     original = vscode.configure
     calls = 0
 
-    def held(*args, **kwargs):
+    def held(
+        path: Path,
+        proxy_root_url: str,
+        auth_token: str,
+        models: Sequence[CatalogModel],
+        *,
+        only_existing: bool = False,
+    ):
         nonlocal calls
         calls += 1
         if calls == 1:
             loop.call_soon_threadsafe(entered.set)
             assert release.wait(5)
-        return original(*args, **kwargs)
+        return original(
+            path, proxy_root_url, auth_token, models, only_existing=only_existing
+        )
 
     monkeypatch.setattr(vscode, "configure", held)
     try:
@@ -121,14 +142,17 @@ async def test_update_arriving_during_write_is_not_lost(runtime, monkeypatch):
     await settle(runtime)
     assert calls >= 2
     assert "nvidia_nim/late" in [
-        m["id"] for m in json.loads(vscode.config_path().read_text())[0]["models"]
+        m["id"]
+        for m in object_array(
+            object_array(load_json_value(vscode.config_path().read_text()))[0]["models"]
+        )
     ]
 
 
 @pytest.mark.asyncio
 async def test_bad_file_does_not_fail_catalog_and_disconnect_needs_no_catalog(
-    runtime, monkeypatch
-):
+    runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
     await settle(runtime)
     path = vscode.config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -148,14 +172,18 @@ async def test_bad_file_does_not_fail_catalog_and_disconnect_needs_no_catalog(
 
 
 @pytest.mark.asyncio
-async def test_disconnected_startup_does_not_create_file(runtime):
+async def test_disconnected_startup_does_not_create_file(
+    runtime: ApplicationRuntime,
+) -> None:
     await settle(runtime)
     assert not vscode.config_path().exists()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("runtime", [True], indirect=True)
-async def test_startup_refreshes_owned_group_and_only_writes_once(runtime):
+async def test_startup_refreshes_owned_group_and_only_writes_once(
+    runtime: ApplicationRuntime,
+) -> None:
     await settle(runtime)
     path = vscode.config_path()
     assert (
@@ -172,8 +200,8 @@ async def test_startup_refreshes_owned_group_and_only_writes_once(runtime):
 
 @pytest.mark.asyncio
 async def test_disconnect_while_refresh_waits_for_ownership_never_reconnects(
-    runtime, monkeypatch
-):
+    runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
     await runtime.connect_vscode_chat()
     await settle(runtime)
     entered, release = pause_next_write(
@@ -191,8 +219,8 @@ async def test_disconnect_while_refresh_waits_for_ownership_never_reconnects(
 
 @pytest.mark.asyncio
 async def test_replaced_generation_cannot_publish_old_url_or_token(
-    runtime, monkeypatch
-):
+    runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
     await runtime.connect_vscode_chat()
     await settle(runtime)
     entered, release = pause_next_write(
@@ -211,15 +239,21 @@ async def test_replaced_generation_cannot_publish_old_url_or_token(
     finally:
         release.set()
     await settle(runtime)
-    group = json.loads(vscode.config_path().read_text())[0]
-    assert all(m["requestHeaders"] == {"x-api-key": "rotated"} for m in group["models"])
+    group = array_payload(load_json_value(vscode.config_path().read_text()))[0]
     assert all(
-        m["url"] == "http://127.0.0.1:12345/v1/messages" for m in group["models"]
+        m["requestHeaders"] == {"x-api-key": "rotated"}
+        for m in object_array(object_payload(group)["models"])
+    )
+    assert all(
+        m["url"] == "http://127.0.0.1:12345/v1/messages"
+        for m in object_array(object_payload(group)["models"])
     )
 
 
 @pytest.mark.asyncio
-async def test_codex_publication_failure_does_not_block_vscode(runtime):
+async def test_codex_publication_failure_does_not_block_vscode(
+    runtime: ApplicationRuntime,
+) -> None:
     await runtime.connect_vscode_chat()
     await settle(runtime)
     publisher = MagicMock()
@@ -233,5 +267,8 @@ async def test_codex_publication_failure_does_not_block_vscode(runtime):
     assert runtime.provider_manager.catalog_status()["catalog_file"] == "failed"
     assert runtime._integrations._vscode_update.state == "ready"
     assert "nvidia_nim/new" in [
-        m["id"] for m in json.loads(vscode.config_path().read_text())[0]["models"]
+        m["id"]
+        for m in object_array(
+            object_array(load_json_value(vscode.config_path().read_text()))[0]["models"]
+        )
     ]

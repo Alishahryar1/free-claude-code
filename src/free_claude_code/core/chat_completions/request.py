@@ -1,13 +1,21 @@
 """Preserve native Chat requests and translate only representable fields."""
 
-import json
 from copy import deepcopy
-from typing import Any, Self
+from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from free_claude_code.core.json_types import load_json_value
+
 from ..history_replay import decode_replay, is_replay, readable_reasoning
-from ..json_types import JsonObject
+from ..json_types import (
+    JsonObject,
+    JsonValue,
+    json_array,
+    json_object,
+    json_objects,
+    json_text,
+)
 
 
 class ChatConversionError(ValueError):
@@ -151,11 +159,13 @@ class ChatRequest(BaseModel):
 
     def reserved_tool_ids(self) -> frozenset[str]:
         return frozenset(
-            call["id"] for message in self.messages for call in function_calls(message)
+            json_text(call["id"])
+            for message in self.messages
+            for call in function_calls(message)
         )
 
 
-def translated_body(request: ChatRequest, *, supported: set[str]) -> dict[str, Any]:
+def translated_body(request: ChatRequest, *, supported: set[str]) -> JsonObject:
     """Reject unsupported controls before any upstream attempt."""
     body = request.body()
     common = {"model", "messages", "stream", "stream_options", "n"}
@@ -180,22 +190,28 @@ def translated_body(request: ChatRequest, *, supported: set[str]) -> dict[str, A
     return deepcopy(body)
 
 
-def content_parts(value: Any) -> list[dict[str, Any]]:
+def content_parts(value: JsonValue) -> list[JsonObject]:
     if value is None:
         return []
     if isinstance(value, str):
         return [{"type": "text", "text": value}]
-    if not isinstance(value, list) or any(not isinstance(part, dict) for part in value):
+    if not isinstance(value, list):
         raise ChatConversionError("Chat content must contain objects")
-    return deepcopy(value)
+    parts: list[JsonObject] = []
+    for part in value:
+        if not isinstance(part, dict):
+            raise ChatConversionError("Chat content must contain objects")
+        parts.append(deepcopy(part))
+    return parts
 
 
-def function_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
+def function_calls(message: JsonObject) -> list[JsonObject]:
     calls = message.get("tool_calls", [])
     if calls is None:
-        calls = []
+        return []
     if not isinstance(calls, list):
         raise ChatConversionError("tool_calls must be an array")
+    result: list[JsonObject] = []
     for call in calls:
         if (
             not isinstance(call, dict)
@@ -206,12 +222,13 @@ def function_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
             raise ChatConversionError("Only named function tool calls are supported")
         if set(call) - {"id", "type", "function"}:
             raise ChatConversionError("Unsupported tool call metadata")
-    return calls
+        result.append(call)
+    return result
 
 
-def tool_arguments(call: dict[str, Any]) -> JsonObject:
+def tool_arguments(call: JsonObject) -> JsonObject:
     try:
-        args = json.loads(call["function"]["arguments"])
+        args = load_json_value(json_text(json_object(call["function"])["arguments"]))
     except (KeyError, TypeError, ValueError) as exc:
         raise ChatConversionError("Function arguments must be JSON objects") from exc
     if not isinstance(args, dict):
@@ -219,7 +236,7 @@ def tool_arguments(call: dict[str, Any]) -> JsonObject:
     return args
 
 
-def validate_message_fields(message: dict[str, Any]) -> None:
+def validate_message_fields(message: JsonObject) -> None:
     unsupported = {key for key, value in message.items() if value is not None} - {
         "role",
         "content",
@@ -238,21 +255,20 @@ def validate_message_fields(message: dict[str, Any]) -> None:
         raise ChatConversionError("Legacy function messages require native Chat egress")
 
 
-def _image_source(part: dict[str, Any]) -> dict[str, Any]:
+def _image_source(part: JsonObject) -> JsonObject:
     image = part.get("image_url")
-    if not isinstance(image, dict) or not isinstance(image.get("url"), str):
+    if not isinstance(image, dict) or not isinstance(url := image.get("url"), str):
         raise ChatConversionError("image_url requires a URL")
     if image.get("detail") not in (None, "auto"):
         raise ChatConversionError("Image detail requires native Chat egress")
-    url = image["url"]
     if url.startswith("data:") and ";base64," in url:
         media, data = url[5:].split(";base64,", 1)
         return {"type": "base64", "media_type": media, "data": data}
     return {"type": "url", "url": url}
 
 
-def _messages_content(value: Any) -> list[dict[str, Any]]:
-    result = []
+def _messages_content(value: JsonValue) -> list[JsonValue]:
+    result: list[JsonValue] = []
     for part in content_parts(value):
         if part.get("type") == "text":
             result.append({"type": "text", "text": part["text"]})
@@ -263,19 +279,19 @@ def _messages_content(value: Any) -> list[dict[str, Any]]:
     return result
 
 
-def _reasoning_items(message: dict[str, Any]) -> list[dict[str, Any]]:
-    details = message.get("reasoning_details") or []
-    readable: list[tuple[str | None, str, bool]] = [
+def _reasoning_items(message: JsonObject) -> list[JsonObject]:
+    details = json_objects(message.get("reasoning_details") or [])
+    readable: list[tuple[JsonValue, str, bool]] = [
         (None, text, False)
         for key in ("reasoning_content", "reasoning")
         if isinstance(text := message.get(key), str) and text
     ]
-    carriers: list[dict[str, Any]] = []
+    carriers: list[JsonObject] = []
     for detail in details:
         kind = detail.get("type")
         if kind == "reasoning.encrypted":
             carriers.append(detail)
-        elif kind in {"reasoning.text", "reasoning.summary"}:
+        elif kind in ("reasoning.text", "reasoning.summary"):
             if detail.get("signature"):
                 raise ChatConversionError(
                     "Signed reasoning details require native Chat egress"
@@ -287,9 +303,10 @@ def _reasoning_items(message: dict[str, Any]) -> list[dict[str, Any]]:
         else:
             raise ChatConversionError("Unsupported reasoning detail")
     for detail in carriers:
-        if not is_replay(detail.get("data")):
+        data = detail.get("data")
+        if not is_replay(data):
             continue
-        native = readable_reasoning(decode_replay(detail["data"]).native)
+        native = readable_reasoning(decode_replay(data).native)
         source = detail.get("id")
         if source is not None:
             # Source IDs associate streamed readable deltas with their final native
@@ -317,7 +334,7 @@ def _reasoning_items(message: dict[str, Any]) -> list[dict[str, Any]]:
                 for owner, text, summary in readable
                 if owner is not None or (text, summary) not in represented
             ]
-    items: list[dict[str, Any]] = []
+    items: list[JsonObject] = []
     for _, text, summary in readable:
         items.append(
             {
@@ -337,12 +354,12 @@ def _reasoning_items(message: dict[str, Any]) -> list[dict[str, Any]]:
     return items
 
 
-def _tools(body: dict[str, Any]) -> list[dict[str, Any]]:
+def _tools(body: JsonObject) -> list[JsonObject]:
     result = []
-    for tool in body.get("tools") or []:
-        if tool.get("type") != "function" or not isinstance(tool.get("function"), dict):
+    for tool in json_objects(body.get("tools") or []):
+        function = tool.get("function")
+        if tool.get("type") != "function" or not isinstance(function, dict):
             raise ChatConversionError("Only function tools can be translated")
-        function = tool["function"]
         if set(function) - {"name", "description", "parameters", "strict"}:
             raise ChatConversionError("Unsupported function declaration fields")
         result.append(function)
@@ -365,14 +382,14 @@ def chat_messages_body(request: ChatRequest) -> JsonObject:
             "response_format",
         },
     )
-    messages: list[dict[str, Any]] = []
-    system: list[dict[str, Any]] = []
-    for message in body["messages"]:
+    messages: list[JsonObject] = []
+    system: list[JsonValue] = []
+    for message in json_objects(body["messages"]):
         validate_message_fields(message)
-        role = message["role"]
+        role = json_text(message["role"])
         if role in {"system", "developer"}:
             parts = _messages_content(message.get("content"))
-            if any(part["type"] != "text" for part in parts):
+            if any(json_object(part)["type"] != "text" for part in parts):
                 raise ChatConversionError("System instructions must be text")
             system.extend(parts)
             continue
@@ -400,16 +417,16 @@ def chat_messages_body(request: ChatRequest) -> JsonObject:
                 {
                     "type": "tool_use",
                     "id": call["id"],
-                    "name": call["function"]["name"],
+                    "name": json_object(call["function"])["name"],
                     "input": tool_arguments(call),
                 }
                 for call in function_calls(message)
             )
         if messages and messages[-1]["role"] == role:
-            messages[-1]["content"].extend(parts)
+            json_array(messages[-1]["content"]).extend(parts)
         else:
             messages.append({"role": role, "content": parts})
-    result: dict[str, Any] = {
+    result: JsonObject = {
         "model": request.model,
         "messages": messages,
         "stream": True,
@@ -445,18 +462,20 @@ def chat_messages_body(request: ChatRequest) -> JsonObject:
         result["tool_choice"] = (
             {"type": {"auto": "auto", "none": "none", "required": "any"}[choice]}
             if isinstance(choice, str)
-            else {"type": "tool", "name": choice["function"]["name"]}
+            else {
+                "type": "tool",
+                "name": json_object(json_object(choice)["function"])["name"],
+            }
         )
     if body.get("parallel_tool_calls") is not None:
-        result.setdefault("tool_choice", {"type": "auto"})[
-            "disable_parallel_tool_use"
-        ] = not body["parallel_tool_calls"]
-    if fmt := body.get("response_format"):
+        choice_payload = json_object(result.setdefault("tool_choice", {"type": "auto"}))
+        choice_payload["disable_parallel_tool_use"] = not body["parallel_tool_calls"]
+    if fmt := request.response_format:
         if fmt.get("type") == "json_schema":
             result["output_config"] = {
                 "format": {
                     "type": "json_schema",
-                    "schema": fmt["json_schema"]["schema"],
+                    "schema": json_object(fmt["json_schema"])["schema"],
                 }
             }
         elif fmt.get("type") != "text":
@@ -466,7 +485,7 @@ def chat_messages_body(request: ChatRequest) -> JsonObject:
     return result
 
 
-def _responses_content(value: Any, *, role: str) -> list[dict[str, Any]]:
+def _responses_content(value: JsonValue, *, role: str) -> list[JsonObject]:
     parts = []
     for part in content_parts(value):
         if part.get("type") == "text":
@@ -477,7 +496,7 @@ def _responses_content(value: Any, *, role: str) -> list[dict[str, Any]]:
                 }
             )
         elif part.get("type") == "image_url" and role != "assistant":
-            image = part["image_url"]
+            image = json_object(part["image_url"])
             parts.append(
                 {
                     "type": "input_image",
@@ -509,10 +528,10 @@ def chat_responses_body(request: ChatRequest) -> JsonObject:
             "user",
         },
     )
-    items: list[dict[str, Any]] = []
-    for message in body["messages"]:
+    items: list[JsonObject] = []
+    for message in json_objects(body["messages"]):
         validate_message_fields(message)
-        role = message["role"]
+        role = json_text(message["role"])
         if role == "tool":
             output = message.get("content") or ""
             if isinstance(output, list):
@@ -536,12 +555,12 @@ def chat_responses_body(request: ChatRequest) -> JsonObject:
             {
                 "type": "function_call",
                 "call_id": call["id"],
-                "name": call["function"]["name"],
-                "arguments": call["function"]["arguments"],
+                "name": json_object(call["function"])["name"],
+                "arguments": json_object(call["function"])["arguments"],
             }
             for call in function_calls(message)
         )
-    result: dict[str, Any] = {
+    result: JsonObject = {
         "model": request.model,
         "input": items,
         "stream": True,
@@ -575,13 +594,16 @@ def chat_responses_body(request: ChatRequest) -> JsonObject:
         result["tool_choice"] = (
             choice
             if isinstance(choice, str)
-            else {"type": "function", "name": choice["function"]["name"]}
+            else {
+                "type": "function",
+                "name": json_object(json_object(choice)["function"])["name"],
+            }
         )
     if body.get("reasoning_effort") is not None:
         result["reasoning"] = {"effort": body["reasoning_effort"]}
-    if fmt := body.get("response_format"):
+    if fmt := request.response_format:
         result["text"] = {
-            "format": {"type": "json_schema", **fmt["json_schema"]}
+            "format": {"type": "json_schema", **json_object(fmt["json_schema"])}
             if fmt.get("type") == "json_schema"
             else fmt
         }

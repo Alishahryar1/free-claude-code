@@ -1,10 +1,12 @@
 import asyncio
+from collections.abc import Mapping
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, _Call, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.providers.open_router import OpenRouterProvider
 from tests.api.support import create_test_app
 from tests.providers.support import (
@@ -14,6 +16,7 @@ from tests.providers.support import (
     sdk_chat_chunk,
 )
 from tests.providers.test_open_router import image_routing_error_body, routing_error
+from tests.wire_payload import object_payload, response_object, string_payload
 
 IMAGE_DATA = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6nGQAAAAASUVORK5CYII="
 IMAGE_URL = f"data:image/png;base64,{IMAGE_DATA}"
@@ -24,8 +27,8 @@ NOTE = (
 WIRES = [("messages", False), ("messages", True), ("responses", True)]
 
 
-def image_payload(wire, stream):
-    payload = {"model": "open_router/test-model", "stream": stream}
+def image_payload(wire: str, stream: bool):
+    payload: JsonObject = {"model": "open_router/test-model", "stream": stream}
     if wire == "messages":
         content = [
             {"type": "text", "text": "Read this image"},
@@ -50,10 +53,11 @@ def image_payload(wire, stream):
     return payload
 
 
-def sent_parts(call):
+def sent_parts(call: _Call):
+    messages: list[JsonObject] = call.kwargs["messages"]
     return [
         part
-        for message in call.kwargs["messages"]
+        for message in messages
         if isinstance(message["content"], list)
         for part in message["content"]
     ]
@@ -74,7 +78,12 @@ async def answered():
         )
 
 
-def post(provider, create, wire, payload):
+def post(
+    provider: OpenRouterProvider,
+    create: AsyncMock,
+    wire: str,
+    payload: Mapping[str, JsonValue],
+):
     try:
         with (
             patch(
@@ -96,7 +105,9 @@ def openrouter():
 
 
 @pytest.mark.parametrize(("wire", "stream"), WIRES)
-def test_openrouter_image_rejection_is_retried_with_a_note(wire, stream):
+def test_openrouter_image_rejection_is_retried_with_a_note(
+    wire: str, stream: bool
+) -> None:
     create = AsyncMock(
         side_effect=[
             routing_error(image_routing_error_body()),
@@ -115,7 +126,7 @@ def test_openrouter_image_rejection_is_retried_with_a_note(wire, stream):
 
 
 @pytest.mark.parametrize(("wire", "stream"), WIRES)
-def test_openrouter_unrelated_404_keeps_the_image(wire, stream):
+def test_openrouter_unrelated_404_keeps_the_image(wire: str, stream: bool) -> None:
     body = {"code": 404, "message": "Model not found"}
     create = AsyncMock(side_effect=routing_error(body))
 
@@ -123,10 +134,14 @@ def test_openrouter_unrelated_404_keeps_the_image(wire, stream):
 
     assert response.status_code == 404
     assert response.headers["x-should-retry"] == "false"
-    error = response.json()["error"]
-    assert error["type"] == "api_error"
-    assert body["message"] in error["message"]
-    assert response.headers["request-id"] in error["message"]
+    error = response_object(response)["error"]
+    assert object_payload(error)["type"] == "api_error"
+    assert string_payload(body["message"]) in string_payload(
+        object_payload(error)["message"]
+    )
+    assert response.headers["request-id"] in string_payload(
+        object_payload(error)["message"]
+    )
     assert create.await_count == 1
     assert {"type": "image_url", "image_url": {"url": IMAGE_URL}} in sent_parts(
         create.await_args_list[0]

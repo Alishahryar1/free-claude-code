@@ -5,6 +5,7 @@ import asyncio
 import httpx
 import pytest
 
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
@@ -18,8 +19,8 @@ from free_claude_code.providers.runtime import ProviderRuntime
 @pytest.mark.parametrize("protection", ["rate", "concurrency"])
 @pytest.mark.parametrize("second_key", [1, 2])
 async def test_models_and_credentials_share_capacity_and_limit_updates(
-    protection, second_key
-):
+    protection: str, second_key: int
+) -> None:
     settings = Settings(
         GROQ_API_KEY=["synthetic-first", "synthetic-second"],
         PROVIDER_RATE_LIMIT=1 if protection == "rate" else 1000,
@@ -50,7 +51,9 @@ async def test_models_and_credentials_share_capacity_and_limit_updates(
         )
         await asyncio.sleep(0)
         assert not pending.done(), f"another model bypassed provider {protection}"
-        registry.reconfigure(ProviderAdmissionLimits(1000, 60, 2))
+        registry.reconfigure(
+            ProviderAdmissionLimits(1000, 60, 2, PROVIDER_MAX_ATTEMPTS_DEFAULT)
+        )
         second_attempt = await asyncio.wait_for(pending, 1)
         await second_attempt.accept()
     finally:
@@ -71,9 +74,9 @@ async def test_models_and_credentials_share_capacity_and_limit_updates(
 @pytest.mark.parametrize("new_first", ["synthetic-second", "replacement-first"])
 @pytest.mark.parametrize("retry_after", ["60", "3600"])
 async def test_recovery_follows_credentials_across_key_reorder_and_replacement(
-    new_first,
-    retry_after,
-):
+    new_first: str,
+    retry_after: str,
+) -> None:
     old_settings = Settings(
         GROQ_API_KEY=["synthetic-first", "synthetic-second"],
         PROVIDER_RATE_LIMIT=1000,

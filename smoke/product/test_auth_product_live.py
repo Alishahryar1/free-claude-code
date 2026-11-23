@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import httpx
 import pytest
 
@@ -7,7 +9,9 @@ from smoke.lib.e2e import SmokeServerDriver
 pytestmark = [pytest.mark.live, pytest.mark.smoke_target("auth")]
 
 
-def test_api_bearer_auth_contract_e2e(smoke_config: SmokeConfig, tmp_path) -> None:
+def test_api_bearer_auth_contract_e2e(
+    smoke_config: SmokeConfig, tmp_path: Path
+) -> None:
     token = "product-smoke-token"
     home = tmp_path / "home"
     env_file = home / ".fcc" / ".env"

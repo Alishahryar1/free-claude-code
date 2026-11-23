@@ -12,6 +12,7 @@ import pytest
 
 from free_claude_code.config.provider_catalog import GROQ_DEFAULT_BASE
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.groq import GroqProvider
 from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.open_router import OpenRouterProvider
@@ -29,7 +30,7 @@ REJECTED = (400, {"type": "invalid_request_error", "message": "Rejected"})
 
 
 @pytest.mark.asyncio
-async def test_output_cap_is_learned_even_when_no_attempt_remains():
+async def test_output_cap_is_learned_even_when_no_attempt_remains() -> None:
     provider = GroqProvider(
         make_provider_config(api_key="key", base_url=GROQ_DEFAULT_BASE),
         admission=immediate_admission(max_attempts=1),
@@ -53,13 +54,15 @@ def _chat(cache: HistoryModeCache, max_attempts: int):
     )
 
 
-def _thoughts(body) -> tuple[bool, bool]:
+def _thoughts(body: JsonObject) -> tuple[bool, bool]:
     serialized = json.dumps(body)
     return "Old" in serialized, "New" in serialized
 
 
 @pytest.mark.asyncio
-async def test_rejected_cached_history_mode_is_forgotten_even_when_no_attempt_remains():
+async def test_rejected_cached_history_mode_is_forgotten_even_when_no_attempt_remains() -> (
+    None
+):
     cache = HistoryModeCache()
 
     # Two rejections teach the cache that this upstream wants no thoughts.

@@ -10,12 +10,12 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-2e7d32.svg?style=for-the-badge)](https://github.com/Alishahryar1/free-claude-code/blob/main/LICENSE)
 [![Python 3.14](https://img.shields.io/badge/python-3.14-3776ab.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![Package Manager: uv](assets/package-manager-uv.svg)](https://github.com/astral-sh/uv)
-[![Testing: Pytest](https://img.shields.io/badge/Testing-Pytest-ad1457.svg?style=for-the-badge)](https://github.com/Alishahryar1/free-claude-code/actions/workflows/tests.yml)
-[![Type Checker: Ty](https://img.shields.io/badge/Type%20Checker-ty-fdd835.svg?style=for-the-badge)](https://pypi.org/project/ty/)
+[![Testing: Pytest](https://img.shields.io/badge/Testing-Pytest-ad1457.svg?style=for-the-badge)](https://github.com/pytest-dev/pytest)
+[![Type Checker: Pyrefly](https://img.shields.io/badge/Type%20Checker-pyrefly-fdd835.svg?style=for-the-badge)](https://github.com/pyrefly-org/pyrefly)
 [![Formatter: Ruff](https://img.shields.io/badge/Formatter-ruff-bf4b00.svg?style=for-the-badge)](https://github.com/astral-sh/ruff)
 [![Logging: Loguru](https://img.shields.io/badge/logging-loguru-00695c.svg?style=for-the-badge)](https://github.com/Delgan/loguru)
 
-[Quick Start](#quick-start) · [Providers](#choose-a-provider) · [Clients](#connect-your-client) · [Integrations](#optional-integrations) · [Manage](#manage-your-installation)
+[Quick Start](#quick-start) · [Providers](#choose-a-provider) · [Integrations](#integrations) · [API](#use-the-api-directly) · [Phone](#use-from-your-phone) · [Manage](#manage-your-installation)
 
 </div>
 
@@ -33,7 +33,7 @@
 - 61 supported providers, including free, paid, subscription, and local providers.
   - 1.3B+ free tokens per month.
   - FCC follows provider TOS and removes integrations if they stop being allowed.
-- Use through the terminal, desktop apps ([Codex App](https://learn.chatgpt.com/docs/app), [Claude Desktop](https://claude.ai/download), and [DeepSeek Desktop](https://github.com/deepseek-ai/deepseek-harness)), IDE extensions ([VS Code](https://code.visualstudio.com/) and [JetBrains](https://www.jetbrains.com/)), your phone ([Discord](https://discord.com/) and [Telegram](https://telegram.org/)), or your browser through native Code sessions.
+- Use through the terminal, desktop apps ([Codex App](https://learn.chatgpt.com/docs/app), [Claude Desktop](https://claude.ai/download), and [DeepSeek Desktop](https://github.com/deepseek-ai/deepseek-harness)), IDE extensions ([VS Code](https://code.visualstudio.com/) and [JetBrains](https://www.jetbrains.com/)), [your phone](#use-from-your-phone) ([Discord](https://discord.com/) and [Telegram](https://telegram.org/)), or your browser through native Code sessions.
   - Voice notes supported for Discord and Telegram using local [Whisper](https://github.com/openai/whisper) or [NVIDIA NIM](https://docs.nvidia.com/nim/speech/latest/asr/deploy-asr-models/whisper.html).
 - Up to 90% lower token usage using [RTK](https://github.com/rtk-ai/rtk) and [Headroom](https://github.com/headroomlabs-ai/headroom).
 - State-of-the-art reliability features so you can keep coding through provider outages:
@@ -176,7 +176,7 @@ Aider:
 fcc-aider
 ```
 
-Antigravity CLI (connect on the Integrations page first):
+Antigravity CLI:
 
 ```bash
 fcc-agy
@@ -380,9 +380,10 @@ Open **Admin UI → Model Config → Model Routing** and choose an effort beside
 
 </details>
 
+<a id="integrations"></a>
 <a id="connect-your-client"></a>
 
-## Connect Your Client
+## Integrations
 
 FCC launchers automatically start the server.
 
@@ -409,11 +410,11 @@ are configuring.
 
 <a id="use-the-api-directly"></a>
 
-### Use The API Directly
+## Use The API Directly
 
 Any client or SDK for these APIs can call FCC. Set the base URL to
 `http://127.0.0.1:8082/v1` for OpenAI clients and `http://127.0.0.1:8082` for
-Anthropic and Gemini clients. Gemini clients also need API version `v1beta`.
+Anthropic and Gemini clients.
 Every FCC model works on every endpoint. If Proxy
 Authentication is enabled, use its token as the client's API key, or add
 `-H "Authorization: Bearer <token>"` to each `curl` request.
@@ -453,10 +454,10 @@ curl http://127.0.0.1:8082/v1/responses \
   }'
 ```
 
-[`POST /v1beta/models/{model}:generateContent`](https://ai.google.dev/api/generate-content):
+[`POST /v1/models/{model}:generateContent`](https://ai.google.dev/api/generate-content):
 
 ```bash
-curl http://127.0.0.1:8082/v1beta/models/nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b:generateContent \
+curl http://127.0.0.1:8082/v1/models/nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b:generateContent \
   -H "Content-Type: application/json" \
   -d '{"contents": [{"role": "user", "parts": [{"text": "Hello!"}]}]}'
 ```
@@ -465,11 +466,13 @@ Responses replies always stream. To stream Messages or Chat Completions replies,
 `"stream": true`. For Gemini, call `:streamGenerateContent?alt=sse` instead of
 `:generateContent`.
 
+<a id="use-from-your-phone"></a>
 <a id="optional-integrations"></a>
 
-## Optional Integrations
+## Use From Your Phone
 
-Configure integrations from **Admin UI → Messaging**, then click **Apply**.
+Run coding tasks from Discord or Telegram, and send voice notes. Configure them
+in **Admin UI → Messaging**, then click **Apply**.
 
 <details>
 <summary><strong>Discord bot</strong></summary>
@@ -557,7 +560,7 @@ Stop all running FCC commands, then run:
 fcc-update
 ```
 
-The update installs the checked stable FCC release with its matching installer.
+`fcc-update` installs the latest FCC release unless you already have it.
 
 If `fcc-update` is unavailable or fails, try running the [install command](#install) again.
 
@@ -617,6 +620,10 @@ fcc-doctor
 
 - [Report bugs or request features](https://github.com/Alishahryar1/free-claude-code/issues)
 - [Contributing guide](CONTRIBUTING.md)
+
+## Maintainers
+
+See [MAINTAINERS.md](MAINTAINERS.md) for the project's maintainers and their areas of responsibility.
 
 ## License
 

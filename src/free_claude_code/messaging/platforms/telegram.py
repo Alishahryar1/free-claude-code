@@ -30,6 +30,8 @@ try:
         Application,
         CommandHandler,
         ContextTypes,
+        ExtBot,
+        JobQueue,
         MessageHandler,
         filters,
     )
@@ -67,7 +69,17 @@ class TelegramRuntime:
         if not self.bot_token:
             logger.warning("TELEGRAM_BOT_TOKEN not set")
 
-        self._application: Application | None = None
+        self._application: (
+            Application[
+                ExtBot[None],
+                ContextTypes.DEFAULT_TYPE,
+                dict[object, object],
+                dict[object, object],
+                dict[object, object],
+                JobQueue[ContextTypes.DEFAULT_TYPE],
+            ]
+            | None
+        ) = None
         self._message_handler: InboundMessageHandler | None = None
         self._connected = False
         self._limiter = limiter

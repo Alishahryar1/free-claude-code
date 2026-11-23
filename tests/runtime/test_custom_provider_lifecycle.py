@@ -17,7 +17,7 @@ pytestmark = pytest.mark.asyncio
 ID = "custom_" + "a" * 32
 
 
-def settings(**changes):
+def settings(**changes: object):
     definition = CustomProviderDefinition.model_validate(
         {
             "provider_id": ID,
@@ -33,7 +33,7 @@ async def commit():
     pass
 
 
-async def test_runtime_constructs_one_custom_owner_lazily():
+async def test_runtime_constructs_one_custom_owner_lazily() -> None:
     runtime = ProviderRuntime(
         settings(model_ids=["manual"]),
         ProviderAdmissionRegistry(
@@ -51,7 +51,7 @@ async def test_runtime_constructs_one_custom_owner_lazily():
         await runtime.cleanup()
 
 
-async def test_manual_inventory_is_immediate_and_does_not_construct_client():
+async def test_manual_inventory_is_immediate_and_does_not_construct_client() -> None:
     factory = RuntimeFactory()
     manager = ProviderRuntimeManager(
         settings(model_ids=["manual"]), runtime_factory=factory
@@ -69,7 +69,7 @@ async def test_manual_inventory_is_immediate_and_does_not_construct_client():
         await manager.close()
 
 
-async def test_changed_endpoint_cannot_inherit_catalog_but_rename_can():
+async def test_changed_endpoint_cannot_inherit_catalog_but_rename_can() -> None:
     factory = RuntimeFactory()
     release = asyncio.Event()
 
@@ -77,7 +77,11 @@ async def test_changed_endpoint_cannot_inherit_catalog_but_rename_can():
         await release.wait()
         return frozenset()
 
-    def blocked(settings, admission_registry, history_cache=None):
+    def blocked(
+        settings: Settings,
+        admission_registry: ProviderAdmissionRegistry,
+        history_cache: object = None,
+    ):
         runtime = factory(settings, admission_registry)
         assert isinstance(runtime, FakeRuntime)
         runtime.provider.list_model_infos.side_effect = wait

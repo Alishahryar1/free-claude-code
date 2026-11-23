@@ -1,7 +1,5 @@
 """Trace-safe snapshots of Anthropic protocol requests."""
 
-from typing import Any
-
 from free_claude_code.core.trace import sanitize_trace_value
 
 from .models import MessagesRequest, NativeTokenCountRequest, TokenCountRequest
@@ -9,9 +7,9 @@ from .models import MessagesRequest, NativeTokenCountRequest, TokenCountRequest
 
 def anthropic_request_snapshot(
     request: MessagesRequest | TokenCountRequest | NativeTokenCountRequest,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Return the traceable public fields of an Anthropic request."""
-    data = request.model_dump(mode="python")
+    data: dict[str, object] = request.model_dump(mode="python")
     snapshot = {
         key: data[key]
         for key in (

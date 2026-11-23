@@ -7,7 +7,7 @@ from free_claude_code.core.stream_output import StreamOutput
 
 
 @pytest.mark.asyncio
-async def test_private_replacement_discards_previous_attempt():
+async def test_private_replacement_discards_previous_attempt() -> None:
     async def body():
         state = current_stream_delivery()
         assert state is not None
@@ -30,7 +30,7 @@ async def test_private_replacement_discards_previous_attempt():
 
 
 @pytest.mark.asyncio
-async def test_eof_after_new_attempt_does_not_return_old_draft():
+async def test_eof_after_new_attempt_does_not_return_old_draft() -> None:
     async def body():
         state = current_stream_delivery()
         assert state is not None

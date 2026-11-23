@@ -22,6 +22,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload
 
 _MODEL = "deepseek/deepseek-v4-flash"
 
@@ -97,7 +98,7 @@ def test_replays_thinking_in_reasoning_content_field(
         reasoning=reasoning_for(request),
     )
 
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "assistant",
         "content": "The answer is 42.",
         "reasoning_content": "Work through it.",
@@ -106,24 +107,29 @@ def test_replays_thinking_in_reasoning_content_field(
 
 @pytest.mark.asyncio
 async def test_lists_models_from_models_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
     scaleway_provider: OpenAIChatProvider,
 ) -> None:
-    scaleway_provider._client.get = AsyncMock(return_value={"data": [{"id": _MODEL}]})
+    mock_get = AsyncMock(return_value={"data": [{"id": _MODEL}]})
+    monkeypatch.setattr(scaleway_provider._client, "get", mock_get)
 
     model_infos = await scaleway_provider.list_model_infos()
 
     assert model_infos == frozenset({ProviderModelInfo(_MODEL)})
-    scaleway_provider._client.get.assert_awaited_once()
-    call = scaleway_provider._client.get.await_args
+    mock_get.assert_awaited_once()
+    call = mock_get.await_args
     assert call is not None
     assert call.args == ("/models",)
 
 
 @pytest.mark.asyncio
 async def test_rejects_empty_model_ids(
+    monkeypatch: pytest.MonkeyPatch,
     scaleway_provider: OpenAIChatProvider,
 ) -> None:
-    scaleway_provider._client.get = AsyncMock(return_value={"data": [{"id": ""}]})
+    monkeypatch.setattr(
+        scaleway_provider._client, "get", AsyncMock(return_value={"data": [{"id": ""}]})
+    )
 
     with pytest.raises(ModelListResponseError, match="include id"):
         await scaleway_provider.list_model_infos()

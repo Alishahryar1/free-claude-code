@@ -14,11 +14,17 @@ from pathlib import Path
 
 import pytest
 
-PROJECT = tomllib.loads(
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import object_payload, string_payload
+
+PROJECT: JsonObject = tomllib.loads(
     (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text(encoding="utf-8")
 )
-PYTHON_VERSION = PROJECT["project"]["requires-python"].removeprefix("==")
-UV_MINIMUM = PROJECT["tool"]["uv"]["required-version"].removeprefix(">=")
+PYTHON_VERSION = string_payload(
+    object_payload(PROJECT["project"])["requires-python"]
+).removeprefix("==")
+UV_TABLE = object_payload(object_payload(PROJECT["tool"])["uv"])
+UV_MINIMUM = string_payload(UV_TABLE["required-version"]).removeprefix(">=")
 UV_NEWER = ".".join(
     [*UV_MINIMUM.split(".")[:2], str(int(UV_MINIMUM.split(".")[2]) + 1)]
 )
@@ -60,15 +66,18 @@ CODING_AGENTS = (
 )
 
 
+type InstallerHarness = PosixHarness | PowerShellHarness
+
+
 if os.name == "nt":
 
     @pytest.fixture
-    def release_harness(powershell_harness):
+    def release_harness(powershell_harness: PowerShellHarness):
         return powershell_harness
 else:
 
     @pytest.fixture
-    def release_harness(posix_harness):
+    def release_harness(posix_harness: PosixHarness):
         return posix_harness
 
 
@@ -79,7 +88,9 @@ else:
         " [project] # package\r\n requires-python = '==3.15.2' # runtime\r\n [tool.uv]\r\n required-version = '>=0.14.2' # minimum\r\n[tool.other]\r\nrequires-python = 'bad'\r\n",
     ],
 )
-def test_selected_release_toolchain_is_read_from_metadata(release_harness, text):
+def test_selected_release_toolchain_is_read_from_metadata(
+    release_harness: InstallerHarness, text: str
+):
     (release_harness.fixtures / "pyproject.toml").write_text(text, encoding="utf-8")
     windows = isinstance(release_harness, PowerShellHarness)
     body = (
@@ -111,7 +122,9 @@ def test_selected_release_toolchain_is_read_from_metadata(release_harness, text)
         '[project]\nrequires-python = """==3.14.9"""\n[tool.uv]\nrequired-version = ">=0.13.5"',
     ],
 )
-def test_invalid_toolchain_stops_before_installer_changes(release_harness, text):
+def test_invalid_toolchain_stops_before_installer_changes(
+    release_harness: InstallerHarness, text: str
+):
     (release_harness.fixtures / "pyproject.toml").write_text(text, encoding="utf-8")
     result = release_harness.run()
     assert result.returncode != 0
@@ -119,7 +132,9 @@ def test_invalid_toolchain_stops_before_installer_changes(release_harness, text)
     assert not (release_harness.root / "home/.fcc/logs").exists()
 
 
-def test_missing_release_pin_rejects_handoff_before_download(release_harness):
+def test_missing_release_pin_rejects_handoff_before_download(
+    release_harness: InstallerHarness,
+):
     release_harness.env.pop("FCC_INSTALL_VERSION")
     result = release_harness.run()
     assert result.returncode != 0
@@ -127,7 +142,9 @@ def test_missing_release_pin_rejects_handoff_before_download(release_harness):
     assert release_harness.calls() == []
 
 
-def test_toolchain_download_failure_stops_before_changes(release_harness):
+def test_toolchain_download_failure_stops_before_changes(
+    release_harness: InstallerHarness,
+):
     result = release_harness.run(fail_step="toolchain-download")
     assert result.returncode != 0
     assert release_harness.calls() == [f"download:{METADATA_URL}"]
@@ -135,7 +152,7 @@ def test_toolchain_download_failure_stops_before_changes(release_harness):
 
 
 @pytest.mark.parametrize("voice", [False, True])
-def test_install_sh_pins_selected_fcc_release(posix_harness, voice):
+def test_install_sh_pins_selected_fcc_release(posix_harness: PosixHarness, voice: bool):
     posix_harness.env["FCC_INSTALL_VERSION"] = "2.0.0"
     posix_harness.add_uv(UV_MINIMUM)
     result = posix_harness.run_functions(
@@ -151,7 +168,9 @@ def test_install_sh_pins_selected_fcc_release(posix_harness, voice):
 
 
 @pytest.mark.parametrize("voice", [False, True])
-def test_install_ps1_pins_selected_fcc_release(powershell_harness, voice):
+def test_install_ps1_pins_selected_fcc_release(
+    powershell_harness: PowerShellHarness, voice: bool
+):
     powershell_harness.env["FCC_INSTALL_VERSION"] = "2.0.0"
     powershell_harness.add_uv(UV_MINIMUM)
     result = powershell_harness.run_functions(
@@ -167,6 +186,106 @@ def test_install_ps1_pins_selected_fcc_release(powershell_harness, voice):
     assert "$env:FCC_INSTALL_VERSION = '2.0.0'" in result.stdout
 
 
+FCC_UPDATE_DECISIONS = [
+    pytest.param(None, True, "", id="not-installed"),
+    pytest.param("1.2.2", True, "FCC update available: 1.2.2 -> 1.2.3.", id="older"),
+    pytest.param(
+        "1.2.3.dev4+gabc",
+        True,
+        "FCC update available: 1.2.3.dev4+gabc -> 1.2.3.",
+        id="dev-build",
+    ),
+    pytest.param(
+        "1.2.3rc1", True, "FCC update available: 1.2.3rc1 -> 1.2.3.", id="pre-release"
+    ),
+    pytest.param("not-a-version", True, "", id="unparseable"),
+    pytest.param("1.2.3", False, "FCC 1.2.3 is already up to date.", id="current"),
+    pytest.param(
+        "1.10.0",
+        False,
+        "FCC 1.10.0 is newer than the published version 1.2.3. No update needed.",
+        id="newer",
+    ),
+    pytest.param(
+        "1.2.3+local",
+        False,
+        "FCC 1.2.3+local is newer than the published version 1.2.3. No update needed.",
+        id="local-build",
+    ),
+    pytest.param(
+        "1.2.3.post1",
+        False,
+        "FCC 1.2.3.post1 is newer than the published version 1.2.3. No update needed.",
+        id="post-release",
+    ),
+]
+
+
+def _assert_update_decision(
+    result: subprocess.CompletedProcess[str], needed: bool, message: str
+):
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert f"decision:{'install' if needed else 'skip'}" in result.stdout, output
+    if message:
+        assert message in result.stdout, output
+    else:
+        assert "FCC " not in result.stdout, output
+    assert "path-changed" not in result.stdout, output
+
+
+@pytest.mark.parametrize(("installed", "needed", "message"), FCC_UPDATE_DECISIONS)
+def test_install_sh_update_compares_installed_fcc_with_selected_release(
+    posix_harness: PosixHarness, installed: str | None, needed: bool, message: str
+):
+    if installed is not None:
+        # uv in its usual directory, which is not on PATH, is still found.
+        uv_bin = Path(posix_harness.env["HOME"]) / ".local/bin"
+        uv_bin.mkdir(parents=True)
+        _write_executable(
+            uv_bin / "uv",
+            f"""#!/bin/sh
+[ "$*" = "tool list" ] || exit 35
+printf 'other-tool v9.9.9\\n- other\\nfree-claude-code v{installed}\\n- fcc-server\\n'
+""",
+        )
+    result = posix_harness.run_functions(
+        "fcc_install_version=1.2.3\nbefore=$PATH\n"
+        "if fcc_update_is_needed; then echo decision:install; else echo decision:skip; fi\n"
+        '[ "$PATH" = "$before" ] || echo path-changed'
+    )
+    _assert_update_decision(result, needed, message)
+
+
+@pytest.mark.parametrize(("installed", "needed", "message"), FCC_UPDATE_DECISIONS)
+def test_install_ps1_update_compares_installed_fcc_with_selected_release(
+    powershell_harness: PowerShellHarness,
+    installed: str | None,
+    needed: bool,
+    message: str,
+):
+    if installed is not None:
+        # uv in its usual directory, which is not on PATH, is still found.
+        uv_bin = Path(powershell_harness.env["USERPROFILE"]) / ".local" / "bin"
+        uv_bin.mkdir(parents=True)
+        _write_executable(
+            uv_bin / "uv.cmd",
+            f"""@echo off
+if not "%~1 %~2"=="tool list" exit /b 35
+echo other-tool v9.9.9
+echo free-claude-code v{installed}
+exit /b 0
+""",
+        )
+    result = powershell_harness.run_functions(
+        "$FccInstallVersion = '1.2.3'\n$before = $env:Path\n"
+        "$decision = if (Test-FccUpdateNeeded) { 'install' } else { 'skip' }\n"
+        'Write-Output "decision:$decision"\n'
+        "if ($env:Path -ne $before) { Write-Output 'path-changed' }"
+    )
+    _assert_update_decision(result, needed, message)
+
+
 @pytest.mark.parametrize(
     "version",
     [
@@ -179,7 +298,9 @@ def test_install_ps1_pins_selected_fcc_release(powershell_harness, voice):
         "2.0.0/../main",
     ],
 )
-def test_install_sh_rejects_invalid_fcc_release_before_changes(posix_harness, version):
+def test_install_sh_rejects_invalid_fcc_release_before_changes(
+    posix_harness: PosixHarness, version: str
+):
     posix_harness.env["FCC_INSTALL_VERSION"] = version
     result = posix_harness.run("--dry-run")
     assert result.returncode != 0
@@ -201,7 +322,7 @@ def test_install_sh_rejects_invalid_fcc_release_before_changes(posix_harness, ve
     ],
 )
 def test_install_ps1_rejects_invalid_fcc_release_before_changes(
-    powershell_harness, version
+    powershell_harness: PowerShellHarness, version: str
 ):
     powershell_harness.env["FCC_INSTALL_VERSION"] = version
     result = powershell_harness.run("-DryRun")
@@ -211,7 +332,9 @@ def test_install_ps1_rejects_invalid_fcc_release_before_changes(
     assert not (Path(powershell_harness.env["USERPROFILE"]) / ".fcc/logs").exists()
 
 
-def test_install_ps1_bundle_dry_run_includes_headroom(powershell_harness):
+def test_install_ps1_bundle_dry_run_includes_headroom(
+    powershell_harness: PowerShellHarness,
+):
     result = powershell_harness.run("-RtkHeadroom", "-DryRun")
     assert result.returncode == 0, result.stderr
     assert "headroom-ai[mcp]==0.40.0" in result.stdout
@@ -220,7 +343,7 @@ def test_install_ps1_bundle_dry_run_includes_headroom(powershell_harness):
     assert not any("headroom-ai" in call for call in powershell_harness.calls())
 
 
-def test_install_sh_bundle_dry_run_includes_headroom(posix_harness):
+def test_install_sh_bundle_dry_run_includes_headroom(posix_harness: PosixHarness):
     result = posix_harness.run("--rtk-headroom", "--dry-run")
     assert result.returncode == 0, result.stderr
     assert "headroom-ai[mcp]==0.40.0" in result.stdout
@@ -229,7 +352,9 @@ def test_install_sh_bundle_dry_run_includes_headroom(posix_harness):
     assert not any("headroom-ai" in call for call in posix_harness.calls())
 
 
-def _assert_headroom_bundle_workflow(harness, failure, reuse):
+def _assert_headroom_bundle_workflow(
+    harness: InstallerHarness, failure: str, reuse: bool
+):
     windows = isinstance(harness, PowerShellHarness)
     for agent in CODING_AGENTS:
         harness.add_client(agent)
@@ -288,7 +413,9 @@ def _assert_headroom_bundle_workflow(harness, failure, reuse):
         ("headroom-configure", False),
     ],
 )
-def test_install_ps1_headroom_bundle_workflow(powershell_harness, failure, reuse):
+def test_install_ps1_headroom_bundle_workflow(
+    powershell_harness: PowerShellHarness, failure: str, reuse: bool
+):
     _assert_headroom_bundle_workflow(powershell_harness, failure, reuse)
 
 
@@ -302,12 +429,16 @@ def test_install_ps1_headroom_bundle_workflow(powershell_harness, failure, reuse
         ("headroom-configure", False),
     ],
 )
-def test_install_sh_headroom_bundle_workflow(posix_harness, failure, reuse):
+def test_install_sh_headroom_bundle_workflow(
+    posix_harness: PosixHarness, failure: str, reuse: bool
+):
     _assert_headroom_bundle_workflow(posix_harness, failure, reuse)
 
 
 @pytest.mark.parametrize("selected", ["claude", "codex", "grok", "unsupported"])
-def test_install_sh_headroom_native_selection(posix_harness, selected):
+def test_install_sh_headroom_native_selection(
+    posix_harness: PosixHarness, selected: str
+):
     posix_harness.add_client("headroom")
     flags = "\n".join(f"install_{name}=0" for name in ("claude", "codex", "grok"))
     if selected != "unsupported":
@@ -327,7 +458,9 @@ def test_install_sh_headroom_native_selection(posix_harness, selected):
 
 
 @pytest.mark.parametrize("selected", ["claude", "codex", "grok", "unsupported"])
-def test_install_ps1_headroom_native_selection(powershell_harness, selected):
+def test_install_ps1_headroom_native_selection(
+    powershell_harness: PowerShellHarness, selected: str
+):
     powershell_harness.add_client("headroom")
     variables = {
         "claude": "InstallClaudeCode",
@@ -388,7 +521,7 @@ def _posix_command(name: str, *, version_output: str | None = None) -> str:
         "dsh": "0.2.0-rc.2",
         "grok": "1.0.5",
         "muse": "0.2.1",
-        "agy": "1.4.7",
+        "agy": "1.5.9",
         "node": "22.19.0",
     }.get(name, "1.0.0")
     if version_output is None:
@@ -475,6 +608,14 @@ if [ "${{1:-}}" = "--version" ]; then
         exit 32
     fi
     echo "uv {version}"
+    exit 0
+fi
+if [ "${{1:-}}" = "python" ] && [ "${{2:-}}" = "find" ]; then
+    [ "${{FAKE_MANAGED_GIL_PYTHON:-}}" = "installed" ]
+    exit $?
+fi
+if [ "${{1:-}}" = "python" ] && [ "${{2:-}}" = "install" ]; then
+    [ "$FAIL_STEP" != "python-install" ] || exit 36
     exit 0
 fi
 if [ "${{1:-}}" = "tool" ] && [ "${{2:-}}" = "install" ]; then
@@ -1733,7 +1874,9 @@ def test_install_sh_rejects_uninstalled_only_selection(
     _assert_uv_ready_without_fcc_install(posix_harness.calls())
 
 
-def test_install_sh_delegates_macos_bundle_to_installed_helper(posix_harness):
+def test_install_sh_delegates_macos_bundle_to_installed_helper(
+    posix_harness: PosixHarness,
+):
     posix_harness.env["FAKE_UNAME"] = "Darwin"
     posix_harness.env["FAKE_TOOL_BIN"] = str(posix_harness.root / "tool's bin")
     result = posix_harness.run()
@@ -1750,13 +1893,18 @@ def test_install_sh_delegates_macos_bundle_to_installed_helper(posix_harness):
 
 
 @pytest.mark.parametrize(
-    "system,preference", [("Darwin", "unset"), ("Linux", "system")]
+    "system,preference,installed",
+    [("Darwin", "unset", False), ("Darwin", "unset", True), ("Linux", "system", False)],
 )
 def test_install_sh_macos_python_selection_overrides_only_its_preference(
-    posix_harness, system, preference
+    posix_harness: PosixHarness, system: str, preference: str, installed: bool
 ):
     posix_harness.env["FAKE_UNAME"] = system
     posix_harness.env["UV_PYTHON_PREFERENCE"] = "system"
+    if installed:
+        posix_harness.env.update(
+            FAKE_MANAGED_GIL_PYTHON="installed", FAIL_STEP="python-install"
+        )
     _write_executable(
         posix_harness.bin_dir / "uv",
         _posix_uv_command(UV_MINIMUM).replace(
@@ -1767,18 +1915,36 @@ def test_install_sh_macos_python_selection_overrides_only_its_preference(
     )
     result = posix_harness.run_functions("install_free_claude_code")
     assert result.returncode == 0, result.stderr
+    calls = posix_harness.calls()
     install = next(
-        call
-        for call in posix_harness.calls()
-        if "--refresh-package free-claude-code" in call
+        call for call in calls if "--refresh-package free-claude-code" in call
     )
+    expected = []
+    if system == "Darwin":
+        expected.append(
+            "uv:python find --project / --system --managed-python --no-python-downloads "
+            f"{PYTHON_VERSION}+gil"
+        )
+        if not installed:
+            expected.append(f"uv:python install --project / --no-bin {PYTHON_VERSION}")
+    assert [call for call in calls if call.startswith("uv:")] == [*expected, install]
     assert ("--managed-python" in install) == (system == "Darwin")
     assert ("+gil" in install) == (system == "Darwin")
 
 
+def test_install_sh_stops_before_fcc_when_macos_python_install_fails(
+    posix_harness: PosixHarness,
+):
+    posix_harness.env.update(FAKE_UNAME="Darwin", FAIL_STEP="python-install")
+    posix_harness.add_uv(UV_MINIMUM)
+    result = posix_harness.run_functions("install_free_claude_code")
+    assert result.returncode != 0
+    assert not any(call.startswith("uv:tool install") for call in posix_harness.calls())
+
+
 @pytest.mark.parametrize("system,dry_run", [("Darwin", True), ("Linux", False)])
 def test_install_sh_macos_helper_dry_run_and_platform_scope(
-    posix_harness, system, dry_run
+    posix_harness: PosixHarness, system: str, dry_run: bool
 ):
     posix_harness.env["FAKE_UNAME"] = system
     result = posix_harness.run_functions(
@@ -2352,7 +2518,7 @@ def _batch_client(name: str, *, version_output: str | None = None) -> str:
         "dsh": "0.2.0-rc.2",
         "grok": "1.0.5",
         "muse": "0.2.1",
-        "agy": "1.4.7",
+        "agy": "1.5.9",
         "node": "22.19.0",
     }.get(name, "1.0.0")
     if version_output is not None:
@@ -2592,17 +2758,23 @@ exit /b 76
         return self.log.read_text(encoding="utf-8").splitlines()
 
 
+def _powershell_id(path: str | None) -> str:
+    return Path(path).name if path is not None else "unavailable"
+
+
 @pytest.fixture(
     params=_powershells() or (None,),
-    ids=lambda path: Path(path).name if path is not None else "unavailable",
+    ids=_powershell_id,
 )
 def powershell_harness(
     tmp_path: Path,
     request: pytest.FixtureRequest,
-    powershell_module_paths,
+    powershell_module_paths: dict[str, str],
 ) -> PowerShellHarness:
-    powershell = request.param
-    if powershell is None or os.name != "nt":
+    powershell: object = getattr(request, "param", None)
+    if not isinstance(powershell, str):
+        pytest.skip("PowerShell is unavailable")
+    if os.name != "nt":
         pytest.skip("PowerShell installer scenarios run on Windows hosts")
 
     bin_dir = tmp_path / "bin"
@@ -3023,7 +3195,7 @@ $installer = [scriptblock]::Create($installerSource)
 
 class TestPowerShellModuleIsolation:
     @pytest.fixture(autouse=True)
-    def unrelated_host_module(self, tmp_path, monkeypatch):
+    def unrelated_host_module(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         modules = tmp_path / "host-modules"
         module = modules / "FccUnrelated"
         module.mkdir(parents=True)
@@ -3043,7 +3215,9 @@ class TestPowerShellModuleIsolation:
             str(modules) + os.pathsep + os.environ.get("PSMODULEPATH", ""),
         )
 
-    def test_missing_commands_do_not_load_host_modules(self, powershell_harness):
+    def test_missing_commands_do_not_load_host_modules(
+        self, powershell_harness: PowerShellHarness
+    ):
         result = powershell_harness.run_functions(
             """$null = Get-ApplicationCommand 'FccUnrelatedProbe'
 $child = Get-PowerShellExecutable
@@ -5007,7 +5181,9 @@ def _run_opencode_scenario(harness: PosixHarness | PowerShellHarness):
         ("2.0.10", []),
     ],
 )
-def test_opencode_official_upgrade_routing(release_harness, version, upgrades):
+def test_opencode_official_upgrade_routing(
+    release_harness: InstallerHarness, version: str, upgrades: list[str]
+):
     _prepare_opencode_upgrade(release_harness, version)
     result = _run_opencode_scenario(release_harness)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -5026,7 +5202,7 @@ def test_opencode_official_upgrade_routing(release_harness, version, upgrades):
 @pytest.mark.parametrize("version", ["1.18.31", "1.19.0"])
 @pytest.mark.parametrize("pin", ["1.18.31", "2.0.9", "invalid"])
 def test_opencode_upgrade_ignores_ambient_version_and_preserves_parent(
-    release_harness, version, pin
+    release_harness: InstallerHarness, version: str, pin: str
 ):
     _prepare_opencode_upgrade(release_harness, version)
     release_harness.env["VERSION"] = pin
@@ -5045,7 +5221,9 @@ def test_opencode_upgrade_ignores_ambient_version_and_preserves_parent(
     assert f"version-after-upgrade:{pin}" in release_harness.calls()
 
 
-def test_opencode_failed_upgrade_preserves_ambient_version(release_harness):
+def test_opencode_failed_upgrade_preserves_ambient_version(
+    release_harness: InstallerHarness,
+):
     _prepare_opencode_upgrade(release_harness, "1.19.0")
     release_harness.env.update(VERSION="unrelated-pin", FAKE_OPENCODE_FAIL="major")
     body = (
@@ -5062,7 +5240,7 @@ ensure_opencode"""
     assert "version-after-upgrade:unrelated-pin" in release_harness.calls()
 
 
-def test_opencode_preliminary_upgrade_can_reach_v2(release_harness):
+def test_opencode_preliminary_upgrade_can_reach_v2(release_harness: InstallerHarness):
     _prepare_opencode_upgrade(release_harness, "1.18.31")
     release_harness.env["FAKE_OPENCODE_PRELIMINARY"] = "2.0.10"
     result = _run_opencode_scenario(release_harness)
@@ -5074,7 +5252,7 @@ def test_opencode_preliminary_upgrade_can_reach_v2(release_harness):
 @pytest.mark.parametrize("stage", ["preliminary", "major"])
 @pytest.mark.parametrize("failure", ["FAIL", "KEEP"])
 def test_opencode_official_upgrade_failure_has_no_fallback(
-    release_harness, stage, failure
+    release_harness: InstallerHarness, stage: str, failure: str
 ):
     _prepare_opencode_upgrade(release_harness, "1.18.31")
     release_harness.env[f"FAKE_OPENCODE_{failure}"] = stage
@@ -5112,7 +5290,9 @@ def test_opencode_official_upgrade_failure_has_no_fallback(
         '{"latest":"1.20.3;bad"}',
     ],
 )
-def test_opencode_invalid_v1_metadata_prevents_upgrade(release_harness, tags):
+def test_opencode_invalid_v1_metadata_prevents_upgrade(
+    release_harness: InstallerHarness, tags: str
+):
     _prepare_opencode_upgrade(release_harness, "1.18.31")
     release_harness.env["FAKE_OPENCODE_TAGS"] = tags
     result = _run_opencode_scenario(release_harness)
@@ -5122,7 +5302,9 @@ def test_opencode_invalid_v1_metadata_prevents_upgrade(release_harness, tags):
     )
 
 
-def test_opencode_v1_metadata_network_failure_prevents_upgrade(release_harness):
+def test_opencode_v1_metadata_network_failure_prevents_upgrade(
+    release_harness: InstallerHarness,
+):
     _prepare_opencode_upgrade(release_harness, "1.18.31")
     release_harness.env["FAIL_STEP"] = "opencode-metadata"
     result = _run_opencode_scenario(release_harness)
@@ -5133,7 +5315,7 @@ def test_opencode_v1_metadata_network_failure_prevents_upgrade(release_harness):
 
 
 def test_opencode_v1_metadata_accepts_whitespace_and_ignores_other_tags(
-    release_harness,
+    release_harness: InstallerHarness,
 ):
     _prepare_opencode_upgrade(release_harness, "1.18.31")
     release_harness.env["FAKE_OPENCODE_TAGS"] = (
@@ -5146,7 +5328,9 @@ def test_opencode_v1_metadata_accepts_whitespace_and_ignores_other_tags(
 
 @pytest.mark.parametrize("stage", ["PRELIMINARY", "MAJOR"])
 @pytest.mark.parametrize("version", ["1.19.0", "2.0.10-beta", "3.0.0", "invalid"])
-def test_opencode_wrong_upgrade_result_stops(release_harness, stage, version):
+def test_opencode_wrong_upgrade_result_stops(
+    release_harness: InstallerHarness, stage: str, version: str
+):
     _prepare_opencode_upgrade(release_harness, "1.18.31")
     release_harness.env[f"FAKE_OPENCODE_{stage}"] = version
     result = _run_opencode_scenario(release_harness)
@@ -5157,7 +5341,9 @@ def test_opencode_wrong_upgrade_result_stops(release_harness, stage, version):
 
 
 @pytest.mark.parametrize("stage", ["preliminary", "major"])
-def test_opencode_missing_after_upgrade_stops(release_harness, stage):
+def test_opencode_missing_after_upgrade_stops(
+    release_harness: InstallerHarness, stage: str
+):
     _prepare_opencode_upgrade(release_harness, "1.18.31")
     release_harness.env["FAKE_OPENCODE_REMOVE"] = stage
     result = _run_opencode_scenario(release_harness)
@@ -5165,7 +5351,7 @@ def test_opencode_missing_after_upgrade_stops(release_harness, stage):
     assert not any("opencode.ai" in call for call in release_harness.calls())
 
 
-def test_opencode_major_uses_rediscovered_command(release_harness):
+def test_opencode_major_uses_rediscovered_command(release_harness: InstallerHarness):
     binary = _prepare_opencode_upgrade(release_harness, "1.18.31")
     destination = release_harness.root / "new path with spaces" / binary.name
     destination.parent.mkdir()
@@ -5180,7 +5366,9 @@ def test_opencode_major_uses_rediscovered_command(release_harness):
 
 
 @pytest.mark.parametrize("stage", ["preliminary", "major"])
-def test_opencode_process_appearing_before_upgrade_blocks_it(release_harness, stage):
+def test_opencode_process_appearing_before_upgrade_blocks_it(
+    release_harness: InstallerHarness, stage: str
+):
     _prepare_opencode_upgrade(release_harness, "1.18.31")
     release_harness.env.update(
         FCC_RUNNING_COMMAND="opencode", FCC_RUNNING_PHASE=f"opencode-{stage}"
@@ -6141,7 +6329,9 @@ def _assert_installer_shows_selected_plan_and_next_steps(
     assert "Claude Code" in plan
     assert "Codex" not in plan
     assert "RTK" not in plan
-    stages = re.findall(r"\[(\d+)/(\d+)\]", result.stdout)
+    stages = [
+        match.groups() for match in re.finditer(r"\[(\d+)/(\d+)\]", result.stdout)
+    ]
     assert stages
     assert [int(number) for number, _ in stages] == list(range(1, len(stages) + 1))
     assert {int(total) for _, total in stages} == {len(stages)}

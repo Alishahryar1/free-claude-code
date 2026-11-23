@@ -35,6 +35,6 @@ def format_validation_errors(exc: ValidationError) -> list[str]:
     errors: list[str] = []
     for error in exc.errors():
         loc = ".".join(str(part) for part in error.get("loc", ()))
-        message = str(error.get("msg", "Invalid value"))
+        message = error.get("msg", "Invalid value")
         errors.append(f"{loc}: {message}" if loc else message)
     return errors

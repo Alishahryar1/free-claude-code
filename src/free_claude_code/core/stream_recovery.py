@@ -1,12 +1,13 @@
 """Portable recovery evidence shared by provider, routing, and public delivery."""
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
 from .history_replay import readable_reasoning
-from .json_types import JsonObject
+from .json_types import DecimalJsonValue, JsonObject
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +27,7 @@ class ContinuationSeed:
     """A snapshot of delivered output in the client's own protocol."""
 
     wire_api: Literal["messages", "responses", "gemini", "chat"]
-    items: tuple[JsonObject, ...]
+    items: tuple[Mapping[str, DecimalJsonValue], ...]
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "items", deepcopy(self.items))

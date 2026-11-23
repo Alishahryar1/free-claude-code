@@ -8,6 +8,7 @@ from free_claude_code.core.anthropic.models import (
     Message,
     MessagesRequest,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 def test_dump_preserves_public_fields_and_nested_extensions() -> None:
@@ -34,7 +35,9 @@ def test_dump_preserves_public_fields_and_nested_extensions() -> None:
 
     body = dump_messages_request(request)
 
-    assert body["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+    assert object_payload(
+        array_payload(object_payload(array_payload(body["messages"])[0])["content"])[0]
+    )["cache_control"] == {"type": "ephemeral"}
     assert body["context_management"] == {"edits": [{"type": "clear"}]}
     assert body["output_config"] == {"some": "hint"}
 

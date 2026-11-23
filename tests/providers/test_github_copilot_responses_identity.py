@@ -8,7 +8,7 @@ match the raw HTTP capture; no credentials or model reasoning are retained.
 import json
 from copy import deepcopy
 from pathlib import Path
-from typing import cast
+from typing import cast, override
 
 import httpx2
 import pytest
@@ -20,7 +20,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     parse_sse_text,
 )
 from free_claude_code.core.failures import ExecutionFailure
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.github_copilot.types import CopilotEgress
 from tests.providers.test_github_copilot_provider import Harness, responses_sse
@@ -29,6 +29,12 @@ from tests.providers.test_openai_responses_transport import (
     _text_delta,
 )
 from tests.public_stream import delivered
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_payload,
+    string_payload,
+)
 
 
 def _capture() -> list[JsonObject]:
@@ -105,7 +111,7 @@ async def _run(
     parsed = parse_sse_text(raw)
     if isinstance(request, MessagesRequest):
         assert_anthropic_stream_contract(parsed)
-    return [cast(JsonObject, event.data) for event in parsed]
+    return [event.data for event in parsed]
 
 
 def _assert_native_identity(events: list[JsonObject]) -> list[JsonObject]:
@@ -141,6 +147,7 @@ async def test_captured_copilot_tool_identity_survives_stream_and_result_continu
     harness.responses_content = responses_sse(*capture).encode()
     try:
         events = await _run(harness, _input(responses, harness.runtime.name))
+        output = None
         if responses:
             output = _assert_native_identity(events)
             assert len(output) == 1
@@ -178,7 +185,7 @@ async def test_captured_copilot_tool_identity_survives_stream_and_result_continu
                 and delta.get("type") == "input_json_delta"
             ]
             assert all(isinstance(fragment, str) for fragment in fragments)
-            arguments = json.loads("".join(cast(list[str], fragments)))
+            arguments = load_json_value("".join(cast(list[str], fragments)))
             assert arguments == {"value": "FCC_TOOL_OK"}
             followup = MessagesRequest.model_validate(
                 {
@@ -213,17 +220,30 @@ async def test_captured_copilot_tool_identity_survives_stream_and_result_continu
             _text_delta("FCC_TOOL_OK"), _completed_event()
         ).encode()
         await _run(harness, followup)
-        body = json.loads(harness.seen[-1].content)
-        calls = [item for item in body["input"] if item.get("type") == "function_call"]
+        body = decode_object(harness.seen[-1].content)
+        calls = [
+            item
+            for item in array_payload(body["input"])
+            if object_payload(item).get("type") == "function_call"
+        ]
         results = [
-            item for item in body["input"] if item.get("type") == "function_call_output"
+            item
+            for item in array_payload(body["input"])
+            if object_payload(item).get("type") == "function_call_output"
         ]
         assert len(calls) == len(results) == 1
-        assert calls[0]["call_id"] == results[0]["call_id"] == call_id
-        assert calls[0]["name"] == "fcc_echo"
-        assert json.loads(calls[0]["arguments"]) == {"value": "FCC_TOOL_OK"}
-        assert results[0]["output"] == "FCC_TOOL_OK"
+        assert (
+            object_payload(calls[0])["call_id"]
+            == object_payload(results[0])["call_id"]
+            == call_id
+        )
+        assert object_payload(calls[0])["name"] == "fcc_echo"
+        assert load_json_value(
+            string_payload(object_payload(calls[0])["arguments"])
+        ) == {"value": "FCC_TOOL_OK"}
+        assert object_payload(results[0])["output"] == "FCC_TOOL_OK"
         if responses:
+            assert output is not None
             assert calls == output
         assert all(wire.closed for wire in harness.wires)
     finally:
@@ -246,6 +266,7 @@ async def test_copilot_done_only_tool_binds_identity_without_an_added_event(
     harness.responses_content = responses_sse(*capture).encode()
     try:
         events = await _run(harness, _input(responses, harness.runtime.name))
+        output = None
         if responses:
             output = _assert_native_identity(events)
             assert output[0]["id"] == _item(capture[1])["id"]
@@ -295,8 +316,7 @@ async def test_copilot_argument_delta_without_item_metadata_fails_before_inventi
         try:
             async for chunk in stream:
                 emitted.extend(
-                    cast(JsonObject, event.data)
-                    for event in parse_sse_text("".join(chunk.frames))
+                    event.data for event in parse_sse_text("".join(chunk.frames))
                 )
         except ExecutionFailure as error:
             failure = error
@@ -323,7 +343,7 @@ async def test_copilot_interleaved_tools_use_output_positions_and_preserve_final
     first = deepcopy(_item(capture[2]))
     second = {**first, "id": "opaque-second-added", "call_id": "call-second"}
     reasoning = {"type": "reasoning", "id": "opaque-reasoning-added", "summary": []}
-    final_reasoning = {
+    final_reasoning: JsonObject = {
         **reasoning,
         "id": "opaque-reasoning-final",
         "summary": [{"type": "summary_text", "text": "synthetic fixture reasoning"}],
@@ -420,8 +440,8 @@ async def test_copilot_interleaved_tools_use_output_positions_and_preserve_final
             _text_delta("done"), _completed_event()
         ).encode()
         await _run(harness, followup)
-        body = json.loads(harness.seen[-1].content)
-        assert body["input"][:3] == output
+        body = decode_object(harness.seen[-1].content)
+        assert array_payload(body["input"])[:3] == output
     finally:
         await harness.close()
 
@@ -498,6 +518,7 @@ async def test_copilot_partial_failure_output_does_not_mask_authentication_refre
     _item(recovered[2])["id"] = "recovered-tool"
 
     class RefreshHarness(Harness):
+        @override
         def openai(self, request: httpx2.Request) -> httpx2.Response:
             if self.runtime.sessions[0].endpoint_calls > 1:
                 self.responses_content = responses_sse(*recovered).encode()

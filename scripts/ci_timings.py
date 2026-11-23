@@ -8,11 +8,36 @@ import os
 import re
 import subprocess
 import zipfile
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict, cast
 
 from .ci_shards import MAX_SHARDS, RUNNERS
+
+
+class _WorkflowRun(TypedDict):
+    id: int
+    created_at: str
+    status: str
+    conclusion: str | None
+    run_attempt: int
+
+
+class _Artifact(TypedDict):
+    id: int
+    name: str
+    expired: bool
+
+
+class _RunPage(TypedDict):
+    workflow_runs: list[_WorkflowRun]
+
+
+class _ArtifactPage(TypedDict):
+    artifacts: list[_Artifact]
+
 
 SUITES = ("pytest", "playwright")
 MAP_NAMES = tuple(f"{suite}-{system}.json" for suite in SUITES for system in RUNNERS)
@@ -21,7 +46,7 @@ COMPLETE_PREFIX = "ci-timings-complete-v1-attempt-"
 MAX_BYTES = 64 * 1024 * 1024
 
 
-def unique_object(pairs: list[tuple[str, object]]) -> dict:
+def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result = {}
     for key, value in pairs:
         if key in result:
@@ -30,7 +55,7 @@ def unique_object(pairs: list[tuple[str, object]]) -> dict:
     return result
 
 
-def load_json(raw: str | bytes):
+def load_json(raw: str | bytes) -> object:
     return json.loads(raw, object_pairs_hook=unique_object)
 
 
@@ -58,7 +83,7 @@ def effective_durations(value: object) -> dict[str, float]:
     return {node: max(seconds, 0.000001) for node, seconds in durations(value).items()}
 
 
-def expected_shards(matrices: dict) -> dict[tuple[str, str, int], int]:
+def expected_shards(matrices: object) -> dict[tuple[str, str, int], int]:
     if not isinstance(matrices, dict) or set(matrices) != set(SUITES):
         raise ValueError("Expected both CI suite matrices")
     expected = {}
@@ -96,7 +121,7 @@ class Run:
     run_id: int
     attempt: int
     sha: str
-    matrices: dict
+    matrices: object
 
     def __post_init__(self) -> None:
         if (
@@ -110,7 +135,7 @@ class Run:
             raise ValueError("Invalid CI run identity")
         expected_shards(self.matrices)
 
-    def manifest(self, kind: str) -> dict:
+    def manifest(self, kind: str) -> dict[str, object]:
         return {
             "schema": 1,
             "kind": kind,
@@ -120,7 +145,7 @@ class Run:
             "matrices": deepcopy(self.matrices),
         }
 
-    def check_input(self, manifest: dict) -> None:
+    def check_input(self, manifest: object) -> None:
         source = manifest_run(manifest, "input")
         if (
             source.run_id != self.run_id
@@ -131,7 +156,7 @@ class Run:
             raise ValueError("Input does not belong to this CI run and matrix")
 
 
-def manifest_run(value: dict, kind: str | None = None) -> Run:
+def manifest_run(value: object, kind: str | None = None) -> Run:
     if (
         not isinstance(value, dict)
         or type(value.get("schema")) is not int
@@ -149,7 +174,7 @@ def manifest_run(value: dict, kind: str | None = None) -> Run:
     )
 
 
-def read_archive(raw: bytes) -> tuple[dict, dict[str, dict[str, float]]]:
+def read_archive(raw: bytes) -> tuple[dict[str, object], dict[str, dict[str, float]]]:
     try:
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             files = archive.infolist()
@@ -168,12 +193,16 @@ def read_archive(raw: bytes) -> tuple[dict, dict[str, dict[str, float]]]:
     except (zipfile.BadZipFile, UnicodeError, RuntimeError) as error:
         raise ValueError("Invalid timing archive") from error
     manifest_run(manifest)
+    assert isinstance(manifest, dict)
     return manifest, maps
 
 
-def read_bundle(directory: Path) -> tuple[dict, dict[str, dict[str, float]]]:
+def read_bundle(
+    directory: Path,
+) -> tuple[dict[str, object], dict[str, dict[str, float]]]:
     manifest = load_json((directory / "manifest.json").read_bytes())
     manifest_run(manifest)
+    assert isinstance(manifest, dict)
     return manifest, {
         name: durations(load_json((directory / name).read_bytes()))
         for name in MAP_NAMES
@@ -188,7 +217,9 @@ def write_json(path: Path, value: object) -> None:
     )
 
 
-def write_bundle(directory: Path, manifest: dict, maps: dict) -> None:
+def write_bundle(
+    directory: Path, manifest: dict[str, object], maps: dict[str, dict[str, float]]
+) -> None:
     write_json(directory / "manifest.json", manifest)
     for name in MAP_NAMES:
         write_json(directory / name, maps[name])
@@ -208,16 +239,25 @@ class GitHub:
             timeout=30,
         ).stdout
 
-    def successful_runs(self) -> list[dict]:
-        return load_json(
-            self.api(
-                "workflows/tests.yml/runs?status=success&event=pull_request&per_page=20"
-            )
-        )["workflow_runs"]
+    def successful_runs(self) -> list[_WorkflowRun]:
+        page = cast(
+            _RunPage,
+            load_json(
+                self.api(
+                    "workflows/tests.yml/runs?status=success&event=pull_request&per_page=20"
+                )
+            ),
+        )
+        return page["workflow_runs"]
 
-    def artifacts(self, run_id: int) -> list[dict]:
-        pages = load_json(
-            self.api(f"runs/{run_id}/artifacts?per_page=100", "--paginate", "--slurp")
+    def artifacts(self, run_id: int) -> list[_Artifact]:
+        pages = cast(
+            list[_ArtifactPage],
+            load_json(
+                self.api(
+                    f"runs/{run_id}/artifacts?per_page=100", "--paginate", "--slurp"
+                )
+            ),
         )
         return [artifact for page in pages for artifact in page["artifacts"]]
 
@@ -253,7 +293,7 @@ def prepare(run: Run, directory: Path, github: GitHub) -> int | None:
         # dependent shards, so they can safely share a newly frozen input.
         print("Original timing input is absent; preparing input for restarted shards")
 
-    maps = {name: {} for name in MAP_NAMES}
+    maps: dict[str, dict[str, float]] = {name: {} for name in MAP_NAMES}
     source_id = None
     try:
         runs = sorted(
@@ -319,19 +359,30 @@ def prepare(run: Run, directory: Path, github: GitHub) -> int | None:
     return None
 
 
-def merge(run: Run, input_id: int, records: list[dict]) -> dict | None:
+def merge(
+    run: Run, input_id: int, records: Sequence[object]
+) -> dict[str, dict[str, float]] | None:
     expected = expected_shards(run.matrices)
     seen = set()
-    maps = {name: {} for name in MAP_NAMES}
+    maps: dict[str, dict[str, float]] = {name: {} for name in MAP_NAMES}
     for record in records:
         identity = manifest_run(record, "shard")
-        if not {"suite", "os", "shard", "shards"} <= record.keys():
+        if (
+            not isinstance(record, dict)
+            or not {"suite", "os", "shard", "shards"} <= record.keys()
+        ):
             raise ValueError("Missing timing shard identity")
-        key = (record["suite"], record["os"], record["shard"])
+        suite, system, shard = record["suite"], record["os"], record["shard"]
+        if (
+            not isinstance(suite, str)
+            or not isinstance(system, str)
+            or type(shard) is not int
+        ):
+            raise ValueError("Invalid timing shard identity")
+        key = (suite, system, shard)
         if (
             identity != run
             or record.get("input_artifact_id") != input_id
-            or type(record.get("shard")) is not int
             or type(record.get("shards")) is not int
             or key not in expected
             or record.get("shards") != expected[key]
@@ -357,10 +408,15 @@ def output(name: str, value: str | int) -> None:
         file.write(f"{name}={value}\n")
 
 
+class _Arguments(argparse.Namespace):
+    command: str
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("prepare", "start", "record", "merge"))
-    args = parser.parse_args()
+    args = _Arguments()
+    parser.parse_args(namespace=args)
     run = Run(
         int(os.environ["GITHUB_RUN_ID"]),
         int(os.environ["GITHUB_RUN_ATTEMPT"]),

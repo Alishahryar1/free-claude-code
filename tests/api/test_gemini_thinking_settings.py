@@ -1,17 +1,17 @@
 """Configured and native thinking controls retain their distinct ownership."""
 
-import json
-
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.config.provider_catalog import GEMINI_DEFAULT_BASE
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.gemini import GeminiProvider
 from tests.api.support import create_test_app
 from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_gemini import _sse
+from tests.wire_payload import decode_object, object_payload
 
 
 @pytest.mark.parametrize(
@@ -31,12 +31,12 @@ from tests.providers.test_gemini import _sse
 )
 @pytest.mark.parametrize("visible", [False, True])
 def test_native_root_route_and_fallback_precedence(
-    root, route, fallback, expected, visible
-):
+    root: str, route: str, fallback: str | None, expected: JsonObject, visible: bool
+) -> None:
     sent = []
 
-    def reply(request):
-        body = json.loads(request.content)
+    def reply(request: httpx.Request):
+        body = decode_object(request.content)
         sent.append((request.url.path, body))
         if fallback is not None and "/primary:" in request.url.path:
             return httpx.Response(
@@ -72,9 +72,9 @@ def test_native_root_route_and_fallback_precedence(
     assert response.status_code == 200, response.text
     assert len(sent) == (2 if fallback is not None else 1)
     config = sent[-1][1]["generationConfig"]
-    assert config["thinkingConfig"] == {
+    assert object_payload(config)["thinkingConfig"] == {
         "includeThoughts": False if expected.get("thinkingBudget") == 0 else visible,
         **expected,
     }
-    assert config["temperature"] == 0.3
+    assert object_payload(config)["temperature"] == 0.3
     assert payload["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "HIGH"

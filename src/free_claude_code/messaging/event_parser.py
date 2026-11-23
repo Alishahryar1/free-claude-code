@@ -9,7 +9,7 @@ from typing import Any
 from loguru import logger
 
 
-def parse_cli_event(event: Any, *, log_raw_cli: bool = False) -> list[dict]:
+def parse_cli_event(event: Any, *, log_raw_cli: bool = False) -> list[dict[str, Any]]:
     """
     Parse a CLI event and return a structured result.
 

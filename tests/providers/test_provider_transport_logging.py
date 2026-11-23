@@ -28,7 +28,9 @@ def _provider(*, verbose: bool = False) -> NvidiaNimProvider:
 
 
 @pytest.mark.asyncio
-async def test_stream_failure_default_logs_exclude_exception_text(caplog) -> None:
+async def test_stream_failure_default_logs_exclude_exception_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     provider = _provider()
     with (
         patch.object(
@@ -52,7 +54,9 @@ async def test_stream_failure_default_logs_exclude_exception_text(caplog) -> Non
 
 
 @pytest.mark.asyncio
-async def test_stream_failure_default_logs_cause_types_only(caplog) -> None:
+async def test_stream_failure_default_logs_cause_types_only(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     provider = _provider()
     error = openai.APIConnectionError(
         request=httpx2.Request("POST", "http://localhost:1/v1/chat/completions")
@@ -81,7 +85,9 @@ async def test_stream_failure_default_logs_cause_types_only(caplog) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_failure_verbose_traceback_redacts_credentials(caplog) -> None:
+async def test_stream_failure_verbose_traceback_redacts_credentials(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     provider = _provider(verbose=True)
     with (
         patch.object(

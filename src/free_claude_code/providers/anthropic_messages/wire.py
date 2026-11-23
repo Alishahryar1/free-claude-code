@@ -3,7 +3,6 @@
 import json
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import aclosing
-from typing import cast
 
 import httpx
 
@@ -39,7 +38,7 @@ async def messages_events(
                 )
             except StopAsyncIteration:
                 return
-            payload = cast(JsonObject, event.data)
+            payload = event.data
             kind = event.event or payload.get("type")
             if not isinstance(kind, str) or not kind:
                 raise RetryableProviderProtocolError(

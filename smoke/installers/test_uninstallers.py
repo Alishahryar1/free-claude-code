@@ -613,17 +613,20 @@ class PowerShellUninstallHarness:
             (self.tool_bin / f"{name}.cmd").unlink(missing_ok=True)
 
 
-@pytest.fixture(
-    params=_powershells() or (None,),
-    ids=lambda path: Path(path).name if path is not None else "unavailable",
-)
+def _powershell_id(path: str | None) -> str:
+    return Path(path).name if path is not None else "unavailable"
+
+
+@pytest.fixture(params=_powershells() or (None,), ids=_powershell_id)
 def powershell_uninstall_harness(
     tmp_path: Path,
     request: pytest.FixtureRequest,
-    powershell_module_paths,
+    powershell_module_paths: dict[str, str],
 ) -> PowerShellUninstallHarness:
-    powershell = request.param
-    if powershell is None or os.name != "nt":
+    powershell: object = getattr(request, "param", None)
+    if not isinstance(powershell, str):
+        pytest.skip("PowerShell is unavailable")
+    if os.name != "nt":
         pytest.skip("PowerShell uninstaller scenarios run on Windows hosts")
 
     home = tmp_path / "home"

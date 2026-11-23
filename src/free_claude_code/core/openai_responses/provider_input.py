@@ -4,7 +4,10 @@ import json
 from typing import Any
 
 from free_claude_code.core.anthropic.content import get_block_attr, get_block_type
-from free_claude_code.core.anthropic.conversion import resolve_anthropic_tool_choice
+from free_claude_code.core.anthropic.conversion import (
+    resolve_anthropic_tool_choice,
+    unrepresentable_client_tool_constraints,
+)
 from free_claude_code.core.anthropic.image_sources import (
     AnthropicImageSourceError,
     portable_anthropic_image_url,
@@ -108,16 +111,28 @@ def _validate_supported_request(request: MessagesRequest) -> None:
     if request.model_extra:
         raise ResponsesConversionError(
             "OpenAI Responses does not support these request fields: "
-            f"{sorted(str(key) for key in request.model_extra)}."
+            f"{sorted(request.model_extra)}."
         )
     provider_tool_types = sorted(
-        {tool.type for tool in request.tools or () if tool.type is not None}
+        {
+            tool.type
+            for tool in request.tools or ()
+            if tool.type is not None
+            and (tool.type != "custom" or tool.input_schema is None)
+        }
     )
     if provider_tool_types:
         raise ResponsesConversionError(
             "OpenAI Responses cannot represent provider-managed tool types: "
             f"{provider_tool_types}."
         )
+    for tool in request.tools or ():
+        if tool.type == "custom" and (
+            constraints := unrepresentable_client_tool_constraints(tool)
+        ):
+            raise ResponsesConversionError(
+                f"OpenAI Responses cannot enforce {constraints} for tool {tool.name!r}."
+            )
     unsupported: list[str] = []
     if request.stop_sequences:
         unsupported.append("stop_sequences")
@@ -154,7 +169,7 @@ def _system_text(request: MessagesRequest) -> list[str]:
 
 
 def _assistant_items(
-    content: Any,
+    content: object,
     *,
     reasoning_content: str | None,
     tool_names: OpenAIToolNameCodec,
@@ -300,7 +315,7 @@ def _assistant_items(
     return items
 
 
-def _user_items(content: Any) -> list[dict[str, Any]]:
+def _user_items(content: object) -> list[dict[str, Any]]:
     if isinstance(content, str):
         return [_user_message([{"type": "input_text", "text": content}])]
     if not isinstance(content, list):
@@ -333,12 +348,15 @@ def _user_items(content: Any) -> list[dict[str, Any]]:
             except AnthropicImageSourceError as exc:
                 raise ResponsesConversionError(str(exc)) from exc
             if decomposed.has_images:
-                output: str | list[JsonObject] = []
+                image_output: list[JsonObject] = []
                 for part in decomposed.parts:
                     if isinstance(part, ToolResultText):
-                        output.append({"type": "input_text", "text": part.text})
+                        image_output.append({"type": "input_text", "text": part.text})
                     elif isinstance(part, ToolResultImage):
-                        output.append({"type": "input_image", "image_url": part.url})
+                        image_output.append(
+                            {"type": "input_image", "image_url": part.url}
+                        )
+                output = image_output
             else:
                 output = serialize_tool_result_content(tool_content)
             items.append(
@@ -360,7 +378,7 @@ def _user_items(content: Any) -> list[dict[str, Any]]:
     return items
 
 
-def _image_part(block: Any) -> dict[str, Any]:
+def _image_part(block: object) -> dict[str, Any]:
     try:
         url = portable_anthropic_image_url(get_block_attr(block, "source", {}))
     except AnthropicImageSourceError as exc:
@@ -381,8 +399,8 @@ def _tool_choice(
     *,
     tool_names: OpenAIToolNameCodec,
 ) -> str | dict[str, str]:
-    choice_type = choice.get("type")
-    if choice_type in {"auto", "none"}:
+    choice_type: object = choice.get("type")
+    if choice_type in ("auto", "none"):
         return str(choice_type)
     if choice_type == "any":
         return "required"

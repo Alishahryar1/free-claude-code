@@ -1,5 +1,6 @@
 """OpenRouter accounting traverses the SDK and public/private destination paths."""
 
+from collections.abc import AsyncIterator
 from copy import deepcopy
 
 import pytest
@@ -8,19 +9,32 @@ from free_claude_code.api.response_streams import (
     ManagedStreamingResponse,
     gemini_sse_streaming_response,
 )
-from free_claude_code.application.response_collection import collect_response
+from free_claude_code.application.response_collection import (
+    WireProtocol,
+    collect_response,
+)
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.async_iterators import AsyncCloseable
 from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.chat_completions.response import ChatResponseAccumulator
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.gemini import GeminiRequest
+from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.stream_output import StreamOutput
+from free_claude_code.providers.open_router.client import OpenRouterProvider
 from tests.api.test_native_tool_wire_contract import public_frames
 from tests.core.test_chat_accounting_trailers import accounting, terminal
 from tests.core.test_chat_tool_buffer import call, event
-from tests.providers.test_history_transports import _harness
+from tests.providers.test_history_transports import _harness, _Send
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
-def source_events(tools):
+def source_events(tools: bool) -> list[JsonObject]:
     if tools:
         events = [
             event([call(0, "read", '{"path":', "a")]),
@@ -32,7 +46,7 @@ def source_events(tools):
         events = [event(content="Hello")]
     reason = "tool_calls" if tools else "stop"
     events.extend([terminal(reason), accounting(reason)])
-    events[-1]["usage"].update(
+    object_payload(events[-1]["usage"]).update(
         prompt_tokens_details={"cached_tokens": 4, "cache_write_tokens": 2},
         completion_tokens_details={"reasoning_tokens": 3},
     )
@@ -48,7 +62,7 @@ def source_events(tools):
     ]
 
 
-def destination_stream(wire, send, provider):
+def destination_stream(wire: WireProtocol, send: _Send, provider: OpenRouterProvider):
     schema = {"type": "object", "properties": {"path": {"type": "string"}}}
     if wire == "chat":
         return provider.stream_chat(
@@ -90,13 +104,13 @@ def destination_stream(wire, send, provider):
     return send(wire, [{"role": "user", "content": "hello"}], tools=tools)
 
 
-async def consume(body, wire, public):
+async def consume(body: AsyncIterator[StreamOutput], wire: WireProtocol, public: bool):
     if not public:
         return await collect_response(body, protocol=wire)
     if wire != "gemini":
         return await public_frames(body, wire)
 
-    def fail(error):
+    def fail(error: BaseException):
         raise error
 
     response = await gemini_sse_streaming_response(
@@ -114,8 +128,8 @@ async def consume(body, wire, public):
 @pytest.mark.parametrize("public", [False, True])
 @pytest.mark.parametrize("tools", [False, True])
 async def test_accounting_retains_usage_and_exactly_once_completion(
-    wire, public, tools
-):
+    wire: WireProtocol, public: bool, tools: bool
+) -> None:
     events = source_events(tools)
     # Repeated accounting must not reseal calls or add usage totals.
     events.append(deepcopy(events[-1]))
@@ -133,6 +147,7 @@ async def test_accounting_retains_usage_and_exactly_once_completion(
                     completed.extend(packet.completed_calls)
                     yield packet
             finally:
+                assert isinstance(stream, AsyncCloseable)
                 await stream.aclose()
 
         frames = await consume(observe(), wire, public)
@@ -144,22 +159,25 @@ async def test_accounting_retains_usage_and_exactly_once_completion(
         for value in output:
             accumulator.feed(value)
         accumulator.finish()
-        message = accumulator.result()["choices"][0]["message"]
+        message = object_payload(array_payload(accumulator.result()["choices"])[0])[
+            "message"
+        ]
         assert accumulator.result()["usage"] == events[-1]["usage"]
         assert (
             sum(
-                c.get("finish_reason") is not None
+                object_payload(c).get("finish_reason") is not None
                 for value in output
-                for c in value.get("choices", [])
+                for c in array_payload(value.get("choices", []))
             )
             == 1
         )
         assert "".join(frames).count("data: [DONE]") == 1
         assert all(value["choices"] == [] for value in output if value.get("usage"))
         assert (
-            [c["id"] for c in message["tool_calls"]] == ["a", "b"]
+            [c["id"] for c in object_array(object_payload(message)["tool_calls"])]
+            == ["a", "b"]
             if tools
-            else message["content"] == "Hello"
+            else object_payload(message)["content"] == "Hello"
         )
     elif wire == "messages":
         finals = [v for v in output if v.get("type") == "message_delta"]
@@ -173,31 +191,50 @@ async def test_accounting_retains_usage_and_exactly_once_completion(
         assert sum(v.get("type") == "message_stop" for v in output) == 1
         if tools:
             assert [
-                v["content_block"]["id"]
+                object_payload(v["content_block"])["id"]
                 for v in output
-                if v.get("content_block", {}).get("type") == "tool_use"
+                if object_payload(v.get("content_block", {})).get("type") == "tool_use"
             ] == ["a", "b"]
         else:
             assert (
-                "".join(v.get("delta", {}).get("text", "") for v in output) == "Hello"
+                "".join(
+                    string_payload(object_payload(v.get("delta", {})).get("text", ""))
+                    for v in output
+                )
+                == "Hello"
             )
     elif wire == "responses":
         finals = [v for v in output if v.get("type") == "response.completed"]
         assert len(finals) == 1
-        assert finals[0]["response"]["usage"]["input_tokens"] == 32
-        assert finals[0]["response"]["usage"]["output_tokens"] == 13
-        items = finals[0]["response"]["output"]
         assert (
-            [i["call_id"] for i in items if i["type"] == "function_call"] == ["a", "b"]
+            object_payload(object_payload(finals[0]["response"])["usage"])[
+                "input_tokens"
+            ]
+            == 32
+        )
+        assert (
+            object_payload(object_payload(finals[0]["response"])["usage"])[
+                "output_tokens"
+            ]
+            == 13
+        )
+        items = object_payload(finals[0]["response"])["output"]
+        assert (
+            [
+                object_payload(i)["call_id"]
+                for i in array_payload(items)
+                if object_payload(i)["type"] == "function_call"
+            ]
+            == ["a", "b"]
             if tools
-            else items[0]["content"][0]["text"] == "Hello"
+            else object_array(object_array(items)[0]["content"])[0]["text"] == "Hello"
         )
     else:
         assert (
             sum(
-                bool(c.get("finishReason"))
+                bool(object_payload(c).get("finishReason"))
                 for v in output
-                for c in v.get("candidates", [])
+                for c in array_payload(v.get("candidates", []))
             )
             == 1
         )
@@ -211,14 +248,23 @@ async def test_accounting_retains_usage_and_exactly_once_completion(
         parts = [
             p
             for v in output
-            for c in v.get("candidates", [])
-            for p in c.get("content", {}).get("parts", [])
+            for c in array_payload(v.get("candidates", []))
+            for p in array_payload(
+                object_payload(object_payload(c).get("content", {})).get("parts", [])
+            )
         ]
         assert (
-            [p["functionCall"]["id"] for p in parts if "functionCall" in p]
+            [
+                object_payload(object_payload(p)["functionCall"])["id"]
+                for p in parts
+                if "functionCall" in object_payload(p)
+            ]
             == ["a", "b"]
             if tools
-            else "".join(p.get("text", "") for p in parts) == "Hello"
+            else "".join(
+                string_payload(object_payload(p).get("text", "")) for p in parts
+            )
+            == "Hello"
         )
 
 
@@ -227,11 +273,13 @@ async def test_accounting_retains_usage_and_exactly_once_completion(
 @pytest.mark.parametrize("public", [False, True])
 @pytest.mark.parametrize("failure", ["content", "error"])
 async def test_late_semantic_output_is_not_accounting_or_another_generation(
-    wire, public, failure
-):
+    wire: WireProtocol, public: bool, failure: str
+) -> None:
     events = source_events(True)
     if failure == "content":
-        events[-1]["choices"][0]["delta"]["content"] = "MUST_NOT_LEAK"
+        object_payload(object_array(events[-1]["choices"])[0]["delta"])["content"] = (
+            "MUST_NOT_LEAK"
+        )
     else:
         events[-1]["error"] = {"message": "upstream failed", "code": 503}
     async with _harness("chat", lambda _: (200, events), max_attempts=2) as (

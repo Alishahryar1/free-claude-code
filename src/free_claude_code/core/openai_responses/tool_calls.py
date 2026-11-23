@@ -2,23 +2,27 @@
 
 import hashlib
 import json
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any
 
 from ..failures import ExecutionFailure, FailureKind
+from ..json_types import DecimalJsonValue, JsonObject, json_object, json_text
 from ..stream_recovery import SourceRecoverySnapshot, StreamFailureContext
 from ..tool_call_buffer import OrderedToolCallBuffer, RetentionBudget
 from .tool_search import is_client_search
 
-type SourceEvent = tuple[str, dict[str, Any]]
+type SourceEvent = tuple[str, JsonObject]
 type SourceEmission = tuple[SourceEvent, ...]
 
 
-def is_client_call(item: dict[str, Any]) -> bool:
+def is_client_call(item: Mapping[str, DecimalJsonValue]) -> bool:
     kind = item.get("type")
+    if not isinstance(kind, str):
+        return False
     if kind == "tool_search_call":
         return is_client_search(item)
+    environment = item.get("environment")
     return kind in {
         "function_call",
         "custom_tool_call",
@@ -27,15 +31,15 @@ def is_client_call(item: dict[str, Any]) -> bool:
         "apply_patch_call",
     } or (
         kind == "shell_call"
-        and isinstance(item.get("environment"), dict)
-        and item["environment"].get("type") == "local"
+        and isinstance(environment, dict)
+        and environment.get("type") == "local"
     )
 
 
 @dataclass(slots=True)
 class _PendingItem:
     index: int
-    item: dict[str, Any]
+    item: JsonObject
     events: list[SourceEvent] = field(default_factory=list)
     completed: SourceEmission = ()
 
@@ -52,7 +56,7 @@ class ResponsesToolCallBuffer:
         self._discarded: set[str] = set()
         self._call_ids: dict[str, str] = {}
 
-    def feed(self, kind: str, payload: dict[str, Any]) -> list[SourceEmission]:
+    def feed(self, kind: str, payload: JsonObject) -> list[SourceEmission]:
         data = deepcopy(payload)
         data["type"] = kind
         if kind in {"error", "response.error"}:
@@ -62,7 +66,11 @@ class ResponsesToolCallBuffer:
         item = data.get("item")
         item = item if isinstance(item, dict) else {}
         index = data.get("output_index")
-        item_id = item.get("id") or data.get("item_id") or self._indices.get(index)
+        item_id = (
+            item.get("id")
+            or data.get("item_id")
+            or (self._indices.get(index) if isinstance(index, int) else None)
+        )
         if (
             isinstance(item_id, str)
             and (item_id in self._items or item_id in self._fingerprints)
@@ -126,7 +134,7 @@ class ResponsesToolCallBuffer:
                         or (
                             kind == "response.completed"
                             and value.get("status")
-                            not in {"in_progress", "incomplete", "failed"}
+                            not in ("in_progress", "incomplete", "failed")
                         )
                     )
                     if eligible:
@@ -137,14 +145,17 @@ class ResponsesToolCallBuffer:
                     for value in output
                     if not isinstance(value, dict)
                     or not is_client_call(value)
-                    or value.get("id") in self._fingerprints
+                    or (
+                        isinstance(item_id := value.get("id"), str)
+                        and item_id in self._fingerprints
+                    )
                 ]
             if terminal:
                 self._discard_pending()
         self._buffer.append(((kind, data),), size=_size(data))
         return self._drain()
 
-    def _ensure(self, identity: str, index: object, item: dict[str, Any]) -> None:
+    def _ensure(self, identity: str, index: object, item: JsonObject) -> None:
         if identity in self._fingerprints or identity in self._items:
             return
         if identity in self._discarded:
@@ -162,11 +173,11 @@ class ResponsesToolCallBuffer:
     def _finish_item(
         self,
         identity: str,
-        item: dict[str, Any],
-        done_event: dict[str, Any] | None = None,
+        item: JsonObject,
+        done_event: JsonObject | None = None,
     ) -> None:
         pending = self._items[identity]
-        if item.get("status") in {"in_progress", "incomplete", "failed"}:
+        if item.get("status") in ("in_progress", "incomplete", "failed"):
             self._buffer.discard(identity)
             self._discarded.add(identity)
             del self._items[identity]
@@ -179,7 +190,7 @@ class ResponsesToolCallBuffer:
             or not call_id.strip()
         ):
             raise _failure("Completed Responses client call requires a call ID")
-        if item.get("type") in {"function_call", "custom_tool_call"} and (
+        if item.get("type") in ("function_call", "custom_tool_call") and (
             not isinstance(name, str) or not name.strip()
         ):
             raise _failure("Completed Responses function requires a name")
@@ -225,10 +236,10 @@ class ResponsesToolCallBuffer:
                 # argument-fragment association on their original events.
                 for key in ("name", "call_id"):
                     if key in final:
-                        start["item"][key] = final[key]
-        if isinstance(final.get(field), str):
+                        json_object(start["item"])[key] = final[key]
+        if isinstance(arguments := final.get(field), str):
             existing = "".join(
-                str(data.get("item", {}).get(field, ""))
+                str(json_object(data.get("item", {})).get(field, ""))
                 for kind, data in events
                 if kind == "response.output_item.added"
             )
@@ -237,11 +248,11 @@ class ResponsesToolCallBuffer:
                 for kind, data in events
                 if kind == prefix + ".delta"
             )
-            if not final[field].startswith(existing):
+            if not arguments.startswith(existing):
                 raise _failure(
                     "Responses arguments changed between fragments and completion"
                 )
-            suffix = final[field][len(existing) :]
+            suffix = arguments[len(existing) :]
             insertion = next(
                 (
                     position
@@ -283,7 +294,7 @@ class ResponsesToolCallBuffer:
         pending.completed = tuple(events)
         self._buffer.complete(identity)
 
-    def _verify(self, identity: str, item: dict[str, Any]) -> None:
+    def _verify(self, identity: str, item: JsonObject) -> None:
         if self._fingerprints[identity] != _fingerprint(item):
             raise _failure("Responses snapshot changed an already completed tool call")
 
@@ -299,7 +310,7 @@ class ResponsesToolCallBuffer:
         for value in self._buffer.drain():
             if isinstance(value, _PendingItem):
                 result.append(value.completed)
-                del self._items[value.item["id"]]
+                del self._items[json_text(value.item["id"])]
             else:
                 result.append(value)
         return result
@@ -309,7 +320,7 @@ class ResponsesToolCallBuffer:
         return self._drain()
 
 
-def _fingerprint(item: dict[str, Any]) -> bytes:
+def _fingerprint(item: JsonObject) -> bytes:
     content = {
         key: value
         for key, value in item.items()

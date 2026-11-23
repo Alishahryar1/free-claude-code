@@ -22,9 +22,10 @@ from free_claude_code.core.history_replay import (
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from tests.core.test_native_gemini_history import ORIGIN
+from tests.wire_payload import array_payload, object_array
 
 
-def recovered(*, echo=True):
+def recovered(*, echo: bool = True):
     return ReplayRecord(
         ORIGIN,
         {
@@ -45,7 +46,7 @@ def recovered(*, echo=True):
     )
 
 
-def request(record):
+def request(record: ReplayRecord):
     return {
         "contents": [
             {"role": "user", "parts": [{"text": "original"}]},
@@ -63,8 +64,11 @@ def request(record):
 
 @pytest.mark.parametrize("mode", list(HistoryMode))
 @pytest.mark.parametrize("removed_prefix", [False, True])
-def test_roundtrip_restores_exact_context_and_native_parts(mode, removed_prefix):
+def test_roundtrip_restores_exact_context_and_native_parts(
+    mode: HistoryMode, removed_prefix: bool
+) -> None:
     record = recovered()
+    assert record.continuation is not None
     if removed_prefix:
         record = replace(
             record,
@@ -72,6 +76,7 @@ def test_roundtrip_restores_exact_context_and_native_parts(mode, removed_prefix)
                 record.continuation, context=record.continuation.context[1:]
             ),
         )
+    assert record.continuation is not None
     encoded = encode_replay(record)
     assert encode_replay(decode_replay(encoded)) == encoded
     body = request(record)
@@ -87,12 +92,12 @@ def test_roundtrip_restores_exact_context_and_native_parts(mode, removed_prefix)
 
 
 @pytest.mark.parametrize("damage", ["text", "origin", "unfinished"])
-def test_invalid_echo_or_origin_never_replays(damage):
+def test_invalid_echo_or_origin_never_replays(damage: str) -> None:
     record = recovered(echo=damage != "unfinished")
     body = request(record)
     origin = ORIGIN
     if damage == "text":
-        body["contents"][1]["parts"][0]["text"] = "edited"
+        object_array(object_array(body["contents"])[1]["parts"])[0]["text"] = "edited"
     if damage == "origin":
         origin = replace(ORIGIN, connection="other-account")
     with pytest.raises(HistoryReplayError):
@@ -111,8 +116,9 @@ def test_invalid_echo_or_origin_never_replays(damage):
         "extra_context",
     ],
 )
-def test_continuation_metadata_is_validated(damage):
+def test_continuation_metadata_is_validated(damage: str) -> None:
     record = recovered()
+    assert record.continuation is not None and record.continuation.echo is not None
     context: list[JsonObject] = deepcopy(list(record.continuation.context))
     echo = deepcopy(list(record.continuation.echo))
     if damage == "role":
@@ -136,7 +142,7 @@ def test_continuation_metadata_is_validated(damage):
         encode_replay(record)
 
 
-def test_complete_encoded_record_is_bounded(monkeypatch):
+def test_complete_encoded_record_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     record = recovered()
     size = len(encode_replay(record))
     monkeypatch.setattr(
@@ -146,19 +152,23 @@ def test_complete_encoded_record_is_bounded(monkeypatch):
         encode_replay(record)
 
 
-def test_captures_corrected_sent_context():
+def test_captures_corrected_sent_context() -> None:
     owner = ContinuationRequest("gemini")
     assert owner.sent_context({"contents": []}, source={}, source_paths={}) is None
-    body = owner.build(
+    body: JsonObject = owner.build(
         {"contents": [{"role": "user", "parts": [{"text": "old"}]}]},
         ContinuationSeed("messages", ({"type": "text", "text": "prefix"},)),
     )
-    body["contents"][-2]["parts"].append({"text": "", "thought": True})
+    array_payload(object_array(body["contents"])[-2]["parts"]).append(
+        {"text": "", "thought": True}
+    )
     paths = {}
     sent = prepare_history(body, ORIGIN, source_paths=paths, continuation=True)
     captured = owner.sent_context(sent, source=body, source_paths=paths)
-    assert captured == tuple(body["contents"][-2:])
-    body["contents"][-2]["parts"][0]["text"] = "later mutation"
+    assert captured == tuple(array_payload(body["contents"])[-2:])
+    object_array(object_array(body["contents"])[-2]["parts"])[0]["text"] = (
+        "later mutation"
+    )
     assert captured[0] == {
         "role": "model",
         "parts": [{"text": "prefix"}, {"text": "", "thought": True}],
@@ -166,11 +176,10 @@ def test_captures_corrected_sent_context():
 
 
 @pytest.mark.parametrize("remove_prefix", [False, True])
-def test_context_mapping_excludes_expanded_previous_replay(remove_prefix):
+def test_context_mapping_excludes_expanded_previous_replay(remove_prefix: bool) -> None:
     owner = ContinuationRequest("gemini")
-    original = request(recovered())
-    original["model"] = ORIGIN.model
-    body = owner.build(
+    original: JsonObject = {**request(recovered()), "model": ORIGIN.model}
+    body: JsonObject = owner.build(
         original,
         ContinuationSeed(
             "messages", ({"type": "thinking", "thinking": "Current thought"},)
@@ -185,16 +194,20 @@ def test_context_mapping_excludes_expanded_previous_replay(remove_prefix):
         continuation=True,
     )
     captured = owner.sent_context(sent, source=body, source_paths=paths)
-    assert captured == tuple(body["contents"][-(1 if remove_prefix else 2) :])
+    assert captured == tuple(
+        array_payload(body["contents"])[-(1 if remove_prefix else 2) :]
+    )
     # Prior replay expands one source row into three wire rows. It is not part
     # of the new continuation even when the current model row is removed.
     contents = sent["contents"]
     assert isinstance(contents, list)
-    assert len(contents) > len(body["contents"])
+    assert len(contents) > len(array_payload(body["contents"]))
 
 
 @pytest.mark.parametrize("mode", list(HistoryMode))
-def test_fragmented_model_turn_restores_once_and_maps_original_carrier(mode):
+def test_fragmented_model_turn_restores_once_and_maps_original_carrier(
+    mode: HistoryMode,
+) -> None:
     record = recovered()
     body = request(record)
     body["contents"][1:2] = [
@@ -208,6 +221,7 @@ def test_fragmented_model_turn_restores_once_and_maps_original_carrier(mode):
     original = deepcopy(body)
     paths = {}
     prepared = prepare_history(body, ORIGIN, scope=mode, source_paths=paths)
+    assert record.continuation is not None
     assert prepared["contents"] == [
         body["contents"][0],
         *record.continuation.context,
@@ -220,7 +234,7 @@ def test_fragmented_model_turn_restores_once_and_maps_original_carrier(mode):
 
 
 @pytest.mark.parametrize("damage", ["edited_prefix", "cross_user", "second_carrier"])
-def test_fragmented_replay_cannot_hide_edits_or_cross_turns(damage):
+def test_fragmented_replay_cannot_hide_edits_or_cross_turns(damage: str) -> None:
     record = recovered()
     body = request(record)
     carrier = {"thoughtSignature": encode_gemini_replay(record)}
@@ -229,7 +243,7 @@ def test_fragmented_replay_cannot_hide_edits_or_cross_turns(damage):
         {"role": "model", "parts": [carrier]},
     ]
     if damage == "edited_prefix":
-        body["contents"][1]["parts"][0]["text"] = "edited"
+        object_array(object_array(body["contents"])[1]["parts"])[0]["text"] = "edited"
     elif damage == "cross_user":
         body["contents"].insert(
             2, {"role": "user", "parts": [{"text": "different turn"}]}
@@ -240,7 +254,7 @@ def test_fragmented_replay_cannot_hide_edits_or_cross_turns(damage):
         prepare_history(body, ORIGIN)
 
 
-def test_fragmented_previous_replay_does_not_absorb_injected_model_prefix():
+def test_fragmented_previous_replay_does_not_absorb_injected_model_prefix() -> None:
     record = recovered()
     source = request(record)
     source["contents"][1:] = [
@@ -251,7 +265,7 @@ def test_fragmented_previous_replay_does_not_absorb_injected_model_prefix():
         },
     ]
     owner = ContinuationRequest("gemini")
-    body = owner.build(
+    body: JsonObject = owner.build(
         source, ContinuationSeed("messages", ({"type": "text", "text": "new prefix"},))
     )
     paths = {}
@@ -259,11 +273,11 @@ def test_fragmented_previous_replay_does_not_absorb_injected_model_prefix():
         body, ORIGIN, scope=HistoryMode.NONE, source_paths=paths, continuation=True
     )
     assert owner.sent_context(prepared, source=body, source_paths=paths) == tuple(
-        body["contents"][-2:]
+        array_payload(body["contents"])[-2:]
     )
 
 
-def test_replay_works_in_a_fresh_process():
+def test_replay_works_in_a_fresh_process() -> None:
     record = recovered()
     script = """
 import json, sys
@@ -280,14 +294,16 @@ print(json.dumps(prepare_history(body,record.origin)))
         timeout=15,
         check=True,
     )
+    assert record.continuation is not None
     assert json.loads(result.stdout)["contents"][1:-1] == [
         *record.continuation.context,
         record.native,
     ]
 
 
-def test_recovered_tool_defaults_and_generated_id_preserve_original_call():
+def test_recovered_tool_defaults_and_generated_id_preserve_original_call() -> None:
     record = recovered()
+    assert record.continuation is not None
     call = {"name": "read", "args": {}}
     record = replace(
         record,

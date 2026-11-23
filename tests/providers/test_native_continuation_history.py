@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.history_replay import HistoryMode, ReplayOrigin
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.stream_recovery import ContinuationSeed
@@ -13,9 +14,14 @@ from free_claude_code.providers.history_negotiation import (
     HistoryModeCache,
     HistoryNegotiation,
 )
+from free_claude_code.providers.openai_chat import OpenAIChatProvider
+from free_claude_code.providers.openai_responses.transport import (
+    OpenAIResponsesTransport,
+)
+from tests.providers.support import stream_provider_request
 
 
-def native_seed(wire):
+def native_seed(wire: WireProtocol):
     items: list[JsonObject]
     if wire == "messages":
         items = [
@@ -46,12 +52,14 @@ def native_seed(wire):
 @pytest.mark.parametrize("wire", ["messages", "responses", "gemini"])
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("mode", list(HistoryMode))
-def test_partial_thinking_is_governed_by_history_mode(wire, protocol, mode):
+def test_partial_thinking_is_governed_by_history_mode(
+    wire: WireProtocol, protocol: WireProtocol, mode: HistoryMode
+) -> None:
     field = "input" if protocol == "responses" else "messages"
     body = {"model": "model", field: [{"role": "user", "content": "Question"}]}
     original = deepcopy(body)
     seed = native_seed(wire)
-    source = ContinuationRequest(protocol).build(body, seed)
+    source: JsonObject = ContinuationRequest(protocol).build(body, seed)
     origin = ReplayOrigin("provider", protocol, "https://test.invalid", "key", "model")
     cache = HistoryModeCache()
     cache.update(
@@ -70,7 +78,9 @@ def test_partial_thinking_is_governed_by_history_mode(wire, protocol, mode):
 
 
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
-def test_current_keeps_current_history_and_prefix_but_not_old_thinking(protocol):
+def test_current_keeps_current_history_and_prefix_but_not_old_thinking(
+    protocol: WireProtocol,
+) -> None:
     field = "input" if protocol == "responses" else "messages"
     request = ContinuationRequest(protocol)
     first = request.build({"model": "model", field: []}, native_seed("messages"))
@@ -90,7 +100,7 @@ def test_current_keeps_current_history_and_prefix_but_not_old_thinking(protocol)
     assert str(projected[field]).count("Partial thought") == 1
 
 
-def test_native_suffix_preserves_response_summary_meaning_and_input():
+def test_native_suffix_preserves_response_summary_meaning_and_input() -> None:
     item: dict[str, Any] = {
         "type": "reasoning",
         "content": [{"type": "reasoning_text", "text": "Full"}],
@@ -101,10 +111,11 @@ def test_native_suffix_preserves_response_summary_meaning_and_input():
     source = ContinuationRequest("responses").build({"input": []}, seed)
     assert source["input"][0]["summary"][0]["text"] == "Summary"
     assert source["input"][0]["content"][0]["text"] == "Full"
-    assert "Summary" not in str(source["input"][-1])
+    source_items: list[JsonObject] = source["input"]
+    assert "Summary" not in str(source_items[-1])
 
 
-def test_response_continuation_preserves_delivered_part_text():
+def test_response_continuation_preserves_delivered_part_text() -> None:
     item: JsonObject = {
         "type": "message",
         "role": "assistant",
@@ -125,7 +136,9 @@ def test_response_continuation_preserves_delivered_part_text():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "responses"])
-async def test_fallback_prefix_follows_effective_sdk_history_override(protocol):
+async def test_fallback_prefix_follows_effective_sdk_history_override(
+    protocol: str,
+) -> None:
     from free_claude_code.core.anthropic.models import MessagesRequest
     from free_claude_code.core.openai_responses import OpenAIResponsesRequest
     from free_claude_code.core.reasoning import ReasoningPolicy
@@ -158,17 +171,28 @@ async def test_fallback_prefix_follows_effective_sdk_history_override(protocol):
             admission=immediate_admission(),
         ),
     ) as (_, bodies, provider):
-        await _saved_reply(
-            getattr(provider, f"stream_{wire}")(
+        if isinstance(provider, OpenAIResponsesTransport):
+            assert isinstance(request, OpenAIResponsesRequest)
+            stream = provider.stream_responses(
                 request,
                 input_tokens=0,
                 request_id="override-continuation",
                 response_model="public",
                 reasoning=ReasoningPolicy.on(),
                 continuation=native_seed(wire),
-            ),
-            wire,
-        )
+            )
+        else:
+            assert isinstance(provider, OpenAIChatProvider)
+            stream = stream_provider_request(
+                provider,
+                wire,
+                request,
+                request_id="override-continuation",
+                response_model="public",
+                reasoning=ReasoningPolicy.on(),
+                continuation=native_seed(wire),
+            )
+        await _saved_reply(stream, wire)
     assert len(bodies) == 1
     assert bodies[0]["model"] == "effective-model"
     assert "Effective question" in str(bodies[0][field])

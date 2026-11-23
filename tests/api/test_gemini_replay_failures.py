@@ -1,15 +1,19 @@
 """Incomplete or unretainable signed continuations must never report success."""
 
 import json
+from collections.abc import Mapping, Sequence
+from typing import override
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import JsonValue
 from tests.api.support import provider_manager_for_app
 from tests.api.test_four_protocol_matrix import ingress_request, matrix_app
 from tests.api.test_gemini_continuation_replay import native
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 
 @pytest.mark.parametrize("wire", ["messages", "chat", "responses", "gemini"])
@@ -18,24 +22,26 @@ from tests.api.test_gemini_continuation_replay import native
     ["signed_eof", "signed_tool_eof", "after_stop", "retention", "no_progress"],
 )
 def test_failed_signed_continuation_stops_and_releases_attempt(
-    wire, failure, monkeypatch
-):
+    wire: str, failure: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls = []
     closed = []
 
     class Wire(httpx.AsyncByteStream):
-        def __init__(self, events):
+        def __init__(self, events: Sequence[Mapping[str, JsonValue]]):
             self.events = events
 
+        @override
         async def __aiter__(self):
             for event in self.events:
                 yield ("data: " + json.dumps(event) + "\n\n").encode()
 
+        @override
         async def aclose(self):
             closed.append(True)
 
-    def reply(request):
-        calls.append(json.loads(request.content))
+    def reply(request: httpx.Request):
+        calls.append(decode_object(request.content))
         if len(calls) == 1:
             events = [native("prefix ")]
         else:
@@ -62,7 +68,7 @@ def test_failed_signed_continuation_stops_and_releases_attempt(
             200, headers={"content-type": "text/event-stream"}, stream=Wire(events)
         )
 
-    app = matrix_app("gemini", reply, max_attempts=4)
+    app = matrix_app("gemini", native_reply=reply, max_attempts=4)
     with TestClient(app) as client:
         path, request = ingress_request(wire, True)
         response = client.post(path, json=request)
@@ -75,9 +81,9 @@ def test_failed_signed_continuation_stops_and_releases_attempt(
             event.event in {"message_stop", "response.completed"} for event in events
         )
         assert not any(
-            candidate.get("finishReason") == "STOP"
+            object_payload(candidate).get("finishReason") == "STOP"
             for event in events
-            for candidate in event.data.get("candidates", [])
+            for candidate in array_payload(event.data.get("candidates", []))
         )
         assert "test-native-signature" not in response.text
         assert "fcc:history:" not in response.text

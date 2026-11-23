@@ -24,6 +24,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload, object_payload
 
 _MODEL = "Qwen/Qwen3-32B"
 _CATALOG_URL = "https://api.siliconflow.com/v1/models?sub_type=chat"
@@ -98,15 +99,23 @@ def test_build_request_body_preserves_common_chat_tools_and_images(
 
     assert body["model"] == _MODEL
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
-    assert body["messages"][0] == {"role": "system", "content": "Be concise."}
-    assert body["messages"][1]["content"] == [
+    assert array_payload(body["messages"])[0] == {
+        "role": "system",
+        "content": "Be concise.",
+    }
+    assert object_payload(array_payload(body["messages"])[1])["content"] == [
         {"type": "text", "text": "Inspect this image."},
         {
             "type": "image_url",
             "image_url": {"url": "data:image/png;base64,aW1hZ2U="},
         },
     ]
-    assert body["tools"][0]["function"]["name"] == "inspect_image"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "inspect_image"
+    )
     assert "extra_body" not in body
 
 
@@ -179,7 +188,7 @@ def test_build_request_body_replays_reasoning_content_verbatim(
         reasoning=reasoning_for(request),
     )
 
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "assistant",
         "content": "Calling it.",
         "reasoning_content": "Need the tool.",
@@ -194,16 +203,16 @@ def test_build_request_body_replays_reasoning_content_verbatim(
 
 @pytest.mark.asyncio
 async def test_model_catalog_uses_chat_query(
+    monkeypatch: pytest.MonkeyPatch,
     siliconflow_provider: OpenAIChatProvider,
 ) -> None:
-    siliconflow_provider._client.get = AsyncMock(
-        return_value={"data": [{"id": _MODEL}]}
-    )
+    mock_get = AsyncMock(return_value={"data": [{"id": _MODEL}]})
+    monkeypatch.setattr(siliconflow_provider._client, "get", mock_get)
 
     model_infos = await siliconflow_provider.list_model_infos()
 
     assert model_infos == frozenset({ProviderModelInfo(_MODEL)})
-    siliconflow_provider._client.get.assert_awaited_once_with(
+    mock_get.assert_awaited_once_with(
         "/models",
         cast_to=object,
         options={"params": {"sub_type": "chat"}},
@@ -257,11 +266,14 @@ async def test_model_catalog_uses_documented_endpoint_query_and_auth() -> None:
     ],
 )
 async def test_rejects_malformed_or_empty_catalog_atomically(
+    monkeypatch: pytest.MonkeyPatch,
     siliconflow_provider: OpenAIChatProvider,
     payload: object,
     message: str,
 ) -> None:
-    siliconflow_provider._client.get = AsyncMock(return_value=payload)
+    monkeypatch.setattr(
+        siliconflow_provider._client, "get", AsyncMock(return_value=payload)
+    )
 
     with pytest.raises(ModelListResponseError, match=message):
         await siliconflow_provider.list_model_infos()
@@ -269,6 +281,7 @@ async def test_rejects_malformed_or_empty_catalog_atomically(
 
 @pytest.mark.asyncio
 async def test_model_catalog_uses_shared_retry_admission(
+    monkeypatch: pytest.MonkeyPatch,
     siliconflow_provider: OpenAIChatProvider,
 ) -> None:
     request = httpx.Request("GET", _CATALOG_URL)
@@ -278,11 +291,12 @@ async def test_model_catalog_uses_shared_retry_admission(
         request=request,
         response=response,
     )
-    siliconflow_provider._client.get = AsyncMock(
+    mock_get_next = AsyncMock(
         side_effect=[rate_limit_error, {"data": [{"id": _MODEL}]}]
     )
+    monkeypatch.setattr(siliconflow_provider._client, "get", mock_get_next)
 
     model_infos = await siliconflow_provider.list_model_infos()
 
     assert model_infos == frozenset({ProviderModelInfo(_MODEL)})
-    assert siliconflow_provider._client.get.await_count == 2
+    assert mock_get_next.await_count == 2

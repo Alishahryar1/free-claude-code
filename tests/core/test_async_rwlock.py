@@ -6,7 +6,7 @@ from free_claude_code.core.async_rwlock import AsyncReadWriteLock
 
 
 @pytest.mark.asyncio
-async def test_readers_overlap_and_writer_waits():
+async def test_readers_overlap_and_writer_waits() -> None:
     lock = AsyncReadWriteLock()
     entered, release = asyncio.Event(), asyncio.Event()
 
@@ -39,7 +39,7 @@ async def test_readers_overlap_and_writer_waits():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_writer", [False, True])
-async def test_queued_writer_precedes_later_reader(cancel_writer):
+async def test_queued_writer_precedes_later_reader(cancel_writer: bool) -> None:
     lock = AsyncReadWriteLock()
     queued, entered, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
     order = []
@@ -77,7 +77,7 @@ async def test_queued_writer_precedes_later_reader(cancel_writer):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["read", "write"])
-async def test_exception_releases_access(mode):
+async def test_exception_releases_access(mode: str) -> None:
     lock = AsyncReadWriteLock()
     with pytest.raises(ValueError):
         async with getattr(lock, mode)():
@@ -88,7 +88,7 @@ async def test_exception_releases_access(mode):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["read", "write"])
-async def test_cancelled_queued_access_does_not_strand_waiters(mode):
+async def test_cancelled_queued_access_does_not_strand_waiters(mode: str) -> None:
     lock = AsyncReadWriteLock()
     queued = asyncio.Event()
 
@@ -109,7 +109,7 @@ async def test_cancelled_queued_access_does_not_strand_waiters(mode):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["read", "write"])
-async def test_repeated_cancellation_drains_contended_release(mode):
+async def test_repeated_cancellation_drains_contended_release(mode: str) -> None:
     lock = AsyncReadWriteLock()
     entered, finish = asyncio.Event(), asyncio.Event()
 

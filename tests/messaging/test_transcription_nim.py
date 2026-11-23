@@ -1,6 +1,7 @@
 """Tests for the NVIDIA NIM voice transcription adapter."""
 
 import asyncio
+from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -13,10 +14,19 @@ from free_claude_code.providers.nvidia_nim.voice import (
     NvidiaNimTranscriber,
 )
 
+_RECOGNITION_CONFIG = object()
+
+
+@dataclass
+class _RivaClient:
+    Auth: MagicMock
+    ASRService: MagicMock
+    RecognitionConfig: MagicMock
+
 
 def _fake_riva_client(
     transcript: str,
-) -> tuple[SimpleNamespace, SimpleNamespace, MagicMock, MagicMock]:
+) -> tuple[SimpleNamespace, _RivaClient, MagicMock, MagicMock]:
     response = SimpleNamespace(
         results=[
             SimpleNamespace(
@@ -28,10 +38,10 @@ def _fake_riva_client(
     asr_service.offline_recognize.return_value = response
     auth = MagicMock()
 
-    client = SimpleNamespace(
+    client = _RivaClient(
         Auth=MagicMock(return_value=auth),
         ASRService=MagicMock(return_value=asr_service),
-        RecognitionConfig=MagicMock(return_value=object()),
+        RecognitionConfig=MagicMock(return_value=_RECOGNITION_CONFIG),
     )
     riva = SimpleNamespace(__path__=[], client=client)
     return riva, client, asr_service, auth
@@ -71,7 +81,7 @@ async def test_nvidia_nim_transcriber_calls_riva_with_owned_configuration(
     )
     asr_service.offline_recognize.assert_called_once_with(
         b"audio bytes",
-        client.RecognitionConfig.return_value,
+        _RECOGNITION_CONFIG,
     )
     auth.channel.close.assert_called_once_with()
 
