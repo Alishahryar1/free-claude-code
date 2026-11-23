@@ -1,7 +1,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, override
 from unittest.mock import patch
 
 import httpx
@@ -11,6 +11,7 @@ from openai import AuthenticationError
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
@@ -18,14 +19,12 @@ from free_claude_code.core.anthropic.stream_contracts import (
     text_content,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.core.stream_output import StreamOutput
-from free_claude_code.providers.admission import (
-    UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
-    ProviderAdmissionController,
-)
+from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.openai_codex import provider as codex_provider_module
 from free_claude_code.providers.openai_codex.auth import (
@@ -34,7 +33,14 @@ from free_claude_code.providers.openai_codex.auth import (
     OpenAIReconnectRequired,
 )
 from free_claude_code.providers.openai_codex.provider import OpenAICodexProvider
+from tests.mock_calls import keyword_arguments
 from tests.providers.support import immediate_admission, make_provider_config
+from tests.wire_payload import (
+    decode_object,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 class _FakeAuth(OpenAIAuthManager):
@@ -43,10 +49,12 @@ class _FakeAuth(OpenAIAuthManager):
         self.recovery_calls = 0
         self.current_token = "access_1"
 
+    @override
     async def access(self, *, force_refresh: bool = False) -> OpenAIAccess:
         self.access_calls += 1
         return OpenAIAccess(self.current_token, "account_1", False)
 
+    @override
     async def recover_unauthorized(self, rejected_token: str) -> OpenAIAccess:
         assert rejected_token == self.current_token
         self.recovery_calls += 1
@@ -68,6 +76,7 @@ class _CloseTrackingResponse(httpx2.Response):
         self.close_calls = 0
         self._close_error = close_error
 
+    @override
     async def aclose(self) -> None:
         self.close_calls += 1
         await super().aclose()
@@ -79,6 +88,7 @@ class _StaticAsyncBody(httpx2.AsyncByteStream):
     def __init__(self, body: bytes) -> None:
         self._body = body
 
+    @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
         yield self._body
 
@@ -88,6 +98,7 @@ class _CloseAwareAuth(_FakeAuth):
         super().__init__()
         self._responses = responses
 
+    @override
     async def recover_unauthorized(self, rejected_token: str) -> OpenAIAccess:
         assert self._responses[-1].is_closed
         return await super().recover_unauthorized(rejected_token)
@@ -384,7 +395,7 @@ async def test_provider_uses_subscription_headers_and_visible_model_catalog() ->
     assert response_request.headers["originator"] == "codex_cli_rs"
     assert response_request.headers["accept"] == "text/event-stream"
     assert response_request.headers["session_id"]
-    payload = json.loads(response_request.content)
+    payload = decode_object(response_request.content)
     assert payload["model"] == "gpt-test"
     assert payload["store"] is False
     events = parse_sse_text(body)
@@ -499,7 +510,7 @@ async def test_provider_accepts_claude_client_controls_before_upstream_io() -> N
     assert len(requests) == 1
     upstream = requests[0]
     assert upstream.url.path.endswith("/responses")
-    payload = json.loads(upstream.content)
+    payload = decode_object(upstream.content)
     assert payload["model"] == "gpt-test"
     assert payload["reasoning"] == {"effort": "high", "summary": "auto"}
     assert "max_output_tokens" not in payload
@@ -540,7 +551,7 @@ async def test_provider_relays_native_responses_with_private_field_policy() -> N
     body = await _collect(stream)
 
     assert len(requests) == 1
-    upstream = json.loads(requests[0].content)
+    upstream = decode_object(requests[0].content)
     assert upstream["model"] == "gpt-test"
     assert upstream["input"] == [{"role": "user", "content": "hello"}]
     assert upstream["stream"] is True
@@ -557,10 +568,10 @@ async def test_provider_relays_native_responses_with_private_field_policy() -> N
         "response.output_text.delta",
         "response.completed",
     ]
-    assert events[0].data["response"]["id"] == "resp_1"
-    assert events[0].data["response"]["model"] == "openai/gpt-test"
-    assert events[-1].data["response"]["id"] == "resp_1"
-    assert events[-1].data["response"]["model"] == "openai/gpt-test"
+    assert object_payload(events[0].data["response"])["id"] == "resp_1"
+    assert object_payload(events[0].data["response"])["model"] == "openai/gpt-test"
+    assert object_payload(events[-1].data["response"])["id"] == "resp_1"
+    assert object_payload(events[-1].data["response"])["model"] == "openai/gpt-test"
     await provider.cleanup()
 
 
@@ -635,9 +646,9 @@ async def test_provider_round_trips_portable_tool_name_alias() -> None:
     payloads: list[dict[str, Any]] = []
 
     def handler(http_request: httpx2.Request) -> httpx2.Response:
-        payload = json.loads(http_request.content)
+        payload = decode_object(http_request.content)
         payloads.append(payload)
-        alias = payload["tools"][0]["name"]
+        alias = object_array(payload["tools"])[0]["name"]
         body = _sse(
             (
                 "response.output_item.added",
@@ -691,8 +702,8 @@ async def test_provider_round_trips_portable_tool_name_alias() -> None:
 
     body = await _collect(provider.stream_messages(request))
 
-    payload = payloads[0]
-    alias = payload["tools"][0]["name"]
+    payload: JsonObject = payloads[0]
+    alias = string_payload(object_array(payload["tools"])[0]["name"])
     assert alias != original
     assert len(alias) <= 64
     assert payload["tool_choice"] == {"type": "function", "name": alias}
@@ -703,7 +714,7 @@ async def test_provider_round_trips_portable_tool_name_alias() -> None:
         for event in events
         if event.event == "content_block_start"
     )
-    assert tool_start["name"] == original
+    assert object_payload(tool_start)["name"] == original
     assert alias not in body
     await provider.cleanup()
 
@@ -814,23 +825,27 @@ async def test_concurrent_credentials_keep_request_identity_and_pool_ownership()
     None
 ):
     class ConcurrentAuth(_FakeAuth):
+        @override
         async def access(self, *, force_refresh: bool = False) -> OpenAIAccess:
             self.access_calls += 1
             return OpenAIAccess(
                 f"access_{self.access_calls}", f"account_{self.access_calls}", False
             )
 
+        @override
         async def recover_unauthorized(self, rejected_token: str) -> OpenAIAccess:
             assert rejected_token == "access_1"
             self.recovery_calls += 1
             return OpenAIAccess("access_3", "account_3", True)
 
+        @override
         async def close(self) -> None:
             raise AssertionError("Provider must not close the runtime-owned account")
 
     class Pool(httpx2.MockTransport):
         closes = 0
 
+        @override
         async def aclose(self) -> None:
             self.closes += 1
             await super().aclose()
@@ -957,6 +972,7 @@ async def test_disconnected_account_never_opens_or_refreshes_a_request(
     operation: str,
 ) -> None:
     class DisconnectedAuth(_FakeAuth):
+        @override
         async def access(self, *, force_refresh: bool = False) -> OpenAIAccess:
             self.access_calls += 1
             raise OpenAIReconnectRequired("Reconnect in Admin.")
@@ -1028,7 +1044,9 @@ async def test_model_discovery_re_request_is_a_second_admitted_attempt() -> None
     attempt_rows = [
         call.kwargs
         for call in trace.call_args_list
-        if call.kwargs.get("event", "").startswith("provider.attempt.")
+        if string_payload(keyword_arguments(call).get("event", "")).startswith(
+            "provider.attempt."
+        )
     ]
     assert [row["event"] for row in attempt_rows] == [
         "provider.attempt.started",
@@ -1050,6 +1068,7 @@ async def test_model_discovery_re_request_is_a_second_admitted_attempt() -> None
 @pytest.mark.asyncio
 async def test_auth_refresh_failure_does_not_repeat_rejected_provider_call() -> None:
     class FailingRecoveryAuth(_FakeAuth):
+        @override
         async def recover_unauthorized(self, rejected_token: str) -> OpenAIAccess:
             assert rejected_token == self.current_token
             self.recovery_calls += 1
@@ -1133,7 +1152,7 @@ async def test_final_attempt_unauthorized_preserves_the_provider_401() -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal attempts
         attempts += 1
-        status = 503 if attempts < UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS else 401
+        status = 503 if attempts < PROVIDER_MAX_ATTEMPTS_DEFAULT else 401
         return httpx2.Response(
             status,
             json={"error": {"message": f"attempt {attempts}"}},
@@ -1155,7 +1174,7 @@ async def test_final_attempt_unauthorized_preserves_the_provider_401() -> None:
             )
         )
 
-    assert attempts == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+    assert attempts == PROVIDER_MAX_ATTEMPTS_DEFAULT
     assert auth.recovery_calls == 0
     assert exc_info.value.status_code == 401
     assert "Request ID: req_final_401" in str(exc_info.value)

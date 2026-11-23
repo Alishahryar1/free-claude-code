@@ -32,14 +32,14 @@ def register_pid(pid: int) -> None:
         return
     ensure_atexit_registered()
     with _lock:
-        _pids.add(int(pid))
+        _pids.add(pid)
 
 
 def unregister_pid(pid: int) -> None:
     if not pid:
         return
     with _lock:
-        _pids.discard(int(pid))
+        _pids.discard(pid)
 
 
 def kill_pid_tree_best_effort(pid: int) -> None:

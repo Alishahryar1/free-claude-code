@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import override
 
 import httpx
 import pytest
@@ -33,6 +34,7 @@ from smoke.lib.e2e import (
     assert_product_stream,
 )
 from smoke.lib.server import find_free_port
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 pytestmark = [pytest.mark.live]
 
@@ -837,7 +839,7 @@ def test_dsh_cli_web_startup_e2e(
             auth_token=auth_token,
             credential_env_keys=credential_env_keys,
         )
-        patches = []
+        patches: list[str] = []
         if workflow == "compact":
             patch = tmp_path / "compact.patch.yml"
             patch.write_text(
@@ -1172,14 +1174,16 @@ def test_muse_cli_headless_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> Non
     )
     assert catalog_files, "Muse did not persist its parsed provider catalog"
     visible_models = {
-        row["model_id"]: row
+        object_payload(row)["model_id"]: row
         for catalog_file in catalog_files
-        for row in json.loads(catalog_file.read_text(encoding="utf-8"))["rows"]
-        if row["visibility"] == "visible"
+        for row in array_payload(
+            decode_object(catalog_file.read_text(encoding="utf-8"))["rows"]
+        )
+        if object_payload(row)["visibility"] == "visible"
     }
     assert full_model in visible_models, "Muse hides the configured FCC model"
-    assert visible_models[full_model]["context_limit"] == 200000
-    assert visible_models[full_model]["output_limit"] == 81920
+    assert object_payload(visible_models[full_model])["context_limit"] == 200000
+    assert object_payload(visible_models[full_model])["output_limit"] == 81920
     responses_count = _access_request_count(server_log, "POST", "/v1/responses")
     assert responses_count >= 1
     assert responses_count == len(provider_requests)
@@ -1661,6 +1665,7 @@ def _deliberately_failing_openai_provider() -> Generator[tuple[str, list[str]]]:
                 },
             )
 
+        @override
         def log_message(self, format: str, *args: object) -> None:
             return
 
@@ -1676,7 +1681,7 @@ def _deliberately_failing_openai_provider() -> Generator[tuple[str, list[str]]]:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        port = int(server.server_address[1])
+        port = server.server_address[1]
         yield f"http://127.0.0.1:{port}/v1", provider_requests
     finally:
         server.shutdown()
@@ -1730,6 +1735,7 @@ def _successful_openai_provider(
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
 
+        @override
         def log_message(self, format: str, *args: object) -> None:
             return
 
@@ -1770,7 +1776,7 @@ def _successful_openai_provider(
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        port = int(server.server_address[1])
+        port = server.server_address[1]
         yield f"http://127.0.0.1:{port}/v1", provider_requests
     finally:
         server.shutdown()

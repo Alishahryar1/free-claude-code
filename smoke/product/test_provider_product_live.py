@@ -1,4 +1,5 @@
 import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -27,6 +28,7 @@ from smoke.lib.skips import (
     skip_if_upstream_unavailable_events,
     skip_if_upstream_unavailable_exception,
 )
+from tests.wire_payload import object_array, object_payload, response_object
 
 pytestmark = [pytest.mark.live, pytest.mark.smoke_target("providers")]
 
@@ -238,10 +240,10 @@ def test_provider_error_e2e(smoke_config: SmokeConfig) -> None:
     assert response.status_code >= 400
     assert response.headers["content-type"].startswith("application/json")
     assert response.headers["x-should-retry"] == "false"
-    payload = response.json()
+    payload = response_object(response)
     assert payload["type"] == "error"
-    assert payload["error"]["type"]
-    assert payload["error"]["message"]
+    assert object_payload(payload["error"])["type"]
+    assert object_payload(payload["error"])["message"]
     assert payload["request_id"] == response.headers["request-id"]
 
 
@@ -316,7 +318,7 @@ def test_openrouter_native_e2e(smoke_config: SmokeConfig) -> None:
 def _run_provider_scenario(
     smoke_config: SmokeConfig,
     provider_model: ProviderModel,
-    scenario,
+    scenario: Callable[[SmokeConfig, ProviderModel], None],
 ) -> None:
     try:
         scenario(smoke_config, provider_model)
@@ -601,7 +603,7 @@ def _scenario_gemini_thought_signature_tool_continuation(
         assert any(
             part.get("thoughtSignature")
             for record in records
-            for part in record.native.get("parts", [])
+            for part in object_array(record.native.get("parts", []))
         ), "gemini tool turn did not preserve its native thought signature"
         second_payload = {
             "model": "claude-sonnet-4-5-20250929",

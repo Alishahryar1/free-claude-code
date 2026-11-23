@@ -2,7 +2,7 @@
 
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Protocol, TypedDict
 
 from loguru import logger
 
@@ -16,6 +16,21 @@ _MODEL_MAP: dict[str, str] = {
     "large-v3-turbo": "openai/whisper-large-v3-turbo",
 }
 _WHISPER_SAMPLE_RATE = 16000
+
+
+class _AudioInput(TypedDict):
+    array: object
+    sampling_rate: int
+
+
+class _TranscriptionResult(TypedDict, total=False):
+    text: str | list[str]
+
+
+class _TranscriptionPipeline(Protocol):
+    def __call__(
+        self, audio: _AudioInput, /, *, generate_kwargs: dict[str, str]
+    ) -> _TranscriptionResult: ...
 
 
 class TranscriptionService:
@@ -35,7 +50,7 @@ class TranscriptionService:
         self._model_id = _MODEL_MAP.get(model, model)
         self._device = device
         self._huggingface_api_key = huggingface_api_key
-        self._pipeline: Any | None = None
+        self._pipeline: _TranscriptionPipeline | None = None
         self._lock = asyncio.Lock()
         self._closed = False
 
@@ -71,7 +86,7 @@ class TranscriptionService:
         logger.debug("Local transcription: {} chars", len(result_text))
         return result_text or "(no speech detected)"
 
-    def _get_pipeline(self) -> Any:
+    def _get_pipeline(self) -> _TranscriptionPipeline:
         if self._pipeline is not None:
             return self._pipeline
         try:
@@ -122,7 +137,7 @@ async def _wait_for_thread_exit(worker: asyncio.Task[str]) -> None:
         worker.exception()
 
 
-def _load_audio(file_path: Path) -> dict[str, Any]:
+def _load_audio(file_path: Path) -> _AudioInput:
     """Load an audio file into the waveform shape expected by Whisper."""
     import librosa
 

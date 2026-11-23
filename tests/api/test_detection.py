@@ -6,14 +6,20 @@ from free_claude_code.api.detection import (
     detect_safety_classifier_stop_sequence,
 )
 from free_claude_code.core.anthropic.models import Message, MessagesRequest
+from free_claude_code.core.json_types import JsonObject
 
 
-def _make_request(content: str, **kwargs) -> MessagesRequest:
-    return MessagesRequest(
-        model="claude-3-sonnet",
-        max_tokens=kwargs.pop("max_tokens", 100),
-        messages=[Message(role="user", content=content)],
-        **kwargs,
+def _make_request(
+    content: str, *, system: str, tools: list[JsonObject] | None = None
+) -> MessagesRequest:
+    return MessagesRequest.model_validate(
+        {
+            "model": "claude-3-sonnet",
+            "max_tokens": 100,
+            "messages": [Message(role="user", content=content)],
+            "system": system,
+            "tools": tools,
+        }
     )
 
 

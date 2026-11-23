@@ -151,7 +151,14 @@ CLEAN = SourceRecoverySnapshot()
         ),
     ],
 )
-def test_next_step(failure, released, prefix, seed, has_next, expected):
+def test_next_step(
+    failure: CandidateFailure,
+    released: bool,
+    prefix: DeliveredPrefix | None,
+    seed: ContinuationSeed | None,
+    has_next: bool,
+    expected: Fail | Fallback | Handoff,
+) -> None:
     assert (
         next_step(
             failure,
@@ -164,7 +171,7 @@ def test_next_step(failure, released, prefix, seed, has_next, expected):
     )
 
 
-def test_prefix_is_ignored_without_stream_evidence():
+def test_prefix_is_ignored_without_stream_evidence() -> None:
     step = next_step(
         _failure(None),
         content_released=True,

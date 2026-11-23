@@ -1,9 +1,11 @@
 import asyncio
-from collections.abc import Callable
-from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
+from collections.abc import Callable, Sequence
+from pathlib import Path
+from unittest.mock import ANY, AsyncMock, MagicMock, Mock, call, patch
 
 import pytest
 
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.messaging.command_context import ReplyClearResult, StopOutcome
 from free_claude_code.messaging.models import MessageScope
 from free_claude_code.messaging.platforms.ports import MessagingStartupNotice
@@ -26,6 +28,7 @@ from free_claude_code.messaging.trees import (
 from free_claude_code.messaging.trees.transitions import CancellationEffect
 from free_claude_code.messaging.voice import VoiceCancellationResult
 from free_claude_code.messaging.workflow import MessagingWorkflow
+from tests.fixture_types import IncomingMessageFactory, MessagingStoreFactory
 
 _SCOPE = MessageScope(platform="telegram", chat_id="chat_1")
 _OTHER_SCOPE = MessageScope(platform="telegram", chat_id="other_chat")
@@ -44,7 +47,7 @@ def _startup_notice(chat_id: str = _SCOPE.chat_id) -> MessagingStartupNotice:
     return MessagingStartupNotice(chat_id=chat_id, transport_label="Bot API")
 
 
-async def _event_stream(events):
+async def _event_stream(events: Sequence[JsonObject]):
     for event in events:
         await asyncio.sleep(0)
         yield event
@@ -73,7 +76,7 @@ def _snapshot(root_id: str = "root_1") -> TreeSnapshot:
     return TreeSnapshot(scope=_SCOPE, root_id=root_id, nodes={})
 
 
-def _session(events) -> MagicMock:
+def _session(events: Sequence[JsonObject]) -> MagicMock:
     session = MagicMock()
     session.start_task.return_value = _event_stream(events)
     return session
@@ -84,7 +87,9 @@ async def _wait_for_idle(workflow: MessagingWorkflow) -> None:
 
 
 @pytest.fixture
-def handler(mock_platform, mock_cli_manager, mock_session_store):
+def handler(
+    mock_platform: MagicMock, mock_cli_manager: MagicMock, mock_session_store: AsyncMock
+):
     default_session = _session([{"type": "exit", "code": 0}])
     mock_cli_manager.get_or_create_session.return_value = (
         default_session,
@@ -102,11 +107,11 @@ def handler(mock_platform, mock_cli_manager, mock_session_store):
 
 @pytest.mark.asyncio
 async def test_handle_message_turn_trace_always_includes_full_message_text(
-    mock_platform,
-    mock_cli_manager,
-    mock_session_store,
-    incoming_message_factory,
-):
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    mock_session_store: AsyncMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
     text = "user-message-content-visible-in-trace"
     workflow = MessagingWorkflow(
         mock_platform,
@@ -126,9 +131,9 @@ async def test_handle_message_turn_trace_always_includes_full_message_text(
 
 @pytest.mark.asyncio
 async def test_user_prompt_and_status_are_recorded_for_global_clear(
-    handler,
-    mock_session_store,
-    incoming_message_factory,
+    handler: MessagingWorkflow,
+    mock_session_store: AsyncMock,
+    incoming_message_factory: IncomingMessageFactory,
 ) -> None:
     incoming = incoming_message_factory(text="keep me", message_id="user-prompt")
 
@@ -179,20 +184,26 @@ async def test_user_prompt_and_status_are_recorded_for_global_clear(
         ),
     ],
 )
-def test_initial_status_uses_immutable_reply_advice(handler, target, expected):
+def test_initial_status_uses_immutable_reply_advice(
+    handler: MessagingWorkflow, target: ReplyTarget | None, expected: str
+) -> None:
     assert expected in handler.turn_intake._get_initial_status(target)
 
 
 @pytest.mark.asyncio
 async def test_global_stop_success_uses_existing_status_without_confirmation(
-    handler, mock_platform, incoming_message_factory
-):
+    monkeypatch: pytest.MonkeyPatch,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
     incoming = incoming_message_factory(text="/stop")
-    handler.stop_all_tasks = AsyncMock(return_value=_stop_outcome(5))
+    mock_stop_all_tasks = AsyncMock(return_value=_stop_outcome(5))
+    monkeypatch.setattr(handler, "stop_all_tasks", mock_stop_all_tasks)
 
     await handler.handle_message(incoming)
 
-    handler.stop_all_tasks.assert_awaited_once()
+    mock_stop_all_tasks.assert_awaited_once()
     mock_platform.queue_send_message.assert_not_awaited()
 
 
@@ -206,14 +217,17 @@ async def test_global_stop_success_uses_existing_status_without_confirmation(
     ids=("remote-only", "mixed-local-and-remote"),
 )
 async def test_global_stop_reports_cross_chat_work(
-    handler,
-    mock_platform,
-    incoming_message_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
     status_feedback_scopes: frozenset[MessageScope],
 ) -> None:
     incoming = incoming_message_factory(text="/stop")
-    handler.stop_all_tasks = AsyncMock(
-        return_value=_stop_outcome(2, scopes=status_feedback_scopes)
+    monkeypatch.setattr(
+        handler,
+        "stop_all_tasks",
+        AsyncMock(return_value=_stop_outcome(2, scopes=status_feedback_scopes)),
     )
 
     await handler.handle_message(incoming)
@@ -226,11 +240,16 @@ async def test_global_stop_reports_cross_chat_work(
 
 @pytest.mark.asyncio
 async def test_global_stop_noop_reports_nothing_to_stop(
-    handler, mock_platform, incoming_message_factory
+    monkeypatch: pytest.MonkeyPatch,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
 ) -> None:
     incoming = incoming_message_factory(text="/stop")
-    handler.stop_all_tasks = AsyncMock(
-        return_value=_stop_outcome(0, scopes=frozenset())
+    monkeypatch.setattr(
+        handler,
+        "stop_all_tasks",
+        AsyncMock(return_value=_stop_outcome(0, scopes=frozenset())),
     )
 
     await handler.handle_message(incoming)
@@ -245,15 +264,22 @@ async def test_global_stop_noop_reports_nothing_to_stop(
 
 @pytest.mark.asyncio
 async def test_global_stop_without_status_target_sends_fallback_confirmation(
-    handler, mock_platform, incoming_message_factory
+    monkeypatch: pytest.MonkeyPatch,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
 ) -> None:
     incoming = incoming_message_factory(text="/stop")
-    handler.stop_all_tasks = AsyncMock(
-        return_value=_stop_outcome(
-            1,
-            scopes=frozenset(),
-            fallback_required=True,
-        )
+    monkeypatch.setattr(
+        handler,
+        "stop_all_tasks",
+        AsyncMock(
+            return_value=_stop_outcome(
+                1,
+                scopes=frozenset(),
+                fallback_required=True,
+            )
+        ),
     )
 
     await handler.handle_message(incoming)
@@ -266,11 +292,16 @@ async def test_global_stop_without_status_target_sends_fallback_confirmation(
 
 @pytest.mark.asyncio
 async def test_failed_global_stop_never_reports_success(
-    handler, mock_platform, incoming_message_factory
+    monkeypatch: pytest.MonkeyPatch,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
 ) -> None:
     incoming = incoming_message_factory(text="/stop")
-    handler.stop_all_tasks = AsyncMock(
-        side_effect=RuntimeError("Failed to stop 1 managed Claude session.")
+    monkeypatch.setattr(
+        handler,
+        "stop_all_tasks",
+        AsyncMock(side_effect=RuntimeError("Failed to stop 1 managed Claude session.")),
     )
 
     with pytest.raises(RuntimeError, match="Failed to stop"):
@@ -281,10 +312,16 @@ async def test_failed_global_stop_never_reports_success(
 
 @pytest.mark.asyncio
 async def test_reply_stop_resolves_and_stops_only_target(
-    handler, mock_platform, mock_cli_manager, incoming_message_factory
-):
-    handler.stop_reply = AsyncMock(return_value=_stop_outcome(1))
-    handler.stop_all_tasks = AsyncMock(return_value=_stop_outcome(999))
+    monkeypatch: pytest.MonkeyPatch,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
+    mock_stop_reply = AsyncMock(return_value=_stop_outcome(1))
+    monkeypatch.setattr(handler, "stop_reply", mock_stop_reply)
+    mock_stop_all_tasks_next = AsyncMock(return_value=_stop_outcome(999))
+    monkeypatch.setattr(handler, "stop_all_tasks", mock_stop_all_tasks_next)
     incoming = incoming_message_factory(
         text="/stop",
         message_id="stop_msg",
@@ -293,18 +330,24 @@ async def test_reply_stop_resolves_and_stops_only_target(
 
     await handler.handle_message(incoming)
 
-    handler.stop_reply.assert_awaited_once_with(incoming.scope, "status_root")
-    handler.stop_all_tasks.assert_not_awaited()
+    mock_stop_reply.assert_awaited_once_with(incoming.scope, "status_root")
+    mock_stop_all_tasks_next.assert_not_awaited()
     mock_cli_manager.stop_all.assert_not_awaited()
     mock_platform.queue_send_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_reply_stop_unknown_does_not_stop_all(
-    handler, mock_platform, mock_cli_manager, incoming_message_factory
-):
-    handler.stop_reply = AsyncMock(return_value=_stop_outcome(0, scopes=frozenset()))
-    handler.stop_all_tasks = AsyncMock(return_value=_stop_outcome(5))
+    monkeypatch: pytest.MonkeyPatch,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
+    mock_stop_reply_next = AsyncMock(return_value=_stop_outcome(0, scopes=frozenset()))
+    monkeypatch.setattr(handler, "stop_reply", mock_stop_reply_next)
+    mock_stop_all_tasks_next_next = AsyncMock(return_value=_stop_outcome(5))
+    monkeypatch.setattr(handler, "stop_all_tasks", mock_stop_all_tasks_next_next)
     incoming = incoming_message_factory(
         text="/stop",
         message_id="stop_msg",
@@ -313,8 +356,8 @@ async def test_reply_stop_unknown_does_not_stop_all(
 
     await handler.handle_message(incoming)
 
-    handler.stop_reply.assert_awaited_once_with(incoming.scope, "unknown_msg")
-    handler.stop_all_tasks.assert_not_awaited()
+    mock_stop_reply_next.assert_awaited_once_with(incoming.scope, "unknown_msg")
+    mock_stop_all_tasks_next_next.assert_not_awaited()
     mock_cli_manager.stop_all.assert_not_awaited()
     assert (
         "Nothing to stop for that message"
@@ -324,9 +367,9 @@ async def test_reply_stop_unknown_does_not_stop_all(
 
 @pytest.mark.asyncio
 async def test_reply_stop_cancels_voice_when_no_tree_was_admitted(
-    handler,
-    mock_platform,
-    incoming_message_factory,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
 ) -> None:
     mock_platform.cancel_pending_voice.return_value = VoiceCancellationResult(
         scope=_SCOPE,
@@ -350,9 +393,9 @@ async def test_reply_stop_cancels_voice_when_no_tree_was_admitted(
 
 @pytest.mark.asyncio
 async def test_reply_stop_without_voice_status_sends_fallback_confirmation(
-    handler,
-    mock_platform,
-    incoming_message_factory,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
 ) -> None:
     mock_platform.cancel_pending_voice.return_value = VoiceCancellationResult(
         scope=_SCOPE,
@@ -374,9 +417,9 @@ async def test_reply_stop_without_voice_status_sends_fallback_confirmation(
 
 @pytest.mark.asyncio
 async def test_reply_stop_resolves_tree_after_joining_voice_handoff(
-    handler,
-    mock_platform,
-    incoming_message_factory,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
 ) -> None:
     events: list[str] = []
 
@@ -438,8 +481,8 @@ async def test_reply_stop_resolves_tree_after_joining_voice_handoff(
 
 @pytest.mark.asyncio
 async def test_reply_stop_port_failure_prevents_tree_transition(
-    handler,
-    mock_platform,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
 ) -> None:
     mock_platform.cancel_pending_voice.side_effect = RuntimeError("voice port failed")
     with (
@@ -458,8 +501,8 @@ async def test_reply_stop_port_failure_prevents_tree_transition(
 
 @pytest.mark.asyncio
 async def test_reply_stop_renders_voice_before_resolve_failure(
-    handler,
-    mock_platform,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
 ) -> None:
     mock_platform.cancel_pending_voice.return_value = VoiceCancellationResult(
         scope=_SCOPE,
@@ -484,8 +527,8 @@ async def test_reply_stop_renders_voice_before_resolve_failure(
 
 @pytest.mark.asyncio
 async def test_cancelled_reply_stop_finishes_after_voice_join_and_lock_wait(
-    handler,
-    mock_platform,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
 ) -> None:
     voice_returned = asyncio.Event()
 
@@ -527,8 +570,8 @@ async def test_cancelled_reply_stop_finishes_after_voice_join_and_lock_wait(
 
 @pytest.mark.asyncio
 async def test_cancelled_reply_stop_preserves_later_operation_failure(
-    handler,
-    mock_platform,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
 ) -> None:
     voice_returned = asyncio.Event()
     failure = RuntimeError("resolve failed after cancellation")
@@ -562,8 +605,11 @@ async def test_cancelled_reply_stop_preserves_later_operation_failure(
 
 @pytest.mark.asyncio
 async def test_stats_command_reports_cli_and_tree_counts(
-    handler, mock_platform, mock_cli_manager, incoming_message_factory
-):
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
     mock_cli_manager.get_stats.return_value = {"active_sessions": 2}
 
     await handler.handle_message(incoming_message_factory(text="/stats"))
@@ -576,8 +622,10 @@ async def test_stats_command_reports_cli_and_tree_counts(
 
 @pytest.mark.asyncio
 async def test_status_echo_is_filtered(
-    handler, mock_platform, incoming_message_factory
-):
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
     await handler.handle_message(incoming_message_factory(text="⏳ Thinking..."))
 
     mock_platform.queue_send_message.assert_not_awaited()
@@ -585,11 +633,11 @@ async def test_status_echo_is_filtered(
 
 @pytest.mark.asyncio
 async def test_new_turn_uses_public_admission_and_persists_exact_snapshot(
-    handler,
-    mock_platform,
-    mock_session_store,
-    incoming_message_factory,
-):
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
     incoming = incoming_message_factory(text="hello", message_id="node_1")
     mock_platform.queue_send_message.return_value = "status_123"
 
@@ -604,11 +652,11 @@ async def test_new_turn_uses_public_admission_and_persists_exact_snapshot(
 
 @pytest.mark.asyncio
 async def test_duplicate_delivery_removes_its_provisional_status(
-    handler,
-    mock_platform,
-    mock_session_store,
-    incoming_message_factory,
-):
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
     incoming = incoming_message_factory(text="hello", message_id="duplicate")
     mock_platform.queue_send_message.side_effect = ["status-first", "status-rejected"]
 
@@ -630,8 +678,10 @@ async def test_duplicate_delivery_removes_its_provisional_status(
 
 @pytest.mark.asyncio
 async def test_pre_sent_status_is_edited_in_place(
-    handler, mock_platform, incoming_message_factory
-):
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
     incoming = incoming_message_factory(
         text="hello",
         message_id="node_1",
@@ -650,11 +700,14 @@ async def test_pre_sent_status_is_edited_in_place(
 
 @pytest.mark.asyncio
 async def test_busy_reply_is_rendered_with_atomic_queue_position(
-    handler, mock_platform, mock_cli_manager, incoming_message_factory
-):
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
     started = asyncio.Event()
 
-    async def blocking_start(*args, **kwargs):
+    async def blocking_start(*args: object, **kwargs: object):
         started.set()
         await asyncio.sleep(60)
         if False:
@@ -689,8 +742,8 @@ async def test_busy_reply_is_rendered_with_atomic_queue_position(
 
 @pytest.mark.asyncio
 async def test_queue_position_callback_consumes_immutable_entries(
-    handler, mock_platform
-):
+    handler: MessagingWorkflow, mock_platform: MagicMock
+) -> None:
     queue = (
         QueueEntry(
             node=NodeUiTarget(
@@ -720,7 +773,9 @@ async def test_queue_position_callback_consumes_immutable_entries(
 
 
 @pytest.mark.asyncio
-async def test_claim_started_callback_renders_processing(handler, mock_platform):
+async def test_claim_started_callback_renders_processing(
+    handler: MessagingWorkflow, mock_platform: MagicMock
+) -> None:
     claim = _claim()
 
     await handler.turn_intake.mark_node_processing(claim)
@@ -734,8 +789,11 @@ async def test_claim_started_callback_renders_processing(handler, mock_platform)
 
 @pytest.mark.asyncio
 async def test_stop_all_applies_immutable_ui_ownership_and_snapshots(
-    handler, mock_cli_manager, mock_platform, mock_session_store
-):
+    handler: MessagingWorkflow,
+    mock_cli_manager: MagicMock,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
+) -> None:
     workflow_owned = CancellationEffect(
         node=NodeUiTarget(
             scope=_SCOPE,
@@ -758,7 +816,7 @@ async def test_stop_all_applies_immutable_ui_ownership_and_snapshots(
         snapshots=(snapshot,),
     )
 
-    async def commit_cancel(*, reason, on_committed):
+    async def commit_cancel(*, reason: object, on_committed: Callable[[], None]):
         on_committed()
         return result
 
@@ -781,9 +839,9 @@ async def test_stop_all_applies_immutable_ui_ownership_and_snapshots(
 
 @pytest.mark.asyncio
 async def test_stop_all_joins_voices_before_tree_transaction_and_deduplicates(
-    handler,
-    mock_cli_manager,
-    mock_platform,
+    handler: MessagingWorkflow,
+    mock_cli_manager: MagicMock,
+    mock_platform: MagicMock,
 ) -> None:
     events: list[str] = []
     voice = VoiceCancellationResult(
@@ -833,9 +891,9 @@ async def test_stop_all_joins_voices_before_tree_transaction_and_deduplicates(
 
 @pytest.mark.asyncio
 async def test_stop_all_voice_join_failure_prevents_false_transition(
-    handler,
-    mock_cli_manager,
-    mock_platform,
+    handler: MessagingWorkflow,
+    mock_cli_manager: MagicMock,
+    mock_platform: MagicMock,
 ) -> None:
     mock_platform.cancel_all_pending_voices.side_effect = RuntimeError(
         "voice handoff cleanup failed"
@@ -855,10 +913,10 @@ async def test_stop_all_voice_join_failure_prevents_false_transition(
 
 @pytest.mark.asyncio
 async def test_stop_all_persists_committed_transition_before_cli_shutdown(
-    handler,
-    mock_cli_manager,
-    mock_session_store,
-):
+    handler: MessagingWorkflow,
+    mock_cli_manager: MagicMock,
+    mock_session_store: AsyncMock,
+) -> None:
     shutdown_started = asyncio.Event()
     release_shutdown = asyncio.Event()
     snapshot = _snapshot()
@@ -868,7 +926,7 @@ async def test_stop_all_persists_committed_transition_before_cli_shutdown(
         shutdown_started.set()
         await release_shutdown.wait()
 
-    async def commit_cancel(*, reason, on_committed):
+    async def commit_cancel(*, reason: object, on_committed: Callable[[], None]):
         on_committed()
         return result
 
@@ -893,11 +951,11 @@ async def test_stop_all_persists_committed_transition_before_cli_shutdown(
 
 @pytest.mark.asyncio
 async def test_terminal_close_waits_past_interactive_drain_timeout(
-    monkeypatch,
-    mock_platform,
-    mock_cli_manager,
-    mock_session_store,
-    incoming_message_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    mock_session_store: AsyncMock,
+    incoming_message_factory: IncomingMessageFactory,
 ) -> None:
     monkeypatch.setattr(
         "free_claude_code.messaging.trees.manager.CANCEL_TASK_DRAIN_TIMEOUT_S",
@@ -957,8 +1015,11 @@ async def test_terminal_close_waits_past_interactive_drain_timeout(
 
 @pytest.mark.asyncio
 async def test_node_runner_success_uses_claim_and_semantic_completion(
-    handler, mock_cli_manager, mock_platform, mock_session_store
-):
+    handler: MessagingWorkflow,
+    mock_cli_manager: MagicMock,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
+) -> None:
     claim = _claim(prompt="say hello")
     session = _session(
         [
@@ -1001,8 +1062,8 @@ async def test_node_runner_success_uses_claim_and_semantic_completion(
 
 @pytest.mark.asyncio
 async def test_node_runner_uses_claim_parent_session_for_fork(
-    handler, mock_cli_manager
-):
+    handler: MessagingWorkflow, mock_cli_manager: MagicMock
+) -> None:
     claim = _claim(parent_session_id="parent_session")
     session = _session([{"type": "exit", "code": 0}])
     mock_cli_manager.get_or_create_session.return_value = (
@@ -1024,8 +1085,10 @@ async def test_node_runner_uses_claim_parent_session_for_fork(
 
 @pytest.mark.asyncio
 async def test_session_info_records_real_session_through_manager(
-    handler, mock_cli_manager, mock_session_store
-):
+    handler: MessagingWorkflow,
+    mock_cli_manager: MagicMock,
+    mock_session_store: AsyncMock,
+) -> None:
     claim = _claim()
     session = _session(
         [
@@ -1063,8 +1126,8 @@ async def test_session_info_records_real_session_through_manager(
 
 @pytest.mark.asyncio
 async def test_session_info_rejects_unregistered_real_session_without_recording_it(
-    handler,
-    mock_cli_manager,
+    handler: MessagingWorkflow,
+    mock_cli_manager: MagicMock,
 ) -> None:
     from free_claude_code.messaging.node_event_pipeline import (
         handle_session_info_event,
@@ -1094,8 +1157,8 @@ async def test_session_info_rejects_unregistered_real_session_without_recording_
 
 @pytest.mark.asyncio
 async def test_session_limit_failure_uses_non_propagating_claim_failure(
-    handler, mock_cli_manager, mock_platform
-):
+    handler: MessagingWorkflow, mock_cli_manager: MagicMock, mock_platform: MagicMock
+) -> None:
     claim = _claim()
     mock_cli_manager.get_or_create_session.side_effect = RuntimeError("session limit")
     result = FailureResult(
@@ -1117,8 +1180,11 @@ async def test_session_limit_failure_uses_non_propagating_claim_failure(
 
 @pytest.mark.asyncio
 async def test_non_exit_error_defers_child_failure_until_stream_ends(
-    handler, mock_cli_manager, mock_platform, mock_session_store
-):
+    handler: MessagingWorkflow,
+    mock_cli_manager: MagicMock,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
+) -> None:
     claim = _claim()
     session = _session([{"type": "error", "error": {"message": "CLI crashed"}}])
     mock_cli_manager.get_or_create_session.return_value = (
@@ -1159,8 +1225,8 @@ async def test_non_exit_error_defers_child_failure_until_stream_ends(
 
 @pytest.mark.asyncio
 async def test_provider_error_exit_does_not_mask_or_complete(
-    handler, mock_cli_manager, mock_platform
-):
+    handler: MessagingWorkflow, mock_cli_manager: MagicMock, mock_platform: MagicMock
+) -> None:
     claim = _claim()
     provider_error = "API Error: Request rejected (429)\nProvider rate limit reached."
     session = _session(
@@ -1206,8 +1272,8 @@ async def test_provider_error_exit_does_not_mask_or_complete(
 
 @pytest.mark.asyncio
 async def test_success_exit_still_renders_complete_after_non_exit_error(
-    handler, mock_cli_manager, mock_platform
-):
+    handler: MessagingWorkflow, mock_cli_manager: MagicMock, mock_platform: MagicMock
+) -> None:
     claim = _claim()
     session = _session(
         [
@@ -1251,11 +1317,11 @@ async def test_success_exit_still_renders_complete_after_non_exit_error(
 
 @pytest.mark.asyncio
 async def test_unexpected_runner_exception_uses_detailed_task_failed_ui(
-    handler, mock_cli_manager, mock_platform
-):
+    handler: MessagingWorkflow, mock_cli_manager: MagicMock, mock_platform: MagicMock
+) -> None:
     claim = _claim()
 
-    async def failing_start(*args, **kwargs):
+    async def failing_start(*args: object, **kwargs: object):
         raise ValueError("runner exploded")
         if False:
             yield {}
@@ -1290,12 +1356,12 @@ async def test_unexpected_runner_exception_uses_detailed_task_failed_ui(
 
 @pytest.mark.asyncio
 async def test_stop_cancellation_preserves_partial_transcript(
-    handler, mock_cli_manager, mock_platform
-):
+    handler: MessagingWorkflow, mock_cli_manager: MagicMock, mock_platform: MagicMock
+) -> None:
     claim = _claim(prompt="work")
     started = asyncio.Event()
 
-    async def start_task(*args, **kwargs):
+    async def start_task(*args: object, **kwargs: object):
         yield {
             "type": "assistant",
             "message": {"content": [{"type": "text", "text": "partial answer"}]},
@@ -1337,9 +1403,13 @@ async def test_stop_cancellation_preserves_partial_transcript(
 
 @pytest.mark.asyncio
 async def test_global_clear_command_deletes_returned_ids(
-    handler, mock_platform, incoming_message_factory
-):
-    handler.clear_chat = AsyncMock(return_value=frozenset({"100", "101"}))
+    monkeypatch: pytest.MonkeyPatch,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
+    mock_clear_chat = AsyncMock(return_value=frozenset({"100", "101"}))
+    monkeypatch.setattr(handler, "clear_chat", mock_clear_chat)
     incoming = incoming_message_factory(
         text="/clear",
         chat_id="chat_1",
@@ -1348,14 +1418,16 @@ async def test_global_clear_command_deletes_returned_ids(
 
     await handler.handle_message(incoming)
 
-    handler.clear_chat.assert_awaited_once_with("telegram", "chat_1")
+    mock_clear_chat.assert_awaited_once_with("telegram", "chat_1")
     mock_platform.queue_delete_messages.assert_awaited_once_with(
         "chat_1",
         ["150", "101", "100"],
         fire_and_forget=False,
     )
     mock_platform.queue_send_message.assert_not_awaited()
-    handler.session_store.record_message_id.assert_not_called()
+    record_message_id = handler.session_store.record_message_id
+    assert isinstance(record_message_id, Mock)
+    record_message_id.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1365,13 +1437,14 @@ async def test_global_clear_command_deletes_returned_ids(
     ids=("failure", "cancellation"),
 )
 async def test_interrupted_global_clear_records_its_deferred_command_id(
-    handler,
-    mock_platform,
-    mock_session_store,
-    incoming_message_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
+    incoming_message_factory: IncomingMessageFactory,
     failure: BaseException,
 ) -> None:
-    handler.clear_chat = AsyncMock(side_effect=failure)
+    monkeypatch.setattr(handler, "clear_chat", AsyncMock(side_effect=failure))
     incoming = incoming_message_factory(
         text="/clear",
         chat_id="chat_1",
@@ -1393,9 +1466,9 @@ async def test_interrupted_global_clear_records_its_deferred_command_id(
 
 @pytest.mark.asyncio
 async def test_startup_notice_is_published_and_recorded_for_clear(
-    handler,
-    mock_platform,
-    mock_session_store,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
 ) -> None:
     mock_platform.queue_send_message.return_value = "startup_1"
 
@@ -1419,9 +1492,9 @@ async def test_startup_notice_is_published_and_recorded_for_clear(
 
 @pytest.mark.asyncio
 async def test_startup_notice_failure_is_nonfatal_and_records_nothing(
-    handler,
-    mock_platform,
-    mock_session_store,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
 ) -> None:
     mock_platform.queue_send_message.side_effect = RuntimeError("unavailable")
 
@@ -1433,9 +1506,9 @@ async def test_startup_notice_failure_is_nonfatal_and_records_nothing(
 
 @pytest.mark.asyncio
 async def test_startup_notice_without_delivery_receipt_records_nothing(
-    handler,
-    mock_platform,
-    mock_session_store,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
 ) -> None:
     mock_platform.queue_send_message.return_value = None
 
@@ -1447,14 +1520,14 @@ async def test_startup_notice_without_delivery_receipt_records_nothing(
 
 @pytest.mark.asyncio
 async def test_startup_notice_record_failure_is_compensated_outside_state_lock(
-    handler,
-    mock_platform,
-    mock_session_store,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
 ) -> None:
     mock_platform.queue_send_message.return_value = "startup_1"
     mock_session_store.record_message_id.side_effect = OSError("store unavailable")
 
-    async def delete_notice(*args, **kwargs) -> None:
+    async def delete_notice(*args: object, **kwargs: object) -> None:
         assert not handler._state_lock.locked()
 
     mock_platform.queue_delete_messages.side_effect = delete_notice
@@ -1482,9 +1555,9 @@ async def test_startup_notice_record_failure_is_compensated_outside_state_lock(
 
 @pytest.mark.asyncio
 async def test_failed_startup_notice_compensation_restores_clear_ownership(
-    handler,
-    mock_platform,
-    mock_session_store,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
 ) -> None:
     mock_platform.queue_send_message.return_value = "startup_1"
     mock_session_store.record_message_id.side_effect = (
@@ -1517,14 +1590,14 @@ async def test_failed_startup_notice_compensation_restores_clear_ownership(
 
 @pytest.mark.asyncio
 async def test_startup_notice_publication_propagates_cancellation(
-    handler,
-    mock_platform,
-    mock_session_store,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
 ) -> None:
     send_started = asyncio.Event()
     send_cancelled = asyncio.Event()
 
-    async def send_notice(*args, **kwargs) -> None:
+    async def send_notice(*args: object, **kwargs: object) -> None:
         send_started.set()
         try:
             await asyncio.Event().wait()
@@ -1546,24 +1619,29 @@ async def test_startup_notice_publication_propagates_cancellation(
 
 @pytest.mark.asyncio
 async def test_startup_notice_cancellation_after_receipt_finishes_compensation(
-    handler,
-    mock_platform,
-    mock_session_store,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
 ) -> None:
     send_started = asyncio.Event()
     release_send = asyncio.Event()
     finalizer_started = asyncio.Event()
 
-    async def send_notice(*args, **kwargs) -> str:
+    async def send_notice(*args: object, **kwargs: object) -> str:
         send_started.set()
         await release_send.wait()
         return "startup_1"
 
     original_finalize = handler._finalize_startup_notice
 
-    async def finalize_notice(*args, **kwargs) -> None:
+    async def finalize_notice(
+        notice: MessagingStartupNotice,
+        message_id: str,
+        clear_generation: int,
+        publisher_task: asyncio.Task[object] | None,
+    ) -> None:
         finalizer_started.set()
-        await original_finalize(*args, **kwargs)
+        await original_finalize(notice, message_id, clear_generation, publisher_task)
 
     mock_platform.queue_send_message.side_effect = send_notice
     with patch.object(
@@ -1599,10 +1677,10 @@ async def test_startup_notice_cancellation_after_receipt_finishes_compensation(
 
 @pytest.mark.asyncio
 async def test_concurrent_global_clear_does_not_wait_for_startup_delivery(
-    messaging_store_factory,
-    mock_platform,
-    mock_cli_manager,
-    tmp_path,
+    messaging_store_factory: MessagingStoreFactory,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    tmp_path: Path,
 ) -> None:
     store = await messaging_store_factory(storage_path=str(tmp_path / "sessions.json"))
     workflow = MessagingWorkflow(
@@ -1615,7 +1693,7 @@ async def test_concurrent_global_clear_does_not_wait_for_startup_delivery(
     send_started = asyncio.Event()
     release_send = asyncio.Event()
 
-    async def send_notice(*args, **kwargs) -> str:
+    async def send_notice(*args: object, **kwargs: object) -> str:
         send_started.set()
         await release_send.wait()
         return "startup_1"
@@ -1648,14 +1726,14 @@ async def test_concurrent_global_clear_does_not_wait_for_startup_delivery(
 
 @pytest.mark.asyncio
 async def test_global_stop_does_not_wait_for_or_invalidate_startup_delivery(
-    handler,
-    mock_platform,
-    mock_session_store,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
 ) -> None:
     send_started = asyncio.Event()
     release_send = asyncio.Event()
 
-    async def send_notice(*args, **kwargs) -> str:
+    async def send_notice(*args: object, **kwargs: object) -> str:
         send_started.set()
         await release_send.wait()
         return "startup_1"
@@ -1686,10 +1764,10 @@ async def test_global_stop_does_not_wait_for_or_invalidate_startup_delivery(
 
 @pytest.mark.asyncio
 async def test_global_clear_precedes_concurrent_startup_notice_publication(
-    messaging_store_factory,
-    mock_platform,
-    mock_cli_manager,
-    tmp_path,
+    messaging_store_factory: MessagingStoreFactory,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    tmp_path: Path,
 ) -> None:
     store = await messaging_store_factory(storage_path=str(tmp_path / "sessions.json"))
     workflow = MessagingWorkflow(
@@ -1738,11 +1816,11 @@ async def test_global_clear_precedes_concurrent_startup_notice_publication(
 
 @pytest.mark.asyncio
 async def test_clear_command_cannot_evict_startup_notice_at_managed_message_cap(
-    messaging_store_factory,
-    mock_platform,
-    mock_cli_manager,
-    incoming_message_factory,
-    tmp_path,
+    messaging_store_factory: MessagingStoreFactory,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
+    tmp_path: Path,
 ) -> None:
     store = await messaging_store_factory(
         storage_path=str(tmp_path / "sessions.json"),
@@ -1781,8 +1859,11 @@ async def test_clear_command_cannot_evict_startup_notice_at_managed_message_cap(
 
 @pytest.mark.asyncio
 async def test_clear_chat_is_fully_scoped_to_the_invoking_chat(
-    handler, mock_cli_manager, mock_session_store, incoming_message_factory
-):
+    handler: MessagingWorkflow,
+    mock_cli_manager: MagicMock,
+    mock_session_store: AsyncMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
     root_1 = incoming_message_factory(
         text="one",
         chat_id="chat_1",
@@ -1811,9 +1892,9 @@ async def test_clear_chat_is_fully_scoped_to_the_invoking_chat(
 
 @pytest.mark.asyncio
 async def test_global_clear_cancels_and_deletes_only_current_chat_voices(
-    handler,
-    mock_platform,
-    mock_session_store,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
 ) -> None:
     events: list[str] = []
     current = VoiceCancellationResult(
@@ -1855,7 +1936,9 @@ async def test_global_clear_cancels_and_deletes_only_current_chat_voices(
 
 
 @pytest.mark.asyncio
-async def test_global_clear_reports_transaction_failure(handler, mock_session_store):
+async def test_global_clear_reports_transaction_failure(
+    handler: MessagingWorkflow, mock_session_store: AsyncMock
+) -> None:
     mock_session_store.commit_trees.side_effect = OSError("write failed")
     with pytest.raises(OSError, match="write failed"):
         await handler.clear_chat("telegram", "chat_1")
@@ -1863,11 +1946,11 @@ async def test_global_clear_reports_transaction_failure(handler, mock_session_st
 
 @pytest.mark.asyncio
 async def test_cancelled_global_clear_finishes_owned_transaction_before_propagating(
-    handler,
-    mock_cli_manager,
-    mock_session_store,
-    incoming_message_factory,
-):
+    handler: MessagingWorkflow,
+    mock_cli_manager: MagicMock,
+    mock_session_store: AsyncMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
     root = incoming_message_factory(text="work", message_id="100")
     await handler.tree_queue.admit(root, "101")
     await _wait_for_idle(handler)
@@ -1901,9 +1984,13 @@ async def test_cancelled_global_clear_finishes_owned_transaction_before_propagat
 
 @pytest.mark.asyncio
 async def test_clear_with_mention_uses_same_global_command(
-    handler, mock_platform, incoming_message_factory
-):
-    handler.clear_chat = AsyncMock(return_value=frozenset())
+    monkeypatch: pytest.MonkeyPatch,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
+    mock_clear_chat_next = AsyncMock(return_value=frozenset())
+    monkeypatch.setattr(handler, "clear_chat", mock_clear_chat_next)
     incoming = incoming_message_factory(
         text="/clear@MyBot",
         chat_id="chat_1",
@@ -1912,7 +1999,7 @@ async def test_clear_with_mention_uses_same_global_command(
 
     await handler.handle_message(incoming)
 
-    handler.clear_chat.assert_awaited_once_with("telegram", "chat_1")
+    mock_clear_chat_next.assert_awaited_once_with("telegram", "chat_1")
     mock_platform.queue_delete_messages.assert_awaited_once_with(
         "chat_1",
         ["10"],
@@ -1922,9 +2009,13 @@ async def test_clear_with_mention_uses_same_global_command(
 
 @pytest.mark.asyncio
 async def test_clear_continues_after_platform_delete_failure(
-    handler, mock_platform, incoming_message_factory
-):
-    handler.clear_chat = AsyncMock(return_value=frozenset({"41", "42"}))
+    monkeypatch: pytest.MonkeyPatch,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
+    mock_clear_chat_next_next = AsyncMock(return_value=frozenset({"41", "42"}))
+    monkeypatch.setattr(handler, "clear_chat", mock_clear_chat_next_next)
     mock_platform.queue_delete_messages.side_effect = RuntimeError(
         "platform rejected delete"
     )
@@ -1933,17 +2024,17 @@ async def test_clear_continues_after_platform_delete_failure(
         incoming_message_factory(text="/clear", message_id="150")
     )
 
-    handler.clear_chat.assert_awaited_once()
+    mock_clear_chat_next_next.assert_awaited_once()
     mock_platform.queue_delete_messages.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_reply_clear_status_preserves_prompt_and_persists_remaining_tree(
-    handler,
-    mock_platform,
-    mock_session_store,
-    incoming_message_factory,
-):
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
     root = incoming_message_factory(text="root", message_id="100")
     child = incoming_message_factory(
         text="child",
@@ -1957,7 +2048,9 @@ async def test_reply_clear_status_preserves_prompt_and_persists_remaining_tree(
     mock_session_store.reset_mock()
     deleted_ids: list[str] = []
 
-    async def capture_delete(chat_id, message_ids, fire_and_forget=True):
+    async def capture_delete(
+        chat_id: object, message_ids: list[str], fire_and_forget: object = True
+    ):
         deleted_ids.extend(message_ids)
 
     mock_platform.queue_delete_messages.side_effect = capture_delete
@@ -1994,8 +2087,11 @@ async def test_reply_clear_status_preserves_prompt_and_persists_remaining_tree(
 
 @pytest.mark.asyncio
 async def test_reply_clear_unknown_reports_nothing_to_clear(
-    handler, mock_platform, mock_session_store, incoming_message_factory
-):
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
     incoming = incoming_message_factory(
         text="/clear",
         message_id="150",
@@ -2016,18 +2112,20 @@ async def test_reply_clear_unknown_reports_nothing_to_clear(
 
 @pytest.mark.asyncio
 async def test_reply_clear_root_removes_tree_snapshot(
-    handler,
-    mock_platform,
-    mock_session_store,
-    incoming_message_factory,
-):
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_session_store: AsyncMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
     root = incoming_message_factory(text="root", message_id="100")
     await handler.tree_queue.admit(root, "101")
     await _wait_for_idle(handler)
     mock_session_store.reset_mock()
     deleted_ids: list[str] = []
 
-    async def capture_delete(chat_id, message_ids, fire_and_forget=True):
+    async def capture_delete(
+        chat_id: object, message_ids: list[str], fire_and_forget: object = True
+    ):
         deleted_ids.extend(message_ids)
 
     mock_platform.queue_delete_messages.side_effect = capture_delete
@@ -2045,15 +2143,15 @@ async def test_reply_clear_root_removes_tree_snapshot(
 
 @pytest.mark.asyncio
 async def test_late_cancelled_runner_cannot_save_or_render_after_chat_clear(
-    handler,
-    mock_platform,
-    mock_cli_manager,
-    mock_session_store,
-    incoming_message_factory,
-):
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    mock_session_store: AsyncMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
     started = asyncio.Event()
 
-    async def blocking_start(*args, **kwargs):
+    async def blocking_start(*args: object, **kwargs: object):
         started.set()
         await asyncio.sleep(60)
         if False:
@@ -2081,18 +2179,18 @@ async def test_late_cancelled_runner_cannot_save_or_render_after_chat_clear(
 
 @pytest.mark.asyncio
 async def test_global_clear_removes_snapshot_saved_during_detach_window(
-    messaging_store_factory,
-    tmp_path,
-    mock_platform,
-    mock_cli_manager,
-    incoming_message_factory,
-):
+    messaging_store_factory: MessagingStoreFactory,
+    tmp_path: Path,
+    mock_platform: MagicMock,
+    mock_cli_manager: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
     runner_started = asyncio.Event()
     release_runner = asyncio.Event()
     id_read_started = asyncio.Event()
     release_id_read = asyncio.Event()
 
-    async def finish_after_release(*args, **kwargs):
+    async def finish_after_release(*args: object, **kwargs: object):
         runner_started.set()
         await release_runner.wait()
         yield {"type": "exit", "code": 0}
@@ -2160,14 +2258,14 @@ async def test_global_clear_removes_snapshot_saved_during_detach_window(
 
 @pytest.mark.asyncio
 async def test_global_clear_invalidates_inflight_prompt_without_waiting_for_status(
-    handler,
-    mock_platform,
-    incoming_message_factory,
-):
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
+) -> None:
     status_send_started = asyncio.Event()
     release_status_send = asyncio.Event()
 
-    async def block_status_send(*args, **kwargs):
+    async def block_status_send(*args: object, **kwargs: object):
         status_send_started.set()
         await release_status_send.wait()
         return "status-new"
@@ -2208,24 +2306,28 @@ async def test_global_clear_invalidates_inflight_prompt_without_waiting_for_stat
     ],
 )
 async def test_reply_clear_pending_voice_cancels_and_reports(
-    handler,
-    mock_platform,
-    incoming_message_factory,
-    status_message_id,
-    expected_deleted_ids,
+    monkeypatch: pytest.MonkeyPatch,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
+    status_message_id: str | None,
+    expected_deleted_ids: set[str],
 ) -> None:
     delete_message_ids = {"100"}
     if status_message_id is not None:
         delete_message_ids.add(status_message_id)
-    handler.clear_reply = AsyncMock(
+    mock_clear_reply = AsyncMock(
         return_value=ReplyClearResult(
             delete_message_ids=frozenset(delete_message_ids),
             tree_matched=False,
         )
     )
+    monkeypatch.setattr(handler, "clear_reply", mock_clear_reply)
     deleted_ids: list[str] = []
 
-    async def capture_delete(chat_id, message_ids, fire_and_forget=True):
+    async def capture_delete(
+        chat_id: object, message_ids: list[str], fire_and_forget: object = True
+    ):
         deleted_ids.extend(message_ids)
 
     mock_platform.queue_delete_messages.side_effect = capture_delete
@@ -2237,26 +2339,30 @@ async def test_reply_clear_pending_voice_cancels_and_reports(
 
     await handler.handle_message(incoming)
 
-    handler.clear_reply.assert_awaited_once_with(incoming.scope, "100")
+    mock_clear_reply.assert_awaited_once_with(incoming.scope, "100")
     assert set(deleted_ids) == expected_deleted_ids
     mock_platform.queue_send_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_reply_clear_deletes_owned_result_ids(
-    handler,
-    mock_platform,
-    incoming_message_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
+    incoming_message_factory: IncomingMessageFactory,
 ) -> None:
-    handler.clear_reply = AsyncMock(
+    mock_clear_reply_next = AsyncMock(
         return_value=ReplyClearResult(
             delete_message_ids=frozenset({"tree_status"}),
             tree_matched=True,
         )
     )
+    monkeypatch.setattr(handler, "clear_reply", mock_clear_reply_next)
     deleted_ids: list[str] = []
 
-    async def capture_delete(_chat_id, message_ids, fire_and_forget=True):
+    async def capture_delete(
+        _chat_id, message_ids: list[str], fire_and_forget: object = True
+    ):
         deleted_ids.extend(message_ids)
 
     mock_platform.queue_delete_messages.side_effect = capture_delete
@@ -2268,7 +2374,7 @@ async def test_reply_clear_deletes_owned_result_ids(
 
     await handler.handle_message(incoming)
 
-    handler.clear_reply.assert_awaited_once_with(incoming.scope, "voice")
+    mock_clear_reply_next.assert_awaited_once_with(incoming.scope, "voice")
     assert set(deleted_ids) == {
         "tree_status",
         "clear",
@@ -2279,8 +2385,8 @@ async def test_reply_clear_deletes_owned_result_ids(
 
 @pytest.mark.asyncio
 async def test_reply_clear_joins_voice_then_unions_authoritative_branch_ids(
-    handler,
-    mock_platform,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
 ) -> None:
     events: list[str] = []
 
@@ -2324,8 +2430,8 @@ async def test_reply_clear_joins_voice_then_unions_authoritative_branch_ids(
 
 @pytest.mark.asyncio
 async def test_cancelled_reply_clear_finishes_voice_only_owner_after_lock_wait(
-    handler,
-    mock_platform,
+    handler: MessagingWorkflow,
+    mock_platform: MagicMock,
 ) -> None:
     voice_returned = asyncio.Event()
 

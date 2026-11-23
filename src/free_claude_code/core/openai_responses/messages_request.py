@@ -78,7 +78,7 @@ def _string(value: JsonValue, context: str, *, empty: bool = False) -> str:
 
 
 def _items(value: JsonValue) -> list[JsonValue]:
-    if isinstance(value, str | Mapping):
+    if isinstance(value, (str, Mapping)):
         return [value]
     if isinstance(value, list):
         return value

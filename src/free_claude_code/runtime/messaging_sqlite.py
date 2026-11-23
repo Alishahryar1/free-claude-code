@@ -11,8 +11,9 @@ from free_claude_code.messaging.trees import (
     TreeSnapshot,
     normalize_tree_snapshot,
 )
+from free_claude_code.runtime.sqlite_database import query_rows
 
-from .sqlite_database import SQLiteDatabase
+from .sqlite_database import SQLiteDatabase, required_column
 
 _FIELDS = (
     "node_id",
@@ -32,9 +33,10 @@ def write_tree(connection: sqlite3.Connection, snapshot: TreeSnapshot) -> None:
     connection.execute(
         "INSERT INTO messaging_trees VALUES (?,?,?) ON CONFLICT DO NOTHING", identity
     )
-    previous = {
-        row["node_id"]: dict(row)
-        for row in connection.execute(
+    previous: dict[str, dict[str, object]] = {
+        required_column(row, "node_id", str): dict(row)
+        for row in query_rows(
+            connection,
             "SELECT * FROM messaging_nodes WHERE platform=? AND chat_id=? AND root_id=?",
             identity,
         )
@@ -70,15 +72,20 @@ class SQLiteMessagingStore:
     async def load_conversation_snapshot(self) -> ConversationSnapshot:
         def load(connection: sqlite3.Connection) -> ConversationSnapshot:
             trees: dict[TreeIdentity, TreeSnapshot] = {}
-            for row in connection.execute(
-                "SELECT * FROM messaging_nodes ORDER BY rowid"
+            for row in query_rows(
+                connection, "SELECT * FROM messaging_nodes ORDER BY rowid"
             ):
-                scope = MessageScope(platform=row["platform"], chat_id=row["chat_id"])
-                identity = TreeIdentity(scope=scope, root_id=row["root_id"])
+                scope = MessageScope(
+                    platform=required_column(row, "platform", str),
+                    chat_id=required_column(row, "chat_id", str),
+                )
+                identity = TreeIdentity(
+                    scope=scope, root_id=required_column(row, "root_id", str)
+                )
                 snapshot = trees.setdefault(
                     identity, TreeSnapshot(scope, identity.root_id, {})
                 )
-                snapshot.nodes[row["node_id"]] = {
+                snapshot.nodes[required_column(row, "node_id", str)] = {
                     field: row[field] for field in _FIELDS
                 }
             return ConversationSnapshot(trees)
@@ -130,10 +137,15 @@ class SQLiteMessagingStore:
 
     async def trim(self) -> None:
         def trim(connection: sqlite3.Connection) -> None:
-            for row in connection.execute(
-                "SELECT DISTINCT platform,chat_id FROM messaging_managed_messages"
+            for row in query_rows(
+                connection,
+                "SELECT DISTINCT platform,chat_id FROM messaging_managed_messages",
             ).fetchall():
-                self._trim(connection, row[0], row[1])
+                self._trim(
+                    connection,
+                    required_column(row, 0, str),
+                    required_column(row, 1, str),
+                )
 
         await self.database.run(trim)
 
@@ -145,9 +157,9 @@ class SQLiteMessagingStore:
                 "INSERT INTO messaging_managed_messages(platform,chat_id,message_id,ts,direction,kind) "
                 "VALUES (?,?,?,?,?,?) ON CONFLICT(platform,chat_id,message_id) DO NOTHING",
                 (
-                    str(platform),
-                    str(chat_id),
-                    str(message_id),
+                    platform,
+                    chat_id,
+                    message_id,
                     datetime.now(UTC).isoformat(),
                     direction,
                     kind,
@@ -162,8 +174,9 @@ class SQLiteMessagingStore:
     ) -> list[str]:
         return await self.database.run(
             lambda connection: [
-                row[0]
-                for row in connection.execute(
+                required_column(row, 0, str)
+                for row in query_rows(
+                    connection,
                     "SELECT message_id FROM messaging_managed_messages WHERE platform=? AND chat_id=? ORDER BY sequence",
                     (platform, chat_id),
                 )

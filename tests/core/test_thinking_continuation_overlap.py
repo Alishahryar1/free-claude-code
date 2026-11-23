@@ -14,11 +14,20 @@ from free_claude_code.core.history_replay import (
     ReplayOrigin,
     encode_replay,
 )
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 @pytest.mark.parametrize("wire", ["messages", "gemini", "responses"])
 @pytest.mark.parametrize("parts", [["Plan", " then act"], ["Pl", "an then act"]])
-def test_thinking_overlap_retains_only_new_characters(wire, parts):
+def test_thinking_overlap_retains_only_new_characters(
+    wire: str, parts: list[str]
+) -> None:
     source: list[dict[str, Any]]
     overlap = ContinuationOverlap("Plan", channel="thinking")
     if wire == "messages":
@@ -75,22 +84,40 @@ def test_thinking_overlap_retains_only_new_characters(wire, parts):
     before = deepcopy(source)
     events = [out for event in source for out in overlap.feed(event)]
     if wire == "messages":
-        text = "".join(event.get("delta", {}).get("thinking", "") for event in events)
+        text = "".join(
+            string_payload(object_payload(event.get("delta", {})).get("thinking", ""))
+            for event in events
+        )
     elif wire == "gemini":
         text = "".join(
-            part.get("text", "")
+            string_payload(object_payload(part).get("text", ""))
             for event in events
-            for candidate in event["candidates"]
-            for part in candidate.get("content", {}).get("parts", [])
+            for candidate in array_payload(event["candidates"])
+            for part in array_payload(
+                object_payload(object_payload(candidate).get("content", {})).get(
+                    "parts", []
+                )
+            )
         )
     else:
-        text = "".join(event.get("delta", "") for event in events)
-        assert events[-1]["response"]["output"][0]["content"][0]["text"] == " then act"
+        text = "".join(string_payload(event.get("delta", "")) for event in events)
+        assert (
+            object_payload(
+                array_payload(
+                    object_payload(
+                        array_payload(object_payload(events[-1]["response"])["output"])[
+                            0
+                        ]
+                    )["content"]
+                )[0]
+            )["text"]
+            == " then act"
+        )
     assert text == " then act"
     assert source == before
 
 
-def test_thinking_overlap_preserves_independent_equal_parts():
+def test_thinking_overlap_preserves_independent_equal_parts() -> None:
     overlap = ContinuationOverlap("Plan", channel="thinking")
     full = {
         "type": "response.reasoning_text.delta",
@@ -111,7 +138,7 @@ def test_thinking_overlap_preserves_independent_equal_parts():
     assert result[0]["delta"] == "Plan more"
 
 
-def test_summary_replay_can_be_followed_by_independent_full_text_in_same_item():
+def test_summary_replay_can_be_followed_by_independent_full_text_in_same_item() -> None:
     overlap = ContinuationOverlap("Plan", channel="thinking")
     assert (
         overlap.feed(
@@ -146,12 +173,16 @@ def test_summary_replay_can_be_followed_by_independent_full_text_in_same_item():
             ]
         },
     }
-    output = overlap.feed(terminal)[0]["response"]["output"][0]
-    assert output["content"] == [{"type": "reasoning_text", "text": "Details"}]
-    assert output["summary"] == [{"type": "summary_text", "text": ""}]
+    output = array_payload(
+        object_payload(overlap.feed(terminal)[0]["response"])["output"]
+    )[0]
+    assert object_payload(output)["content"] == [
+        {"type": "reasoning_text", "text": "Details"}
+    ]
+    assert object_payload(output)["summary"] == [{"type": "summary_text", "text": ""}]
 
 
-def reasoning_part(field, index, text, *, done=False):
+def reasoning_part(field: str, index: int, text: str, *, done: bool = False):
     return {
         "type": f"response.reasoning{'_summary' if field == 'summary' else ''}_text.{'done' if done else 'delta'}",
         "item_id": "rs",
@@ -165,8 +196,8 @@ def reasoning_part(field, index, text, *, done=False):
 @pytest.mark.parametrize("new_summary_first", [False, True])
 @pytest.mark.parametrize("terminal", ["response.completed", "response.incomplete"])
 def test_replayed_thinking_accepts_later_parts_in_either_array(
-    summary_first, new_summary_first, terminal
-):
+    summary_first: bool, new_summary_first: bool, terminal: str
+) -> None:
     overlap = ContinuationOverlap("PlanAct", channel="thinking")
     prefix = [("content", "Plan"), ("summary", "Act")]
     if summary_first:
@@ -182,7 +213,7 @@ def test_replayed_thinking_accepts_later_parts_in_either_array(
         assert overlap.feed(delta) == [delta]
         done = reasoning_part(field, 1, text, done=True)
         assert overlap.feed(done) == [done]
-    item: dict[str, Any] = {
+    item: JsonObject = {
         "type": "reasoning",
         "id": "rs",
         "content": [
@@ -195,27 +226,29 @@ def test_replayed_thinking_accepts_later_parts_in_either_array(
         ],
     }
     expected = deepcopy(item)
-    expected["content"][0]["text"] = ""
-    expected["summary"][0]["text"] = ""
+    object_array(expected["content"])[0]["text"] = ""
+    object_array(expected["summary"])[0]["text"] = ""
     assert (
         overlap.feed(
             {"type": "response.output_item.done", "output_index": 0, "item": item}
         )[0]["item"]
         == expected
     )
-    assert overlap.feed({"type": terminal, "response": {"output": [item]}})[0][
-        "response"
-    ]["output"] == [expected]
+    assert object_payload(
+        overlap.feed({"type": terminal, "response": {"output": [item]}})[0]["response"]
+    )["output"] == [expected]
 
 
 @pytest.mark.parametrize("field", ["content", "summary"])
 @pytest.mark.parametrize("change", ["changed", "missing", "inserted", "earlier-item"])
-def test_interleaved_thinking_still_rejects_rewritten_prefix(field, change):
+def test_interleaved_thinking_still_rejects_rewritten_prefix(
+    field: str, change: str
+) -> None:
     overlap = ContinuationOverlap("PlanAct", channel="thinking")
     for source, text in [("content", "Plan"), ("summary", "Act")]:
         overlap.feed(reasoning_part(source, 0, text))
         overlap.feed(reasoning_part(source, 0, text, done=True))
-    item: dict[str, Any] = {
+    item: JsonObject = {
         "type": "reasoning",
         "id": "rs",
         "content": [{"type": "reasoning_text", "text": "Plan"}],
@@ -223,11 +256,12 @@ def test_interleaved_thinking_still_rejects_rewritten_prefix(field, change):
     }
     output = [item]
     if change == "changed":
-        item[field][0]["text"] = "Rewritten"
+        object_array(item[field])[0]["text"] = "Rewritten"
     elif change == "missing":
         item[field] = []
     elif change == "inserted":
-        item[field].insert(0, {"type": item[field][0]["type"], "text": "Earlier"})
+        parts = object_array(item[field])
+        parts.insert(0, {"type": parts[0]["type"], "text": "Earlier"})
     else:
         output.insert(0, {**deepcopy(item), "id": "earlier"})
     with pytest.raises(ExecutionFailure, match="already observed output prefix"):
@@ -236,7 +270,9 @@ def test_interleaved_thinking_still_rejects_rewritten_prefix(field, change):
 
 @pytest.mark.parametrize("field", ["content", "summary"])
 @pytest.mark.parametrize("snapshot", [False, True])
-def test_new_thinking_part_cannot_precede_a_later_matched_item(field, snapshot):
+def test_new_thinking_part_cannot_precede_a_later_matched_item(
+    field: str, snapshot: bool
+) -> None:
     overlap = ContinuationOverlap("PlanAct", channel="thinking")
     for index, text in enumerate(("Plan", "Act")):
         identity = {"item_id": f"rs_{index}", "output_index": index}
@@ -246,13 +282,13 @@ def test_new_thinking_part_cannot_precede_a_later_matched_item(field, snapshot):
         "type": "summary_text" if field == "summary" else "reasoning_text",
         "text": "Earlier",
     }
-    first: dict[str, Any] = {
+    first: JsonObject = {
         "type": "reasoning",
         "id": "rs_0",
         "content": [{"type": "reasoning_text", "text": "Plan"}],
         "summary": [],
     }
-    first[field].append(extra)
+    array_payload(first[field]).append(extra)
     terminal = {
         "type": "response.completed",
         "response": {
@@ -275,7 +311,9 @@ def test_new_thinking_part_cannot_precede_a_later_matched_item(field, snapshot):
 
 
 @pytest.mark.parametrize("summary", [False, True])
-def test_completed_scalar_alias_can_be_repeated_as_its_native_summary(summary):
+def test_completed_scalar_alias_can_be_repeated_as_its_native_summary(
+    summary: bool,
+) -> None:
     delivered = DeliveredResponse("responses")
     carrier = encode_replay(
         AssociatedReplayRecord(

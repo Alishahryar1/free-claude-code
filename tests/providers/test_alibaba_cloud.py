@@ -1,6 +1,7 @@
 """Alibaba Cloud discovery and configuration contracts."""
 
 import json
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 
 import httpx2
@@ -10,16 +11,18 @@ from openai import AsyncOpenAI
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.model_listing import ModelListResponseError
 from free_claude_code.providers.runtime import build_provider_config
 from tests.providers.support import immediate_admission
+from tests.wire_payload import decode_object, object_array, object_payload
 
 BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 
 
-def model(model_id="qwen-coder", **metadata):
+def model(model_id: str = "qwen-coder", **metadata: JsonValue) -> JsonObject:
     return {
         "model": model_id,
         "features": ["function-calling"],
@@ -30,7 +33,9 @@ def model(model_id="qwen-coder", **metadata):
     }
 
 
-def page(models, *, number=1, total=None):
+def page(
+    models: list[JsonObject], *, number: int = 1, total: bool | int | str | None = None
+):
     return {
         "success": True,
         "output": {
@@ -43,7 +48,9 @@ def page(models, *, number=1, total=None):
 
 
 @asynccontextmanager
-async def provider_for(handler, base_url=BASE_URL):
+async def provider_for(
+    handler: Callable[[httpx2.Request], httpx2.Response], base_url: str = BASE_URL
+):
     from free_claude_code.providers.alibaba_cloud import AlibabaCloudProvider
 
     settings = Settings(
@@ -67,7 +74,7 @@ async def provider_for(handler, base_url=BASE_URL):
             await provider.cleanup()
 
 
-def test_configuration_defaults_and_region_override():
+def test_configuration_defaults_and_region_override() -> None:
     descriptor = PROVIDER_CATALOG["alibaba_cloud"]
     settings = Settings(ALIBABA_CLOUD_API_KEY=" key ")
     config = build_provider_config(descriptor, settings)
@@ -91,10 +98,12 @@ def test_configuration_defaults_and_region_override():
     "endpoint",
     [BASE_URL, "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/"],
 )
-async def test_discovery_fetches_all_pages_with_same_region_and_auth(endpoint):
+async def test_discovery_fetches_all_pages_with_same_region_and_auth(
+    endpoint: str,
+) -> None:
     requests = []
 
-    def handler(request):
+    def handler(request: httpx2.Request):
         requests.append(request)
         number = int(request.url.params["page_no"])
         return httpx2.Response(
@@ -122,7 +131,7 @@ async def test_discovery_fetches_all_pages_with_same_region_and_auth(endpoint):
 
 
 @pytest.mark.asyncio
-async def test_discovery_filters_transport_after_counting_every_page():
+async def test_discovery_filters_transport_after_counting_every_page() -> None:
     requests = []
     pages = [
         [
@@ -139,7 +148,7 @@ async def test_discovery_filters_transport_after_counting_every_page():
         ],
     ]
 
-    def handler(request):
+    def handler(request: httpx2.Request):
         number = int(request.url.params["page_no"])
         requests.append(number)
         return httpx2.Response(
@@ -156,10 +165,14 @@ async def test_discovery_filters_transport_after_counting_every_page():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("capabilities", [None, [], ["New-API"], "TG", [1]])
 async def test_discovery_does_not_assume_unknown_capabilities_support_chat(
-    capabilities,
-):
+    capabilities: JsonValue,
+) -> None:
     payload = page([model(), model("unknown", capabilities=capabilities)])
-    async with provider_for(lambda _: httpx2.Response(200, json=payload)) as provider:
+
+    def callback(_: object):
+        return httpx2.Response(200, json=payload)
+
+    async with provider_for(callback) as provider:
         infos = await provider.list_model_infos()
     assert {info.model_id for info in infos} == {"qwen-coder"}
 
@@ -168,8 +181,8 @@ async def test_discovery_does_not_assume_unknown_capabilities_support_chat(
 @pytest.mark.parametrize("same_page", [False, True])
 @pytest.mark.parametrize("capabilities", [["TG"], ["Realtime-Omni"]])
 async def test_discovery_rejects_duplicate_ids_before_publishing_catalog(
-    same_page, capabilities
-):
+    same_page: bool, capabilities: list[str]
+) -> None:
     requests = []
     repeated = model("repeated", capabilities=capabilities)
     pages = (
@@ -178,7 +191,7 @@ async def test_discovery_rejects_duplicate_ids_before_publishing_catalog(
         else [[model("chat"), repeated], [repeated]]
     )
 
-    def handler(request):
+    def handler(request: httpx2.Request):
         number = int(request.url.params["page_no"])
         requests.append(number)
         return httpx2.Response(
@@ -192,11 +205,17 @@ async def test_discovery_rejects_duplicate_ids_before_publishing_catalog(
 
 
 @pytest.mark.asyncio
-async def test_discovery_filters_non_tool_models_without_guessing_missing_limits():
+async def test_discovery_filters_non_tool_models_without_guessing_missing_limits() -> (
+    None
+):
     payload = page(
         [model(), model("embedding", features=[]), model("unknown", model_info=None)]
     )
-    async with provider_for(lambda _: httpx2.Response(200, json=payload)) as provider:
+
+    def callback(_: object):
+        return httpx2.Response(200, json=payload)
+
+    async with provider_for(callback) as provider:
         infos = {info.model_id: info for info in await provider.list_model_infos()}
     assert set(infos) == {"qwen-coder", "unknown"}
     assert infos["unknown"].context_window_tokens is None
@@ -218,15 +237,20 @@ async def test_discovery_filters_non_tool_models_without_guessing_missing_limits
         page([{"features": ["function-calling"]}]),
     ],
 )
-async def test_discovery_rejects_malformed_or_empty_catalog(payload):
-    async with provider_for(lambda _: httpx2.Response(200, json=payload)) as provider:
+async def test_discovery_rejects_malformed_or_empty_catalog(
+    payload: JsonObject,
+) -> None:
+    def callback(_: object):
+        return httpx2.Response(200, json=payload)
+
+    async with provider_for(callback) as provider:
         with pytest.raises(ModelListResponseError):
             await provider.list_model_infos()
 
 
 @pytest.mark.asyncio
-async def test_later_page_failure_does_not_publish_partial_catalog():
-    def handler(request):
+async def test_later_page_failure_does_not_publish_partial_catalog() -> None:
+    def handler(request: httpx2.Request):
         number = int(request.url.params["page_no"])
         payload = (
             page([model()], total=2) if number == 1 else page([], number=2, total=2)
@@ -239,10 +263,10 @@ async def test_later_page_failure_does_not_publish_partial_catalog():
 
 
 @pytest.mark.asyncio
-async def test_discovery_retries_only_the_failed_page():
+async def test_discovery_retries_only_the_failed_page() -> None:
     pages = []
 
-    def handler(request):
+    def handler(request: httpx2.Request):
         number = int(request.url.params["page_no"])
         pages.append(number)
         if pages == [1, 2]:
@@ -259,9 +283,9 @@ async def test_discovery_retries_only_the_failed_page():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_chat_stream_preserves_reasoning_tools_and_usage(wire):
+async def test_chat_stream_preserves_reasoning_tools_and_usage(wire: str) -> None:
     requests = []
-    chunks = [
+    chunks: list[JsonObject] = [
         {"choices": [{"index": 0, "delta": {"reasoning_content": "Inspecting."}}]},
         {
             "choices": [
@@ -302,7 +326,7 @@ async def test_chat_stream_preserves_reasoning_tools_and_usage(wire):
         },
     ]
 
-    def handler(request):
+    def handler(request: httpx2.Request):
         requests.append(request)
         frames = [
             {
@@ -349,28 +373,50 @@ async def test_chat_stream_preserves_reasoning_tools_and_usage(wire):
     assert len(requests) == 1
     assert requests[0].url.path == "/compatible-mode/v1/chat/completions"
     assert requests[0].headers["authorization"] == "Bearer test-key"
-    body = json.loads(requests[0].content)
+    body = decode_object(requests[0].content)
     assert body["model"] == "qwen-coder"
     assert body["stream"] is True
     assert body["stream_options"] == {"include_usage": True}
     assert body["max_tokens"] == 2048
-    assert body["tools"][0]["function"]["parameters"] == schema
+    assert (
+        object_payload(object_array(body["tools"])[0]["function"])["parameters"]
+        == schema
+    )
     assert "enable_thinking" not in body
     assert "Inspecting." in output
     assert "inspect" in output
     assert "README.md" in output
     events = [
-        json.loads(line[6:])
+        load_json_value(line[6:])
         for line in output.splitlines()
         if line.startswith("data: {")
     ]
     if wire == "messages":
-        terminal = next(event for event in events if event["type"] == "message_delta")
-        assert terminal["delta"]["stop_reason"] == "tool_use"
-        assert terminal["usage"]["output_tokens"] == 10
+        terminal = next(
+            event
+            for event in events
+            if object_payload(event)["type"] == "message_delta"
+        )
+        assert (
+            object_payload(object_payload(terminal)["delta"])["stop_reason"]
+            == "tool_use"
+        )
+        assert object_payload(object_payload(terminal)["usage"])["output_tokens"] == 10
     else:
         terminal = next(
-            event for event in events if event["type"] == "response.completed"
+            event
+            for event in events
+            if object_payload(event)["type"] == "response.completed"
         )
-        assert terminal["response"]["usage"]["input_tokens"] == 25
-        assert terminal["response"]["usage"]["output_tokens"] == 10
+        assert (
+            object_payload(
+                object_payload(object_payload(terminal)["response"])["usage"]
+            )["input_tokens"]
+            == 25
+        )
+        assert (
+            object_payload(
+                object_payload(object_payload(terminal)["response"])["usage"]
+            )["output_tokens"]
+            == 10
+        )

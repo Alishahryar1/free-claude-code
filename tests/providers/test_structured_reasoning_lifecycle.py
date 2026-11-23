@@ -4,8 +4,9 @@ import json
 
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.models import MessagesRequest
-from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.anthropic.stream_contracts import SSEEvent, parse_sse_text
 from free_claude_code.core.history_replay import (
     AssociatedReplayRecord,
     ReplayOrigin,
@@ -30,11 +31,20 @@ from tests.providers.test_history_transports import (
     _harness,
     _saved_reply,
 )
+from tests.wire_payload import (
+    array_payload,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_distinct_native_reasoning_survives_structured_summary(wire):
+async def test_distinct_native_reasoning_survives_structured_summary(
+    wire: WireProtocol,
+) -> None:
     events = _chat_reasoning_events(
         [
             {
@@ -62,7 +72,7 @@ async def test_distinct_native_reasoning_survives_structured_summary(wire):
 
 
 @pytest.mark.asyncio
-async def test_encrypted_only_reasoning_stays_with_its_answer():
+async def test_encrypted_only_reasoning_stays_with_its_answer() -> None:
     details = [{"type": "reasoning.encrypted", "data": "opaque", "index": 0}]
     events = _chat_reasoning_events([{"reasoning_details": details}])
     async with _harness("chat", lambda _: (200, events)) as (send, bodies, _):
@@ -75,16 +85,20 @@ async def test_encrypted_only_reasoning_stays_with_its_answer():
             send("responses", [*saved, {"role": "user", "content": "next"}]),
             "responses",
         )
-    assistants = [msg for msg in bodies[-1]["messages"] if msg["role"] == "assistant"]
+    assistants = [
+        msg
+        for msg in object_array(bodies[-1]["messages"])
+        if object_payload(msg)["role"] == "assistant"
+    ]
     assert len(assistants) == 1
-    assert assistants[0]["content"] == "17"
-    assert assistants[0]["reasoning_details"] == [
+    assert object_payload(assistants[0])["content"] == "17"
+    assert object_payload(assistants[0])["reasoning_details"] == [
         {"type": "reasoning.encrypted", "data": "opaque"}
     ]
 
 
 @pytest.mark.asyncio
-async def test_late_metadata_uses_open_indices_and_closes_final_text_last():
+async def test_late_metadata_uses_open_indices_and_closes_final_text_last() -> None:
     events = _chat_reasoning_events(
         [
             {
@@ -110,13 +124,13 @@ async def test_late_metadata_uses_open_indices_and_closes_final_text_last():
         parsed = parse_sse_text("".join(stream))
         _assert_indexed(parsed)
         text_index = max(
-            event.data["index"]
+            int_payload(event.data["index"])
             for event in parsed
             if event.event == "content_block_start"
-            and event.data["content_block"]["type"] == "text"
+            and object_payload(event.data["content_block"])["type"] == "text"
         )
         assert [
-            event.data["index"]
+            int_payload(event.data["index"])
             for event in parsed
             if event.event == "content_block_stop"
         ][-1] == text_index
@@ -126,7 +140,7 @@ async def test_late_metadata_uses_open_indices_and_closes_final_text_last():
         await _saved_reply(
             send("messages", [*saved, {"role": "user", "content": "next"}]), "messages"
         )
-    assert bodies[-1]["messages"][0]["reasoning_details"] == [
+    assert object_array(bodies[-1]["messages"])[0]["reasoning_details"] == [
         {"type": "reasoning.text", "text": "Plan.", "signature": "firstsecond"}
     ]
 
@@ -135,8 +149,8 @@ async def test_late_metadata_uses_open_indices_and_closes_final_text_last():
 @pytest.mark.parametrize("destination", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("readable", [False, True])
 async def test_legacy_associated_messages_replay_into_every_transport(
-    destination, readable
-):
+    destination: str, readable: bool
+) -> None:
     first: JsonObject = {
         "reasoning_details": [
             {"type": "reasoning.encrypted", "data": "first", "index": 0}
@@ -179,9 +193,9 @@ async def test_legacy_associated_messages_replay_into_every_transport(
     assert "fcc:history" not in body
     assert body.count("Plan.") == int(readable)
     if destination == "chat":
-        assert bodies[-1]["messages"][0]["reasoning_details"] == [
-            {"type": "reasoning.encrypted", "data": "firstsecond", "index": 0}
-        ]
+        assert object_payload(array_payload(bodies[-1]["messages"])[0])[
+            "reasoning_details"
+        ] == [{"type": "reasoning.encrypted", "data": "firstsecond", "index": 0}]
     else:
         assert "firstsecond" not in body
 
@@ -195,12 +209,13 @@ def _messages_writer():
     return output, reasoning
 
 
-def test_native_thinking_streams_before_late_structured_alias():
+def test_native_thinking_streams_before_late_structured_alias() -> None:
     output, reasoning = _messages_writer()
     early = list(reasoning.events({}, output, native_reasoning="Plan."))
     parsed = parse_sse_text("".join(early))
     assert any(
-        event.data.get("delta", {}).get("thinking") == "Plan." for event in parsed
+        object_payload(event.data.get("delta", {})).get("thinking") == "Plan."
+        for event in parsed
     )
     late = list(
         reasoning.events(
@@ -216,12 +231,22 @@ def test_native_thinking_streams_before_late_structured_alias():
     late.extend(reasoning.finish(output))
     parsed = parse_sse_text("".join([*early, *late]))
     assert (
-        "".join(event.data.get("delta", {}).get("thinking", "") for event in parsed)
+        "".join(
+            string_payload(
+                object_payload(event.data.get("delta", {})).get("thinking", "")
+            )
+            for event in parsed
+        )
         == "Plan."
     )
 
 
-def _readable(reasoning, output, text="Plan.", data="first"):
+def _readable(
+    reasoning: StructuredReasoningStream,
+    output: AnthropicChatStreamOutput,
+    text: str = "Plan.",
+    data: str = "first",
+):
     return list(
         reasoning.events(
             {
@@ -235,7 +260,7 @@ def _readable(reasoning, output, text="Plan.", data="first"):
     )
 
 
-def _assert_indexed(events):
+def _assert_indexed(events: list[SSEEvent]):
     active = set()
     seen = set()
     for event in events:
@@ -253,14 +278,16 @@ def _assert_indexed(events):
 @pytest.mark.parametrize(
     "terminal", ["normal", "length", "failure", "tool", "continuation"]
 )
-def test_immediate_text_and_late_replay_survive_every_exit(terminal):
+def test_immediate_text_and_late_replay_survive_every_exit(terminal: str) -> None:
     output, reasoning = _messages_writer()
     frames = output.start_events() + _readable(reasoning, output)
     frames += output.ensure_text_block()
     frames.append(output.emit_text_delta("Answer."))
     # Text has already been emitted, while upstream metadata and termination are pending.
     early = parse_sse_text("".join(frames))
-    assert any(e.data.get("delta", {}).get("text") == "Answer." for e in early)
+    assert any(
+        object_payload(e.data.get("delta", {})).get("text") == "Answer." for e in early
+    )
     assert not any(e.event == "message_stop" for e in early)
     if terminal == "tool":
         frames += output.close_content_blocks()
@@ -302,15 +329,15 @@ def test_immediate_text_and_late_replay_survive_every_exit(terminal):
     events = parse_sse_text("".join(frames))
     _assert_indexed(events)
     signatures = [
-        e.data["delta"]["signature"]
+        object_payload(e.data["delta"])["signature"]
         for e in events
-        if e.data.get("delta", {}).get("type") == "signature_delta"
+        if object_payload(e.data.get("delta", {})).get("type") == "signature_delta"
     ]
     assert signatures == ([] if terminal == "failure" else ["firstsecond"])
     assert "fcc:history" not in "".join(frames)
 
 
-def test_request_copy_preserves_routing_and_does_not_join_across_messages():
+def test_request_copy_preserves_routing_and_does_not_join_across_messages() -> None:
     origin = ReplayOrigin("test", "chat", "endpoint", "account", "model")
     native: JsonObject = {
         "reasoning_content": "Plan.",
@@ -352,8 +379,8 @@ def test_request_copy_preserves_routing_and_does_not_join_across_messages():
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("committed", [False, True])
 async def test_private_replacement_discards_prior_reasoning_for_any_draft_size(
-    wire, committed
-):
+    wire: WireProtocol, committed: bool
+) -> None:
     prefix = "x" * 66000 if committed else "partial"
     first = _chat_reasoning_events(
         [
@@ -392,7 +419,9 @@ async def test_private_replacement_discards_prior_reasoning_for_any_draft_size(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_first_metadata_after_text_does_not_invent_earlier_reasoning(wire):
+async def test_first_metadata_after_text_does_not_invent_earlier_reasoning(
+    wire: WireProtocol,
+) -> None:
     events = _chat_reasoning_events(
         [
             {"content": "Earlier answer."},
@@ -417,5 +446,5 @@ async def test_first_metadata_after_text_does_not_invent_earlier_reasoning(wire)
     assert (
         saved[0]["type"] == "message"
         if wire == "responses"
-        else saved[0]["content"][0]["type"] == "text"
+        else object_array(saved[0]["content"])[0]["type"] == "text"
     )

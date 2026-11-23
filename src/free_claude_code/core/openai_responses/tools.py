@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, load_json_value
 
 from .errors import ResponsesConversionError
 from .ids import new_call_id
@@ -41,7 +41,7 @@ def flatten_responses_tool_name(name: str, *, namespace: str | None = None) -> s
     return f"{combined[:prefix_len]}_{digest}"
 
 
-def custom_tool_input_text(value: Any) -> str:
+def custom_tool_input_text(value: object) -> str:
     if value is None:
         return ""
     if isinstance(value, str):
@@ -49,7 +49,7 @@ def custom_tool_input_text(value: Any) -> str:
     return _json_dumps(value)
 
 
-def custom_tool_input_text_from_wrapper(value: Any) -> str:
+def custom_tool_input_text_from_wrapper(value: object) -> str:
     if isinstance(value, Mapping):
         raw_input = value.get("input")
         if isinstance(raw_input, str):
@@ -66,7 +66,7 @@ def custom_tool_input_text_from_arguments(arguments: str) -> str:
     if not arguments:
         return ""
     try:
-        parsed = json.loads(arguments)
+        parsed = load_json_value(arguments)
     except json.JSONDecodeError:
         return arguments
     return custom_tool_input_text_from_wrapper(parsed)
@@ -79,7 +79,7 @@ def call_id_from_item(item: Mapping[str, Any]) -> str:
     return new_call_id()
 
 
-def required_str(value: Any, field_name: str) -> str:
+def required_str(value: object, field_name: str) -> str:
     if isinstance(value, str) and value:
         return value
     raise ResponsesConversionError(
@@ -87,7 +87,7 @@ def required_str(value: Any, field_name: str) -> str:
     )
 
 
-def optional_str(value: Any) -> str | None:
+def optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
@@ -125,7 +125,7 @@ def _tool_name_part(value: str) -> str:
     return normalized or "tool"
 
 
-def _json_dumps(value: Any) -> str:
+def _json_dumps(value: object) -> str:
     try:
         return json.dumps(value)
     except TypeError:

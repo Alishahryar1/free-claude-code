@@ -75,7 +75,7 @@ def validate_messages_json(body: JsonObject) -> None:
 
     try:
         json.dumps(body, ensure_ascii=False, allow_nan=False).encode("utf-8")
-    except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise NativeMessagesError(
             "Messages request must be finite JSON encodable as UTF-8."
         ) from exc
@@ -120,7 +120,7 @@ def build_native_messages_request(
 
     if not request.messages:
         raise NativeMessagesError("Messages input must not be empty.")
-    body = cast(JsonObject, dump_messages_request(request))
+    body = dump_messages_request(request)
     raw_request = cast(JsonObject, request.model_dump(mode="json", exclude_none=True))
     for name in request.model_extra or ():
         if name not in raw_request:

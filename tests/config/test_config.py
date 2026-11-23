@@ -1,6 +1,7 @@
 """Contracts for pure Settings and canonical source composition."""
 
 import json
+from collections.abc import Mapping
 from enum import Enum
 from pathlib import Path
 from unittest.mock import patch
@@ -40,7 +41,7 @@ _SUPER_REF = "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
 _ULTRA_REF = "nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b"
 
 
-def test_default_claude_aliases_use_hosted_ultra():
+def test_default_claude_aliases_use_hosted_ultra() -> None:
     settings = compose_settings_snapshot({}, {}).settings
     router = ModelRouter(settings)
     for tier in ("fable", "opus", "sonnet", "haiku"):
@@ -54,7 +55,9 @@ def test_default_claude_aliases_use_hosted_ultra():
 @pytest.mark.parametrize(
     "key", ["MODEL", "MODEL_FABLE", "MODEL_OPUS", "MODEL_SONNET", "MODEL_HAIKU"]
 )
-def test_super_migration_preserves_explicit_selection_and_source(source, key):
+def test_super_migration_preserves_explicit_selection_and_source(
+    source: ConfigSource, key: str
+) -> None:
     values = {
         key: f" {_SUPER_REF} ",
         "REASONING_POLICY": "high",
@@ -80,8 +83,8 @@ def test_super_migration_preserves_explicit_selection_and_source(source, key):
 @pytest.mark.parametrize("source", [ConfigSource.MANAGED, ConfigSource.PROCESS])
 @pytest.mark.parametrize("super_first", [True, False])
 def test_super_fallback_migration_preserves_order_reasoning_and_distinct_keys(
-    source, super_first
-):
+    source: ConfigSource, super_first: bool
+) -> None:
     first, second = (
         (_SUPER_REF, _ULTRA_REF) if super_first else (_ULTRA_REF, _SUPER_REF)
     )
@@ -127,7 +130,9 @@ def test_super_fallback_migration_preserves_order_reasoning_and_distinct_keys(
         [_SUPER_REF, "groq/backup", "groq/backup"],
     ],
 )
-def test_super_migration_does_not_hide_preexisting_fallback_duplicates(refs):
+def test_super_migration_does_not_hide_preexisting_fallback_duplicates(
+    refs: list[str],
+) -> None:
     with pytest.raises(ValidationError, match="duplicate model/key pairs"):
         compose_settings_snapshot({"MODEL_FALLBACKS": json.dumps(refs)}, {})
 
@@ -141,14 +146,14 @@ def test_super_migration_does_not_hide_preexisting_fallback_duplicates(refs):
         '[{"model":"groq/a","reasoning":"invalid"}]',
     ],
 )
-def test_super_migration_keeps_invalid_settings_invalid(fallbacks):
+def test_super_migration_keeps_invalid_settings_invalid(fallbacks: str) -> None:
     with pytest.raises(ValidationError):
         compose_settings_snapshot(
             {"MODEL": _SUPER_REF, "MODEL_FALLBACKS": fallbacks}, {}
         )
 
 
-def test_model_repairs_leave_unaffected_fallback_text_unchanged():
+def test_model_repairs_leave_unaffected_fallback_text_unchanged() -> None:
     values = {
         "MODEL_FALLBACKS": '[{"model":"groq/backup","reasoning":"inherit","api_key_number":1}]',
         "UNKNOWN": "keep",
@@ -167,7 +172,7 @@ def test_model_repairs_leave_unaffected_fallback_text_unchanged():
         _SUPER_REF + "-successor",
     ],
 )
-def test_super_migration_leaves_other_endpoints_unchanged(model):
+def test_super_migration_leaves_other_endpoints_unchanged(model: str) -> None:
     values = {
         "MODEL": model,
         "MODEL_OPUS": model,
@@ -182,7 +187,7 @@ def test_super_migration_leaves_other_endpoints_unchanged(model):
     )
 
 
-def test_builtin_effort_is_from_client_with_inherited_tier_efforts():
+def test_builtin_effort_is_from_client_with_inherited_tier_efforts() -> None:
     snapshot = compose_settings_snapshot({}, {})
     settings = snapshot.settings
     assert settings.reasoning_policy is ReasoningPreference.CLIENT
@@ -198,7 +203,7 @@ def test_builtin_effort_is_from_client_with_inherited_tier_efforts():
 
 @pytest.mark.parametrize("source", [ConfigSource.MANAGED, ConfigSource.PROCESS])
 @pytest.mark.parametrize("effort", ["client", "off", "medium", "high"])
-def test_explicit_default_effort_is_retained(source, effort):
+def test_explicit_default_effort_is_retained(source: ConfigSource, effort: str) -> None:
     values = {"REASONING_POLICY": effort}
     snapshot = compose_settings_snapshot(
         values if source is ConfigSource.MANAGED else {},
@@ -210,7 +215,9 @@ def test_explicit_default_effort_is_retained(source, effort):
 
 @pytest.mark.parametrize("source", [ConfigSource.MANAGED, ConfigSource.PROCESS])
 @pytest.mark.parametrize("tier", ["FABLE", "OPUS", "SONNET", "HAIKU"])
-def test_retirement_normalizes_sources_without_resurrecting_overrides(source, tier):
+def test_retirement_normalizes_sources_without_resurrecting_overrides(
+    source: ConfigSource, tier: str
+) -> None:
     retired = {
         "MODEL": "github_models/openai/old",
         f"MODEL_{tier}": "github_models/vendor/opus",
@@ -243,8 +250,8 @@ def test_retirement_normalizes_sources_without_resurrecting_overrides(source, ti
 
 
 def test_retirement_preserves_effective_default_order_and_process_environment(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("MODEL", raising=False)
     monkeypatch.setenv("MODEL_OPUS", "github_models/opus")
     snapshot = compose_settings_snapshot(
@@ -278,19 +285,21 @@ def test_retirement_preserves_effective_default_order_and_process_environment(
         {"MODEL_FALLBACKS": "github_models/old,github_models/"},
     ],
 )
-def test_retirement_does_not_hide_invalid_configuration(values):
+def test_retirement_does_not_hide_invalid_configuration(
+    values: Mapping[str, str],
+) -> None:
     with pytest.raises(ValidationError):
         compose_settings_snapshot(values, {})
 
 
-def test_direct_settings_still_reject_retired_provider():
+def test_direct_settings_still_reject_retired_provider() -> None:
     with pytest.raises(ValidationError):
         Settings(MODEL="github_models/openai/old")
 
 
 @pytest.mark.parametrize("value", ["0.01", "0", "invalid"])
 @pytest.mark.parametrize("source", ["managed", "process"])
-def test_retired_progress_timeout_is_ignored(value, source):
+def test_retired_progress_timeout_is_ignored(value: str, source: str) -> None:
     managed = {"HTTP_READ_TIMEOUT": "120"}
     process = {"HTTP_CONNECT_TIMEOUT": "30"}
     (managed if source == "managed" else process)["PROVIDER_PROGRESS_TIMEOUT"] = value
@@ -309,6 +318,7 @@ def test_settings_defaults_are_valid_and_nonempty() -> None:
     assert settings.provider_rate_limit == 1
     assert settings.provider_rate_window == 2
     assert settings.provider_max_concurrency == 2
+    assert settings.provider_max_attempts == 5
     assert settings.http_read_timeout == 120.0
     assert settings.http_write_timeout == 30.0
     assert settings.http_connect_timeout == 30.0
@@ -318,8 +328,9 @@ def test_settings_defaults_are_valid_and_nonempty() -> None:
     assert settings.enable_web_server_tools is True
     assert settings.proxy_auth_enabled is False
     assert settings.proxy_auth_token == "freecc"
+    fields: list[tuple[str, object]] = list(settings)
     assert [
-        name for name, value in settings if isinstance(value, str) and not value
+        name for name, value in fields if isinstance(value, str) and not value
     ] == []
     assert [
         name
@@ -717,7 +728,9 @@ def test_model_ref_parsing(model_ref: str, provider: str, model: str) -> None:
     assert parse_model_name(model_ref) == model
 
 
-def test_paths_are_owned_by_fcc_home(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_paths_are_owned_by_fcc_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
 
@@ -752,6 +765,7 @@ def test_settings_validated_replacement_preserves_original() -> None:
 
 
 def test_settings_defaults_do_not_contain_empty_enum_strings() -> None:
-    for _name, value in Settings():
+    fields: list[tuple[str, object]] = list(Settings())
+    for _name, value in fields:
         if isinstance(value, Enum):
             assert value.value

@@ -23,9 +23,10 @@ from free_claude_code.core.stream_recovery import (
     SourceRecoverySnapshot,
     StreamFailureContext,
 )
+from tests.assertions import require_present
 
 
-def _candidates(count=1):
+def _candidates(count: int = 1):
     return tuple(
         ProviderModelCandidate(
             ProviderModelTarget("provider", f"m{i}", f"provider/m{i}")
@@ -35,7 +36,7 @@ def _candidates(count=1):
 
 
 @pytest.mark.asyncio
-async def test_delivery_and_opening_are_deferred_and_packets_preserved():
+async def test_delivery_and_opening_are_deferred_and_packets_preserved() -> None:
     construction_state = StreamDeliveryState()
     consumption_state = StreamDeliveryState()
     packets = (
@@ -52,7 +53,7 @@ async def test_delivery_and_opening_are_deferred_and_packets_preserved():
         finally:
             closed.append(current_stream_delivery())
 
-    async def open_candidate(index, candidate, continuation):
+    async def open_candidate(index: object, candidate: object, continuation: object):
         seen.append(current_stream_delivery())
         return body()
 
@@ -77,7 +78,7 @@ async def test_delivery_and_opening_are_deferred_and_packets_preserved():
 
 
 @pytest.mark.asyncio
-async def test_missing_delivery_never_opens_a_candidate():
+async def test_missing_delivery_never_opens_a_candidate() -> None:
     open_candidate = AsyncMock()
     stream = stream_model_candidates(
         _candidates(),
@@ -94,7 +95,7 @@ async def test_missing_delivery_never_opens_a_candidate():
     open_candidate.assert_not_awaited()
 
 
-def _prefix(text):
+def _prefix(text: str):
     return DeliveredPrefix(
         text=text,
         thinking="",
@@ -107,7 +108,7 @@ def _prefix(text):
 
 
 @pytest.mark.asyncio
-async def test_interleaved_sequences_use_their_own_latest_delivered_prefix():
+async def test_interleaved_sequences_use_their_own_latest_delivered_prefix() -> None:
     left_state, right_state = StreamDeliveryState(), StreamDeliveryState()
     left_prefix, right_prefix = _prefix("left"), _prefix("right")
     left_state.bind_prefix(lambda: left_prefix)
@@ -115,8 +116,8 @@ async def test_interleaved_sequences_use_their_own_latest_delivered_prefix():
     opened = []
     closed = []
 
-    def opener(label):
-        async def body(index):
+    def opener(label: str):
+        async def body(index: int):
             try:
                 yield StreamOutput((f"{label}-{index}",))
                 if index < 2:
@@ -130,7 +131,9 @@ async def test_interleaved_sequences_use_their_own_latest_delivered_prefix():
             finally:
                 closed.append((label, index))
 
-        async def open_candidate(index, candidate, continuation):
+        async def open_candidate(
+            index: int, candidate: object, continuation: ContinuationSeed | None
+        ):
             opened.append((label, index, continuation))
             return body(index)
 
@@ -163,7 +166,9 @@ async def test_interleaved_sequences_use_their_own_latest_delivered_prefix():
         assert (await anext(right)).frames == ("right-1",)
         right_prefix = _prefix("right extended")
         assert (await anext(right)).frames == ("right-2",)
-        assert [row[2].readable_text("text") for row in opened if row[1]] == [
+        assert [
+            require_present(row[2]).readable_text("text") for row in opened if row[1]
+        ] == [
             "left",
             "left extended",
             "right",

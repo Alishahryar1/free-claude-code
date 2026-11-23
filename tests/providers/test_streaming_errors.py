@@ -1,31 +1,34 @@
 """Tests for streaming error handling in providers/nvidia_nim/client.py."""
 
 import asyncio
+from collections.abc import Sequence
 from types import SimpleNamespace
+from typing import override
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import httpx2
 import openai
 import pytest
+from openai.types.chat import ChatCompletionChunk
 
 from free_claude_code.api.response_streams import (
     ManagedStreamingResponse,
     _first_chunk_streaming_response,
 )
 from free_claude_code.application.response_collection import collect_response
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
+from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import (
     assert_anthropic_stream_contract,
     parse_sse_text,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
-from free_claude_code.providers.admission import (
-    UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS,
-    ProviderOperationKind,
-)
+from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.openai_chat.stream_output import (
     AnthropicChatStreamOutput,
@@ -43,12 +46,20 @@ from tests.providers.support import (
     profiled_provider,
     sdk_chat_chunk,
 )
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
-class AsyncStreamMock(SDKStreamDouble):
+class AsyncStreamMock(SDKStreamDouble[ChatCompletionChunk]):
     """Async iterable mock that yields chunks then optionally raises."""
 
-    def __init__(self, chunks, error=None):
+    def __init__(
+        self, chunks: list[ChatCompletionChunk], error: BaseException | None = None
+    ):
         self._chunks = chunks
         self._error = error
         super().__init__(self._aiter())
@@ -63,7 +74,13 @@ class AsyncStreamMock(SDKStreamDouble):
 class ClosableAsyncStreamMock(AsyncStreamMock):
     """Async stream mock that records cleanup."""
 
-    def __init__(self, chunks, error=None, *, close_error=None):
+    def __init__(
+        self,
+        chunks: list[ChatCompletionChunk],
+        error: BaseException | None = None,
+        *,
+        close_error: BaseException | None = None,
+    ):
         super().__init__(chunks, error=error)
         self.closed = False
         self.close_calls = 0
@@ -75,15 +92,16 @@ class ClosableAsyncStreamMock(AsyncStreamMock):
         if self._close_error is not None:
             raise self._close_error
 
+    @override
     async def close(self):
         await super().close()
         await self.aclose()
 
 
-class BlockingClosableAsyncStreamMock(SDKStreamDouble):
+class BlockingClosableAsyncStreamMock(SDKStreamDouble[None]):
     """Async stream that blocks until its consumer is cancelled."""
 
-    def __init__(self, *, close_error=None):
+    def __init__(self, *, close_error: BaseException | None = None):
         self.entered = asyncio.Event()
         self.close_calls = 0
         self._close_error = close_error
@@ -140,7 +158,7 @@ def _make_request(model: str = "test-model", stream: bool = True, **overrides: o
 def _make_stream_runner(
     provider: NvidiaNimProvider,
     *,
-    request=None,
+    request: MessagesRequest | None = None,
     request_id: str | None = None,
 ) -> _OpenAIChatStreamRunner:
     concrete_request = request or _make_request()
@@ -158,10 +176,14 @@ def _make_stream_runner(
 
 
 def _make_chunk(
-    content=None, finish_reason=None, tool_calls=None, reasoning_content=None
+    content: str | None = None,
+    finish_reason: str | None = None,
+    tool_calls: Sequence[SimpleNamespace | MagicMock] | None = None,
+    reasoning_content: str | None = None,
 ):
+    from openai._models import construct_type
     from openai.types.chat import ChatCompletionChunk
-    from openai.types.chat.chat_completion_chunk import Choice, ChoiceDelta
+    from openai.types.chat.chat_completion_chunk import Choice
 
     calls = [
         tool
@@ -176,24 +198,25 @@ def _make_chunk(
         }
         for tool in tool_calls or []
     ]
+    choice = construct_type(
+        type_=Choice,
+        value={
+            "index": 0,
+            "delta": {
+                "content": content,
+                "tool_calls": calls or None,
+                "reasoning_content": reasoning_content,
+            },
+            "finish_reason": finish_reason,
+        },
+    )
+    assert isinstance(choice, Choice)
     return ChatCompletionChunk.model_construct(
         id="chat_test",
         object="chat.completion.chunk",
         created=0,
         model="test-model",
-        choices=[
-            Choice.model_construct(
-                index=0,
-                delta=ChoiceDelta.model_validate(
-                    {
-                        "content": content,
-                        "tool_calls": calls or None,
-                        "reasoning_content": reasoning_content,
-                    }
-                ),
-                finish_reason=finish_reason,
-            )
-        ],
+        choices=[choice],
         usage=None,
     )
 
@@ -222,8 +245,10 @@ def _make_usage_chunk(*, prompt_tokens: int, completion_tokens: int):
         created=0,
         model="test-model",
         choices=[],
-        usage=CompletionUsage.model_construct(
-            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
+        usage=CompletionUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
         ),
     )
 
@@ -243,8 +268,8 @@ def _make_tool_calls_chunk(
 
 
 async def _collect_stream(
-    provider,
-    request,
+    provider: NvidiaNimProvider,
+    request: MessagesRequest,
     *,
     reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
 ):
@@ -258,28 +283,36 @@ async def _collect_stream(
     )
 
 
-async def _collect_stream_error(provider, request, **kwargs) -> ExecutionFailure:
+async def _collect_stream_error(
+    provider: NvidiaNimProvider,
+    request: MessagesRequest,
+    *,
+    request_id: str | None = None,
+) -> ExecutionFailure:
     with pytest.raises(ExecutionFailure) as exc_info:
         [
             frame
-            async for e in provider.stream_messages(request, **kwargs)
+            async for e in provider.stream_messages(request, request_id=request_id)
             for frame in e.frames
         ]
     return exc_info.value
 
 
 async def _collect_stream_and_error(
-    provider, request, **kwargs
+    provider: NvidiaNimProvider,
+    request: MessagesRequest,
+    *,
+    request_id: str | None = None,
 ) -> tuple[list[str], ExecutionFailure]:
     events: list[str] = []
 
-    def reject(error):
+    def reject(error: BaseException):
         raise error
 
     response = None
     with pytest.raises(ExecutionFailure) as exc_info:
         response = await _first_chunk_streaming_response(
-            provider.stream_messages(request, **kwargs),
+            provider.stream_messages(request, request_id=request_id),
             wire_api="messages",
             headers={},
             pre_start_error_response=reject,
@@ -295,12 +328,13 @@ async def _collect_stream_and_error(
     return events, exc_info.value
 
 
-def _tool_use_starts(events: list[str]) -> list[dict]:
+def _tool_use_starts(events: list[str]) -> list[JsonObject]:
     return [
-        event.data["content_block"]
+        object_payload(event.data["content_block"])
         for event in parse_sse_text("".join(events))
         if event.event == "content_block_start"
-        and event.data.get("content_block", {}).get("type") == "tool_use"
+        and object_payload(event.data.get("content_block", {})).get("type")
+        == "tool_use"
     ]
 
 
@@ -314,8 +348,8 @@ def _assert_no_content_deltas_after_error_text(
         if ev.event != "content_block_delta":
             continue
         delta = ev.data.get("delta", {})
-        if delta.get("type") == "text_delta" and error_substr in str(
-            delta.get("text", "")
+        if object_payload(delta).get("type") == "text_delta" and error_substr in str(
+            object_payload(delta).get("text", "")
         ):
             first_error_idx = i
             break
@@ -336,8 +370,8 @@ def _assert_error_not_in_text_deltas_after_tool(
         if ev.event != "content_block_delta":
             continue
         delta = ev.data.get("delta", {})
-        if delta.get("type") == "text_delta" and error_substr in str(
-            delta.get("text", "")
+        if object_payload(delta).get("type") == "text_delta" and error_substr in str(
+            object_payload(delta).get("text", "")
         ):
             raise AssertionError(
                 f"error leaked as text_delta after tool_use: {ev.data!r} full={blob!r}"
@@ -346,7 +380,7 @@ def _assert_error_not_in_text_deltas_after_tool(
 
 class TestStreamingExceptionHandling:
     @pytest.mark.asyncio
-    async def test_stream_normalization_failure_closes_raw_stream(self):
+    async def test_stream_normalization_failure_closes_raw_stream(self) -> None:
         provider = _make_provider()
         stream = ClosableAsyncStreamMock([])
 
@@ -370,7 +404,7 @@ class TestStreamingExceptionHandling:
     """Tests for error paths during stream_messages."""
 
     @pytest.mark.asyncio
-    async def test_pre_start_api_error_raises_provider_error(self):
+    async def test_pre_start_api_error_raises_provider_error(self) -> None:
         """Before holdback commit, provider failures raise for API-level non-200."""
         provider = _make_provider()
         request = _make_request()
@@ -425,7 +459,7 @@ class TestStreamingExceptionHandling:
         assert exc_info.value.retryable is False
 
     @pytest.mark.asyncio
-    async def test_read_timeout_with_empty_message_raises_fallback(self):
+    async def test_read_timeout_with_empty_message_raises_fallback(self) -> None:
         """ReadTimeout(TimeoutError()) should raise a non-empty timeout message."""
         provider = _make_provider()
         request = _make_request()
@@ -449,7 +483,7 @@ class TestStreamingExceptionHandling:
         assert "Request ID: req_timeout123" in error.message
 
     @pytest.mark.asyncio
-    async def test_error_after_precommit_partial_content_raises(self):
+    async def test_error_after_precommit_partial_content_raises(self) -> None:
         """Precommit partial text is discarded so the API can return non-200."""
         provider = _make_provider()
         request = _make_request()
@@ -470,7 +504,9 @@ class TestStreamingExceptionHandling:
         assert "Connection lost" in error.message
 
     @pytest.mark.asyncio
-    async def test_error_after_native_tool_call_keeps_tool_incomplete_and_raises(self):
+    async def test_error_after_native_tool_call_keeps_tool_incomplete_and_raises(
+        self,
+    ) -> None:
         """A failure never marks an unfinished tool complete for the API."""
         provider = _make_provider()
         request = _make_request()
@@ -502,7 +538,7 @@ class TestStreamingExceptionHandling:
         )
 
     @pytest.mark.asyncio
-    async def test_empty_response_gets_space(self):
+    async def test_empty_response_gets_space(self) -> None:
         """Empty response with no text/tools gets a single space text block."""
         provider = _make_provider()
         request = _make_request()
@@ -525,7 +561,7 @@ class TestStreamingExceptionHandling:
         assert "message_stop" in event_text
 
     @pytest.mark.asyncio
-    async def test_upstream_completion_tokens_null_emits_int_usage(self):
+    async def test_upstream_completion_tokens_null_emits_int_usage(self) -> None:
         """NIM/GLM may send usage.completion_tokens=null; final SSE must not use JSON null."""
         provider = _make_provider()
         request = _make_request()
@@ -554,12 +590,12 @@ class TestStreamingExceptionHandling:
         delta_events = [e for e in parsed if e.event == "message_delta"]
         assert len(delta_events) == 1
         usage_out = delta_events[0].data.get("usage", {})
-        assert isinstance(usage_out.get("output_tokens"), int)
-        assert usage_out["output_tokens"] is not None
+        assert isinstance(object_payload(usage_out).get("output_tokens"), int)
+        assert object_payload(usage_out)["output_tokens"] is not None
         assert '"output_tokens": null' not in "".join(events)
 
     @pytest.mark.asyncio
-    async def test_reasoning_only_stream_emits_placeholder_text(self):
+    async def test_reasoning_only_stream_emits_placeholder_text(self) -> None:
         """When the model streams only ``reasoning_content`` (no ``content``), add text block.
 
         NIM / some templates may emit no main ``content``; a minimal text block matches
@@ -585,7 +621,7 @@ class TestStreamingExceptionHandling:
         assert "message_stop" in event_text
 
     @pytest.mark.asyncio
-    async def test_stream_with_thinking_content(self):
+    async def test_stream_with_thinking_content(self) -> None:
         """Thinking content via think tags is emitted as thinking blocks."""
         provider = _make_provider()
         request = _make_request()
@@ -610,7 +646,7 @@ class TestStreamingExceptionHandling:
         assert "answer" in event_text
 
     @pytest.mark.asyncio
-    async def test_stream_with_reasoning_content_field(self):
+    async def test_stream_with_reasoning_content_field(self) -> None:
         """reasoning_content delta field is emitted as thinking block."""
         provider = _make_provider()
         request = _make_request()
@@ -636,7 +672,9 @@ class TestStreamingExceptionHandling:
         assert "The answer" in event_text
 
     @pytest.mark.asyncio
-    async def test_stream_with_empty_reasoning_content_creates_no_thinking_block(self):
+    async def test_stream_with_empty_reasoning_content_creates_no_thinking_block(
+        self,
+    ) -> None:
         """Empty reasoning_content is stateful but must not emit visible thinking text."""
         provider = _make_provider()
         request = _make_request()
@@ -660,13 +698,13 @@ class TestStreamingExceptionHandling:
             event
             for event in parsed
             if event.event == "content_block_start"
-            and event.data["content_block"]["type"] == "thinking"
+            and object_payload(event.data["content_block"])["type"] == "thinking"
         ]
         thinking_deltas = [
             event
             for event in parsed
             if event.event == "content_block_delta"
-            and event.data["delta"]["type"] == "thinking_delta"
+            and object_payload(event.data["delta"])["type"] == "thinking_delta"
         ]
         assert thinking_starts == []
         assert thinking_deltas == []
@@ -704,8 +742,11 @@ class TestStreamingExceptionHandling:
         ],
     )
     async def test_empty_reasoning_placeholders_preserve_content_blocks(
-        self, wire, deltas, expected
-    ):
+        self,
+        wire: str,
+        deltas: list[tuple[str | None, str | None]],
+        expected: JsonValue,
+    ) -> None:
         provider = profiled_provider(
             "qwencloud",
             make_provider_config(api_key="test", base_url="https://provider.invalid"),
@@ -715,11 +756,15 @@ class TestStreamingExceptionHandling:
             for reasoning, content in deltas
         ] + [_make_chunk(finish_reason="stop")]
         try:
+
+            def side_effect_2(**kwargs: object):
+                return AsyncStreamMock(chunks)
+
             with patch.object(
                 provider._client.chat.completions,
                 "create",
                 new_callable=AsyncMock,
-                side_effect=lambda **kwargs: AsyncStreamMock(chunks),
+                side_effect=side_effect_2,
             ):
                 # Empty placeholders do not create output items on either request.
                 for _ in range(2):
@@ -739,11 +784,19 @@ class TestStreamingExceptionHandling:
                         actual = [
                             (
                                 "reasoning"
-                                if start.data["content_block"]["type"] == "thinking"
-                                else start.data["content_block"]["type"],
+                                if object_payload(start.data["content_block"])["type"]
+                                == "thinking"
+                                else object_payload(start.data["content_block"])[
+                                    "type"
+                                ],
                                 "".join(
-                                    event.data["delta"].get(
-                                        "thinking", event.data["delta"].get("text", "")
+                                    string_payload(
+                                        object_payload(event.data["delta"]).get(
+                                            "thinking",
+                                            object_payload(event.data["delta"]).get(
+                                                "text", ""
+                                            ),
+                                        )
                                     )
                                     for event in events
                                     if event.event == "content_block_delta"
@@ -757,17 +810,26 @@ class TestStreamingExceptionHandling:
                         assert events[-1].event == "response.completed"
                         actual = [
                             (
-                                "text" if item["type"] == "message" else item["type"],
-                                "".join(part["text"] for part in item["content"]),
+                                "text"
+                                if object_payload(item)["type"] == "message"
+                                else item["type"],
+                                "".join(
+                                    string_payload(part["text"])
+                                    for part in object_array(
+                                        object_payload(item)["content"]
+                                    )
+                                ),
                             )
-                            for item in events[-1].data["response"]["output"]
+                            for item in object_array(
+                                object_payload(events[-1].data["response"])["output"]
+                            )
                         ]
                     assert actual == expected
         finally:
             await provider.cleanup()
 
     @pytest.mark.asyncio
-    async def test_stream_with_reasoning_content_suppressed_when_disabled(self):
+    async def test_stream_with_reasoning_content_suppressed_when_disabled(self) -> None:
         """reasoning deltas are stripped while normal text still streams."""
         provider = _make_provider()
         request = _make_request()
@@ -794,7 +856,7 @@ class TestStreamingExceptionHandling:
         assert "The answer" in event_text
 
     @pytest.mark.asyncio
-    async def test_stream_with_upstream_405_mentions_provider_name(self):
+    async def test_stream_with_upstream_405_mentions_provider_name(self) -> None:
         """HTTP 405s are surfaced as upstream method/endpoint rejections."""
         provider = _make_provider()
         request = _make_request()
@@ -828,7 +890,7 @@ class TestStreamingExceptionHandling:
         assert "Request ID: REQ405" in stream_error.message
 
     @pytest.mark.asyncio
-    async def test_stream_with_openai_bad_request_surfaces_upstream_body(self):
+    async def test_stream_with_openai_bad_request_surfaces_upstream_body(self) -> None:
         """OpenAI SDK bodies should be raised so users can copy exact provider errors."""
         provider = _make_provider()
         request = _make_request()
@@ -857,7 +919,7 @@ class TestStreamingExceptionHandling:
             )
 
         assert "Upstream provider NIM returned HTTP 400." in stream_error.message
-        assert "Category: BadRequest" in stream_error.message
+        assert "Category: invalid_request" in stream_error.message
         assert "Thinking mode does not support this tool_choice" in stream_error.message
         assert (
             '{"error":{"type":"BadRequest","message":"Thinking mode does not support this tool_choice"}}'
@@ -866,7 +928,7 @@ class TestStreamingExceptionHandling:
         assert "Request ID: REQ_BODY" in stream_error.message
 
     @pytest.mark.asyncio
-    async def test_error_after_native_tool_call_failure_includes_body(self):
+    async def test_error_after_native_tool_call_failure_includes_body(self) -> None:
         """Detailed failure data survives without completing an unfinished tool."""
         provider = _make_provider()
         request = _make_request()
@@ -906,7 +968,7 @@ class TestStreamingExceptionHandling:
         _assert_error_not_in_text_deltas_after_tool(events, "bad after tool")
 
     @pytest.mark.asyncio
-    async def test_clean_eof_does_not_promote_json_to_tool_completion(self):
+    async def test_clean_eof_does_not_promote_json_to_tool_completion(self) -> None:
         """Valid JSON without a source finish remains an unfinished call."""
         provider = _make_provider()
         request = _make_request()
@@ -928,7 +990,9 @@ class TestStreamingExceptionHandling:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("finish_reason", ["tool_calls", "stop"])
-    async def test_legacy_tool_markup_remains_visible_text(self, finish_reason):
+    async def test_legacy_tool_markup_remains_visible_text(
+        self, finish_reason: str
+    ) -> None:
         """Legacy markup cannot manufacture executable tool calls."""
         provider = _make_provider()
         request = _make_request()
@@ -954,28 +1018,35 @@ class TestStreamingExceptionHandling:
         parsed = parse_sse_text("".join(events))
         assert not any(
             event.event == "content_block_start"
-            and event.data.get("content_block", {}).get("type") == "tool_use"
+            and object_payload(event.data.get("content_block", {})).get("type")
+            == "tool_use"
             for event in parsed
         )
         assert not any(
             event.event == "content_block_delta"
-            and event.data.get("delta", {}).get("type") == "text_delta"
-            and event.data.get("delta", {}).get("text") == " "
+            and object_payload(event.data.get("delta", {})).get("type") == "text_delta"
+            and object_payload(event.data.get("delta", {})).get("text") == " "
             for event in parsed
         )
         assert any(
             event.event == "message_delta"
-            and event.data.get("delta", {}).get("stop_reason") == "end_turn"
+            and object_payload(event.data.get("delta", {})).get("stop_reason")
+            == "end_turn"
             for event in parsed
         )
 
         assert (
-            "".join(event.data.get("delta", {}).get("text", "") for event in parsed)
+            "".join(
+                string_payload(
+                    object_payload(event.data.get("delta", {})).get("text", "")
+                )
+                for event in parsed
+            )
             == heuristic_tool
         )
 
     @pytest.mark.asyncio
-    async def test_function_tag_markup_remains_text_beside_reasoning(self):
+    async def test_function_tag_markup_remains_text_beside_reasoning(self) -> None:
         """Function-looking text stays visible after reasoning parsing."""
         provider = _make_provider()
         request = _make_request(
@@ -1019,18 +1090,23 @@ class TestStreamingExceptionHandling:
             for event in parsed
             if event.event == "content_block_start"
         ]
-        tool_starts = [block for block in starts if block["type"] == "tool_use"]
+        tool_starts = [
+            block for block in starts if object_payload(block)["type"] == "tool_use"
+        ]
         input_json = "".join(
-            event.data.get("delta", {}).get("partial_json", "")
+            string_payload(
+                object_payload(event.data.get("delta", {})).get("partial_json", "")
+            )
             for event in parsed
             if event.event == "content_block_delta"
-            and event.data.get("delta", {}).get("type") == "input_json_delta"
+            and object_payload(event.data.get("delta", {})).get("type")
+            == "input_json_delta"
         )
         visible_text = "".join(
-            event.data.get("delta", {}).get("text", "")
+            string_payload(object_payload(event.data.get("delta", {})).get("text", ""))
             for event in parsed
             if event.event == "content_block_delta"
-            and event.data.get("delta", {}).get("type") == "text_delta"
+            and object_payload(event.data.get("delta", {})).get("type") == "text_delta"
         )
 
         assert tool_starts == []
@@ -1038,17 +1114,19 @@ class TestStreamingExceptionHandling:
         assert visible_text == raw_call.split("</think>", 1)[1]
         assert any(
             event.event == "content_block_delta"
-            and event.data.get("delta", {}).get("type") == "thinking_delta"
+            and object_payload(event.data.get("delta", {})).get("type")
+            == "thinking_delta"
             for event in parsed
         )
         assert any(
             event.event == "message_delta"
-            and event.data.get("delta", {}).get("stop_reason") == "end_turn"
+            and object_payload(event.data.get("delta", {})).get("stop_reason")
+            == "end_turn"
             for event in parsed
         )
 
     @pytest.mark.asyncio
-    async def test_native_tool_call_disables_function_tag_recovery(self):
+    async def test_native_tool_call_disables_function_tag_recovery(self) -> None:
         """Native structured calls win and release earlier candidate text in order."""
         provider = _make_provider()
         request = _make_request(
@@ -1085,23 +1163,26 @@ class TestStreamingExceptionHandling:
 
         parsed = parse_sse_text("".join(events))
         visible_text = "".join(
-            event.data.get("delta", {}).get("text", "")
+            string_payload(object_payload(event.data.get("delta", {})).get("text", ""))
             for event in parsed
             if event.event == "content_block_delta"
-            and event.data.get("delta", {}).get("type") == "text_delta"
+            and object_payload(event.data.get("delta", {})).get("type") == "text_delta"
         )
         tool_starts = [
             event.data["content_block"]
             for event in parsed
             if event.event == "content_block_start"
-            and event.data.get("content_block", {}).get("type") == "tool_use"
+            and object_payload(event.data.get("content_block", {})).get("type")
+            == "tool_use"
         ]
 
         assert visible_text == held_text
-        assert [block["id"] for block in tool_starts] == ["call_native"]
+        assert [object_payload(block)["id"] for block in tool_starts] == ["call_native"]
 
     @pytest.mark.asyncio
-    async def test_rejected_function_tag_candidate_bypasses_legacy_heuristics(self):
+    async def test_rejected_function_tag_candidate_bypasses_legacy_heuristics(
+        self,
+    ) -> None:
         """Rejected reserved text is preserved without a second permissive parse."""
         provider = _make_provider()
         request = _make_request(
@@ -1133,16 +1214,17 @@ class TestStreamingExceptionHandling:
 
         parsed = parse_sse_text("".join(events))
         visible_text = "".join(
-            event.data.get("delta", {}).get("text", "")
+            string_payload(object_payload(event.data.get("delta", {})).get("text", ""))
             for event in parsed
             if event.event == "content_block_delta"
-            and event.data.get("delta", {}).get("type") == "text_delta"
+            and object_payload(event.data.get("delta", {})).get("type") == "text_delta"
         )
         tool_starts = [
             event
             for event in parsed
             if event.event == "content_block_start"
-            and event.data.get("content_block", {}).get("type") == "tool_use"
+            and object_payload(event.data.get("content_block", {})).get("type")
+            == "tool_use"
         ]
 
         assert visible_text == raw
@@ -1150,7 +1232,9 @@ class TestStreamingExceptionHandling:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("committed", [False, True])
-    async def test_literal_markup_respects_connection_commit_boundary(self, committed):
+    async def test_literal_markup_respects_connection_commit_boundary(
+        self, committed: bool
+    ) -> None:
         """Literal markup follows ordinary retry and continuation boundaries."""
         provider = _make_provider()
         request = _make_request(
@@ -1190,16 +1274,17 @@ class TestStreamingExceptionHandling:
 
         parsed = parse_sse_text("".join(events))
         visible_text = "".join(
-            event.data.get("delta", {}).get("text", "")
+            string_payload(object_payload(event.data.get("delta", {})).get("text", ""))
             for event in parsed
             if event.event == "content_block_delta"
-            and event.data.get("delta", {}).get("type") == "text_delta"
+            and object_payload(event.data.get("delta", {})).get("type") == "text_delta"
         )
         tool_starts = [
             event.data["content_block"]
             for event in parsed
             if event.event == "content_block_start"
-            and event.data.get("content_block", {}).get("type") == "tool_use"
+            and object_payload(event.data.get("content_block", {})).get("type")
+            == "tool_use"
         ]
 
         assert mock_create.await_count == 2
@@ -1209,7 +1294,7 @@ class TestStreamingExceptionHandling:
         assert "tools" in mock_create.call_args_list[1].kwargs
 
     @pytest.mark.asyncio
-    async def test_precommit_retry_discards_abandoned_tool_id_candidate(self):
+    async def test_precommit_retry_discards_abandoned_tool_id_candidate(self) -> None:
         """An ID observed only by an invisible attempt cannot leak into its replay."""
         provider = _make_provider()
         request = _make_request()
@@ -1245,7 +1330,7 @@ class TestStreamingExceptionHandling:
         parsed = parse_sse_text("".join(events))
         [start] = _tool_use_starts(events)
         assert mock_create.await_count == 2
-        assert start["id"].startswith("tool_")
+        assert string_payload(start["id"]).startswith("tool_")
         assert start["id"] != "call_abandoned"
         assert sum(event.event == "message_start" for event in parsed) == 1
         assert sum(event.event == "content_block_start" for event in parsed) == 1
@@ -1253,7 +1338,7 @@ class TestStreamingExceptionHandling:
         assert sum(event.event == "message_stop" for event in parsed) == 1
 
     @pytest.mark.asyncio
-    async def test_colliding_tool_id_round_trips_as_distinct_matched_pair(self):
+    async def test_colliding_tool_id_round_trips_as_distinct_matched_pair(self) -> None:
         """A repaired public ID stays paired when Claude replays the next turn."""
         provider = _make_provider()
         first_pair = [
@@ -1337,20 +1422,25 @@ class TestStreamingExceptionHandling:
             reasoning=DEFAULT_REASONING_POLICY,
         )
         assistant_ids = [
-            message["tool_calls"][0]["id"]
-            for message in body["messages"]
-            if message.get("role") == "assistant" and message.get("tool_calls")
+            object_payload(array_payload(object_payload(message)["tool_calls"])[0])[
+                "id"
+            ]
+            for message in array_payload(body["messages"])
+            if object_payload(message).get("role") == "assistant"
+            and object_payload(message).get("tool_calls")
         ]
         result_ids = [
-            message["tool_call_id"]
-            for message in body["messages"]
-            if message.get("role") == "tool"
+            object_payload(message)["tool_call_id"]
+            for message in array_payload(body["messages"])
+            if object_payload(message).get("role") == "tool"
         ]
         assert assistant_ids == ["Bash:0", public_id]
         assert result_ids == ["Bash:0", public_id]
 
     @pytest.mark.asyncio
-    async def test_precommit_retry_emits_one_unduplicated_downstream_lifecycle(self):
+    async def test_precommit_retry_emits_one_unduplicated_downstream_lifecycle(
+        self,
+    ) -> None:
         """An abandoned attempt contributes no frame to the successful replay."""
         provider = _make_provider()
         request = _make_request()
@@ -1378,7 +1468,7 @@ class TestStreamingExceptionHandling:
         assert "hidden" not in event_text
         parsed = parse_sse_text(event_text)
         text_deltas = [
-            event.data.get("delta", {}).get("text", "")
+            object_payload(event.data.get("delta", {})).get("text", "")
             for event in parsed
             if event.event == "content_block_delta"
         ]
@@ -1392,7 +1482,9 @@ class TestStreamingExceptionHandling:
         assert parsed[-1].event == "message_stop"
 
     @pytest.mark.asyncio
-    async def test_responses_precommit_retry_emits_one_unduplicated_lifecycle(self):
+    async def test_responses_precommit_retry_emits_one_unduplicated_lifecycle(
+        self,
+    ) -> None:
         """Responses output also discards every frame from an abandoned attempt."""
         provider = _make_provider()
         request = OpenAIResponsesRequest(model="test-model", input="hello")
@@ -1429,7 +1521,7 @@ class TestStreamingExceptionHandling:
         assert "response.failed" not in event_names
 
     @pytest.mark.asyncio
-    async def test_responses_cancellation_closes_upstream_without_retry(self):
+    async def test_responses_cancellation_closes_upstream_without_retry(self) -> None:
         provider = _make_provider()
         request = OpenAIResponsesRequest(model="test-model", input="hello")
         stream = BlockingClosableAsyncStreamMock()
@@ -1440,7 +1532,7 @@ class TestStreamingExceptionHandling:
             new_callable=AsyncMock,
             return_value=stream,
         ) as create:
-            task = asyncio.create_task(
+            task = asyncio.ensure_future(
                 anext(
                     provider.stream_responses(
                         request,
@@ -1458,7 +1550,9 @@ class TestStreamingExceptionHandling:
         assert stream.close_calls == 1
 
     @pytest.mark.asyncio
-    async def test_precommit_retry_discards_abandoned_parser_and_usage_state(self):
+    async def test_precommit_retry_discards_abandoned_parser_and_usage_state(
+        self,
+    ) -> None:
         """A replay owns fresh parsers and terminal usage metadata."""
         provider = _make_provider()
         request = _make_request()
@@ -1487,10 +1581,10 @@ class TestStreamingExceptionHandling:
 
         parsed = parse_sse_text("".join(events))
         visible_text = "".join(
-            event.data.get("delta", {}).get("text", "")
+            string_payload(object_payload(event.data.get("delta", {})).get("text", ""))
             for event in parsed
             if event.event == "content_block_delta"
-            and event.data.get("delta", {}).get("type") == "text_delta"
+            and object_payload(event.data.get("delta", {})).get("type") == "text_delta"
         )
         final_usage = next(
             event.data["usage"] for event in parsed if event.event == "message_delta"
@@ -1504,7 +1598,7 @@ class TestStreamingExceptionHandling:
         assert sum(event.event == "message_stop" for event in parsed) == 1
 
     @pytest.mark.asyncio
-    async def test_create_correction_survives_later_precommit_retry(self):
+    async def test_create_correction_survives_later_precommit_retry(self) -> None:
         """A corrected request body outlives the replay-local stream state."""
         provider = _make_provider()
         request = _make_request()
@@ -1535,10 +1629,10 @@ class TestStreamingExceptionHandling:
 
         parsed = parse_sse_text("".join(events))
         text_deltas = [
-            event.data.get("delta", {}).get("text", "")
+            object_payload(event.data.get("delta", {})).get("text", "")
             for event in parsed
             if event.event == "content_block_delta"
-            and event.data.get("delta", {}).get("type") == "text_delta"
+            and object_payload(event.data.get("delta", {})).get("type") == "text_delta"
         ]
 
         assert create.await_count == 3
@@ -1552,7 +1646,7 @@ class TestStreamingExceptionHandling:
         assert sum(event.event == "message_stop" for event in parsed) == 1
 
     @pytest.mark.asyncio
-    async def test_precommit_retry_discards_abandoned_tool_name_fragment(self):
+    async def test_precommit_retry_discards_abandoned_tool_name_fragment(self) -> None:
         """A retried alias fragment cannot prefix or duplicate the successful call."""
         provider = _make_provider()
         original = "mcp__retry_tool_name__" + "x" * 70
@@ -1594,7 +1688,8 @@ class TestStreamingExceptionHandling:
             event.data["content_block"]
             for event in parsed
             if event.event == "content_block_start"
-            and event.data.get("content_block", {}).get("type") == "tool_use"
+            and object_payload(event.data.get("content_block", {})).get("type")
+            == "tool_use"
         ]
         assert create.await_count == 2
         assert tool_starts == [
@@ -1611,11 +1706,11 @@ class TestStreamingExceptionHandling:
         assert sum(event.event == "message_stop" for event in parsed) == 1
 
     @pytest.mark.asyncio
-    async def test_private_replacements_share_one_generation_budget(self):
+    async def test_private_replacements_share_one_generation_budget(self) -> None:
         """Private drafts are replaced within the same bounded execution."""
         provider = _make_provider()
         request = _make_request()
-        primary_attempts = UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS - 1
+        primary_attempts = PROVIDER_MAX_ATTEMPTS_DEFAULT - 1
         primary_streams = [
             AsyncStreamMock([_make_chunk(content="hello")])
             for _ in range(primary_attempts)
@@ -1638,7 +1733,7 @@ class TestStreamingExceptionHandling:
         ):
             events = await _collect_stream(provider, request)
 
-        assert create.await_count == UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS
+        assert create.await_count == PROVIDER_MAX_ATTEMPTS_DEFAULT
         assert all(
             call.kwargs["messages"] == create.await_args_list[0].kwargs["messages"]
             for call in create.await_args_list[:primary_attempts]
@@ -1649,7 +1744,7 @@ class TestStreamingExceptionHandling:
         )
         parsed = parse_sse_text("".join(events))
         text = "".join(
-            event.data.get("delta", {}).get("text", "")
+            string_payload(object_payload(event.data.get("delta", {})).get("text", ""))
             for event in parsed
             if event.event == "content_block_delta"
         )
@@ -1669,7 +1764,7 @@ class TestStreamingExceptionHandling:
         assert len({row["execution_id"] for row in starts}) == 1
 
     @pytest.mark.asyncio
-    async def test_disabled_thinking_recovery_discards_reasoning(self):
+    async def test_disabled_thinking_recovery_discards_reasoning(self) -> None:
         provider = _make_provider()
         request = _make_request()
         initial_stream = AsyncStreamMock([_make_chunk(content="hello")])
@@ -1691,19 +1786,19 @@ class TestStreamingExceptionHandling:
 
         parsed = parse_sse_text("".join(events))
         text = "".join(
-            event.data.get("delta", {}).get("text", "")
+            string_payload(object_payload(event.data.get("delta", {})).get("text", ""))
             for event in parsed
             if event.event == "content_block_delta"
         )
         assert text == "hello world"
         assert "hidden reasoning" not in "".join(events)
         assert not any(
-            event.data.get("delta", {}).get("type") == "thinking_delta"
+            object_payload(event.data.get("delta", {})).get("type") == "thinking_delta"
             for event in parsed
         )
 
     @pytest.mark.asyncio
-    async def test_context_exhaustion_during_recovery_remains_terminal(self):
+    async def test_context_exhaustion_during_recovery_remains_terminal(self) -> None:
         """A recovery request cannot turn context exhaustion into success."""
         original = ClosableAsyncStreamMock(
             [_make_chunk(content="partial" + ("x" * 70_000))]
@@ -1736,7 +1831,7 @@ class TestStreamingExceptionHandling:
         assert recovery.closed is True
 
     @pytest.mark.asyncio
-    async def test_context_error_opening_continuation_remains_terminal(self):
+    async def test_context_error_opening_continuation_remains_terminal(self) -> None:
         """A derived continuation's SDK context error replaces the cutoff."""
         original = ClosableAsyncStreamMock(
             [_make_chunk(content="partial" + ("x" * 70_000))]
@@ -1767,7 +1862,7 @@ class TestStreamingExceptionHandling:
         assert original.closed is True
 
     @pytest.mark.asyncio
-    async def test_primary_stream_closes_when_iteration_fails(self):
+    async def test_primary_stream_closes_when_iteration_fails(self) -> None:
         """OpenAI-chat main streams close after iterator failures."""
         provider = _make_provider()
         request = _make_request()
@@ -1788,7 +1883,7 @@ class TestStreamingExceptionHandling:
         assert "provider stream failed" in error.message.lower()
 
     @pytest.mark.asyncio
-    async def test_stream_rate_limit_uses_the_execution_retry_session(self):
+    async def test_stream_rate_limit_uses_the_execution_retry_session(self) -> None:
         """A create-time 429 consumes one attempt before a successful retry."""
         provider = _make_provider()
         request = _make_request()
@@ -1826,14 +1921,12 @@ class TestStreamChunkEdgeCases:
     """Tests for edge cases in stream chunk handling."""
 
     @pytest.mark.asyncio
-    async def test_stream_chunk_with_empty_choices_skipped(self):
+    async def test_stream_chunk_with_empty_choices_skipped(self) -> None:
         """Chunk with choices=[] is skipped without crashing."""
         provider = _make_provider()
         request = _make_request()
 
-        empty_choices_chunk = MagicMock()
-        empty_choices_chunk.choices = []
-        empty_choices_chunk.usage = None
+        empty_choices_chunk = _make_chunk().model_copy(update={"choices": []})
 
         finish_chunk = _make_chunk(finish_reason="stop")
         stream_mock = AsyncStreamMock([empty_choices_chunk, finish_chunk])
@@ -1853,17 +1946,14 @@ class TestStreamChunkEdgeCases:
         assert "message_stop" in event_text
 
     @pytest.mark.asyncio
-    async def test_stream_chunk_with_none_delta_handled(self):
+    async def test_stream_chunk_with_none_delta_handled(self) -> None:
         """Chunk with choice.delta=None is handled defensively."""
         provider = _make_provider()
         request = _make_request()
 
-        none_delta_chunk = MagicMock()
-        none_delta_chunk.usage = None
-        choice = MagicMock()
-        choice.delta = None
-        choice.finish_reason = None
-        none_delta_chunk.choices = [choice]
+        chunk = _make_chunk()
+        choice = chunk.choices[0].model_copy(update={"delta": None})
+        none_delta_chunk = chunk.model_copy(update={"choices": [choice]})
 
         finish_chunk = _make_chunk(finish_reason="stop")
         stream_mock = AsyncStreamMock([none_delta_chunk, finish_chunk])
@@ -1883,7 +1973,7 @@ class TestStreamChunkEdgeCases:
         assert "message_stop" in event_text
 
     @pytest.mark.asyncio
-    async def test_stream_generator_cleanup_on_exception(self):
+    async def test_stream_generator_cleanup_on_exception(self) -> None:
         """When stream raises mid-iteration, message_stop still emitted."""
         provider = _make_provider()
         request = _make_request()

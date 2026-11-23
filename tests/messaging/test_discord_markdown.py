@@ -18,66 +18,66 @@ from free_claude_code.messaging.rendering.markdown_tables import (
 class TestEscapeDiscord:
     """Tests for escape_discord."""
 
-    def test_empty_string(self):
+    def test_empty_string(self) -> None:
         assert escape_discord("") == ""
 
-    def test_plain_text_unchanged(self):
+    def test_plain_text_unchanged(self) -> None:
         assert escape_discord("hello world") == "hello world"
 
-    def test_special_chars_escaped(self):
+    def test_special_chars_escaped(self) -> None:
         for ch in "\\*_`~|>":
             assert escape_discord(ch) == f"\\{ch}"
 
-    def test_mixed_special_and_plain(self):
+    def test_mixed_special_and_plain(self) -> None:
         assert escape_discord("a*b_c") == "a\\*b\\_c"
 
-    def test_unicode_preserved(self):
+    def test_unicode_preserved(self) -> None:
         assert escape_discord("café 日本語") == "café 日本語"
 
 
 class TestEscapeDiscordCode:
     """Tests for escape_discord_code."""
 
-    def test_empty_string(self):
+    def test_empty_string(self) -> None:
         assert escape_discord_code("") == ""
 
-    def test_backslash_escaped(self):
+    def test_backslash_escaped(self) -> None:
         assert escape_discord_code("\\") == "\\\\"
 
-    def test_backtick_escaped(self):
+    def test_backtick_escaped(self) -> None:
         assert escape_discord_code("`") == "\\`"
 
-    def test_both_escaped(self):
+    def test_both_escaped(self) -> None:
         assert escape_discord_code("`\\") == "\\`\\\\"
 
 
 class TestDiscordBold:
     """Tests for discord_bold."""
 
-    def test_simple(self):
+    def test_simple(self) -> None:
         assert discord_bold("hello") == "**hello**"
 
-    def test_escapes_inner(self):
+    def test_escapes_inner(self) -> None:
         assert discord_bold("a*b") == "**a\\*b**"
 
 
 class TestDiscordCodeInline:
     """Tests for discord_code_inline."""
 
-    def test_simple(self):
+    def test_simple(self) -> None:
         assert discord_code_inline("x") == "`x`"
 
-    def test_escapes_backtick(self):
+    def test_escapes_backtick(self) -> None:
         assert discord_code_inline("`") == "`\\``"
 
 
 class TestFormatStatusDiscord:
     """Tests for format_status_discord."""
 
-    def test_label_only(self):
+    def test_label_only(self) -> None:
         assert format_status_discord("Running") == "**Running**"
 
-    def test_label_with_suffix(self):
+    def test_label_with_suffix(self) -> None:
         # Parentheses not in DISCORD_SPECIAL, so unchanged
         assert (
             format_status_discord("Queued", "(position 2)") == "**Queued** (position 2)"
@@ -87,47 +87,47 @@ class TestFormatStatusDiscord:
 class TestFormatStatus:
     """Tests for format_status."""
 
-    def test_label_only(self):
+    def test_label_only(self) -> None:
         assert format_status("🔄", "Running") == "🔄 **Running**"
 
-    def test_label_with_suffix(self):
+    def test_label_with_suffix(self) -> None:
         assert format_status("⏳", "Waiting", "5/10") == "⏳ **Waiting** 5/10"
 
 
 class TestIsGfmTableHeaderLine:
     """Tests for _is_gfm_table_header_line."""
 
-    def test_no_pipe_returns_false(self):
+    def test_no_pipe_returns_false(self) -> None:
         assert _is_gfm_table_header_line("hello world") is False
 
-    def test_separator_only_returns_false(self):
+    def test_separator_only_returns_false(self) -> None:
         assert _is_gfm_table_header_line("|---|") is False
         assert _is_gfm_table_header_line("|:---|:---|") is False
 
-    def test_valid_header(self):
+    def test_valid_header(self) -> None:
         assert _is_gfm_table_header_line("| A | B |") is True
         assert _is_gfm_table_header_line("A | B") is True
 
-    def test_single_column_returns_false(self):
+    def test_single_column_returns_false(self) -> None:
         assert _is_gfm_table_header_line("| A |") is False
 
 
 class TestNormalizeGfmTables:
     """Tests for _normalize_gfm_tables."""
 
-    def test_single_line_unchanged(self):
+    def test_single_line_unchanged(self) -> None:
         assert normalize_gfm_tables("hello") == "hello"
 
-    def test_two_lines_no_table_unchanged(self):
+    def test_two_lines_no_table_unchanged(self) -> None:
         assert normalize_gfm_tables("a\nb") == "a\nb"
 
-    def test_table_gets_blank_line_before(self):
+    def test_table_gets_blank_line_before(self) -> None:
         text = "para\n| A | B |\n|---|\n| 1 | 2 |"
         result = normalize_gfm_tables(text)
         assert "para" in result
         assert "| A | B |" in result
 
-    def test_table_inside_fence_unchanged(self):
+    def test_table_inside_fence_unchanged(self) -> None:
         text = "```\n| A | B |\n|---|\n```"
         result = normalize_gfm_tables(text)
         assert result == text
@@ -136,65 +136,65 @@ class TestNormalizeGfmTables:
 class TestRenderMarkdownToDiscord:
     """Tests for render_markdown_to_discord."""
 
-    def test_empty_string(self):
+    def test_empty_string(self) -> None:
         assert render_markdown_to_discord("") == ""
 
-    def test_plain_paragraph(self):
+    def test_plain_paragraph(self) -> None:
         assert "hello" in render_markdown_to_discord("hello")
 
-    def test_headings(self):
+    def test_headings(self) -> None:
         result = render_markdown_to_discord("# Title\n## Sub")
         assert "Title" in result
         assert "Sub" in result
 
-    def test_bold_italic(self):
+    def test_bold_italic(self) -> None:
         result = render_markdown_to_discord("**bold** *italic*")
         assert "bold" in result
         assert "italic" in result
 
-    def test_strikethrough(self):
+    def test_strikethrough(self) -> None:
         result = render_markdown_to_discord("~~strike~~")
         assert "strike" in result
 
-    def test_inline_code(self):
+    def test_inline_code(self) -> None:
         result = render_markdown_to_discord("use `code` here")
         assert "`" in result
         assert "code" in result
 
-    def test_code_block(self):
+    def test_code_block(self) -> None:
         result = render_markdown_to_discord("```\nprint(1)\n```")
         assert "print(1)" in result
         assert "```" in result
 
-    def test_blockquote(self):
+    def test_blockquote(self) -> None:
         result = render_markdown_to_discord("> quote")
         assert "quote" in result
 
-    def test_bullet_list(self):
+    def test_bullet_list(self) -> None:
         result = render_markdown_to_discord("- a\n- b")
         assert "a" in result
         assert "b" in result
 
-    def test_ordered_list(self):
+    def test_ordered_list(self) -> None:
         result = render_markdown_to_discord("1. first\n2. second")
         assert "first" in result
         assert "second" in result
 
-    def test_link(self):
+    def test_link(self) -> None:
         result = render_markdown_to_discord("[text](https://example.com)")
         assert "text" in result
         assert "https://example.com" in result
 
-    def test_image_with_alt(self):
+    def test_image_with_alt(self) -> None:
         result = render_markdown_to_discord("![alt](https://img.png)")
         assert "alt" in result
         assert "https://img.png" in result
 
-    def test_image_without_alt(self):
+    def test_image_without_alt(self) -> None:
         result = render_markdown_to_discord("![](https://img.png)")
         assert "https://img.png" in result
 
-    def test_gfm_table(self):
+    def test_gfm_table(self) -> None:
         text = "| A | B |\n|---|---|\n| 1 | 2 |"
         result = render_markdown_to_discord(text)
         assert "A" in result

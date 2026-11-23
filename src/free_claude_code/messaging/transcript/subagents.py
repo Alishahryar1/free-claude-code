@@ -26,7 +26,7 @@ class SubagentState:
         return self._segments[-1] if self._segments else None
 
     def push(self, tool_id: str, segment: SubagentSegment) -> None:
-        marker = str(tool_id or "").strip() or f"__task_{len(self._stack) + 1}"
+        marker = (tool_id or "").strip() or f"__task_{len(self._stack) + 1}"
         self._stack.append(marker)
         self._segments.append(segment)
         if self._debug:
@@ -38,7 +38,7 @@ class SubagentState:
             )
 
     def close_for_tool_result(self, tool_id: str, *, tool_name: str | None) -> bool:
-        tool_id = str(tool_id or "").strip()
+        tool_id = (tool_id or "").strip()
         popped = self._pop(tool_id)
         top = self._stack[-1] if self._stack else ""
         looks_like_task_id = "task" in tool_id.lower()
@@ -54,7 +54,7 @@ class SubagentState:
         return popped
 
     def _pop(self, tool_id: str) -> bool:
-        tool_id = str(tool_id or "").strip()
+        tool_id = (tool_id or "").strip()
         if not self._stack:
             return False
 

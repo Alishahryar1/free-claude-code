@@ -3,20 +3,23 @@ from dataclasses import dataclass
 import httpx
 import pytest
 
+from free_claude_code.core.json_types import JsonObject
 from smoke.lib.local_providers import first_local_provider_model_id
 
 
 @dataclass(slots=True)
 class FakeResponse:
     status_code: int
-    payload: dict
+    payload: JsonObject
     text: str = ""
 
-    def json(self) -> dict:
+    def json(self) -> JsonObject:
         return self.payload
 
 
-def test_local_provider_openai_models_returns_first_id(monkeypatch) -> None:
+def test_local_provider_openai_models_returns_first_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[tuple[str, float]] = []
 
     def fake_get(url: str, *, timeout: float) -> FakeResponse:
@@ -43,7 +46,7 @@ def test_local_provider_openai_models_returns_first_id(monkeypatch) -> None:
     ],
 )
 def test_local_provider_root_url_targets_openai_v1_models(
-    monkeypatch, provider: str, port: int, model_id: str
+    monkeypatch: pytest.MonkeyPatch, provider: str, port: int, model_id: str
 ) -> None:
     def fake_get(url: str, *, timeout: float) -> FakeResponse:
         assert url == f"http://127.0.0.1:{port}/v1/models"
@@ -62,7 +65,9 @@ def test_local_provider_root_url_targets_openai_v1_models(
     )
 
 
-def test_local_provider_not_running_is_missing_env_skip(monkeypatch) -> None:
+def test_local_provider_not_running_is_missing_env_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def fake_get(url: str, *, timeout: float) -> FakeResponse:
         raise httpx.ConnectError("refused")
 
@@ -78,7 +83,9 @@ def test_local_provider_not_running_is_missing_env_skip(monkeypatch) -> None:
     assert "missing_env: llamacpp local server is not running" in str(excinfo.value)
 
 
-def test_local_provider_empty_model_list_is_missing_env_skip(monkeypatch) -> None:
+def test_local_provider_empty_model_list_is_missing_env_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def fake_get(url: str, *, timeout: float) -> FakeResponse:
         return FakeResponse(200, {"data": []})
 

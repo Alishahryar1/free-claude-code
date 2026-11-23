@@ -2,7 +2,7 @@
 
 import secrets
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from loguru import logger
 
 from free_claude_code.application.errors import UnknownProviderError
@@ -14,7 +14,18 @@ from .ports import ApiServices
 
 def get_services(request: Request) -> ApiServices:
     """Return the complete services supplied when the app was constructed."""
-    return request.app.state.services
+    app: object = request.scope.get("app")
+    if not isinstance(app, FastAPI):
+        raise RuntimeError("FCC dependencies require the FastAPI application.")
+    return app_services(app)
+
+
+def app_services(app: FastAPI) -> ApiServices:
+    """Read the services attached by the application factory."""
+    services: object = getattr(app.state, "services", None)
+    if not isinstance(services, ApiServices):
+        raise RuntimeError("FCC application services are unavailable.")
+    return services
 
 
 def get_settings(services: ApiServices = Depends(get_services)) -> Settings:

@@ -1,7 +1,9 @@
 """Protocols for messaging-owned managed Claude sessions."""
 
 from collections.abc import AsyncGenerator
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
+
+from free_claude_code.core.json_types import JsonObject
 
 
 @runtime_checkable
@@ -10,7 +12,7 @@ class ManagedClaudeSessionProtocol(Protocol):
 
     def start_task(
         self, prompt: str, session_id: str | None = None, fork_session: bool = False
-    ) -> AsyncGenerator[dict, Any]: ...
+    ) -> AsyncGenerator[JsonObject]: ...
 
     @property
     def is_busy(self) -> bool: ...
@@ -32,4 +34,4 @@ class ManagedClaudeSessionManagerProtocol(Protocol):
 
     async def remove_session(self, session_id: str) -> bool: ...
 
-    def get_stats(self) -> dict: ...
+    def get_stats(self) -> dict[str, int]: ...

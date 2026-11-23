@@ -9,9 +9,16 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from free_claude_code.core.json_types import JsonObject
 from tests.api.support import provider_manager_for_app
 from tests.api.test_four_protocol_matrix import matrix_app
 from tests.api.test_gemini_continuation_replay import native
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+)
 
 # google-genai 3.0 has a docstring escape warning under Python 3.14.
 with warnings.catch_warnings():
@@ -40,8 +47,12 @@ with warnings.catch_warnings():
     ],
 )
 def test_sdk_recovers_and_replays_native_generation(
-    streaming, client_api, empty_terminal, case, monkeypatch
-):
+    streaming: bool,
+    client_api: str,
+    empty_terminal: bool,
+    case: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     args = {
         "integer": {"amount": 9007199254740993},
         "fractional": {"amount": 1.5},
@@ -52,34 +63,35 @@ def test_sdk_recovers_and_replays_native_generation(
         "native_id": {"amount": 1.5},
         "null_fields": {},
     }.get(case)
-    call = {"name": "read", "args": args}
+    function_call: JsonObject = {"name": "read", "args": args}
     if case == "native_id":
-        call["id"] = "native-id"
+        function_call["id"] = "native-id"
     elif case == "null_fields":
-        call.update(id=None, args=None)
-    signed = {
-        "role": "model",
-        "parts": [
-            {
-                **({"text": "Done 🧠."} if args is None else {"functionCall": call}),
-                "thoughtSignature": base64.b64encode(
-                    b"original-native-signature"
-                ).decode(),
-            }
-        ],
-    }
+        function_call.update(id=None, args=None)
+    signed_parts: list[JsonObject] = [
+        {
+            **(
+                {"text": "Done 🧠."}
+                if args is None
+                else {"functionCall": function_call}
+            ),
+            "thoughtSignature": base64.b64encode(b"original-native-signature").decode(),
+        }
+    ]
+    signed: JsonObject = {"role": "model", "parts": signed_parts}
     if case == "unsigned":
-        signed["parts"][0].pop("thoughtSignature")
+        signed_parts[0].pop("thoughtSignature")
     elif empty_terminal:
-        signature = signed["parts"][0].pop("thoughtSignature")
-        signed["parts"].append({"thoughtSignature": signature})
+        signature = signed_parts[0].pop("thoughtSignature")
+        signed_parts.append({"thoughtSignature": signature})
     bodies = []
 
-    def upstream(request):
-        value = json.loads(request.content)
+    def upstream(request: httpx.Request):
+        value = decode_object(request.content)
         bodies.append(deepcopy(value))
+        event: JsonObject
         if len(bodies) == 1:
-            event = native("Prefix ")
+            event = {**native("Prefix ")}
         elif len(bodies) == 2:
             event = {
                 "candidates": [{"index": 0, "content": signed, "finishReason": "STOP"}]
@@ -89,19 +101,17 @@ def test_sdk_recovers_and_replays_native_generation(
                 assert ("Prefix " in json.dumps(value["contents"])) == streaming
                 assert "Done" in json.dumps(value["contents"])
             else:
-                assert value["contents"][:-2] == bodies[1]["contents"]
+                assert array_payload(value["contents"])[:-2] == bodies[1]["contents"]
                 expected = deepcopy(signed)
                 if not streaming and case in {"defaults", "null_fields"}:
-                    expected_parts = expected["parts"]
-                    assert isinstance(expected_parts, list)
-                    function = expected_parts[0]["functionCall"]
-                    assert isinstance(function, dict)
+                    expected_parts = object_array(expected["parts"])
+                    function = object_payload(expected_parts[0]["functionCall"])
                     if case == "defaults":
                         function["args"] = {"amount": 1.5}
                     else:
                         function.pop("args")
                         function.pop("id")
-                assert value["contents"][-2] == expected
+                assert array_payload(value["contents"])[-2] == expected
             event = {
                 "candidates": [
                     {
@@ -114,16 +124,17 @@ def test_sdk_recovers_and_replays_native_generation(
                     }
                 ]
             }
-        events = [deepcopy(event)]
+        events: list[JsonObject] = [deepcopy(event)]
         if len(bodies) == 2:
             if empty_terminal:
-                content = events[0]["candidates"][0]["content"]
-                events[0]["candidates"][0].pop("finishReason")
-                terminal = {"index": 0, "finishReason": "STOP"}
+                candidate = object_array(events[0]["candidates"])[0]
+                content = object_payload(candidate["content"])
+                candidate.pop("finishReason")
+                terminal: JsonObject = {"index": 0, "finishReason": "STOP"}
                 if case != "unsigned":
                     terminal["content"] = {
                         "role": "model",
-                        "parts": [content["parts"].pop()],
+                        "parts": [array_payload(content["parts"]).pop()],
                     }
                 events.extend(
                     [
@@ -133,17 +144,19 @@ def test_sdk_recovers_and_replays_native_generation(
                     ]
                 )
             if case == "no_role":
-                events[0]["candidates"][0]["content"].pop("role")
+                object_payload(object_array(events[0]["candidates"])[0]["content"]).pop(
+                    "role"
+                )
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
             text="".join("data: " + json.dumps(item) + "\n\n" for item in events),
         )
 
-    app = matrix_app("gemini", upstream)
+    app = matrix_app("gemini", native_reply=upstream)
     with TestClient(app) as fcc:
 
-        def bridge(request):
+        def bridge(request: httpx.Request):
             return fcc.request(
                 request.method,
                 str(request.url),
@@ -259,8 +272,8 @@ def test_sdk_recovers_and_replays_native_generation(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("async_client", [False, True])
 async def test_sdk_chat_automatic_tool_result_preserves_recovered_history(
-    async_client, monkeypatch
-):
+    async_client: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     bodies = []
     executed = []
     signed = {
@@ -273,20 +286,28 @@ async def test_sdk_chat_automatic_tool_result_preserves_recovered_history(
         ],
     }
 
-    def upstream(request):
-        value = json.loads(request.content)
+    def upstream(request: httpx.Request):
+        value = decode_object(request.content)
         bodies.append(deepcopy(value))
         if len(bodies) == 1:
-            event = native("Prefix ")
+            event = {**native("Prefix ")}
         elif len(bodies) == 2:
             event = {
                 "candidates": [{"index": 0, "content": signed, "finishReason": "STOP"}]
             }
         else:
             assert (
-                value["contents"][: len(bodies[1]["contents"])] == bodies[1]["contents"]
+                array_payload(value["contents"])[
+                    : len(array_payload(bodies[1]["contents"]))
+                ]
+                == bodies[1]["contents"]
             )
-            assert value["contents"][len(bodies[1]["contents"])] == signed
+            assert (
+                array_payload(value["contents"])[
+                    len(array_payload(bodies[1]["contents"]))
+                ]
+                == signed
+            )
             assert "functionResponse" in json.dumps(value["contents"])
             event = {
                 "candidates": [
@@ -310,10 +331,10 @@ async def test_sdk_chat_automatic_tool_result_preserves_recovered_history(
         executed.append(amount)
         return {"result": "ok"}
 
-    app = matrix_app("gemini", upstream)
+    app = matrix_app("gemini", native_reply=upstream)
     with TestClient(app) as fcc:
 
-        def bridge(request):
+        def bridge(request: httpx.Request):
             return fcc.request(
                 request.method,
                 str(request.url),
@@ -321,7 +342,7 @@ async def test_sdk_chat_automatic_tool_result_preserves_recovered_history(
                 headers=request.headers,
             )
 
-        async def async_bridge(request):
+        async def async_bridge(request: httpx.Request):
             response = bridge(request)
             return httpx.Response(
                 response.status_code, headers=response.headers, content=response.content

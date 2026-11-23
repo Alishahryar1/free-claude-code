@@ -36,17 +36,18 @@ class RequestCorrelationMiddleware:
             return
 
         request_id = new_request_id()
-        state = scope.setdefault("state", {})
+        state: dict[str, object] = scope.setdefault("state", {})
         state[_REQUEST_ID_STATE_ATTRIBUTE] = request_id
-        method = scope.get("method", "")
-        path = scope.get("path", "")
+        method: str = scope.get("method", "")
+        path: str = scope.get("path", "")
         request_headers = Headers(scope=scope)
         claude_sid = extract_claude_session_id_from_headers(request_headers)
 
         async def send_with_correlation(message: Message) -> None:
             if message["type"] == "http.response.start":
                 message = dict(message)
-                raw_headers = list(message.get("headers", ()))
+                headers: list[tuple[bytes, bytes]] = message.get("headers", [])
+                raw_headers = list(headers)
                 _set_request_id_headers(
                     MutableHeaders(raw=raw_headers),
                     request_id=request_id,

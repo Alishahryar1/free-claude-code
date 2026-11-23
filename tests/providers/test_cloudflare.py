@@ -1,6 +1,5 @@
 """Tests for Cloudflare Workers AI OpenAI-compatible chat provider."""
 
-import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +17,7 @@ from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.chat_completions.response import ChatResponseAccumulator
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.cloudflare import (
     CloudflareProvider,
@@ -29,6 +29,12 @@ from tests.providers.support import (
     make_provider_config,
     reasoning_for,
     sdk_chat_chunk,
+)
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
 )
 
 _ACCOUNT_ID = "account-123"
@@ -143,7 +149,12 @@ def test_build_request_body_preserves_literal_cf_model_id_and_controls_thinking(
     assert body["model"] == "@cf/moonshotai/kimi-k2.6"
     assert body["max_completion_tokens"] == 100
     assert "max_tokens" not in body
-    assert body["extra_body"]["chat_template_kwargs"]["thinking"] is True
+    assert (
+        object_payload(object_payload(body["extra_body"])["chat_template_kwargs"])[
+            "thinking"
+        ]
+        is True
+    )
 
 
 def test_build_request_body_disabled_thinking_sets_cloudflare_template_flag(
@@ -161,7 +172,12 @@ def test_build_request_body_disabled_thinking_sets_cloudflare_template_flag(
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["chat_template_kwargs"]["thinking"] is False
+    assert (
+        object_payload(object_payload(body["extra_body"])["chat_template_kwargs"])[
+            "thinking"
+        ]
+        is False
+    )
 
 
 def test_build_request_body_preserves_user_extra_body_without_overriding_thinking(
@@ -179,7 +195,12 @@ def test_build_request_body_preserves_user_extra_body_without_overriding_thinkin
         request, reasoning=reasoning_for(request)
     )
 
-    assert body["extra_body"]["chat_template_kwargs"]["thinking"] is False
+    assert (
+        object_payload(object_payload(body["extra_body"])["chat_template_kwargs"])[
+            "thinking"
+        ]
+        is False
+    )
 
 
 @pytest.mark.asyncio
@@ -243,7 +264,8 @@ async def test_stream_uses_openai_chat_completions(
     parsed = parse_sse_text("".join(events))
     assert any(
         event.event == "content_block_delta"
-        and event.data.get("delta", {}).get("text") == "Hello from Cloudflare"
+        and object_payload(event.data.get("delta", {})).get("text")
+        == "Hello from Cloudflare"
         for event in parsed
     )
     assert mock_create.call_args.kwargs["model"] == "@cf/moonshotai/kimi-k2.6"
@@ -276,7 +298,8 @@ async def test_stream_maps_cloudflare_reasoning_delta_to_thinking(
     parsed = parse_sse_text("".join(events))
     assert any(
         event.event == "content_block_delta"
-        and event.data.get("delta", {}).get("thinking") == "Cloudflare reasoning"
+        and object_payload(event.data.get("delta", {})).get("thinking")
+        == "Cloudflare reasoning"
         for event in parsed
     )
 
@@ -331,13 +354,15 @@ async def test_stream_maps_openai_tool_calls_to_tool_use(
     parsed = parse_sse_text("".join(events))
     assert any(
         event.event == "content_block_start"
-        and event.data.get("content_block", {}).get("type") == "tool_use"
-        and event.data.get("content_block", {}).get("name") == "echo"
+        and object_payload(event.data.get("content_block", {})).get("type")
+        == "tool_use"
+        and object_payload(event.data.get("content_block", {})).get("name") == "echo"
         for event in parsed
     )
     assert any(
         event.event == "content_block_delta"
-        and event.data.get("delta", {}).get("partial_json") == '{"value":"x"}'
+        and object_payload(event.data.get("delta", {})).get("partial_json")
+        == '{"value":"x"}'
         for event in parsed
     )
 
@@ -346,8 +371,8 @@ async def test_stream_maps_openai_tool_calls_to_tool_use(
 @pytest.mark.parametrize("wire", ["messages", "chat"])
 @pytest.mark.parametrize("numeric", [206, 0, -7, 1.25])
 async def test_numeric_text_reaches_translated_and_native_consumers(
-    cloudflare_provider, wire, numeric
-):
+    cloudflare_provider: CloudflareProvider, wire: str, numeric: float | int
+) -> None:
     chunks = [
         sdk_chat_chunk(
             {"choices": [{"delta": {"content": value}, "finish_reason": None}]}
@@ -377,18 +402,25 @@ async def test_numeric_text_reaches_translated_and_native_consumers(
         frames = [frame async for packet in stream for frame in packet.frames]
     parsed = parse_sse_text("".join(frames))
     if wire == "messages":
-        text = "".join(e.data.get("delta", {}).get("text", "") for e in parsed)
+        text = "".join(
+            string_payload(object_payload(e.data.get("delta", {})).get("text", ""))
+            for e in parsed
+        )
         assert parsed[-1].event == "message_stop"
     else:
         accumulator = ChatResponseAccumulator()
         for event in parsed:
             accumulator.feed(event.data)
         accumulator.finish()
-        text = accumulator.result()["choices"][0]["message"]["content"]
+        text = object_payload(
+            object_payload(array_payload(accumulator.result()["choices"])[0])["message"]
+        )["content"]
         assert all(
-            isinstance(choice["delta"].get("content", ""), str)
+            isinstance(
+                object_payload(object_payload(choice)["delta"]).get("content", ""), str
+            )
             for event in parsed
-            for choice in event.data.get("choices", [])
+            for choice in array_payload(event.data.get("choices", []))
         )
     assert text == f"FCC_{numeric}_SMOKE"
     assert create.call_count == 1
@@ -396,15 +428,19 @@ async def test_numeric_text_reaches_translated_and_native_consumers(
 
 
 @pytest.mark.asyncio
-async def test_captured_cloudflare_numeric_stream(cloudflare_provider):
-    chunks = json.loads(
+async def test_captured_cloudflare_numeric_stream(
+    cloudflare_provider: CloudflareProvider,
+) -> None:
+    chunks = load_json_value(
         (Path(__file__).parent / "fixtures/cloudflare_numeric_content.json").read_text()
     )
     with patch.object(
         cloudflare_provider._client.chat.completions,
         "create",
         new_callable=AsyncMock,
-        return_value=SDKStreamDouble(_stream(*(sdk_chat_chunk(c) for c in chunks))),
+        return_value=SDKStreamDouble(
+            _stream(*(sdk_chat_chunk(c) for c in object_array(chunks)))
+        ),
     ):
         frames = [
             frame
@@ -413,7 +449,8 @@ async def test_captured_cloudflare_numeric_stream(cloudflare_provider):
         ]
     parsed = parse_sse_text("".join(frames))
     assert "FCC_206_SMOKE" in "".join(
-        e.data.get("delta", {}).get("text", "") for e in parsed
+        string_payload(object_payload(e.data.get("delta", {})).get("text", ""))
+        for e in parsed
     )
     assert parsed[-1].event == "message_stop"
 
@@ -421,7 +458,9 @@ async def test_captured_cloudflare_numeric_stream(cloudflare_provider):
 @pytest.mark.parametrize(
     "value", [True, False, {}, [], float("inf"), float("-inf"), float("nan")]
 )
-def test_cloudflare_rejects_non_text_non_numeric_content(cloudflare_provider, value):
+def test_cloudflare_rejects_non_text_non_numeric_content(
+    cloudflare_provider: CloudflareProvider, value: JsonValue
+) -> None:
     chunk = sdk_chat_chunk({"choices": [{"delta": {"content": value}}]})
     with pytest.raises(ExecutionFailure) as caught:
         cloudflare_provider._behavior.normalize_chunk(chunk)
@@ -430,9 +469,9 @@ def test_cloudflare_rejects_non_text_non_numeric_content(cloudflare_provider, va
 
 
 def test_cloudflare_normalization_preserves_other_fields_and_source(
-    cloudflare_provider,
-):
-    payload = {
+    cloudflare_provider: CloudflareProvider,
+) -> None:
+    payload: JsonObject = {
         "opaque": {"keep": 0},
         "usage": {"prompt_tokens": 3, "completion_tokens": 2},
         "choices": [
@@ -468,10 +507,13 @@ def test_cloudflare_normalization_preserves_other_fields_and_source(
             **payload,
             "choices": [
                 {
-                    **payload["choices"][0],
-                    "delta": {**payload["choices"][0]["delta"], "content": "0"},
+                    **object_array(payload["choices"])[0],
+                    "delta": {
+                        **object_payload(object_array(payload["choices"])[0]["delta"]),
+                        "content": "0",
+                    },
                 },
-                *payload["choices"][1:],
+                *object_array(payload["choices"])[1:],
             ],
         }
     )
@@ -486,6 +528,8 @@ def test_cloudflare_normalization_preserves_other_fields_and_source(
     "payload",
     [{}, {"choices": []}, {"choices": [{"delta": {}}]}, {"choices": [{"delta": None}]}],
 )
-def test_cloudflare_leaves_non_content_frames_unchanged(cloudflare_provider, payload):
+def test_cloudflare_leaves_non_content_frames_unchanged(
+    cloudflare_provider: CloudflareProvider, payload: JsonObject
+) -> None:
     chunk = sdk_chat_chunk(payload)
     assert cloudflare_provider._behavior.normalize_chunk(chunk) is chunk

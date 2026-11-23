@@ -3,7 +3,6 @@
 import asyncio
 from collections import deque
 from collections.abc import Awaitable, Callable
-from typing import Any
 
 from loguru import logger
 
@@ -35,15 +34,15 @@ class MessagingRateLimiter:
         # Custom queue state - using deque for O(1) popleft
         self._queue_list: deque[str] = deque()  # Deque of dedup_keys in order
         self._queue_map: dict[
-            str, tuple[Callable[[], Awaitable[Any]], list[asyncio.Future]]
+            str, tuple[Callable[[], Awaitable[object]], list[asyncio.Future[object]]]
         ] = {}
         self._condition = asyncio.Condition()
         self._shutdown = asyncio.Event()
         self._worker_task: asyncio.Task[None] | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
-        self._active_futures: list[asyncio.Future[Any]] = []
+        self._active_futures: list[asyncio.Future[object]] = []
         self._closed = False
-        self._paused_until = 0
+        self._paused_until = 0.0
 
         logger.info(
             f"MessagingRateLimiter initialized ({rate_limit} req / {rate_window}s with Task Compaction)"
@@ -210,8 +209,8 @@ class MessagingRateLimiter:
 
     async def _enqueue_internal(
         self,
-        func: Callable[[], Awaitable[Any]],
-        future: asyncio.Future[Any],
+        func: Callable[[], Awaitable[object]],
+        future: asyncio.Future[object],
         dedup_key: str,
         front: bool = False,
     ) -> None:
@@ -219,8 +218,8 @@ class MessagingRateLimiter:
 
     async def _enqueue_internal_multi(
         self,
-        func: Callable[[], Awaitable[Any]],
-        futures: list[asyncio.Future[Any]],
+        func: Callable[[], Awaitable[object]],
+        futures: list[asyncio.Future[object]],
         dedup_key: str,
         front: bool = False,
     ) -> None:
@@ -246,8 +245,8 @@ class MessagingRateLimiter:
                 self._condition.notify_all()
 
     async def enqueue(
-        self, func: Callable[[], Awaitable[Any]], dedup_key: str | None = None
-    ) -> Any:
+        self, func: Callable[[], Awaitable[object]], dedup_key: str | None = None
+    ) -> object:
         """
         Enqueue a messaging task and return its future result.
         If dedup_key is provided, subsequent tasks with the same key will replace this one.
@@ -266,7 +265,7 @@ class MessagingRateLimiter:
         return await future
 
     def fire_and_forget(
-        self, func: Callable[[], Awaitable[Any]], dedup_key: str | None = None
+        self, func: Callable[[], Awaitable[object]], dedup_key: str | None = None
     ) -> None:
         """Enqueue a task without waiting for the result."""
         self._require_running()
@@ -274,45 +273,17 @@ class MessagingRateLimiter:
             dedup_key = f"task_{id(func)}_{asyncio.get_running_loop().time()}"
 
         async def _wrapped() -> None:
-            max_retries = 2
-            for attempt in range(max_retries + 1):
-                try:
-                    await self.enqueue(func, dedup_key)
-                    return
-                except Exception as e:
-                    error_msg = str(e).lower()
-                    # Only retry transient connectivity issues that might have slipped through
-                    # or occurred between platform checks.
-                    if attempt < max_retries and any(
-                        x in error_msg for x in ["connect", "timeout", "broken"]
-                    ):
-                        wait = 2**attempt
-                        if self._log_error_details:
-                            logger.warning(
-                                "Limiter fire_and_forget transient error (attempt {}): {}. Retrying in {}s...",
-                                attempt + 1,
-                                e,
-                                wait,
-                            )
-                        else:
-                            logger.warning(
-                                "Limiter fire_and_forget transient error (attempt {}): exc_type={}. Retrying in {}s...",
-                                attempt + 1,
-                                type(e).__name__,
-                                wait,
-                            )
-                        await asyncio.sleep(wait)
-                        continue
-
-                    logger.error(
-                        "Final error in fire_and_forget for key {}: {}",
-                        dedup_key,
-                        format_exception_for_log(
-                            e,
-                            log_full_message=self._log_error_details,
-                        ),
-                    )
-                    break
+            try:
+                await self.enqueue(func, dedup_key)
+            except Exception as e:
+                logger.error(
+                    "fire_and_forget failed for key {}: {}",
+                    dedup_key,
+                    format_exception_for_log(
+                        e,
+                        log_full_message=self._log_error_details,
+                    ),
+                )
 
         task = asyncio.create_task(_wrapped(), name=f"msg-limiter:{dedup_key}")
         self._background_tasks.add(task)

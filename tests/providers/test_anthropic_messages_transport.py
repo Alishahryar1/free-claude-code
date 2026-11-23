@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
+from typing import override
 
 import httpx
 import pytest
@@ -28,6 +29,7 @@ from free_claude_code.providers.anthropic_messages.transport import (
 from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.http import maybe_await_aclose
 from tests.providers.support import immediate_admission
+from tests.wire_payload import decode_object, int_payload, object_array, object_payload
 
 
 @pytest.mark.asyncio
@@ -54,14 +56,14 @@ from tests.providers.support import immediate_admission
 )
 @pytest.mark.parametrize("cap", [None, 4096])
 async def test_tolerant_classifier_corrects_required_reasoning(
-    stream_error, error, cap
-):
+    stream_error: bool, error: JsonObject, cap: int | None
+) -> None:
     bodies = []
 
-    def handler(request):
-        body = json.loads(request.content)
+    def handler(request: httpx.Request):
+        body = decode_object(request.content)
         bodies.append(body)
-        if body.get("thinking", {}).get("type") == "disabled":
+        if object_payload(body.get("thinking", {})).get("type") == "disabled":
             if stream_error:
                 return httpx.Response(
                     200,
@@ -183,7 +185,14 @@ async def test_unicode_line_characters_remain_inside_sse_text(separator: str) ->
             )
         )
     assert endpoint.refreshes == [False]
-    assert output[-1].data["response"]["output"][0]["content"][0]["text"] == text
+    assert (
+        object_array(
+            object_array(object_payload(output[-1].data["response"])["output"])[0][
+                "content"
+            ]
+        )[0]["text"]
+        == text
+    )
 
 
 class Wire(httpx.AsyncByteStream):
@@ -199,12 +208,14 @@ class Wire(httpx.AsyncByteStream):
         self._on_close = closed
         self._close_gate = close_gate
 
+    @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
         for chunk in self.chunks:
             if isinstance(chunk, Exception):
                 raise chunk
             yield chunk
 
+    @override
     async def aclose(self) -> None:
         if self._close_gate is not None:
             await self._close_gate.wait()
@@ -274,12 +285,12 @@ def _transport(
     [(2048, 4096, 2048), (4096, 2048, 2048), (4096, None, 4096)],
 )
 async def test_model_metadata_cannot_relax_declared_profile_cap(
-    profile_cap, model_cap, expected
-):
+    profile_cap: int, model_cap: int | None, expected: int
+) -> None:
     bodies = []
 
-    def reply(request):
-        bodies.append(json.loads(request.content))
+    def reply(request: httpx.Request):
+        bodies.append(decode_object(request.content))
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -364,16 +375,16 @@ async def test_fragmented_messages_http_keeps_native_path_and_public_identity(
     assert requests[0].headers["Authorization"] == "Bearer original"
     assert requests[0].headers["anthropic-version"] == "2023-06-01"
     assert requests[0].headers.get_list("anthropic-version") == ["2023-06-01"]
-    body = json.loads(requests[0].content)
+    body = decode_object(requests[0].content)
     assert body["stream"] is True and body["model"] == "native"
-    assert body["max_tokens"] > 0
+    assert int_payload(body["max_tokens"]) > 0
     if responses:
-        assert output[-1].data["response"]["model"] == "public"
+        assert object_payload(output[-1].data["response"])["model"] == "public"
         assert output[-1].event == "response.completed"
     else:
         assert requests[0].headers["anthropic-beta"] == "test-beta"
-        assert output[0].data["message"]["id"] == "upstream-id"
-        assert output[0].data["message"]["model"] == "public"
+        assert object_payload(output[0].data["message"])["id"] == "upstream-id"
+        assert object_payload(output[0].data["message"])["model"] == "public"
         assert output[-1].event == "message_stop"
 
 
@@ -601,6 +612,7 @@ async def test_task_cancellation_closes_live_http_response() -> None:
     entered = asyncio.Event()
 
     class BlockingWire(Wire):
+        @override
         async def __aiter__(self) -> AsyncIterator[bytes]:
             yield _sse(*_events("x" * 70_000)[:3])
             entered.set()

@@ -1,5 +1,6 @@
 """Buffered native calls still satisfy the destination's executable wire contract."""
 
+from collections.abc import AsyncIterator
 from copy import deepcopy
 
 import httpx
@@ -12,21 +13,32 @@ from free_claude_code.api.response_streams import (
     ManagedStreamingResponse,
     chat_sse_streaming_response,
 )
-from free_claude_code.application.response_collection import collect_response
+from free_claude_code.application.response_collection import (
+    WireProtocol,
+    collect_response,
+)
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.chat_completions.request import ChatRequest
+from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.stream_output import StreamOutput
 from tests.api.test_tool_call_buffer import _response
 from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import (
+    array_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
-async def public_frames(body, wire):
+async def public_frames(body: AsyncIterator[StreamOutput], wire: str):
     if wire == "chat":
 
-        def fail(error):
+        def fail(error: BaseException):
             raise error
 
         response = await chat_sse_streaming_response(
@@ -43,7 +55,7 @@ async def public_frames(body, wire):
 
 def truncated_messages():
     events = tool_events("messages", "{}")
-    events[-2]["delta"]["stop_reason"] = "max_tokens"
+    object_payload(events[-2]["delta"])["stop_reason"] = "max_tokens"
     events[-2:-2] = [
         {
             "type": "content_block_start",
@@ -64,11 +76,11 @@ def truncated_messages():
 @pytest.mark.parametrize("passthrough", [False, True])
 @pytest.mark.parametrize("public", [False, True])
 async def test_filtered_messages_blocks_have_dense_consistent_client_indexes(
-    passthrough, public
-):
+    passthrough: bool, public: bool
+) -> None:
     events = truncated_messages()
 
-    async def consume(body):
+    async def consume(body: AsyncIterator[StreamOutput]):
         return (
             await public_frames(body, "messages")
             if public
@@ -76,13 +88,15 @@ async def test_filtered_messages_blocks_have_dense_consistent_client_indexes(
         )
 
     if passthrough:
-        p = provider(
-            lambda _: httpx.Response(
+
+        def callback(_: object):
+            return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
                 stream=Wire([_sse(*events)]),
             )
-        )
+
+        p = provider(callback)
         try:
             frames = await consume(
                 p.stream_native_messages(
@@ -108,12 +122,12 @@ async def test_filtered_messages_blocks_have_dense_consistent_client_indexes(
         ("content_block_stop", 0),
     ]
     assert "call_probe" not in "".join(frames)
-    assert output[-2]["delta"]["stop_reason"] == "max_tokens"
+    assert object_payload(output[-2]["delta"])["stop_reason"] == "max_tokens"
 
 
 def parallel_responses():
     events = tool_events("responses", "{}")
-    first = events[1]["item"]
+    first = object_payload(events[1]["item"])
     second = {**first, "id": "fc_second", "call_id": "call_second"}
     done = {**second, "status": "completed", "arguments": "{}"}
     events[2:2] = [
@@ -134,7 +148,7 @@ def parallel_responses():
         },
         {"type": "response.output_item.done", "output_index": 1, "item": done},
     ]
-    events[-1]["response"]["output"].append(done)
+    array_payload(object_payload(events[-1]["response"])["output"]).append(done)
     for index, event in enumerate(events):
         event["sequence_number"] = index
     return events
@@ -144,8 +158,8 @@ def parallel_responses():
 @pytest.mark.parametrize("snapshot_only", [False, True])
 @pytest.mark.parametrize("public", [False, True])
 async def test_native_responses_number_every_emitted_event_in_output_order(
-    snapshot_only, public
-):
+    snapshot_only: bool, public: bool
+) -> None:
     events = parallel_responses()
     if snapshot_only:
         events = [events[0], events[-1]]
@@ -172,19 +186,25 @@ async def test_native_responses_number_every_emitted_event_in_output_order(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid", [None, "", "   ", "duplicate"])
-async def test_native_chat_never_releases_calls_without_unambiguous_ids(invalid):
+async def test_native_chat_never_releases_calls_without_unambiguous_ids(
+    invalid: str | None,
+) -> None:
     events = tool_events("chat", "{}")
-    first = events[0]["choices"][0]["delta"]["tool_calls"][0]
+    first = object_array(
+        object_payload(object_array(events[0]["choices"])[0]["delta"])["tool_calls"]
+    )[0]
     if invalid == "duplicate":
-        first["function"]["arguments"] = "{}"
+        object_payload(object_payload(first)["function"])["arguments"] = "{}"
         other = deepcopy(first)
-        other["index"] = 1
-        events[0]["choices"][0]["delta"]["tool_calls"].append(other)
+        object_payload(other)["index"] = 1
+        array_payload(
+            object_payload(object_array(events[0]["choices"])[0]["delta"])["tool_calls"]
+        ).append(other)
         events = [events[0], events[-1]]
     elif invalid is None:
         first.pop("id")
     else:
-        first["id"] = invalid
+        object_payload(first)["id"] = invalid
     prefix = {
         **events[0],
         "choices": [
@@ -210,9 +230,9 @@ async def test_native_chat_never_releases_calls_without_unambiguous_ids(invalid)
     output = [event.data for event in parse_sse_text("".join(frames))]
     assert any("error" in event for event in output)
     assert not any(
-        (choice.get("delta") or {}).get("tool_calls")
+        (object_payload(object_payload(choice).get("delta") or {})).get("tool_calls")
         for event in output
-        for choice in event.get("choices", [])
+        for choice in array_payload(event.get("choices", []))
     )
     assert len(bodies) == 1
 
@@ -227,17 +247,21 @@ async def test_native_chat_never_releases_calls_without_unambiguous_ids(invalid)
         ("responses", "name"),
     ],
 )
-async def test_native_complete_calls_require_execution_identity(protocol, field):
+async def test_native_complete_calls_require_execution_identity(
+    protocol: str, field: str
+) -> None:
     events = tool_events(protocol, "{}")
     if protocol == "messages":
-        events[1]["content_block"].pop(field)
-        p = provider(
-            lambda _: httpx.Response(
+        object_payload(events[1]["content_block"]).pop(field)
+
+        def callback(_: object):
+            return httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
                 stream=Wire([_sse(*events)]),
             )
-        )
+
+        p = provider(callback)
         try:
             frames = await public_frames(
                 p.stream_native_messages(
@@ -250,9 +274,9 @@ async def test_native_complete_calls_require_execution_identity(protocol, field)
     else:
         for event in events:
             if "item" in event:
-                event["item"].pop(field, None)
+                object_payload(event["item"]).pop(field, None)
             if "response" in event:
-                for item in event["response"]["output"]:
+                for item in object_array(object_payload(event["response"])["output"]):
                     item.pop(field, None)
         async with _harness("responses", lambda _: (200, events), max_attempts=1) as (
             send,
@@ -265,26 +289,30 @@ async def test_native_complete_calls_require_execution_identity(protocol, field)
     output = [event.data for event in parse_sse_text("".join(frames))]
     assert output[-1]["type"] in {"error", "response.failed"}
     assert not any(
-        event.get("content_block", {}).get("type") == "tool_use"
-        or event.get("item", {}).get("type") == "function_call"
+        object_payload(event.get("content_block", {})).get("type") == "tool_use"
+        or object_payload(event.get("item", {})).get("type") == "function_call"
         for event in output
     )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalid", ["id", "name", "duplicate"])
-async def test_native_json_messages_validate_the_same_complete_call_identity(invalid):
-    block = {"type": "tool_use", "id": "call", "name": "read", "input": {}}
+async def test_native_json_messages_validate_the_same_complete_call_identity(
+    invalid: str,
+) -> None:
+    block: JsonObject = {"type": "tool_use", "id": "call", "name": "read", "input": {}}
     content = [block]
     if invalid == "duplicate":
         content.append(deepcopy(block))
     else:
         block.pop(invalid)
-    p = provider(
-        lambda _: httpx.Response(
+
+    def callback(_: object):
+        return httpx.Response(
             200, json={"type": "message", "stop_reason": "tool_use", "content": content}
         )
-    )
+
+    p = provider(callback)
     try:
         from free_claude_code.core.failures import ExecutionFailure
 
@@ -302,19 +330,23 @@ async def test_native_json_messages_validate_the_same_complete_call_identity(inv
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("complete", [False, True])
 async def test_generated_alias_with_arguments_waits_for_remaining_name_and_source_completion(
-    wire, complete
-):
+    wire: str, complete: bool
+) -> None:
     original = "synthetic.invalid/name:" + "long_" * 20
 
-    def reply(bodies):
-        alias = bodies[-1]["tools"][0]["function"]["name"]
+    def reply(bodies: list[JsonObject]):
+        alias = string_payload(
+            object_payload(object_array(bodies[-1]["tools"])[0]["function"])["name"]
+        )
         events = tool_events("chat", "{}")
-        first = events[0]["choices"][0]["delta"]["tool_calls"][0]
-        first["function"] = {"name": alias[:15], "arguments": "{}"}
+        first = object_array(
+            object_payload(object_array(events[0]["choices"])[0]["delta"])["tool_calls"]
+        )[0]
+        object_payload(first)["function"] = {"name": alias[:15], "arguments": "{}"}
         if not complete:
             return 200, events[:1]
         second = deepcopy(events[0])
-        second["choices"][0]["delta"]["tool_calls"] = [
+        object_payload(object_array(second["choices"])[0]["delta"])["tool_calls"] = [
             {"index": 0, "function": {"name": alias[15:]}}
         ]
         return 200, [events[0], second, events[-1]]
@@ -330,7 +362,7 @@ async def test_generated_alias_with_arguments_waits_for_remaining_name_and_sourc
         )
     output = [event.data for event in parse_sse_text("".join(frames))]
     names = [
-        event.get("content_block", event.get("item", {})).get("name")
+        object_payload(event.get("content_block", event.get("item", {}))).get("name")
         for event in output
         if event["type"] in {"content_block_start", "response.output_item.added"}
     ]
@@ -344,20 +376,20 @@ async def test_generated_alias_with_arguments_waits_for_remaining_name_and_sourc
 )
 @pytest.mark.parametrize("public", [False, True])
 async def test_contradictory_snapshot_never_replaces_a_completed_native_call(
-    kind, public
-):
+    kind: str, public: bool
+) -> None:
     from free_claude_code.core.failures import ExecutionFailure
 
     events = tool_events("responses", "{}")
     final = deepcopy(events[-1])
     changed = deepcopy(final)
     changed["type"] = kind
-    changed["response"]["status"] = kind.split(".")[-1]
-    changed["response"]["output"][0].update(
+    object_payload(changed["response"])["status"] = kind.split(".")[-1]
+    object_array(object_payload(changed["response"])["output"])[0].update(
         status="incomplete", name="delete", arguments='{"changed":true}'
     )
     if kind == "response.failed":
-        changed["response"]["error"] = {
+        object_payload(changed["response"])["error"] = {
             "code": "server_error",
             "message": "upstream failed",
         }
@@ -372,7 +404,11 @@ async def test_contradictory_snapshot_never_replaces_a_completed_native_call(
             frames = await public_frames(body, "responses")
             output = [event.data for event in parse_sse_text("".join(frames))]
             assert output[-1]["type"] == "response.failed"
-            assert "already completed" in output[-1]["response"]["error"]["message"]
+            assert "already completed" in string_payload(
+                object_payload(object_payload(output[-1]["response"])["error"])[
+                    "message"
+                ]
+            )
             assert "delete" not in "".join(frames)
         else:
             with pytest.raises(ExecutionFailure, match="already completed"):
@@ -385,10 +421,12 @@ async def test_contradictory_snapshot_never_replaces_a_completed_native_call(
 @pytest.mark.parametrize("public", [False, True])
 @pytest.mark.parametrize("placeholder", [None, "", " \t"])
 async def test_chat_fragment_placeholders_preserve_the_resolved_execution_id(
-    wire, public, placeholder
-):
+    wire: WireProtocol, public: bool, placeholder: str | None
+) -> None:
     events = tool_events("chat", "{}")
-    events[1]["choices"][0]["delta"]["tool_calls"][0]["id"] = placeholder
+    object_array(
+        object_payload(object_array(events[1]["choices"])[0]["delta"])["tool_calls"]
+    )[0]["id"] = placeholder
     async with _harness("chat", lambda _: (200, events), max_attempts=1) as (
         send,
         bodies,
@@ -417,19 +455,24 @@ async def test_chat_fragment_placeholders_preserve_the_resolved_execution_id(
             identities = [
                 call["id"]
                 for value in output
-                for choice in value.get("choices", [])
-                for call in choice.get("delta", {}).get("tool_calls", [])
-                if "id" in call
+                for choice in array_payload(value.get("choices", []))
+                for call in object_array(
+                    object_payload(object_payload(choice).get("delta", {})).get(
+                        "tool_calls", []
+                    )
+                )
+                if "id" in object_payload(call)
             ]
         elif wire == "messages":
             identities = [
-                value["content_block"]["id"]
+                object_payload(value["content_block"])["id"]
                 for value in output
-                if value.get("content_block", {}).get("type") == "tool_use"
+                if object_payload(value.get("content_block", {})).get("type")
+                == "tool_use"
             ]
         else:
             identities = [
-                value["item"]["call_id"]
+                object_payload(value["item"])["call_id"]
                 for value in output
                 if value.get("type") == "response.output_item.done"
             ]

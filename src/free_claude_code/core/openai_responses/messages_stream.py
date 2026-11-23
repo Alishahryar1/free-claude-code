@@ -1,6 +1,5 @@
 """Present native Anthropic Messages events as one Responses lifecycle."""
 
-import json
 import time
 import uuid
 from collections.abc import Mapping
@@ -12,7 +11,7 @@ from free_claude_code.core.anthropic.native_stream import (
     NativeMessagesStreamState,
 )
 from free_claude_code.core.failures import ExecutionFailure
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 
 from .errors import openai_error_from_failure
 from .events import format_response_sse_event
@@ -352,7 +351,7 @@ class AnthropicToResponsesStream:
                 raise AssertionError("Completed native tool must retain its arguments.")
             if state.kind == "custom":
                 try:
-                    wrapper = json.loads(arguments)
+                    wrapper = load_json_value(arguments)
                 except (ValueError, RecursionError) as exc:
                     raise NativeMessagesError(
                         "Invalid native custom tool wrapper."

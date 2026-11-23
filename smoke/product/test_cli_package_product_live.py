@@ -53,7 +53,8 @@ async def test_cli_session_resume_fork_e2e(tmp_path: Path) -> None:
         ):
             pass
 
-    args = spawn.call_args[0]
+    assert spawn.call_args is not None
+    args = spawn.call_args.args
     assert args[:3] == ("claude", "--resume", "sess_product")
     assert "--fork-session" in args
     assert "-p" in args

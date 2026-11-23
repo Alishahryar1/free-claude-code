@@ -66,7 +66,7 @@ def parse_model_fallbacks(value: object) -> object:
                 ) from None
         else:
             value = value.split(",")
-    if isinstance(value, list | tuple):
+    if isinstance(value, (list, tuple)):
         return (
             tuple({"model": item} if isinstance(item, str) else item for item in value)
             or None

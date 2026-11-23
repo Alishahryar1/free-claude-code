@@ -10,9 +10,11 @@ from free_claude_code.core.anthropic.streaming import (
     StreamBlockLedger,
     map_stop_reason,
 )
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import object_payload
 
 
-def _payload(event: str) -> dict:
+def _payload(event: str) -> JsonObject:
     return json.loads(
         next(line[6:] for line in event.splitlines() if line.startswith("data:"))
     )
@@ -24,7 +26,7 @@ def _payload(event: str) -> dict:
         ("stop", "end_turn"),
         ("length", "max_tokens"),
         ("tool_calls", "tool_use"),
-        ("content_filter", "end_turn"),
+        ("content_filter", "refusal"),
         (None, "end_turn"),
     ],
 )
@@ -45,10 +47,12 @@ def test_message_lifecycle() -> None:
     delta = _payload(ledger.message_delta("end_turn", 3))
     stop = _payload(ledger.message_stop())
 
-    assert start["message"]["id"] == "msg_1"
-    assert start["message"]["usage"]["input_tokens"] == 7
-    assert delta["delta"]["stop_reason"] == "end_turn"
-    assert delta["usage"]["output_tokens"] == 3
+    assert object_payload(start["message"])["id"] == "msg_1"
+    assert (
+        object_payload(object_payload(start["message"])["usage"])["input_tokens"] == 7
+    )
+    assert object_payload(delta["delta"])["stop_reason"] == "end_turn"
+    assert object_payload(delta["usage"])["output_tokens"] == 3
     assert stop == {"type": "message_stop"}
     assert ledger.has_terminal_message()
 

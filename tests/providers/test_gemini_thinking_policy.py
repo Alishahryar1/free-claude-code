@@ -1,6 +1,5 @@
 """Native Gemini uses shared FCC budgets and preserves native client controls."""
 
-import json
 from copy import deepcopy
 
 import httpx
@@ -9,10 +8,16 @@ import pytest
 from free_claude_code.config.provider_catalog import GEMINI_DEFAULT_BASE
 from free_claude_code.core.gemini.models import ThinkingConfig
 from free_claude_code.core.gemini.native_request import apply_reasoning
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.gemini import GeminiProvider
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    stream_provider_request,
+)
 from tests.providers.test_gemini import _collect, _request, _sse
+from tests.wire_payload import decode_object, object_payload
 
 
 @pytest.mark.asyncio
@@ -21,11 +26,13 @@ from tests.providers.test_gemini import _collect, _request, _sse
     "model", ["models/gemini-2.5-flash", "models/gemini-3.5-flash-lite", "arbitrary"]
 )
 @pytest.mark.parametrize("effort", list(ReasoningEffort))
-async def test_fcc_effort_uses_shared_budget_on_every_ingress(wire, model, effort):
+async def test_fcc_effort_uses_shared_budget_on_every_ingress(
+    wire: str, model: str, effort: ReasoningEffort
+) -> None:
     bodies = []
 
-    def reply(request):
-        bodies.append(json.loads(request.content))
+    def reply(request: httpx.Request):
+        bodies.append(decode_object(request.content))
         return _sse([{"text": "answer"}])
 
     provider = GeminiProvider(
@@ -38,11 +45,11 @@ async def test_fcc_effort_uses_shared_budget_on_every_ingress(wire, model, effor
     try:
         await _collect(
             wire,
-            getattr(provider, f"stream_{wire}")(
-                request, reasoning=ReasoningPolicy.on(effort=effort)
+            stream_provider_request(
+                provider, wire, request, reasoning=ReasoningPolicy.on(effort=effort)
             ),
         )
-        assert bodies[0]["generationConfig"]["thinkingConfig"] == {
+        assert object_payload(bodies[0]["generationConfig"])["thinkingConfig"] == {
             "includeThoughts": True,
             "thinkingBudget": effort.budget_tokens,
         }
@@ -67,10 +74,10 @@ async def test_fcc_effort_uses_shared_budget_on_every_ingress(wire, model, effor
 )
 @pytest.mark.parametrize("visible", [False, True])
 def test_native_client_computation_and_visibility_are_preserved(
-    model, control, visible
-):
+    model: str, control: JsonObject, visible: bool
+) -> None:
     thinking = {"includeThoughts": visible, **control}
-    body = {
+    body: JsonObject = {
         "model": model,
         "generationConfig": {"thinkingConfig": thinking, "temperature": 0.3},
     }
@@ -83,10 +90,12 @@ def test_native_client_computation_and_visibility_are_preserved(
 @pytest.mark.parametrize(
     "flag, capability", [(False, "none"), (True, "unknown"), (None, "unknown")]
 )
-async def test_discovery_capability_drives_classifier_allowance(flag, capability):
+async def test_discovery_capability_drives_classifier_allowance(
+    flag: bool | None, capability: str
+) -> None:
     bodies = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         if request.method == "GET":
             return httpx.Response(
                 200,
@@ -100,7 +109,7 @@ async def test_discovery_capability_drives_classifier_allowance(flag, capability
                     ]
                 },
             )
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return _sse([{"text": "verdict"}])
 
     provider = GeminiProvider(
@@ -122,10 +131,17 @@ async def test_discovery_capability_drives_classifier_allowance(flag, capability
         )
         config = bodies[0]["generationConfig"]
         if flag is False:
-            assert config["maxOutputTokens"] == 64
-            assert "thinkingBudget" not in config["thinkingConfig"]
+            assert object_payload(config)["maxOutputTokens"] == 64
+            assert "thinkingBudget" not in object_payload(
+                object_payload(config)["thinkingConfig"]
+            )
         else:
-            assert "maxOutputTokens" not in config
-            assert config["thinkingConfig"]["thinkingBudget"] == 0
+            assert "maxOutputTokens" not in object_payload(config)
+            assert (
+                object_payload(object_payload(config)["thinkingConfig"])[
+                    "thinkingBudget"
+                ]
+                == 0
+            )
     finally:
         await provider.cleanup()

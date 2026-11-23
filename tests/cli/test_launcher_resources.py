@@ -1,6 +1,5 @@
 """Observe configuration while children run and after launch scopes unwind."""
 
-import importlib
 import os
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -9,9 +8,11 @@ import pytest
 
 from free_claude_code.cli.launchers import common
 from free_claude_code.config.paths import launcher_temp_dir_path
+from free_claude_code.core.json_types import JsonValue
 from free_claude_code.harnesses import resources
+from free_claude_code.harnesses.resources import LaunchResources
 from tests.cli.conftest import LaunchCapture
-from tests.cli.test_launcher_workflow import launch
+from tests.cli.test_launcher_workflow import launch, launcher
 
 FILE_HARNESSES = ("codex", "opencode", "cline", "hermes", "dsh", "aider")
 
@@ -22,7 +23,7 @@ def test_private_files_live_until_child_exit(
 ) -> None:
     paths: list[Path] = []
 
-    def inspect(command, env):
+    def inspect(command: object, env: object):
         paths.extend(
             path for path in launcher_temp_dir_path().rglob("*") if path.is_file()
         )
@@ -44,14 +45,14 @@ def test_private_files_live_until_child_exit(
 def test_cleanup_on_process_start_failure(
     name: str, failure: BaseException, launch_capture: LaunchCapture
 ) -> None:
-    def fail_start(command, env):
+    def fail_start(command: object, env: object):
         assert any(launcher_temp_dir_path().rglob("*"))
         raise failure
 
     launch_capture.on_start = fail_start
     if isinstance(failure, KeyboardInterrupt):
         with pytest.raises(KeyboardInterrupt):
-            importlib.import_module(f"free_claude_code.cli.launchers.{name}").launch([])
+            launcher(name)([])
     else:
         launch(name, [], exit_code=1)
     assert list(launcher_temp_dir_path().iterdir()) == []
@@ -60,7 +61,7 @@ def test_cleanup_on_process_start_failure(
 def test_cleanup_after_partial_configuration(launch_capture: LaunchCapture) -> None:
     original = resources.LaunchResources.write_json
 
-    def fail_second(self, filename, payload):
+    def fail_second(self: LaunchResources, filename: str, payload: JsonValue):
         if filename == "settings/models.json":
             raise PermissionError("failed second write")
         return original(self, filename, payload)
@@ -86,11 +87,11 @@ def test_nested_launches_keep_independent_live_catalogs(
 ) -> None:
     outer: list[Path] = []
 
-    def nested(command, env):
+    def nested(command: object, env: object):
         outer.extend(launcher_temp_dir_path().glob("*/model-catalog.json"))
         assert len(outer) == 1
 
-        def inspect_inner(inner_command, inner_env):
+        def inspect_inner(inner_command: object, inner_env: object):
             paths = list(launcher_temp_dir_path().glob("*/model-catalog.json"))
             assert len(paths) == 2
             assert outer[0].is_file()
@@ -111,25 +112,29 @@ def test_interrupt_kills_and_waits_for_registered_child_before_cleanup(
     process.wait.side_effect = (KeyboardInterrupt(), 0)
     events: list[str] = []
 
-    def kill(pid):
+    def kill(pid: int):
         assert pid == 12345
         assert list(launcher_temp_dir_path().glob("*/model-catalog.json"))
         events.append("kill")
 
+    def side_effect_2(pid: object):
+        return events.append("register")
+
+    def side_effect_3(pid: object):
+        return events.append("unregister")
+
     with (
         patch.object(common.subprocess, "Popen", return_value=process),
-        patch.object(
-            common, "register_pid", side_effect=lambda pid: events.append("register")
-        ),
+        patch.object(common, "register_pid", side_effect=side_effect_2),
         patch.object(common, "kill_pid_tree_best_effort", side_effect=kill),
         patch.object(
             common,
             "unregister_pid",
-            side_effect=lambda pid: events.append("unregister"),
+            side_effect=side_effect_3,
         ),
         pytest.raises(KeyboardInterrupt),
     ):
-        importlib.import_module("free_claude_code.cli.launchers.codex").launch([])
+        launcher("codex")([])
     assert events == ["register", "kill", "unregister"]
     assert process.wait.call_count == 2
     assert list(launcher_temp_dir_path().iterdir()) == []

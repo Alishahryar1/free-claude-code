@@ -45,7 +45,7 @@ def decode_gateway_model_id(model_name: str) -> DecodedGatewayModelId | None:
     if prefix in {DESKTOP_MODEL_PREFIX, DESKTOP_NO_THINKING_PREFIX}:
         try:
             decoded = bytes.fromhex(remainder).decode("utf-8")
-        except ValueError, UnicodeError:
+        except ValueError:
             raise ValueError("Invalid Desktop model ID") from None
         if not remainder or decoded.encode("utf-8").hex() != remainder:
             raise ValueError("Invalid Desktop model ID")

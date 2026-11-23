@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
+from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.config.settings import Settings
 from free_claude_code.providers.admission import ProviderOperationKind
 from free_claude_code.providers.admission_policy import ProviderAdmissionLimits
@@ -86,7 +87,7 @@ async def test_replacement_cannot_bypass_existing_protection(protection: str) ->
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
-async def test_limits_publish_only_with_successful_settings(outcome):
+async def test_limits_publish_only_with_successful_settings(outcome: str) -> None:
     settings = Settings(provider_rate_limit=1000, provider_max_concurrency=1)
     manager = ProviderRuntimeManager(settings, runtime_factory=RuntimeFactory())
     controller = manager._admission_registry.get("nvidia_nim")
@@ -130,7 +131,7 @@ async def test_limits_publish_only_with_successful_settings(outcome):
 
 
 @pytest.mark.asyncio
-async def test_blocked_publication_keeps_old_limits_until_generation_switch():
+async def test_blocked_publication_keeps_old_limits_until_generation_switch() -> None:
     settings = Settings(provider_rate_limit=1000, provider_max_concurrency=1)
     manager = ProviderRuntimeManager(settings, runtime_factory=RuntimeFactory())
     controller = manager._admission_registry.get("nvidia_nim")
@@ -162,7 +163,9 @@ async def test_blocked_publication_keeps_old_limits_until_generation_switch():
 
 
 @pytest.mark.asyncio
-async def test_old_lazy_construction_uses_current_limits_and_survives_retirement():
+async def test_old_lazy_construction_uses_current_limits_and_survives_retirement() -> (
+    None
+):
     settings = Settings(
         nvidia_nim_api_keys="test", provider_rate_limit=1000, provider_max_concurrency=1
     )
@@ -213,8 +216,8 @@ async def test_old_lazy_construction_uses_current_limits_and_survives_retirement
 
 
 @pytest.mark.asyncio
-async def test_separate_provider_ids_and_managers_have_independent_capacity():
-    limits = ProviderAdmissionLimits(1, 60, 1)
+async def test_separate_provider_ids_and_managers_have_independent_capacity() -> None:
+    limits = ProviderAdmissionLimits(1, 60, 1, PROVIDER_MAX_ATTEMPTS_DEFAULT)
     registry = ProviderAdmissionRegistry(limits)
     other = ProviderAdmissionRegistry(limits)
     attempts = []
@@ -234,7 +237,9 @@ async def test_separate_provider_ids_and_managers_have_independent_capacity():
 
 
 @pytest.mark.asyncio
-async def test_custom_registry_entry_lives_until_retired_generation_cleanup_succeeds():
+async def test_custom_registry_entry_lives_until_retired_generation_cleanup_succeeds() -> (
+    None
+):
     from free_claude_code.config.custom_providers import CustomProviderDefinition
 
     custom_id = "custom_12345678123412341234123456789abc"
@@ -278,7 +283,9 @@ async def test_custom_registry_entry_lives_until_retired_generation_cleanup_succ
 
 
 @pytest.mark.asyncio
-async def test_history_cache_survives_settings_and_key_replacement_but_clears_on_close():
+async def test_history_cache_survives_settings_and_key_replacement_but_clears_on_close() -> (
+    None
+):
     from free_claude_code.core.history_replay import HistoryMode, ReplayOrigin
     from free_claude_code.providers.history_negotiation import HistoryNegotiation
 
@@ -334,7 +341,9 @@ async def test_history_cache_survives_settings_and_key_replacement_but_clears_on
 @pytest.mark.parametrize(
     "kind", ["anthropic", "openai_chat", "openai_responses", "anthropic_messages"]
 )
-async def test_exceptional_factories_retain_history_cache_across_replacement(kind):
+async def test_exceptional_factories_retain_history_cache_across_replacement(
+    kind: str,
+) -> None:
     from free_claude_code.core.history_replay import HistoryMode
     from tests.config.test_custom_providers import definition
 

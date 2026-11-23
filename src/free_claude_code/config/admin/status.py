@@ -105,7 +105,7 @@ def _value_for_settings_attr(
         if field.settings_attr == settings_attr:
             entry = state.get(field.key)
             value = entry.value if entry is not None else field.resolved_default()
-            return str(value) if value is not None else None
+            return value
     return None
 
 

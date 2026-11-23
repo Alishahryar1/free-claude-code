@@ -6,7 +6,7 @@ from free_claude_code.core.anthropic import (
 )
 
 
-def test_think_tag_parser_basic():
+def test_think_tag_parser_basic() -> None:
     parser = ThinkTagParser()
     chunks = list(parser.feed("Hello <think>reasoning</think> world"))
 
@@ -19,7 +19,7 @@ def test_think_tag_parser_basic():
     assert chunks[2].content == " world"
 
 
-def test_think_tag_parser_streaming():
+def test_think_tag_parser_streaming() -> None:
     parser = ThinkTagParser()
 
     # Partial tag
@@ -40,7 +40,7 @@ def test_think_tag_parser_streaming():
 # --- Orphan </think> Tag Tests (Step Fun AI compatibility) ---
 
 
-def test_orphan_close_tag_stripped():
+def test_orphan_close_tag_stripped() -> None:
     """Orphan </think> without opening tag should be stripped."""
     parser = ThinkTagParser()
     chunks = list(parser.feed("Hello </think> world"))
@@ -53,7 +53,7 @@ def test_orphan_close_tag_stripped():
     assert chunks[1].content == " world"
 
 
-def test_orphan_close_tag_at_start():
+def test_orphan_close_tag_at_start() -> None:
     """Orphan </think> at start should be stripped."""
     parser = ThinkTagParser()
     chunks = list(parser.feed("</think>Hello world"))
@@ -63,7 +63,7 @@ def test_orphan_close_tag_at_start():
     assert chunks[0].content == "Hello world"
 
 
-def test_orphan_close_tag_at_end():
+def test_orphan_close_tag_at_end() -> None:
     """Orphan </think> at end should be stripped."""
     parser = ThinkTagParser()
     chunks = list(parser.feed("Hello world</think>"))
@@ -73,7 +73,7 @@ def test_orphan_close_tag_at_end():
     assert chunks[0].content == "Hello world"
 
 
-def test_multiple_orphan_close_tags():
+def test_multiple_orphan_close_tags() -> None:
     """Multiple orphan </think> tags should all be stripped."""
     parser = ThinkTagParser()
     chunks = list(parser.feed("a</think>b</think>c"))
@@ -83,7 +83,7 @@ def test_multiple_orphan_close_tags():
     assert "</think>" not in text
 
 
-def test_orphan_close_tag_streaming():
+def test_orphan_close_tag_streaming() -> None:
     """Orphan </think> split across chunks should be stripped."""
     parser = ThinkTagParser()
 
@@ -99,7 +99,7 @@ def test_orphan_close_tag_streaming():
     assert chunks2[0].content == " world"
 
 
-def test_orphan_close_with_valid_think_pair():
+def test_orphan_close_with_valid_think_pair() -> None:
     """Orphan </think> followed by valid <think>...</think> pair."""
     parser = ThinkTagParser()
     chunks = list(parser.feed("a</think>b<think>thinking</think>c"))
@@ -138,7 +138,7 @@ def test_orphan_close_with_valid_think_pair():
         "consecutive_orphans",
     ],
 )
-def test_orphan_close_tag_parametrized(input_text, expected_text):
+def test_orphan_close_tag_parametrized(input_text: str, expected_text: str) -> None:
     """Parametrized: orphan </think> tags should be stripped from various positions."""
     parser = ThinkTagParser()
     chunks = list(parser.feed(input_text))
@@ -147,21 +147,21 @@ def test_orphan_close_tag_parametrized(input_text, expected_text):
     assert "</think>" not in text
 
 
-def test_think_tag_parser_empty_input():
+def test_think_tag_parser_empty_input() -> None:
     """Empty string input should yield no chunks."""
     parser = ThinkTagParser()
     chunks = list(parser.feed(""))
     assert chunks == []
 
 
-def test_think_tag_parser_flush_no_content():
+def test_think_tag_parser_flush_no_content() -> None:
     """Flush with no buffered content should return None."""
     parser = ThinkTagParser()
     result = parser.flush()
     assert result is None
 
 
-def test_think_tag_parser_flush_buffered_text():
+def test_think_tag_parser_flush_buffered_text() -> None:
     """Flush with buffered text returns TEXT chunk."""
     parser = ThinkTagParser()
     # Feed partial tag that stays buffered
@@ -172,7 +172,7 @@ def test_think_tag_parser_flush_buffered_text():
     assert "<thi" in result.content
 
 
-def test_think_tag_parser_flush_inside_think():
+def test_think_tag_parser_flush_inside_think() -> None:
     """Flush while inside <think> with buffered partial close tag returns THINKING chunk."""
     parser = ThinkTagParser()
     # Feed content that ends with a potential partial </think> tag, which stays buffered
@@ -185,7 +185,7 @@ def test_think_tag_parser_flush_inside_think():
     assert "</thi" in result.content
 
 
-def test_think_tag_parser_empty_think_tags():
+def test_think_tag_parser_empty_think_tags() -> None:
     """Empty <think></think> pair should yield no thinking content."""
     parser = ThinkTagParser()
     chunks = list(parser.feed("<think></think>remaining"))
@@ -195,7 +195,7 @@ def test_think_tag_parser_empty_think_tags():
     assert text == "remaining"
 
 
-def test_think_tag_parser_unicode():
+def test_think_tag_parser_unicode() -> None:
     """Unicode content inside and outside think tags."""
     parser = ThinkTagParser()
     chunks = list(parser.feed("日本語 <think>思考中 🤔</think> 結果"))

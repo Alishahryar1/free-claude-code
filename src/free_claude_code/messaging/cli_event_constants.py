@@ -1,7 +1,6 @@
 """CLI event types and status-line mapping for transcript / UI updates."""
 
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Callable, Mapping
 
 # Status message prefixes used to filter our own messages (ignore echo)
 STATUS_MESSAGE_PREFIXES = (
@@ -52,7 +51,7 @@ _EVENT_STATUS_MAP: dict[str, tuple[str, str]] = {
 
 def get_status_for_event(
     ptype: str,
-    parsed: dict[str, Any],
+    parsed: Mapping[str, object],
     format_status_fn: Callable[..., str],
 ) -> str | None:
     """Return status string for event type, or None if no status update needed."""

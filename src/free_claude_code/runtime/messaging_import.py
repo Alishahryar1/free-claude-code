@@ -1,6 +1,5 @@
 """One-time, best-effort import of FCC's retired messaging JSON file."""
 
-import json
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -8,11 +7,13 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from free_claude_code.core.json_types import load_json_value
 from free_claude_code.messaging.trees import (
     TreeIdentity,
     TreeSnapshot,
     normalize_tree_snapshot,
 )
+from free_claude_code.runtime.sqlite_database import query_rows
 
 from .messaging_sqlite import write_tree
 from .sqlite_database import SQLiteDatabase
@@ -35,7 +36,7 @@ def read_legacy(path: Path) -> LegacyData:
     try:
         if path.is_symlink():
             return LegacyData(outcome="unreadable", skipped=1)
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = load_json_value(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return LegacyData(outcome="absent")
     except OSError, UnicodeError, ValueError:
@@ -51,7 +52,7 @@ def read_legacy(path: Path) -> LegacyData:
         candidates = list(candidates.values())
     if not isinstance(candidates, list):
         result.reject()
-        candidates = []
+        candidates = list[object]()
     # Historical JSON loading used the last duplicate tree identity.
     decoded: dict[TreeIdentity, TreeSnapshot] = {}
     for candidate in candidates:
@@ -73,7 +74,7 @@ def read_legacy(path: Path) -> LegacyData:
     messages = raw.get("managed_messages", raw.get("message_log", {}))
     if not isinstance(messages, dict):
         result.reject()
-        messages = {}
+        messages = dict[str, object]()
     for chat_key, items in messages.items():
         if (
             not isinstance(chat_key, str)
@@ -129,8 +130,8 @@ def _try_import(connection: sqlite3.Connection, write: Callable[[], object]) -> 
 
 def _import_legacy(database: SQLiteDatabase, path: Path) -> str | None:
     receipt = database.execute(
-        lambda connection: connection.execute(
-            "SELECT * FROM messaging_legacy_import"
+        lambda connection: query_rows(
+            connection, "SELECT * FROM messaging_legacy_import"
         ).fetchone(),
         write=False,
     )

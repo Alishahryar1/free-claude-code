@@ -5,13 +5,13 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import override
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _PACKAGE_ROOT = _REPO_ROOT / "src" / "free_claude_code"
 _PACKAGE_NAME = "free_claude_code"
 
 ALLOWED_PACKAGE_DEPENDENCIES: dict[str, set[str]] = {
-    "updater": set(),
     "config": {"core"},
     "core": set(),
     "application": {"config", "core"},
@@ -98,10 +98,12 @@ class _ImportVisitor(ast.NodeVisitor):
         self._function_depth = 0
         self.records: list[ImportRecord] = []
 
+    @override
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             self._record(alias.name, node.lineno)
 
+    @override
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         base = _resolve_import_from_base(
             importer=self._importer,
@@ -116,9 +118,11 @@ class _ImportVisitor(ast.NodeVisitor):
             imported = candidate if candidate in self._modules else base
             self._record(imported, node.lineno)
 
+    @override
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._visit_function(node)
 
+    @override
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._visit_function(node)
 

@@ -25,7 +25,6 @@ from free_claude_code.core.async_rwlock import AsyncReadWriteLock
 from free_claude_code.core.async_tasks import run_sync_owned
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.harnesses import (
-    antigravity_integration,
     claude_desktop_integration,
     claude_integration,
     claude_onboarding,
@@ -73,7 +72,6 @@ class IntegrationService:
         self._is_draining = is_draining
         self._has_pending_restart = has_pending_restart
         self._claude_update = _IntegrationUpdate()
-        self._antigravity_update = _IntegrationUpdate()
         self._desktop_update = _IntegrationUpdate()
         self._codex_update = _IntegrationUpdate()
         self._jetbrains_update = _IntegrationUpdate()
@@ -89,7 +87,6 @@ class IntegrationService:
 
     def _updates(self) -> dict[str, _IntegrationUpdate]:
         return {
-            "antigravity": self._antigravity_update,
             "vscode-chat": self._vscode_update,
             "claude-vscode": self._claude_update,
             "claude-desktop": self._desktop_update,
@@ -126,71 +123,6 @@ class IntegrationService:
                     "Background initialization ended with exc_type={}",
                     type(result).__name__,
                 )
-
-    async def antigravity_status(self) -> JsonObject:
-        return await self._antigravity("status")
-
-    async def connect_antigravity(self) -> JsonObject:
-        return await self._antigravity("connect")
-
-    async def disconnect_antigravity(self) -> JsonObject:
-        return await self._antigravity("disconnect")
-
-    async def _antigravity(
-        self, action: Literal["status", "connect", "disconnect"]
-    ) -> JsonObject:
-        def operate(url: str, token: str, ready: bool) -> JsonObject:
-            path, state = (
-                antigravity_integration.config_path(),
-                antigravity_integration.state_path(),
-            )
-            if action == "disconnect":
-                antigravity_integration.disconnect(path, state)
-            return antigravity_integration.status(path, state)
-
-        try:
-            if action != "connect":
-                return await self._run_integration(
-                    self._antigravity_update, action, operate
-                )
-            while True:
-                self._check_integration_available()
-                snapshot = self.provider_manager.catalog_snapshot()
-                revision = self.provider_manager.catalog_status()["catalog_revision"]
-                async with (
-                    self._antigravity_update.access.write(),
-                    self._config_publication.read(),
-                ):
-                    self._check_integration_available()
-                    if (
-                        snapshot.current_settings() is not self.settings
-                        or revision
-                        != self.provider_manager.catalog_status()["catalog_revision"]
-                    ):
-                        continue
-                    catalog = read_model_catalog(snapshot)
-
-                    def connect(catalog: ModelCatalog = catalog) -> JsonObject:
-                        path, state = (
-                            antigravity_integration.config_path(),
-                            antigravity_integration.state_path(),
-                        )
-                        antigravity_integration.configure(
-                            path, state, catalog, connect=True
-                        )
-                        return antigravity_integration.status(path, state)
-
-                    result = await run_sync_owned(connect)
-                    self._antigravity_update.complete()
-                    return result
-        except ValueError, UnicodeError:
-            raise InvalidRequestError(
-                "Could not configure Antigravity CLI. Check settings.json and the FCC connection record for invalid JSON or conflicting model entries."
-            ) from None
-        except OSError:
-            raise ApplicationUnavailableError(
-                "Could not access Antigravity CLI settings. Finish configuration edits, check file permissions, and retry."
-            ) from None
 
     async def vscode_chat_status(self) -> JsonObject:
         return await self._vscode_chat("status")
@@ -381,7 +313,7 @@ class IntegrationService:
                     return result
         except dsh_desktop_integration.DshConfigError as exc:
             raise InvalidRequestError(str(exc)) from None
-        except ValueError, UnicodeError:
+        except ValueError:
             raise InvalidRequestError(
                 "Could not read DSH Desktop configuration. Correct the invalid document and retry."
             ) from None
@@ -457,7 +389,7 @@ class IntegrationService:
                     if action in {"connect", "disconnect"}:
                         self._vscode_update.complete()
                     return result
-        except ValueError, UnicodeError:
+        except ValueError:
             raise InvalidRequestError(
                 "Could not configure VS Code Chat. Check chatLanguageModels.json for invalid JSON or conflicting FCC groups."
             ) from None
@@ -501,7 +433,7 @@ class IntegrationService:
                 result = await run_sync_owned(operate)
                 self._check_integration_available()
                 return result
-        except ValueError, UnicodeError:
+        except ValueError:
             raise InvalidRequestError(
                 "Could not read Claude onboarding state. Check the JSON in .claude.json."
             ) from None
@@ -639,7 +571,7 @@ class IntegrationService:
             return await self._run_integration(self._jetbrains_update, action, operate)
         except jetbrains_acp_integration.SetupError as exc:
             raise InvalidRequestError(str(exc)) from None
-        except ValueError, UnicodeError:
+        except ValueError:
             raise InvalidRequestError(
                 "Could not read JetBrains ACP configuration. Check the JSON in acp.json and the installed Claude Agent metadata."
             ) from None
@@ -698,7 +630,7 @@ class IntegrationService:
             raise InvalidRequestError(
                 "Claude Desktop has data in its previous Windows location. Launch Claude Desktop once so it can migrate that data, fully quit it, then retry Connect."
             ) from None
-        except ValueError, UnicodeError:
+        except ValueError:
             raise InvalidRequestError(
                 "Could not configure Claude Desktop. Check its configuration JSON and FCC disconnect record, and ensure FCC uses a localhost address and a nonempty managed token."
             ) from None
@@ -742,7 +674,7 @@ class IntegrationService:
             return await self._run_integration(
                 self._claude_update, action, operate, mask_when_unready=True
             )
-        except ValueError, UnicodeError:
+        except ValueError:
             files = (
                 "VS Code settings.json and .claude.json"
                 if action == "connect"
@@ -841,7 +773,7 @@ class IntegrationService:
                     if action in {"connect", "disconnect"}:
                         self._codex_update.complete()
                     return result
-        except ValueError, UnicodeError:
+        except ValueError:
             raise InvalidRequestError(
                 "Could not read Codex settings. Check the TOML in config.toml."
             ) from None

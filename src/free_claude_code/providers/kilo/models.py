@@ -1,7 +1,6 @@
 """Kilo.ai model-catalog interpretation."""
 
 from collections.abc import Mapping, Sequence
-from typing import Any
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.providers.model_listing import (
@@ -11,7 +10,7 @@ from free_claude_code.providers.model_listing import (
 
 
 def extract_kilo_model_infos(
-    payload: Any, *, provider_name: str
+    payload: object, *, provider_name: str
 ) -> frozenset[ProviderModelInfo]:
     """Return chat/tool Kilo models with their advertised reasoning support."""
     tool_models = extract_tool_capable_model_infos(
@@ -27,34 +26,34 @@ def extract_kilo_model_infos(
     return frozenset(info for info in tool_models if info.model_id not in excluded_ids)
 
 
-def _produces_images(item: Any) -> bool:
+def _produces_images(item: object) -> bool:
     architecture = _field(item, "architecture")
     modalities = _string_values(_field(architecture, "output_modalities"))
     return modalities is not None and "image" in modalities
 
 
-def _requires_responses_api(item: Any) -> bool:
+def _requires_responses_api(item: object) -> bool:
     opencode = _field(item, "opencode")
     provider = _field(opencode, "ai_sdk_provider")
     return isinstance(provider, str) and provider.casefold() == "openai"
 
 
-def _model_id(item: Any) -> str | None:
+def _model_id(item: object) -> str | None:
     value = _field(item, "id")
     return value if isinstance(value, str) and value.strip() else None
 
 
-def _string_values(value: Any) -> set[str] | None:
+def _string_values(value: object) -> set[str] | None:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return None
     return {item.casefold() for item in value if isinstance(item, str)}
 
 
-def _field(item: Any, name: str) -> Any:
+def _field(item: object, name: str) -> object:
     if isinstance(item, Mapping):
         return item.get(name)
-    value = getattr(item, name, None)
+    value: object = getattr(item, name, None)
     if value is not None:
         return value
-    extra = getattr(item, "model_extra", None)
+    extra: object = getattr(item, "model_extra", None)
     return extra.get(name) if isinstance(extra, Mapping) else None

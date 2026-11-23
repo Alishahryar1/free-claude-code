@@ -1,9 +1,11 @@
 """Custom endpoint resource ownership using FCC's existing wire transports."""
 
 from collections.abc import AsyncIterator, Mapping
+from typing import override
 
 import httpx
 import httpx2
+from openai import AsyncOpenAI
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.model_metadata import ProviderModelInfo
@@ -11,6 +13,7 @@ from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.core.anthropic import MessagesRequest, ReasoningReplayMode
 from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.gemini import GeminiRequest
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     responses_reasoning_policy,
@@ -110,11 +113,11 @@ class CustomProvider(BaseProvider):
             base_url=config.base_url, api_key=config.api_key, headers={}
         )
         self._openai_transport = openai_transport
-        self._sdk = None
-        self._http = None
-        self._chat = None
-        self._responses = None
-        self._messages = None
+        self._sdk: AsyncOpenAI | None = None
+        self._http: httpx.AsyncClient | None = None
+        self._chat: OpenAIChatTransport | None = None
+        self._responses: OpenAIResponsesTransport | None = None
+        self._messages: AnthropicMessagesTransport | None = None
         if definition.api_format == "anthropic_messages":
             self._http = httpx.AsyncClient(
                 timeout=httpx.Timeout(
@@ -232,12 +235,13 @@ class CustomProvider(BaseProvider):
             self._definition.reasoning_format == "provider_default"
             and self._messages is None
         ):
+            output_config: JsonObject = request.output_config or {}
             request = request.model_copy(
                 update={
                     "thinking": None,
                     "output_config": {
                         key: value
-                        for key, value in (request.output_config or {}).items()
+                        for key, value in output_config.items()
                         if key != "effort"
                     },
                 }
@@ -267,6 +271,7 @@ class CustomProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_chat(
         self,
         request: ChatRequest,
@@ -302,6 +307,7 @@ class CustomProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_gemini(
         self,
         request: GeminiRequest,

@@ -2,13 +2,15 @@
 
 import json
 from copy import deepcopy
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.history_replay import (
     AssociatedReplayRecord,
     HistoryMode,
+    HistoryProtocol,
     HistoryReplayError,
     ReplayOrigin,
     ReplayRecord,
@@ -17,15 +19,20 @@ from free_claude_code.core.history_replay import (
     prepare_history,
     resolve_messages_replay,
 )
+from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import decode_object, object_array
 
 
 def _origin(
-    provider="a", protocol="responses", connection="connection-a", model="arbitrary"
+    provider: str = "a",
+    protocol: HistoryProtocol = "responses",
+    connection: str = "connection-a",
+    model: str = "arbitrary",
 ):
     return ReplayOrigin(provider, protocol, "https://example.org/v1", connection, model)
 
 
-def _native():
+def _native() -> JsonObject:
     return {
         "type": "reasoning",
         "id": "rs_native:original",
@@ -35,7 +42,7 @@ def _native():
     }
 
 
-def test_response_history_roundtrip_across_providers_and_restart():
+def test_response_history_roundtrip_across_providers_and_restart() -> None:
     native = _native()
     item = {
         **native,
@@ -54,7 +61,7 @@ def test_response_history_roundtrip_across_providers_and_restart():
     restored = cast(
         dict[str, Any],
         prepare_history(
-            json.loads(json.dumps(saved)), _origin(model="completely-different")
+            decode_object(json.dumps(saved)), _origin(model="completely-different")
         ),
     )
     assert restored["input"][0] == native
@@ -63,8 +70,10 @@ def test_response_history_roundtrip_across_providers_and_restart():
 
 
 @pytest.mark.parametrize("protocol", ["responses", "messages", "chat"])
-def test_foreign_readable_reasoning_keeps_context_without_ciphertext(protocol):
-    native = {
+def test_foreign_readable_reasoning_keeps_context_without_ciphertext(
+    protocol: WireProtocol,
+) -> None:
+    native: JsonObject = {
         **_native(),
         "summary": [{"type": "summary_text", "text": "Search for the value."}],
     }
@@ -111,7 +120,7 @@ def test_foreign_readable_reasoning_keeps_context_without_ciphertext(protocol):
     assert "fcc:" not in rendered
     assert all(
         item.get("role") not in {"system", "developer"}
-        for item in result.get("input", result.get("messages", []))
+        for item in object_array(result.get("input", result.get("messages", [])))
     )
 
 
@@ -128,7 +137,9 @@ def test_foreign_readable_reasoning_keeps_context_without_ciphertext(protocol):
         {"type": "redacted_thinking", "data": "hidden"},
     ],
 )
-def test_messages_native_blocks_are_exact_after_carrier_replay(block):
+def test_messages_native_blocks_are_exact_after_carrier_replay(
+    block: JsonObject,
+) -> None:
     origin = _origin(protocol="messages")
     carrier = encode_replay(ReplayRecord(origin, block))
     public = (
@@ -141,7 +152,7 @@ def test_messages_native_blocks_are_exact_after_carrier_replay(block):
     assert result["messages"][0]["content"] == [block]
 
 
-def test_native_replay_connection_is_scoped_but_model_name_is_not_a_rule():
+def test_native_replay_connection_is_scoped_but_model_name_is_not_a_rule() -> None:
     item = {
         **_native(),
         "encrypted_content": encode_replay(ReplayRecord(_origin(), _native())),
@@ -154,7 +165,7 @@ def test_native_replay_connection_is_scoped_but_model_name_is_not_a_rule():
     ]
 
 
-def test_codec_rejects_malformed_and_nonfinite_payloads():
+def test_codec_rejects_malformed_and_nonfinite_payloads() -> None:
     with pytest.raises(HistoryReplayError):
         decode_replay("fcc:history:v1:broken")
     with pytest.raises(HistoryReplayError):
@@ -163,14 +174,16 @@ def test_codec_rejects_malformed_and_nonfinite_payloads():
         )
 
 
-def test_legacy_naked_opaque_history_is_tried_unchanged():
+def test_legacy_naked_opaque_history_is_tried_unchanged() -> None:
     saved = {"input": [_native()]}
     assert prepare_history(saved, _origin("other")) == saved
 
 
 @pytest.mark.parametrize("native_text", ["Full reasoning.", "Short summary."])
-def test_legacy_chat_replay_materializes_all_readable_thinking_once(native_text):
-    native = {
+def test_legacy_chat_replay_materializes_all_readable_thinking_once(
+    native_text: str,
+) -> None:
+    native: JsonObject = {
         "reasoning_content": native_text,
         "reasoning_details": [
             {"type": "reasoning.summary", "summary": "Short summary.", "index": 0}
@@ -187,10 +200,8 @@ def test_legacy_chat_replay_materializes_all_readable_thinking_once(native_text)
         ]
     }
     original = deepcopy(body)
-    result = cast(
-        dict[str, Any],
-        prepare_history(body, _origin("b", "chat"), scope=HistoryMode.ALL),
-    )["messages"][0]
+    prepared = prepare_history(body, _origin("b", "chat"), scope=HistoryMode.ALL)
+    result = object_array(prepared["messages"])[0]
     assert result["content"] == "answer"
     assert "reasoning_details" not in result
     assert result["reasoning_content"] == (
@@ -205,7 +216,9 @@ def test_legacy_chat_replay_materializes_all_readable_thinking_once(native_text)
     "thinking",
     ["  Read first.\nThen edit.  ", "[Earlier reasoning]\nOriginal text.", ""],
 )
-def test_plain_reasoning_context_preserves_original_text_and_history(thinking):
+def test_plain_reasoning_context_preserves_original_text_and_history(
+    thinking: str,
+) -> None:
     body = {
         "messages": [
             {"role": "assistant", "content": "Answer.", "reasoning_content": thinking},
@@ -227,7 +240,13 @@ def test_plain_reasoning_context_preserves_original_text_and_history(thinking):
     assert body == original
 
 
-def _associated(part, data, *, group_id="group-a", origin=None):
+def _associated(
+    part: Literal["anchor", "final"],
+    data: str,
+    *,
+    group_id: str = "group-a",
+    origin: ReplayOrigin | None = None,
+):
     return encode_replay(
         AssociatedReplayRecord(
             origin or _origin(protocol="chat"),
@@ -239,7 +258,7 @@ def _associated(part, data, *, group_id="group-a", origin=None):
 
 
 @pytest.mark.parametrize("readable", [False, True])
-def test_late_replay_replaces_snapshot_at_original_position(readable):
+def test_late_replay_replaces_snapshot_at_original_position(readable: bool) -> None:
     anchor = (
         {
             "type": "thinking",
@@ -276,7 +295,9 @@ def test_late_replay_replaces_snapshot_at_original_position(readable):
 
 
 @pytest.mark.parametrize("part", ["anchor", "final"])
-def test_unpaired_replay_preserves_available_data(part):
+def test_unpaired_replay_preserves_available_data(
+    part: Literal["anchor", "final"],
+) -> None:
     resolved = resolve_messages_replay(
         [{"type": "redacted_thinking", "data": _associated(part, "available")}]
     )
@@ -301,7 +322,7 @@ def test_unpaired_replay_preserves_available_data(part):
         "final_in_thinking",
     ],
 )
-def test_conflicting_replay_associations_are_rejected(case):
+def test_conflicting_replay_associations_are_rejected(case: str) -> None:
     anchor = {
         "type": "thinking",
         "thinking": "plan",
@@ -328,7 +349,7 @@ def test_conflicting_replay_associations_are_rejected(case):
         resolve_messages_replay(blocks)
 
 
-def test_unrelated_native_and_older_replay_blocks_are_unchanged():
+def test_unrelated_native_and_older_replay_blocks_are_unchanged() -> None:
     blocks = [
         {"type": "thinking", "thinking": "native", "signature": "upstream-signature"},
         {

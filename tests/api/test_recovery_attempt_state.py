@@ -6,8 +6,10 @@ from copy import deepcopy
 import httpx
 import pytest
 
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.json_types import JsonObject
 from tests.api.test_delivered_stream_recovery import (
     assert_completed,
     public_text,
@@ -18,13 +20,16 @@ from tests.providers.support import assistant_history_text, without_empty_reason
 from tests.providers.test_anthropic_messages_transport import Wire, _sse
 from tests.providers.test_anthropic_provider import native_body, provider
 from tests.providers.test_history_transports import _events_for, _harness, _saved_reply
+from tests.wire_payload import array_payload, decode_object, object_array
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_empty_continuation_fails_without_compatibility_padding(protocol, wire):
-    def reply(bodies):
+async def test_empty_continuation_fails_without_compatibility_padding(
+    protocol: str, wire: WireProtocol
+) -> None:
+    def reply(bodies: list[JsonObject]):
         return 200, text_events(
             protocol,
             "Hello" if len(bodies) == 1 else "",
@@ -45,7 +50,9 @@ async def test_empty_continuation_fails_without_compatibility_padding(protocol, 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_empty_initial_generation_preserves_compatibility_padding(protocol, wire):
+async def test_empty_initial_generation_preserves_compatibility_padding(
+    protocol: str, wire: WireProtocol
+) -> None:
     async with _harness(protocol, lambda _: (200, text_events(protocol, ""))) as (
         send,
         bodies,
@@ -65,7 +72,9 @@ async def test_empty_initial_generation_preserves_compatibility_padding(protocol
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_real_provider_whitespace_is_continuation_output(protocol, wire):
+async def test_real_provider_whitespace_is_continuation_output(
+    protocol: str, wire: WireProtocol
+) -> None:
     async with _harness(
         protocol,
         lambda bodies: (
@@ -90,9 +99,11 @@ async def test_real_provider_whitespace_is_continuation_output(protocol, wire):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_readable_reasoning_continuation_succeeds_without_padding(wire):
+async def test_readable_reasoning_continuation_succeeds_without_padding(
+    wire: WireProtocol,
+) -> None:
     reasoning = text_events("chat", "")
-    reasoning[0]["choices"][0]["delta"] = {
+    object_array(reasoning[0]["choices"])[0]["delta"] = {
         "reasoning_content": "Consider the greeting."
     }
     async with _harness(
@@ -116,10 +127,12 @@ async def test_readable_reasoning_continuation_succeeds_without_padding(wire):
     assert len(bodies) == 2
 
 
-def rejected_history_error(protocol, body):
+def rejected_history_error(protocol: str, body: JsonObject):
     if protocol == "responses":
         index = next(
-            i for i, item in enumerate(body["input"]) if item.get("encrypted_content")
+            i
+            for i, item in enumerate(object_array(body["input"]))
+            if item.get("encrypted_content")
         )
         param = f"input[{index}].encrypted_content"
     else:
@@ -127,9 +140,9 @@ def rejected_history_error(protocol, body):
         key = "signature" if protocol == "messages" else "data"
         index, block_index = next(
             (i, j)
-            for i, message in enumerate(body["messages"])
+            for i, message in enumerate(object_array(body["messages"]))
             if isinstance(message.get(field), list)
-            for j, block in enumerate(message[field])
+            for j, block in enumerate(object_array(message[field]))
             if block.get(key) == "opaque-original"
         )
         param = f"messages[{index}].{field}[{block_index}].{key}"
@@ -146,8 +159,10 @@ def rejected_history_error(protocol, body):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_history_correction_survives_another_interruption(protocol, wire):
-    def reply(bodies):
+async def test_history_correction_survives_another_interruption(
+    protocol: str, wire: WireProtocol
+) -> None:
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, _events_for(protocol)
         if len(bodies) > 2 and "opaque-original" in json.dumps(bodies[-1]):
@@ -175,10 +190,14 @@ async def test_history_correction_survives_another_interruption(protocol, wire):
     assert "opaque-original" in json.dumps(bodies[2])
     assert all("opaque-original" not in json.dumps(body) for body in bodies[3:])
     history_field = "input" if protocol == "responses" else "messages"
-    before_history = bodies[3][history_field][:-2]
-    assert bodies[4][history_field][: len(before_history)] == before_history
+    before_history = array_payload(bodies[3][history_field])[:-2]
     assert (
-        assistant_history_text(bodies[4][history_field][len(before_history) :])
+        array_payload(bodies[4][history_field])[: len(before_history)] == before_history
+    )
+    assert (
+        assistant_history_text(
+            array_payload(bodies[4][history_field])[len(before_history) :]
+        )
         == "Hello world "
     )
     events = parse_sse_text(result)
@@ -187,8 +206,8 @@ async def test_history_correction_survives_another_interruption(protocol, wire):
 
 
 @pytest.mark.asyncio
-async def test_removed_history_row_stays_removed_after_another_interruption():
-    history = [
+async def test_removed_history_row_stays_removed_after_another_interruption() -> None:
+    history: list[JsonObject] = [
         {
             "type": "reasoning",
             "id": "rs_old",
@@ -198,7 +217,7 @@ async def test_removed_history_row_stays_removed_after_another_interruption():
         {"role": "user", "content": "greet"},
     ]
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) > 1 and "opaque-original" in json.dumps(bodies[-1]):
             return 400, rejected_history_error("responses", bodies[-1])
         return 200, text_events(
@@ -215,11 +234,14 @@ async def test_removed_history_row_stays_removed_after_another_interruption():
         result = await delivered(send("responses", history), "responses")
 
     assert len(bodies) == 4
-    assert len(bodies[2]["input"]) == len(bodies[1]["input"]) - 1
-    before_history = bodies[2]["input"][:-2]
-    assert bodies[3]["input"][: len(before_history)] == before_history
     assert (
-        assistant_history_text(bodies[3]["input"][len(before_history) :])
+        len(object_array(bodies[2]["input"]))
+        == len(object_array(bodies[1]["input"])) - 1
+    )
+    before_history = array_payload(bodies[2]["input"])[:-2]
+    assert array_payload(bodies[3]["input"])[: len(before_history)] == before_history
+    assert (
+        assistant_history_text(array_payload(bodies[3]["input"])[len(before_history) :])
         == "Hello world "
     )
     assert_completed(parse_sse_text(result), "responses")
@@ -227,16 +249,18 @@ async def test_removed_history_row_stays_removed_after_another_interruption():
 
 
 @pytest.mark.asyncio
-async def test_native_messages_repeated_continuation_replaces_only_private_tail():
+async def test_native_messages_repeated_continuation_replaces_only_private_tail() -> (
+    None
+):
     bodies = []
     wires = [
         Wire([_sse(*text_events("messages", text, complete=index == 2))])
         for index, text in enumerate(["Hello ", "world ", "again."])
     ]
 
-    def reply(request):
+    def reply(request: httpx.Request):
         assert all(wire.closed for wire in wires[: len(bodies)])
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -253,9 +277,13 @@ async def test_native_messages_repeated_continuation_replaces_only_private_tail(
         assert public_text(parse_sse_text(result), "messages") == "Hello world again."
         assert len(bodies) == 3
         assert (
-            without_empty_reasoning(bodies[-1]["messages"][:-2]) == initial["messages"]
+            without_empty_reasoning(array_payload(bodies[-1]["messages"])[:-2])
+            == initial["messages"]
         )
-        assert assistant_history_text(bodies[-1]["messages"][-2:]) == "Hello world "
+        assert (
+            assistant_history_text(array_payload(bodies[-1]["messages"])[-2:])
+            == "Hello world "
+        )
         assert all(wire.closed for wire in wires)
     finally:
         await p.cleanup()

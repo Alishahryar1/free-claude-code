@@ -376,7 +376,7 @@ def _controls(
         "presence_penalty",
         "frequency_penalty",
     ):
-        value = getattr(config, name)
+        value: int | float | None = getattr(config, name)
         if value is not None:
             if name not in mapping:
                 raise GeminiConversionError(

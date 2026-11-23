@@ -1,5 +1,6 @@
 import asyncio
 import threading
+from collections.abc import Mapping
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -14,17 +15,19 @@ from tests.api.support import create_test_app
 @pytest.mark.parametrize(
     "path", ["config", "status", "providers/lmstudio/local-status", "config/apply"]
 )
-async def test_admin_storage_wait_allows_health_and_authenticated_requests(path):
+async def test_admin_storage_wait_allows_health_and_authenticated_requests(
+    path: str,
+) -> None:
     app = create_test_app()
     entered, release = threading.Event(), threading.Event()
     read = ManagedConfigStore.read
     worker_limiter = to_thread.current_default_thread_limiter()
     original_tokens = worker_limiter.total_tokens
 
-    def blocked_read(store, *args):
+    def blocked_read(store: ManagedConfigStore, env: Mapping[str, str] | None = None):
         entered.set()
         assert release.wait(5), "Admin blocked the event loop"
-        return read(store, *args)
+        return read(store, env)
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 50000)),

@@ -1,13 +1,14 @@
 """Stateless source-native state carried in Gemini's opaque signature field."""
 
 import base64
-import binascii
 import json
 import re
 from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from typing import cast
+
+from free_claude_code.core.json_types import load_json_value
 
 from ..history_replay import (
     HistoryProtocol,
@@ -41,7 +42,7 @@ class ReplayBundle:
 
 
 def encode_bundle(bundle: ReplayBundle) -> str:
-    payload = {
+    payload: JsonObject = {
         "response_id": bundle.response_id,
         "records": [encode_replay(record) for record in bundle.records],
         "calls": [asdict(call) for call in bundle.calls],
@@ -65,7 +66,7 @@ def decode_bundle(signature: str) -> ReplayBundle | None:
         protected = raw.startswith(_PROTECTED_PREFIX)
         if not protected and not raw.startswith(_PREFIX):
             return None
-        value = json.loads(raw[len(_PROTECTED_PREFIX if protected else _PREFIX) :])
+        value = load_json_value(raw[len(_PROTECTED_PREFIX if protected else _PREFIX) :])
         allowed = (
             {"thought_echo_sha256", "protected_echo"}
             if protected
@@ -89,9 +90,12 @@ def decode_bundle(signature: str) -> ReplayBundle | None:
             value["calls"], list
         ):
             raise ValueError("Invalid replay collections")
-        if any(not isinstance(record, str) for record in value["records"]):
-            raise ValueError("Invalid reasoning record")
-        records = tuple(decode_replay(record) for record in value["records"])
+        decoded: list[ReplayRecord] = []
+        for record in value["records"]:
+            if not isinstance(record, str):
+                raise ValueError("Invalid reasoning record")
+            decoded.append(decode_replay(record))
+        records = tuple(decoded)
         echo = None
         if protected:
             if any(not protected_reasoning(record.native) for record in records):
@@ -102,15 +106,14 @@ def decode_bundle(signature: str) -> ReplayBundle | None:
             echo = []
             previous_end = 0
             for span in ranges:
-                if (
-                    not isinstance(span, list)
-                    or len(span) != 3
-                    or any(type(n) is not int for n in span)
-                ):
+                if not isinstance(span, list) or len(span) != 3:
                     raise ValueError("Invalid protected echo range")
                 record_index, start, end = span
                 if (
-                    not 0 <= record_index < len(records)
+                    type(record_index) is not int
+                    or type(start) is not int
+                    or type(end) is not int
+                    or not 0 <= record_index < len(records)
                     or start < previous_end
                     or end <= start
                 ):
@@ -126,15 +129,13 @@ def decode_bundle(signature: str) -> ReplayBundle | None:
             value["response_id"],
             records,
             calls,
-            digest,
+            digest if isinstance(digest, str) else None,
             tuple(echo) if echo is not None else None,
         )
     except (
         ValueError,
         TypeError,
         KeyError,
-        binascii.Error,
-        UnicodeError,
         RecursionError,
     ) as error:
         raise GeminiConversionError(

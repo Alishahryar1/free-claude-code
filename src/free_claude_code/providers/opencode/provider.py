@@ -3,6 +3,7 @@
 import sys
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
+from typing import override
 
 import httpx
 
@@ -251,6 +252,7 @@ class OpenCodeProvider(BaseProvider):
                     request_id=request_id,
                 )
 
+    @override
     def stream_chat(
         self,
         request: ChatRequest,
@@ -275,6 +277,7 @@ class OpenCodeProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_gemini(
         self,
         request: GeminiRequest,

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from free_claude_code.core.json_types import load_json_value
 from free_claude_code.harnesses import (
-    antigravity_integration,
     claude_desktop_integration,
     claude_integration,
     codex_integration,
@@ -19,7 +19,8 @@ from free_claude_code.harnesses.integration_cleanup import (
     IntegrationPaths,
     disconnect_integrations,
 )
-from tests.harnesses.test_antigravity_integration import catalog
+from tests.harnesses.antigravity_support import write_previous_connection
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 URL = "http://127.0.0.1:8082"
 TOKEN = "cleanup-test-token"
@@ -42,7 +43,7 @@ def paths_at(root: Path) -> IntegrationPaths:
 
 
 @pytest.fixture
-def paths(tmp_path, monkeypatch):
+def paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     paths = paths_at(tmp_path)
     paths.env.parent.mkdir()
     paths.env.write_text(f"PORT=8082\nANTHROPIC_AUTH_TOKEN={TOKEN}\nMODEL=invalid\n")
@@ -52,15 +53,12 @@ def paths(tmp_path, monkeypatch):
     return paths
 
 
-def test_cleanup_disconnects_native_connections_and_preserves_unrelated_settings(paths):
+def test_cleanup_disconnects_native_connections_and_preserves_unrelated_settings(
+    paths: IntegrationPaths,
+) -> None:
     paths.antigravity.parent.mkdir()
     paths.antigravity.write_text('{"modelProvider":"", "keep": true}')
-    antigravity_integration.configure(
-        paths.antigravity,
-        paths.antigravity_state,
-        catalog("provider/model"),
-        connect=True,
-    )
+    write_previous_connection(paths.antigravity, paths.antigravity_state)
     paths.claude_vscode.parent.mkdir()
     paths.claude_vscode.write_text('{"editor.fontSize": 17}')
     claude_integration.configure(paths.claude_vscode, URL, TOKEN, True)
@@ -142,13 +140,15 @@ def test_cleanup_disconnects_native_connections_and_preserves_unrelated_settings
     }
 
 
-def test_missing_native_configurations_create_no_files(tmp_path):
+def test_missing_native_configurations_create_no_files(tmp_path: Path) -> None:
     disconnect_integrations(paths_at(tmp_path))
     assert list(tmp_path.iterdir()) == []
 
 
 @pytest.mark.parametrize("change", ["token", "url"])
-def test_manually_changed_vscode_connection_is_preserved(paths, change):
+def test_manually_changed_vscode_connection_is_preserved(
+    paths: IntegrationPaths, change: str
+) -> None:
     claude_integration.configure(paths.claude_vscode, URL, TOKEN, True)
     before = paths.claude_vscode.read_text().replace(
         TOKEN if change == "token" else URL,
@@ -170,8 +170,13 @@ def test_manually_changed_vscode_connection_is_preserved(paths, change):
 )
 @pytest.mark.parametrize("keep_override", [False, True])
 def test_cleanup_of_connection_from_process_override(
-    paths, monkeypatch, key, value, connected_url, keep_override
-):
+    paths: IntegrationPaths,
+    monkeypatch: pytest.MonkeyPatch,
+    key: str,
+    value: str,
+    connected_url: str,
+    keep_override: bool,
+) -> None:
     monkeypatch.setenv(key, value)
     claude_integration.configure(paths.claude_vscode, connected_url, TOKEN, True)
     vscode_chat_integration.configure(paths.vscode_chat, connected_url, TOKEN, [])
@@ -200,11 +205,13 @@ def test_cleanup_of_connection_from_process_override(
         ("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", None),
     ],
 )
-def test_unmarked_vscode_settings_are_preserved_without_blocking(paths, key, value):
+def test_unmarked_vscode_settings_are_preserved_without_blocking(
+    paths: IntegrationPaths, key: str, value: bool | str | None
+) -> None:
     claude_integration.configure(
         paths.claude_vscode, "https://other.example", "unrelated-token", True
     )
-    document = json.loads(paths.claude_vscode.read_text())
+    document = decode_object(paths.claude_vscode.read_text())
     if key == "claudeCode.disableLoginPrompt":
         if value is None:
             document.pop(key)
@@ -214,10 +221,18 @@ def test_unmarked_vscode_settings_are_preserved_without_blocking(paths, key, val
         entries = document["claudeCode.environmentVariables"]
         if value is None:
             document["claudeCode.environmentVariables"] = [
-                entry for entry in entries if entry["name"] != key
+                entry
+                for entry in array_payload(entries)
+                if object_payload(entry)["name"] != key
             ]
         else:
-            next(entry for entry in entries if entry["name"] == key)["value"] = value
+            object_payload(
+                next(
+                    entry
+                    for entry in array_payload(entries)
+                    if object_payload(entry)["name"] == key
+                )
+            )["value"] = value
     paths.claude_vscode.write_text(json.dumps(document))
     before = paths.claude_vscode.read_bytes()
     disconnect_integrations(paths)
@@ -228,10 +243,10 @@ def test_unmarked_vscode_settings_are_preserved_without_blocking(paths, key, val
 @pytest.mark.parametrize("remove", [False, True])
 @pytest.mark.parametrize("mismatch", [None, "url", "token"])
 def test_vscode_cleanup_uses_gateway_identity_without_optional_flags(
-    paths, change, remove, mismatch
-):
+    paths: IntegrationPaths, change: str, remove: bool, mismatch: str | None
+) -> None:
     claude_integration.configure(paths.claude_vscode, URL, TOKEN, True)
-    document = json.loads(paths.claude_vscode.read_text())
+    document = decode_object(paths.claude_vscode.read_text())
     document["editor.fontSize"] = 17
     if change in {"login", "both"}:
         if remove:
@@ -242,26 +257,35 @@ def test_vscode_cleanup_uses_gateway_identity_without_optional_flags(
     if change in {"discovery", "both"}:
         discovery = next(
             entry
-            for entry in entries
-            if entry["name"] == "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
+            for entry in array_payload(entries)
+            if object_payload(entry)["name"]
+            == "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
         )
         if remove:
-            entries.remove(discovery)
+            array_payload(entries).remove(discovery)
         else:
-            discovery["value"] = "0"
+            object_payload(discovery)["value"] = "0"
     if mismatch is not None:
         name, value = (
             ("ANTHROPIC_BASE_URL", "https://other.example")
             if mismatch == "url"
             else ("ANTHROPIC_AUTH_TOKEN", "changed-token")
         )
-        next(entry for entry in entries if entry["name"] == name)["value"] = value
+        object_payload(
+            next(
+                entry
+                for entry in array_payload(entries)
+                if object_payload(entry)["name"] == name
+            )
+        )["value"] = value
     paths.claude_vscode.write_text(json.dumps(document))
     before = paths.claude_vscode.read_bytes()
 
     if mismatch is None:
         disconnect_integrations(paths)
-        assert json.loads(paths.claude_vscode.read_text()) == {"editor.fontSize": 17}
+        assert load_json_value(paths.claude_vscode.read_text()) == {
+            "editor.fontSize": 17
+        }
     else:
         with pytest.raises(IntegrationCleanupError, match="Claude Code in VS Code"):
             disconnect_integrations(paths)
@@ -279,9 +303,13 @@ def test_vscode_cleanup_uses_gateway_identity_without_optional_flags(
 )
 @pytest.mark.parametrize("failure", [PermissionError, OSError])
 def test_cleanup_fails_when_path_access_cannot_be_confirmed(
-    paths, monkeypatch, field, message, failure
-):
-    blocked = getattr(paths, field)
+    paths: IntegrationPaths,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    message: str,
+    failure: type[Exception],
+) -> None:
+    blocked: Path = getattr(paths, field)
     if field == "desktop":
         claude_desktop_integration.configure(
             paths.desktop, URL, TOKEN, True, disconnect_path=paths.desktop_disconnect
@@ -304,10 +332,15 @@ def test_cleanup_fails_when_path_access_cannot_be_confirmed(
     }
     original_stat = os.stat
 
-    def inaccessible(path, *args, **kwargs):
-        if Path(path) == blocked:
+    def inaccessible(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes] | int,
+        *,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ):
+        if isinstance(path, (str, Path)) and Path(path) == blocked:
             raise failure("private-filesystem-detail")
-        return original_stat(path, *args, **kwargs)
+        return original_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
 
     with monkeypatch.context() as patch:
         patch.setattr(os, "stat", inaccessible)
@@ -324,13 +357,17 @@ def test_cleanup_fails_when_path_access_cannot_be_confirmed(
     "connected_url",
     ["http://localhost:8082/", "http://[::1]:8082", "http://127.0.0.1:8082/"],
 )
-def test_equivalent_loopback_connection_is_disconnected(paths, connected_url):
+def test_equivalent_loopback_connection_is_disconnected(
+    paths: IntegrationPaths, connected_url: str
+) -> None:
     claude_integration.configure(paths.claude_vscode, connected_url, TOKEN, True)
     disconnect_integrations(paths)
     assert json.loads(paths.claude_vscode.read_text()) == {}
 
 
-def test_missing_identity_does_not_claim_gateway_settings(paths):
+def test_missing_identity_does_not_claim_gateway_settings(
+    paths: IntegrationPaths,
+) -> None:
     claude_integration.configure(paths.claude_vscode, URL, TOKEN, True)
     paths.env.unlink()
     before = paths.claude_vscode.read_bytes()
@@ -340,7 +377,9 @@ def test_missing_identity_does_not_claim_gateway_settings(paths):
 
 
 @pytest.mark.parametrize("content", ["PORT=invalid", "ANTHROPIC_AUTH_TOKEN="])
-def test_invalid_connection_settings_abort_without_modifying_apps(paths, content):
+def test_invalid_connection_settings_abort_without_modifying_apps(
+    paths: IntegrationPaths, content: str
+) -> None:
     claude_integration.configure(paths.claude_vscode, URL, TOKEN, True)
     paths.env.write_text(content)
     before = paths.claude_vscode.read_bytes()
@@ -350,7 +389,9 @@ def test_invalid_connection_settings_abort_without_modifying_apps(paths, content
     assert paths.env.read_text() == content
 
 
-def test_invalid_settings_error_does_not_disclose_source_text(paths):
+def test_invalid_settings_error_does_not_disclose_source_text(
+    paths: IntegrationPaths,
+) -> None:
     paths.claude_vscode.parent.mkdir()
     paths.claude_vscode.write_text('{"secret": "cleanup-secret", invalid}')
     with pytest.raises(IntegrationCleanupError) as error:
@@ -363,8 +404,8 @@ def test_invalid_settings_error_does_not_disclose_source_text(paths):
     "error", [claude_desktop_integration.ManagedDesktopError, PermissionError]
 )
 def test_desktop_policy_or_access_failure_preserves_recovery_data(
-    paths, monkeypatch, error
-):
+    paths: IntegrationPaths, monkeypatch: pytest.MonkeyPatch, error: type[Exception]
+) -> None:
     paths.desktop.mkdir()
 
     def fail():
@@ -377,7 +418,9 @@ def test_desktop_policy_or_access_failure_preserves_recovery_data(
     assert paths.env.exists()
 
 
-def test_orphan_dsh_credential_is_removed_without_creating_profile(paths):
+def test_orphan_dsh_credential_is_removed_without_creating_profile(
+    paths: IntegrationPaths,
+) -> None:
     paths.dsh.mkdir()
     credentials = paths.dsh / ".credentials.yaml"
     credentials.write_text(

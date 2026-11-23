@@ -2,7 +2,7 @@
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Iterable, Iterator, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from urllib.parse import urlparse, urlsplit
@@ -11,7 +11,7 @@ from loguru import logger
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.application.execution import ProviderExecutor, TokenCounter
-from free_claude_code.application.response_collection import collect_response
+from free_claude_code.application.response_collection import collect_response_packets
 from free_claude_code.application.routing import RoutedMessagesRequest
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import (
@@ -30,9 +30,17 @@ from free_claude_code.core.anthropic.server_tool_sse import (
     web_search_result_block,
     web_tool_error_block,
 )
+from free_claude_code.core.anthropic.stream_contracts import SSEEvent
+from free_claude_code.core.anthropic.streaming import format_sse_event
+from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.gemini.web_search_replay import signed_gemini_turn
 from free_claude_code.core.json_types import JsonObject
-from free_claude_code.core.stream_output import StreamOutput
+from free_claude_code.core.stream_output import (
+    CompletedCall,
+    StreamOutput,
+    call_references,
+)
 from free_claude_code.core.trace import trace_event
 from free_claude_code.core.web_tools import WebSearchResult
 
@@ -43,7 +51,6 @@ from .ports import (
     web_fetch_allowed_scheme_set,
 )
 from .request import (
-    HIDDEN_WEB_SEARCH_NAME,
     AutomaticWebSearchPlan,
     WebSearchDomainFilter,
     extract_query,
@@ -142,7 +149,16 @@ class WebToolService:
             raw_log_payload=plan.request.model_dump,
             request_id=request_id,
         )
-        chunks = await collect_response(provider_stream, protocol="messages")
+        packets = await collect_response_packets(provider_stream, protocol="messages")
+        chunks = tuple(frame for packet in packets for frame in packet.frames)
+        stop_reason = _provider_stop_reason(chunks)
+        references = {ref.call_id: ref for ref in call_references(chunks)}
+        if stop_reason in ("refusal", "max_tokens", "stop_sequence", "pause_turn"):
+            # Tool arguments from a discarded candidate can be incomplete.
+            output = _without_tool_candidates(chunks) if references else iter(packets)
+            for packet in output:
+                yield packet
+            return
 
         message, stream_error, _complete = await aggregate_anthropic_sse_to_message(
             _iterate_chunks(chunks)
@@ -150,7 +166,52 @@ class WebToolService:
         if stream_error is not None:
             raise _execution_failure_from_stream_error(stream_error)
         tool_calls = _tool_calls(message)
-        if not tool_calls:
+        if tool_calls and stop_reason != "tool_use":
+            raise _protocol_failure(
+                "Upstream model returned tool candidates without a tool-use stop.",
+                request_id=request_id,
+            )
+        completed = {call for packet in packets for call in packet.completed_calls}
+        names = {tool.name for tool in plan.request.tools or ()}
+        searches: dict[int, str] = {}
+        client_calls: dict[int, CompletedCall] = {}
+        seen_ids: set[str] = set()
+        for call in tool_calls:
+            name = call.get("name")
+            call_id = call.get("id")
+            if not isinstance(name, str) or name not in names:
+                raise _protocol_failure(
+                    "Upstream model returned an unexpected tool for automatic WebSearch.",
+                    request_id=request_id,
+                )
+            reference = references.get(call_id) if isinstance(call_id, str) else None
+            if not call_id or reference not in completed or call_id in seen_ids:
+                raise _protocol_failure(
+                    "Upstream model returned an incomplete or ambiguous tool call for automatic WebSearch.",
+                    request_id=request_id,
+                )
+            assert reference is not None and isinstance(call_id, str)
+            seen_ids.add(call_id)
+            index = reference.position[0]
+            if name == plan.private_name:
+                searches[index] = _search_query(
+                    call.get("input"), request_id=request_id
+                )
+            else:
+                client_calls[index] = reference
+
+        if not tool_calls and (
+            stop_reason == "tool_use"
+            or (
+                (plan.request.tool_choice or {}).get("type") == "any"
+                and stop_reason == "end_turn"
+            )
+        ):
+            raise _protocol_failure(
+                "Upstream model ended the response without a required tool call.",
+                request_id=request_id,
+            )
+        if not searches:
             trace_event(
                 stage="execution",
                 event="free_claude_code.api.web_search.automatic_declined",
@@ -158,30 +219,14 @@ class WebToolService:
                 request_id=request_id,
                 model=routed.resolved.original_model,
             )
-            for chunk in chunks:
-                yield StreamOutput((chunk,))
+            for packet in packets:
+                yield packet
             return
-        queries: list[str] = []
-        for call in tool_calls:
-            if call.get("name") != HIDDEN_WEB_SEARCH_NAME:
-                raise _protocol_failure(
-                    "Upstream model returned an unexpected tool for automatic WebSearch.",
-                    request_id=request_id,
-                )
-            arguments = call.get("input")
-            if not isinstance(arguments, dict) or set(arguments) != {"query"}:
-                raise _protocol_failure(
-                    "Upstream model returned malformed arguments for automatic WebSearch.",
-                    request_id=request_id,
-                )
-            raw_query = arguments.get("query")
-            if not isinstance(raw_query, str) or not raw_query.strip():
-                raise _protocol_failure(
-                    "Upstream model returned an empty query for automatic WebSearch.",
-                    request_id=request_id,
-                )
-            queries.append(raw_query.strip())
         provider_usage = _provider_usage(message)
+        message_content: list[JsonObject] = message["content"]
+        preserve_signed_turn = (
+            bool(client_calls) and signed_gemini_turn(message_content) is not None
+        )
         input_tokens = _integer_field(provider_usage, "input_tokens")
         if input_tokens is None:
             input_tokens = fallback_input_tokens
@@ -204,11 +249,16 @@ class WebToolService:
                 input_tokens=input_tokens,
                 provider_usage=provider_usage,
             )
-            for query in queries
+            for query in searches.values()
         ]
-        executed = min(len(contexts), plan.max_uses or len(contexts))
-        for frame in server_tool_message_start_frames(contexts[0]):
-            yield StreamOutput((frame,))
+        executed = (
+            len(contexts)
+            if plan.remaining_uses is None
+            else min(len(contexts), plan.remaining_uses)
+        )
+        if not client_calls:
+            for frame in server_tool_message_start_frames(contexts[0]):
+                yield StreamOutput((frame,))
 
         limit = asyncio.Semaphore(4)
 
@@ -224,11 +274,15 @@ class WebToolService:
                 group.create_task(search_one(context))
                 for context in contexts[:executed]
             ]
-            for index, context in enumerate(contexts):
-                for frame in server_tool_use_frames(context, index=index * 2):
+
+            async def search_frames(
+                slot: int, index: int
+            ) -> AsyncIterator[StreamOutput]:
+                context = contexts[slot]
+                for frame in server_tool_use_frames(context, index=index):
                     yield StreamOutput((frame,))
-                if index < executed:
-                    result_block, summary = await tasks[index]
+                if slot < executed:
+                    result_block, summary = await tasks[slot]
                 else:
                     result_block = web_tool_error_block(
                         context, error_code="max_uses_exceeded"
@@ -236,17 +290,60 @@ class WebToolService:
                     summary = (
                         f"Web search limit reached for: {context.tool_input['query']}"
                     )
-                for frame in server_tool_result_frames(
-                    result_block, index=index * 2 + 1
-                ):
+                for frame in server_tool_result_frames(result_block, index=index + 1):
                     yield StreamOutput((frame,))
                 summaries.append(summary)
 
+            if client_calls:
+                if preserve_signed_turn:
+                    schedule = {index: (slot,) for slot, index in enumerate(searches)}
+                else:
+                    # Finish local searches before placing the ordinary calls
+                    # the client still needs to execute. The search data then
+                    # stays in the assistant message that precedes tool results.
+                    first_call = min(searches.keys() | client_calls.keys())
+                    schedule = {first_call: tuple(range(len(contexts)))}
+                indices: dict[int, int] = {}
+                next_index = 0
+                for event in _messages_events(chunks):
+                    data = event.data
+                    kind = data.get("type")
+                    if kind in {"message_delta", "message_stop"}:
+                        continue
+                    index = data.get("index")
+                    proof = ()
+                    if isinstance(index, int):
+                        if kind == "content_block_start":
+                            for slot in schedule.get(index, ()):
+                                async for packet in search_frames(slot, next_index):
+                                    yield packet
+                                next_index += 2
+                            if index not in searches:
+                                indices[index] = next_index
+                                next_index += 1
+                            if index in client_calls:
+                                proof = (
+                                    replace(
+                                        client_calls[index],
+                                        position=(indices[index],),
+                                    ),
+                                )
+                        if index in searches:
+                            continue
+                        data["index"] = indices.get(index, index)
+                    yield StreamOutput((format_sse_event(event.event, data),), proof)
+            else:
+                for slot in range(len(contexts)):
+                    async for packet in search_frames(slot, slot * 2):
+                        yield packet
+                next_index = len(contexts) * 2
+
         for frame in server_tool_finish_frames(
             contexts[0],
-            summary="\n\n".join(summaries),
-            index=len(contexts) * 2,
+            summary=None if client_calls else "\n\n".join(summaries),
+            index=next_index,
             request_count=executed,
+            stop_reason="tool_use" if client_calls else "end_turn",
         ):
             yield StreamOutput((frame,))
         trace_event(
@@ -336,6 +433,47 @@ async def _iterate_chunks(chunks: tuple[str, ...]) -> AsyncIterator[str]:
         yield chunk
 
 
+def _messages_events(
+    chunks: Iterable[str], *, event_names: frozenset[str] | None = None
+) -> Iterator[SSEEvent]:
+    decoder = AnthropicSSEDecoder(event_names=event_names)
+    for chunk in chunks:
+        yield from decoder.feed(chunk)
+
+
+def _provider_stop_reason(chunks: Iterable[str]) -> str | None:
+    reason = None
+    for event in _messages_events(chunks, event_names=frozenset({"message_delta"})):
+        delta = event.data.get("delta")
+        if isinstance(delta, dict) and isinstance(
+            stop := delta.get("stop_reason"), str
+        ):
+            reason = stop
+    return reason
+
+
+def _without_tool_candidates(chunks: Iterable[str]) -> Iterator[StreamOutput]:
+    """Keep the provider's terminal and discard calls it did not finish with tool_use."""
+    kept_indices: dict[int, int] = {}
+    for event in _messages_events(chunks):
+        data = event.data
+        index = data.get("index")
+        if isinstance(index, int):
+            if data.get("type") == "content_block_start":
+                block = data.get("content_block", {})
+                # This carrier describes a native Gemini turn that still has
+                # the discarded function calls in it.
+                if isinstance(block, dict) and (
+                    block.get("type") == "tool_use" or signed_gemini_turn((block,))
+                ):
+                    continue
+                kept_indices[index] = len(kept_indices)
+            if index not in kept_indices:
+                continue
+            data["index"] = kept_indices[index]
+        yield StreamOutput((format_sse_event(event.event, data),))
+
+
 def _tool_calls(message: Mapping[str, object]) -> list[dict[str, object]]:
     content = message.get("content")
     if not isinstance(content, list):
@@ -346,6 +484,21 @@ def _tool_calls(message: Mapping[str, object]) -> list[dict[str, object]]:
             continue
         calls.append({str(key): value for key, value in block.items()})
     return calls
+
+
+def _search_query(arguments: object, *, request_id: str) -> str:
+    if not isinstance(arguments, dict) or set(arguments) != {"query"}:
+        raise _protocol_failure(
+            "Upstream model returned malformed arguments for automatic WebSearch.",
+            request_id=request_id,
+        )
+    query = arguments.get("query")
+    if not isinstance(query, str) or not query.strip():
+        raise _protocol_failure(
+            "Upstream model returned an empty query for automatic WebSearch.",
+            request_id=request_id,
+        )
+    return query.strip()
 
 
 def _provider_usage(message: Mapping[str, object]) -> dict[str, object]:

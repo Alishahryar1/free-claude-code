@@ -9,10 +9,12 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from aiohttp.web import AppRunner
 
 from free_claude_code.application.connected_accounts import (
     ConnectedAccountLoginMode,
 )
+from free_claude_code.core.json_types import load_json_value
 from free_claude_code.providers.openai_codex import auth as openai_auth
 from free_claude_code.providers.openai_codex import login as openai_login
 from free_claude_code.providers.openai_codex.auth import (
@@ -20,6 +22,7 @@ from free_claude_code.providers.openai_codex.auth import (
     OpenAIReconnectRequired,
 )
 from free_claude_code.providers.openai_codex.login import BrowserAuthorization
+from tests.wire_payload import decode_object, object_payload
 
 
 def _jwt(payload: dict[str, object]) -> str:
@@ -54,12 +57,12 @@ def _credential_document(*, expires_at: int) -> dict[str, object]:
 
 
 def test_saved_connection_inspection_has_no_client_or_write_side_effects(
-    monkeypatch, tmp_path
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     path = tmp_path / "openai.json"
     monkeypatch.setattr(openai_auth, "openai_auth_path", lambda: path)
 
-    def forbidden(*args, **kwargs):
+    def forbidden(*args: object, **kwargs: object):
         pytest.fail("saved inspection must not construct an HTTP client")
 
     monkeypatch.setattr(openai_auth.httpx, "AsyncClient", forbidden)
@@ -108,7 +111,7 @@ async def test_auth_manager_refreshes_atomically_without_exposing_tokens(
     assert len(requests) == 1
     assert b"refresh_secret" in requests[0].content
     assert requests[0].headers["content-type"] == "application/json"
-    assert json.loads(requests[0].content) == {
+    assert load_json_value(requests[0].content) == {
         "grant_type": "refresh_token",
         "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
         "refresh_token": "refresh_secret",
@@ -116,9 +119,9 @@ async def test_auth_manager_refreshes_atomically_without_exposing_tokens(
     safe_status = json.dumps(manager.status().as_dict())
     assert "refresh_secret" not in safe_status
     assert refreshed_access not in safe_status
-    saved = json.loads(credential_path.read_text(encoding="utf-8"))
-    assert saved["credentials"]["access_token"] == refreshed_access
-    assert "email" not in saved["credentials"]
+    saved = decode_object(credential_path.read_text(encoding="utf-8"))
+    assert object_payload(saved["credentials"])["access_token"] == refreshed_access
+    assert "email" not in object_payload(saved["credentials"])
     if os.name != "nt":
         assert stat.S_IMODE(credential_path.parent.stat().st_mode) == 0o700
         assert stat.S_IMODE(credential_path.stat().st_mode) == 0o600
@@ -307,12 +310,12 @@ async def test_disconnect_revokes_refresh_token_and_always_deletes_credentials(
 
 @pytest.mark.asyncio
 async def test_browser_authorization_validates_state_and_returns_pkce_grant(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     callback_hosts: list[str] = []
     tcp_site = openai_login.web.TCPSite
 
-    def recording_site(runner, host: str, port: int):
+    def recording_site(runner: AppRunner, host: str, port: int):
         callback_hosts.append(host)
         return tcp_site(runner, host, port)
 
@@ -449,8 +452,8 @@ async def test_device_login_persists_account_and_reports_only_safe_state(
 
         assert status.state == "connected"
         assert status.email == "device@example.com"
-        saved = json.loads((tmp_path / "openai.json").read_text(encoding="utf-8"))
-        assert saved["credentials"]["account_id"] == "account_device"
+        saved = decode_object((tmp_path / "openai.json").read_text(encoding="utf-8"))
+        assert object_payload(saved["credentials"])["account_id"] == "account_device"
         serialized = json.dumps(status.as_dict())
         assert "device_private" not in serialized
         assert "refresh_private" not in serialized
@@ -466,7 +469,7 @@ async def test_device_login_persists_account_and_reports_only_safe_state(
 
 @pytest.mark.asyncio
 async def test_close_waits_for_pending_login_resource_cleanup(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     class PendingBrowser:

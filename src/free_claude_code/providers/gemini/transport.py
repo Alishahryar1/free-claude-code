@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import aclosing
 from functools import partial
-from typing import Any
+from typing import override
 from urllib.parse import quote
 
 import httpx
@@ -14,7 +14,7 @@ from free_claude_code.core.anthropic.stream_contracts import SSEEvent
 from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
 from free_claude_code.core.continuation_request import ContinuationRequest
 from free_claude_code.core.history_replay import HistoryReplayError
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, normalize_empty_array_field
 from free_claude_code.core.stream_output import StreamOutput, completed_output
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
@@ -47,7 +47,7 @@ from .stream import GeminiStream
 
 async def _events(
     response: httpx.Response, *, read_timeout: float
-) -> AsyncIterator[dict[str, Any]]:
+) -> AsyncIterator[JsonObject]:
     async with aclosing(_decoded_events(response)) as source:
         while True:
             try:
@@ -60,7 +60,14 @@ async def _events(
                 )
             except StopAsyncIteration:
                 return
-            yield event.data
+            payload = event.data
+            if isinstance(candidates := payload.get("candidates"), list):
+                for candidate in candidates:
+                    if isinstance(candidate, dict) and isinstance(
+                        content := candidate.get("content"), dict
+                    ):
+                        normalize_empty_array_field(content, "parts")
+            yield payload
 
 
 async def _decoded_events(response: httpx.Response) -> AsyncGenerator[SSEEvent]:
@@ -200,9 +207,11 @@ class _GeminiAttempt(TransportAttempt):
         self._origin: ReplayOrigin | None = None
 
     @property
+    @override
     def normal_stop_seen(self) -> bool:
         return self._presenter is not None and self._presenter.normal_stop_seen
 
+    @override
     async def prepare(self) -> None:
         context = self.context
         snapshot = await self._endpoint.resolve()
@@ -232,6 +241,7 @@ class _GeminiAttempt(TransportAttempt):
             },
         )
 
+    @override
     async def stream(self, scope: ProviderAttemptScope) -> AsyncIterator[StreamOutput]:
         assert self._request is not None and self._origin is not None
         history = self.context.history
@@ -242,34 +252,42 @@ class _GeminiAttempt(TransportAttempt):
         if not response.is_success:
             await response.aread()
             response.raise_for_status()
-        if "text/event-stream" not in response.headers.get("content-type", "").lower():
+        content_type: str = response.headers.get("content-type", "")
+        if "text/event-stream" not in content_type.lower():
             raise RetryableProviderProtocolError(
                 "Gemini upstream did not return an SSE stream"
             )
-        declarations = [
-            function
-            for tool in self.body.get("tools", [])
-            if isinstance(tool, dict)
-            for function in tool.get("functionDeclarations", [])
-            if isinstance(function, dict)
-        ]
+        tools = self.body.get("tools")
+        tool_defaults: dict[str, JsonObject] = {}
+        for tool in tools if isinstance(tools, list) else ():
+            if not isinstance(tool, dict):
+                continue
+            declarations = tool.get("functionDeclarations")
+            for declaration in declarations if isinstance(declarations, list) else ():
+                if not isinstance(declaration, dict):
+                    continue
+                name = str(declaration["name"])
+                parameters = declaration.get("parametersJsonSchema") or declaration.get(
+                    "parameters"
+                )
+                properties = (
+                    parameters.get("properties")
+                    if isinstance(parameters, dict)
+                    else None
+                )
+                tool_defaults[name] = {
+                    key: schema["default"]
+                    for key, schema in (
+                        properties.items() if isinstance(properties, dict) else ()
+                    )
+                    if isinstance(schema, dict) and "default" in schema
+                }
         presenter = self._presenter = GeminiStream(
             model=self._response_model,
             origin=self._origin,
             output=self._output_factory(),
-            tool_names=frozenset(str(tool["name"]) for tool in declarations),
-            tool_defaults={
-                str(tool["name"]): {
-                    name: schema["default"]
-                    for name, schema in (
-                        tool.get("parametersJsonSchema") or tool.get("parameters") or {}
-                    )
-                    .get("properties", {})
-                    .items()
-                    if isinstance(schema, dict) and "default" in schema
-                }
-                for tool in declarations
-            },
+            tool_names=frozenset(tool_defaults),
+            tool_defaults=tool_defaults,
             include_thoughts=self._include_thoughts,
             continuation_context=self._continuation.sent_context(
                 self.sent_body,

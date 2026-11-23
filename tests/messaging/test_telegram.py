@@ -3,7 +3,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from telegram.error import TelegramError
 
+from free_claude_code.messaging.models import IncomingMessage
 from free_claude_code.messaging.platforms.telegram import TelegramRuntime
+from free_claude_code.messaging.voice import Transcriber
+
+
+def _mock_application_builder(mock_app: MagicMock) -> MagicMock:
+    builder = MagicMock()
+    builder.token.return_value = builder
+    builder.request.return_value = builder
+    builder.get_updates_request.return_value = builder
+    builder.build.return_value = mock_app
+    return builder
 
 
 def _limiter_mock() -> MagicMock:
@@ -14,13 +25,23 @@ def _limiter_mock() -> MagicMock:
 
 
 def _telegram_runtime(
-    *args, limiter=None, transcriber=None, **kwargs
+    bot_token: str | None = None,
+    allowed_user_id: str | None = None,
+    *,
+    telegram_proxy_url: str | None = None,
+    limiter: MagicMock | None = None,
+    transcriber: Transcriber | None = None,
+    log_raw_messaging_content: bool = False,
+    log_api_error_tracebacks: bool = False,
 ) -> TelegramRuntime:
     return TelegramRuntime(
-        *args,
+        bot_token,
+        allowed_user_id,
         limiter=limiter or _limiter_mock(),
         transcriber=transcriber,
-        **kwargs,
+        telegram_proxy_url=telegram_proxy_url,
+        log_raw_messaging_content=log_raw_messaging_content,
+        log_api_error_tracebacks=log_api_error_tracebacks,
     )
 
 
@@ -33,34 +54,39 @@ def telegram_platform():
         return platform
 
 
-def test_telegram_platform_init_no_token():
+def test_telegram_platform_init_no_token() -> None:
     with patch.dict("os.environ", {}, clear=True):
         platform = _telegram_runtime(bot_token=None)
         assert platform.bot_token is None
 
 
 @pytest.mark.asyncio
-async def test_telegram_platform_start_success(telegram_platform):
-    telegram_platform.outbound.send_message = AsyncMock()
+async def test_telegram_platform_start_success(
+    monkeypatch: pytest.MonkeyPatch, telegram_platform: TelegramRuntime
+) -> None:
+    mock_send_message = AsyncMock()
+    monkeypatch.setattr(telegram_platform.outbound, "send_message", mock_send_message)
     with patch("telegram.ext.Application.builder") as mock_builder:
         mock_app = MagicMock()
         mock_app.initialize = AsyncMock()
         mock_app.start = AsyncMock()
         mock_app.updater.start_polling = AsyncMock()
 
-        mock_builder.return_value.token.return_value.request.return_value.build.return_value = mock_app
+        mock_builder.return_value = _mock_application_builder(mock_app)
 
         await telegram_platform.start()
 
         assert telegram_platform._connected is True
         mock_app.initialize.assert_called_once()
         mock_app.start.assert_called_once()
-        telegram_platform._limiter.start.assert_called_once_with()
-        telegram_platform.outbound.send_message.assert_not_awaited()
+        start = telegram_platform._limiter.start
+        assert isinstance(start, MagicMock)
+        start.assert_called_once_with()
+        mock_send_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_telegram_platform_start_with_proxy():
+async def test_telegram_platform_start_with_proxy() -> None:
     limiter = _limiter_mock()
     with patch(
         "free_claude_code.messaging.platforms.telegram.TELEGRAM_AVAILABLE", True
@@ -83,11 +109,8 @@ async def test_telegram_platform_start_with_proxy():
         mock_app.start = AsyncMock()
         mock_app.updater.start_polling = AsyncMock()
 
-        builder = mock_builder.return_value
-        builder.token.return_value = builder
-        builder.request.return_value = builder
-        builder.get_updates_request.return_value = builder
-        builder.build.return_value = mock_app
+        builder = _mock_application_builder(mock_app)
+        mock_builder.return_value = builder
         request = MagicMock()
         update_request = MagicMock()
         request_cls.side_effect = [request, update_request]
@@ -108,7 +131,9 @@ async def test_telegram_platform_start_with_proxy():
 
 
 @pytest.mark.asyncio
-async def test_telegram_platform_send_message_success(telegram_platform):
+async def test_telegram_platform_send_message_success(
+    telegram_platform: TelegramRuntime,
+) -> None:
     mock_bot = AsyncMock()
     mock_msg = MagicMock()
     mock_msg.message_id = 999
@@ -129,7 +154,9 @@ async def test_telegram_platform_send_message_success(telegram_platform):
 
 
 @pytest.mark.asyncio
-async def test_telegram_platform_edit_message_success(telegram_platform):
+async def test_telegram_platform_edit_message_success(
+    telegram_platform: TelegramRuntime,
+) -> None:
     mock_bot = AsyncMock()
     telegram_platform._application = MagicMock()
     telegram_platform._application.bot = mock_bot
@@ -142,7 +169,9 @@ async def test_telegram_platform_edit_message_success(telegram_platform):
 
 
 @pytest.mark.asyncio
-async def test_telegram_platform_delete_messages_uses_batch_api(telegram_platform):
+async def test_telegram_platform_delete_messages_uses_batch_api(
+    telegram_platform: TelegramRuntime,
+) -> None:
     mock_bot = AsyncMock()
     telegram_platform._application = MagicMock()
     telegram_platform._application.bot = mock_bot
@@ -157,7 +186,9 @@ async def test_telegram_platform_delete_messages_uses_batch_api(telegram_platfor
 
 
 @pytest.mark.asyncio
-async def test_telegram_platform_delete_messages_chunks_batch_api(telegram_platform):
+async def test_telegram_platform_delete_messages_chunks_batch_api(
+    telegram_platform: TelegramRuntime,
+) -> None:
     mock_bot = AsyncMock()
     telegram_platform._application = MagicMock()
     telegram_platform._application.bot = mock_bot
@@ -178,8 +209,8 @@ async def test_telegram_platform_delete_messages_chunks_batch_api(telegram_platf
 
 @pytest.mark.asyncio
 async def test_telegram_platform_delete_messages_falls_back_without_batch(
-    telegram_platform,
-):
+    telegram_platform: TelegramRuntime,
+) -> None:
     class BotWithoutBatch:
         def __init__(self) -> None:
             self.delete_message = AsyncMock()
@@ -202,8 +233,8 @@ async def test_telegram_platform_delete_messages_falls_back_without_batch(
 
 @pytest.mark.asyncio
 async def test_telegram_platform_delete_messages_falls_back_after_batch_failure(
-    telegram_platform,
-):
+    telegram_platform: TelegramRuntime,
+) -> None:
     mock_bot = AsyncMock()
     mock_bot.delete_messages.side_effect = RuntimeError("bulk failed")
     telegram_platform._application = MagicMock()
@@ -227,8 +258,8 @@ async def test_telegram_platform_delete_messages_falls_back_after_batch_failure(
 
 @pytest.mark.asyncio
 async def test_telegram_platform_delete_messages_falls_back_after_swallowed_error(
-    telegram_platform,
-):
+    telegram_platform: TelegramRuntime,
+) -> None:
     mock_bot = AsyncMock()
     mock_bot.delete_messages.side_effect = TelegramError("message can't be deleted")
     telegram_platform._application = MagicMock()
@@ -252,8 +283,8 @@ async def test_telegram_platform_delete_messages_falls_back_after_swallowed_erro
 
 @pytest.mark.asyncio
 async def test_telegram_platform_single_delete_still_swallows_known_error(
-    telegram_platform,
-):
+    telegram_platform: TelegramRuntime,
+) -> None:
     mock_bot = AsyncMock()
     mock_bot.delete_message.side_effect = TelegramError("message can't be deleted")
     telegram_platform._application = MagicMock()
@@ -268,19 +299,24 @@ async def test_telegram_platform_single_delete_still_swallows_known_error(
 
 
 @pytest.mark.asyncio
-async def test_telegram_platform_queue_send_message(telegram_platform):
+async def test_telegram_platform_queue_send_message(
+    monkeypatch: pytest.MonkeyPatch, telegram_platform: TelegramRuntime
+) -> None:
     mock_limiter = telegram_platform._limiter
-    mock_limiter.enqueue = AsyncMock()
+    mock_enqueue = AsyncMock(return_value="message")
+    monkeypatch.setattr(mock_limiter, "enqueue", mock_enqueue)
 
     await telegram_platform.outbound.queue_send_message(
         "chat_1", "hello", fire_and_forget=False
     )
 
-    mock_limiter.enqueue.assert_called_once()
+    mock_enqueue.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_on_telegram_message_authorized(telegram_platform):
+async def test_on_telegram_message_authorized(
+    telegram_platform: TelegramRuntime,
+) -> None:
     handler = AsyncMock()
     telegram_platform.on_message(handler)
 
@@ -294,12 +330,16 @@ async def test_on_telegram_message_authorized(telegram_platform):
     await telegram_platform._on_telegram_message(mock_update, MagicMock())
 
     handler.assert_called_once()
-    incoming = handler.call_args[0][0]
+    assert handler.call_args is not None
+    incoming: object = handler.call_args.args[0]
+    assert isinstance(incoming, IncomingMessage)
     assert incoming.text == "hello"
 
 
 @pytest.mark.asyncio
-async def test_on_telegram_message_unauthorized(telegram_platform):
+async def test_on_telegram_message_unauthorized(
+    telegram_platform: TelegramRuntime,
+) -> None:
     handler = AsyncMock()
     telegram_platform.on_message(handler)
 

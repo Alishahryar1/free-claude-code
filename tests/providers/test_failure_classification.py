@@ -78,14 +78,18 @@ def _http_status(
     module: ModuleType, status_code: int, body: object | None = None
 ) -> Callable[[], Exception]:
     def build() -> Exception:
-        request = module.Request("POST", _URL)
-        response = module.Response(
-            status_code,
-            request=request,
-            json=body or {"error": {"message": "upstream said no"}},
-        )
-        return module.HTTPStatusError(
-            "status error", request=request, response=response
+        payload = body or {"error": {"message": "upstream said no"}}
+        if module is httpx:
+            request = httpx.Request("POST", _URL)
+            response = httpx.Response(status_code, request=request, json=payload)
+            return httpx.HTTPStatusError(
+                "status error", request=request, response=response
+            )
+        assert module is httpx2
+        request2 = httpx2.Request("POST", _URL)
+        response2 = httpx2.Response(status_code, request=request2, json=payload)
+        return httpx2.HTTPStatusError(
+            "status error", request=request2, response=response2
         )
 
     return build

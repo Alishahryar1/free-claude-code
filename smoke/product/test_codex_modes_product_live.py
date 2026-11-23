@@ -13,7 +13,7 @@ from collections.abc import Generator
 from contextlib import closing, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, NotRequired, TypedDict, override
 
 import httpx
 import pytest
@@ -25,9 +25,19 @@ from free_claude_code.config.env_migrations import (
 )
 from free_claude_code.config.paths import FCC_DATABASE_FILENAME
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
+from free_claude_code.core.json_types import JsonObject
 from smoke.lib.child_process import run_captured_text
 from smoke.lib.config import SmokeConfig
 from smoke.lib.e2e import SmokeServerDriver
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+    response_object,
+    response_payload,
+    string_payload,
+)
 
 pytestmark = [
     pytest.mark.live,
@@ -101,14 +111,24 @@ def _marker_command(marker: Path) -> str:
     )
 
 
+class _CannedProviderState(TypedDict):
+    requests: list[JsonObject]
+    command: str | None
+    reviews: int
+    spawn: NotRequired[bool]
+    mode: NotRequired[str]
+    error: NotRequired[str]
+
+
 @contextmanager
 def _canned_provider(
     review_release: threading.Event | None = None,
     child_finished: threading.Event | None = None,
-) -> Generator[tuple[str, dict[str, Any]]]:
-    state: dict[str, Any] = {"requests": [], "command": None, "reviews": 0}
+) -> Generator[tuple[str, _CannedProviderState]]:
+    state: _CannedProviderState = {"requests": [], "command": None, "reviews": 0}
 
     class Handler(BaseHTTPRequestHandler):
+        @override
         def log_message(self, format: str, *args: object) -> None:
             pass
 
@@ -123,24 +143,29 @@ def _canned_provider(
             self.wfile.write(body)
 
         def do_POST(self) -> None:
-            request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            request = decode_object(
+                self.rfile.read(int(self.headers["Content-Length"]))
+            )
             state["requests"].append(request)
             try:
                 assert self.path == "/v1/chat/completions"
                 assert request["model"] == "codex-mode-smoke"
-                schema = (
-                    request.get("response_format", {})
-                    .get("json_schema", {})
-                    .get("schema", {})
-                )
+                schema = object_payload(
+                    object_payload(request.get("response_format", {})).get(
+                        "json_schema", {}
+                    )
+                ).get("schema", {})
                 # The child starts without the parent's history. Route the canned
                 # actor by that boundary, independently of task-message encoding.
                 child_request = child_finished is not None and not any(
-                    "FCC_PARENT_REVIEW_WORK" in json.dumps(message.get("content", ""))
-                    for message in request["messages"]
-                    if message["role"] == "user"
+                    "FCC_PARENT_REVIEW_WORK"
+                    in json.dumps(object_payload(message).get("content", ""))
+                    for message in array_payload(request["messages"])
+                    if object_payload(message)["role"] == "user"
                 )
-                if "outcome" in schema.get("properties", {}):
+                if "outcome" in object_payload(
+                    object_payload(schema).get("properties", {})
+                ):
                     state["reviews"] += 1
                     if review_release is not None:
                         assert review_release.wait(30), (
@@ -159,40 +184,44 @@ def _canned_provider(
                     reason = "stop"
                 elif state.get("spawn"):
                     functions = {
-                        tool["function"]["name"]: tool["function"]
-                        for tool in request["tools"]
-                        if tool["type"] == "function"
+                        object_payload(object_payload(tool)["function"])[
+                            "name"
+                        ]: object_payload(tool)["function"]
+                        for tool in array_payload(request["tools"])
+                        if object_payload(tool)["type"] == "function"
                     }
                     spawn_name = next(
                         (
-                            name
+                            string_payload(name)
                             for name in functions
-                            if name.rsplit("__", 1)[-1] == "spawn_agent"
+                            if string_payload(name).rsplit("__", 1)[-1] == "spawn_agent"
                         ),
                         None,
                     )
                     assert spawn_name is not None, list(functions)
-                    properties = functions[spawn_name]["parameters"]["properties"]
-                    arguments = {
+                    properties = object_payload(
+                        object_payload(functions[spawn_name])["parameters"]
+                    )["properties"]
+                    arguments: JsonObject = {
                         "message": "FCC_CHILD_REVIEW_WORK: Execute the disposable local smoke command, then finish."
                     }
-                    if "task_name" in properties:
+                    if "task_name" in object_payload(properties):
                         arguments["task_name"] = "smoke_child"
-                    if "fork_turns" in properties:
+                    if "fork_turns" in object_payload(properties):
                         arguments["fork_turns"] = "none"
-                    elif "fork_context" in properties:
+                    elif "fork_context" in object_payload(properties):
                         arguments["fork_context"] = False
                     state["spawn"] = False
                     delta = _tool_call(spawn_name, arguments)
                     reason = "tool_calls"
                 elif state["command"] and (child_finished is None or child_request):
                     names = [
-                        tool["function"]["name"]
-                        for tool in request["tools"]
-                        if tool["type"] == "function"
+                        object_payload(object_payload(tool)["function"])["name"]
+                        for tool in array_payload(request["tools"])
+                        if object_payload(tool)["type"] == "function"
                     ]
                     assert "exec_command" in names, names
-                    arguments = {
+                    arguments: JsonObject = {
                         "cmd": state["command"],
                         "max_output_tokens": 1000,
                     }
@@ -213,7 +242,8 @@ def _canned_provider(
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Connection", "close")
                 self.end_headers()
-                for payload, finish in ((delta, None), ({}, reason)):
+                empty_delta: JsonObject = {}
+                for payload, finish in ((delta, None), (empty_delta, reason)):
                     chunk = {
                         "id": "chatcmpl-" + uuid.uuid4().hex,
                         "object": "chat.completion.chunk",
@@ -242,23 +272,23 @@ def _canned_provider(
         thread.join(timeout=5)
 
 
-async def _events(response: httpx.Response, queue: asyncio.Queue) -> None:
+async def _events(response: httpx.Response, queue: asyncio.Queue[JsonObject]) -> None:
     async for line in response.aiter_lines():
         if line.startswith("data: "):
-            queue.put_nowait(json.loads(line[6:]))
+            queue.put_nowait(decode_object(line[6:]))
 
 
 async def _exercise(
     base_url: str,
     workspace: Path,
     modes: tuple[str, ...],
-    state: dict[str, Any] | None,
+    state: _CannedProviderState | None,
     timeout_s: float,
     session_id: str | None = None,
 ) -> str:
     workspace.mkdir(exist_ok=True)
     async with httpx.AsyncClient(base_url=base_url, timeout=timeout_s) as client:
-        bootstrap = (await client.get("/admin/api/code/bootstrap")).json()
+        bootstrap = response_object(await client.get("/admin/api/code/bootstrap"))
         assert bootstrap["available"], bootstrap
         path = f"/admin/api/code/sessions/{session_id or uuid.uuid4()}"
         prepared = (
@@ -270,7 +300,11 @@ async def _exercise(
             )
         )
         prepared.raise_for_status()
-        session = prepared.json()["session"] if session_id else prepared.json()
+        session = (
+            response_object(prepared)["session"]
+            if session_id
+            else response_payload(prepared)
+        )
         queue = asyncio.Queue()
         async with client.stream(
             "GET", "/admin/api/code/events", timeout=None
@@ -282,10 +316,13 @@ async def _exercise(
                 for mode in modes:
                     changed = await client.patch(
                         path,
-                        json={"expected_revision": session["revision"], "mode": mode},
+                        json={
+                            "expected_revision": object_payload(session)["revision"],
+                            "mode": mode,
+                        },
                     )
                     changed.raise_for_status()
-                    session = changed.json()
+                    session = response_object(changed)
                     marker = workspace.parent / f"marker-{uuid.uuid4().hex}.txt"
                     command = _marker_command(marker)
                     if state is not None:
@@ -307,7 +344,7 @@ async def _exercise(
                         },
                     )
                     posted.raise_for_status()
-                    run_id = posted.json()["id"]
+                    run_id = response_object(posted)["id"]
                     approvals = 0
                     async with asyncio.timeout(timeout_s):
                         while True:
@@ -315,10 +352,14 @@ async def _exercise(
                             if event.get("session_id") != session["id"]:
                                 continue
                             pending = event.get("prompt")
-                            if pending and pending["status"] == "pending":
+                            if pending is not None:
+                                pending = object_payload(pending)
+                            if pending is not None and pending["status"] == "pending":
                                 assert mode in {"config", "ask"}, pending
                                 approvals += 1
-                                choices = pending["form"]["choices"]
+                                choices = object_array(
+                                    object_payload(pending["form"])["choices"]
+                                )
                                 choice = next(
                                     choice["id"]
                                     for choice in choices
@@ -334,26 +375,27 @@ async def _exercise(
                                 answer.raise_for_status()
                             run = event.get("run")
                             if (
-                                run
+                                isinstance(run, dict)
                                 and run["id"] == run_id
                                 and run["status"]
                                 in {"completed", "failed", "interrupted"}
                             ):
                                 assert run["status"] == "completed", run
                                 break
-                    detail = (await client.get(path)).json()
+                    detail = response_object(await client.get(path))
                     session = detail["session"]
                     assert marker.exists(), detail
                     assert approvals == (1 if mode in {"config", "ask"} else 0), detail
                     reviews = [
                         item
-                        for item in detail["items"]
-                        if item["run_id"] == run_id and item["kind"] == "auto_review"
+                        for item in array_payload(detail["items"])
+                        if object_payload(item)["run_id"] == run_id
+                        and object_payload(item)["kind"] == "auto_review"
                     ]
                     if mode == "auto_review":
                         assert reviews and all(
-                            item["complete"]
-                            and item["title"] == "Auto-review: Approved"
+                            object_payload(item)["complete"]
+                            and object_payload(item)["title"] == "Auto-review: Approved"
                             for item in reviews
                         ), detail
                     else:
@@ -364,7 +406,7 @@ async def _exercise(
             finally:
                 reading.cancel()
                 await asyncio.gather(reading, return_exceptions=True)
-        return session["id"]
+        return string_payload(object_payload(session)["id"])
 
 
 def test_codex_modes_local_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> None:
@@ -415,7 +457,7 @@ async def _exercise_child_review(
 ) -> str:
     workspace.mkdir()
     async with httpx.AsyncClient(base_url=base_url, timeout=timeout_s) as client:
-        bootstrap = (await client.get("/admin/api/code/bootstrap")).json()
+        bootstrap = response_object(await client.get("/admin/api/code/bootstrap"))
         assert bootstrap["available"], bootstrap
         session_id = str(uuid.uuid4())
         path = f"/admin/api/code/sessions/{session_id}"
@@ -427,12 +469,12 @@ async def _exercise_child_review(
         changed = await client.patch(
             path,
             json={
-                "expected_revision": created.json()["revision"],
+                "expected_revision": response_object(created)["revision"],
                 "mode": "auto_review",
             },
         )
         changed.raise_for_status()
-        session = changed.json()
+        session = response_object(changed)
         queue = asyncio.Queue()
 
         async def send(text: str) -> str:
@@ -440,7 +482,7 @@ async def _exercise_child_review(
                 path + "/turns",
                 json={
                     "operation_id": str(uuid.uuid4()),
-                    "expected_revision": session["revision"],
+                    "expected_revision": object_payload(session)["revision"],
                     "expected_epoch": bootstrap["epoch"],
                     "text": text,
                 },
@@ -448,7 +490,7 @@ async def _exercise_child_review(
             response.raise_for_status()
             return response.json()["id"]
 
-        async def event() -> dict[str, Any]:
+        async def event() -> JsonObject:
             while True:
                 value = await queue.get()
                 if value.get("session_id") == session_id:
@@ -472,31 +514,30 @@ async def _exercise_child_review(
                     parent_done = False
                     while review is None or not parent_done:
                         value = await event()
-                        item = value.get("item", {})
+                        item = object_payload(value.get("item", {}))
                         if item.get("kind") == "subagent_auto_review":
                             review = item
                         parent_done |= (
-                            value.get("run", {}).get("id") == first
-                            and value["run"]["status"] == "completed"
+                            object_payload(value.get("run", {})).get("id") == first
+                            and object_payload(value["run"])["status"] == "completed"
                         )
-                    detail = (await client.get(path)).json()
-                    assert (
-                        not review["complete"]
-                        and review["id"] in detail["active_review_ids"]
+                    detail = response_object(await client.get(path))
+                    assert not review["complete"] and review["id"] in array_payload(
+                        detail["active_review_ids"]
                     ), detail
                     session = detail["session"]
                     second = await send("Reply while the child review is pending.")
                     while True:
                         value = await event()
                         if (
-                            value.get("run", {}).get("id") == second
-                            and value["run"]["status"] == "completed"
+                            object_payload(value.get("run", {})).get("id") == second
+                            and object_payload(value["run"])["status"] == "completed"
                         ):
                             break
                     release.set()
                     while True:
                         value = await event()
-                        item = value.get("item", {})
+                        item = object_payload(value.get("item", {}))
                         if item.get("id") == review["id"] and item["complete"]:
                             assert item["title"] == "Sub-agent Auto-review: Approved", (
                                 item
@@ -506,14 +547,15 @@ async def _exercise_child_review(
                                 and item["sequence"] == review["sequence"]
                             ), item
                             assert (
-                                value["run"]["id"] == second
-                                and value["run"]["status"] == "completed"
+                                object_payload(value["run"])["id"] == second
+                                and object_payload(value["run"])["status"]
+                                == "completed"
                             ), value
                             break
                     assert await asyncio.to_thread(finished.wait, timeout_s), (
                         "Child did not finish its command"
                     )
-                    detail = (await client.get(path)).json()
+                    detail = response_object(await client.get(path))
                     assert detail["active_review_ids"] == [], detail
                     print(
                         "child Auto-review: parent finished; next message completed; original review approved"
@@ -562,16 +604,18 @@ def test_codex_child_review_local_e2e(
                         uri=True,
                     )
                 ) as database:
-                    root = database.execute(
+                    row: tuple[str | None] | None = database.execute(
                         "SELECT native_thread_id FROM code_sessions WHERE id = ?",
                         (session_id,),
-                    ).fetchone()[0]
-                    rows = database.execute(
+                    ).fetchone()
+                    assert row is not None
+                    root = row[0]
+                    rows: list[tuple[str]] = database.execute(
                         "SELECT raw FROM code_items WHERE session_id = ? AND kind = 'subagent_auto_review'",
                         (session_id,),
                     ).fetchall()
                     assert rows and all(
-                        json.loads(row[0])["threadId"] != root for row in rows
+                        decode_object(row[0])["threadId"] != root for row in rows
                     )
             assert "error" not in state, state.get("error")
             assert state["reviews"] == 1
@@ -596,13 +640,21 @@ def test_codex_modes_free_provider_e2e(
     )
     catalog = httpx.get("https://openrouter.ai/api/v1/models", timeout=20)
     catalog.raise_for_status()
-    entry = next(entry for entry in catalog.json()["data"] if entry["id"] == name)
-    assert all(float(entry["pricing"][key]) == 0 for key in ("prompt", "completion")), (
-        "Selected model is not free"
+    entry = next(
+        entry
+        for entry in array_payload(response_object(catalog)["data"])
+        if object_payload(entry)["id"] == name
     )
+    assert all(
+        float(string_payload(object_payload(object_payload(entry)["pricing"])[key]))
+        == 0
+        for key in ("prompt", "completion")
+    ), "Selected model is not free"
     descriptor = PROVIDER_CATALOG[provider]
     assert descriptor.credential_attr and descriptor.credential_env
-    key = first_api_key(getattr(smoke_config.settings, descriptor.credential_attr))
+    key = first_api_key(
+        smoke_config.settings.credential_keys(descriptor.credential_attr)
+    )
     if not key:
         pytest.skip("missing_env: OpenRouter key is unavailable")
     env, unset = _environment(tmp_path, model)

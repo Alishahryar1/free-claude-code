@@ -16,9 +16,12 @@ from free_claude_code.config.loader import (
 from free_claude_code.config.model_refs import configured_chat_model_refs
 from free_claude_code.config.reasoning import ReasoningPreference
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonValue
 
 
-def _snapshot(managed=None, process=None):
+def _snapshot(
+    managed: dict[str, str] | None = None, process: dict[str, str] | None = None
+):
     managed, process = managed or {}, process or {}
     result = compose_settings_snapshot(managed, process)
     return ManagedConfigSnapshot(
@@ -26,7 +29,7 @@ def _snapshot(managed=None, process=None):
     )
 
 
-def _fallback_field(state):
+def _fallback_field(state: ManagedConfigSnapshot):
     fields = load_config_response(state, revision_key=b"test-revision-key")["fields"]
     assert isinstance(fields, list)
     for field in fields:
@@ -40,7 +43,7 @@ def _fallback_field(state):
     "effort", ["inherit", "off", "client", "low", "medium", "high", "xhigh", "max"]
 )
 @pytest.mark.parametrize("as_json", [False, True])
-def test_fallback_records_preserve_model_and_effort(effort, as_json):
+def test_fallback_records_preserve_model_and_effort(effort: str, as_json: bool) -> None:
     value = [
         {"model": " groq/vendor/Model-A ", "reasoning": effort},
         {"model": "open_router/vendor/model-b"},
@@ -67,7 +70,9 @@ def test_fallback_records_preserve_model_and_effort(effort, as_json):
         ("groq/one", "open_router/vendor/two"),
     ],
 )
-def test_legacy_fallbacks_are_inherit_records(value):
+def test_legacy_fallbacks_are_inherit_records(
+    value: str | list[str] | tuple[str, ...],
+) -> None:
     settings = Settings.model_validate({"MODEL_FALLBACKS": value})
     assert settings.model_fallbacks is not None
     assert [
@@ -90,12 +95,12 @@ def test_legacy_fallbacks_are_inherit_records(value):
         '[{"model":"groq/one"}',
     ],
 )
-def test_invalid_fallback_records_are_rejected(value):
+def test_invalid_fallback_records_are_rejected(value: JsonValue) -> None:
     with pytest.raises(ValidationError):
         Settings.model_validate({"MODEL_FALLBACKS": value})
 
 
-def test_fallback_records_retain_primary_overlap_and_discovery_identity():
+def test_fallback_records_retain_primary_overlap_and_discovery_identity() -> None:
     settings = Settings(
         MODEL="groq/one",
         MODEL_OPUS="groq/one",
@@ -111,7 +116,9 @@ def test_fallback_records_retain_primary_overlap_and_discovery_identity():
 
 
 @pytest.mark.parametrize("as_json", [False, True])
-def test_admin_fallback_records_round_trip_without_restart_or_false_changes(as_json):
+def test_admin_fallback_records_round_trip_without_restart_or_false_changes(
+    as_json: bool,
+) -> None:
     entries = [
         {"model": "groq/one", "reasoning": "low"},
         {"model": "open_router/vendor/two", "reasoning": "inherit"},
@@ -165,7 +172,9 @@ def test_admin_fallback_records_round_trip_without_restart_or_false_changes(as_j
 
 
 @pytest.mark.parametrize("empty", ["", "[]", []])
-def test_empty_process_fallbacks_override_managed_records_and_remain_locked(empty):
+def test_empty_process_fallbacks_override_managed_records_and_remain_locked(
+    empty: list[str] | str,
+) -> None:
     managed = {"MODEL_FALLBACKS": '[{"model":"groq/one","reasoning":"max"}]'}
     state = _snapshot(
         managed,
@@ -187,7 +196,7 @@ def test_empty_process_fallbacks_override_managed_records_and_remain_locked(empt
     ]
 
 
-def test_retired_provider_normalization_preserves_surviving_efforts():
+def test_retired_provider_normalization_preserves_surviving_efforts() -> None:
     state = _snapshot(
         {
             "MODEL_FALLBACKS": json.dumps(

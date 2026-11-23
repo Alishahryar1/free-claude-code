@@ -6,14 +6,16 @@ from free_claude_code.core.anthropic.stream_contracts import (
     thinking_content,
 )
 from free_claude_code.core.history_replay import ReplayOrigin, decode_replay
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses.provider_stream import (
     ResponsesProviderStream,
     ResponsesStreamFailure,
 )
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
+from tests.wire_payload import object_payload, string_payload
 
 
-def _terminal_usage(usage: dict[str, object]) -> dict[str, object]:
+def _terminal_usage(usage: dict[str, object]) -> JsonObject:
     stream = ResponsesProviderStream(
         origin=ReplayOrigin("test", "responses", "", "", "m"),
         message_id="msg_test",
@@ -28,7 +30,7 @@ def _terminal_usage(usage: dict[str, object]) -> dict[str, object]:
         )
     )
     return next(
-        event.data["usage"]
+        object_payload(event.data["usage"])
         for event in parse_sse_text("".join(output))
         if event.event == "message_delta"
     )
@@ -137,9 +139,11 @@ def test_responses_provider_stream_preserves_reasoning_tools_usage_and_ids() -> 
         if event.event == "content_block_start"
     ]
     assert [
-        decode_replay(event.data["delta"]["signature"]).native["encrypted_content"]
+        decode_replay(
+            string_payload(object_payload(event.data["delta"])["signature"])
+        ).native["encrypted_content"]
         for event in events
-        if event.data.get("delta", {}).get("type") == "signature_delta"
+        if object_payload(event.data.get("delta", {})).get("type") == "signature_delta"
     ] == ["opaque"]
     assert {
         "type": "tool_use",
@@ -148,9 +152,9 @@ def test_responses_provider_stream_preserves_reasoning_tools_usage_and_ids() -> 
         "input": {},
     } in starts
     argument_deltas = [
-        event.data["delta"]["partial_json"]
+        object_payload(event.data["delta"])["partial_json"]
         for event in events
-        if event.data.get("delta", {}).get("type") == "input_json_delta"
+        if object_payload(event.data.get("delta", {})).get("type") == "input_json_delta"
     ]
     assert argument_deltas == ['{"q":', '"x"}']
     message_delta = next(event for event in events if event.event == "message_delta")
@@ -385,5 +389,5 @@ def test_responses_provider_stream_restores_added_and_done_only_tool_names() -> 
         for event in parse_sse_text(event_text)
         if event.event == "content_block_start"
     ]
-    assert [start["name"] for start in starts] == list(originals)
+    assert [object_payload(start)["name"] for start in starts] == list(originals)
     assert all(codec.encode(name) not in event_text for name in originals)
