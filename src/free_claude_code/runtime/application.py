@@ -193,9 +193,9 @@ class ApplicationRuntime:
                     )
                 self.provider_manager.start_model_list_refresh()
                 self.provider_manager.set_catalog_changed_callback(
-                    self.integrations.catalog_changed
+                    self._integrations.catalog_changed
                 )
-                await self.integrations.start()
+                await self._integrations.start()
                 self._startup_tasks.append(
                     asyncio.create_task(
                         run_sync_owned(remove_retired_chat_history),
@@ -244,12 +244,12 @@ class ApplicationRuntime:
             if self._closed:
                 return True
             logger.info("Shutdown requested, cleaning up...")
-            self.integrations.cancel_background_tasks()
+            self._integrations.cancel_background_tasks()
             self._messaging.cancel_background_tasks()
             for task in self._startup_tasks:
                 if not task.done():
                     task.cancel()
-            await self.integrations.wait_background_tasks()
+            await self._integrations.wait_background_tasks()
             await self._messaging.wait_background_tasks()
             results = await asyncio.gather(*self._startup_tasks, return_exceptions=True)
             for result in results:
@@ -392,7 +392,7 @@ class ApplicationRuntime:
                 if self._code_service
                 else {"state": "disabled"},
                 "messaging": self._messaging.snapshot(),
-                "integrations": self.integrations.snapshot(),
+                "integrations": self._integrations.snapshot(),
             },
             "host": settings.host,
             "port": settings.port,
