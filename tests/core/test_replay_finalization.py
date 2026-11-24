@@ -1,5 +1,7 @@
 """Only actual replay fields are sealed against the published response."""
 
+from weakref import ref
+
 import pytest
 
 from free_claude_code.api.stream_delivery import PublicResponseStream
@@ -129,8 +131,8 @@ async def test_disconnected_public_stream_releases_replay_state(
     )
     await anext(stream)
     if publish_carrier:
-        await anext(stream)
-        assert stream._replay_carriers
+        assert "thoughtSignature" in await anext(stream)
+    publication = ref(stream._publication)
     await stream.aclose()
     assert closed == [True]
-    assert not stream._replay_carriers
+    assert publication() is None

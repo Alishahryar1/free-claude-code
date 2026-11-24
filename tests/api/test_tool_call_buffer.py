@@ -13,6 +13,7 @@ from free_claude_code.api.response_streams import (
     openai_responses_sse_streaming_response,
 )
 from free_claude_code.api.stream_delivery import PublicResponseStream
+from free_claude_code.api.stream_publication import PacketPublication
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.stream_output import StreamOutput, completed_output
 from tests.api.test_response_streams import _json_error
@@ -205,17 +206,19 @@ async def test_complete_packet_is_released_before_response_terminal(wire: str) -
 async def test_late_packet_projection_failure_releases_no_call(
     wire: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    original = PublicResponseStream._finalize_frame
+    original = PacketPublication._finalize_frame
 
-    def fail_on_call_delta(self: PublicResponseStream, frame: str):
+    def fail_on_call_delta(
+        self: PacketPublication, frame: str, *, transition_pending: bool
+    ):
         if (
             "input_json_delta" in frame
             or "response.function_call_arguments.delta" in frame
         ):
             raise ValueError("synthetic late projection failure")
-        return original(self, frame)
+        return original(self, frame, transition_pending=transition_pending)
 
-    monkeypatch.setattr(PublicResponseStream, "_finalize_frame", fail_on_call_delta)
+    monkeypatch.setattr(PacketPublication, "_finalize_frame", fail_on_call_delta)
 
     async def body():
         yield StreamOutput(tuple(_frames(wire, [_start(wire)])))
@@ -226,9 +229,11 @@ async def test_late_packet_projection_failure_releases_no_call(
     try:
         output = "".join([chunk async for chunk in response.body_iterator])
         assert "call_0" not in output
-        assert response.body_iterator.state.prefix is not None
-        assert not response.body_iterator.state.prefix.has_calls
-        assert not response.body_iterator._delivered.items
+        prefix = response.body_iterator.state.prefix
+        assert prefix is not None
+        assert not prefix.has_calls
+        assert prefix.continuation is not None
+        assert not prefix.continuation.items
     finally:
         await response.aclose()
 

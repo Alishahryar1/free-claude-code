@@ -8,7 +8,10 @@ from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.continuation_stream import ContinuationStream
 from free_claude_code.core.json_types import JsonObject
-from free_claude_code.core.stream_delivery import current_stream_delivery
+from free_claude_code.core.stream_delivery import (
+    StreamDeliveryState,
+    current_stream_delivery,
+)
 from free_claude_code.core.stream_output import completed_output
 from free_claude_code.providers.request_correction import (
     Correction,
@@ -204,23 +207,30 @@ async def test_public_transform_failure_preserves_returned_packets_and_emits_err
 ) -> None:
     original = ContinuationStream.prepare
     closed = []
+    delivery: StreamDeliveryState | None = None
+    observed_prefixes: list[str] = []
 
     def prepare(self: ContinuationStream, payload: JsonObject):
         if payload["type"] == "response.output_text.done":
+            assert delivery is not None
+            prefix = delivery.prefix
+            assert prefix is not None
+            observed_prefixes.append(prefix.text)
             raise ValueError("public transform failed")
         return original(self, object_payload(payload))
 
     monkeypatch.setattr(ContinuationStream, "prepare", prepare)
 
     async def source():
-        state = current_stream_delivery()
-        assert state is not None
+        nonlocal delivery
+        delivery = current_stream_delivery()
+        assert delivery is not None
         try:
             for event in text_events("responses", "Hello ", complete=False):
                 yield completed_output(
                     (_frames("responses", [(event["type"], event)])[0],)
                 )
-            state.begin_continuation()
+            delivery.begin_continuation()
             yield completed_output(
                 (
                     "".join(
@@ -241,6 +251,7 @@ async def test_public_transform_failure_preserves_returned_packets_and_emits_err
     events = parse_sse_text(raw)
     assert public_text(events, "responses") == "Hello "
     assert events[-1].event == "response.failed"
+    assert observed_prefixes == ["Hello "]
     assert sum(e.event == "response.failed" for e in events) == 1
     assert not any(e.event == "response.completed" for e in events)
     assert closed == [True]
