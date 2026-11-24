@@ -24,12 +24,12 @@ from free_claude_code.application.model_catalog import read_model_catalog
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
 from free_claude_code.config.admin.custom_providers import CustomProviderMutation
 from free_claude_code.config.admin.manifest import FIELD_BY_KEY
-from free_claude_code.config.admin.provider_manifest import settings_env_key
 from free_claude_code.config.errors import ConfigConflictError
 from free_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
     ProviderAuthKind,
 )
+from free_claude_code.config.settings import ENV_KEY_BY_SETTING
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.version import package_version
 
@@ -167,16 +167,12 @@ async def local_provider_status(
 ):
     require_loopback_admin(request)
     descriptor = PROVIDER_CATALOG.get(provider_id)
-    if (
-        descriptor is None
-        or not descriptor.local
-        or descriptor.local_probe_path is None
-        or descriptor.base_url_attr is None
-    ):
+    if descriptor is None or descriptor.local_probe_path is None:
         raise HTTPException(status_code=404, detail="Local provider not found")
+    if descriptor.base_url_attr is None:
+        raise AssertionError(f"Local provider {provider_id!r} has no base URL setting.")
     values = await services.admin.admin_values()
-    entry = values.get(settings_env_key(descriptor.base_url_attr))
-    base_url = entry.value if entry is not None else None
+    base_url = values[ENV_KEY_BY_SETTING[descriptor.base_url_attr]].value
     return await _check_local_provider(
         provider_id, base_url or "", descriptor.local_probe_path
     )

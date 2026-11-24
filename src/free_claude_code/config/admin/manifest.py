@@ -9,7 +9,6 @@ from free_claude_code.config.reasoning import (
     ROUTE_REASONING_PREFERENCES,
     ReasoningPreference,
 )
-from free_claude_code.config.settings import Settings
 
 from .provider_manifest import provider_field_specs
 from .specs import ConfigFieldSpec, ConfigOptionSpec, ConfigSectionSpec
@@ -541,18 +540,6 @@ FIELDS: tuple[ConfigFieldSpec, ...] = (
     *_catalog_smoke_fields(),
 )
 FIELD_BY_KEY = {field.key: field for field in FIELDS}
-
-
-def field_input_key(field: ConfigFieldSpec) -> str | None:
-    """Return the Settings input key used for a manifest field."""
-
-    if field.settings_attr is None:
-        return None
-    model_field = Settings.model_fields[field.settings_attr]
-    alias = model_field.validation_alias
-    if alias is None:
-        return field.settings_attr
-    return str(alias)
 
 
 def env_keys() -> frozenset[str]:

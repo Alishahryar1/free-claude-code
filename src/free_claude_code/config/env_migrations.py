@@ -27,7 +27,7 @@ from .env_files import (
 from .model_refs import normalize_retired_model_settings
 from .paths import legacy_env_paths, managed_env_path
 from .provider_catalog import PROVIDER_CATALOG
-from .settings import Settings
+from .settings import ENV_KEY_BY_SETTING, Settings
 
 CONFIG_SCHEMA_VERSION = "2"
 LEGACY_HUGGINGFACE_TOKEN_ENV = "HF_TOKEN"
@@ -138,13 +138,7 @@ _RETIRED_ENV_KEYS = frozenset(
 def settings_env_keys() -> frozenset[str]:
     """Return the explicit environment aliases owned by Settings."""
 
-    keys: set[str] = set()
-    for name, field in Settings.model_fields.items():
-        alias = field.validation_alias
-        if not isinstance(alias, str):
-            raise AssertionError(f"Settings field {name!r} needs one string alias")
-        keys.add(alias)
-    return frozenset(keys)
+    return frozenset(ENV_KEY_BY_SETTING.values())
 
 
 def smoke_env_keys() -> frozenset[str]:
@@ -183,9 +177,7 @@ def secret_env_keys() -> frozenset[str]:
         for descriptor in PROVIDER_CATALOG.values()
         if descriptor.credential_attr is not None
     )
-    return frozenset(
-        str(Settings.model_fields[name].validation_alias) for name in secret_attrs
-    )
+    return frozenset(ENV_KEY_BY_SETTING[name] for name in secret_attrs)
 
 
 def consolidate_managed_config(

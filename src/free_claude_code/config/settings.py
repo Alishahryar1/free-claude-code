@@ -1,5 +1,7 @@
 """Pure, validated application settings schema."""
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Annotated
 
 from pydantic import (
@@ -862,3 +864,17 @@ class Settings(BaseModel):
                 "Set it in the Admin UI."
             )
         return self
+
+
+def _env_key_by_setting() -> Mapping[str, str]:
+    keys: dict[str, str] = {}
+    for name, field in Settings.model_fields.items():
+        alias = field.validation_alias
+        if not isinstance(alias, str):
+            raise AssertionError(f"Settings field {name!r} needs one string alias")
+        keys[name] = alias
+    return MappingProxyType(keys)
+
+
+ENV_KEY_BY_SETTING = _env_key_by_setting()
+"""The environment key that sets each Settings field."""
