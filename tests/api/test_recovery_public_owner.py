@@ -53,10 +53,14 @@ async def test_retained_prefix_does_not_keep_stream_alive(consume: bool) -> None
             pass
 
     stream_ref = ref(stream)
+    publication_ref = ref(stream._publication)
+    decoder_ref = ref(stream._publication._decoder)
     del stream, response
     gc.collect()
 
     assert stream_ref() is None
+    assert publication_ref() is None
+    assert decoder_ref() is None
     prefix = state.prefix
     assert prefix is not None
     assert prefix.text == ("Hello" if consume else "")

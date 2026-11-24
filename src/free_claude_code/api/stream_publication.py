@@ -1,7 +1,7 @@
 """Project response frames and track their publication as one packet."""
 
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from copy import deepcopy
 from itertools import chain
 from typing import Literal
@@ -50,8 +50,10 @@ class PacketPublication:
         self.start_frame = ""
         self._pending_call_proofs: set[tuple[object, ...]] = set()
 
-    def snapshot(self) -> DeliveredPrefix:
-        return self._delivered.snapshot()
+    @property
+    def prefix_reader(self) -> Callable[[], DeliveredPrefix]:
+        """Let recovery retain just the delivered record."""
+        return self._delivered.snapshot
 
     def discard_held_starts(self) -> None:
         self._pending_starts.clear()
