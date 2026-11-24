@@ -137,7 +137,7 @@ class ApplicationRuntime:
         self._lifecycle_lock = asyncio.Lock()
         self._startup_tasks: list[asyncio.Task[None]] = []
         self._http_ready = asyncio.Event()
-        self.integrations = IntegrationService(
+        self._integrations = IntegrationService(
             provider_manager,
             config_publication=self._config_publication,
             is_draining=lambda: self._draining,
@@ -151,6 +151,10 @@ class ApplicationRuntime:
             transcriber=transcriber,
             transcriber_factory=transcriber_factory,
         )
+
+    @property
+    def integrations(self) -> IntegrationService:
+        return self._integrations
 
     @property
     def instance_id(self) -> str:

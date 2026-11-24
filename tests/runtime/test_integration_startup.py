@@ -84,6 +84,11 @@ def runtime():
     )
 
 
+def test_runtime_integrations_cannot_be_reassigned(runtime: ApplicationRuntime) -> None:
+    with pytest.raises(AttributeError):
+        object.__setattr__(runtime, "integrations", runtime.integrations)
+
+
 def old_connections():
     claude, codex = claude_integration.settings_path(), codex_integration.config_path()
     claude.parent.mkdir(parents=True)
