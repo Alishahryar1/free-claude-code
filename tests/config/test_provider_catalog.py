@@ -37,6 +37,13 @@ def test_catalog_local_assignments_are_exact() -> None:
     } == {"lmstudio", "llamacpp", "ollama"}
 
 
+def test_each_local_provider_has_a_configurable_status_probe() -> None:
+    for descriptor in PROVIDER_CATALOG.values():
+        if descriptor.local:
+            assert descriptor.base_url_attr
+            assert descriptor.local_probe_path
+
+
 def test_ollama_cloud_is_remote_and_distinct_from_local_ollama() -> None:
     cloud = PROVIDER_CATALOG["ollama_cloud"]
     local = PROVIDER_CATALOG["ollama"]
