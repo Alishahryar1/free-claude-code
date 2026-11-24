@@ -1,9 +1,12 @@
 """Attempt completion and public publication share one response lifecycle."""
 
+import gc
 from copy import deepcopy
+from weakref import ref
 
 import pytest
 
+from free_claude_code.api.stream_delivery import PublicResponseStream
 from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.continuation_stream import ContinuationStream
@@ -30,6 +33,33 @@ from tests.wire_payload import (
     object_payload,
     string_payload,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "consume", [False, True], ids=["before-first-packet", "after-commit"]
+)
+async def test_retained_prefix_does_not_keep_stream_alive(consume: bool) -> None:
+    async def source():
+        for event in text_events("responses", "Hello"):
+            yield completed_output(_frames("responses", [(event["type"], event)]))
+
+    response = await _response("responses", source())
+    stream = response.body_iterator
+    assert isinstance(stream, PublicResponseStream)
+    state = stream.state
+    if consume:
+        async for _ in stream:
+            pass
+
+    stream_ref = ref(stream)
+    del stream, response
+    gc.collect()
+
+    assert stream_ref() is None
+    prefix = state.prefix
+    assert prefix is not None
+    assert prefix.text == ("Hello" if consume else "")
 
 
 @pytest.mark.asyncio

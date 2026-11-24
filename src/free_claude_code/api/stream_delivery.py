@@ -58,7 +58,7 @@ class PublicResponseStream(AsyncIterator[str]):
         self._revision = state.attempt_revision
         self._hide_reasoning = hide_reasoning
         self._publication = PacketPublication(wire_api, hide_reasoning=hide_reasoning)
-        state.bind_prefix(lambda: self._publication.snapshot())
+        state.bind_prefix(self._publication.snapshot)
         self._initial_chunk = "".join(first_chunk.frames)
         self._latest_chunk = ""
         self._terminal_frame = terminal_frame
@@ -107,6 +107,7 @@ class PublicResponseStream(AsyncIterator[str]):
             transition_pending=self.state.transition is not None,
         )
         self._publication = draft
+        self.state.bind_prefix(draft.snapshot)
         if released:
             self.state.release_content(synthetic=synthetic)
         return output
