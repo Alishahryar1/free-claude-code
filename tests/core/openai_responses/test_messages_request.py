@@ -133,6 +133,7 @@ def test_text_controls_and_stateless_history_policy() -> None:
             "temperature": 0.2,
             "top_p": 0.8,
             "metadata": {"user_id": "person"},
+            "prompt_cache_key": "ses_opencode_123",
         }
     )
     assert built.body == {

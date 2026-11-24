@@ -184,3 +184,30 @@ def test_messages_noop_context_management_keeps_claude_code_compatible() -> None
     result = messages_to_gemini(request)
     assert result["contents"] == [{"role": "user", "parts": [{"text": "hello"}]}]
     assert "context_management" not in result
+
+
+def test_responses_prompt_cache_key_hint_is_accepted_and_omitted() -> None:
+    from free_claude_code.core.gemini import GeminiConversionError
+    from free_claude_code.core.gemini.native_request import responses_to_gemini
+    from free_claude_code.core.openai_responses import OpenAIResponsesRequest
+
+    request = OpenAIResponsesRequest.model_validate(
+        {
+            "model": "gemini-2.5-flash",
+            "input": "hello",
+            "prompt_cache_key": "ses_opencode_123",
+        }
+    )
+    result = responses_to_gemini(request)
+    assert result["contents"] == [{"role": "user", "parts": [{"text": "hello"}]}]
+    assert "prompt_cache_key" not in result
+
+    bad_request = OpenAIResponsesRequest.model_validate(
+        {
+            "model": "gemini-2.5-flash",
+            "input": "hello",
+            "unsupported_future_field": True,
+        }
+    )
+    with pytest.raises(GeminiConversionError, match="unsupported_future_field"):
+        responses_to_gemini(bad_request)

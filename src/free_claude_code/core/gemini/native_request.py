@@ -531,7 +531,10 @@ def responses_to_gemini(
         "text",
         "metadata",
     }
-    if unsupported := set(body) - supported:
+    # Client prompt-cache affinity hints have no native Gemini field and can be
+    # ignored safely when translating OpenAI Responses requests (like Chat does).
+    advisory_hints = {"prompt_cache_key"}
+    if unsupported := set(body) - (supported | advisory_hints):
         raise GeminiConversionError(
             f"Native Gemini cannot represent Responses fields: {sorted(unsupported)}"
         )

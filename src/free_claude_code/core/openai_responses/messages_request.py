@@ -50,6 +50,8 @@ _REQUEST_FIELDS = {
     "text",
     "include",
     "truncation",
+    # Client prompt-cache affinity hint ignored on translation (no Messages wire equivalent).
+    "prompt_cache_key",
 }
 
 
