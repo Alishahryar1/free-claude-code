@@ -4,7 +4,7 @@ from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.config.api_keys import ApiKeyList, selected_api_key
 from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.config.provider_catalog import ProviderDescriptor
-from free_claude_code.config.settings import Settings
+from free_claude_code.config.settings import ENV_KEY_BY_SETTING, Settings
 from free_claude_code.providers.base import ProviderConfig
 
 
@@ -78,10 +78,9 @@ def build_provider_config(
             raise AssertionError(
                 f"Provider {descriptor.provider_id!r} has no base URL owner."
             )
-        field = Settings.model_fields[descriptor.base_url_attr]
-        env_name = field.validation_alias or descriptor.base_url_attr
         raise ApplicationUnavailableError(
-            f"{env_name} is not set. Add it in the Admin UI."
+            f"{ENV_KEY_BY_SETTING[descriptor.base_url_attr]} is not set. "
+            "Add it in the Admin UI."
         )
     for attr in descriptor.required_settings_attrs:
         if (
@@ -90,10 +89,8 @@ def build_provider_config(
             else string_setting(settings, attr)
         ) is not None:
             continue
-        field = Settings.model_fields[attr]
-        env_name = field.validation_alias or attr
         raise ApplicationUnavailableError(
-            f"{env_name} is not set. Add it in the Admin UI."
+            f"{ENV_KEY_BY_SETTING[attr]} is not set. Add it in the Admin UI."
         )
     proxy = string_setting(settings, descriptor.proxy_attr)
     return ProviderConfig(

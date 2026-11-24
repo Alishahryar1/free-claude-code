@@ -27,7 +27,7 @@ from .errors import ConfigConflictError
 from .model_refs import normalize_retired_model_settings
 from .paths import config_lock_path, managed_env_path
 from .provider_proxies import invalid_provider_proxy_keys
-from .settings import Settings
+from .settings import ENV_KEY_BY_SETTING, Settings
 
 
 class ConfigSource(StrEnum):
@@ -156,7 +156,7 @@ def compose_settings_snapshot(
 
     process = normalize_retired_model_settings(env, preserve_empty_overrides=True)
     managed = normalize_retired_model_settings(managed, preserve_empty_overrides=False)
-    aliases = _settings_aliases()
+    aliases = {key: name for name, key in ENV_KEY_BY_SETTING.items()}
     recognized = settings_env_keys()
     values: dict[str, str] = {
         key: value for key, value in managed.items() if key in recognized
@@ -202,13 +202,3 @@ def clear_settings_cache() -> None:
     """Discard the runtime Settings cache after a committed configuration change."""
 
     get_settings.cache_clear()
-
-
-def _settings_aliases() -> dict[str, str]:
-    aliases: dict[str, str] = {}
-    for name, field in Settings.model_fields.items():
-        alias = field.validation_alias
-        if not isinstance(alias, str):
-            raise AssertionError(f"Settings field {name!r} needs one string alias")
-        aliases[alias] = name
-    return aliases
