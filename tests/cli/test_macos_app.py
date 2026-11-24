@@ -129,7 +129,7 @@ def test_complete_bundle_is_signed_before_publication(
 ) -> None:
     home, _resources, calls = installer
     app = macos_app.install()
-    assert app == home / "Applications/Free Claude Code.app"
+    assert app == home / "Applications/CellCode.app"
     contents = app / "Contents"
     with (contents / "Info.plist").open("rb") as stream:
         info: JsonObject = plistlib.load(stream)
@@ -138,7 +138,7 @@ def test_complete_bundle_is_signed_before_publication(
     assert info["LSUIElement"] and info["LSMultipleInstancesProhibited"]
     with (contents / "Resources/runtime.plist").open("rb") as stream:
         assert plistlib.load(stream)["PythonExecutable"] == str(runtime[0])
-    assert (home / "Desktop/Free Claude Code.app").resolve() == app.resolve()
+    assert (home / "Desktop/CellCode.app").resolve() == app.resolve()
     assert [call[:-1] for call in calls] == [
         ["/usr/bin/codesign", "--force", "--sign", "-"],
         ["/usr/bin/codesign", "--verify", "--strict"],
@@ -148,7 +148,7 @@ def test_complete_bundle_is_signed_before_publication(
 
 
 def owned_app(home: Path):
-    app = home / "Applications/Free Claude Code.app"
+    app = home / "Applications/CellCode.app"
     (app / "Contents").mkdir(parents=True)
     (app / "Contents/.free-claude-code-owner").write_text(macos_app.BUNDLE_ID)
     (app / "old").write_text("preserve on failure")
@@ -192,7 +192,7 @@ def test_failure_preserves_existing_app(
         rename = Path.rename
 
         def fail(path: Path, destination: Path):
-            if path.name == "Free Claude Code.app" and path != app:
+            if path.name == "CellCode.app" and path != app:
                 raise OSError("publication failed")
             return rename(path, destination)
 
@@ -209,7 +209,7 @@ def test_unowned_app_is_preserved(
     installer: tuple[Path, Path, list[list[str]]],
 ) -> None:
     home, _resources, calls = installer
-    app = home / "Applications/Free Claude Code.app"
+    app = home / "Applications/CellCode.app"
     app.mkdir(parents=True)
     with pytest.raises(ValueError, match="not managed"):
         macos_app.install()
@@ -255,7 +255,7 @@ def test_unrelated_desktop_item_is_preserved(
     home, _resources, _calls = installer
     desktop = home / "Desktop"
     desktop.mkdir()
-    item = desktop / "Free Claude Code.app"
+    item = desktop / "CellCode.app"
     item.write_text("unrelated")
     macos_app.install()
     assert item.read_text() == "unrelated"

@@ -235,8 +235,8 @@ macos_app_is_fcc_owned() {
 remove_macos_desktop_app() {
     [ "$(uname -s)" = "Darwin" ] || return 0
 
-    app_dir="$HOME/Applications/Free Claude Code.app"
-    desktop_link="$HOME/Desktop/Free Claude Code.app"
+    app_dir="$HOME/Applications/CellCode.app"
+    desktop_link="$HOME/Desktop/CellCode.app"
 
     if ! macos_app_is_fcc_owned "$app_dir"; then
         if [ -e "$app_dir" ] || [ -L "$app_dir" ]; then

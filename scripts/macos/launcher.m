@@ -17,9 +17,9 @@ static int fail(NSString *reason) {
     fprintf(stderr, "Free Claude Code: %s\n", reason.UTF8String);
     [NSApplication sharedApplication];
     NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = @"Free Claude Code could not start";
+    alert.messageText = @"CellCode could not start";
     alert.informativeText = [reason stringByAppendingString:
-        @"\n\nRerun the Free Claude Code installer to repair the desktop launcher."];
+        @"\n\nRerun the CellCode installer to repair the desktop launcher."];
     [alert addButtonWithTitle:@"OK"];
     [NSApp activateIgnoringOtherApps:YES];
     [alert runModal];
@@ -99,7 +99,7 @@ int main(int argc, char **argv) {
         }
         PyInitConfig_Free(config);
         int exitCode = Py_RunMain();
-        if (exitCode != 0) return fail(@"Free Claude Code could not finish starting. Check its logs for details.");
+        if (exitCode != 0) return fail(@"CellCode could not finish starting. Check its logs for details.");
         return 0;
     }
 }

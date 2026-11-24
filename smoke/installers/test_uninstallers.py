@@ -246,7 +246,7 @@ printf '%s\n' "$FAKE_UNAME"
 """,
     )
 
-    app = home / "Applications" / "Free Claude Code.app"
+    app = home / "Applications" / "CellCode.app"
     contents = app / "Contents"
     contents.mkdir(parents=True)
     (contents / ".free-claude-code-owner").write_text(
@@ -255,7 +255,7 @@ printf '%s\n' "$FAKE_UNAME"
     )
     desktop = home / "Desktop"
     desktop.mkdir()
-    (desktop / "Free Claude Code.app").symlink_to(app, target_is_directory=True)
+    (desktop / "CellCode.app").symlink_to(app, target_is_directory=True)
 
     env = os.environ.copy()
     env.update(
@@ -278,7 +278,7 @@ def test_uninstall_sh_removes_and_verifies_only_fcc(
     posix_uninstall_harness: PosixUninstallHarness,
     marker_directory: str,
 ) -> None:
-    app = posix_uninstall_harness.home / "Applications/Free Claude Code.app"
+    app = posix_uninstall_harness.home / "Applications/CellCode.app"
     if marker_directory != "Contents":
         destination = app / marker_directory / ".free-claude-code-owner"
         destination.parent.mkdir()
@@ -326,8 +326,8 @@ def test_uninstall_sh_removes_and_verifies_only_fcc(
         "uv:tool dir --bin",
         "doctor:--disconnect-integrations",
         "uv:tool uninstall free-claude-code",
-        f"rm:-f {posix_uninstall_harness.home / 'Desktop' / 'Free Claude Code.app'}",
-        f"rm:-rf {posix_uninstall_harness.home / 'Applications' / 'Free Claude Code.app'}",
+        f"rm:-f {posix_uninstall_harness.home / 'Desktop' / 'CellCode.app'}",
+        f"rm:-rf {posix_uninstall_harness.home / 'Applications' / 'CellCode.app'}",
         f"rm:-rf {posix_uninstall_harness.fcc_home}",
     ]
 
@@ -407,7 +407,7 @@ def test_uninstall_sh_does_not_purge_when_tool_and_cleanup_helper_are_absent(
 def test_uninstall_sh_preserves_unrelated_macos_desktop_link(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
-    desktop_link = posix_uninstall_harness.home / "Desktop" / "Free Claude Code.app"
+    desktop_link = posix_uninstall_harness.home / "Desktop" / "CellCode.app"
     desktop_link.unlink()
     unrelated = posix_uninstall_harness.home / "Unrelated.app"
     unrelated.mkdir()
@@ -423,12 +423,12 @@ def test_uninstall_sh_preserves_unrelated_macos_desktop_link(
 def test_uninstall_sh_preserves_unowned_macos_app_bundle(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
-    app = posix_uninstall_harness.home / "Applications" / "Free Claude Code.app"
+    app = posix_uninstall_harness.home / "Applications" / "CellCode.app"
     owner_file = app / "Contents" / ".free-claude-code-owner"
     owner_file.unlink()
     sentinel = app / "foreign.txt"
     sentinel.write_text("keep", encoding="utf-8")
-    desktop_link = posix_uninstall_harness.home / "Desktop" / "Free Claude Code.app"
+    desktop_link = posix_uninstall_harness.home / "Desktop" / "CellCode.app"
 
     result = posix_uninstall_harness.run()
 
@@ -442,8 +442,8 @@ def test_uninstall_sh_does_not_touch_macos_paths_on_linux(
     posix_uninstall_harness: PosixUninstallHarness,
 ) -> None:
     posix_uninstall_harness.env["FAKE_UNAME"] = "Linux"
-    app = posix_uninstall_harness.home / "Applications" / "Free Claude Code.app"
-    desktop_link = posix_uninstall_harness.home / "Desktop" / "Free Claude Code.app"
+    app = posix_uninstall_harness.home / "Applications" / "CellCode.app"
+    desktop_link = posix_uninstall_harness.home / "Desktop" / "CellCode.app"
 
     result = posix_uninstall_harness.run()
 
@@ -768,14 +768,9 @@ if ($env:UNINSTALL_KEEP_INTEGRATIONS -eq "1") {
         encoding="utf-8",
     )
 
-    desktop_shortcut = home / "Desktop" / "Free Claude Code.lnk"
+    desktop_shortcut = home / "Desktop" / "CellCode.lnk"
     start_shortcut = (
-        app_data
-        / "Microsoft"
-        / "Windows"
-        / "Start Menu"
-        / "Programs"
-        / "Free Claude Code.lnk"
+        app_data / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "CellCode.lnk"
     )
     for shortcut in (desktop_shortcut, start_shortcut):
         _create_windows_shortcut(
@@ -857,8 +852,8 @@ def test_uninstall_ps1_removes_and_verifies_only_fcc(
         "uv:tool dir --bin",
         "doctor:--disconnect-integrations",
         "uv:tool uninstall free-claude-code",
-        f"remove:{Path(powershell_uninstall_harness.env['USERPROFILE']) / 'Desktop' / 'Free Claude Code.lnk'}",
-        f"remove:{Path(powershell_uninstall_harness.env['APPDATA']) / 'Microsoft' / 'Windows' / 'Start Menu' / 'Programs' / 'Free Claude Code.lnk'}",
+        f"remove:{Path(powershell_uninstall_harness.env['USERPROFILE']) / 'Desktop' / 'CellCode.lnk'}",
+        f"remove:{Path(powershell_uninstall_harness.env['APPDATA']) / 'Microsoft' / 'Windows' / 'Start Menu' / 'Programs' / 'CellCode.lnk'}",
         f"remove:{powershell_uninstall_harness.fcc_home}",
     ]
 
@@ -869,7 +864,7 @@ def test_uninstall_ps1_preserves_unowned_desktop_shortcut(
     desktop_shortcut = (
         Path(powershell_uninstall_harness.env["USERPROFILE"])
         / "Desktop"
-        / "Free Claude Code.lnk"
+        / "CellCode.lnk"
     )
     unrelated_target = powershell_uninstall_harness.home / "unrelated.cmd"
     unrelated_target.write_text("@echo off\n", encoding="utf-8")

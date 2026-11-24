@@ -1951,8 +1951,8 @@ function Install-FccDesktopShortcuts {
     )
 
     $shortcutPaths = @(
-        (Join-Path $env:USERPROFILE "Desktop\Free Claude Code.lnk"),
-        (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Free Claude Code.lnk")
+        (Join-Path $env:USERPROFILE "Desktop\CellCode.lnk"),
+        (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\CellCode.lnk")
     )
     foreach ($shortcutPath in $shortcutPaths) {
         Write-Host "+ create shortcut $(Format-Argument $shortcutPath) -> $(Format-Argument $DesktopCommand)"
@@ -1982,7 +1982,7 @@ function Install-FccDesktopShortcuts {
         $shortcut.TargetPath = $DesktopCommand
         $shortcut.WorkingDirectory = $env:USERPROFILE
         $shortcut.IconLocation = "$IconPath,0"
-        $shortcut.Description = "Run Free Claude Code in the background"
+        $shortcut.Description = "Run CellCode in the background"
         $shortcut.Save()
         if ($shortcutPath -eq $shortcutPaths[0]) { $script:DesktopReady = $true }
     }
@@ -1991,7 +1991,7 @@ function Install-FccDesktopShortcuts {
 function Show-InstallerNextSteps {
     Write-Host "`nFree Claude Code is installed and verified."
     if ($script:DesktopReady) {
-        Write-Host "Open the Free Claude Code desktop shortcut to run it in the background."
+        Write-Host "Open the CellCode desktop shortcut to run it in the background."
     }
     Write-Host "For terminal use, start the proxy with: fcc-server"
     if ($script:InstallClaudeCode) {

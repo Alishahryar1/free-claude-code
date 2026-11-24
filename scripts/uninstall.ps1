@@ -287,8 +287,8 @@ function Test-FccDesktopShortcutTarget {
 
 function Remove-FccDesktopShortcuts {
     $shortcutPaths = @(
-        (Join-Path $env:USERPROFILE "Desktop\Free Claude Code.lnk"),
-        (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Free Claude Code.lnk")
+        (Join-Path $env:USERPROFILE "Desktop\CellCode.lnk"),
+        (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\CellCode.lnk")
     )
     $shell = New-Object -ComObject WScript.Shell
     foreach ($shortcutPath in $shortcutPaths) {

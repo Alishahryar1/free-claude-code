@@ -1967,10 +1967,8 @@ def test_install_sh_stops_if_macos_bundle_setup_fails(
     assert "Command failed with exit code 37" in result.stderr
     assert "Free Claude Code is installed and verified." in result.stdout
     assert "Start the proxy with: fcc-server" in result.stdout
-    assert "Open Free Claude Code from Applications" not in result.stdout
-    assert not (
-        posix_harness.root / "home" / "Desktop" / "Free Claude Code.app"
-    ).exists()
+    assert "Open CellCode from Applications" not in result.stdout
+    assert not (posix_harness.root / "home" / "Desktop" / "CellCode.app").exists()
 
 
 @pytest.mark.parametrize("uv_version", (UV_MINIMUM, f"{UV_MINIMUM}+build.1", UV_NEWER))
@@ -3774,7 +3772,7 @@ def test_install_ps1_fresh_install_is_verified(
     icon = home / ".fcc" / "app-icon.ico"
     assert icon.read_text(encoding="utf-8").strip() == "fake icon"
     assert calls[-1] == f'fcc-desktop:--export-icon "{icon}"'
-    desktop_shortcut = home / "Desktop" / "Free Claude Code.lnk"
+    desktop_shortcut = home / "Desktop" / "CellCode.lnk"
     assert desktop_shortcut.is_file()
     assert (
         _windows_shortcut_icon(
@@ -3785,12 +3783,7 @@ def test_install_ps1_fresh_install_is_verified(
         == f"{icon},0"
     )
     assert (
-        app_data
-        / "Microsoft"
-        / "Windows"
-        / "Start Menu"
-        / "Programs"
-        / "Free Claude Code.lnk"
+        app_data / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "CellCode.lnk"
     ).is_file()
 
 
@@ -4289,9 +4282,9 @@ def test_install_ps1_stops_if_windows_icon_export_fails(
     assert "Command failed with exit code 56" in result.stderr
     assert "Free Claude Code is installed and verified." in result.stdout
     assert "start the proxy with: fcc-server" in result.stdout
-    assert "Open the Free Claude Code desktop shortcut" not in result.stdout
+    assert "Open the CellCode desktop shortcut" not in result.stdout
     home = Path(powershell_harness.env["USERPROFILE"])
-    assert not (home / "Desktop" / "Free Claude Code.lnk").exists()
+    assert not (home / "Desktop" / "CellCode.lnk").exists()
 
 
 def test_install_ps1_preserves_unowned_desktop_shortcut(
@@ -4299,7 +4292,7 @@ def test_install_ps1_preserves_unowned_desktop_shortcut(
 ) -> None:
     powershell_harness.add_uv(UV_MINIMUM)
     desktop_shortcut = (
-        Path(powershell_harness.env["USERPROFILE"]) / "Desktop" / "Free Claude Code.lnk"
+        Path(powershell_harness.env["USERPROFILE"]) / "Desktop" / "CellCode.lnk"
     )
     unrelated_target = powershell_harness.root / "unrelated.cmd"
     unrelated_target.write_text("@echo off\n", encoding="utf-8")
@@ -4317,7 +4310,7 @@ def test_install_ps1_preserves_unowned_desktop_shortcut(
     assert result.returncode == 0, result.stderr
     assert "not managed by Free Claude Code" in result.stdout
     assert desktop_shortcut.read_bytes() == original_shortcut
-    assert "Open the Free Claude Code desktop shortcut" not in result.stdout
+    assert "Open the CellCode desktop shortcut" not in result.stdout
     assert "start the proxy with: fcc-server" in result.stdout
 
 
@@ -5999,7 +5992,7 @@ def _assert_installer_recovers_after_verification_failure(
 
     assert failed.returncode != 0
     assert not any(call.startswith("rtk:init") for call in harness.calls())
-    assert not (home / "Desktop" / "Free Claude Code.lnk").exists()
+    assert not (home / "Desktop" / "CellCode.lnk").exists()
     assert "Free Claude Code is installed and verified." not in failed.stdout
     assert re.search(r"completed.*FCC package", failed.stdout, re.IGNORECASE)
     assert re.search(r"failed.*FCC verification", failed.stdout, re.IGNORECASE)

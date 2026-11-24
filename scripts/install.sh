@@ -1706,7 +1706,7 @@ install_macos_desktop_app() {
 
 show_installer_next_steps() {
     if [ "$desktop_ready" -eq 1 ]; then
-        printf '\nFree Claude Code is installed and verified. Open Free Claude Code from Applications or the desktop to run it in the background.\n'
+        printf '\nFree Claude Code is installed and verified. Open CellCode from Applications or the desktop to run it in the background.\n'
         printf 'For terminal use, start the proxy with: fcc-server\n'
     else
         printf '\nFree Claude Code is installed and verified. Start the proxy with: fcc-server\n'

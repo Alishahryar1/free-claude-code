@@ -131,7 +131,7 @@ def installed_desktop(
         check=True,
         timeout=30,
     )
-    app = home / "Applications/Free Claude Code.app"
+    app = home / "Applications/CellCode.app"
     with (app / "Contents/Resources/runtime.plist").open("rb") as stream:
         runtime: dict[str, object] = plistlib.load(stream)
     # Launch Services receives explicit private settings; no launchd-wide changes.

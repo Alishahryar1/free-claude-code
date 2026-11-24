@@ -72,7 +72,7 @@ def install() -> Path:
     if sys.platform != "darwin":
         raise ValueError("Application installation is supported only on macOS.")
     home = Path.home()
-    app = home / "Applications/Free Claude Code.app"
+    app = home / "Applications/CellCode.app"
     if (app.exists() or app.is_symlink()) and not is_owned(app):
         raise ValueError(
             f"An app not managed by Free Claude Code already exists at {app}."
@@ -103,11 +103,11 @@ def install() -> Path:
         with (contents / "Info.plist").open("wb") as stream:
             plistlib.dump(
                 {
-                    "CFBundleDisplayName": "Free Claude Code",
+                    "CFBundleDisplayName": "CellCode",
                     "CFBundleExecutable": "fcc-desktop",
                     "CFBundleIdentifier": BUNDLE_ID,
                     "CFBundleIconFile": "AppIcon",
-                    "CFBundleName": "Free Claude Code",
+                    "CFBundleName": "CellCode",
                     "CFBundlePackageType": "APPL",
                     "LSMultipleInstancesProhibited": True,
                     "LSUIElement": True,
@@ -136,7 +136,7 @@ def install() -> Path:
             print(
                 f"The previous application is preserved at {backup}.", file=sys.stderr
             )
-    desktop = home / "Desktop/Free Claude Code.app"
+    desktop = home / "Desktop/CellCode.app"
     desktop.parent.mkdir(parents=True, exist_ok=True)
     if desktop.is_symlink() and desktop.readlink() == app:
         return app
