@@ -270,7 +270,7 @@ async def claude_onboarding_status(
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.claude_onboarding_status)
+    return await _integration_response(services.integrations.claude_onboarding_status)
 
 
 @router.post("/admin/api/integrations/claude-onboarding/complete")
@@ -279,7 +279,7 @@ async def complete_claude_onboarding(
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.complete_claude_onboarding)
+    return await _integration_response(services.integrations.complete_claude_onboarding)
 
 
 @router.get("/admin/api/integrations/claude-vscode")
@@ -288,7 +288,7 @@ async def claude_vscode_status(
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.claude_vscode_status)
+    return await _integration_response(services.integrations.claude_vscode_status)
 
 
 @router.get("/admin/api/integrations/vscode-chat")
@@ -297,7 +297,7 @@ async def vscode_chat_status(
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.vscode_chat_status)
+    return await _integration_response(services.integrations.vscode_chat_status)
 
 
 @router.post("/admin/api/integrations/vscode-chat/connect")
@@ -306,7 +306,7 @@ async def connect_vscode_chat(
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.connect_vscode_chat)
+    return await _integration_response(services.integrations.connect_vscode_chat)
 
 
 @router.post("/admin/api/integrations/vscode-chat/disconnect")
@@ -315,7 +315,7 @@ async def disconnect_vscode_chat(
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.disconnect_vscode_chat)
+    return await _integration_response(services.integrations.disconnect_vscode_chat)
 
 
 @router.post("/admin/api/integrations/vscode-chat/refresh")
@@ -324,7 +324,7 @@ async def refresh_vscode_chat(
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.refresh_vscode_chat)
+    return await _integration_response(services.integrations.refresh_vscode_chat)
 
 
 @router.post("/admin/api/integrations/claude-vscode/connect")
@@ -333,7 +333,7 @@ async def connect_claude_vscode(
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.connect_claude_vscode)
+    return await _integration_response(services.integrations.connect_claude_vscode)
 
 
 @router.post("/admin/api/integrations/claude-vscode/refresh")
@@ -342,7 +342,7 @@ async def refresh_claude_vscode(
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.refresh_claude_vscode)
+    return await _integration_response(services.integrations.refresh_claude_vscode)
 
 
 @router.post("/admin/api/integrations/claude-vscode/disconnect")
@@ -351,7 +351,7 @@ async def disconnect_claude_vscode(
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.disconnect_claude_vscode)
+    return await _integration_response(services.integrations.disconnect_claude_vscode)
 
 
 @router.get("/admin/api/integrations/dsh-desktop")
@@ -359,7 +359,7 @@ async def dsh_desktop_status(
     request: Request, services: ApiServices = Depends(get_services)
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.dsh_desktop_status)
+    return await _integration_response(services.integrations.dsh_desktop_status)
 
 
 @router.post("/admin/api/integrations/dsh-desktop/connect")
@@ -367,7 +367,7 @@ async def connect_dsh_desktop(
     request: Request, services: ApiServices = Depends(get_services)
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.connect_dsh_desktop)
+    return await _integration_response(services.integrations.connect_dsh_desktop)
 
 
 @router.post("/admin/api/integrations/dsh-desktop/disconnect")
@@ -375,7 +375,7 @@ async def disconnect_dsh_desktop(
     request: Request, services: ApiServices = Depends(get_services)
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.disconnect_dsh_desktop)
+    return await _integration_response(services.integrations.disconnect_dsh_desktop)
 
 
 @router.post("/admin/api/integrations/dsh-desktop/refresh")
@@ -383,7 +383,7 @@ async def refresh_dsh_desktop(
     request: Request, services: ApiServices = Depends(get_services)
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.refresh_dsh_desktop)
+    return await _integration_response(services.integrations.refresh_dsh_desktop)
 
 
 @router.get("/admin/api/integrations/claude-desktop")
@@ -391,7 +391,7 @@ async def claude_desktop_status(
     request: Request, services: ApiServices = Depends(get_services)
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.claude_desktop_status)
+    return await _integration_response(services.integrations.claude_desktop_status)
 
 
 @router.post("/admin/api/integrations/claude-desktop/connect")
@@ -399,7 +399,7 @@ async def connect_claude_desktop(
     request: Request, services: ApiServices = Depends(get_services)
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.connect_claude_desktop)
+    return await _integration_response(services.integrations.connect_claude_desktop)
 
 
 @router.post("/admin/api/integrations/claude-desktop/disconnect")
@@ -407,7 +407,7 @@ async def disconnect_claude_desktop(
     request: Request, services: ApiServices = Depends(get_services)
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.disconnect_claude_desktop)
+    return await _integration_response(services.integrations.disconnect_claude_desktop)
 
 
 @router.post("/admin/api/integrations/claude-desktop/refresh")
@@ -415,7 +415,7 @@ async def refresh_claude_desktop(
     request: Request, services: ApiServices = Depends(get_services)
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.refresh_claude_desktop)
+    return await _integration_response(services.integrations.refresh_claude_desktop)
 
 
 @router.get("/admin/api/integrations/jetbrains-acp")
@@ -423,7 +423,7 @@ async def jetbrains_acp_status(
     request: Request, services: ApiServices = Depends(get_services)
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.jetbrains_acp_status)
+    return await _integration_response(services.integrations.jetbrains_acp_status)
 
 
 @router.post("/admin/api/integrations/jetbrains-acp/connect")
@@ -431,7 +431,7 @@ async def connect_jetbrains_acp(
     request: Request, services: ApiServices = Depends(get_services)
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.connect_jetbrains_acp)
+    return await _integration_response(services.integrations.connect_jetbrains_acp)
 
 
 @router.post("/admin/api/integrations/jetbrains-acp/disconnect")
@@ -439,7 +439,7 @@ async def disconnect_jetbrains_acp(
     request: Request, services: ApiServices = Depends(get_services)
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.disconnect_jetbrains_acp)
+    return await _integration_response(services.integrations.disconnect_jetbrains_acp)
 
 
 @router.post("/admin/api/integrations/jetbrains-acp/refresh")
@@ -447,7 +447,7 @@ async def refresh_jetbrains_acp(
     request: Request, services: ApiServices = Depends(get_services)
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.refresh_jetbrains_acp)
+    return await _integration_response(services.integrations.refresh_jetbrains_acp)
 
 
 @router.get("/admin/api/integrations/codex")
@@ -456,7 +456,7 @@ async def codex_integration_status(
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.codex_integration_status)
+    return await _integration_response(services.integrations.codex_integration_status)
 
 
 @router.post("/admin/api/integrations/codex/connect")
@@ -465,7 +465,7 @@ async def connect_codex(
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.connect_codex)
+    return await _integration_response(services.integrations.connect_codex)
 
 
 @router.post("/admin/api/integrations/codex/refresh")
@@ -474,7 +474,7 @@ async def refresh_codex_integration(
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.refresh_codex_integration)
+    return await _integration_response(services.integrations.refresh_codex_integration)
 
 
 @router.post("/admin/api/integrations/codex/disconnect")
@@ -483,7 +483,7 @@ async def disconnect_codex(
     services: ApiServices = Depends(get_services),
 ):
     require_loopback_admin(request)
-    return await _integration_response(services.admin.disconnect_codex)
+    return await _integration_response(services.integrations.disconnect_codex)
 
 
 async def _integration_response(

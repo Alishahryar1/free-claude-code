@@ -137,7 +137,7 @@ class ApplicationRuntime:
         self._lifecycle_lock = asyncio.Lock()
         self._startup_tasks: list[asyncio.Task[None]] = []
         self._http_ready = asyncio.Event()
-        self._integrations = IntegrationService(
+        self.integrations = IntegrationService(
             provider_manager,
             config_publication=self._config_publication,
             is_draining=lambda: self._draining,
@@ -189,9 +189,9 @@ class ApplicationRuntime:
                     )
                 self.provider_manager.start_model_list_refresh()
                 self.provider_manager.set_catalog_changed_callback(
-                    self._integrations.catalog_changed
+                    self.integrations.catalog_changed
                 )
-                await self._integrations.start()
+                await self.integrations.start()
                 self._startup_tasks.append(
                     asyncio.create_task(
                         run_sync_owned(remove_retired_chat_history),
@@ -240,12 +240,12 @@ class ApplicationRuntime:
             if self._closed:
                 return True
             logger.info("Shutdown requested, cleaning up...")
-            self._integrations.cancel_background_tasks()
+            self.integrations.cancel_background_tasks()
             self._messaging.cancel_background_tasks()
             for task in self._startup_tasks:
                 if not task.done():
                     task.cancel()
-            await self._integrations.wait_background_tasks()
+            await self.integrations.wait_background_tasks()
             await self._messaging.wait_background_tasks()
             results = await asyncio.gather(*self._startup_tasks, return_exceptions=True)
             for result in results:
@@ -376,84 +376,6 @@ class ApplicationRuntime:
     async def admin_values(self) -> ValueState:
         return await self._configuration.admin_values()
 
-    async def vscode_chat_status(self) -> JsonObject:
-        return await self._integrations.vscode_chat_status()
-
-    async def connect_vscode_chat(self) -> JsonObject:
-        return await self._integrations.connect_vscode_chat()
-
-    async def disconnect_vscode_chat(self) -> JsonObject:
-        return await self._integrations.disconnect_vscode_chat()
-
-    async def refresh_vscode_chat(self) -> JsonObject:
-        return await self._integrations.refresh_vscode_chat()
-
-    async def claude_vscode_status(self) -> JsonObject:
-        return await self._integrations.claude_vscode_status()
-
-    async def claude_onboarding_status(self) -> JsonObject:
-        return await self._integrations.claude_onboarding_status()
-
-    async def complete_claude_onboarding(self) -> JsonObject:
-        return await self._integrations.complete_claude_onboarding()
-
-    async def connect_claude_vscode(self) -> JsonObject:
-        return await self._integrations.connect_claude_vscode()
-
-    async def disconnect_claude_vscode(self) -> JsonObject:
-        return await self._integrations.disconnect_claude_vscode()
-
-    async def refresh_claude_vscode(self) -> JsonObject:
-        return await self._integrations.refresh_claude_vscode()
-
-    async def refresh_codex_integration(self) -> JsonObject:
-        return await self._integrations.refresh_codex_integration()
-
-    async def jetbrains_acp_status(self) -> JsonObject:
-        return await self._integrations.jetbrains_acp_status()
-
-    async def connect_jetbrains_acp(self) -> JsonObject:
-        return await self._integrations.connect_jetbrains_acp()
-
-    async def disconnect_jetbrains_acp(self) -> JsonObject:
-        return await self._integrations.disconnect_jetbrains_acp()
-
-    async def refresh_jetbrains_acp(self) -> JsonObject:
-        return await self._integrations.refresh_jetbrains_acp()
-
-    async def dsh_desktop_status(self) -> JsonObject:
-        return await self._integrations.dsh_desktop_status()
-
-    async def connect_dsh_desktop(self) -> JsonObject:
-        return await self._integrations.connect_dsh_desktop()
-
-    async def disconnect_dsh_desktop(self) -> JsonObject:
-        return await self._integrations.disconnect_dsh_desktop()
-
-    async def refresh_dsh_desktop(self) -> JsonObject:
-        return await self._integrations.refresh_dsh_desktop()
-
-    async def claude_desktop_status(self) -> JsonObject:
-        return await self._integrations.claude_desktop_status()
-
-    async def connect_claude_desktop(self) -> JsonObject:
-        return await self._integrations.connect_claude_desktop()
-
-    async def disconnect_claude_desktop(self) -> JsonObject:
-        return await self._integrations.disconnect_claude_desktop()
-
-    async def refresh_claude_desktop(self) -> JsonObject:
-        return await self._integrations.refresh_claude_desktop()
-
-    async def codex_integration_status(self) -> JsonObject:
-        return await self._integrations.codex_integration_status()
-
-    async def connect_codex(self) -> JsonObject:
-        return await self._integrations.connect_codex()
-
-    async def disconnect_codex(self) -> JsonObject:
-        return await self._integrations.disconnect_codex()
-
     async def admin_status(self) -> JsonObject:
         values = await self.admin_values()
         settings = self.settings
@@ -466,7 +388,7 @@ class ApplicationRuntime:
                 if self._code_service
                 else {"state": "disabled"},
                 "messaging": self._messaging.snapshot(),
-                "integrations": self._integrations.snapshot(),
+                "integrations": self.integrations.snapshot(),
             },
             "host": settings.host,
             "port": settings.port,

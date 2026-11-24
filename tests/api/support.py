@@ -130,6 +130,7 @@ def create_test_app(
         ApiServices(
             requests=manager,
             admin=runtime,
+            integrations=runtime.integrations,
             tasks=runtime,
             code=code,
             web_tools=StubWebToolsClient(),

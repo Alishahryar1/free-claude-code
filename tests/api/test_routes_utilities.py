@@ -1,3 +1,4 @@
+from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -5,12 +6,10 @@ from fastapi.applications import FastAPI
 from fastapi.testclient import TestClient
 
 from free_claude_code.api.dependencies import app_services
-from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.ports import StopResult
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.json_types import JsonObject
 from tests.api.support import create_test_app
-from tests.web_tools_support import StubWebToolsClient
 from tests.wire_payload import object_payload, response_object, string_payload
 
 
@@ -126,13 +125,7 @@ def test_count_tokens_error_returns_500(client: TestClient) -> None:
 def test_stop_cli_with_messaging_workflow(app: FastAPI, client: TestClient) -> None:
     session_control = MagicMock()
     session_control.stop_all = AsyncMock(return_value=StopResult(cancelled_count=3))
-    services = app_services(app)
-    app.state.services = ApiServices(
-        requests=services.requests,
-        admin=services.admin,
-        tasks=session_control,
-        web_tools=StubWebToolsClient(),
-    )
+    app.state.services = replace(app_services(app), tasks=session_control)
 
     response = client.post("/stop")
 
@@ -144,13 +137,7 @@ def test_stop_cli_with_messaging_workflow(app: FastAPI, client: TestClient) -> N
 def test_stop_cli_fallback_to_manager(app: FastAPI, client: TestClient) -> None:
     session_control = MagicMock()
     session_control.stop_all = AsyncMock(return_value=StopResult(source="cli_manager"))
-    services = app_services(app)
-    app.state.services = ApiServices(
-        requests=services.requests,
-        admin=services.admin,
-        tasks=session_control,
-        web_tools=StubWebToolsClient(),
-    )
+    app.state.services = replace(app_services(app), tasks=session_control)
 
     response = client.post("/stop")
 

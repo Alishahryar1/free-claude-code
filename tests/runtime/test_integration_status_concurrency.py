@@ -32,10 +32,12 @@ async def test_slow_integration_writer_does_not_block_another(
         return {"connected": True}
 
     monkeypatch.setattr(vscode, "configure", held)
-    first = asyncio.create_task(runtime.connect_vscode_chat())
+    first = asyncio.create_task(runtime.integrations.connect_vscode_chat())
     try:
         await asyncio.wait_for(entered.wait(), 1)
-        result = await asyncio.wait_for(runtime.disconnect_claude_vscode(), 1)
+        result = await asyncio.wait_for(
+            runtime.integrations.disconnect_claude_vscode(), 1
+        )
         assert result["connected"] is False
         assert not first.done()
     finally:
@@ -48,14 +50,16 @@ async def test_slow_integration_writer_does_not_block_another(
 async def test_queued_integration_writer_does_not_block_another(
     runtime: ApplicationRuntime,
 ) -> None:
-    update = runtime._integrations._vscode_update
+    update = runtime.integrations._vscode_update
     first = None
     try:
         async with update.access.read():
-            first = asyncio.create_task(runtime.disconnect_vscode_chat())
+            first = asyncio.create_task(runtime.integrations.disconnect_vscode_chat())
             while not update.access._waiting_writers:
                 await asyncio.sleep(0)
-            result = await asyncio.wait_for(runtime.disconnect_claude_vscode(), 1)
+            result = await asyncio.wait_for(
+                runtime.integrations.disconnect_claude_vscode(), 1
+            )
             assert result["connected"] is False
             assert not first.done()
     finally:
@@ -86,10 +90,12 @@ async def test_slow_status_does_not_block_other_integration(
         return {"connected": False, "paths": {}}
 
     monkeypatch.setattr(vscode, "status", held)
-    task = asyncio.create_task(runtime.vscode_chat_status())
+    task = asyncio.create_task(runtime.integrations.vscode_chat_status())
     try:
         await asyncio.wait_for(entered.wait(), 5)
-        status: Callable[[], Awaitable[JsonObject]] = getattr(runtime, other)
+        status: Callable[[], Awaitable[JsonObject]] = getattr(
+            runtime.integrations, other
+        )
         result = await asyncio.wait_for(status(), 1)
         assert result["connected"] is False
         assert not task.done()
@@ -132,19 +138,19 @@ async def test_cancelled_reader_drains_before_writer_enters(
 
     monkeypatch.setattr(vscode, "status", held)
     monkeypatch.setattr(vscode, "configure", record_write)
-    reader = asyncio.create_task(runtime.vscode_chat_status())
+    reader = asyncio.create_task(runtime.integrations.vscode_chat_status())
     writer = None
     try:
         await asyncio.wait_for(entered.wait(), 5)
         reader.cancel()
         await asyncio.sleep(0)
         reader.cancel()
-        writer = asyncio.create_task(runtime.connect_vscode_chat())
+        writer = asyncio.create_task(runtime.integrations.connect_vscode_chat())
         await finish_discovery(runtime.provider_manager)
         await asyncio.sleep(0)
         assert not reader.done()
         assert not writer_entered.is_set()
-        assert (await asyncio.wait_for(runtime.jetbrains_acp_status(), 1))[
+        assert (await asyncio.wait_for(runtime.integrations.jetbrains_acp_status(), 1))[
             "connected"
         ] is False
         release.set()
@@ -175,14 +181,14 @@ async def test_status_cannot_observe_partial_multifile_write(
             assert release.wait(5)
 
     monkeypatch.setattr(claude_onboarding, "atomic_write_text", held)
-    writer = asyncio.create_task(runtime.connect_claude_vscode())
+    writer = asyncio.create_task(runtime.integrations.connect_claude_vscode())
     reader = None
     try:
         await asyncio.wait_for(entered.wait(), 5)
         assert claude_onboarding.state_path().exists()
         assert not claude.settings_path().exists()
-        reader = asyncio.create_task(runtime.claude_vscode_status())
-        assert (await asyncio.wait_for(runtime.jetbrains_acp_status(), 1))[
+        reader = asyncio.create_task(runtime.integrations.claude_vscode_status())
+        assert (await asyncio.wait_for(runtime.integrations.jetbrains_acp_status(), 1))[
             "connected"
         ] is False
         assert not reader.done()
@@ -218,7 +224,10 @@ async def test_connect_and_onboarding_share_write_ownership(
         return complete(path)
 
     monkeypatch.setattr(claude_onboarding, "complete", held)
-    operations = [runtime.connect_claude_vscode, runtime.complete_claude_onboarding]
+    operations = [
+        runtime.integrations.connect_claude_vscode,
+        runtime.integrations.complete_claude_onboarding,
+    ]
     if first == "complete":
         operations.reverse()
     writer = asyncio.create_task(operations[0]())
@@ -226,8 +235,8 @@ async def test_connect_and_onboarding_share_write_ownership(
     try:
         await asyncio.wait_for(entered.wait(), 5)
         second = asyncio.create_task(operations[1]())
-        reader = asyncio.create_task(runtime.claude_onboarding_status())
-        assert (await asyncio.wait_for(runtime.jetbrains_acp_status(), 1))[
+        reader = asyncio.create_task(runtime.integrations.claude_onboarding_status())
+        assert (await asyncio.wait_for(runtime.integrations.jetbrains_acp_status(), 1))[
             "connected"
         ] is False
         assert not second.done() and not reader.done()
@@ -240,7 +249,7 @@ async def test_connect_and_onboarding_share_write_ownership(
             "theme": "dark",
             "hasCompletedOnboarding": True,
         }
-        assert (await runtime.claude_vscode_status())["connected"] is True
+        assert (await runtime.integrations.claude_vscode_status())["connected"] is True
     finally:
         release.set()
         await asyncio.gather(
@@ -266,7 +275,7 @@ async def test_cancelled_onboarding_write_is_drained_before_shutdown(
         return complete(path)
 
     monkeypatch.setattr(claude_onboarding, "complete", held)
-    writer = asyncio.create_task(runtime.complete_claude_onboarding())
+    writer = asyncio.create_task(runtime.integrations.complete_claude_onboarding())
     close = None
     try:
         await asyncio.wait_for(entered.wait(), 5)
@@ -307,7 +316,7 @@ async def test_continuously_changed_generation_has_bounded_retry(
         return {"connected": False, "paths": {}}
 
     monkeypatch.setattr(claude, "configure", held)
-    task = asyncio.create_task(runtime.claude_vscode_status())
+    task = asyncio.create_task(runtime.integrations.claude_vscode_status())
     try:
         for attempt in range(2):
             await asyncio.wait_for(entered.get(), 5)
@@ -341,7 +350,7 @@ async def test_availability_is_rechecked_after_status_worker(
         return {"connected": False, "paths": {}}
 
     monkeypatch.setattr(vscode, "status", held)
-    task = asyncio.create_task(runtime.vscode_chat_status())
+    task = asyncio.create_task(runtime.integrations.vscode_chat_status())
     try:
         await asyncio.wait_for(entered.wait(), 5)
         if change == "shutdown":
@@ -361,7 +370,7 @@ async def test_availability_is_rechecked_after_status_worker(
 async def test_startup_finishing_during_skipped_status_repeats_inspection(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    update = runtime._integrations._claude_update
+    update = runtime.integrations._claude_update
     update.state = "starting"
     loop = asyncio.get_running_loop()
     path = claude.settings_path()
@@ -381,7 +390,7 @@ async def test_startup_finishing_during_skipped_status_repeats_inspection(
 
     monkeypatch.setattr(claude, "configure", replace_configure)
     try:
-        result = await runtime.claude_vscode_status()
+        result = await runtime.integrations.claude_vscode_status()
         assert result["connected"] is True
         assert object_payload(result["update"])["state"] == "ready"
         assert reads == 2
@@ -408,7 +417,9 @@ async def test_same_integration_status_readers_overlap(
         return {"connected": False, "paths": {}}
 
     monkeypatch.setattr(vscode, "status", held)
-    tasks = [asyncio.create_task(runtime.vscode_chat_status()) for _ in range(2)]
+    tasks = [
+        asyncio.create_task(runtime.integrations.vscode_chat_status()) for _ in range(2)
+    ]
     try:
         await asyncio.wait_for(both_entered.wait(), 1)
         assert all(not task.done() for task in tasks)
@@ -440,7 +451,7 @@ async def test_generation_change_discards_old_status_outcome(
         return {"connected": token == "rotated", "paths": {}}
 
     monkeypatch.setattr(claude, "configure", held)
-    task = asyncio.create_task(runtime.claude_vscode_status())
+    task = asyncio.create_task(runtime.integrations.claude_vscode_status())
     try:
         await asyncio.wait_for(entered.wait(), 5)
         await runtime.provider_manager.replace(

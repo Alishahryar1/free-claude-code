@@ -76,7 +76,13 @@ async def test_http_and_admin_serve_while_selected_catalog_is_held() -> None:
         transcriber=None,
     )
     app = create_app(
-        ApiServices(manager, runtime, runtime, web_tools=StubWebToolsClient())
+        ApiServices(
+            manager,
+            runtime,
+            runtime,
+            web_tools=StubWebToolsClient(),
+            integrations=runtime.integrations,
+        )
     )
     try:
         await asyncio.wait_for(runtime.start(), 1)

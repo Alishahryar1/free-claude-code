@@ -92,7 +92,13 @@ async def test_http_catalog_exposes_ready_models_while_another_provider_waits(
     runtime, release = catalog_runtime
     manager = runtime.provider_manager
     app = create_app(
-        ApiServices(manager, runtime, runtime, web_tools=StubWebToolsClient())
+        ApiServices(
+            manager,
+            runtime,
+            runtime,
+            web_tools=StubWebToolsClient(),
+            integrations=runtime.integrations,
+        )
     )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"

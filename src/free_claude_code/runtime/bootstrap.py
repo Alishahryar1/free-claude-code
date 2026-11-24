@@ -96,6 +96,7 @@ def build_asgi_app(
     services = ApiServices(
         requests=provider_manager,
         admin=runtime,
+        integrations=runtime.integrations,
         tasks=runtime,
         web_tools=HTTPWebToolsClient(),
         code=code_service,
