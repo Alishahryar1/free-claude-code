@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Protocol
 from unittest.mock import AsyncMock, patch
 
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from free_claude_code.api import admin_routes
 from free_claude_code.config.admin.state import ConfigValueState
+from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from tests.api.support import create_test_app, runtime_for_app
 from tests.wire_payload import response_object
 
@@ -86,6 +88,24 @@ def test_local_probe_reports_the_requested_endpoint_and_elapsed_time(
         "latency_ms": pytest.approx(12.5),
         "error_type": None,
     }
+
+
+def test_catalog_local_provider_uses_its_configured_base_url(
+    monkeypatch: pytest.MonkeyPatch, local_probe: LocalProbe
+) -> None:
+    provider = replace(
+        PROVIDER_CATALOG["ollama"],
+        provider_id="another_local",
+        base_url_attr="lm_studio_base_url",
+    )
+    monkeypatch.setitem(PROVIDER_CATALOG, provider.provider_id, provider)
+    monkeypatch.setenv("LM_STUDIO_BASE_URL", "http://127.0.0.1:9123/custom")
+
+    _, requests = local_probe(lambda _: httpx.Response(200), provider.provider_id)
+
+    assert [str(request.url) for request in requests] == [
+        "http://127.0.0.1:9123/custom/api/tags"
+    ]
 
 
 @pytest.mark.parametrize("status_code", (200, 204, 302, 401, 404, 429, 503))

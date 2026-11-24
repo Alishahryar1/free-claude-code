@@ -131,6 +131,7 @@ class ProviderDescriptor:
     proxy_attr: str | None = None
     required_settings_attrs: tuple[str, ...] = ()
     native_messages_passthrough: bool = False
+    local_probe_path: str | None = None
 
     def configuration_attrs(self) -> tuple[str, ...]:
         """Return settings fields whose non-empty values configure this provider."""
@@ -799,6 +800,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         base_url_attr="lm_studio_base_url",
         proxy_attr="lmstudio_proxy",
         local=True,
+        local_probe_path="/models",
     ),
     "llamacpp": ProviderDescriptor(
         provider_id="llamacpp",
@@ -810,6 +812,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         base_url_attr="llamacpp_base_url",
         proxy_attr="llamacpp_proxy",
         local=True,
+        local_probe_path="/models",
     ),
     "ollama": ProviderDescriptor(
         provider_id="ollama",
@@ -820,6 +823,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         default_base_url=OLLAMA_DEFAULT_BASE,
         base_url_attr="ollama_base_url",
         local=True,
+        local_probe_path="/api/tags",
     ),
 }
 

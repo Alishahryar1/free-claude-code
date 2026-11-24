@@ -24,6 +24,7 @@ from free_claude_code.application.model_catalog import read_model_catalog
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
 from free_claude_code.config.admin.custom_providers import CustomProviderMutation
 from free_claude_code.config.admin.manifest import FIELD_BY_KEY
+from free_claude_code.config.admin.provider_manifest import settings_env_key
 from free_claude_code.config.errors import ConfigConflictError
 from free_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
@@ -65,11 +66,6 @@ _ADMIN_ASSET_FILENAMES = frozenset(
         ),
     }
 )
-LOCAL_PROVIDER_PATHS = {
-    "lmstudio": "/models",
-    "llamacpp": "/models",
-    "ollama": "/api/tags",
-}
 _LOCAL_PROVIDER_CHECK_FAILURE_MESSAGE = (
     "Could not connect. Verify the URL and that the local provider is running."
 )
@@ -170,16 +166,19 @@ async def local_provider_status(
     provider_id: str, request: Request, services: ApiServices = Depends(get_services)
 ):
     require_loopback_admin(request)
-    if provider_id not in LOCAL_PROVIDER_PATHS:
+    descriptor = PROVIDER_CATALOG.get(provider_id)
+    if (
+        descriptor is None
+        or not descriptor.local
+        or descriptor.local_probe_path is None
+        or descriptor.base_url_attr is None
+    ):
         raise HTTPException(status_code=404, detail="Local provider not found")
-    values = {
-        key: entry.value or ""
-        for key, entry in (await services.admin.admin_values()).items()
-    }
+    values = await services.admin.admin_values()
+    entry = values.get(settings_env_key(descriptor.base_url_attr))
+    base_url = entry.value if entry is not None else None
     return await _check_local_provider(
-        provider_id,
-        _local_provider_url(provider_id, values),
-        LOCAL_PROVIDER_PATHS[provider_id],
+        provider_id, base_url or "", descriptor.local_probe_path
     )
 
 
@@ -529,16 +528,6 @@ def _model_options(
 
 def _filtered_values(values: Mapping[str, JsonValue]) -> JsonObject:
     return {key: value for key, value in values.items() if key in FIELD_BY_KEY}
-
-
-def _local_provider_url(provider_id: str, values: dict[str, str]) -> str:
-    if provider_id == "lmstudio":
-        return values.get("LM_STUDIO_BASE_URL", "")
-    if provider_id == "llamacpp":
-        return values.get("LLAMACPP_BASE_URL", "")
-    if provider_id == "ollama":
-        return values.get("OLLAMA_BASE_URL", "")
-    return ""
 
 
 async def _check_local_provider(

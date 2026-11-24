@@ -408,7 +408,7 @@ def _base_url_field_specs() -> tuple[ConfigFieldSpec, ...]:
     for descriptor in PROVIDER_CATALOG.values():
         if descriptor.base_url_attr is None:
             continue
-        key = _settings_env_key(descriptor.base_url_attr)
+        key = settings_env_key(descriptor.base_url_attr)
         specs.append(
             _with_override(
                 ConfigFieldSpec(
@@ -473,7 +473,7 @@ def _proxy_field_specs() -> tuple[ConfigFieldSpec, ...]:
         specs.append(
             _with_override(
                 ConfigFieldSpec(
-                    key=_settings_env_key(descriptor.proxy_attr),
+                    key=settings_env_key(descriptor.proxy_attr),
                     label=f"{descriptor.display_name} Proxy",
                     description="Optional network proxy. Leave blank unless you use one",
                     section_id="providers",
@@ -500,7 +500,8 @@ def _with_override(spec: ConfigFieldSpec) -> ConfigFieldSpec:
     )
 
 
-def _settings_env_key(settings_attr: str) -> str:
+def settings_env_key(settings_attr: str) -> str:
+    """Return the environment key used by Admin for a Settings attribute."""
     model_field = Settings.model_fields[settings_attr]
     alias = model_field.validation_alias
     return str(alias) if alias is not None else settings_attr
