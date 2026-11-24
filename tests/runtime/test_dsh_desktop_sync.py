@@ -51,7 +51,7 @@ def route() -> JsonObject:
 
 async def settle(runtime: ApplicationRuntime):
     await finish_discovery(runtime.provider_manager)
-    task = runtime._integrations._dsh_update.task
+    task = runtime.integrations._dsh_update.task
     if task:
         await asyncio.wait_for(asyncio.shield(task), 5)
 
@@ -61,7 +61,7 @@ async def connected(runtime: ApplicationRuntime):
     install()
     await runtime.start()
     try:
-        await runtime.connect_dsh_desktop()
+        await runtime.integrations.connect_dsh_desktop()
         await settle(runtime)
         yield runtime
     finally:
@@ -82,11 +82,11 @@ async def test_late_catalog_updates_and_disconnect_remains_removed(
         "nvidia_nim/one",
         "nvidia_nim/two",
     }
-    await runtime.disconnect_dsh_desktop()
-    runtime._integrations.catalog_changed()
+    await runtime.integrations.disconnect_dsh_desktop()
+    runtime.integrations.catalog_changed()
     await settle(runtime)
     assert not desktop.has_provider(desktop.config_home())
-    assert not (await runtime.dsh_desktop_status())["connected"]
+    assert not (await runtime.integrations.dsh_desktop_status())["connected"]
 
 
 @pytest.mark.asyncio
@@ -95,15 +95,17 @@ async def test_disconnect_during_write_wait_cannot_be_reconnected(
 ) -> None:
     runtime = connected
     entered, release = pause_next_write(
-        monkeypatch, runtime._integrations._dsh_update.access
+        monkeypatch, runtime.integrations._dsh_update.access
     )
     try:
-        await runtime.refresh_dsh_desktop()
+        await runtime.integrations.refresh_dsh_desktop()
         await asyncio.wait_for(entered.wait(), 5)
-        assert (await asyncio.wait_for(runtime.dsh_desktop_status(), 1))["connected"]
-        assert not (await asyncio.wait_for(runtime.disconnect_dsh_desktop(), 1))[
+        assert (await asyncio.wait_for(runtime.integrations.dsh_desktop_status(), 1))[
             "connected"
         ]
+        assert not (
+            await asyncio.wait_for(runtime.integrations.disconnect_dsh_desktop(), 1)
+        )["connected"]
     finally:
         release.set()
     await settle(runtime)
@@ -120,8 +122,8 @@ async def test_status_and_disconnect_do_not_need_catalog(
         "catalog_snapshot",
         AsyncMock(side_effect=AssertionError("must not wait")),
     )
-    assert (await runtime.dsh_desktop_status())["connected"]
-    assert not (await runtime.disconnect_dsh_desktop())["connected"]
+    assert (await runtime.integrations.dsh_desktop_status())["connected"]
+    assert not (await runtime.integrations.disconnect_dsh_desktop())["connected"]
 
 
 @pytest.mark.asyncio
@@ -130,10 +132,10 @@ async def test_new_generation_replaces_old_url_and_credential(
 ) -> None:
     runtime = connected
     entered, release = pause_next_write(
-        monkeypatch, runtime._integrations._dsh_update.access
+        monkeypatch, runtime.integrations._dsh_update.access
     )
     try:
-        await runtime.refresh_dsh_desktop()
+        await runtime.integrations.refresh_dsh_desktop()
         await asyncio.wait_for(entered.wait(), 5)
         await runtime.provider_manager.replace(
             runtime.settings.model_copy(
@@ -150,7 +152,7 @@ async def test_new_generation_replaces_old_url_and_credential(
         (desktop.config_home() / ".credentials.yaml").read_text()
     )
     assert object_payload(credentials["refs"])[desktop.DSH_DESKTOP_API_KEY] == "rotated"
-    assert (await runtime.dsh_desktop_status())["connected"]
+    assert (await runtime.integrations.dsh_desktop_status())["connected"]
 
 
 @pytest.mark.asyncio
@@ -173,7 +175,7 @@ async def test_catalog_change_during_write_is_coalesced_without_loss(
 
     monkeypatch.setattr(desktop, "refresh_connected", held)
     try:
-        runtime._integrations.catalog_changed()
+        runtime.integrations.catalog_changed()
         await asyncio.wait_for(entered.wait(), 5)
         runtime.provider_manager.cache_model_infos(
             "nvidia_nim", (ProviderModelInfo("late"),)
@@ -209,18 +211,18 @@ async def test_first_configure_waiting_for_ownership_is_superseded_by_disconnect
     await runtime.start()
     await settle(runtime)
     entered, release = pause_next_write(
-        monkeypatch, runtime._integrations._dsh_update.access
+        monkeypatch, runtime.integrations._dsh_update.access
     )
-    task = asyncio.create_task(runtime.connect_dsh_desktop())
+    task = asyncio.create_task(runtime.integrations.connect_dsh_desktop())
     try:
         await asyncio.wait_for(entered.wait(), 5)
-        assert not (await asyncio.wait_for(runtime.disconnect_dsh_desktop(), 1))[
-            "connected"
-        ]
+        assert not (
+            await asyncio.wait_for(runtime.integrations.disconnect_dsh_desktop(), 1)
+        )["connected"]
         release.set()
         await asyncio.wait_for(task, 5)
         assert not desktop.has_provider(desktop.config_home())
-        assert not (await runtime.dsh_desktop_status())["connected"]
+        assert not (await runtime.integrations.dsh_desktop_status())["connected"]
     finally:
         release.set()
         await asyncio.gather(task, return_exceptions=True)

@@ -71,7 +71,7 @@ async def runtime(request: pytest.FixtureRequest):
 
 async def settle(runtime: ApplicationRuntime):
     await finish_discovery(runtime.provider_manager)
-    task = runtime._integrations._vscode_update.task
+    task = runtime.integrations._vscode_update.task
     if task:
         await asyncio.wait_for(asyncio.shield(task), 5)
 
@@ -80,7 +80,7 @@ async def settle(runtime: ApplicationRuntime):
 async def test_catalog_updates_connected_file_and_disconnect_stays_removed(
     runtime: ApplicationRuntime,
 ) -> None:
-    await runtime.connect_vscode_chat()
+    await runtime.integrations.connect_vscode_chat()
     await settle(runtime)
     path = vscode.config_path()
     runtime.provider_manager.cache_model_infos(
@@ -93,19 +93,19 @@ async def test_catalog_updates_connected_file_and_disconnect_stays_removed(
         "nvidia_nim/one",
         "nvidia_nim/two",
     }
-    assert (await runtime.vscode_chat_status())["connected"]
-    await runtime.disconnect_vscode_chat()
-    runtime._integrations.catalog_changed()
+    assert (await runtime.integrations.vscode_chat_status())["connected"]
+    await runtime.integrations.disconnect_vscode_chat()
+    runtime.integrations.catalog_changed()
     await settle(runtime)
     assert load_json_value(path.read_text()) == []
-    assert not (await runtime.vscode_chat_status())["connected"]
+    assert not (await runtime.integrations.vscode_chat_status())["connected"]
 
 
 @pytest.mark.asyncio
 async def test_update_arriving_during_write_is_not_lost(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    await runtime.connect_vscode_chat()
+    await runtime.integrations.connect_vscode_chat()
     await settle(runtime)
     entered, release = asyncio.Event(), threading.Event()
     loop = asyncio.get_running_loop()
@@ -131,7 +131,7 @@ async def test_update_arriving_during_write_is_not_lost(
 
     monkeypatch.setattr(vscode, "configure", held)
     try:
-        runtime._integrations.catalog_changed()
+        runtime.integrations.catalog_changed()
         await asyncio.wait_for(entered.wait(), 5)
         runtime.provider_manager.cache_model_infos(
             "nvidia_nim", (ProviderModelInfo("late"),)
@@ -157,18 +157,18 @@ async def test_bad_file_does_not_fail_catalog_and_disconnect_needs_no_catalog(
     path = vscode.config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{broken")
-    await runtime.refresh_vscode_chat()
+    await runtime.integrations.refresh_vscode_chat()
     await settle(runtime)
-    assert runtime._integrations._vscode_update.state == "failed"
+    assert runtime.integrations._vscode_update.state == "failed"
     assert runtime.provider_manager.catalog_status()["catalog_file"] == "ready"
     path.unlink()
-    await runtime.connect_vscode_chat()
+    await runtime.integrations.connect_vscode_chat()
     monkeypatch.setattr(
         runtime.provider_manager,
         "catalog_snapshot",
         AsyncMock(side_effect=AssertionError("Must not wait")),
     )
-    assert (await runtime.disconnect_vscode_chat())["connected"] is False
+    assert (await runtime.integrations.disconnect_vscode_chat())["connected"] is False
 
 
 @pytest.mark.asyncio
@@ -192,25 +192,25 @@ async def test_startup_refreshes_owned_group_and_only_writes_once(
     )
     assert json.loads(path.read_text())[0]["models"]
     before = path.stat().st_mtime_ns
-    await runtime.refresh_vscode_chat()
+    await runtime.integrations.refresh_vscode_chat()
     await settle(runtime)
     assert path.stat().st_mtime_ns == before
-    assert not runtime._integrations._vscode_update.changed
+    assert not runtime.integrations._vscode_update.changed
 
 
 @pytest.mark.asyncio
 async def test_disconnect_while_refresh_waits_for_ownership_never_reconnects(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    await runtime.connect_vscode_chat()
+    await runtime.integrations.connect_vscode_chat()
     await settle(runtime)
     entered, release = pause_next_write(
-        monkeypatch, runtime._integrations._vscode_update.access
+        monkeypatch, runtime.integrations._vscode_update.access
     )
     try:
-        await runtime.refresh_vscode_chat()
+        await runtime.integrations.refresh_vscode_chat()
         await asyncio.wait_for(entered.wait(), 5)
-        await asyncio.wait_for(runtime.disconnect_vscode_chat(), 5)
+        await asyncio.wait_for(runtime.integrations.disconnect_vscode_chat(), 5)
     finally:
         release.set()
     await settle(runtime)
@@ -221,13 +221,13 @@ async def test_disconnect_while_refresh_waits_for_ownership_never_reconnects(
 async def test_replaced_generation_cannot_publish_old_url_or_token(
     runtime: ApplicationRuntime, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    await runtime.connect_vscode_chat()
+    await runtime.integrations.connect_vscode_chat()
     await settle(runtime)
     entered, release = pause_next_write(
-        monkeypatch, runtime._integrations._vscode_update.access
+        monkeypatch, runtime.integrations._vscode_update.access
     )
     try:
-        await runtime.refresh_vscode_chat()
+        await runtime.integrations.refresh_vscode_chat()
         await asyncio.wait_for(entered.wait(), 5)
         await runtime.provider_manager.replace(
             runtime.settings.model_copy(
@@ -254,7 +254,7 @@ async def test_replaced_generation_cannot_publish_old_url_or_token(
 async def test_codex_publication_failure_does_not_block_vscode(
     runtime: ApplicationRuntime,
 ) -> None:
-    await runtime.connect_vscode_chat()
+    await runtime.integrations.connect_vscode_chat()
     await settle(runtime)
     publisher = MagicMock()
     publisher.publish.side_effect = PermissionError("denied")
@@ -265,7 +265,7 @@ async def test_codex_publication_failure_does_not_block_vscode(
     await finish_publication(runtime.provider_manager)
     await settle(runtime)
     assert runtime.provider_manager.catalog_status()["catalog_file"] == "failed"
-    assert runtime._integrations._vscode_update.state == "ready"
+    assert runtime.integrations._vscode_update.state == "ready"
     assert "nvidia_nim/new" in [
         m["id"]
         for m in object_array(

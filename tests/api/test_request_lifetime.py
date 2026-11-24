@@ -3,13 +3,13 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from dataclasses import replace
 from typing import cast
 
 import pytest
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from free_claude_code.api.app import create_app
-from free_claude_code.api.ports import AdminRuntimePort, ApiServices
+from free_claude_code.api.dependencies import app_services
 from free_claude_code.api.request_lifetime import (
     ClientRequestLifetimeMiddleware,
 )
@@ -18,7 +18,6 @@ from free_claude_code.application.ports import (
     ProviderPort,
     RequestRuntimeLease,
     RequestRuntimePort,
-    TaskController,
 )
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
@@ -30,7 +29,7 @@ from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
 from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
-from tests.web_tools_support import StubWebToolsClient
+from tests.api.support import create_test_app
 
 
 def _http_scope(
@@ -579,13 +578,9 @@ async def _disconnect_real_app(
     settings = Settings()
     lease = _Lease(settings, cast(ProviderPort, provider))
     requests = _Requests(lease)
-    app = create_app(
-        ApiServices(
-            requests=cast(RequestRuntimePort, requests),
-            admin=cast(AdminRuntimePort, object()),
-            tasks=cast(TaskController, object()),
-            web_tools=StubWebToolsClient(),
-        )
+    app = create_test_app(settings)
+    app.state.services = replace(
+        app_services(app), requests=cast(RequestRuntimePort, requests)
     )
     body = json.dumps(payload).encode()
     route, _, query = path.partition("?")

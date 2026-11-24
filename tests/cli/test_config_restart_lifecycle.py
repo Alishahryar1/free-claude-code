@@ -83,6 +83,7 @@ def test_harness_waits_through_owner_apply_restart(
                 ApiServices(
                     requests=manager,
                     admin=runtime,
+                    integrations=runtime.integrations,
                     tasks=runtime,
                     web_tools=StubWebToolsClient(),
                     code=code,
@@ -274,6 +275,7 @@ def test_supervised_http_apply_finishes_and_reconnects(
                 ApiServices(
                     requests=manager,
                     admin=runtime,
+                    integrations=runtime.integrations,
                     tasks=runtime,
                     web_tools=StubWebToolsClient(),
                 )

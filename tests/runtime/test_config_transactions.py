@@ -49,7 +49,7 @@ async def test_integration_write_finishes_before_configuration_publication(
         "free_claude_code.runtime.application.check_credentials",
         AsyncMock(return_value=()),
     )
-    writer = asyncio.create_task(runtime.connect_claude_vscode())
+    writer = asyncio.create_task(runtime.integrations.connect_claude_vscode())
     apply = None
     try:
         assert await asyncio.to_thread(entered.wait, 5)
@@ -98,7 +98,9 @@ async def test_credential_validation_does_not_block_integrations(
     apply = asyncio.create_task(runtime.apply_admin_config({}))
     try:
         await asyncio.wait_for(entered.wait(), 1)
-        assert (await asyncio.wait_for(runtime.connect_claude_vscode(), 1))["connected"]
+        assert (
+            await asyncio.wait_for(runtime.integrations.connect_claude_vscode(), 1)
+        )["connected"]
         assert not apply.done()
         configuration.commit.assert_not_awaited()
     finally:

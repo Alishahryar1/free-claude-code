@@ -39,7 +39,7 @@ async def test_close_cancels_both_feature_owners_before_acquiring_config_lock() 
         async with runtime._config_lock:
             await runtime.start()
             await asyncio.wait_for(import_started.wait(), 5)
-            refresh = runtime._integrations._claude_update.task
+            refresh = runtime.integrations._claude_update.task
             assert refresh is not None and not refresh.done()
             messaging_tasks = tuple(runtime._messaging._startup_tasks)
             assert len(messaging_tasks) == 2
@@ -68,10 +68,10 @@ async def test_draining_runtime_rejects_new_feature_work() -> None:
     )
     try:
         runtime.begin_shutdown()
-        runtime._integrations.catalog_changed()
-        assert runtime._integrations._vscode_update.task is None
+        runtime.integrations.catalog_changed()
+        assert runtime.integrations._vscode_update.task is None
         with pytest.raises(ApplicationUnavailableError):
-            await runtime.refresh_claude_vscode()
+            await runtime.integrations.refresh_claude_vscode()
         with pytest.raises(ApplicationUnavailableError):
             runtime._messaging.start()
         assert runtime._messaging._startup_tasks == []

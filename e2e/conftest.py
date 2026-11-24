@@ -342,6 +342,7 @@ def admin_base_url(
             ApiServices(
                 requests=manager,
                 admin=runtime,
+                integrations=runtime.integrations,
                 tasks=runtime,
                 web_tools=StubWebToolsClient(),
                 code=code_control.service,

@@ -33,8 +33,8 @@ def test_passive_status_and_independent_completion(
     monkeypatch.setattr(
         runtime.provider_manager, "wait_for_model_catalog", mock_wait_for_model_catalog
     )
-    runtime._integrations._claude_update.state = "failed"
-    runtime._integrations._claude_update.message = "VS Code unavailable"
+    runtime.integrations._claude_update.state = "failed"
+    runtime.integrations._claude_update.message = "VS Code unavailable"
     result = client.get(ROOT)
     assert result.status_code == 200
     assert result.headers["cache-control"] == "no-store"
@@ -56,8 +56,8 @@ def test_passive_status_and_independent_completion(
         "changed": False,
     }
     assert path.stat().st_mtime_ns == before
-    assert runtime._integrations._claude_update.state == "failed"
-    assert runtime._integrations._claude_update.message == "VS Code unavailable"
+    assert runtime.integrations._claude_update.state == "failed"
+    assert runtime.integrations._claude_update.message == "VS Code unavailable"
     mock_wait_for_model_catalog.assert_not_awaited()
 
 

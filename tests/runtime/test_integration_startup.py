@@ -119,9 +119,9 @@ async def test_jetbrains_startup_refresh_and_failed_discovery_allow_disconnect(
     try:
         await runtime.start()
         await asyncio.wait_for(
-            require_present(runtime._integrations._jetbrains_update.task), 5
+            require_present(runtime.integrations._jetbrains_update.task), 5
         )
-        status = await runtime.jetbrains_acp_status()
+        status = await runtime.integrations.jetbrains_acp_status()
         assert status["connected"] is True
         assert object_payload(status["update"])["changed"] is True
         entry = object_payload(
@@ -136,14 +136,16 @@ async def test_jetbrains_startup_refresh_and_failed_discovery_allow_disconnect(
             == "http://127.0.0.1:8000"
         )
         jb.registry_path().unlink()
-        await runtime.refresh_jetbrains_acp()
+        await runtime.integrations.refresh_jetbrains_acp()
         await asyncio.wait_for(
-            require_present(runtime._integrations._jetbrains_update.task), 5
+            require_present(runtime.integrations._jetbrains_update.task), 5
         )
-        status = await runtime.jetbrains_acp_status()
+        status = await runtime.integrations.jetbrains_acp_status()
         assert object_payload(status["update"])["state"] == "failed"
         assert status["connected"] is True
-        assert (await runtime.disconnect_jetbrains_acp())["connected"] is False
+        assert (await runtime.integrations.disconnect_jetbrains_acp())[
+            "connected"
+        ] is False
     finally:
         await runtime.close()
 
@@ -151,8 +153,8 @@ async def test_jetbrains_startup_refresh_and_failed_discovery_allow_disconnect(
 async def finish(runtime: ApplicationRuntime):
     await asyncio.wait_for(
         asyncio.gather(
-            require_present(runtime._integrations._claude_update.task),
-            require_present(runtime._integrations._codex_update.task),
+            require_present(runtime.integrations._claude_update.task),
+            require_present(runtime.integrations._codex_update.task),
         ),
         5,
     )
@@ -167,8 +169,8 @@ async def test_startup_refreshes_old_connections_and_status_is_read_only(
         await runtime.start()
         await finish(runtime)
         for status in (
-            await runtime.claude_vscode_status(),
-            await runtime.codex_integration_status(),
+            await runtime.integrations.claude_vscode_status(),
+            await runtime.integrations.codex_integration_status(),
         ):
             assert status["connected"] is True
             assert status["update"] == {
@@ -177,18 +179,20 @@ async def test_startup_refreshes_old_connections_and_status_is_read_only(
                 "message": None,
             }
         before = [p.stat().st_mtime_ns for p in (claude, codex)]
-        await runtime.claude_vscode_status()
-        await runtime.codex_integration_status()
+        await runtime.integrations.claude_vscode_status()
+        await runtime.integrations.codex_integration_status()
         assert [p.stat().st_mtime_ns for p in (claude, codex)] == before
         assert not claude_onboarding.state_path().exists()
-        await runtime.disconnect_claude_vscode()
+        await runtime.integrations.disconnect_claude_vscode()
         assert (
-            object_payload((await runtime.claude_vscode_status())["update"])["changed"]
+            object_payload(
+                (await runtime.integrations.claude_vscode_status())["update"]
+            )["changed"]
             is False
         )
-        await runtime.refresh_claude_vscode()
-        await require_present(runtime._integrations._claude_update.task)
-        assert (await runtime.claude_vscode_status())["connected"] is False
+        await runtime.integrations.refresh_claude_vscode()
+        await require_present(runtime.integrations._claude_update.task)
+        assert (await runtime.integrations.claude_vscode_status())["connected"] is False
     finally:
         await runtime.close()
 
@@ -204,7 +208,7 @@ async def test_startup_preserves_global_onboarding(
     try:
         await runtime.start()
         await finish(runtime)
-        assert (await runtime.claude_vscode_status())["connected"] is True
+        assert (await runtime.integrations.claude_vscode_status())["connected"] is True
         assert state.read_text() == source
     finally:
         await runtime.close()
@@ -227,14 +231,18 @@ async def test_codex_wait_does_not_delay_http_or_claude(
     monkeypatch.setattr(runtime.provider_manager, "wait_for_catalog_file", held)
     app = create_app(
         ApiServices(
-            runtime.provider_manager, runtime, runtime, web_tools=StubWebToolsClient()
+            runtime.provider_manager,
+            runtime,
+            runtime,
+            web_tools=StubWebToolsClient(),
+            integrations=runtime.integrations,
         )
     )
     try:
         await asyncio.wait_for(runtime.start(), 1)
         await asyncio.wait_for(entered.wait(), 5)
         await asyncio.wait_for(
-            require_present(runtime._integrations._claude_update.task), 5
+            require_present(runtime.integrations._claude_update.task), 5
         )
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
@@ -243,7 +251,9 @@ async def test_codex_wait_does_not_delay_http_or_claude(
             status = response_object(await client.get("/admin/api/integrations/codex"))
             assert status["connected"] is None
             assert object_payload(status["update"])["state"] == "starting"
-            assert (await runtime.claude_vscode_status())["connected"] is True
+            assert (await runtime.integrations.claude_vscode_status())[
+                "connected"
+            ] is True
             assert (
                 object_payload(
                     object_payload(
@@ -258,7 +268,9 @@ async def test_codex_wait_does_not_delay_http_or_claude(
             )
         release.set()
         await finish(runtime)
-        assert (await runtime.codex_integration_status())["connected"] is True
+        assert (await runtime.integrations.codex_integration_status())[
+            "connected"
+        ] is True
     finally:
         release.set()
         await runtime.close()
@@ -274,7 +286,9 @@ async def test_unrecognized_codex_never_waits_for_catalog(
         await runtime.start()
         await finish(runtime)
         wait.assert_not_awaited()
-        assert (await runtime.codex_integration_status())["connected"] is False
+        assert (await runtime.integrations.codex_integration_status())[
+            "connected"
+        ] is False
         assert not codex_integration.config_path().exists()
         assert not claude_onboarding.state_path().exists()
     finally:
@@ -290,24 +304,28 @@ async def test_update_failure_is_isolated_and_retry_finishes(
     try:
         await runtime.start()
         await finish(runtime)
-        status = await runtime.claude_vscode_status()
+        status = await runtime.integrations.claude_vscode_status()
         assert object_payload(status["update"])["state"] == "failed"
         assert "secret" not in string_payload(
             object_payload(status["update"])["message"]
         )
-        assert (await runtime.codex_integration_status())["connected"] is True
+        assert (await runtime.integrations.codex_integration_status())[
+            "connected"
+        ] is True
         claude.write_text(json.dumps(OLD_CLAUDE))
         assert (
-            object_payload((await runtime.claude_vscode_status())["update"])["state"]
+            object_payload(
+                (await runtime.integrations.claude_vscode_status())["update"]
+            )["state"]
             == "failed"
         )
         assert "CLAUDE_CODE_DISABLE_ADVISOR_TOOL" not in claude.read_text()
-        await runtime.refresh_claude_vscode()
-        task = runtime._integrations._claude_update.task
-        await runtime.refresh_claude_vscode()
-        assert runtime._integrations._claude_update.task is task
+        await runtime.integrations.refresh_claude_vscode()
+        task = runtime.integrations._claude_update.task
+        await runtime.integrations.refresh_claude_vscode()
+        assert runtime.integrations._claude_update.task is task
         await asyncio.wait_for(require_present(task), 5)
-        assert (await runtime.claude_vscode_status())["connected"] is True
+        assert (await runtime.integrations.claude_vscode_status())["connected"] is True
     finally:
         await runtime.close()
 
@@ -386,7 +404,9 @@ async def test_codex_refresh_rechecks_catalog_generation_before_writing(
         await runtime.start()
         await finish(runtime)
         assert calls == 2
-        assert (await runtime.codex_integration_status())["connected"] is True
+        assert (await runtime.integrations.codex_integration_status())[
+            "connected"
+        ] is True
     finally:
         await runtime.close()
 
@@ -398,7 +418,11 @@ async def test_refresh_endpoint_is_local_only_and_does_not_connect(
 ) -> None:
     app = create_app(
         ApiServices(
-            runtime.provider_manager, runtime, runtime, web_tools=StubWebToolsClient()
+            runtime.provider_manager,
+            runtime,
+            runtime,
+            web_tools=StubWebToolsClient(),
+            integrations=runtime.integrations,
         )
     )
     try:
@@ -445,21 +469,23 @@ async def test_desktop_startup_rotates_selected_profile_and_disconnect_stays_off
     profile.write_text(json.dumps(config))
     try:
         await runtime.start()
-        await require_present(runtime._integrations._desktop_update.task)
+        await require_present(runtime.integrations._desktop_update.task)
         refreshed = decode_object(profile.read_text())
         assert refreshed["inferenceModels"] == models
         assert refreshed["inferenceGatewayApiKey"] == TOKEN
         assert refreshed["inferenceGatewayBaseUrl"] == "http://127.0.0.1:8000"
-        result = await runtime.claude_desktop_status()
+        result = await runtime.integrations.claude_desktop_status()
         assert result["connected"] is True
         assert object_payload(result["update"])["changed"] is True
         before = {p: p.stat().st_mtime_ns for p in root.rglob("*.json")}
-        await runtime.claude_desktop_status()
+        await runtime.integrations.claude_desktop_status()
         assert before == {p: p.stat().st_mtime_ns for p in root.rglob("*.json")}
-        await runtime.disconnect_claude_desktop()
-        await runtime.refresh_claude_desktop()
-        await require_present(runtime._integrations._desktop_update.task)
-        assert (await runtime.claude_desktop_status())["connected"] is False
+        await runtime.integrations.disconnect_claude_desktop()
+        await runtime.integrations.refresh_claude_desktop()
+        await require_present(runtime.integrations._desktop_update.task)
+        assert (await runtime.integrations.claude_desktop_status())[
+            "connected"
+        ] is False
     finally:
         await runtime.close()
 
@@ -474,13 +500,13 @@ async def test_desktop_failure_does_not_block_other_startup(
     monkeypatch.setattr(desktop, "refresh_connected", fail)
     try:
         await runtime.start()
-        await require_present(runtime._integrations._desktop_update.task)
+        await require_present(runtime.integrations._desktop_update.task)
         await finish(runtime)
-        assert runtime._integrations._desktop_update.state == "failed"
+        assert runtime.integrations._desktop_update.state == "failed"
         assert "private-invalid-file" not in require_present(
-            runtime._integrations._desktop_update.message
+            runtime.integrations._desktop_update.message
         )
-        assert runtime._integrations._claude_update.state == "ready"
-        assert runtime._integrations._codex_update.state == "ready"
+        assert runtime.integrations._claude_update.state == "ready"
+        assert runtime.integrations._codex_update.state == "ready"
     finally:
         await runtime.close()
