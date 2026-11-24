@@ -174,13 +174,16 @@ async def test_documented_probe_acceptance_and_rejection(
         requests.append(request)
         assert request.method == "GET"
         assert str(request.url) == url
-        header = "x-goog-api-key" if provider_id == "gemini" else "Authorization"
-        expected = (
-            "secret-not-a-known-format"
-            if provider_id == "gemini"
-            else "Bearer secret-not-a-known-format"
-        )
-        assert request.headers[header] == expected
+        assert request.headers["Accept"] == "application/json"
+        if provider_id == "gemini":
+            assert request.headers["x-goog-api-key"] == "secret-not-a-known-format"
+            assert "Authorization" not in request.headers
+        else:
+            assert (
+                request.headers["Authorization"] == "Bearer secret-not-a-known-format"
+            )
+        if provider_id == "novita":
+            assert request.headers["Content-Type"] == "application/json"
         assert "secret-not-a-known-format" not in str(request.url)
         assert not request.content
         return httpx.Response(status, json=body)
@@ -211,6 +214,44 @@ async def test_documented_probe_acceptance_and_rejection(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_id", "status", "body", "expected"),
+    [
+        (
+            "gemini",
+            400,
+            {"error": {"message": "Bad request"}},
+            validation.CredentialStatus.UNVERIFIED,
+        ),
+        (
+            "gemini",
+            403,
+            {"error": {"details": [{"reason": "API_KEY_INVALID"}]}},
+            validation.CredentialStatus.UNVERIFIED,
+        ),
+        (
+            "siliconflow",
+            401,
+            {"error": "Invalid token"},
+            validation.CredentialStatus.REJECTED,
+        ),
+    ],
+)
+async def test_rejection_requires_provider_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_id: str,
+    status: int,
+    body: JsonValue,
+    expected: validation.CredentialStatus,
+) -> None:
+    _mock_http(monkeypatch, lambda _: httpx.Response(status, json=body))
+    key = PROVIDER_CATALOG[provider_id].credential_env
+    assert key is not None
+    result = await _check_credentials(_settings(provider_id), (key,))
+    assert result[0].status == expected
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [400, 402, 403, 404, 429, 500, 503])
 @pytest.mark.parametrize("provider_id", ["groq", "xkiro", "anthropic"])
 async def test_ambiguous_errors_warn_without_retry(
@@ -232,6 +273,8 @@ async def test_ambiguous_errors_warn_without_retry(
     assert result[0].status == validation.CredentialStatus.UNVERIFIED
     assert len(requests) == 1
     assert "secret-not-a-known-format" not in caplog.text
+    if provider_id == "anthropic":
+        assert "Workspace ID" in result[0].message
 
 
 @pytest.mark.asyncio
@@ -255,6 +298,7 @@ async def test_non_api_responses_do_not_verify_or_reject(
     assert key is not None
     result = await _check_credentials(_settings(provider_id), (key,))
     assert result[0].status == validation.CredentialStatus.UNVERIFIED
+    assert "unexpected provider response" in result[0].message
 
 
 @pytest.mark.asyncio
