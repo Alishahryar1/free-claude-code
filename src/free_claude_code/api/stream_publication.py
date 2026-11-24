@@ -1,0 +1,356 @@
+"""Project response frames and track their publication as one packet."""
+
+import re
+from collections.abc import Iterator
+from copy import deepcopy
+from itertools import chain
+from typing import Literal
+
+import simplejson
+
+from free_claude_code.core.anthropic.streaming.decoder import AnthropicSSEDecoder
+from free_claude_code.core.continuation_stream import ContinuationStream
+from free_claude_code.core.delivered_response import DeliveredResponse
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.gemini.response import gemini_finished, gemini_parts
+from free_claude_code.core.json_types import (
+    DecimalJsonObject,
+    DecimalJsonValue,
+    json_object,
+    json_objects,
+    optional_string,
+)
+from free_claude_code.core.replay_finalization import finalize_replay
+from free_claude_code.core.stream_output import StreamOutput, call_references
+from free_claude_code.core.stream_recovery import DeliveredPrefix
+
+from .classifier_projection import ClassifierProjection
+from .generation_paths import WireApi
+from .stream_frames import frame_data, replace_frame_data
+
+
+class PacketPublication:
+    """State staged and committed together for one public response."""
+
+    def __init__(self, wire_api: WireApi, *, hide_reasoning: bool = False) -> None:
+        self._wire_api = wire_api
+        self._hide_reasoning = hide_reasoning
+        self._decoder = AnthropicSSEDecoder()
+        self._projection = ClassifierProjection() if hide_reasoning else None
+        self._delivered = DeliveredResponse(wire_api)
+        self._continuation = ContinuationStream(self._delivered)
+        self._published_starts: set[str] = set()
+        self._seen_starts: set[str] = set()
+        self._replacement = False
+        self._public_id: str | None = None
+        self._created_at: DecimalJsonValue = None
+        self._sequence = -1
+        self._pending_starts: list[str] = []
+        self._replay_carriers: dict[str, str] = {}
+        self.start_frame = ""
+        self._pending_call_proofs: set[tuple[object, ...]] = set()
+
+    def snapshot(self) -> DeliveredPrefix:
+        return self._delivered.snapshot()
+
+    def discard_held_starts(self) -> None:
+        self._pending_starts.clear()
+
+    def apply(
+        self,
+        packet: StreamOutput,
+        *,
+        synthetic: bool,
+        content_released: bool,
+        transition_pending: bool,
+    ) -> tuple[str | None, bool]:
+        """Return the serialized packet and whether it releases content."""
+        released = False
+        self._pending_call_proofs.update(
+            self._continuation.map_call_reference(call).identity
+            for call in packet.completed_calls
+        )
+        published = []
+        for chunk in packet.frames:
+            for raw in self._decoder.feed_frames(chunk):
+                for frame in (raw,) if synthetic else self._process(raw):
+                    frame = self._finalize_frame(
+                        frame, transition_pending=transition_pending
+                    )
+                    value, frame_released = self._publish(
+                        frame,
+                        synthetic=synthetic,
+                        content_released=content_released or released,
+                    )
+                    released = released or frame_released
+                    if value is not None:
+                        published.append(value)
+        # Replay removal can hold a completed call until a later text packet.
+        # Retain only its proof identity and consume it at actual publication.
+        calls = tuple(
+            call
+            for call in call_references(published)
+            if call.identity in self._pending_call_proofs
+        )
+        self._delivered.complete_calls(calls)
+        self._pending_call_proofs.difference_update(call.identity for call in calls)
+        return "".join(published) or None, released
+
+    def _finalize_frame(self, frame: str, *, transition_pending: bool) -> str:
+        payload = frame_data(frame)
+        if payload is None:
+            return frame
+        if finalize_replay(payload, self._delivered.snapshot, self._replay_carriers):
+            if self._continuation.active and not self._continuation.made_progress:
+                raise ExecutionFailure(
+                    kind=FailureKind.UPSTREAM,
+                    status_code=502,
+                    message="The provider continuation completed without adding output.",
+                    retryable=False,
+                )
+            frame = replace_frame_data(frame, payload)
+        kind = payload.get("type")
+        if kind == "response.failed":
+            response = payload.get("response")
+            if not isinstance(response, dict):
+                return frame
+            # Failure snapshots may be based on the provider's empty start frame.
+            # Use only retained public evidence, independently of a failed mapper.
+            if self._delivered.retention_exhausted:
+                output: list[DecimalJsonObject] = []
+                response["output"] = output
+                response["usage"] = None
+                error = response.get("error")
+                error = error if isinstance(error, dict) else {}
+                message = error.get("message") or "Provider response failed."
+                response["error"] = {
+                    **error,
+                    "message": f"{message}\n\nThe partial answer was already streamed. "
+                    "A complete final snapshot is unavailable.",
+                }
+            elif self._continuation.active or transition_pending:
+                # A timeout can precede the first frame that activates recovery.
+                response["output"] = [
+                    deepcopy(item) for _, item in sorted(self._delivered.items.items())
+                ]
+                response["usage"] = self._delivered.usage(response["output"])
+            else:
+                return frame
+        elif not self._continuation.active or kind in {"error", "response.error"}:
+            return frame
+        else:
+            payload = self._continuation.finalize(payload)
+        return replace_frame_data(frame, payload)
+
+    def reset_attempt(
+        self,
+        transition: Literal["continue", "handoff"] | None,
+        *,
+        content_released: bool,
+    ) -> Iterator[str]:
+        self._decoder = AnthropicSSEDecoder()
+        self._projection = ClassifierProjection() if self._hide_reasoning else None
+        self._seen_starts.clear()
+        self._pending_starts.clear()
+        self._pending_call_proofs.clear()
+        if self._wire_api == "chat" and not content_released:
+            self._public_id = None
+            self._created_at = None
+        if transition is not None:
+            self._continuation.begin(handoff=transition == "handoff")
+        elif self._continuation.active:
+            self._continuation.restart_attempt()
+        self._replacement = (
+            bool(self._published_starts) and not self._continuation.active
+        )
+        return map(self._format, self._continuation.boundary())
+
+    def handoff_frames(self) -> Iterator[str]:
+        if not self._continuation.handoff:
+            return iter(())
+        frames = map(self._format, self._delivered.handoff_events())
+        if self._wire_api == "chat":
+            return chain(frames, ("data: [DONE]\n\n",))
+        return frames
+
+    def _process(self, frame: str) -> Iterator[str]:
+        if self._projection is not None:
+            projected = self._projection.feed(frame)
+            if projected is None:
+                return
+            frame = projected
+        yield from self._prepare(frame)
+
+    def _prepare(self, frame: str) -> Iterator[str]:
+        if not self._continuation.active:
+            yield frame
+            return
+        payload = frame_data(frame)
+        if payload is None:
+            yield frame
+            return
+        for item in self._continuation.prepare(payload):
+            yield (
+                replace_frame_data(frame, item)
+                if item.get("type") == payload.get("type")
+                else self._format(item)
+            )
+
+    @staticmethod
+    def _format(payload: DecimalJsonObject) -> str:
+        if "type" not in payload:
+            return f"data: {simplejson.dumps(payload, use_decimal=True)}\n\n"
+        return f"event: {payload['type']}\ndata: {simplejson.dumps(payload, use_decimal=True)}\n\n"
+
+    def _release_content(self, frame: str, *, synthetic: bool) -> str:
+        for start in self._pending_starts:
+            self._record(start, synthetic=synthetic)
+        self._record(frame, synthetic=synthetic)
+        if not self._pending_starts:
+            return frame
+        self.start_frame = self._pending_starts[0]
+        self._published_starts.add("message_start")
+        prefix = "".join(self._pending_starts)
+        self._pending_starts.clear()
+        return prefix + frame
+
+    def _record(self, frame: str, *, synthetic: bool) -> None:
+        if self._wire_api == "chat" and frame.strip() == "data: [DONE]":
+            return
+        payload = frame_data(frame)
+        if payload is not None:
+            self._delivered.observe(payload, count_progress=not synthetic)
+        elif any(line.startswith("data:") for line in frame.splitlines()):
+            self._delivered.unsafe_reason = "unknown_event"
+
+    def _publish(
+        self, frame: str, *, synthetic: bool, content_released: bool
+    ) -> tuple[str | None, bool]:
+        """Keep replacement and failure envelopes in the public response lifecycle."""
+        payload = frame_data(frame)
+        if payload is None:
+            if self._wire_api == "chat" and frame.strip() == "data: [DONE]":
+                return self._release_content(frame, synthetic=synthetic), True
+            if any(
+                line.strip() and not line.startswith(":")
+                for line in re.split(r"\r\n|\r|\n", frame)
+            ):
+                return self._release_content(frame, synthetic=synthetic), True
+            return frame, False
+
+        raw_kind = payload.get("type")
+        if self._wire_api == "chat":
+            if self._public_id is None and isinstance(payload.get("id"), str):
+                self._public_id = payload["id"]
+                self._created_at = payload.get("created")
+            elif self._public_id is not None and "id" in payload:
+                payload["id"] = self._public_id
+                if self._created_at is not None:
+                    payload["created"] = self._created_at
+                frame = replace_frame_data(frame, payload)
+            if "error" in payload:
+                self._pending_starts.clear()
+            elif self._metadata("", payload) and not content_released:
+                self._pending_starts.append(frame)
+                return None, False
+        if self._wire_api == "gemini":
+            if self._public_id is None and isinstance(payload.get("responseId"), str):
+                self._public_id = payload["responseId"]
+                self.start_frame = frame
+            elif self._public_id is not None and "responseId" in payload:
+                payload["responseId"] = self._public_id
+                frame = replace_frame_data(frame, payload)
+        kind = raw_kind if isinstance(raw_kind, str) else ""
+        metadata = self._metadata(kind, payload)
+        if self._wire_api == "messages":
+            if kind == "message_start" and metadata and not content_released:
+                self._pending_starts.append(frame)
+                return None, False
+            if kind == "error":
+                self._pending_starts.clear()
+        start = kind in {"message_start", "response.created", "response.in_progress"}
+        if start and metadata:
+            if kind not in self._seen_starts:
+                self._seen_starts.add(kind)
+                if self._replacement and kind in self._published_starts:
+                    return None, False
+            self._published_starts.add(kind)
+            if not self.start_frame:
+                self.start_frame = frame
+                value = payload.get(
+                    "message" if self._wire_api == "messages" else "response"
+                )
+                if isinstance(value, dict):
+                    self._public_id = optional_string(value.get("id"))
+                    self._created_at = value.get("created_at")
+
+        changed = False
+        failure = kind == "response.failed"
+        if (self._replacement or failure) and self._wire_api == "responses":
+            response = payload.get("response")
+            if isinstance(response, dict):
+                if (
+                    self._public_id is not None
+                    and response.get("id") != self._public_id
+                ):
+                    response["id"] = self._public_id
+                    changed = True
+                if (
+                    self._created_at is not None
+                    and response.get("created_at") != self._created_at
+                ):
+                    response["created_at"] = self._created_at
+                    changed = True
+            if (
+                "response_id" in payload
+                and self._public_id is not None
+                and payload["response_id"] != self._public_id
+            ):
+                payload["response_id"] = self._public_id
+                changed = True
+        if self._wire_api == "responses":
+            self._sequence += 1
+            payload["sequence_number"] = self._sequence
+            changed = True
+        frame = replace_frame_data(frame, payload) if changed else frame
+        if metadata:
+            self._record(frame, synthetic=synthetic)
+            return frame, False
+        return self._release_content(frame, synthetic=synthetic), True
+
+    def _metadata(self, kind: str, payload: DecimalJsonObject) -> bool:
+        if self._wire_api == "chat":
+            return "error" not in payload and all(
+                choice.get("finish_reason") is None
+                and all(
+                    key == "role" or value in (None, "", [], {})
+                    for key, value in json_object(choice.get("delta") or {}).items()
+                )
+                for choice in json_objects(payload.get("choices", []))
+            )
+        if self._wire_api == "gemini":
+            return (
+                not gemini_parts(payload)
+                and not gemini_finished(payload)
+                and "error" not in payload
+            )
+        if kind == "ping":
+            return True
+        if self._wire_api == "messages" and kind == "message_start":
+            message = payload.get("message")
+            return (
+                isinstance(message, dict)
+                and message.get("content", []) == []
+                and message.get("stop_reason") is None
+            )
+        if self._wire_api == "responses" and kind in {
+            "response.created",
+            "response.in_progress",
+        }:
+            response = payload.get("response")
+            return (
+                isinstance(response, dict)
+                and response.get("output", []) == []
+                and response.get("status") in (None, "queued", "in_progress")
+            )
+        return False
