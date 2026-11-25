@@ -17,6 +17,7 @@ from free_claude_code.core.diagnostics import (
     attached_upstream_error_body,
     reported_http_status,
 )
+from free_claude_code.core.failure_evidence import reports_quota_403
 from free_claude_code.core.json_types import load_json_value
 from free_claude_code.providers.canonical_failures import is_context_window_error_code
 
@@ -52,6 +53,8 @@ def transient_status(exc: Exception) -> int | None:
         return None
     if is_invalid_request(exc) or reported_status(exc) == 413:
         return None
+    if reports_quota_403(exc):
+        return 429
     if isinstance(exc, openai.RateLimitError):
         return 429
     if isinstance(exc, httpx.HTTPStatusError | httpx2.HTTPStatusError):

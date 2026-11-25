@@ -4,7 +4,8 @@ import asyncio
 import sys
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
-from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.application.key_rotation import RotationScope, rotation_scope
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.request_outcomes import record_request_route
 from free_claude_code.core.stream_delivery import StreamDeliveryState
 from free_claude_code.core.stream_output import StreamOutput
@@ -25,6 +26,8 @@ async def stream_model_candidates(
     request_id: str,
     wire_api: WireApi,
     generation_id: int | None = None,
+    on_failure: Callable[[ProviderModelCandidate, Exception], None] | None = None,
+    unavailable: Callable[[], ExecutionFailure] | None = None,
 ) -> AsyncGenerator[StreamOutput]:
     """Run candidates sequentially, closing each before a safe model transition.
 
@@ -34,8 +37,22 @@ async def stream_model_candidates(
     delivery = get_delivery()
     if delivery is None:
         raise RuntimeError("Generation requires a response delivery context")
+    if not candidates:
+        raise (
+            unavailable()
+            if unavailable is not None
+            else ExecutionFailure(
+                FailureKind.RATE_LIMIT,
+                429,
+                "All configured API keys are cooling down. "
+                "Retry after their cooldown expires.",
+                False,
+            )
+        )
     continuation: ContinuationSeed | None = None
-    for index, candidate in enumerate(candidates):
+    index = 0
+    while index < len(candidates):
+        candidate = candidates[index]
         if index:
             # A replacement can fail before its provider opens an attempt.
             delivery.begin_attempt()
@@ -88,10 +105,22 @@ async def stream_model_candidates(
 
         if candidate_failure is None:
             return
+        if on_failure is not None:
+            on_failure(candidate, candidate_failure)
+        scope = rotation_scope(candidate_failure)
+        quota_failure = scope is not None
+        next_index = index + 1
+        if scope is not RotationScope.KEY:
+            # Non-quota failures and organization-wide caps (e.g. TPM) gain
+            # nothing from sibling keys of the same provider.
+            while (
+                next_index < len(candidates) and candidates[next_index].is_key_rotation
+            ):
+                next_index += 1
         step = next_step(
             CandidateFailure(
                 context=candidate_failure.stream_context,
-                retryable=candidate_failure.retryable,
+                retryable=candidate_failure.retryable or quota_failure,
                 produced_output=candidate_committed,
             ),
             content_released=delivery.content_released,
@@ -103,7 +132,7 @@ async def stream_model_candidates(
                 else None
             ),
             seed=continuation,
-            has_next=index + 1 < len(candidates),
+            has_next=next_index < len(candidates),
         )
         match step:
             case Fail():
@@ -120,10 +149,11 @@ async def stream_model_candidates(
                     generation_id=generation_id,
                     wire_api=wire_api,
                     failed=target,
-                    selected=candidates[index + 1].target,
+                    selected=candidates[next_index].target,
                     failure=candidate_failure,
-                    candidate_index=index + 2,
+                    candidate_index=next_index + 1,
                     candidate_count=len(candidates),
                     recovery_action=action.value,
                     recovery_reason=reason,
                 )
+                index = next_index

@@ -81,6 +81,7 @@ class MessagesHandler:
             log_raw_payloads=settings.log_raw_api_payloads,
             request_headers=request_headers,
             model_info_lookup=model_info_lookup,
+            settings=settings,
         )
         self._web_tools = WebToolService(
             settings=settings,

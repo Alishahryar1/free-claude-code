@@ -18,6 +18,7 @@ from free_claude_code.application.connected_accounts import (
 from free_claude_code.application.errors import (
     ApplicationUnavailableError,
 )
+from free_claude_code.application.key_rotation import key_rotation_registry
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
 from free_claude_code.application.ports import StopResult
 from free_claude_code.config.admin.custom_providers import CustomProviderMutation
@@ -202,6 +203,13 @@ class ApplicationRuntime:
                         name="fcc-retired-chat-cleanup",
                     )
                 )
+                if self._database is not None:
+                    self._startup_tasks.append(
+                        asyncio.create_task(
+                            self._initialize_key_rotation_storage(),
+                            name="fcc-key-rotation-storage",
+                        )
+                    )
                 self._messaging.start()
                 if self._code_service is not None:
                     self._startup_tasks.append(
@@ -219,6 +227,17 @@ class ApplicationRuntime:
             )
             await self.close()
             raise
+
+    async def _initialize_key_rotation_storage(self) -> None:
+        if self._database is None:
+            return
+        try:
+            await self._database.start()
+            key_rotation_registry.bind_database(self._database)
+        except Exception as exc:
+            logger.error(
+                "Key rotation storage initialization failed: {}", type(exc).__name__
+            )
 
     def http_started(self) -> None:
         """Called by the server after lifespan and socket adoption, not at reservation."""
@@ -399,6 +418,7 @@ class ApplicationRuntime:
             "model": settings.model,
             "provider": parse_provider_type(settings.model),
             "pending_fields": list(self._pending_fields),
+            "key_rotation": key_rotation_registry.status(settings),
             "provider_status": provider_config_status(values),
             "cached_models": {
                 provider_id: sorted(model_ids)
@@ -534,10 +554,10 @@ class ApplicationRuntime:
             log_verbose_errors=verbose,
         ):
             return False
-        if self._database is not None and not await best_effort(
-            "database.close", self._database.close()
-        ):
-            return False
+        if self._database is not None:
+            if not await best_effort("database.close", self._database.close()):
+                return False
+            key_rotation_registry.bind_database(None)
         if not await self._messaging.close_transcriber():
             return False
         if not self._provider_manager_closed:

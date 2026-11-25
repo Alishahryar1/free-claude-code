@@ -117,8 +117,10 @@ def _canonical(
         return (FailureKind.INVALID_REQUEST, 413, False, _REQUEST_TOO_LARGE_MESSAGE)
     if credential == 401:
         return (FailureKind.AUTHENTICATION, 401, False, _AUTHENTICATION_MESSAGE)
-    if credential == 403:
+    if credential == 403 and transient != 429:
         return (FailureKind.PERMISSION, 403, False, _PERMISSION_MESSAGE)
+    if transient == 429:
+        return _RATE_LIMITED
     if isinstance(exc, openai.APIError):
         return _openai_canonical(exc, transient)
     if isinstance(exc, httpx.HTTPStatusError | httpx2.HTTPStatusError):

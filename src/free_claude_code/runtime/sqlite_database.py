@@ -32,6 +32,9 @@ _BASE_COLUMNS = {
     "code_deleted": "id",
 }
 _SIDECARS = ("-wal", "-shm", "-journal")
+_KEY_COOLDOWN_COLUMNS = {
+    "provider_key_cooldowns": "credential_id provider_id key_number cooldown_until last_error",
+}
 _MESSAGING_COLUMNS = {
     "messaging_trees": "platform chat_id root_id",
     "messaging_nodes": "platform chat_id root_id node_id parent_id parent_reference_id status_message_id session_id state",
@@ -102,6 +105,8 @@ def _schema_version(connection: sqlite3.Connection) -> int:
     if version == 0 and not tables:
         return version
     columns = _BASE_COLUMNS | (_MESSAGING_COLUMNS if version >= 4 else {})
+    if version >= 6:
+        columns |= _KEY_COOLDOWN_COLUMNS
     if tables != columns.keys():
         raise sqlite3.DatabaseError(
             "Unrecognized FCC database schema. Saved data was preserved."

@@ -616,6 +616,9 @@ class Settings(BaseModel):
     provider_rate_window: int = Field(
         default=2, gt=0, validation_alias="PROVIDER_RATE_WINDOW"
     )
+    api_key_cooldown_fallback_seconds: int = Field(
+        default=3600, ge=60, validation_alias="API_KEY_COOLDOWN_FALLBACK_SECONDS"
+    )
     provider_max_concurrency: int = Field(
         default=2, gt=0, validation_alias="PROVIDER_MAX_CONCURRENCY"
     )

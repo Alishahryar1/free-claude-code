@@ -367,6 +367,21 @@ Choose a model, effort, and API key number in the bottom row, then click **+**. 
 </details>
 
 <details>
+<summary><strong>API key cooldowns and quota fallback</strong></summary>
+
+Configure multiple keys in a provider's settings, or use a JSON array in its existing environment variable, for example `GROQ_API_KEY=["first-key","second-key"]`. When a key receives HTTP 429, FCC normally cools that key and tries another configured key before moving through **Fallback Models**. A structured quota response with HTTP 403 can also trigger rotation. HTTP 400, HTTP 401, and ordinary payload-too-large HTTP 413 responses do not trigger key rotation.
+
+A structured tokens-per-minute limit, including Groq's rate-limit HTTP 413 response, cools every configured key for that provider and moves to the next provider route. Trying sibling keys does not resolve an organization-wide cap. FCC remembers an observed token cap for one hour and can skip that provider for larger requests when another route is available. Request size uses a rough estimate of four characters per token.
+
+FCC honors `Retry-After` and supported reset headers. Without a reported wait, recognized daily-quota messages use 24 hours, structured TPM failures use 60 seconds, and other quota failures use `API_KEY_COOLDOWN_FALLBACK_SECONDS` (default `3600`, minimum `60`). When every route is cooling, requests fail with a bounded rate-limit response instead of repeatedly contacting exhausted keys.
+
+**Providers → API key availability** shows each provider, key number, availability, remaining cooldown, and failure category. SQLite stores SHA-256 credential identifiers and fixed failure labels; the status table does not expose key text or provider-supplied error messages. Coding-agent summarization requests use the same routing; FCC does not manage client conversation compaction.
+
+**Database compatibility:** this feature adds `provider_key_cooldowns` and upgrades the database schema from 5 to 6. Stop FCC and back up the entire FCC data directory before testing. Older builds that only support schema 5 cannot open the upgraded database. To return to such a build while retaining newer conversations, stop FCC and run `uv run --no-project --python 3.14 scripts/downgrade_key_rotation_db.py /path/to/fcc.db` from this checkout before reinstalling the older build. The helper backs up the database and removes only the cooldown table. It refuses databases with a schema version other than 6. Keep FCC stopped throughout the downgrade.
+
+</details>
+
+<details>
 <summary><strong>Reasoning control</strong></summary>
 
 Open **Admin UI → Model Config → Model Routing** and choose an effort beside each model. **Default Effort** starts at **From client**. Fable, Opus, Sonnet, and Haiku start at **Inherit**.

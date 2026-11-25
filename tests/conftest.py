@@ -1,7 +1,7 @@
 import asyncio
 import contextlib
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import Unpack
@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 
+from free_claude_code.application.key_rotation import key_rotation_registry
 from free_claude_code.config import env_migrations, paths
 from free_claude_code.config.loader import clear_settings_cache
 from free_claude_code.core.stream_delivery import (
@@ -341,3 +342,13 @@ async def database_factory() -> AsyncIterator[DatabaseFactory]:
     finally:
         for database in reversed(databases):
             await database.close()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_key_rotation_registry() -> Iterator[None]:
+    """The registry is process-wide; keep one test's cooldowns out of the next."""
+    key_rotation_registry.bind_database(None)
+    key_rotation_registry.clear()
+    yield
+    key_rotation_registry.bind_database(None)
+    key_rotation_registry.clear()

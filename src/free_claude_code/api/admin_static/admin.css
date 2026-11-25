@@ -221,6 +221,13 @@ textarea:focus-visible,
   margin: calc((1cap - 1em) / 2) 0 0;
 }
 
+.key-rotation-status { margin-top: 24px; overflow-x: auto; }
+.key-rotation-status h3 { font-size: 16px; margin: 0 0 12px; }
+.key-rotation-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.key-rotation-table th, .key-rotation-table td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.key-rotation-table th { color: var(--muted); font-weight: 600; }
+.key-rotation-table td:last-child { overflow-wrap: anywhere; }
+
 /* Provider Strip & Panels */
 .provider-strip,
 .settings-section {

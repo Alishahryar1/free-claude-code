@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from typing_extensions import TypedDict
 
+from free_claude_code.application.key_rotation import key_rotation_registry
 from free_claude_code.config.constants import PROVIDER_MAX_ATTEMPTS_DEFAULT
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.json_types import JsonObject
@@ -38,13 +39,27 @@ class _SDKClientOptions(TypedDict, total=False, closed=True):
     limits: httpx2.Limits
 
 
-@pytest.fixture(params=[403, 429], ids=["permission-rejection", "rate-limit"])
+@pytest.fixture(
+    params=[(400, False), (401, False), (403, False), (403, True), (429, False)],
+    ids=[
+        "invalid-request",
+        "authentication",
+        "permission-rejection",
+        "quota-403",
+        "rate-limit",
+    ],
+)
 def upstream(
     monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, tmp_path: Path
 ):
     monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "missing-ca.pem"))
+    key_rotation_registry.clear()
+    request.addfinalizer(key_rotation_registry.clear)
     calls = []
-    failure_status: int = fixture_parameter(request, int)
+    parameter = fixture_parameter(request, tuple)
+    failure_status, quota_evidence = parameter
+    assert isinstance(failure_status, int)
+    assert isinstance(quota_evidence, bool)
     build = ProviderAdmissionController.__init__
 
     def fast_backoff(
@@ -83,12 +98,21 @@ def upstream(
         body = decode_object(request.content)
         calls.append((token, body))
         if token != "synthetic-third":
+            error_type = (
+                "rate_limit_error"
+                if failure_status == 429 or quota_evidence
+                else "invalid_request_error"
+                if failure_status == 400
+                else "authentication_error"
+                if failure_status == 401
+                else "permission_error"
+            )
             return failure_status, {
                 "error": {
-                    "type": "rate_limit_error"
-                    if failure_status == 429
-                    else "permission_error",
-                    "message": "No quota",
+                    "type": error_type,
+                    "message": "daily quota exceeded"
+                    if quota_evidence
+                    else "Synthetic upstream failure",
                 }
             }
         protocol = (
@@ -147,7 +171,7 @@ def upstream(
 
     monkeypatch.setattr(httpx.AsyncClient, "__init__", init_native_client)
     monkeypatch.setattr(httpx2.AsyncClient, "__init__", init_sdk_client)
-    return calls, failure_status
+    return calls, failure_status, quota_evidence
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
@@ -163,12 +187,12 @@ def upstream(
     ],
 )
 def test_fallback_sequence_uses_each_rows_selected_key(
-    upstream: tuple[list[tuple[str, JsonObject]], int],
+    upstream: tuple[list[tuple[str, JsonObject]], int, bool],
     provider: str,
     api_format: str,
     wire: str,
 ) -> None:
-    calls, failure_status = upstream
+    calls, failure_status, quota_evidence = upstream
     model = f"{provider}/same-model"
     custom = (
         [
@@ -191,10 +215,6 @@ def test_fallback_sequence_uses_each_rows_selected_key(
         PROVIDER_RATE_LIMIT=1000,
         PROVIDER_RATE_WINDOW=1,
         FCC_CUSTOM_PROVIDERS=custom,
-        MODEL_FALLBACKS=[
-            {"model": model, "reasoning": "off", "api_key_number": 2},
-            {"model": model, "reasoning": "off", "api_key_number": 3},
-        ],
     )
     body = (
         {"messages": [{"role": "user", "content": "hello"}], "max_tokens": 64}
@@ -206,15 +226,18 @@ def test_fallback_sequence_uses_each_rows_selected_key(
         result = client.post(
             f"/v1/{wire}", json={"model": model, "stream": True, **body}
         )
-    assert result.status_code == 200, result.text
-    assert "selected key worked" in result.text
     tokens = [token for token, _ in calls]
-    assert [
-        token
-        for index, token in enumerate(tokens)
-        if not index or token != tokens[index - 1]
-    ] == KEYS
-    if failure_status == 429:
+    if failure_status in {400, 401, 403} and not quota_evidence:
+        assert tokens == [KEYS[0]]
+        assert "selected key worked" not in result.text
+    else:
+        assert result.status_code == 200, result.text
+        assert "selected key worked" in result.text
+        assert [
+            token
+            for index, token in enumerate(tokens)
+            if not index or token != tokens[index - 1]
+        ] == KEYS
         assert tokens == (
             [KEYS[0]] * PROVIDER_MAX_ATTEMPTS_DEFAULT
             + [KEYS[1]] * PROVIDER_MAX_ATTEMPTS_DEFAULT

@@ -538,7 +538,7 @@ def test_historical_database_moves_and_upgrades_without_losing_records(
         assert len(after["code_items"]) == 2
         assert after["code_items"][-1]["kind"] == "prompt"
         with closing(sqlite3.connect(target)) as connection:
-            assert connection.execute("PRAGMA user_version").fetchone() == (5,)
+            assert connection.execute("PRAGMA user_version").fetchone() == (6,)
             assert connection.execute("PRAGMA journal_mode").fetchone() == ("wal",)
             assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
@@ -575,7 +575,7 @@ def test_orphan_journals_are_not_treated_as_a_fresh_database(
     assert not (tmp_path / "fcc.db").exists()
 
 
-@pytest.mark.parametrize("version", [-1, 6])
+@pytest.mark.parametrize("version", [-1, 7])
 def test_unsupported_version_is_not_moved_or_mutated(
     tmp_path: Path, version: int
 ) -> None:

@@ -47,6 +47,7 @@ class GeminiHandler:
             generation_id=generation_id,
             request_headers=request_headers,
             model_info_lookup=model_info_lookup,
+            settings=settings,
             log_raw_payloads=settings.log_raw_api_payloads,
         )
 
