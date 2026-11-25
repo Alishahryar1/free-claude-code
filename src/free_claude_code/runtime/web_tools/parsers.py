@@ -1,9 +1,8 @@
 """HTML parsing for web_search / web_fetch."""
 
-import html
 from html.parser import HTMLParser
 from typing import override
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, urlparse
 
 from free_claude_code.core.web_tools import WebSearchResult
 
@@ -29,7 +28,7 @@ class SearchResultParser(HTMLParser):
         uddg = query.get("uddg", [""])[0]
         if not uddg:
             return
-        self._href = unquote(uddg)
+        self._href = uddg
         self._title_parts = []
 
     @override
@@ -43,9 +42,7 @@ class SearchResultParser(HTMLParser):
             return
         title = " ".join("".join(self._title_parts).split())
         if title and not any(result.url == self._href for result in self.results):
-            self.results.append(
-                WebSearchResult(title=html.unescape(title), url=self._href)
-            )
+            self.results.append(WebSearchResult(title=title, url=self._href))
         self._href = None
         self._title_parts = []
 

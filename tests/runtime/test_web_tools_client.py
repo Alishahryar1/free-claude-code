@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Callable, Coroutine, Mapping
 from typing import override
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -58,6 +59,41 @@ async def test_search_request_parsing_limit_and_client_closure(
         for index in range(10)
     ]
     assert len(clients) == 1 and clients[0].is_closed
+
+
+@pytest.mark.asyncio
+async def test_search_decodes_result_urls_and_titles_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    targets = [
+        "https://en.wikipedia.org/wiki/C%23_(disambiguation)",
+        "https://example.com/files/a%2Fb?q=x%26y",
+        "https://example.com/100%25",
+        "https://example.com/caf%C3%A9",
+    ]
+
+    def handle(request: httpx.Request):
+        links = [
+            f'<a href="/l/?uddg={quote(url, safe="")}&amp;rut=x">Title {index}</a>'
+            for index, url in enumerate(targets)
+        ]
+        links.append(
+            '<a href="/l/?uddg=https%3A%2F%2Fexample.com%2Ftags">'
+            "Escape &amp;lt;b&amp;gt; in HTML</a>"
+        )
+        return httpx.Response(200, text="".join(links))
+
+    _httpx_clients(monkeypatch, handle)
+    result = await web_client.HTTPWebToolsClient().search("query")
+    assert result == [
+        *(
+            WebSearchResult(title=f"Title {index}", url=url)
+            for index, url in enumerate(targets)
+        ),
+        WebSearchResult(
+            title="Escape &lt;b&gt; in HTML", url="https://example.com/tags"
+        ),
+    ]
 
 
 @pytest.mark.asyncio
