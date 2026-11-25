@@ -64,7 +64,7 @@ def unsigned_events(protocol: str):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("protocol", ["chat", "responses"])
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses", "gemini"])
 async def test_unsigned_thinking_has_only_client_native_history(
     protocol: str, wire: WireProtocol

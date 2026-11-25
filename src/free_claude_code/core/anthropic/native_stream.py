@@ -216,10 +216,6 @@ class NativeMessagesStreamState:
             if not isinstance(initial, str):
                 raise AssertionError("Validated native content fields must be strings.")
             block.body[key] = initial + "".join(parts)
-        if block.body["type"] == "thinking" and not block.body.get("signature"):
-            raise NativeMessagesError(
-                "Completed native thinking requires its signature."
-            )
         arguments = None
         if block.body["type"] == "tool_use":
             arguments = streamed_tool_arguments(
