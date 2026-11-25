@@ -85,6 +85,14 @@ class ChatMessagesStream:
                 raise chat_failure("Chat cannot represent native Messages citations")
         if block is not None:
             if block.body["type"] in {"thinking", "redacted_thinking"}:
+                # Unsigned thinking with no other fields was already streamed and
+                # has no state to replay.
+                if not block.body.get("signature") and set(block.body) <= {
+                    "type",
+                    "thinking",
+                    "signature",
+                }:
+                    return []
                 return self._output.replay(
                     encode_replay(ReplayRecord(self._origin, block.body)),
                     source=f"rs_{data['index']}",
