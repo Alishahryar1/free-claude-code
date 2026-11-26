@@ -1,8 +1,8 @@
 """Pydantic models for the Anthropic Messages protocol."""
 
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
@@ -40,7 +40,7 @@ class ContentBlockToolUse(_AnthropicBlockBase):
 class ContentBlockToolResult(_AnthropicBlockBase):
     type: Literal["tool_result"]
     tool_use_id: str
-    content: str | list[Any] | dict[str, Any]
+    content: str | list[JsonValue] | JsonObject
 
 
 class ContentBlockThinking(_AnthropicBlockBase):
@@ -80,6 +80,30 @@ class SystemContent(_AnthropicBlockBase):
     text: str
 
 
+class ExtensionBlock(_AnthropicBlockBase):
+    """A tagged block outside the set of known message variants."""
+
+    type: str = Field(min_length=1)
+
+    @field_validator("type")
+    @classmethod
+    def unknown_type(cls, value: str) -> str:
+        if value in {
+            "text",
+            "image",
+            "document",
+            "tool_use",
+            "tool_result",
+            "thinking",
+            "redacted_thinking",
+            "server_tool_use",
+            "web_search_tool_result",
+            "web_fetch_tool_result",
+        }:
+            raise ValueError("Malformed known Messages content block")
+        return value
+
+
 MessageContentBlock = (
     ContentBlockText
     | ContentBlockImage
@@ -91,10 +115,11 @@ MessageContentBlock = (
     | ContentBlockServerToolUse
     | ContentBlockWebSearchToolResult
     | ContentBlockWebFetchToolResult
+    | ExtensionBlock
 )
 
 
-class Message(BaseModel):
+class Message(_AnthropicBlockBase):
     role: Literal["user", "assistant"]
     content: str | list[MessageContentBlock]
     reasoning_content: str | None = None
@@ -105,6 +130,18 @@ class Tool(_AnthropicBlockBase):
     type: str | None = None
     description: str | None = None
     input_schema: dict[str, Any] | None = None
+
+
+class UnnamedTool(_AnthropicBlockBase):
+    """Opaque hosted declaration whose protocol supplies no client function name."""
+
+    type: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def unknown_declaration(self) -> Self:
+        if self.type == "custom" or "name" in (self.model_extra or {}):
+            raise ValueError("A client tool requires a name")
+        return self
 
 
 class ThinkingConfig(BaseModel):
@@ -124,14 +161,14 @@ class MessagesRequest(BaseModel):
     resolved_provider_model: str | None = Field(default=None, exclude=True)
     max_tokens: int | None = None
     messages: list[Message]
-    system: str | list[SystemContent] | None = None
+    system: str | list[SystemContent | ExtensionBlock] | None = None
     stop_sequences: list[str] | None = None
     stream: bool = False
     temperature: float | None = None
     top_p: float | None = None
     top_k: int | None = None
     metadata: dict[str, Any] | None = None
-    tools: list[Tool] | None = None
+    tools: list[Tool | UnnamedTool] | None = None
     tool_choice: JsonObject | None = None
     thinking: ThinkingConfig | None = None
     context_management: dict[str, Any] | None = None
@@ -139,6 +176,14 @@ class MessagesRequest(BaseModel):
     mcp_servers: list[dict[str, Any]] | None = None
     extra_body: dict[str, Any] | None = None
     betas: list[str] | None = Field(default=None, exclude=True)
+
+    @property
+    def named_tools(self) -> list[Tool]:
+        return [tool for tool in self.tools or () if isinstance(tool, Tool)]
+
+    @property
+    def client_tools(self) -> list[Tool]:
+        return [tool for tool in self.named_tools if tool.type in (None, "custom")]
 
     @field_validator("max_tokens", mode="before")
     @classmethod
@@ -155,8 +200,8 @@ class TokenCountRequest(BaseModel):
     original_model: str | None = Field(default=None, exclude=True)
     resolved_provider_model: str | None = Field(default=None, exclude=True)
     messages: list[Message]
-    system: str | list[SystemContent] | None = None
-    tools: list[Tool] | None = None
+    system: str | list[SystemContent | ExtensionBlock] | None = None
+    tools: list[Tool | UnnamedTool] | None = None
     thinking: ThinkingConfig | None = None
     tool_choice: JsonObject | None = None
     context_management: dict[str, Any] | None = None

@@ -19,6 +19,7 @@ from free_claude_code.core.history_replay import (
     decode_replay,
     encode_replay,
     is_replay,
+    messages_replay_key,
     normalize_history_source,
     protected_reasoning,
     readable_reasoning,
@@ -39,29 +40,38 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
 
-def validate_history(body: Mapping[str, JsonValue]) -> None:
+def validate_history(body: Mapping[str, JsonValue], protocol: HistoryProtocol) -> None:
     """Reject malformed persisted carriers before credentials or inference."""
     try:
-        for protocol in ("responses", "messages", "chat"):
-            for _, item in _reasoning_records(body, protocol):
-                for key in ("encrypted_content", "signature", "data"):
-                    value = item.get(key)
-                    if isinstance(value, str) and is_replay(value):
-                        decode_replay(value)
+        for _, item in _reasoning_records(body, protocol):
+            if protocol == "messages":
+                key = messages_replay_key(item)
+            elif protocol == "responses":
+                key = "encrypted_content"
+            else:
+                key = (
+                    "data"
+                    if item.get("type") == "reasoning.encrypted"
+                    else "signature"
+                    if item.get("type") == "reasoning.text"
+                    else None
+                )
+            if key is not None and is_replay(value := item.get(key)):
+                decode_replay(value)
     except HistoryReplayError as error:
         raise InvalidRequestError(str(error)) from error
 
 
 def normalize_messages_history(request: MessagesRequest) -> MessagesRequest:
     """Resolve persisted associations before any lossy protocol conversion."""
-    validate_history(request.model_dump(mode="json"))
+    validate_history(request.model_dump(mode="json"), "messages")
     messages = []
     try:
         for message in request.messages:
             if message.role != "assistant":
                 messages.append(message)
                 continue
-            body: JsonObject = message.model_dump(mode="json")
+            body: JsonObject = message.model_dump(mode="json", exclude_unset=True)
             blocks = body["content"]
             if isinstance(blocks, list):
                 blocks = resolve_messages_replay(blocks)
@@ -74,7 +84,8 @@ def normalize_messages_history(request: MessagesRequest) -> MessagesRequest:
                     if not isinstance(block, dict):
                         continue
                     native = block
-                    carrier = block.get("signature", block.get("data"))
+                    key = messages_replay_key(block)
+                    carrier = block.get(key) if key is not None else None
                     if isinstance(carrier, str) and is_replay(carrier):
                         native = decode_replay(carrier).native
                     full.extend(
@@ -91,7 +102,7 @@ def normalize_messages_history(request: MessagesRequest) -> MessagesRequest:
                     blocks.insert(
                         0, {"type": "thinking", "thinking": message.reasoning_content}
                     )
-                body["reasoning_content"] = None
+                body.pop("reasoning_content", None)
             body["content"] = blocks
             normalized = normalize_history_source({"messages": [body]}, "messages")
             messages.append(

@@ -12,11 +12,20 @@ from free_claude_code.core.token_estimation import (
 )
 
 from .content import get_block_attr, get_block_type
-from .models import Message, NativeTokenCountMessage, SystemContent, Tool
+from .models import (
+    ExtensionBlock,
+    Message,
+    NativeTokenCountMessage,
+    SystemContent,
+    Tool,
+    UnnamedTool,
+)
 
 type CountMessages = Sequence[Message | NativeTokenCountMessage]
-type CountSystem = str | Sequence[SystemContent | dict[str, Any]] | None
-type CountTools = Sequence[Tool | dict[str, Any]] | None
+type CountSystem = (
+    str | Sequence[SystemContent | ExtensionBlock | dict[str, Any]] | None
+)
+type CountTools = Sequence[Tool | UnnamedTool | dict[str, Any]] | None
 type TokenCounter = Callable[[CountMessages, CountSystem, CountTools], int]
 
 
@@ -128,6 +137,8 @@ def get_token_count(
             tool_str = (
                 json.dumps(tool)
                 if isinstance(tool, dict)
+                else tool.model_dump_json(exclude_unset=True)
+                if isinstance(tool, UnnamedTool)
                 else tool.name
                 + (tool.description or "")
                 + json.dumps(tool.input_schema)

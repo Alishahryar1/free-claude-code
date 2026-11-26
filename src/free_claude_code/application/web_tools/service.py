@@ -15,6 +15,7 @@ from free_claude_code.application.response_collection import collect_response_pa
 from free_claude_code.application.routing import RoutedMessagesRequest
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import (
+    ContentBlockServerToolUse,
     aggregate_anthropic_sse_to_message,
     anthropic_status_for_error_type,
 )
@@ -59,6 +60,7 @@ from .request import (
     forced_tool_turn_text,
     plan_automatic_web_search,
     unsupported_server_tool_error,
+    web_tool_limits,
 )
 
 
@@ -114,7 +116,35 @@ class WebToolService:
             source="api",
             model=routed.resolved.original_model,
         )
+        tool = next(tool for tool in request.named_tools if tool.name == tool_name)
+        max_uses, domains = web_tool_limits(tool)
+        if tool_name == "web_fetch" and (domains.allowed or domains.blocked):
+            raise InvalidRequestError(
+                "Local web_fetch cannot enforce domain filters across redirects"
+            )
+        if max_uses is not None:
+            used = 0
+            for message in reversed(request.messages):
+                blocks = message.content
+                if message.role == "user" and not (
+                    isinstance(blocks, list)
+                    and blocks
+                    and blocks[0].type == "tool_result"
+                ):
+                    break
+                if isinstance(blocks, list):
+                    used += sum(
+                        isinstance(block, ContentBlockServerToolUse)
+                        and block.name == tool_name
+                        for block in blocks
+                    )
+            if used >= max_uses:
+                raise InvalidRequestError(f"{tool_name}.max_uses has been reached")
         text = forced_tool_turn_text(request)
+        if not text.strip():
+            raise InvalidRequestError(
+                f"The latest user message has no text for {tool_name}"
+            )
         tool_input = (
             {"query": extract_query(text)}
             if tool_name == "web_search"
@@ -125,6 +155,7 @@ class WebToolService:
             tool_input=tool_input,
             input_tokens=input_tokens,
             response_model=routed.resolved.original_model,
+            domains=domains,
         )
 
     async def _stream_automatic_search(
@@ -172,7 +203,7 @@ class WebToolService:
                 request_id=request_id,
             )
         completed = {call for packet in packets for call in packet.completed_calls}
-        names = {tool.name for tool in plan.request.tools or ()}
+        names = {tool.name for tool in plan.request.named_tools}
         searches: dict[int, str] = {}
         client_calls: dict[int, CompletedCall] = {}
         seen_ids: set[str] = set()

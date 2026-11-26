@@ -16,6 +16,7 @@ from free_claude_code.config.provider_catalog import DEEPSEEK_DEFAULT_BASE
 from free_claude_code.core.anthropic.models import (
     ContentBlockDocument,
     ContentBlockImage,
+    ContentBlockText,
     Message,
     MessagesRequest,
     Tool,
@@ -101,7 +102,7 @@ def test_responses_request_uses_deepseek_chat_policy(
                     },
                 }
             ],
-            "tool_choice": {"type": "function", "name": "Read"},
+            "tool_choice": "auto",
         }
     )
 
@@ -365,7 +366,7 @@ def test_build_request_body_tool_choice_keeps_thinking(
     assert body["tool_choice"] == "auto"
 
 
-def test_build_request_body_forced_tool_choice_downgrades_to_auto(
+def test_build_request_body_forced_tool_choice_is_rejected(
     deepseek_provider: DeepSeekProvider,
 ) -> None:
     request = MessagesRequest.model_validate(
@@ -384,12 +385,10 @@ def test_build_request_body_forced_tool_choice_downgrades_to_auto(
         }
     )
 
-    body = deepseek_provider._chat._build_request_body(
-        request, reasoning=reasoning_for(request)
-    )
-
-    assert object_payload(body["extra_body"])["thinking"] == {"type": "enabled"}
-    assert body["tool_choice"] == "auto"
+    with pytest.raises(InvalidRequestError, match="named tool_choice"):
+        deepseek_provider._chat._build_request_body(
+            request, reasoning=reasoning_for(request)
+        )
 
 
 def test_build_request_body_encodes_reasoning_off() -> None:
@@ -635,7 +634,7 @@ def test_tool_history_without_thinking_keeps_selected_effort(
                 ],
                 "other": True,
             },
-            "output_config": {"effort": "high", "format": "text"},
+            "output_config": {"effort": "high"},
         }
     )
 
@@ -944,13 +943,14 @@ def test_forwards_user_image_for_any_model(
 
 
 def test_vision_model_strips_user_document() -> None:
-    """Vision models still omit documents; conversion has no document parts."""
+    """Vision models must receive the text alongside an unsupported document."""
     request = MessagesRequest(
         model="deepseek-v4-flash-vision-exp",
         messages=[
             Message(
                 role="user",
                 content=[
+                    ContentBlockText(type="text", text="what is a PDF?"),
                     ContentBlockDocument(
                         type="document",
                         source={
@@ -958,7 +958,7 @@ def test_vision_model_strips_user_document() -> None:
                             "media_type": "application/pdf",
                             "data": "YQ==",
                         },
-                    )
+                    ),
                 ],
             )
         ],
@@ -970,29 +970,14 @@ def test_vision_model_strips_user_document() -> None:
         ),
         admission=immediate_admission(),
     )
-    provider.stream_messages(request, reasoning=REASONING_ON)
     body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
-    content = object_payload(array_payload(body["messages"])[0])["content"]
-    assert content
-    if isinstance(content, str):
-        lowered = content.lower()
-    else:
-        texts = [
-            part.get("text", "")
-            for part in array_payload(content)
-            if isinstance(part, dict) and part.get("type") == "text"
-        ]
-        lowered = "\n".join(map(string_payload, texts)).lower()
-        assert not any(
-            isinstance(part, dict) and part.get("type") == "image_url"
-            for part in array_payload(content)
-        )
-    assert "attachment omitted" in lowered
-    assert "document inputs" in lowered
-    assert "image" not in lowered
+    assert (
+        object_payload(array_payload(body["messages"])[0])["content"]
+        == "what is a PDF?"
+    )
 
 
-def test_startup_rejects_mcp_servers() -> None:
+def test_request_omits_mcp_servers() -> None:
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="x")],
@@ -1005,11 +990,11 @@ def test_startup_rejects_mcp_servers() -> None:
         ),
         admission=immediate_admission(),
     )
-    with pytest.raises(InvalidRequestError, match="mcp_servers"):
-        provider.stream_messages(request)
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
+    assert "mcp_servers" not in body
 
 
-def test_startup_rejects_listed_server_tools_in_tools_list() -> None:
+def test_request_omits_listed_server_tools_in_tools_list() -> None:
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="x")],
@@ -1022,8 +1007,8 @@ def test_startup_rejects_listed_server_tools_in_tools_list() -> None:
         ),
         admission=immediate_admission(),
     )
-    with pytest.raises(InvalidRequestError, match="web_search"):
-        provider.stream_messages(request)
+    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
+    assert "tools" not in body
 
 
 def test_startup_preserves_completed_server_tool_history() -> None:
@@ -1710,11 +1695,10 @@ def test_image_only_tool_result_reaches_user_content(
         [{"type": "document", "source": {"type": "file", "file_id": "file_pdf"}}],
     ],
 )
-def test_document_or_empty_tool_result_keeps_placeholder(
+def test_document_or_empty_tool_result_retains_tool_association(
     deepseek_provider: DeepSeekProvider,
     tool_content: list[JsonObject],
 ) -> None:
-    """Document-only and empty tool results retain their omission marker."""
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1750,25 +1734,13 @@ def test_document_or_empty_tool_result_keeps_placeholder(
 
     tool_result = array_payload(body["messages"])[1]
     assert object_payload(tool_result)["role"] == "tool"
-    assert isinstance(object_payload(tool_result)["content"], str)
-    assert (
-        "attachment omitted"
-        in string_payload(object_payload(tool_result)["content"]).lower()
-    )
-    assert (
-        "document inputs"
-        in string_payload(object_payload(tool_result)["content"]).lower()
-    )
-    assert (
-        "image omitted"
-        not in string_payload(object_payload(tool_result)["content"]).lower()
-    )
+    assert object_payload(tool_result)["tool_call_id"] == "t1"
+    assert object_payload(tool_result)["content"] == ""
 
 
-def test_document_only_message_replaced_with_placeholder(
+def test_document_only_message_is_rejected(
     deepseek_provider: DeepSeekProvider,
 ) -> None:
-    """A top-level document-only message remains non-empty after stripping."""
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1786,79 +1758,10 @@ def test_document_only_message_replaced_with_placeholder(
         }
     )
 
-    body = deepseek_provider._chat._build_request_body(
-        request, reasoning=reasoning_for(request)
-    )
-
-    content = object_payload(array_payload(body["messages"])[0])["content"]
-    assert "attachment omitted" in string_payload(content).lower()
-    assert "document inputs" in string_payload(content).lower()
-
-
-def test_warns_when_stripping_document_blocks(
-    deepseek_provider: DeepSeekProvider, caplog: pytest.LogCaptureFixture
-) -> None:
-    """A warning identifies documents omitted from user and tool content."""
-    request = MessagesRequest.model_validate(
-        {
-            "model": "m",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "look"},
-                        {
-                            "type": "document",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "application/pdf",
-                                "data": "abc",
-                            },
-                        },
-                    ],
-                },
-                {
-                    "role": "assistant",
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "id": "t1",
-                            "name": "Screenshot",
-                            "input": {},
-                        }
-                    ],
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": "t1",
-                            "content": [
-                                {
-                                    "type": "document",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": "application/pdf",
-                                        "data": "abc",
-                                    },
-                                },
-                            ],
-                        }
-                    ],
-                },
-            ],
-        }
-    )
-
-    with caplog.at_level(logging.WARNING):
+    with pytest.raises(InvalidRequestError, match="latest user"):
         deepseek_provider._chat._build_request_body(
             request, reasoning=reasoning_for(request)
         )
-
-    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert any("stripped unsupported document blocks" in r.message for r in warnings)
-    assert not any("no vision" in r.message for r in warnings)
 
 
 @pytest.mark.parametrize(

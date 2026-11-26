@@ -224,7 +224,7 @@ class AnthropicMessagesTransport:
         reasoning: ReasoningPolicy,
         capabilities: MessagesModelCapabilities,
     ) -> ResponsesMessagesRequest:
-        validate_history(request.model_dump(mode="json"))
+        validate_history(request.model_dump(mode="json"), "responses")
         try:
             options = resolve_messages_options(
                 model=request.model,

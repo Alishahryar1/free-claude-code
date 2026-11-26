@@ -423,14 +423,10 @@ def test_malformed_tool_history_is_rejected_before_inference(
                 }
             ]
         },
-        {"tools": [{"type": "web_search"}]},
-        {"text": {"verbosity": "high"}},
         {"text": {"format": {"type": "json_object"}}},
-        {"metadata": {"unrepresentable": "value"}},
         {"reasoning": {"summary": "detailed"}},
         {"include": ["web_search_call.action.sources"]},
         {"truncation": "auto"},
-        {"future_control": {"required": True}},
     ],
 )
 def test_unrepresentable_input_is_explicitly_rejected(payload: JsonObject) -> None:
@@ -488,3 +484,16 @@ def test_malformed_discriminators_produce_conversion_errors(
 ) -> None:
     with pytest.raises(ResponsesConversionError):
         _build(payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"tools": [{"type": "web_search"}]},
+        {"text": {"verbosity": "high"}},
+        {"metadata": {"unrepresentable": "value"}},
+        {"future_control": {"required": True}},
+    ],
+)
+def test_unsupported_advisory_fields_are_omitted(payload: JsonObject) -> None:
+    assert _build(payload).body == _build({}).body

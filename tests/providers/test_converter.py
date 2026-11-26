@@ -1789,8 +1789,7 @@ def test_openai_build_converts_validated_anthropic_image_block() -> None:
     ]
 
 
-def test_openai_build_rejects_unknown_top_level_extras() -> None:
-    """Truly unknown keys must still be rejected (not dropped silently)."""
+def test_openai_build_omits_unknown_top_level_extras() -> None:
     req = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1798,8 +1797,7 @@ def test_openai_build_rejects_unknown_top_level_extras() -> None:
             "experimental_client_only_passthrough": True,
         }
     )
-    with pytest.raises(OpenAIConversionError, match="top-level request fields"):
-        build_base_request_body(req)
+    assert "experimental_client_only_passthrough" not in build_base_request_body(req)
 
 
 @pytest.mark.parametrize(

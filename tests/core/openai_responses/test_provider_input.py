@@ -214,7 +214,7 @@ def test_responses_provider_request_preserves_rich_tool_output_order() -> None:
                                         "url": "https://images.example.test/tool.png",
                                     },
                                 },
-                                {"type": "document", "title": "reference"},
+                                {"type": "future_media", "text": "opaque"},
                                 {"type": "text", "text": "after"},
                             ],
                         }
@@ -238,10 +238,6 @@ def test_responses_provider_request_preserves_rich_tool_output_order() -> None:
                 {
                     "type": "input_image",
                     "image_url": "https://images.example.test/tool.png",
-                },
-                {
-                    "type": "input_text",
-                    "text": '{"type": "document", "title": "reference"}',
                 },
                 {"type": "input_text", "text": "after"},
             ],
@@ -354,11 +350,9 @@ def test_build_responses_provider_request_omits_choice_without_tools() -> None:
 
 
 @pytest.mark.parametrize("choice", ["auto", "any", "none"])
-def test_build_responses_provider_request_omits_explicit_choice_without_tools(
+def test_build_responses_provider_request_resolves_explicit_choice_without_tools(
     choice: str,
 ) -> None:
-    # An explicit choice must not survive either: "any" would otherwise become
-    # "required", demanding a tool call when no tool exists.
     request = MessagesRequest.model_validate(
         {
             "model": "gpt-test",
@@ -367,6 +361,10 @@ def test_build_responses_provider_request_omits_explicit_choice_without_tools(
         }
     )
 
+    if choice == "any":
+        with pytest.raises(ResponsesConversionError, match="Required tool choice"):
+            build_responses_provider_request(request, reasoning=ReasoningPolicy.off())
+        return
     body: JsonObject = build_responses_provider_request(
         request,
         reasoning=ReasoningPolicy.off(),
@@ -507,7 +505,6 @@ def test_build_responses_provider_request_accepts_application_owned_effort(
             {"effort": "high", "format": {"type": "json_schema"}},
             "output_config.format",
         ),
-        ({"future_control": True}, "output_config.future_control"),
     ],
 )
 def test_build_responses_provider_request_rejects_unconsumed_output_config(
@@ -592,13 +589,14 @@ def test_responses_provider_request_uses_one_portable_tool_alias() -> None:
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("stop_sequences", ["stop"]),
+        ("output_config", {"future_control": True}),
+        ("future_field", True),
         ("top_k", 4),
         ("mcp_servers", [{"name": "server"}]),
         ("extra_body", {"unknown": True}),
     ],
 )
-def test_build_responses_provider_request_rejects_lossy_fields(
+def test_build_responses_provider_request_omits_unsupported_options(
     field: str, value: object
 ) -> None:
     payload = {
@@ -607,14 +605,28 @@ def test_build_responses_provider_request_rejects_lossy_fields(
         field: value,
     }
 
-    with pytest.raises(ResponsesConversionError, match=field):
-        build_responses_provider_request(
-            MessagesRequest.model_validate(payload),
-            reasoning=ReasoningPolicy.provider_default(),
-        )
+    body = build_responses_provider_request(
+        MessagesRequest.model_validate(payload),
+        reasoning=ReasoningPolicy.provider_default(),
+    )
+    assert field not in body
 
 
-def test_build_responses_provider_request_rejects_provider_managed_tools() -> None:
+def test_build_responses_provider_request_rejects_stop_sequences() -> None:
+    request = MessagesRequest.model_validate(
+        {
+            "model": "m",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stop_sequences": ["stop"],
+        }
+    )
+    with pytest.raises(ResponsesConversionError, match="stop_sequences"):
+        build_responses_provider_request(request, reasoning=ReasoningPolicy.off())
+
+
+def test_build_responses_provider_request_omits_optional_provider_managed_tools() -> (
+    None
+):
     request = MessagesRequest.model_validate(
         {
             "model": "gpt-test",
@@ -629,24 +641,6 @@ def test_build_responses_provider_request_rejects_provider_managed_tools() -> No
         }
     )
 
-    with pytest.raises(ResponsesConversionError, match="web_search_20250305"):
-        build_responses_provider_request(
-            request,
-            reasoning=ReasoningPolicy.provider_default(),
-        )
-
-
-def test_build_responses_provider_request_rejects_unknown_request_fields() -> None:
-    request = MessagesRequest.model_validate(
-        {
-            "model": "gpt-test",
-            "messages": [{"role": "user", "content": "hello"}],
-            "future_field": True,
-        }
+    assert "tools" not in build_responses_provider_request(
+        request, reasoning=ReasoningPolicy.off()
     )
-
-    with pytest.raises(ResponsesConversionError, match="future_field"):
-        build_responses_provider_request(
-            request,
-            reasoning=ReasoningPolicy.provider_default(),
-        )

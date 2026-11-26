@@ -10,10 +10,8 @@ from typing import cast
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from .models import MessagesRequest
-from .request_serialization import dump_messages_request
 
 _BETA_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-_NATIVE_EXTRA_FIELDS = frozenset({"cache_control", "service_tier"})
 RESERVED_MESSAGES_EXTRA_FIELDS = frozenset(
     {
         "model",
@@ -120,34 +118,17 @@ def build_native_messages_request(
 
     if not request.messages:
         raise NativeMessagesError("Messages input must not be empty.")
-    body = dump_messages_request(request)
-    raw_request = cast(JsonObject, request.model_dump(mode="json", exclude_none=True))
-    for name in request.model_extra or ():
-        if name not in raw_request:
-            continue
-        if name not in _NATIVE_EXTRA_FIELDS:
-            raise NativeMessagesError(
-                f"Unsupported native Messages request field: {name!r}."
-            )
-        body[name] = deepcopy(raw_request[name])
+    body = cast(JsonObject, request.model_dump(mode="python", exclude_unset=True))
     system: list[JsonValue] = []
     raw_system = body.pop("system", None)
     if isinstance(raw_system, str):
         system.append({"type": "text", "text": raw_system})
     elif isinstance(raw_system, list):
         system.extend(raw_system)
-    messages: list[JsonValue] = []
-    for message in request.messages:
-        if message.reasoning_content is not None:
-            raise NativeMessagesError(
-                "Native Messages history requires signed thinking blocks; "
-                "reasoning_content cannot be replayed losslessly."
-            )
-        raw = cast(JsonObject, message.model_dump(mode="json", exclude_none=True))
-        messages.append(raw)
-    if not messages:
-        raise NativeMessagesError("Messages input must contain a conversational turn.")
-    body["messages"] = messages
+    if any(message.reasoning_content is not None for message in request.messages):
+        raise NativeMessagesError(
+            "Native Messages history requires signed thinking blocks."
+        )
     if system:
         body["system"] = system
     extra = body.pop("extra_body", None)
@@ -161,6 +142,8 @@ def build_native_messages_request(
                 )
             body[name] = deepcopy(value)
     apply_messages_options(body, options)
+    if request.thinking is not None and request.thinking.model_extra:
+        body["thinking"] = {**request.thinking.model_extra, **(options.thinking or {})}
     betas = tuple(request.betas or ())
     if any(_BETA_NAME.fullmatch(beta) is None for beta in betas):
         raise NativeMessagesError("Messages beta names must be valid header tokens.")

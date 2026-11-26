@@ -3,11 +3,16 @@
 from collections.abc import Mapping
 from copy import deepcopy
 
+from ..anthropic.conversion import (
+    resolve_anthropic_tool_choice,
+    unrepresentable_client_tool_constraints,
+)
 from ..anthropic.image_sources import portable_anthropic_image_url
 from ..anthropic.models import MessagesRequest
 from ..anthropic.request_serialization import (
     dump_messages_request,
     is_noop_context_management,
+    translated_messages,
 )
 from ..chat_completions.request import (
     ChatRequest,
@@ -15,11 +20,11 @@ from ..chat_completions.request import (
     function_calls,
     tool_arguments,
     translated_body,
-    validate_message_fields,
 )
 from ..history_replay import (
     decode_replay,
     is_replay,
+    messages_replay_key,
     protected_reasoning,
     readable_reasoning,
     resolve_messages_replay,
@@ -32,7 +37,11 @@ from ..json_types import (
     json_objects,
     json_text,
 )
-from ..openai_responses import OpenAIResponsesRequest
+from ..openai_responses import (
+    OpenAIResponsesRequest,
+    is_hosted_history,
+    latest_user_input,
+)
 from ..reasoning import ReasoningControl, ReasoningPolicy
 from .errors import GeminiConversionError
 from .models import GeminiRequest, InlineData, ThinkingConfig
@@ -78,10 +87,8 @@ def _text_parts(value: JsonValue, *, responses: bool = False) -> list[JsonObject
             if not isinstance(url, str):
                 raise GeminiConversionError("Image requires a data URL")
             parts.append(_image(url))
-        else:
-            raise GeminiConversionError(
-                f"Native Gemini cannot represent content {kind!r}"
-            )
+        elif not isinstance(kind, str):
+            raise GeminiConversionError("Content block requires a type")
     return parts
 
 
@@ -94,8 +101,9 @@ def _append(contents: list[JsonObject], role: str, parts: list[JsonObject]) -> N
         contents.append({"role": role, "parts": parts})
 
 
-def _reasoning(item: Mapping[str, JsonValue]) -> list[JsonObject]:
-    carrier = item.get("encrypted_content") or item.get("signature") or item.get("data")
+def _reasoning(
+    item: Mapping[str, JsonValue], carrier: JsonValue = None
+) -> list[JsonObject]:
     if carrier:
         if not is_replay(carrier):
             # Foreign provider native state is never a Google thought signature.
@@ -137,13 +145,23 @@ def apply_reasoning(
         thinking["thinkingBudget"] = budget
 
 
-def _tool_config(choice: JsonValue, *, responses: bool = False) -> JsonObject:
+def _tool_config(
+    choice: JsonValue, declarations: list[JsonObject], *, responses: bool = False
+) -> JsonObject | None:
+    if choice is None:
+        return None
     if isinstance(choice, str):
         mode = {"auto": "AUTO", "none": "NONE", "required": "ANY", "any": "ANY"}.get(
             choice
         )
         if mode is None:
             raise GeminiConversionError("Unsupported tool_choice")
+        if not declarations:
+            if mode == "ANY":
+                raise GeminiConversionError(
+                    "Required tool choice has no available functions"
+                )
+            return None
         return {"functionCallingConfig": {"mode": mode}}
     if isinstance(choice, dict):
         name = (
@@ -151,7 +169,11 @@ def _tool_config(choice: JsonValue, *, responses: bool = False) -> JsonObject:
             if responses
             else json_object(choice.get("function", {})).get("name")
         )
-        if isinstance(name, str):
+        if (
+            choice.get("type") in ("function", "tool")
+            and isinstance(name, str)
+            and any(tool["name"] == name for tool in declarations)
+        ):
             return {
                 "functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": [name]}
             }
@@ -197,29 +219,11 @@ def _function_result(
 def chat_to_gemini(
     request: ChatRequest, *, allow_pending_calls: bool = False
 ) -> JsonObject:
-    body = translated_body(
-        request,
-        supported={
-            "tools",
-            "tool_choice",
-            "parallel_tool_calls",
-            "max_tokens",
-            "max_completion_tokens",
-            "temperature",
-            "top_p",
-            "stop",
-            "seed",
-            "presence_penalty",
-            "frequency_penalty",
-            "reasoning_effort",
-            "response_format",
-        },
-    )
+    body = translated_body(request)
     contents: list[JsonObject] = []
     system: list[JsonObject] = []
     calls: dict[str, str] = {}
     for message in json_objects(body["messages"]):
-        validate_message_fields(message)
         role = json_text(message["role"])
         if role in {"system", "developer"}:
             parts = _text_parts(message.get("content"))
@@ -240,16 +244,18 @@ def chat_to_gemini(
         parts = []
         if role == "assistant":
             reasoning = {
-                key: value for key, value in message.items() if key != "content"
+                key: message[key]
+                for key in ("reasoning", "reasoning_content", "reasoning_details")
+                if key in message
             }
             parts.extend(_reasoning(reasoning))
             for detail in json_objects(message.get("reasoning_details") or []):
                 if detail.get("type") == "reasoning.encrypted":
-                    parts.extend(_reasoning(detail))
-                elif detail.get("type") not in (
+                    parts.extend(_reasoning(detail, detail.get("data")))
+                elif detail.get("type") in (
                     "reasoning.text",
                     "reasoning.summary",
-                ) or detail.get("signature"):
+                ) and detail.get("signature"):
                     raise GeminiConversionError(
                         "Unsupported protected reasoning detail"
                     )
@@ -302,14 +308,12 @@ def chat_to_gemini(
     declarations = []
     for tool in json_objects(body.get("tools") or []):
         if tool.get("type") != "function":
-            raise GeminiConversionError("Native Gemini supports function tools only")
+            continue
         function = json_object(tool["function"])
         if function.get("strict"):
             raise GeminiConversionError(
                 "Native Gemini cannot enforce strict function tools"
             )
-        if set(function) - {"name", "description", "parameters", "strict"}:
-            raise GeminiConversionError("Unsupported function declaration fields")
         declarations.append(
             {
                 "name": function["name"],
@@ -323,8 +327,8 @@ def chat_to_gemini(
         )
     if declarations:
         result["tools"] = [{"functionDeclarations": declarations}]
-    if (choice := body.get("tool_choice")) is not None:
-        result["toolConfig"] = _tool_config(choice)
+    if tool_config := _tool_config(body.get("tool_choice"), declarations):
+        result["toolConfig"] = tool_config
     if body.get("parallel_tool_calls") is False:
         raise GeminiConversionError(
             "Native Gemini cannot enforce parallel_tool_calls=false"
@@ -336,22 +340,26 @@ def messages_to_gemini(
     request: MessagesRequest, *, allow_pending_calls: bool = False
 ) -> JsonObject:
     body = dump_messages_request(request)
-    unsupported = set(request.model_extra or {})
-    unsupported.update(key for key in ("mcp_servers", "extra_body") if body.get(key))
     if not is_noop_context_management(request.context_management):
-        unsupported.add("context_management")
-    if unsupported:
         raise GeminiConversionError(
-            f"Native Gemini cannot represent Messages fields: {sorted(unsupported)}"
+            "Native Gemini cannot apply context_management edits"
         )
     contents: list[JsonObject] = []
     system: list[JsonObject] = []
     if body.get("system"):
-        system = [{"text": part["text"]} for part in content_parts(body["system"])]
+        system = [
+            {"text": part["text"]}
+            for part in content_parts(body["system"])
+            if part.get("type") == "text"
+        ]
     calls: dict[str, str] = {}
     result_parts: list[JsonObject] | None = None
     result_order: dict[str, int] = {}
-    for message in restore_web_search_history(json_objects(body["messages"])):
+    turns = [
+        message.model_dump(mode="json", exclude_unset=True)
+        for message in translated_messages(request)
+    ]
+    for message in restore_web_search_history(turns):
         role = json_text(message["role"])
         parts: list[JsonObject] = []
         if message.get("reasoning_content"):
@@ -365,13 +373,16 @@ def messages_to_gemini(
             elif kind == "image":
                 parts.append(_image(portable_anthropic_image_url(block["source"])))
             elif kind in ("thinking", "redacted_thinking"):
-                parts.extend(_reasoning(block))
+                key = messages_replay_key(block)
+                parts.extend(_reasoning(block, block.get(key) if key else None))
             elif kind == "tool_use":
                 if block.get("extra_content"):
                     raise GeminiConversionError(
                         "Saved compatibility tool metadata cannot be replayed on native Gemini; start a fresh conversation"
                     )
                 call_id, name = str(block["id"]), str(block["name"])
+                if call_id in calls:
+                    raise GeminiConversionError("Duplicate pending tool call ID")
                 calls[call_id] = name
                 parts.append(
                     {
@@ -423,10 +434,6 @@ def messages_to_gemini(
                     for part in output_parts
                     if part.get("type") == "image"
                 ]
-                if any(
-                    part.get("type") not in ("image", "text") for part in output_parts
-                ):
-                    raise GeminiConversionError("Unsupported tool result content")
                 if images:
                     result["parts"] = images
                 result_parts.append({"functionResponse": result})
@@ -462,8 +469,6 @@ def messages_to_gemini(
         if body.get(source) is not None:
             config[target] = body[source]
     output = json_object(body.get("output_config") or {})
-    if set(output) - {"effort", "format"}:
-        raise GeminiConversionError("Unsupported Messages output_config")
     if fmt := output.get("format"):
         _format(config, fmt)
     result: JsonObject = {
@@ -473,71 +478,43 @@ def messages_to_gemini(
     }
     if system:
         result["systemInstruction"] = {"parts": system}
-    if body.get("tools"):
-        declarations = []
-        for tool in json_objects(body["tools"]):
-            if tool.get("strict"):
-                raise GeminiConversionError(
-                    "Native Gemini cannot enforce strict function tools"
-                )
-            if tool.get("type") not in (None, "custom"):
-                raise GeminiConversionError(
-                    "Native Gemini cannot execute provider-hosted tools"
-                )
-            declarations.append(
-                {
-                    "name": tool["name"],
-                    "parametersJsonSchema": tool.get(
-                        "input_schema", {"type": "object"}
-                    ),
-                    **(
-                        {"description": tool["description"]}
-                        if tool.get("description")
-                        else {}
-                    ),
-                }
+    declarations = []
+    for tool in request.client_tools:
+        if constraints := unrepresentable_client_tool_constraints(tool):
+            raise GeminiConversionError(
+                f"Native Gemini cannot enforce {constraints} on tool {tool.name!r}"
             )
+        declaration: JsonObject = {
+            "name": tool.name,
+            "parametersJsonSchema": tool.input_schema
+            if tool.input_schema is not None
+            else {"type": "object"},
+        }
+        if tool.description is not None:
+            declaration["description"] = tool.description
+        declarations.append(declaration)
+    if declarations:
         result["tools"] = [{"functionDeclarations": declarations}]
-    if body.get("tools") and body.get("tool_choice"):
-        choice = json_object(body["tool_choice"])
-        if choice.get("disable_parallel_tool_use"):
+    resolved = resolve_anthropic_tool_choice(request.client_tools, request.tool_choice)
+    if resolved and request.tool_choice is not None:
+        if resolved.get("disable_parallel_tool_use") and resolved.get("type") != "none":
             raise GeminiConversionError(
                 "Native Gemini cannot enforce disable_parallel_tool_use"
             )
-        result["toolConfig"] = _tool_config(
-            choice if choice.get("type") == "tool" else choice["type"], responses=True
-        )
+        choice = resolved if resolved.get("type") == "tool" else resolved["type"]
+        if config_choice := _tool_config(choice, declarations, responses=True):
+            result["toolConfig"] = config_choice
     return result
 
 
 def responses_to_gemini(
     request: OpenAIResponsesRequest, *, allow_pending_calls: bool = False
 ) -> JsonObject:
+    request = request.restrict_allowed_tools()
     body: JsonObject = request.model_dump(mode="json", exclude_none=True)
-    supported = {
-        "model",
-        "input",
-        "instructions",
-        "tools",
-        "tool_choice",
-        "parallel_tool_calls",
-        "stream",
-        "temperature",
-        "top_p",
-        "max_output_tokens",
-        "reasoning",
-        "store",
-        "include",
-        "text",
-        "metadata",
-    }
-    if unsupported := set(body) - supported:
+    if body.get("store") or body.get("previous_response_id"):
         raise GeminiConversionError(
-            f"Native Gemini cannot represent Responses fields: {sorted(unsupported)}"
-        )
-    if body.get("store") or body.get("parallel_tool_calls") is False:
-        raise GeminiConversionError(
-            "Native Gemini cannot enforce storage or serial tool controls"
+            "Native Gemini cannot access stored Responses state"
         )
     value = body.get("input")
     items = (
@@ -552,13 +529,21 @@ def responses_to_gemini(
         [{"text": body["instructions"]}] if body.get("instructions") else []
     )
     calls: dict[str, str] = {}
+    latest = latest_user_input(items)
     for item in items:
+        if isinstance(item, str):
+            _append(contents, "user", [{"text": item}])
+            continue
         if not isinstance(item, dict):
             raise GeminiConversionError("Responses input requires messages or items")
         kind = item.get("type", "message")
         if kind == "message":
             role = item.get("role", "user")
             parts = _text_parts(item.get("content"), responses=True)
+            if item is latest and not parts:
+                raise GeminiConversionError(
+                    "The latest user message has no translatable content"
+                )
             if role in ("system", "developer"):
                 if any("text" not in part for part in parts):
                     raise GeminiConversionError("System instructions must be text")
@@ -568,7 +553,7 @@ def responses_to_gemini(
             else:
                 raise GeminiConversionError("Unsupported Responses role")
         elif kind == "reasoning":
-            _append(contents, "model", _reasoning(item))
+            _append(contents, "model", _reasoning(item, item.get("encrypted_content")))
         elif kind == "function_call":
             if item.get("extra_content"):
                 raise GeminiConversionError(
@@ -582,6 +567,8 @@ def responses_to_gemini(
                     "Function calls require an ID, name, and arguments"
                 )
             call_id, name = json_text(item["call_id"]), json_text(item["name"])
+            if call_id in calls:
+                raise GeminiConversionError("Duplicate pending tool call ID")
             calls[call_id] = name
             args = tool_arguments({"function": {"arguments": item["arguments"]}})
             _append(
@@ -604,8 +591,20 @@ def responses_to_gemini(
                     )
                 ],
             )
-        else:
-            raise GeminiConversionError(f"Unsupported Responses input item {kind!r}")
+        elif kind in ("input_text", "output_text", "text", "input_image"):
+            _append(contents, "user", _text_parts([item], responses=True))
+        elif kind == "item_reference" or (
+            is_hosted_history(kind)
+            and item.get("status")
+            not in (None, "completed", "failed", "incomplete", "interrupted")
+        ):
+            raise GeminiConversionError(f"Native Gemini cannot replay {kind!r}")
+        elif not isinstance(kind, str):
+            raise GeminiConversionError("Responses input item requires a type")
+    if not contents and not allow_pending_calls:
+        raise GeminiConversionError(
+            "Responses request has no translatable conversation"
+        )
     if calls and not allow_pending_calls:
         raise GeminiConversionError("Unresolved function calls in history")
     config: JsonObject = {}
@@ -617,7 +616,7 @@ def responses_to_gemini(
         if body.get(source) is not None:
             config[target] = body[source]
     if (text := body.get("text")) is not None:
-        if not isinstance(text, dict) or set(text) - {"format"}:
+        if not isinstance(text, dict):
             raise GeminiConversionError(
                 "Native Gemini cannot represent Responses text controls"
             )
@@ -633,15 +632,13 @@ def responses_to_gemini(
     declarations = []
     for tool in json_objects(body.get("tools") or []):
         if tool.get("type") != "function":
-            raise GeminiConversionError("Native Gemini supports function tools only")
+            continue
         if tool.get("strict"):
             raise GeminiConversionError(
                 "Native Gemini cannot enforce strict function tools"
             )
         if not isinstance(tool.get("name"), str) or not tool["name"]:
             raise GeminiConversionError("Function declarations require a name")
-        if set(tool) - {"type", "name", "description", "parameters", "strict"}:
-            raise GeminiConversionError("Unsupported function declaration fields")
         declarations.append(
             {
                 "name": tool["name"],
@@ -655,8 +652,18 @@ def responses_to_gemini(
         )
     if declarations:
         result["tools"] = [{"functionDeclarations": declarations}]
-    if (choice := body.get("tool_choice")) is not None:
-        result["toolConfig"] = _tool_config(choice, responses=True)
+    if config_choice := _tool_config(
+        body.get("tool_choice"), declarations, responses=True
+    ):
+        result["toolConfig"] = config_choice
+    if (
+        declarations
+        and body.get("tool_choice") != "none"
+        and request.parallel_tool_calls is False
+    ):
+        raise GeminiConversionError(
+            "Native Gemini cannot enforce parallel_tool_calls=false"
+        )
     return result
 
 

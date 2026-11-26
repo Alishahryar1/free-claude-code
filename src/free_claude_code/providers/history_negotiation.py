@@ -153,7 +153,8 @@ class HistoryNegotiation:
         native_chat: bool = False,
     ) -> JsonObject:
         self._source = normalize_history_source(
-            resolve_history_overrides(body), origin.protocol
+            body if origin.protocol == "gemini" else resolve_history_overrides(body),
+            origin.protocol,
         )
         origin = replace(origin, model=str(self._source["model"]))
         if origin.protocol == "messages":
@@ -189,12 +190,16 @@ class HistoryNegotiation:
 
         self._render = render
         wire = render(self.mode, self.paths)
-        effective = effective_body(wire)
+        effective = self._effective(wire)
         self._seen.append(effective)
         self._learnable = any(
-            effective_body(render(mode, {})) != effective for mode in HistoryMode
+            self._effective(render(mode, {})) != effective for mode in HistoryMode
         )
         return wire
+
+    def _effective(self, wire: JsonObject) -> JsonObject:
+        # Gemini sends this JSON directly. Only SDK request envelopes have an overlay.
+        return wire if self._key[2] == "gemini" else effective_body(wire)
 
     @property
     def source(self) -> JsonObject:
@@ -211,7 +216,7 @@ class HistoryNegotiation:
         assert self._render is not None
         while len(self._order) > 0:
             mode = self._order.pop(0)
-            effective = effective_body(self._render(mode, {}))
+            effective = self._effective(self._render(mode, {}))
             if effective not in self._seen:
                 self.mode = mode
                 self._accepted = False

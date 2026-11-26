@@ -25,48 +25,18 @@ from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 
 from .errors import ResponsesConversionError
-from .models import OpenAIResponsesRequest
+from .models import OpenAIResponsesRequest, is_hosted_history, latest_user_input
 from .tools import (
     ResponsesToolIdentity,
     custom_tool_input_schema,
     flatten_responses_tool_name,
 )
 
-_REQUEST_FIELDS = {
-    "model",
-    "input",
-    "instructions",
-    "tools",
-    "tool_choice",
-    "parallel_tool_calls",
-    "stream",
-    "temperature",
-    "top_p",
-    "max_output_tokens",
-    "metadata",
-    "reasoning",
-    "previous_response_id",
-    "store",
-    "text",
-    "include",
-    "truncation",
-}
-
 
 @dataclass(frozen=True, slots=True)
 class ResponsesMessagesRequest:
     body: JsonObject
     tool_identities: Mapping[str, ResponsesToolIdentity]
-
-
-def _fields(value: Mapping[str, JsonValue], allowed: set[str], context: str) -> None:
-    unsupported = sorted(
-        key for key, item in value.items() if key not in allowed and item is not None
-    )
-    if unsupported:
-        raise ResponsesConversionError(
-            f"{context} cannot represent field(s): {', '.join(unsupported)}."
-        )
 
 
 def _string(value: JsonValue, context: str, *, empty: bool = False) -> str:
@@ -128,7 +98,6 @@ class _ToolScope:
         definitions: list[tuple[ResponsesToolIdentity, JsonObject]] = []
         for tool in tools or ():
             if tool.get("type") == "namespace":
-                _fields(tool, {"type", "name", "description", "tools"}, "Namespace")
                 namespace = _string(tool.get("name"), "namespace.name")
                 nested = tool.get("tools")
                 if not isinstance(nested, list):
@@ -143,6 +112,10 @@ class _ToolScope:
                         raise ResponsesConversionError(
                             "Namespace tool must be an object."
                         )
+                    if not isinstance(child.get("type"), str):
+                        raise ResponsesConversionError("Namespace tool requires a type")
+                    if child.get("type") not in ("function", "custom"):
+                        continue
                     identity, body = self._definition(child, namespace)
                     if description:
                         own = body.get("description", "")
@@ -150,8 +123,10 @@ class _ToolScope:
                             f"Namespace {namespace}: {description}\n\n{own}".rstrip()
                         )
                     definitions.append((identity, body))
-            else:
+            elif tool.get("type") in ("function", "custom"):
                 definitions.append(self._definition(tool, None))
+            elif not isinstance(tool.get("type"), str):
+                raise ResponsesConversionError("Tool declaration requires a type")
         for item in items:
             if isinstance(item, Mapping) and item.get("type") in (
                 "function_call",
@@ -193,9 +168,6 @@ class _ToolScope:
         kind: Literal["function", "custom"] = (
             "custom" if kind_value == "custom" else "function"
         )
-        allowed = {"type", "name", "namespace", "description"}
-        allowed |= {"format"} if kind == "custom" else {"parameters", "strict"}
-        _fields(value, allowed, "Tool declaration")
         identity = _identity(value, kind, namespace)
         if identity in self._declared:
             raise ResponsesConversionError("Duplicate tool declaration.")
@@ -208,15 +180,13 @@ class _ToolScope:
             )
         if kind == "custom":
             format_value = value.get("format")
-            if format_value is not None:
-                if (
-                    not isinstance(format_value, Mapping)
-                    or format_value.get("type") != "text"
-                ):
-                    raise ResponsesConversionError(
-                        "Messages upstream cannot enforce custom tool grammars."
-                    )
-                _fields(format_value, {"type"}, "Custom tool format")
+            if format_value is not None and (
+                not isinstance(format_value, Mapping)
+                or format_value.get("type") != "text"
+            ):
+                raise ResponsesConversionError(
+                    "Messages upstream cannot enforce custom tool grammars."
+                )
             body["input_schema"] = {
                 **custom_tool_input_schema(description=None),
                 "additionalProperties": False,
@@ -250,7 +220,6 @@ class _ToolScope:
                 kind = value.get("type")
                 if kind not in ("function", "custom"):
                     raise ResponsesConversionError("Unsupported named tool choice.")
-                _fields(value, {"type", "name", "namespace"}, "Tool choice")
                 identity = _identity(
                     value, "custom" if kind == "custom" else "function"
                 )
@@ -272,11 +241,10 @@ class _ToolScope:
         ):
             choice = choice or {"type": "auto"}
             choice["disable_parallel_tool_use"] = True
-        return choice
+        return choice if self.tools else None
 
 
 def _image(value: Mapping[str, JsonValue]) -> JsonObject:
-    _fields(value, {"type", "image_url", "detail", "file_id"}, "Image")
     if value.get("file_id") is not None:
         raise ResponsesConversionError(
             "A Messages upstream requires image content or a portable URL, not file_id."
@@ -321,20 +289,13 @@ def _content(value: JsonValue, *, images: bool, empty: bool = False) -> list[Jso
             raise ResponsesConversionError("Message content blocks must be objects.")
         kind = item.get("type")
         if kind in ("input_text", "output_text", "text"):
-            _fields(item, {"type", "text", "annotations", "logprobs"}, "Text block")
-            if item.get("annotations") or item.get("logprobs"):
-                raise ResponsesConversionError(
-                    "Messages history cannot represent text annotations or logprobs."
-                )
             text = _string(item.get("text"), "content.text", empty=empty)
             if text:
                 blocks.append({"type": "text", "text": text})
         elif kind == "input_image" and images:
             blocks.append(_image(item))
-        else:
-            raise ResponsesConversionError(
-                f"Messages upstream cannot represent content type {kind!r}."
-            )
+        elif not isinstance(kind, str):
+            raise ResponsesConversionError("Content block requires a type.")
     return blocks
 
 
@@ -376,7 +337,7 @@ class _MessagesInput:
         else:
             self.messages.append({"role": role, "content": parts})
 
-    def add(self, value: JsonValue) -> None:
+    def add(self, value: JsonValue, *, current_user: bool = False) -> None:
         if isinstance(value, str):
             self._append("user", [{"type": "text", "text": value}])
             return
@@ -386,7 +347,6 @@ class _MessagesInput:
             )
         kind = value.get("type")
         if kind is None or kind == "message":
-            _fields(value, {"type", "role", "content", "id", "status"}, "Message")
             role = value.get("role", "user")
             if role in ("system", "developer"):
                 if self.messages:
@@ -395,14 +355,17 @@ class _MessagesInput:
                     )
                 self.system.extend(_content(value.get("content"), images=False))
             elif role in ("user", "assistant"):
-                self._append(
-                    "user" if role == "user" else "assistant",
-                    _content(
-                        value.get("content"),
-                        images=role == "user",
-                        empty=self._assistant_fragment and role == "assistant",
-                    ),
+                parts = _content(
+                    value.get("content"),
+                    images=role == "user",
+                    empty=self._assistant_fragment and role == "assistant",
                 )
+                if parts or self._assistant_fragment:
+                    self._append("user" if role == "user" else "assistant", parts)
+                elif current_user:
+                    raise ResponsesConversionError(
+                        "The latest user message has no translatable content"
+                    )
             else:
                 raise ResponsesConversionError("Unsupported Responses message role.")
             return
@@ -419,34 +382,27 @@ class _MessagesInput:
         if kind in ("input_text", "output_text", "text", "input_image"):
             self._append("user", _content([value], images=True))
             return
-        if (
-            isinstance(kind, str)
-            and kind.endswith(("_call", "_result"))
-            and value.get("status")
-            in {None, "completed", "failed", "incomplete", "interrupted"}
-        ):
+        if is_hosted_history(kind) and value.get("status") in {
+            None,
+            "completed",
+            "failed",
+            "incomplete",
+            "interrupted",
+        }:
             self._append(
                 "assistant", [{"type": "text", "text": tool_history_context(value)}]
             )
             return
-        raise ResponsesConversionError(
-            f"Messages upstream cannot represent input item {kind!r}."
-        )
+        if (
+            not isinstance(kind, str)
+            or is_hosted_history(kind)
+            or kind == "item_reference"
+        ):
+            raise ResponsesConversionError(
+                f"Messages upstream cannot represent input item {kind!r}."
+            )
 
     def _call(self, value: Mapping[str, JsonValue], *, custom: bool) -> None:
-        _fields(
-            value,
-            {
-                "type",
-                "id",
-                "status",
-                "call_id",
-                "name",
-                "namespace",
-                "input" if custom else "arguments",
-            },
-            "Tool call",
-        )
         call_id = _string(value.get("call_id"), "tool.call_id")
         if call_id in self._calls:
             raise ResponsesConversionError(
@@ -474,11 +430,6 @@ class _MessagesInput:
         self._pending.add(call_id)
 
     def _result(self, value: Mapping[str, JsonValue], *, custom: bool) -> None:
-        _fields(
-            value,
-            {"type", "id", "status", "call_id", "output", "is_error"},
-            "Tool output",
-        )
         call_id = _string(value.get("call_id"), "tool output.call_id")
         if call_id not in self._pending:
             raise ResponsesConversionError("Tool output is orphaned or duplicated.")
@@ -525,7 +476,6 @@ def _output_format(value: JsonValue) -> JsonObject | None:
         return None
     if not isinstance(value, Mapping):
         raise ResponsesConversionError("Responses text options must be an object.")
-    _fields(value, {"format"}, "Text options")
     format_value = value.get("format")
     if format_value is None:
         return None
@@ -533,17 +483,12 @@ def _output_format(value: JsonValue) -> JsonObject | None:
         raise ResponsesConversionError("Responses text.format must be an object.")
     kind = format_value.get("type")
     if kind == "text":
-        _fields(format_value, {"type"}, "Text format")
         return None
     if kind != "json_schema":
         raise ResponsesConversionError(
             "Messages upstream supports text or json_schema output."
         )
-    _fields(
-        format_value,
-        {"type", "name", "description", "schema", "strict"},
-        "Output format",
-    )
+
     schema = format_value.get("schema")
     if not isinstance(schema, Mapping):
         raise ResponsesConversionError("Output format schema must be an object.")
@@ -582,8 +527,8 @@ def build_responses_messages_request(
 ) -> ResponsesMessagesRequest:
     """Convert caller-owned history directly to the native Messages wire shape."""
 
+    request = request.restrict_allowed_tools()
     raw = cast(JsonObject, request.model_dump(mode="json", exclude_none=True))
-    _fields(raw, _REQUEST_FIELDS, "Responses request")
     if raw.get("truncation") not in (None, "disabled"):
         raise ResponsesConversionError(
             "Messages upstream does not support automatic input truncation."
@@ -596,19 +541,21 @@ def build_responses_messages_request(
         raise ResponsesConversionError(
             "Messages upstream cannot represent the requested include fields."
         )
-    if request.reasoning is not None:
-        _fields(request.reasoning, {"effort", "summary"}, "Reasoning controls")
-        if request.reasoning.get("summary") not in (None, "auto"):
-            raise ResponsesConversionError(
-                "Messages upstream supports only automatic reasoning summaries."
-            )
+    if request.reasoning is not None and request.reasoning.get("summary") not in (
+        None,
+        "auto",
+    ):
+        raise ResponsesConversionError(
+            "Messages upstream supports only automatic reasoning summaries."
+        )
     items = _items(request.input)
     scope = _ToolScope(request.tools, items)
     builder = _MessagesInput(scope)
     if request.instructions is not None:
         builder.system.append({"type": "text", "text": request.instructions})
+    latest = latest_user_input(items)
     for item in items:
-        builder.add(item)
+        builder.add(item, current_user=item is latest)
     builder.finish()
     if not builder.messages:
         raise ResponsesConversionError(
@@ -625,14 +572,12 @@ def build_responses_messages_request(
     for key in ("temperature", "top_p"):
         if key in raw:
             body[key] = raw[key]
-    if request.metadata is not None:
-        _fields(request.metadata, {"user_id"}, "Metadata")
-        if "user_id" in request.metadata:
-            body["metadata"] = {
-                "user_id": _string(
-                    request.metadata["user_id"], "metadata.user_id", empty=True
-                )
-            }
+    if request.metadata is not None and "user_id" in request.metadata:
+        body["metadata"] = {
+            "user_id": _string(
+                request.metadata["user_id"], "metadata.user_id", empty=True
+            )
+        }
     output_format = _output_format(raw.get("text"))
     if output_format is not None:
         body["output_config"] = {"format": output_format}

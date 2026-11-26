@@ -136,14 +136,14 @@ class GeminiStream:
                 if self._output is None and self._continuation_context is None:
                     if "functionCall" in raw:
                         try:
-                            Part.model_validate(raw)
+                            Part.model_validate(raw, extra="forbid")
                         except ValueError as error:
                             raise conversion_failure(
                                 "Gemini returned an unsupported partial function call"
                             ) from error
                     continue
                 try:
-                    part = Part.model_validate(raw)
+                    part = Part.model_validate(raw, extra="forbid")
                 except ValueError as error:
                     raise conversion_failure(
                         "Gemini returned unsupported native content"

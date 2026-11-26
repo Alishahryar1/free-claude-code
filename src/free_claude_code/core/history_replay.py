@@ -172,7 +172,7 @@ def _continuation_replay(value: JsonValue) -> ContinuationReplay:
             "Continuation replay requires its instruction and optional model prefix."
         )
     try:
-        contents = [Content.model_validate(item) for item in context]
+        contents = [Content.model_validate(item, extra="forbid") for item in context]
         if [item.role for item in contents] not in (["user"], ["model", "user"]) or any(
             not item.parts
             or any(
@@ -186,7 +186,7 @@ def _continuation_replay(value: JsonValue) -> ContinuationReplay:
             if not isinstance(echo, list) or not echo:
                 raise ValueError("Invalid public echo")
             for item in echo:
-                part = Part.model_validate(item)
+                part = Part.model_validate(item, extra="forbid")
                 if part.thought_signature or (
                     part.text is None and part.function_call is None
                 ):
@@ -240,7 +240,7 @@ def _validate_record(payload: JsonObject, *, associated: bool = False) -> Replay
         from .gemini.models import Content
 
         try:
-            content = Content.model_validate(native)
+            content = Content.model_validate(native, extra="forbid")
         except ValueError as error:
             raise HistoryReplayError(
                 "Gemini replay requires native model content."
@@ -351,6 +351,14 @@ def decode_replay(value: str) -> ReplayRecord:
     return record
 
 
+def messages_replay_key(block: Mapping[str, object]) -> str | None:
+    if block.get("type") == "thinking":
+        return "signature"
+    if block.get("type") == "redacted_thinking":
+        return "data"
+    return None
+
+
 def resolve_messages_replay(content: Sequence[JsonValue]) -> list[JsonValue]:
     """Join late metadata within one assistant message on a fresh copy."""
     blocks = deepcopy(list(content))
@@ -358,13 +366,7 @@ def resolve_messages_replay(content: Sequence[JsonValue]) -> list[JsonValue]:
     for index, block in enumerate(blocks):
         if not isinstance(block, dict):
             continue
-        key = (
-            "signature"
-            if block.get("type") == "thinking"
-            else "data"
-            if block.get("type") == "redacted_thinking"
-            else None
-        )
+        key = messages_replay_key(block)
         if key is None or not is_replay(value := block.get(key)):
             continue
         record = decode_replay(value)
@@ -637,8 +639,9 @@ def normalize_history_source(
                 blocks: list[JsonValue] = []
                 for block in resolve_messages_replay(content):
                     record = (
-                        _record(block, "signature", "data")
+                        _record(block, key)
                         if isinstance(block, dict)
+                        and (key := messages_replay_key(block))
                         else None
                     )
                     if (
@@ -888,7 +891,11 @@ def _prepare_messages_content(
         }:
             values.append(block)
         else:
-            record = _record(block, "signature", "data", destination=destination)
+            record = (
+                _record(block, key, destination=destination)
+                if (key := messages_replay_key(block))
+                else None
+            )
             if protected_reasoning(block):
                 has_reasoning = True
                 if record is not None and destination.accepts(record.origin):
@@ -1052,7 +1059,7 @@ def _visible_gemini_parts(
             continue
         # ProtoJSON nulls and omitted optional fields have the same meaning.
         # Normalize only this comparison copy, never the signed native record.
-        value = Part.model_validate(part).model_dump(
+        value = Part.model_validate(part, extra="forbid").model_dump(
             mode="json", by_alias=True, exclude_none=True
         )
         value.pop("thoughtSignature", None)

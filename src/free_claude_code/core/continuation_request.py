@@ -124,7 +124,9 @@ class ContinuationRequest:
             if seed.wire_api == "gemini":
                 # Public frame parsing retains Decimal; use the native JSON
                 # model's numeric representation before storing the echo.
-                content = Content.model_validate({"role": "model", "parts": items})
+                content = Content.model_validate(
+                    {"role": "model", "parts": items}, extra="forbid"
+                )
                 return [
                     content.model_dump(mode="json", by_alias=True, exclude_none=True)
                 ]

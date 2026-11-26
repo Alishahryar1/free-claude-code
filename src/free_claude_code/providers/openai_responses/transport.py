@@ -209,7 +209,7 @@ class OpenAIResponsesTransport:
             prepared = build_gemini_responses_request(request, reasoning)
         except GeminiConversionError as error:
             raise InvalidRequestError(str(error)) from error
-        for field in self._omitted_request_fields - {"store", "include"}:
+        for field in self._omitted_request_fields - {"store", "include", "metadata"}:
             if field in prepared.body:
                 raise InvalidRequestError(
                     f"{self._provider_name} cannot represent Gemini control {field}"
@@ -273,7 +273,11 @@ class OpenAIResponsesTransport:
     ) -> AsyncIterator[StreamOutput]:
         try:
             body = chat_responses_body(request)
-            for field in self._omitted_request_fields - {"store", "include"}:
+            for field in self._omitted_request_fields - {
+                "store",
+                "include",
+                "metadata",
+            }:
                 if field in body:
                     raise InvalidRequestError(
                         f"{self._provider_name} cannot represent Chat control {field}"
@@ -334,7 +338,7 @@ class OpenAIResponsesTransport:
         *,
         reasoning: ReasoningPolicy,
     ) -> tuple[JsonObject, ResponsesToolAdapter]:
-        validate_history(request.model_dump(mode="json"))
+        validate_history(request.model_dump(mode="json"), "responses")
         if not request.model.strip():
             raise InvalidRequestError("Responses request model must not be empty.")
         if request.input is None or request.input == "" or request.input == []:

@@ -28,8 +28,12 @@ from free_claude_code.core.tool_schema_patterns import translate_tool_schema_pat
 
 from .content import get_block_attr, get_block_type
 from .image_sources import AnthropicImageSourceError, portable_anthropic_image_url
-from .models import MessagesRequest, Tool
-from .request_serialization import serialize_tool_result_content
+from .models import ExtensionBlock, MessagesRequest, Tool
+from .request_serialization import (
+    openai_output_schema,
+    serialize_tool_result_content,
+    translated_messages,
+)
 from .tool_results import (
     ToolResultImage,
     ToolResultText,
@@ -66,20 +70,20 @@ class ReasoningReplayMode(StrEnum):
 
 
 def resolve_anthropic_tool_choice(
-    tools: Sequence[object] | None,
+    tools: Sequence[Tool] | None,
     tool_choice: JsonObject | None,
 ) -> JsonObject | None:
-    """Materialize Anthropic's automatic choice when tools are available.
-
-    A choice with no tools has nothing to act on, so it is dropped rather than
-    forwarded. Gemini rejects the whole request otherwise, with "Function calling
-    config is set without function_declarations".
-    """
-    if not tools:
-        return None
-    if tool_choice is not None:
-        return tool_choice
-    return {"type": "auto"}
+    """Validate the caller's choice against the functions that survived translation."""
+    kind = tool_choice.get("type") if tool_choice else "auto"
+    if kind == "tool" and not any(
+        tool.name == (tool_choice or {}).get("name") for tool in tools or ()
+    ):
+        raise ValueError("Named tool choice requires an available function")
+    if kind in ("any", "required") and not tools:
+        raise ValueError("Required tool choice has no available functions")
+    if kind not in ("auto", "any", "required", "none", "tool"):
+        raise ValueError("Unsupported tool choice")
+    return (tool_choice or {"type": "auto"}) if tools else None
 
 
 def unrepresentable_client_tool_constraints(tool: Tool) -> list[str]:
@@ -99,24 +103,6 @@ def _set_replayed_reasoning(
     message: dict[str, Any], reasoning: str, mode: ReasoningReplayMode
 ) -> None:
     message[mode.value] = reasoning
-
-
-def _openai_reject_native_only_top_level_fields(
-    request_data: MessagesRequest,
-) -> None:
-    """OpenAI chat providers may only convert known top-level request fields.
-
-    First-class model fields (e.g. ``context_management``) are not forwarded to
-    the OpenAI API but are allowed so clients do not hit spurious 400s.
-    Unknown extra keys (``__pydantic_extra__``) are still rejected.
-    """
-    extra = request_data.model_extra
-    if not extra:
-        return
-    raise OpenAIConversionError(
-        "OpenAI chat conversion does not support these top-level request fields: "
-        f"{sorted(extra)}. Remove the unsupported fields."
-    )
 
 
 def _tool_input_schema(tool: object) -> dict[str, Any]:
@@ -870,14 +856,22 @@ def build_base_request_body(
     structured_reasoning_details: bool = False,
 ) -> dict[str, Any]:
     """Build the common parts of an OpenAI-format request body."""
-    _openai_reject_native_only_top_level_fields(request_data)
+    tools = request_data.client_tools
+    try:
+        source_messages = translated_messages(request_data)
+        output_schema = openai_output_schema(request_data)
+        tool_choice = resolve_anthropic_tool_choice(tools, request_data.tool_choice)
+    except ValueError as error:
+        raise OpenAIConversionError(str(error)) from error
     messages = AnthropicToOpenAIConverter.convert_messages(
-        request_data.messages,
+        source_messages,
         reasoning_replay=reasoning_replay,
         structured_reasoning_details=structured_reasoning_details,
     )
 
     system = request_data.system
+    if isinstance(system, list):
+        system = [block for block in system if not isinstance(block, ExtensionBlock)]
     if system:
         system_msg = AnthropicToOpenAIConverter.convert_system_prompt(system)
         if system_msg:
@@ -885,6 +879,8 @@ def build_base_request_body(
 
     body: dict[str, Any] = {"model": request_data.model, "messages": messages}
 
+    if output_schema is not None:
+        body["response_format"] = {"type": "json_schema", "json_schema": output_schema}
     max_tokens = request_data.max_tokens
     set_if_not_none(body, "max_tokens", max_tokens or default_max_tokens)
     set_if_not_none(body, "temperature", request_data.temperature)
@@ -894,10 +890,24 @@ def build_base_request_body(
     if stop_sequences:
         body["stop"] = stop_sequences
 
-    tools = request_data.tools
     if tools:
         body["tools"] = AnthropicToOpenAIConverter.convert_tools(tools)
-    tool_choice = resolve_anthropic_tool_choice(tools, request_data.tool_choice)
+        for declaration, tool in zip(body["tools"], tools, strict=True):
+            options = tool.model_extra or {}
+            if "strict" in options:
+                declaration["function"]["strict"] = options["strict"]
+            if any(
+                key != "strict" for key in unrepresentable_client_tool_constraints(tool)
+            ):
+                raise OpenAIConversionError(
+                    f"Unsupported caller constraints on tool {tool.name!r}"
+                )
+    if (
+        tool_choice
+        and tool_choice.get("disable_parallel_tool_use")
+        and tool_choice.get("type") != "none"
+    ):
+        body["parallel_tool_calls"] = False
     if tool_choice:
         body["tool_choice"] = AnthropicToOpenAIConverter.convert_tool_choice(
             tool_choice

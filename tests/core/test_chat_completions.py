@@ -75,17 +75,13 @@ def test_chat_tool_history_and_thinking_survive_conversion(
 
 
 @pytest.mark.parametrize("destination", [chat_messages_body, chat_responses_body])
-def test_translated_chat_rejects_unrepresentable_options(
+def test_translated_chat_omits_unsupported_logprobs(
     destination: Callable[[ChatRequest], JsonObject],
 ) -> None:
-    with pytest.raises(ChatConversionError, match="logprobs"):
-        destination(
-            ChatRequest(
-                model="model",
-                messages=[{"role": "user", "content": "hi"}],
-                logprobs=True,
-            )
-        )
+    request = ChatRequest(
+        model="model", messages=[{"role": "user", "content": "hi"}], logprobs=True
+    )
+    assert "logprobs" not in destination(request)
 
 
 def test_rich_tool_output_uses_responses_input_part_types() -> None:
@@ -114,7 +110,7 @@ def test_rich_tool_output_uses_responses_input_part_types() -> None:
 
 
 @pytest.mark.parametrize("destination", [chat_messages_body, chat_responses_body])
-def test_cross_protocol_stream_options_cannot_be_silently_discarded(
+def test_cross_protocol_stream_options_omit_unknown_hints(
     destination: Callable[[ChatRequest], JsonObject],
 ) -> None:
     request = ChatRequest(
@@ -122,8 +118,7 @@ def test_cross_protocol_stream_options_cannot_be_silently_discarded(
         messages=[{"role": "user", "content": "hello"}],
         stream_options={"include_obfuscation": False},
     )
-    with pytest.raises(ChatConversionError, match="stream_options"):
-        destination(request)
+    assert "stream_options" not in destination(request)
 
 
 @pytest.mark.parametrize("destination", [chat_messages_body, chat_responses_body])
@@ -150,7 +145,7 @@ def test_nullable_chat_assistant_fields_are_absent_in_translation(
 @pytest.mark.parametrize(
     "destination", [chat_messages_body, chat_responses_body, chat_to_gemini]
 )
-def test_allowed_tools_rejects_unsupported_translation_clearly(
+def test_allowed_tools_omits_unavailable_automatic_tools(
     destination: Callable[[ChatRequest], JsonObject],
 ) -> None:
     request = ChatRequest(
@@ -164,8 +159,10 @@ def test_allowed_tools_rejects_unsupported_translation_clearly(
             },
         },
     )
-    with pytest.raises(ChatConversionError, match="tool_choice"):
-        destination(request)
+    body = destination(request)
+    assert "tools" not in body
+    assert "tool_choice" not in body
+    assert "toolConfig" not in body
 
 
 @pytest.mark.parametrize("destination", [chat_messages_body, chat_to_gemini])
@@ -186,3 +183,60 @@ def test_refusal_history_keeps_its_text_across_other_protocols(
         ]
     else:
         assert result["contents"][0]["parts"] == [{"text": "I cannot do that."}]
+
+
+@pytest.mark.parametrize(
+    "destination", [chat_messages_body, chat_responses_body, chat_to_gemini]
+)
+def test_untranslated_history_keeps_only_the_supported_call_and_its_result(
+    destination: Callable[[ChatRequest], JsonObject],
+) -> None:
+    request = ChatRequest(
+        model="m",
+        messages=[
+            {"role": "user", "content": "check"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"type": "future_action"},
+                    {"type": "future_action", "id": "future"},
+                    {
+                        "type": "function",
+                        "id": "kept",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    },
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "future",
+                "content": "untranslated result",
+            },
+            {"role": "tool", "tool_call_id": "kept", "content": ""},
+        ],
+    )
+    assert request.reserved_tool_ids() == {"kept", "future"}
+    body = destination(request)
+    assert "kept" in str(body) and "untranslated result" not in str(body)
+
+
+def test_result_cannot_be_assigned_to_an_ambiguous_source_call() -> None:
+    request = ChatRequest(
+        model="m",
+        messages=[
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"type": "future_action", "id": "duplicate"},
+                    {
+                        "type": "function",
+                        "id": "duplicate",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    },
+                ],
+            },
+            {"role": "tool", "tool_call_id": "duplicate", "content": "ambiguous"},
+        ],
+    )
+    with pytest.raises(ChatConversionError, match="uplicate"):
+        chat_responses_body(request)

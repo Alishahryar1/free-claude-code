@@ -110,6 +110,15 @@ def apply_openai_chat_body_policy(
     if policy.strip_message_names:
         _strip_message_names(body.get("messages"))
 
+    if (
+        "parallel_tool_calls" in policy.unsupported_body_keys
+        and body.get("parallel_tool_calls") is False
+        and body.get("tools")
+        and body.get("tool_choice") != "none"
+    ):
+        raise InvalidRequestError(
+            f"{policy.provider_name} cannot enforce serial tool calls"
+        )
     for key in policy.unsupported_body_keys:
         body.pop(key, None)
 

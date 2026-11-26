@@ -144,6 +144,16 @@ def source_events(protocol: str):
     return [{**event, "sequence_number": index} for index, event in enumerate(events)]
 
 
+def matrix_reply(protocol: str):
+    raw = "".join(
+        (f"event: {event['type']}\n" if protocol == "messages" else "")
+        + f"data: {json.dumps(event)}\n\n"
+        for event in source_events(protocol)
+    )
+    response = httpx.Response if protocol in {"messages", "gemini"} else httpx2.Response
+    return response(200, headers={"content-type": "text/event-stream"}, text=raw)
+
+
 def matrix_app(
     protocol: str,
     *,
@@ -236,7 +246,7 @@ def test_matrix_requires_the_handler_for_its_protocol(
 
 def ingress_request(
     wire: str, streaming: bool, history: Sequence[Mapping[str, JsonValue]] | None = None
-):
+) -> tuple[str, JsonObject]:
     tools = (
         [{"name": "read", "input_schema": SCHEMA}]
         if wire == "messages"
@@ -269,6 +279,85 @@ def ingress_request(
     if wire == "messages":
         body["max_tokens"] = 100
     return "/v1/chat/completions" if wire == "chat" else f"/v1/{wire}", body
+
+
+@pytest.mark.parametrize("wire", ["chat", "messages", "responses", "gemini"])
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses", "gemini"])
+def test_request_extensions_follow_the_selected_wire(wire: str, protocol: str) -> None:
+    bodies: list[JsonObject] = []
+
+    def reply(request: httpx.Request | httpx2.Request):
+        bodies.append(decode_object(request.content))
+        return matrix_reply(protocol)
+
+    parts_key = "parts" if wire == "gemini" else "content"
+    turn_key = {"gemini": "contents", "responses": "input"}.get(wire, "messages")
+    part: JsonObject = {"text": "hello"}
+    if wire != "gemini":
+        part["type"] = "input_text" if wire == "responses" else "text"
+    path, baseline = ingress_request(
+        wire, wire == "responses", [{"role": "user", parts_key: [part]}]
+    )
+    extended = deepcopy(baseline)
+    extended.update(vendor_null=None, vendor_option={"enabled": False})
+    turn = object_array(extended[turn_key])[0]
+    turn["vendor_turn"] = 0
+    parts = array_payload(turn[parts_key])
+    object_payload(parts[0])["vendor_part"] = True
+    future: JsonObject = {"futureData": {"text": "opaque"}}
+    if wire != "gemini":
+        future["type"] = "future_data"
+    parts.append(future)
+    tool = object_array(extended["tools"])[0]
+    if wire == "gemini":
+        tool = object_array(tool["functionDeclarations"])[0]
+    elif wire == "chat":
+        tool = object_payload(tool["function"])
+    tool["vendor_declaration"] = 17
+    if wire == "messages":
+        array_payload(extended["tools"]).append({"type": "future_hosted"})
+    if wire == "responses":
+        extended["messages"] = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "redacted_thinking", "data": "fcc:history:invalid"}
+                ],
+            }
+        ]
+    if wire in {"chat", "responses", "messages"}:
+        extended["prompt_cache_key"] = "cache-group"
+    with TestClient(
+        matrix_app(protocol, native_reply=reply, sdk_reply=reply)
+    ) as client:
+        for body in (baseline, extended):
+            result = client.post(path, json=body)
+            assert result.status_code == 200, result.text
+    original, sent = bodies
+    if wire == protocol:
+        assert sent["vendor_null"] is None
+        assert sent["vendor_option"] == {"enabled": False}
+        sent_turn = object_array(sent[turn_key])[0]
+        assert sent_turn["vendor_turn"] == 0
+        sent_parts = object_array(sent_turn[parts_key])
+        assert sent_parts[0]["vendor_part"] is True
+        assert sent_parts[1] == future
+        declaration = object_array(sent["tools"])[0]
+        if wire == "gemini":
+            declaration = object_array(declaration["functionDeclarations"])[0]
+        elif wire == "chat":
+            declaration = object_payload(declaration["function"])
+        assert declaration["vendor_declaration"] == 17
+        if wire == "messages":
+            assert object_array(sent["tools"])[1] == {"type": "future_hosted"}
+        if wire == "responses":
+            assert sent["messages"] == extended["messages"]
+        if wire != "gemini":
+            assert sent["prompt_cache_key"] == "cache-group"
+    elif {wire, protocol} == {"chat", "responses"}:
+        assert sent == {**original, "prompt_cache_key": "cache-group"}
+    else:
+        assert sent == original
 
 
 def response_value(response: httpx.Response, wire: str, streaming: bool):
@@ -706,16 +795,7 @@ def test_all_sixteen_paths_replay_native_state_and_tool_results(
 
     def reply(request: httpx.Request | httpx2.Request):
         bodies.append(decode_object(request.content))
-        events = source_events(protocol)
-        raw = "".join(
-            (f"event: {event['type']}\n" if protocol == "messages" else "")
-            + f"data: {json.dumps(event)}\n\n"
-            for event in events
-        )
-        response = (
-            httpx.Response if protocol in {"messages", "gemini"} else httpx2.Response
-        )
-        return response(200, headers={"content-type": "text/event-stream"}, text=raw)
+        return matrix_reply(protocol)
 
     app = matrix_app(protocol, native_reply=reply, sdk_reply=reply)
     with TestClient(app) as client:
@@ -769,3 +849,181 @@ def test_all_sixteen_paths_replay_native_state_and_tool_results(
                 )
             )
             assert json.dumps(assistant).count("Find 17.") == 1
+
+
+@pytest.mark.parametrize(
+    ("wire", "protocol"),
+    [
+        (wire, protocol)
+        for wire in ("chat", "messages", "responses", "gemini")
+        for protocol in ("chat", "messages", "responses", "gemini")
+        if wire != protocol
+    ],
+)
+def test_unsupported_latest_user_turn_never_replays_an_older_prompt(
+    wire: str, protocol: str
+) -> None:
+    key = "parts" if wire == "gemini" else "content"
+    future: JsonObject = (
+        {"futureMedia": {"text": "opaque"}}
+        if wire == "gemini"
+        else {"type": "future_media", "text": "opaque"}
+    )
+    known: JsonObject = {"text": "earlier"}
+    if wire != "gemini":
+        known["type"] = "input_text" if wire == "responses" else "text"
+    path, body = ingress_request(
+        wire,
+        wire == "responses",
+        [
+            {"role": "user", key: [known]},
+            {"role": "user", key: [future]},
+        ],
+    )
+    sent = []
+
+    def upstream(request: httpx.Request | httpx2.Request):
+        sent.append(request)
+        return matrix_reply(protocol)
+
+    with TestClient(
+        matrix_app(protocol, native_reply=upstream, sdk_reply=upstream)
+    ) as client:
+        result = client.post(path, json=body)
+    assert result.status_code == 400, result.text
+    assert "latest user" in result.text.lower()
+    assert not sent
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses", "gemini"])
+def test_gemini_saved_input_and_literal_sdk_fields_follow_the_wire(
+    protocol: str,
+) -> None:
+    requests = []
+
+    def upstream(request: httpx.Request | httpx2.Request):
+        requests.append(request)
+        return matrix_reply(protocol)
+
+    path, body = ingress_request("gemini", False)
+    extras: JsonObject = {
+        "model": "other",
+        "extra_headers": {"x-goog-api-key": "client-value"},
+    }
+    with TestClient(
+        matrix_app(protocol, native_reply=upstream, sdk_reply=upstream)
+    ) as client:
+        result = client.post(
+            path,
+            json={
+                **body,
+                "extra_body": extras,
+                "cachedContent": "cachedContents/context",
+            },
+        )
+    if protocol == "gemini":
+        assert result.status_code == 200, result.text
+        (request,) = requests
+        assert request.url.path.endswith("/models/backend:streamGenerateContent")
+        assert request.headers["x-goog-api-key"] == "upstream-key"
+        sent = decode_object(request.content)
+        assert sent["cachedContent"] == "cachedContents/context"
+        assert sent["extra_body"] == extras
+    else:
+        assert result.status_code == 400, result.text
+        assert result.json()["error"]["status"] == "INVALID_ARGUMENT"
+        assert "cachedContent" in result.text
+        assert not requests
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses"])
+def test_messages_required_output_schema_survives_translation(protocol: str) -> None:
+    bodies = []
+
+    def upstream(request: httpx.Request | httpx2.Request):
+        bodies.append(decode_object(request.content))
+        return matrix_reply(protocol)
+
+    path, body = ingress_request("messages", False)
+    schema = {
+        "type": "object",
+        "properties": {"future_field": {"type": "null"}},
+        "additionalProperties": False,
+    }
+    with TestClient(matrix_app(protocol, sdk_reply=upstream)) as client:
+        result = client.post(
+            path,
+            json={
+                **body,
+                "output_config": {"format": {"type": "json_schema", "schema": schema}},
+            },
+        )
+    assert result.status_code == 200, result.text
+    (sent,) = bodies
+    fmt = (
+        object_payload(object_payload(sent["response_format"])["json_schema"])
+        if protocol == "chat"
+        else object_payload(object_payload(sent["text"])["format"])
+    )
+    assert fmt["schema"] == schema
+    assert fmt["strict"] is True
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses", "gemini"])
+def test_forcing_omitted_hosted_tool_fails_before_upstream(protocol: str) -> None:
+    requests = []
+
+    def upstream(request: httpx.Request | httpx2.Request):
+        requests.append(request)
+        return matrix_reply(protocol)
+
+    path, body = ingress_request("messages", False)
+    tools = [
+        {"type": "future_hosted", "name": "upstream_only"},
+        *array_payload(body["tools"]),
+    ]
+    with TestClient(
+        matrix_app(protocol, native_reply=upstream, sdk_reply=upstream)
+    ) as client:
+        result = client.post(
+            path,
+            json={
+                **body,
+                "tools": tools,
+                "tool_choice": {"type": "tool", "name": "upstream_only"},
+            },
+        )
+    assert result.status_code == 400, result.text
+    assert (
+        object_payload(response_object(result)["error"])["type"]
+        == "invalid_request_error"
+    )
+    assert not requests
+
+
+@pytest.mark.parametrize("wire", ["gemini", "chat"])
+def test_partial_gemini_upstream_call_never_becomes_a_complete_tool_call(
+    wire: str,
+) -> None:
+    from tests.providers.test_gemini import _sse
+
+    def reply(request: httpx.Request):
+        return _sse(
+            [
+                {
+                    "functionCall": {
+                        "name": "read",
+                        "partialArgs": [
+                            {"jsonPath": "$.path", "stringValue": "unfinished"}
+                        ],
+                        "willContinue": True,
+                    }
+                }
+            ]
+        )
+
+    path, body = ingress_request(wire, False)
+    with TestClient(matrix_app("gemini", native_reply=reply, max_attempts=1)) as client:
+        result = client.post(path, json=body)
+    assert result.status_code >= 400, result.text
+    assert "error" in response_object(result)

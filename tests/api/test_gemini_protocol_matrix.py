@@ -337,3 +337,67 @@ def test_public_fallback_omits_hidden_unsigned_history(streaming: bool) -> None:
         if "thoughtSignature" in part
     ]
     assert not signatures
+
+
+def test_responses_fallback_reuses_original_extensions_after_translated_primary() -> (
+    None
+):
+    captured: list[JsonObject] = []
+
+    def primary_reply(request: httpx.Request) -> httpx.Response:
+        captured.append(decode_object(request.content))
+        return httpx.Response(
+            503,
+            json={
+                "type": "error",
+                "error": {"type": "overloaded_error", "message": "overloaded"},
+            },
+        )
+
+    def fallback_reply(request: httpx2.Request) -> httpx2.Response:
+        captured.append(decode_object(request.content))
+        return httpx2.Response(
+            200,
+            text=completion("openai_responses"),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    primary = definition(api_format="anthropic_messages")
+    backup = definition(
+        provider_id="custom_" + "b" * 32,
+        display_name="Backup",
+        api_format="openai_responses",
+    )
+    app = create_test_app(
+        Settings(
+            MODEL=f"{primary.provider_id}/first",
+            MODEL_FALLBACKS=[ModelFallback(model=f"{backup.provider_id}/second")],
+            custom_providers=(primary, backup),
+        ),
+        providers={
+            primary.provider_id: CustomProvider(
+                build_custom_provider_config(primary, Settings()),
+                definition=primary,
+                admission=immediate_admission(max_attempts=1),
+                messages_transport=httpx.MockTransport(primary_reply),
+            ),
+            backup.provider_id: provider(backup, openai_handler=fallback_reply),
+        },
+    )
+    extras: JsonObject = {
+        "prompt_cache_key": "group",
+        "vendor_option": {"value": None},
+        "vendor_null": None,
+    }
+    with TestClient(app) as client:
+        result = client.post(
+            "/v1/responses",
+            json={"model": "public", "input": "hello", "stream": True, **extras},
+        )
+    assert result.status_code == 200 and "response.completed" in result.text, (
+        result.text
+    )
+    translated, native = captured
+    assert translated["model"] == "first" and not (translated.keys() & extras.keys())
+    assert native["model"] == "second"
+    assert {key: native[key] for key in extras} == extras

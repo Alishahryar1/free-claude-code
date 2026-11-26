@@ -30,13 +30,11 @@ _SERVER_TOOL_TYPES = {
     "web_search": WEB_SEARCH_TYPE,
     "web_fetch": WEB_FETCH_TYPE,
 }
-_SERVER_TOOL_PREFIXES = ("web_search_", "web_fetch_")
 _SERVER_HISTORY_TYPES = {
     "server_tool_use",
     "web_search_tool_result",
     "web_fetch_tool_result",
 }
-_WEB_SEARCH_OPTION_FIELDS = {"max_uses", "allowed_domains", "blocked_domains"}
 _DOMAIN_PATTERN = re.compile(
     r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*"
     r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
@@ -81,33 +79,21 @@ def forced_server_tool_name(request: MessagesRequest) -> str | None:
     if not isinstance(name, str) or name not in _SERVER_TOOL_TYPES:
         return None
     expected_type = _SERVER_TOOL_TYPES[name]
-    if any(
-        tool.name == name and tool.type == expected_type for tool in request.tools or []
-    ):
-        return name
-    return None
+    named = [tool for tool in request.named_tools if tool.name == name]
+    if not any(tool.type == expected_type for tool in named):
+        return None
+    if len(named) != 1:
+        raise InvalidRequestError("Forced web tools require a unique tool name.")
+    return name
 
 
 def has_tool_named(request: MessagesRequest, name: str) -> bool:
-    return any(tool.name == name for tool in request.tools or [])
+    return any(tool.name == name for tool in request.named_tools)
 
 
 def is_web_server_tool_request(request: MessagesRequest) -> bool:
     """True only when the client forces one supported Anthropic server tool."""
     return forced_server_tool_name(request) is not None
-
-
-def is_anthropic_server_tool_definition(tool: Tool) -> bool:
-    """Whether ``tool.type`` identifies an Anthropic web server-tool family."""
-    tool_type = tool.type
-    return isinstance(tool_type, str) and tool_type.startswith(_SERVER_TOOL_PREFIXES)
-
-
-def has_listed_anthropic_server_tools(request: MessagesRequest) -> bool:
-    """True when tools include a typed Anthropic web server-tool definition."""
-    return any(
-        is_anthropic_server_tool_definition(tool) for tool in request.tools or []
-    )
 
 
 def plan_automatic_web_search(
@@ -120,25 +106,24 @@ def plan_automatic_web_search(
     if choice is not None and (
         choice.get("type") not in ("auto", "any")
         or choice.get("disable_parallel_tool_use", False) is not False
-        or set(choice) - {"type", "disable_parallel_tool_use"}
     ):
         return None
 
-    tools = request.tools or []
-    server_tools = [tool for tool in tools if is_anthropic_server_tool_definition(tool)]
+    if not web_tools_enabled:
+        return None
+    tools = request.named_tools
+    server_tools = [tool for tool in tools if tool.type == WEB_SEARCH_TYPE]
     if not server_tools:
         return None
     if len(server_tools) != 1:
-        return None
+        raise InvalidRequestError("Automatic web_search requires unique tool names.")
 
     tool = server_tools[0]
-    if tool.type != WEB_SEARCH_TYPE:
-        return None
     for other in tools:
         if other is tool:
             continue
-        if other.type not in (None, "custom") or other.input_schema is None:
-            return None
+        if other.type not in (None, "custom"):
+            continue
         if constraints := unrepresentable_client_tool_constraints(other):
             raise InvalidRequestError(
                 f"Automatic web_search cannot enforce {constraints} for tool {other.name!r}."
@@ -146,11 +131,6 @@ def plan_automatic_web_search(
     names = {definition.name for definition in tools}
     if len(names) != len(tools):
         raise InvalidRequestError("Automatic web_search requires unique tool names.")
-    if not web_tools_enabled:
-        raise InvalidRequestError(
-            "Anthropic web_search is disabled (ENABLE_WEB_SERVER_TOOLS=false). "
-            "Enable local web tools or remove web_search from the request."
-        )
     if tool.name != "web_search":
         raise InvalidRequestError(
             f"Server tool type {WEB_SEARCH_TYPE!r} must use name 'web_search'."
@@ -160,25 +140,7 @@ def plan_automatic_web_search(
             "Anthropic web_search must not define description or input_schema."
         )
 
-    options = tool.model_extra or {}
-    unsupported = sorted(set(options) - _WEB_SEARCH_OPTION_FIELDS)
-    if unsupported:
-        raise InvalidRequestError(
-            "Anthropic web_search contains unsupported option(s): "
-            + ", ".join(unsupported)
-            + "."
-        )
-    max_uses = _validate_max_uses(options.get("max_uses"))
-    allowed = _parse_domains(
-        options.get("allowed_domains"), field="web_search.allowed_domains"
-    )
-    blocked = _parse_domains(
-        options.get("blocked_domains"), field="web_search.blocked_domains"
-    )
-    if allowed and blocked:
-        raise InvalidRequestError(
-            "web_search may define allowed_domains or blocked_domains, not both."
-        )
+    max_uses, domains = web_tool_limits(tool)
 
     private_name = _private_search_name(names, request.messages)
     hidden_tool = Tool(
@@ -197,7 +159,9 @@ def plan_automatic_web_search(
         raise InvalidRequestError(str(error)) from error
     translated = request.model_copy(
         update={
-            "tools": [hidden_tool if other is tool else other for other in tools],
+            "tools": [
+                hidden_tool if other is tool else other for other in request.tools or ()
+            ],
             "messages": messages,
         },
         deep=True,
@@ -205,9 +169,25 @@ def plan_automatic_web_search(
     return AutomaticWebSearchPlan(
         request=translated,
         private_name=private_name,
-        domains=WebSearchDomainFilter(allowed=allowed, blocked=blocked),
+        domains=domains,
         remaining_uses=None if max_uses is None else max(0, max_uses - used_this_turn),
     )
+
+
+def web_tool_limits(tool: Tool) -> tuple[int | None, WebSearchDomainFilter]:
+    options = tool.model_extra or {}
+    max_uses = _validate_max_uses(options.get("max_uses"))
+    allowed = _parse_domains(
+        options.get("allowed_domains"), field="web_search.allowed_domains"
+    )
+    blocked = _parse_domains(
+        options.get("blocked_domains"), field="web_search.blocked_domains"
+    )
+    if allowed and blocked:
+        raise InvalidRequestError(
+            "web_search may define allowed_domains or blocked_domains, not both."
+        )
+    return max_uses, WebSearchDomainFilter(allowed=allowed, blocked=blocked)
 
 
 def unsupported_server_tool_error(
@@ -220,11 +200,6 @@ def unsupported_server_tool_error(
             f"tool_choice forces Anthropic server tool {forced!r}, but local web "
             "server tools are disabled (ENABLE_WEB_SERVER_TOOLS=false). Enable "
             "them or remove the forced server tool."
-        )
-    if not forced and has_listed_anthropic_server_tools(request):
-        return (
-            f"FCC supports one {WEB_SEARCH_TYPE} alongside custom tools with "
-            "automatic or required tool choice."
         )
     return None
 
@@ -463,10 +438,14 @@ def content_text(content: object) -> str:
     if isinstance(content, list):
         parts = []
         for item in content:
-            if isinstance(item, dict):
-                parts.append(str(item.get("text", "")))
-            else:
-                parts.append(str(getattr(item, "text", "")))
+            if isinstance(item, ContentBlockText):
+                parts.append(item.text)
+            elif (
+                isinstance(item, dict)
+                and item.get("type") == "text"
+                and isinstance(item.get("text"), str)
+            ):
+                parts.append(item["text"])
         return "\n".join(part for part in parts if part)
     return str(content)
 

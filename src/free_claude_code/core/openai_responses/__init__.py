@@ -26,7 +26,7 @@ from .messages_request import (
     build_responses_messages_suffix,
 )
 from .messages_stream import AnthropicToResponsesStream
-from .models import OpenAIResponsesRequest
+from .models import OpenAIResponsesRequest, is_hosted_history, latest_user_input
 from .native import NativeResponsesRelay, build_native_responses_request
 from .provider_input import build_responses_provider_request
 from .provider_stream import (
@@ -88,6 +88,8 @@ __all__ = [
     "format_response_sse_event",
     "is_client_call",
     "is_client_search",
+    "is_hosted_history",
+    "latest_user_input",
     "new_call_id",
     "new_message_item_id",
     "new_reasoning_item_id",

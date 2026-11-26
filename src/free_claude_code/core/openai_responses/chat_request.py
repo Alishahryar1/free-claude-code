@@ -25,7 +25,7 @@ from free_claude_code.core.openai_chat import (
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 
 from .errors import ResponsesConversionError
-from .models import OpenAIResponsesRequest
+from .models import OpenAIResponsesRequest, is_hosted_history, latest_user_input
 from .reasoning import (
     combine_reasoning,
     encrypted_reasoning_from_item,
@@ -43,6 +43,7 @@ _CHAT_OPTION_FIELDS = (
     "logprobs",
     "n",
     "presence_penalty",
+    "prompt_cache_key",
     "seed",
     "service_tier",
     "stop",
@@ -92,7 +93,13 @@ class _ResponsesChatInputBuilder:
         self._pending_rich_output_parts: list[dict[str, object]] = []
         self._discovery_outputs: list[dict[str, object]] = []
 
-    def add(self, item: JsonValue, *, source_type: str | None = None) -> None:
+    def add(
+        self,
+        item: JsonValue,
+        *,
+        source_type: str | None = None,
+        current_user: bool = False,
+    ) -> None:
         if isinstance(item, str):
             self._flush_rich_outputs()
             self._flush_reasoning()
@@ -109,8 +116,8 @@ class _ResponsesChatInputBuilder:
             "computer_call_output",
         }:
             self._flush_rich_outputs()
-        if item_type in (None, "message") or "role" in item:
-            self._add_message(item)
+        if item_type in (None, "message"):
+            self._add_message(item, current_user=current_user)
             return
         if item_type == "reasoning":
             self._pending_reasoning.add(item)
@@ -133,7 +140,7 @@ class _ResponsesChatInputBuilder:
             self._flush_reasoning()
             self.messages.append({"role": "user", "content": [image]})
             return
-        if isinstance(item_type, str) and item_type.endswith(("_call", "_result")):
+        if is_hosted_history(item_type):
             if item.get("status") not in {
                 None,
                 "completed",
@@ -169,7 +176,9 @@ class _ResponsesChatInputBuilder:
                 tool["name"] = tool_names.encode(name)
             message["content"] = json.dumps(tools)
 
-    def _add_message(self, item: Mapping[str, JsonValue]) -> None:
+    def _add_message(
+        self, item: Mapping[str, JsonValue], *, current_user: bool
+    ) -> None:
         role = required_str(item.get("role", "user"), "input.role")
         if role in {"developer", "system"}:
             text = _content_text(item.get("content"))
@@ -184,6 +193,10 @@ class _ResponsesChatInputBuilder:
         if role == "user":
             self._flush_reasoning()
         content = _message_content(item.get("content"), allow_images=role == "user")
+        if current_user and not content:
+            raise ResponsesConversionError(
+                "The latest user message has no translatable content"
+            )
         message: dict[str, object] = {"role": role, "content": content}
         if role == "assistant":
             self._apply_pending_reasoning(message)
@@ -375,7 +388,7 @@ def build_responses_chat_request(
 ) -> ResponsesChatRequest:
     """Translate a Responses request directly into one Chat Completions body."""
     adapter = ResponsesToolAdapter(
-        request,
+        request.restrict_allowed_tools(),
         ResponsesToolPolicy(
             custom_tools_as_functions=True,
             flatten_namespaces=True,
@@ -390,12 +403,14 @@ def build_responses_chat_request(
     if request.instructions:
         builder.system_parts.append(request.instructions)
     original_items = _input_items(adapter.original.input)
+    latest = latest_user_input(original_items)
     for source_index, item in zip(
         adapter.input_source_indices, _input_items(request.input), strict=True
     ):
         source = original_items[source_index]
         builder.add(
             item,
+            current_user=source is latest,
             source_type=optional_str(source.get("type"))
             if isinstance(source, dict)
             else None,
@@ -418,13 +433,17 @@ def build_responses_chat_request(
         )
 
     tools, available_tool_names = _chat_tools(request.tools)
+    choice = _chat_tool_choice(request.tool_choice, available_tool_names)
     if request.tool_choice != "none" and tools:
         body["tools"] = tools
-        choice = _chat_tool_choice(request.tool_choice, available_tool_names)
         if choice is not None:
             body["tool_choice"] = choice
 
-    if request.parallel_tool_calls is not None and tools:
+    if (
+        request.parallel_tool_calls is not None
+        and tools
+        and request.tool_choice != "none"
+    ):
         body["parallel_tool_calls"] = request.parallel_tool_calls
     if request.max_output_tokens is not None:
         body["max_tokens"] = request.max_output_tokens
@@ -469,7 +488,7 @@ def _message_content(
         return value
     if not isinstance(value, Sequence) or isinstance(value, bytes | bytearray):
         if isinstance(value, Mapping):
-            return _text_from_part(value)
+            return _message_content([value], allow_images=allow_images)
         return ""
 
     parts: list[dict[str, object]] = []
@@ -480,9 +499,7 @@ def _message_content(
         if not isinstance(part, Mapping):
             continue
         part_type = part.get("type")
-        if part_type in {"input_text", "output_text", "text", "refusal"} or (
-            "text" in part
-        ):
+        if part_type in ("input_text", "output_text", "text", "refusal"):
             parts.append({"type": "text", "text": _text_from_part(part)})
             continue
         if allow_images and part_type == "input_image":
@@ -641,40 +658,54 @@ def _chat_function_tool(tool: Mapping[str, JsonValue]) -> tuple[dict[str, object
 def _chat_tool_choice(
     value: JsonValue, available_names: frozenset[str]
 ) -> object | None:
-    if not available_names:
-        return None
     if value is None or value == "auto":
-        return "auto"
+        return "auto" if available_names else None
     if value == "required":
+        if not available_names:
+            raise ResponsesConversionError(
+                "Required tool choice has no available functions"
+            )
         return "required"
     if value == "none":
         return None
     if not isinstance(value, Mapping):
-        return None
+        raise ResponsesConversionError("Unsupported tool choice")
     choice_type = value.get("type")
     if choice_type in {"auto", "any", "required"}:
-        return "required" if choice_type in {"any", "required"} else "auto"
+        return _chat_tool_choice(
+            "auto" if choice_type == "auto" else "required", available_names
+        )
     if choice_type != "function":
-        return None
+        raise ResponsesConversionError(
+            "Named tool choice requires an available function"
+        )
     name = optional_str(value.get("name"))
-    if not name:
-        return None
-    if name not in available_names:
-        return None
+    if not name or name not in available_names:
+        raise ResponsesConversionError(
+            "Named tool choice requires an available function"
+        )
     return {"type": "function", "function": {"name": name}}
 
 
-def _chat_response_format(value: JsonValue) -> object | None:
+def _chat_response_format(value: JsonValue) -> JsonObject | None:
+    if value is None:
+        return None
     if not isinstance(value, Mapping):
-        return None
+        raise ResponsesConversionError("Responses text controls require an object")
     format_value = value.get("format")
-    if not isinstance(format_value, Mapping):
+    if format_value is None:
         return None
+    if not isinstance(format_value, Mapping):
+        raise ResponsesConversionError("Output format requires an object")
     format_type = format_value.get("type")
     if format_type in {"text", "json_object"}:
         return {"type": format_type}
     if format_type != "json_schema":
-        return None
+        raise ResponsesConversionError(
+            "Chat cannot enforce the requested output format"
+        )
+    if not isinstance(format_value.get("schema"), dict):
+        raise ResponsesConversionError("Output format requires a JSON schema object")
     json_schema = {
         key: format_value[key]
         for key in ("name", "description", "schema", "strict")

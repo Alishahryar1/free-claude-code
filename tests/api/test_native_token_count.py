@@ -18,10 +18,8 @@ from free_claude_code.core.anthropic.tokens import CountMessages
 from free_claude_code.core.json_types import JsonObject
 from tests.api.support import create_test_app, provider_manager_for_app
 from tests.wire_payload import (
-    array_payload,
     object_array,
     object_payload,
-    response_object,
 )
 
 
@@ -83,7 +81,9 @@ def test_native_count_accepts_and_estimates_opaque_payload_without_provider(
     assert body == original
 
 
-def test_compatibility_primary_keeps_count_validation_with_native_fallback() -> None:
+def test_compatibility_primary_counts_future_blocks_and_unnamed_tools_with_native_fallback() -> (
+    None
+):
     app = create_test_app(
         Settings(
             MODEL="nvidia_nim/selected",
@@ -91,12 +91,12 @@ def test_compatibility_primary_keeps_count_validation_with_native_fallback() -> 
         )
     )
     with TestClient(app) as client:
-        response = client.post("/v1/messages/count_tokens", json=count_body())
-    assert response.status_code == 422
-    assert any(
-        array_payload(object_payload(error)["loc"])[:2] == ["body", "messages"]
-        for error in object_array(response_object(response)["detail"])
-    )
+        response = client.post(
+            "/v1/messages/count_tokens",
+            json={**count_body(), "tools": [{"type": "future_hosted"}]},
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["input_tokens"] > 0
 
 
 @pytest.mark.parametrize(

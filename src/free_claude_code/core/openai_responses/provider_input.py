@@ -12,10 +12,12 @@ from free_claude_code.core.anthropic.image_sources import (
     AnthropicImageSourceError,
     portable_anthropic_image_url,
 )
-from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.anthropic.models import MessagesRequest, SystemContent
 from free_claude_code.core.anthropic.request_serialization import (
     is_noop_context_management,
+    openai_output_schema,
     serialize_tool_result_content,
+    translated_messages,
 )
 from free_claude_code.core.anthropic.tool_results import (
     ToolResultImage,
@@ -52,7 +54,15 @@ def build_responses_provider_request(
     tool_names = OpenAIToolNameCodec.from_request(request)
     instructions = _system_text(request)
     input_items: list[dict[str, Any]] = []
-    for message in request.messages:
+    try:
+        messages = translated_messages(request)
+        output_schema = openai_output_schema(request)
+        tool_choice = resolve_anthropic_tool_choice(
+            request.client_tools, request.tool_choice
+        )
+    except ValueError as error:
+        raise ResponsesConversionError(str(error)) from error
+    for message in messages:
         if message.role == "assistant":
             input_items.extend(
                 _assistant_items(
@@ -76,6 +86,8 @@ def build_responses_provider_request(
         "store": False,
         "include": ["reasoning.encrypted_content"],
     }
+    if output_schema is not None:
+        body["text"] = {"format": {"type": "json_schema", **output_schema}}
     if instructions:
         body["instructions"] = "\n\n".join(instructions)
     if request.max_tokens is not None:
@@ -86,7 +98,7 @@ def build_responses_provider_request(
         body["top_p"] = request.top_p
     if request.metadata is not None:
         body["metadata"] = request.metadata
-    if request.tools:
+    if request.client_tools:
         body["tools"] = [
             {
                 "type": "function",
@@ -95,11 +107,16 @@ def build_responses_provider_request(
                 "parameters": translate_tool_schema_patterns(
                     tool.input_schema or {"type": "object", "properties": {}}
                 ),
-                "strict": False,
+                "strict": (tool.model_extra or {}).get("strict", False),
             }
-            for tool in request.tools
+            for tool in request.client_tools
         ]
-    tool_choice = resolve_anthropic_tool_choice(request.tools, request.tool_choice)
+    if (
+        tool_choice
+        and tool_choice.get("disable_parallel_tool_use")
+        and tool_choice.get("type") != "none"
+    ):
+        body["parallel_tool_calls"] = False
     if tool_choice is not None:
         body["tool_choice"] = _tool_choice(tool_choice, tool_names=tool_names)
     if reasoning_config := responses_reasoning_config(reasoning):
@@ -108,43 +125,21 @@ def build_responses_provider_request(
 
 
 def _validate_supported_request(request: MessagesRequest) -> None:
-    if request.model_extra:
-        raise ResponsesConversionError(
-            "OpenAI Responses does not support these request fields: "
-            f"{sorted(request.model_extra)}."
-        )
-    provider_tool_types = sorted(
-        {
-            tool.type
-            for tool in request.tools or ()
-            if tool.type is not None
-            and (tool.type != "custom" or tool.input_schema is None)
-        }
-    )
-    if provider_tool_types:
-        raise ResponsesConversionError(
-            "OpenAI Responses cannot represent provider-managed tool types: "
-            f"{provider_tool_types}."
-        )
-    for tool in request.tools or ():
-        if tool.type == "custom" and (
-            constraints := unrepresentable_client_tool_constraints(tool)
-        ):
+    for tool in request.client_tools:
+        constraints = [
+            key
+            for key in unrepresentable_client_tool_constraints(tool)
+            if key != "strict"
+        ]
+        if constraints:
             raise ResponsesConversionError(
                 f"OpenAI Responses cannot enforce {constraints} for tool {tool.name!r}."
             )
     unsupported: list[str] = []
     if request.stop_sequences:
         unsupported.append("stop_sequences")
-    if request.top_k is not None:
-        unsupported.append("top_k")
     if not is_noop_context_management(request.context_management):
         unsupported.append("context_management")
-    unsupported.extend(_unsupported_output_config_paths(request.output_config))
-    if request.mcp_servers:
-        unsupported.append("mcp_servers")
-    if request.extra_body:
-        unsupported.append("extra_body")
     if unsupported:
         raise ResponsesConversionError(
             "OpenAI Responses cannot represent these fields without data loss: "
@@ -152,20 +147,16 @@ def _validate_supported_request(request: MessagesRequest) -> None:
         )
 
 
-def _unsupported_output_config_paths(
-    output_config: dict[str, Any] | None,
-) -> list[str]:
-    if not output_config:
-        return []
-    return [f"output_config.{key}" for key in sorted(output_config) if key != "effort"]
-
-
 def _system_text(request: MessagesRequest) -> list[str]:
     if request.system is None:
         return []
     if isinstance(request.system, str):
         return [request.system] if request.system else []
-    return [part.text for part in request.system if part.text]
+    return [
+        part.text
+        for part in request.system
+        if isinstance(part, SystemContent) and part.text
+    ]
 
 
 def _assistant_items(

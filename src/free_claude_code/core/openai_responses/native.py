@@ -30,7 +30,7 @@ def build_native_responses_request(
 
     body = cast(
         JsonObject,
-        request.model_dump(mode="json", exclude_none=True),
+        request.model_dump(mode="json", exclude_unset=True),
     )
     if isinstance(items := body.get("input"), list):
         for item in items:

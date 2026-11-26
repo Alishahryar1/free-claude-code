@@ -205,10 +205,16 @@ def test_native_fallback_excludes_compatibility_and_preserves_alias() -> None:
     assert sent[-1]["tools"] == body["tools"]
 
 
-def test_compatibility_ingress_still_rejects_unknown_blocks() -> None:
+def test_compatibility_ingress_rejects_malformed_known_blocks() -> None:
     app = create_test_app(Settings())
     with TestClient(app) as client:
-        response = client.post("/v1/messages", json=native_body())
+        response = client.post(
+            "/v1/messages",
+            json={
+                **native_body(),
+                "messages": [{"role": "user", "content": [{"type": "text"}]}],
+            },
+        )
     assert response.status_code == 422
 
 

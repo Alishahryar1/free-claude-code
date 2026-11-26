@@ -614,9 +614,7 @@ def test_build_responses_chat_request_rejects_unportable_computer_screenshot(
         )
 
 
-def test_build_responses_chat_request_skips_unsupported_optional_items_and_choice() -> (
-    None
-):
+def test_build_responses_chat_request_skips_unsupported_optional_items() -> None:
     translated = build_responses_chat_request(
         _request(
             input=[
@@ -624,7 +622,6 @@ def test_build_responses_chat_request_skips_unsupported_optional_items_and_choic
                 {"role": "user", "content": "Hello"},
             ],
             tools=[{"type": "web_search_preview"}],
-            tool_choice={"type": "web_search_preview"},
         ),
         reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
     )
@@ -633,6 +630,18 @@ def test_build_responses_chat_request_skips_unsupported_optional_items_and_choic
         "model": "provider/model",
         "messages": [{"role": "user", "content": "Hello"}],
     }
+
+
+def test_unavailable_forced_tool_is_rejected() -> None:
+    with pytest.raises(ResponsesConversionError):
+        build_responses_chat_request(
+            _request(
+                input="hello",
+                tools=[{"type": "web_search_preview"}],
+                tool_choice={"type": "web_search_preview"},
+            ),
+            reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
+        )
 
 
 def test_build_responses_chat_request_rejects_no_usable_input() -> None:

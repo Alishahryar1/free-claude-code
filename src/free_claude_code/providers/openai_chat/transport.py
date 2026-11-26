@@ -734,7 +734,7 @@ class OpenAIChatTransport:
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
     ) -> ResponsesChatRequest:
         """Build a Chat body directly from Responses ingress."""
-        validate_history(request.model_dump(mode="json"))
+        validate_history(request.model_dump(mode="json"), "responses")
         try:
             translated = build_responses_chat_request(
                 request,
@@ -907,7 +907,7 @@ class OpenAIChatTransport:
         # exactly as supplied, including vendor extensions and explicit nulls.
         if reasoning != DEFAULT_REASONING_POLICY:
             self._profile.apply_reasoning_to_body(body, reasoning)
-        validate_history(body)
+        validate_history(body, "chat")
         public_model = response_model or request.model
         options = body.get("stream_options") or {}
         return _OpenAIChatStreamRunner(
@@ -1008,11 +1008,6 @@ class OpenAIChatTransport:
         body = prepared.body
         body.pop("stream", None)
         policy = self._profile.request_policy
-        for key in policy.unsupported_body_keys:
-            if key in body:
-                raise InvalidRequestError(
-                    f"{self._provider_name} cannot represent Gemini control {key}"
-                )
         if "max_tokens" not in body and policy.default_max_tokens is not None:
             body["max_tokens"] = policy.default_max_tokens
         apply_openai_chat_body_policy(body, policy)

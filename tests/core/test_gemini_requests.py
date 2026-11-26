@@ -155,7 +155,6 @@ def test_protocol_aliases_and_nulls_do_not_rewrite_arbitrary_json() -> None:
     [
         ("candidateCount", 2),
         ("responseModalities", ["AUDIO"]),
-        ("responseLogprobs", True),
     ],
 )
 def test_unsupported_generation_fields_are_explicit(
@@ -166,9 +165,13 @@ def test_unsupported_generation_fields_are_explicit(
 
 
 @pytest.mark.parametrize("protocol", ["messages", "responses"])
-def test_destination_does_not_silently_drop_sampling_controls(protocol: str) -> None:
-    with pytest.raises(GeminiConversionError, match="seed"):
-        build(request(generationConfig={"seed": 42}), protocol)
+def test_destination_omits_unsupported_sampling_hints(protocol: str) -> None:
+    assert (
+        build(
+            request(generationConfig={"seed": 42, "responseLogprobs": True}), protocol
+        ).body
+        == build(request(), protocol).body
+    )
 
 
 def test_duplicate_named_calls_without_result_ids_are_not_guessed() -> None:
@@ -321,3 +324,21 @@ def test_conflicting_echoed_replay_bundles_are_not_silently_deduplicated() -> No
     )
     with pytest.raises(GeminiConversionError, match="Conflicting"):
         build_gemini_chat_request(value)
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
+def test_allowed_function_names_use_the_declared_intersection(protocol: str) -> None:
+    value = request(
+        tools=[{"functionDeclarations": [{"name": "read"}, {"name": "write"}]}],
+        toolConfig={
+            "functionCallingConfig": {
+                "mode": "ANY",
+                "allowedFunctionNames": ["read", "future"],
+            }
+        },
+    )
+    tools = object_array(build(value, protocol).body["tools"])
+    if protocol == "chat":
+        assert [object_payload(tool["function"])["name"] for tool in tools] == ["read"]
+    else:
+        assert [tool["name"] for tool in tools] == ["read"]

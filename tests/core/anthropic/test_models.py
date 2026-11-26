@@ -2,7 +2,6 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from free_claude_code.core.anthropic.conversion import (
-    OpenAIConversionError,
     build_base_request_body,
 )
 from free_claude_code.core.anthropic.models import (
@@ -10,6 +9,7 @@ from free_claude_code.core.anthropic.models import (
     ContentBlockWebFetchToolResult,
     Message,
     MessagesRequest,
+    SystemContent,
     TokenCountRequest,
 )
 from free_claude_code.core.json_types import JsonObject
@@ -70,7 +70,9 @@ def test_messages_request_preserves_system_block_metadata() -> None:
     )
 
     assert isinstance(request.system, list)
-    assert [block.text for block in request.system] == ["existing system"]
+    assert [
+        block.text for block in request.system if isinstance(block, SystemContent)
+    ] == ["existing system"]
     assert request.system[0].model_dump()["cache_control"] == {"type": "ephemeral"}
 
 
@@ -282,7 +284,7 @@ def test_token_count_request_accepts_extras_but_excludes_internal_fields() -> No
     }
 
 
-def test_openai_conversion_rejects_unknown_top_level_anthropic_extensions() -> None:
+def test_openai_conversion_omits_unknown_top_level_anthropic_extensions() -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "model",
@@ -291,5 +293,4 @@ def test_openai_conversion_rejects_unknown_top_level_anthropic_extensions() -> N
         }
     )
 
-    with pytest.raises(OpenAIConversionError, match="client_extension"):
-        build_base_request_body(request)
+    assert "client_extension" not in build_base_request_body(request)
