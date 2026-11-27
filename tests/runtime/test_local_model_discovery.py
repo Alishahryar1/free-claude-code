@@ -29,7 +29,7 @@ from free_claude_code.runtime.provider_manager import (
 from tests.runtime.catalog_support import finish_discovery, finish_publication
 from tests.wire_payload import object_payload
 
-LOCAL_IDS = ("lmstudio", "llamacpp", "ollama")
+LOCAL_IDS = ("lmstudio", "llamacpp", "ollama", "rapid_mlx")
 
 
 def provider(

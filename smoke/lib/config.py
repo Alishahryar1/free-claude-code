@@ -28,6 +28,7 @@ DEFAULT_TARGETS = frozenset(
         "lmstudio",
         "messaging",
         "ollama",
+        "rapid_mlx",
         "providers",
         "rate_limit",
         "tools",
@@ -60,6 +61,7 @@ PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
     "lmstudio": "lmstudio/local-model",
     "llamacpp": "llamacpp/local-model",
     "ollama": "ollama/llama3.1",
+    "rapid_mlx": "rapid_mlx/local-model",
     "kimi_code": "kimi_code/k3",
     "wafer": "wafer/DeepSeek-V4-Pro",
     "minimax": "minimax/MiniMax-M3",
@@ -137,6 +139,7 @@ TARGET_REQUIRED_ENV: dict[str, tuple[str, ...]] = {
     "lmstudio": ("LM_STUDIO_BASE_URL with a running LM Studio server",),
     "llamacpp": ("LLAMACPP_BASE_URL with a running llama-server",),
     "ollama": ("OLLAMA_BASE_URL with a running Ollama server",),
+    "rapid_mlx": ("RAPID_MLX_BASE_URL with a running Rapid-MLX server",),
     "nvidia_nim_cli": (
         "NVIDIA_NIM_API_KEY",
         "FCC_SMOKE_CLAUDE_BIN or claude on PATH",

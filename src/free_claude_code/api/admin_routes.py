@@ -24,6 +24,7 @@ from free_claude_code.application.model_catalog import read_model_catalog
 from free_claude_code.application.model_metadata import ProviderModelRefreshResult
 from free_claude_code.config.admin.custom_providers import CustomProviderMutation
 from free_claude_code.config.admin.manifest import FIELD_BY_KEY
+from free_claude_code.config.api_keys import first_api_key, normalize_api_keys
 from free_claude_code.config.errors import ConfigConflictError
 from free_claude_code.config.provider_catalog import (
     PROVIDER_CATALOG,
@@ -31,6 +32,7 @@ from free_claude_code.config.provider_catalog import (
 )
 from free_claude_code.config.settings import ENV_KEY_BY_SETTING
 from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.urls import openai_v1_base_url
 from free_claude_code.core.version import package_version
 
 from .admin_security import require_loopback_admin
@@ -174,7 +176,10 @@ async def local_provider_status(
     values = await services.admin.admin_values()
     base_url = values[ENV_KEY_BY_SETTING[descriptor.base_url_attr]].value
     return await _check_local_provider(
-        provider_id, base_url or "", descriptor.local_probe_path
+        provider_id,
+        base_url or "",
+        descriptor.local_probe_path,
+        api_key=_local_provider_api_key(descriptor.credential_env, values),
     )
 
 
@@ -526,8 +531,19 @@ def _filtered_values(values: Mapping[str, JsonValue]) -> JsonObject:
     return {key: value for key, value in values.items() if key in FIELD_BY_KEY}
 
 
+def _local_provider_api_key(
+    credential_env: str | None, values: Mapping[str, object]
+) -> str | None:
+    """Return the first configured key for keyed local providers (Rapid-MLX)."""
+    if credential_env is None:
+        return None
+    entry = values.get(credential_env)
+    raw = getattr(entry, "value", None) or ""
+    return first_api_key(normalize_api_keys(raw)) or None
+
+
 async def _check_local_provider(
-    provider_id: str, base_url: str, path: str
+    provider_id: str, base_url: str, path: str, *, api_key: str | None = None
 ) -> JsonObject:
     clean_url = base_url.strip().rstrip("/")
     if not clean_url:
@@ -541,11 +557,17 @@ async def _check_local_provider(
             "error_type": None,
         }
 
+    if provider_id == "rapid_mlx":
+        clean_url = openai_v1_base_url(clean_url)
     url = f"{clean_url}{path}"
     started = perf_counter()
     try:
         async with httpx.AsyncClient(timeout=1.5) as client:
-            response = await client.get(url)
+            response = (
+                await client.get(url, headers={"Authorization": f"Bearer {api_key}"})
+                if api_key
+                else await client.get(url)
+            )
         ok = 200 <= response.status_code < 300
         return {
             "provider_id": provider_id,
