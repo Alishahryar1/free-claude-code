@@ -1028,6 +1028,21 @@ def unsigned_thinking(
     return events
 
 
+def public_thinking(events: list[SSEEvent], wire: str) -> list[str]:
+    if wire == "messages":
+        return [
+            string_payload(delta["thinking"])
+            for event in events
+            if (delta := object_payload(event.data.get("delta", {}))).get("type")
+            == "thinking_delta"
+        ]
+    return [
+        string_payload(event.data["delta"])
+        for event in events
+        if event.event == "response.reasoning_text.delta"
+    ]
+
+
 def shifted(events: list[JsonObject], offset: int) -> list[JsonObject]:
     events = deepcopy(events)
     for event in events:
@@ -1065,8 +1080,16 @@ async def test_completed_unsigned_messages_thinking_continues(
     events = parse_sse_text(result)
     assert_completed(events, wire)
     assert public_text(events, wire) == "Answer."
+    assert public_thinking(events, wire) == [thought, " Then answer."]
+    if wire == "responses":
+        output = object_array(object_payload(events[-1].data["response"])["output"])
+        assert [
+            string_payload(part["text"])
+            for item in output
+            if item["type"] == "reasoning"
+            for part in object_array(item["content"])
+        ] == [thought, " Then answer."]
     assert len(bodies) == 2
-    assert thought in result
     assert thought in str(bodies[-1])
 
 
