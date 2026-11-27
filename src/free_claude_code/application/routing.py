@@ -61,10 +61,11 @@ class ProviderModelTarget:
 
 @dataclass(frozen=True, slots=True)
 class ProviderModelCandidate:
-    """One execution target with a candidate-local reasoning preference."""
+    """One target with candidate-local reasoning and rotation provenance."""
 
     target: ProviderModelTarget
     reasoning_preference: ReasoningPreference = ReasoningPreference.INHERIT
+    is_key_rotation: bool = False
 
 
 @dataclass(frozen=True, slots=True)

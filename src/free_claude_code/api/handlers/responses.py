@@ -54,6 +54,7 @@ class ResponsesHandler:
             log_raw_payloads=settings.log_raw_api_payloads,
             request_headers=request_headers,
             model_info_lookup=model_info_lookup,
+            settings=settings,
         )
 
     async def create(

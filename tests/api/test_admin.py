@@ -16,6 +16,7 @@ from free_claude_code.application.connected_accounts import (
     ConnectedAccountState,
     ConnectedAccountStatus,
 )
+from free_claude_code.application.key_rotation import key_rotation_registry
 from free_claude_code.application.model_metadata import (
     ProviderModelInfo,
     ProviderModelRefreshResult,
@@ -30,6 +31,7 @@ from free_claude_code.config.model_refs import ModelFallback, decode_model_fallb
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.config.server_urls import local_admin_url
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.version import package_version
 from tests.api.support import (
@@ -70,6 +72,47 @@ def _local_client(app: FastAPI):
 def test_retired_chat_urls_are_not_served(path: str) -> None:
     client = _local_client(create_test_app())
     assert client.get(path).status_code == 404
+
+
+def test_admin_key_rotation_status_is_available_to_loopback_only() -> None:
+    key_rotation_registry.bind_database(None)
+    key_rotation_registry.clear()
+    settings = Settings(GROQ_API_KEY=["synthetic-admin-secret"])
+    app = create_test_app(settings)
+    key_rotation_registry.mark(
+        "groq",
+        1,
+        "synthetic-admin-secret",
+        ExecutionFailure(
+            FailureKind.RATE_LIMIT,
+            429,
+            "rate limit synthetic-admin-secret",
+            True,
+        ),
+    )
+    response = _local_client(app).get("/admin/api/status")
+    assert response.status_code == 200
+    body = response_object(response)
+    rows = body["key_rotation"]
+    assert isinstance(rows, list)
+    assert len(rows) == 1
+    row = rows[0]
+    assert isinstance(row, dict)
+    assert row["provider_id"] == "groq"
+    assert row["key_number"] == 1
+    assert row["status"] == "cooldown"
+    cooldown = row["cooldown_seconds"]
+    assert isinstance(cooldown, int)
+    assert cooldown > 0
+    assert "synthetic-admin-secret" not in response.text
+    assert _local_client(app).get("/admin").status_code == 200
+    assert 'id="keyRotationRows"' in _local_client(app).get("/admin").text
+    script = _local_client(app).get(f"/admin/assets/{package_version()}/admin.js")
+    assert script.status_code == 200
+    assert "renderKeyRotation" in script.text
+    remote = TestClient(app, base_url="http://192.0.2.10", client=("192.0.2.10", 50000))
+    assert remote.get("/admin/api/status").status_code == 403
+    key_rotation_registry.clear()
 
 
 def test_admin_retains_code_without_chat_markup() -> None:

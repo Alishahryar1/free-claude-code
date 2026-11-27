@@ -149,6 +149,42 @@ function renderStartup() {
   renderDshDesktopIntegration();
 }
 
+function formatCooldown(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours) return `${hours}h ${minutes}m`;
+  return minutes ? `${minutes}m ${seconds % 60}s` : `${seconds}s`;
+}
+
+function renderKeyRotation(rows) {
+  const container = document.getElementById("keyRotationRows");
+  if (!container) return;
+  container.replaceChildren();
+  if (!rows.length) {
+    container.textContent = "No API-key credentials configured.";
+    return;
+  }
+  const table = document.createElement("table");
+  table.className = "key-rotation-table";
+  const head = table.createTHead().insertRow();
+  ["Provider", "Key index", "State", "Remaining cooldown", "Last failure category"].forEach((label) => {
+    const cell = document.createElement("th");
+    cell.textContent = label;
+    head.appendChild(cell);
+  });
+  const body = table.createTBody();
+  rows.forEach((entry) => {
+    const row = body.insertRow();
+    [entry.provider_id, String(entry.key_number),
+      entry.status === "cooldown" ? "Cooling down" : "Available",
+      entry.cooldown_seconds ? formatCooldown(entry.cooldown_seconds) : "-",
+      entry.last_error || "-"].forEach((value) => {
+      row.insertCell().textContent = value;
+    });
+  });
+  container.append(table);
+}
+
 async function refreshStartup() {
   if (!state.config || document.hidden || state.restart) return;
   if (state.startupRequest) { state.startupAgain = true; return; }
@@ -170,6 +206,7 @@ async function refreshStartup() {
     )) return;
     state.startup = result;
     renderStartup();
+    renderKeyRotation(result.key_rotation || []);
     refreshIntegrationUpdates(
       previous?.instance_id === result.instance_id ? previous.startup.integrations : null,
       current.integrations,

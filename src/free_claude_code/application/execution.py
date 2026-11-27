@@ -1,17 +1,29 @@
 """Provider execution shared by inbound API adapters."""
 
 import json
+import math
 from collections.abc import AsyncIterator, Callable, Mapping
+from dataclasses import replace
 from types import MappingProxyType
 
 from loguru import logger
 
+from free_claude_code.application.key_rotation import (
+    RotationScope,
+    configured_keys,
+    error_chain,
+    key_rotation_registry,
+    rotation_scope,
+)
 from free_claude_code.config.reasoning import ReasoningPreference
+from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import (
     anthropic_request_snapshot,
     get_token_count,
 )
 from free_claude_code.core.anthropic.tokens import TokenCounter
+from free_claude_code.core.failure_evidence import tpm_limit_and_requested
+from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.gemini.tokens import estimate_gemini_input_tokens
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -49,6 +61,14 @@ from .routing import (
 ResponsesTokenCounter = Callable[[OpenAIResponsesRequest], int]
 
 
+def _estimate_request_tokens(payload: object) -> int:
+    """Conservative size estimate (~4 characters per token) of an ingress payload."""
+    try:
+        return len(json.dumps(payload, default=str)) // 4
+    except TypeError, ValueError:
+        return 0
+
+
 class ProviderExecutor:
     """Prepare routed requests and compose their model execution streams."""
 
@@ -62,6 +82,7 @@ class ProviderExecutor:
         log_raw_payloads: bool = False,
         request_headers: Mapping[str, str] | None = None,
         model_info_lookup: ModelInfoLookup | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self._provider_resolver = provider_resolver
         self._model_info_lookup = model_info_lookup or (lambda _provider, _model: None)
@@ -70,6 +91,217 @@ class ProviderExecutor:
         self._generation_id = generation_id
         self._log_raw_payloads = log_raw_payloads
         self._request_headers = MappingProxyType(dict(request_headers or {}))
+        self._settings = settings
+
+    def _rotation_candidates(
+        self,
+        resolved: ResolvedModelRoute,
+        request_tokens: Callable[[], int] | None = None,
+    ) -> tuple[ProviderModelCandidate, ...]:
+        original = (ProviderModelCandidate(resolved.primary), *resolved.fallbacks)
+        if self._settings is None:
+            return original
+        expanded = self._expand_candidates(resolved, original)
+        if not expanded and self._cooling_is_advertised(resolved, original):
+            # Providers advertised these waits, and FCC's provider admission
+            # tracks them and answers with the preserved upstream detail.
+            return original
+        if request_tokens is None or not any(
+            key_rotation_registry.tpm_limit(item.target.provider_id) is not None
+            for item in expanded
+        ):
+            return expanded
+        size = request_tokens()
+        # Skip providers whose observed token-rate cap is below this request's
+        # size (it can never be accepted there), but never drop every route.
+        fitting = tuple(
+            item
+            for item in expanded
+            if (limit := key_rotation_registry.tpm_limit(item.target.provider_id))
+            is None
+            or size <= limit
+        )
+        return fitting or expanded
+
+    def _expand_candidates(
+        self,
+        resolved: ResolvedModelRoute,
+        original: tuple[ProviderModelCandidate, ...],
+    ) -> tuple[ProviderModelCandidate, ...]:
+        assert self._settings is not None
+        key_map: dict[str, list[tuple[int, str]]] = {}
+        for provider_id, number, key in configured_keys(self._settings):
+            key_map.setdefault(provider_id, []).append((number, key))
+        expanded: list[ProviderModelCandidate] = []
+        seen: set[tuple[str, str, int]] = set()
+        for candidate in original:
+            target = candidate.target
+            keys = key_map.get(target.provider_id, [])
+            same_provider = [
+                item
+                for item in keys
+                if item[0] != target.api_key_number
+                and key_rotation_registry.available(
+                    target.provider_id, item[0], item[1]
+                )
+            ]
+            primary_key = next(
+                (key for number, key in keys if number == target.api_key_number), None
+            )
+            primary_available = primary_key is None or key_rotation_registry.available(
+                target.provider_id, target.api_key_number, primary_key
+            )
+            if primary_available:
+                identity = (
+                    target.provider_id,
+                    target.provider_model,
+                    target.api_key_number,
+                )
+                if identity in seen:
+                    existing = next(
+                        position
+                        for position, item in enumerate(expanded)
+                        if (
+                            item.target.provider_id,
+                            item.target.provider_model,
+                            item.target.api_key_number,
+                        )
+                        == identity
+                    )
+                    if expanded[existing].is_key_rotation:
+                        expanded[existing] = candidate
+                else:
+                    expanded.append(candidate)
+                    seen.add(identity)
+            for key_index, (number, _key) in enumerate(same_provider):
+                identity = (target.provider_id, target.provider_model, number)
+                replacement = ProviderModelCandidate(
+                    replace(target, api_key_number=number),
+                    candidate.reasoning_preference,
+                    primary_available or key_index > 0,
+                )
+                if identity not in seen:
+                    expanded.append(replacement)
+                    seen.add(identity)
+                elif not replacement.is_key_rotation:
+                    for position, item in enumerate(expanded):
+                        if (
+                            item.target.provider_id,
+                            item.target.provider_model,
+                            item.target.api_key_number,
+                        ) == identity and item.is_key_rotation:
+                            expanded[position] = replacement
+                            break
+        logger.info(
+            "API key rotation candidates selected: provider={} candidates={}",
+            resolved.primary.provider_id,
+            len(expanded),
+        )
+        return tuple(expanded)
+
+    def _cooling_is_advertised(
+        self,
+        resolved: ResolvedModelRoute,
+        original: tuple[ProviderModelCandidate, ...],
+    ) -> bool:
+        assert self._settings is not None
+        providers = dict.fromkeys(item.target.provider_id for item in original)
+        return all(
+            key_rotation_registry.provider_advertised(
+                provider,
+                [
+                    (number, key)
+                    for owner, number, key in configured_keys(self._settings)
+                    if owner == provider
+                ],
+            )
+            for provider in providers
+        )
+
+    def _all_cooling_failure(self, resolved: ResolvedModelRoute) -> ExecutionFailure:
+        """429 for a request whose every route has only cooling credentials."""
+        assert self._settings is not None
+        providers = [
+            resolved.primary.provider_id,
+            *(item.target.provider_id for item in resolved.fallbacks),
+        ]
+        waits = {
+            provider: key_rotation_registry.remaining(
+                provider,
+                [
+                    (number, key)
+                    for owner, number, key in configured_keys(self._settings)
+                    if owner == provider
+                ],
+            )
+            for provider in dict.fromkeys(providers)
+        }
+        active = {provider: wait for provider, wait in waits.items() if wait > 0}
+        provider = (
+            min(active, key=lambda item: active[item]) if active else providers[0]
+        )
+        seconds = math.ceil(active[provider]) if active else 1
+        return ExecutionFailure(
+            FailureKind.RATE_LIMIT,
+            429,
+            key_rotation_registry.cooldown_message(provider, seconds),
+            False,
+        )
+
+    def _record_key_failure(
+        self, candidate: ProviderModelCandidate, error: Exception
+    ) -> None:
+        if self._settings is None:
+            return
+        target = candidate.target
+        key = next(
+            (
+                key
+                for provider, number, key in configured_keys(self._settings)
+                if provider == target.provider_id and number == target.api_key_number
+            ),
+            None,
+        )
+        scope = rotation_scope(error)
+        if key is None or scope is None:
+            return
+        if isinstance(error, ExecutionFailure):
+            key_rotation_registry.remember_detail(target.provider_id, error.message)
+        fallback = self._settings.api_key_cooldown_fallback_seconds
+        if scope is RotationScope.PROVIDER:
+            keys = [
+                (number, value)
+                for provider, number, value in configured_keys(self._settings)
+                if provider == target.provider_id
+            ]
+            key_rotation_registry.mark_provider(
+                target.provider_id, keys, error, fallback_seconds=fallback
+            )
+            parsed = next(
+                (
+                    found
+                    for item in error_chain(error)
+                    if isinstance(item, Exception)
+                    and (found := tpm_limit_and_requested(item)) is not None
+                ),
+                None,
+            )
+            if parsed is not None and parsed[1] > parsed[0]:
+                key_rotation_registry.learn_tpm_limit(target.provider_id, parsed[0])
+        else:
+            key_rotation_registry.mark(
+                target.provider_id,
+                target.api_key_number,
+                key,
+                error,
+                fallback_seconds=fallback,
+            )
+        logger.warning(
+            "API key cooldown applied: provider={} key_number={} scope={}",
+            target.provider_id,
+            target.api_key_number,
+            scope.value,
+        )
 
     def stream_native_messages(
         self,
@@ -153,7 +385,7 @@ class ProviderExecutor:
             )
             request = (
                 primary_request
-                if index == 0
+                if target == routed.resolved.primary
                 else prepare_fallback_request(
                     routed.request,
                     model=target.provider_model,
@@ -214,7 +446,7 @@ class ProviderExecutor:
             )
             request = (
                 primary_request
-                if index == 0
+                if target == routed.resolved.primary
                 else prepare_fallback_request(
                     routed.request,
                     model=target.provider_model,
@@ -399,7 +631,9 @@ class ProviderExecutor:
         """Compose request observations and the candidate response stream."""
 
         primary = resolved.primary
-        candidates = (ProviderModelCandidate(primary), *resolved.fallbacks)
+        candidates = self._rotation_candidates(
+            resolved, lambda: _estimate_request_tokens(raw_log_payload())
+        )
         gateway_model = resolved.original_model
         route_trace: dict[str, object] = {
             "request_id": request_id,
@@ -459,6 +693,8 @@ class ProviderExecutor:
                 request_id=request_id,
                 wire_api=wire_api,
                 generation_id=self._generation_id,
+                on_failure=self._record_key_failure,
+                unavailable=lambda: self._all_cooling_failure(resolved),
             ),
             stage="egress",
             source="api",

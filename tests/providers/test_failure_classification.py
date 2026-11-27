@@ -67,6 +67,20 @@ def _openai_status(
     return build
 
 
+def _openai_status_with_body(
+    error_type: type[openai.APIStatusError],
+    status_code: int,
+    message: str,
+    body: dict[str, object],
+) -> Callable[[], Exception]:
+    def build() -> Exception:
+        request = httpx2.Request("POST", _URL)
+        response = httpx2.Response(status_code, request=request)
+        return error_type(message, response=response, body={"error": body})
+
+    return build
+
+
 def _statusless(message: str, body: object) -> Callable[[], Exception]:
     def build() -> Exception:
         return openai.APIError(message, request=httpx2.Request("POST", _URL), body=body)
@@ -165,6 +179,19 @@ _ROWS: dict[str, tuple[Callable[[], Exception], Observed]] = {
     ),
     "openai_403": (
         _openai_status(openai.PermissionDeniedError, 403, "denied"),
+        _o(K.PERMISSION, 403, False, auth=403),
+    ),
+    "openai_403_with_structured_quota": (
+        _openai_status_with_body(
+            openai.PermissionDeniedError,
+            403,
+            "quota",
+            {"code": "insufficient_quota", "message": "quota"},
+        ),
+        _o(K.RATE_LIMIT, 429, True, transient=429, auth=403),
+    ),
+    "openai_403_with_quota_text_only": (
+        _openai_status(openai.PermissionDeniedError, 403, "insufficient_quota"),
         _o(K.PERMISSION, 403, False, auth=403),
     ),
     "openai_403_with_overload_text": (
