@@ -420,7 +420,8 @@ def test_malformed_tool_history_is_rejected_before_inference(
                     "name": "grammar",
                     "format": {"type": "grammar", "definition": "x"},
                 }
-            ]
+            ],
+            "tool_choice": {"type": "custom", "name": "grammar"},
         },
         {"text": {"format": {"type": "json_object"}}},
         {"reasoning": {"summary": "detailed"}},

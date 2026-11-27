@@ -1,10 +1,9 @@
 """Direct Responses-to-Messages conversion with explicit replay and tool identity."""
 
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Literal, cast
+from typing import Literal, assert_never, cast
 from urllib.parse import urlsplit
 
 from free_claude_code.core.anthropic.image_sources import (
@@ -19,13 +18,21 @@ from free_claude_code.core.anthropic.native import (
 )
 from free_claude_code.core.history_replay import (
     responses_reasoning_blocks,
-    tool_history_context,
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 
 from .errors import ResponsesConversionError
-from .models import OpenAIResponsesRequest, is_hosted_history, latest_user_input
+from .input_history import (
+    HistoryItem,
+    InputCall,
+    InputMessage,
+    InputResult,
+    ReasoningItem,
+    Screenshot,
+    read_history,
+)
+from .models import OpenAIResponsesRequest
 from .tools import (
     ResponsesToolIdentity,
     custom_tool_input_schema,
@@ -47,16 +54,6 @@ def _string(value: JsonValue, context: str, *, empty: bool = False) -> str:
     return value
 
 
-def _items(value: JsonValue) -> list[JsonValue]:
-    if isinstance(value, (str, Mapping)):
-        return [value]
-    if isinstance(value, list):
-        return value
-    raise ResponsesConversionError(
-        "Messages upstream requires explicit Responses input history."
-    )
-
-
 def _identity(
     value: Mapping[str, JsonValue],
     kind: Literal["function", "custom"],
@@ -75,24 +72,10 @@ def _identity(
     )
 
 
-def _arguments(value: JsonValue) -> JsonObject:
-    if isinstance(value, Mapping):
-        return dict(value)
-    if not isinstance(value, str):
-        raise ResponsesConversionError("Function arguments must be a JSON object.")
-    try:
-        parsed = cast(JsonValue, json.loads(value))
-    except (ValueError, RecursionError) as exc:
-        raise ResponsesConversionError(
-            "Function arguments must be valid JSON."
-        ) from exc
-    if not isinstance(parsed, Mapping):
-        raise ResponsesConversionError("Function arguments must decode to an object.")
-    return dict(parsed)
-
-
 class _ToolScope:
-    def __init__(self, tools: list[JsonObject] | None, items: list[JsonValue]) -> None:
+    def __init__(
+        self, tools: list[JsonObject] | None, history: list[HistoryItem]
+    ) -> None:
         self._flat: dict[str, ResponsesToolIdentity] = {}
         self._declared: set[ResponsesToolIdentity] = set()
         definitions: list[tuple[ResponsesToolIdentity, JsonObject]] = []
@@ -127,15 +110,9 @@ class _ToolScope:
                 definitions.append(self._definition(tool, None))
             elif not isinstance(tool.get("type"), str):
                 raise ResponsesConversionError("Tool declaration requires a type")
-        for item in items:
-            if isinstance(item, Mapping) and item.get("type") in (
-                "function_call",
-                "custom_tool_call",
-            ):
-                kind = (
-                    "custom" if item.get("type") == "custom_tool_call" else "function"
-                )
-                self._register(_identity(item, kind))
+        for item in history:
+            if isinstance(item, InputCall):
+                self._register(item.identity)
         self._codec = OpenAIToolNameCodec.from_names(self._flat)
         self.identities = MappingProxyType(
             {
@@ -337,113 +314,70 @@ class _MessagesInput:
         else:
             self.messages.append({"role": role, "content": parts})
 
-    def add(self, value: JsonValue, *, current_user: bool = False) -> None:
-        if isinstance(value, str):
-            self._append("user", [{"type": "text", "text": value}])
-            return
-        if not isinstance(value, Mapping):
-            raise ResponsesConversionError(
-                "Responses input items must be text or objects."
-            )
-        kind = value.get("type")
-        if kind is None or kind == "message":
-            role = value.get("role", "user")
+    def add(self, item: HistoryItem) -> None:
+        if isinstance(item, InputMessage):
+            role = item.role
             if role in ("system", "developer"):
                 if self.messages:
                     raise ResponsesConversionError(
                         "Messages upstream supports only leading system/developer input."
                     )
-                self.system.extend(_content(value.get("content"), images=False))
-            elif role in ("user", "assistant"):
+                self.system.extend(_content(item.content, images=False))
+            else:
                 parts = _content(
-                    value.get("content"),
+                    item.content,
                     images=role == "user",
                     empty=self._assistant_fragment and role == "assistant",
                 )
                 if parts or self._assistant_fragment:
                     self._append("user" if role == "user" else "assistant", parts)
-                elif current_user:
-                    raise ResponsesConversionError(
-                        "The latest user message has no translatable content"
-                    )
-            else:
-                raise ResponsesConversionError("Unsupported Responses message role.")
-            return
-        if kind == "reasoning":
-            if blocks := responses_reasoning_blocks(value):
+        elif isinstance(item, ReasoningItem):
+            if blocks := responses_reasoning_blocks(item.data):
                 self._append("assistant", blocks)
-            return
-        if kind in ("function_call", "custom_tool_call"):
-            self._call(value, custom=kind == "custom_tool_call")
-            return
-        if kind in ("function_call_output", "custom_tool_call_output"):
-            self._result(value, custom=kind == "custom_tool_call_output")
-            return
-        if kind in ("input_text", "output_text", "text", "input_image"):
-            self._append("user", _content([value], images=True))
-            return
-        if is_hosted_history(kind) and value.get("status") in {
-            None,
-            "completed",
-            "failed",
-            "incomplete",
-            "interrupted",
-        }:
-            self._append(
-                "assistant", [{"type": "text", "text": tool_history_context(value)}]
-            )
-            return
-        if not isinstance(kind, str) or is_hosted_history(kind):
-            raise ResponsesConversionError(
-                f"Messages upstream cannot represent input item {kind!r}."
-            )
+        elif isinstance(item, InputCall):
+            self._call(item)
+        elif isinstance(item, InputResult):
+            self._result(item)
+        elif isinstance(item, Screenshot):
+            self._append("user", _content(item.content, images=True))
+        else:
+            assert_never(item)
 
-    def _call(self, value: Mapping[str, JsonValue], *, custom: bool) -> None:
-        call_id = _string(value.get("call_id"), "tool.call_id")
+    def _call(self, item: InputCall) -> None:
+        call_id = item.call_id
         if call_id in self._calls:
             raise ResponsesConversionError(
                 "Duplicate tool call_id in Responses history."
             )
-        kind = "custom" if custom else "function"
-        identity = _identity(value, kind)
-        arguments: JsonObject = (
-            {"input": _string(value.get("input"), "custom_tool_call.input", empty=True)}
-            if custom
-            else _arguments(value.get("arguments"))
-        )
         self._append(
             "assistant",
             [
                 {
                     "type": "tool_use",
                     "id": call_id,
-                    "name": self._tools.alias(identity),
-                    "input": arguments,
+                    "name": self._tools.alias(item.identity),
+                    "input": item.object_arguments(),
                 }
             ],
         )
-        self._calls[call_id] = kind
+        self._calls[call_id] = item.identity.kind
         self._pending.add(call_id)
 
-    def _result(self, value: Mapping[str, JsonValue], *, custom: bool) -> None:
-        call_id = _string(value.get("call_id"), "tool output.call_id")
+    def _result(self, item: InputResult) -> None:
+        call_id = item.call_id
         if call_id not in self._pending:
             raise ResponsesConversionError("Tool output is orphaned or duplicated.")
-        if self._calls[call_id] != ("custom" if custom else "function"):
+        if self._calls[call_id] != item.kind:
             raise ResponsesConversionError("Tool output type does not match its call.")
         block: JsonObject = {
             "type": "tool_result",
             "tool_use_id": call_id,
         }
-        content = _content(value.get("output"), images=True, empty=True)
+        content = _content(item.output, images=True, empty=True)
         if content:
             block["content"] = content
-        if value.get("is_error") is not None:
-            if not isinstance(value["is_error"], bool):
-                raise ResponsesConversionError(
-                    "Tool result is_error must be a boolean."
-                )
-            block["is_error"] = value["is_error"]
+        if item.is_error is not None:
+            block["is_error"] = item.is_error
         self._append("user", [block], result=True)
         self._pending.remove(call_id)
 
@@ -456,8 +390,9 @@ class _MessagesInput:
 
 def build_responses_messages_suffix(items: list[JsonValue]) -> list[JsonObject]:
     """Convert delivered assistant fragments, which may contain only a summary."""
-    builder = _MessagesInput(_ToolScope(None, items), assistant_fragment=True)
-    for item in items:
+    history = [item for _, item in read_history(items)]
+    builder = _MessagesInput(_ToolScope(None, history), assistant_fragment=True)
+    for item in history:
         builder.add(item)
     builder.finish()
     try:
@@ -545,14 +480,13 @@ def build_responses_messages_request(
         raise ResponsesConversionError(
             "Messages upstream supports only automatic reasoning summaries."
         )
-    items = _items(request.input)
-    scope = _ToolScope(request.tools, items)
+    history = [item for _, item in read_history(request.input)]
+    scope = _ToolScope(request.tools, history)
     builder = _MessagesInput(scope)
     if request.instructions is not None:
         builder.system.append({"type": "text", "text": request.instructions})
-    latest = latest_user_input(items)
-    for item in items:
-        builder.add(item, current_user=item is latest)
+    for item in history:
+        builder.add(item)
     builder.finish()
     if not builder.messages:
         raise ResponsesConversionError(

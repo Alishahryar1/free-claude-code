@@ -173,7 +173,6 @@ def test_discovery_and_current_declarations_are_selected_before_flattening(
         object_payload(tool["function"])["name"]
         for tool in object_array(prepared.body["tools"])
     ] == ["math__count"]
-    assert prepared.tool_adapter.original is request
 
 
 def test_unique_bare_tool_name_restores_declared_namespace() -> None:

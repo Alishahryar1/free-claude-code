@@ -92,6 +92,8 @@ class WebToolService:
     ) -> AsyncIterator[StreamOutput] | None:
         """Validate synchronously; return a lazy body only for handled requests."""
         request = routed.request
+        if request.uses_container:
+            return None
         plan = plan_automatic_web_search(request, web_tools_enabled=self._enabled)
         if plan is None:
             error = unsupported_server_tool_error(

@@ -1044,6 +1044,17 @@ def test_partial_gemini_upstream_call_never_becomes_a_complete_tool_call(
         {"previous_response_id": "resp_1"},
         {"type": "compaction", "encrypted_content": "opaque"},
         {"type": "item_reference", "id": "msg_1"},
+        {
+            "type": "configuration_update",
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "count",
+                    "strict": True,
+                    "schema": SCHEMA,
+                }
+            },
+        },
         {"type": "mcp_approval_request", "id": "approval_1", "name": "read"},
         {
             "type": "mcp_approval_response",
@@ -1309,15 +1320,256 @@ def sent_request(protocol: str, path: str, body: JsonObject) -> JsonObject:
 
     def reply(request: httpx.Request | httpx2.Request):
         sent.append(decode_object(request.content))
-        return matrix_reply(protocol)
+        events: list[JsonObject] = (
+            [
+                {
+                    "responseId": "reply",
+                    "candidates": [
+                        {
+                            "index": 0,
+                            "content": {
+                                "role": "model",
+                                "parts": [{"text": "fixture reply"}],
+                            },
+                            "finishReason": "STOP",
+                        }
+                    ],
+                }
+            ]
+            if protocol == "gemini"
+            else text_events(protocol, "fixture reply")
+        )
+        return matrix_reply(protocol, events)
 
     with TestClient(
         matrix_app(protocol, native_reply=reply, sdk_reply=reply)
     ) as client:
         response = client.post(path, json=body)
     assert response.status_code == 200, response.text
+    assert "fixture reply" in response.text
+    if body.get("stream") and path == "/v1/responses":
+        assert "response.completed" in response.text
     (upstream,) = sent
     return upstream
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses", "gemini"])
+def test_saved_messages_container_stays_on_its_own_protocol(protocol: str) -> None:
+    path, body = ingress_request("messages", True)
+    body["container"] = "container_saved"
+    if protocol == "messages":
+        assert sent_request(protocol, path, body)["container"] == "container_saved"
+    else:
+        assert "container" in translation_error(protocol, path, body).lower()
+
+
+@pytest.mark.parametrize("protocol", ["messages", "responses", "gemini"])
+def test_chat_custom_call_history_keeps_input_and_result(protocol: str) -> None:
+    call: JsonObject = {
+        "type": "custom",
+        "id": "lookup_1",
+        "custom": {"name": "lookup", "input": "original text input"},
+    }
+    path, body = ingress_request(
+        "chat",
+        True,
+        [
+            {"role": "user", "content": "Look this up"},
+            {"role": "assistant", "tool_calls": [call]},
+            {
+                "role": "tool",
+                "tool_call_id": "lookup_1",
+                "content": "original tool result",
+            },
+            {"role": "user", "content": "What did the tool return?"},
+        ],
+    )
+    upstream = sent_request(protocol, path, body)
+    if protocol == "responses":
+        exchange = [
+            item
+            for item in object_array(upstream["input"])
+            if item.get("call_id") == "lookup_1"
+        ]
+        assert [item["type"] for item in exchange] == [
+            "custom_tool_call",
+            "custom_tool_call_output",
+        ]
+        assert exchange[0]["input"] == "original text input"
+        assert exchange[1]["output"] == "original tool result"
+    elif protocol == "messages":
+        messages = object_array(upstream["messages"])
+        historical_call = object_array(messages[1]["content"])[0]
+        historical_result = object_array(messages[2]["content"])[0]
+        assert historical_call == {
+            "type": "tool_use",
+            "id": "lookup_1",
+            "name": "lookup",
+            "input": {"input": "original text input"},
+        }
+        assert historical_result["tool_use_id"] == historical_call["id"]
+        assert (
+            object_array(historical_result["content"])[0]["text"]
+            == "original tool result"
+        )
+    else:
+        turns = object_array(upstream["contents"])
+        call = object_payload(object_array(turns[1]["parts"])[0]["functionCall"])
+        result = object_payload(object_array(turns[2]["parts"])[0]["functionResponse"])
+        assert call == {
+            "id": "lookup_1",
+            "name": "lookup",
+            "args": {"input": "original text input"},
+        }
+        assert result == {
+            "id": "lookup_1",
+            "name": "lookup",
+            "response": {"output": "original tool result"},
+        }
+    array_payload(body["messages"]).pop(2)
+    translation_error(protocol, path, body)
+
+
+@pytest.mark.parametrize("protocol", ["messages", "responses", "gemini"])
+def test_chat_rejects_malformed_tool_result_reference(protocol: str) -> None:
+    path, body = ingress_request(
+        "chat",
+        True,
+        [
+            {"role": "user", "content": "Read"},
+            {"role": "tool", "tool_call_id": ["read_1"], "content": "result"},
+        ],
+    )
+    assert "tool_call_id" in translation_error(protocol, path, body)
+
+
+@pytest.mark.parametrize("wire", ["chat", "responses"])
+def test_optional_strict_function_is_unavailable_on_gemini(wire: str) -> None:
+    path, body = ingress_request(wire, True)
+    function: JsonObject = {
+        "name": "strict_lookup",
+        "parameters": SCHEMA,
+        "strict": True,
+    }
+    array_payload(body["tools"]).append(
+        {"type": "function", "function": function}
+        if wire == "chat"
+        else {"type": "function", **function}
+    )
+    sent = sent_request("gemini", path, body)
+    declarations = object_array(object_array(sent["tools"])[0]["functionDeclarations"])
+    assert [tool["name"] for tool in declarations] == ["read"]
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "gemini"])
+def test_completed_responses_hosted_call_keeps_its_output(protocol: str) -> None:
+    item: JsonObject = {
+        "type": "code_interpreter_call",
+        "id": "ci_1",
+        "status": "completed",
+        "code": "previous computation",
+        "outputs": [{"type": "logs", "logs": "previous calculation result"}],
+    }
+    path, body = ingress_request(
+        "responses",
+        True,
+        [
+            {"role": "user", "content": "Calculate it"},
+            item,
+            {"role": "user", "content": "Explain the result"},
+        ],
+    )
+    outgoing = json.dumps(sent_request(protocol, path, body))
+    assert "[Earlier tool record]" in outgoing
+    assert outgoing.index("previous computation") < outgoing.index(
+        "previous calculation result"
+    )
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "gemini"])
+def test_foreign_responses_history_keeps_known_content_in_order(protocol: str) -> None:
+    path, body = ingress_request(
+        "responses",
+        True,
+        [
+            {"role": "user", "content": "First question"},
+            {
+                "role": "assistant",
+                "content": [{"type": "refusal", "refusal": "Earlier refusal"}],
+            },
+            {
+                "type": "custom_tool_call",
+                "call_id": "custom_1",
+                "name": "lookup",
+                "input": "free-form lookup",
+            },
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "custom_1",
+                "output": "lookup answer",
+            },
+            {
+                "type": "function_call",
+                "call_id": "read_1",
+                "name": "read",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "read_1",
+                "output": [
+                    {"type": "input_text", "text": "ordinary result"},
+                    {"type": "future_media", "value": "untranslated extension"},
+                ],
+            },
+            {"role": "user", "content": "Latest question"},
+        ],
+    )
+    outgoing = json.dumps(sent_request(protocol, path, body))
+    order = [
+        "First question",
+        "Earlier refusal",
+        "free-form lookup",
+        "lookup answer",
+        "ordinary result",
+        "Latest question",
+    ]
+    assert [outgoing.index(text) for text in order] == sorted(
+        outgoing.index(text) for text in order
+    )
+    assert "untranslated extension" not in outgoing
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "gemini"])
+def test_computer_history_preserves_the_screenshot_and_requires_a_completed_call(
+    protocol: str,
+) -> None:
+    path, body = ingress_request(
+        "responses",
+        True,
+        [
+            {"role": "user", "content": "Look at the sample"},
+            {
+                "type": "computer_call",
+                "call_id": "screen_1",
+                "status": "completed",
+                "action": {"type": "screenshot"},
+            },
+            {
+                "type": "computer_call_output",
+                "call_id": "screen_1",
+                "output": {
+                    "type": "computer_screenshot",
+                    "image_url": "data:image/png;base64,iVBORw0KGgo=",
+                },
+            },
+            {"role": "user", "content": "What was on the screen?"},
+        ],
+    )
+    sent = sent_request(protocol, path, body)
+    assert "iVBORw0KGgo=" in json.dumps(sent)
+    array_payload(body["input"]).pop(2)
+    translation_error(protocol, path, body)
 
 
 @pytest.mark.parametrize("protocol", ["messages", "chat", "responses", "gemini"])

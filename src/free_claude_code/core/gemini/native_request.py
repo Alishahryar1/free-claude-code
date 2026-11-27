@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from copy import deepcopy
+from typing import assert_never
 
 from ..anthropic.conversion import (
     resolve_anthropic_tool_choice,
@@ -17,9 +18,8 @@ from ..anthropic.request_serialization import (
 from ..chat_completions.request import (
     ChatRequest,
     content_parts,
-    function_calls,
-    tool_arguments,
-    translated_body,
+    function_history,
+    project_chat_request,
 )
 from ..history_replay import (
     decode_replay,
@@ -38,9 +38,13 @@ from ..json_types import (
     json_text,
 )
 from ..openai_responses import (
+    InputCall,
+    InputMessage,
+    InputResult,
     OpenAIResponsesRequest,
-    is_hosted_history,
-    latest_user_input,
+    ReasoningItem,
+    Screenshot,
+    read_history,
 )
 from ..reasoning import ReasoningControl, ReasoningPolicy
 from .errors import GeminiConversionError
@@ -220,7 +224,7 @@ def _function_result(
 def chat_to_gemini(
     request: ChatRequest, *, allow_pending_calls: bool = False
 ) -> JsonObject:
-    body = translated_body(request)
+    body = project_chat_request(request).body
     contents: list[JsonObject] = []
     system: list[JsonObject] = []
     calls: dict[str, str] = {}
@@ -263,9 +267,7 @@ def chat_to_gemini(
         parts.extend(_text_parts(message.get("content")))
         if message.get("refusal"):
             parts.append({"text": message["refusal"]})
-        for call in function_calls(message):
-            name = json_text(json_object(call["function"])["name"])
-            call_id = json_text(call["id"])
+        for call_id, name, args in function_history(message):
             if call_id in calls:
                 raise GeminiConversionError("Duplicate function call ID")
             calls[call_id] = name
@@ -274,7 +276,7 @@ def chat_to_gemini(
                     "functionCall": {
                         "id": call_id,
                         "name": name,
-                        "args": tool_arguments(call),
+                        "args": args,
                     }
                 }
             )
@@ -312,9 +314,7 @@ def chat_to_gemini(
             continue
         function = json_object(tool["function"])
         if function.get("strict"):
-            raise GeminiConversionError(
-                "Native Gemini cannot enforce strict function tools"
-            )
+            continue
         declarations.append(
             {
                 "name": function["name"],
@@ -520,93 +520,69 @@ def responses_to_gemini(
         raise GeminiConversionError(
             "Native Gemini cannot access stored Responses state"
         )
-    value = body.get("input")
-    items = (
-        [{"role": "user", "content": value}]
-        if isinstance(value, str)
-        else value
-        if isinstance(value, list)
-        else [value]
-    )
     contents: list[JsonObject] = []
     system: list[JsonObject] = (
         [{"text": body["instructions"]}] if body.get("instructions") else []
     )
-    calls: dict[str, str] = {}
-    latest = latest_user_input(items)
-    for item in items:
-        if isinstance(item, str):
-            _append(contents, "user", [{"text": item}])
-            continue
-        if not isinstance(item, dict):
-            raise GeminiConversionError("Responses input requires messages or items")
-        kind = item.get("type", "message")
-        if kind == "message":
-            role = item.get("role", "user")
-            parts = _text_parts(item.get("content"), responses=True)
-            if item is latest and not parts:
-                raise GeminiConversionError(
-                    "The latest user message has no translatable content"
-                )
+    calls: dict[str, InputCall] = {}
+    for _, item in read_history(request.input):
+        if isinstance(item, InputMessage):
+            role = item.role
+            parts = _text_parts(item.content, responses=True)
             if role in ("system", "developer"):
+                if contents:
+                    raise GeminiConversionError(
+                        "Native Gemini supports only leading system/developer input"
+                    )
                 if any("text" not in part for part in parts):
                     raise GeminiConversionError("System instructions must be text")
                 system.extend(parts)
-            elif role in ("assistant", "user"):
-                _append(contents, "model" if role == "assistant" else "user", parts)
             else:
-                raise GeminiConversionError("Unsupported Responses role")
-        elif kind == "reasoning":
-            _append(contents, "model", _reasoning(item, item.get("encrypted_content")))
-        elif kind == "function_call":
-            if item.get("extra_content"):
-                raise GeminiConversionError(
-                    "Saved compatibility tool metadata cannot be replayed on native Gemini; start a fresh conversation"
-                )
-            if any(
-                not isinstance(item.get(key), str) or not item[key]
-                for key in ("call_id", "name", "arguments")
-            ):
-                raise GeminiConversionError(
-                    "Function calls require an ID, name, and arguments"
-                )
-            call_id, name = json_text(item["call_id"]), json_text(item["name"])
-            if call_id in calls:
-                raise GeminiConversionError("Duplicate pending tool call ID")
-            calls[call_id] = name
-            args = tool_arguments({"function": {"arguments": item["arguments"]}})
+                _append(contents, "model" if role == "assistant" else "user", parts)
+        elif isinstance(item, ReasoningItem):
             _append(
                 contents,
                 "model",
-                [{"functionCall": {"id": call_id, "name": name, "args": args}}],
+                _reasoning(item.data, item.data.get("encrypted_content")),
             )
-        elif kind == "function_call_output":
-            if not isinstance(item.get("call_id"), str) or not item["call_id"]:
-                raise GeminiConversionError("Function output requires a call ID")
-            call_id = item["call_id"]
-            if call_id not in calls:
-                raise GeminiConversionError("Orphaned function_call_output")
+        elif isinstance(item, InputCall):
+            if item.extra_content:
+                raise GeminiConversionError(
+                    "Saved compatibility tool metadata cannot be replayed on native Gemini; start a fresh conversation"
+                )
+            if item.call_id in calls:
+                raise GeminiConversionError("Duplicate pending tool call ID")
+            calls[item.call_id] = item
             _append(
                 contents,
-                "user",
+                "model",
                 [
-                    _function_result(
-                        call_id, calls.pop(call_id), item.get("output"), responses=True
-                    )
+                    {
+                        "functionCall": {
+                            "id": item.call_id,
+                            "name": item.identity.name,
+                            "args": item.object_arguments(),
+                        }
+                    }
                 ],
             )
-        elif kind in ("input_text", "output_text", "text", "input_image"):
-            _append(contents, "user", _text_parts([item], responses=True))
-        elif is_hosted_history(kind) and item.get("status") not in (
-            None,
-            "completed",
-            "failed",
-            "incomplete",
-            "interrupted",
-        ):
-            raise GeminiConversionError(f"Native Gemini cannot replay {kind!r}")
-        elif not isinstance(kind, str):
-            raise GeminiConversionError("Responses input item requires a type")
+        elif isinstance(item, InputResult):
+            call = calls.pop(item.call_id, None)
+            if call is None or call.identity.kind != item.kind:
+                raise GeminiConversionError("Unmatched Responses tool output")
+            result = _function_result(
+                item.call_id, call.identity.name, item.output, responses=True
+            )
+            if item.is_error:
+                response = json_object(
+                    json_object(result["functionResponse"])["response"]
+                )
+                response["error"] = response.pop("output")
+            _append(contents, "user", [result])
+        elif isinstance(item, Screenshot):
+            _append(contents, "user", _text_parts(item.content, responses=True))
+        else:
+            assert_never(item)
     if not contents and not allow_pending_calls:
         raise GeminiConversionError(
             "Responses request has no translatable conversation"
@@ -640,9 +616,7 @@ def responses_to_gemini(
         if tool.get("type") != "function" or tool.get("namespace") is not None:
             continue
         if tool.get("strict"):
-            raise GeminiConversionError(
-                "Native Gemini cannot enforce strict function tools"
-            )
+            continue
         if not isinstance(tool.get("name"), str) or not tool["name"]:
             raise GeminiConversionError("Function declarations require a name")
         declarations.append(

@@ -3,7 +3,7 @@
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import cast
+from typing import assert_never, cast
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.history_replay import (
@@ -11,7 +11,6 @@ from free_claude_code.core.history_replay import (
     is_replay,
     readable_reasoning,
     reasoning_detail,
-    tool_history_context,
     unprotected_replay,
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
@@ -19,20 +18,28 @@ from free_claude_code.core.openai_chat import (
     IMAGE_TOOL_RESULT_MARKER,
     ChatToolResultImages,
     close_chat_tool_result_turns,
-    computer_screenshot_label,
     image_tool_result_label,
 )
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 
 from .errors import ResponsesConversionError
-from .models import OpenAIResponsesRequest, is_hosted_history, latest_user_input
+from .input_history import (
+    HistoryItem,
+    InputCall,
+    InputMessage,
+    InputResult,
+    ReasoningItem,
+    Screenshot,
+    input_items,
+    read_history,
+)
+from .models import OpenAIResponsesRequest
 from .reasoning import (
     combine_reasoning,
     encrypted_reasoning_from_item,
 )
 from .tool_adaptation import ResponsesToolAdapter, ResponsesToolPolicy
 from .tools import (
-    call_id_from_item,
     optional_str,
     required_str,
 )
@@ -93,68 +100,24 @@ class _ResponsesChatInputBuilder:
         self._pending_rich_output_parts: list[dict[str, object]] = []
         self._discovery_outputs: list[dict[str, object]] = []
 
-    def add(
-        self,
-        item: JsonValue,
-        *,
-        source_type: str | None = None,
-        current_user: bool = False,
-    ) -> None:
-        if isinstance(item, str):
+    def add(self, item: HistoryItem, *, source_type: str | None) -> None:
+        if not isinstance(item, (InputResult, Screenshot)):
             self._flush_rich_outputs()
-            self._flush_reasoning()
-            self.messages.append({"role": "user", "content": item})
-            return
-        if not isinstance(item, Mapping):
-            self._flush_rich_outputs()
-            return
-
-        item_type = item.get("type")
-        if item_type not in {
-            "function_call_output",
-            "custom_tool_call_output",
-            "computer_call_output",
-        }:
-            self._flush_rich_outputs()
-        if item_type in (None, "message"):
-            self._add_message(item, current_user=current_user)
-            return
-        if item_type == "reasoning":
-            self._pending_reasoning.add(item)
-            return
-        if item_type == "function_call":
+        if isinstance(item, InputMessage):
+            self._add_message(item)
+        elif isinstance(item, ReasoningItem):
+            self._pending_reasoning.add(item.data)
+        elif isinstance(item, InputCall):
             self._add_tool_call(item)
-            return
-        if item_type == "function_call_output":
+        elif isinstance(item, InputResult):
             self._add_tool_output(item, source_type=source_type)
-            return
-        if item_type == "computer_call_output":
-            self._add_computer_output(item)
-            return
-        if item_type in {"input_text", "output_text", "text"}:
+        elif isinstance(item, Screenshot):
             self._flush_reasoning()
-            self.messages.append({"role": "user", "content": _text_from_part(item)})
-            return
-        if item_type == "input_image":
-            image = _image_part(item, context="input_image")
-            self._flush_reasoning()
-            self.messages.append({"role": "user", "content": [image]})
-            return
-        if is_hosted_history(item_type):
-            if item.get("status") not in {
-                None,
-                "completed",
-                "failed",
-                "incomplete",
-                "interrupted",
-            }:
-                raise ResponsesConversionError(
-                    "An active hosted tool cannot continue through Chat Completions."
-                )
-            self._flush_reasoning()
-            self.messages.append(
-                {"role": "assistant", "content": tool_history_context(item)}
-            )
+            content = _message_content(item.content, allow_images=True)
+            assert isinstance(content, list)
+            self._pending_rich_output_parts.extend(content)
+        else:
+            assert_never(item)
 
     def finish(self) -> tuple[list[str], list[dict[str, object]]]:
         self._flush_rich_outputs()
@@ -176,27 +139,21 @@ class _ResponsesChatInputBuilder:
                 tool["name"] = tool_names.encode(name)
             message["content"] = json.dumps(tools)
 
-    def _add_message(
-        self, item: Mapping[str, JsonValue], *, current_user: bool
-    ) -> None:
-        role = required_str(item.get("role", "user"), "input.role")
+    def _add_message(self, item: InputMessage) -> None:
+        role = item.role
         if role in {"developer", "system"}:
-            text = _content_text(item.get("content"))
+            text = _content_text(item.content)
             if text:
-                self.system_parts.append(text)
+                if self.messages or not self._pending_reasoning.empty:
+                    self._flush_reasoning()
+                    self.messages.append({"role": role, "content": text})
+                else:
+                    self.system_parts.append(text)
             return
-        if role not in {"user", "assistant"}:
-            raise ResponsesConversionError(
-                f"Unsupported Responses message role: {role!r}"
-            )
 
         if role == "user":
             self._flush_reasoning()
-        content = _message_content(item.get("content"), allow_images=role == "user")
-        if current_user and not content:
-            raise ResponsesConversionError(
-                "The latest user message has no translatable content"
-            )
+        content = _message_content(item.content, allow_images=role == "user")
         message: dict[str, object] = {"role": role, "content": content}
         if role == "assistant":
             self._apply_pending_reasoning(message)
@@ -204,11 +161,10 @@ class _ResponsesChatInputBuilder:
             return
         self.messages.append(message)
 
-    def _add_tool_call(self, item: Mapping[str, JsonValue]) -> None:
-        call_id = call_id_from_item(item)
-        name = required_str(item.get("name"), "function_call.name")
-        raw_arguments = item.get("arguments")
-        arguments = _arguments_text(raw_arguments)
+    def _add_tool_call(self, item: InputCall) -> None:
+        call_id = item.call_id
+        name = item.identity.name
+        arguments = _arguments_text(item.arguments)
 
         message: dict[str, object] | None = self._last_tool_call_message()
         if message is None:
@@ -229,18 +185,16 @@ class _ResponsesChatInputBuilder:
             }
         )
 
-    def _add_tool_output(
-        self, item: Mapping[str, JsonValue], *, source_type: str | None
-    ) -> None:
+    def _add_tool_output(self, item: InputResult, *, source_type: str | None) -> None:
         function = source_type != "custom_tool_call_output"
-        call_id = call_id_from_item(item)
+        call_id = item.call_id
         if not self._pending_reasoning.empty:
             previous = self._last_tool_call_message()
             if previous is not None:
                 self._apply_pending_reasoning(previous)
             else:
                 self._flush_reasoning()
-        output = item.get("output")
+        output = item.output
         rich_parts = (
             _rich_function_output_parts(output, call_id=call_id) if function else None
         )
@@ -259,24 +213,6 @@ class _ResponsesChatInputBuilder:
             self._discovery_outputs.append(self.messages[-1])
         if rich_parts is not None:
             self._pending_rich_output_parts.extend(rich_parts)
-
-    def _add_computer_output(self, item: Mapping[str, JsonValue]) -> None:
-        call_id = call_id_from_item(item)
-        output = item.get("output")
-        if not isinstance(output, Mapping) or output.get("type") != (
-            "computer_screenshot"
-        ):
-            raise ResponsesConversionError(
-                "computer_call_output.output must be a computer_screenshot object"
-            )
-        image = _image_part(output, context="computer_call_output.output")
-        self._flush_reasoning()
-        self._pending_rich_output_parts.extend(
-            [
-                {"type": "text", "text": computer_screenshot_label(call_id)},
-                image,
-            ]
-        )
 
     def _last_tool_call_message(self) -> dict[str, object] | None:
         if not self.messages:
@@ -404,19 +340,13 @@ def build_responses_chat_request(
     )
     if request.instructions:
         builder.system_parts.append(request.instructions)
-    original_items = _input_items(adapter.original.input)
-    latest = latest_user_input(original_items)
-    for source_index, item in zip(
-        adapter.input_source_indices, _input_items(request.input), strict=True
-    ):
-        source = original_items[source_index]
-        builder.add(
-            item,
-            current_user=source is latest,
-            source_type=optional_str(source.get("type"))
-            if isinstance(source, dict)
-            else None,
+    originals = input_items(adapter.original.input)
+    for index, item in read_history(request.input):
+        original = originals[adapter.input_source_indices[index]]
+        source_type = (
+            optional_str(original.get("type")) if isinstance(original, dict) else None
         )
+        builder.add(item, source_type=source_type)
     system_parts, raw_messages = builder.finish()
     messages = cast(
         list[dict[str, object]],
@@ -473,14 +403,6 @@ def build_responses_chat_request(
         reserved_tool_ids=reserved_tool_ids,
         tool_adapter=adapter,
     )
-
-
-def _input_items(value: JsonValue) -> Sequence[JsonValue]:
-    if value is None:
-        return ()
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        return value
-    return (value,)
 
 
 def _message_content(

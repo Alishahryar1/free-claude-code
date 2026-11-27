@@ -100,6 +100,8 @@ def quote_code_execution_history(messages: list[Message]) -> list[Message]:
 
 def translated_messages(request: MessagesRequest) -> list[Message]:
     """Keep usable source turns before a foreign builder coalesces their roles."""
+    if request.uses_container:
+        raise ValueError("A Messages container requires native Messages egress")
     latest = next(
         (turn for turn in reversed(request.messages) if turn.role == "user"), None
     )

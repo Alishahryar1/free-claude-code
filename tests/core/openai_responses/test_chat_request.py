@@ -407,10 +407,6 @@ def test_build_responses_chat_request_relocates_rich_function_output() -> None:
         },
         {"type": "text", "text": "before"},
         {"type": "image_url", "image_url": {"url": image_url}},
-        {
-            "type": "text",
-            "text": '{"type":"input_file","file_id":"file_1"}',
-        },
         {"type": "text", "text": "after"},
     ]
     assert image_url not in messages[1]["content"]

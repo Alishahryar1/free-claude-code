@@ -1,6 +1,8 @@
 """Preserve native Chat requests and translate only representable fields."""
 
+from collections.abc import Iterator, Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -103,8 +105,10 @@ class ChatRequest(BaseModel):
             content = message.get("content")
             if content is not None and not isinstance(content, (str, list)):
                 raise ValueError("Chat content must be a string, array or null")
-            if message.get("role") == "tool" and not message.get("tool_call_id"):
-                raise ValueError("Tool messages require tool_call_id")
+            if message.get("role") == "tool" and not (
+                isinstance(result_id := message.get("tool_call_id"), str) and result_id
+            ):
+                raise ValueError("Tool messages require a nonempty string tool_call_id")
             for part in content_parts(content):
                 if part.get("type") == "text" and not isinstance(part.get("text"), str):
                     raise ValueError("Text content requires text")
@@ -169,7 +173,13 @@ class ChatRequest(BaseModel):
         )
 
 
-def translated_body(request: ChatRequest) -> JsonObject:
+@dataclass(frozen=True, slots=True)
+class ChatProjection:
+    body: JsonObject
+    call_kinds: Mapping[str, str]
+
+
+def project_chat_request(request: ChatRequest) -> ChatProjection:
     """Project the shared Chat input before building a foreign request."""
     body = request.body()
     if request.n not in (None, 1):
@@ -227,8 +237,8 @@ def translated_body(request: ChatRequest) -> JsonObject:
     latest_user = next(
         (msg for msg in reversed(messages) if msg["role"] == "user"), None
     )
-    omitted_calls: set[str] = set()
-    seen_calls: set[str] = set()
+    pending_custom: set[str] = set()
+    call_kinds: dict[str, str] = {}
     projected: list[JsonObject] = []
     for message in messages:
         if message["role"] == "assistant" and google_thought_signature(
@@ -252,25 +262,41 @@ def translated_body(request: ChatRequest) -> JsonObject:
                     )
                 call_id = call.get("id")
                 if isinstance(call_id, str) and call_id:
-                    if call_id in seen_calls:
+                    if call_id in call_kinds:
                         raise ChatConversionError(
                             "Duplicate tool call ID in Chat history"
                         )
-                    seen_calls.add(call_id)
-                    if call.get("type") != "function":
-                        omitted_calls.add(call_id)
+                    kind = json_text(call["type"])
+                    call_kinds[call_id] = kind
+                    if kind == "custom":
+                        pending_custom.add(call_id)
             message["tool_calls"] = [
-                call for call in calls if call.get("type") == "function"
+                call for call in calls if call.get("type") in ("function", "custom")
             ]
-        if message["role"] == "tool" and message.get("tool_call_id") in omitted_calls:
-            continue
+        if message["role"] == "tool":
+            result_id = json_text(message["tool_call_id"])
+            if call_kinds.get(result_id) not in (None, "function", "custom"):
+                continue
+            if (
+                call_kinds.get(result_id) == "custom"
+                and result_id not in pending_custom
+            ):
+                raise ChatConversionError(
+                    "Duplicate custom tool result in Chat history"
+                )
+            pending_custom.discard(result_id)
         content = message.get("content")
         if isinstance(content, list):
-            parts = [
-                part
-                for part in json_objects(content)
-                if part.get("type") in ("text", "image_url")
-            ]
+            parts = []
+            for part in json_objects(content):
+                if part.get("type") in ("text", "image_url"):
+                    parts.append(part)
+                elif (
+                    message["role"] == "assistant"
+                    and part.get("type") == "refusal"
+                    and isinstance(refusal := part.get("refusal"), str)
+                ):
+                    parts.append({"type": "text", "text": refusal})
             message["content"] = parts
         if not isinstance(content, str) and not message.get("content"):
             if message is latest_user:
@@ -292,10 +318,12 @@ def translated_body(request: ChatRequest) -> JsonObject:
             ):
                 continue
         projected.append(message)
+    if pending_custom:
+        raise ChatConversionError("Unresolved custom tool call in Chat history")
     if not any(message["role"] not in ("system", "developer") for message in projected):
         raise ChatConversionError("Chat request has no translatable conversation")
     body["messages"] = projected
-    return body
+    return ChatProjection(body, call_kinds)
 
 
 def google_thought_signature(extra_content: JsonValue) -> str | None:
@@ -323,23 +351,15 @@ def content_parts(value: JsonValue) -> list[JsonObject]:
     return parts
 
 
-def function_calls(message: JsonObject) -> list[JsonObject]:
-    calls = message.get("tool_calls", [])
-    if calls is None:
-        return []
-    if not isinstance(calls, list):
-        raise ChatConversionError("tool_calls must be an array")
-    result: list[JsonObject] = []
-    for call in calls:
-        if (
-            not isinstance(call, dict)
-            or call.get("type") != "function"
-            or not isinstance(call.get("function"), dict)
-            or not isinstance(call.get("id"), str)
-        ):
-            raise ChatConversionError("Only named function tool calls are supported")
-        result.append(call)
-    return result
+def function_history(message: JsonObject) -> Iterator[tuple[str, str, JsonObject]]:
+    """Represent completed free-form calls on protocols with object arguments."""
+    for call in json_objects(message.get("tool_calls") or []):
+        kind = json_text(call["type"])
+        definition = json_object(call[kind])
+        args: JsonObject = (
+            {"input": definition["input"]} if kind == "custom" else tool_arguments(call)
+        )
+        yield json_text(call["id"]), json_text(definition["name"]), args
 
 
 def tool_arguments(call: JsonObject) -> JsonObject:
@@ -468,7 +488,7 @@ def _tools(body: JsonObject) -> list[JsonObject]:
 
 
 def chat_messages_body(request: ChatRequest) -> JsonObject:
-    body = translated_body(request)
+    body = project_chat_request(request).body
     messages: list[JsonObject] = []
     system: list[JsonValue] = []
     for message in json_objects(body["messages"]):
@@ -502,11 +522,11 @@ def chat_messages_body(request: ChatRequest) -> JsonObject:
             parts.extend(
                 {
                     "type": "tool_use",
-                    "id": call["id"],
-                    "name": json_object(call["function"])["name"],
-                    "input": tool_arguments(call),
+                    "id": call_id,
+                    "name": name,
+                    "input": args,
                 }
-                for call in function_calls(message)
+                for call_id, name, args in function_history(message)
             )
         if messages and messages[-1]["role"] == role:
             json_array(messages[-1]["content"]).extend(parts)
@@ -596,20 +616,24 @@ def _responses_content(value: JsonValue, *, role: str) -> list[JsonObject]:
 
 
 def chat_responses_body(request: ChatRequest) -> JsonObject:
-    body = translated_body(request)
+    projected = project_chat_request(request)
+    body = projected.body
     if body.get("stop"):
         raise ChatConversionError("Responses cannot represent stop sequences")
     items: list[JsonObject] = []
     for message in json_objects(body["messages"]):
         role = json_text(message["role"])
         if role == "tool":
+            call_id = json_text(message["tool_call_id"])
             output = message.get("content") or ""
             if isinstance(output, list):
                 output = _responses_content(output, role="tool")
             items.append(
                 {
-                    "type": "function_call_output",
-                    "call_id": message["tool_call_id"],
+                    "type": "custom_tool_call_output"
+                    if projected.call_kinds.get(call_id) == "custom"
+                    else "function_call_output",
+                    "call_id": call_id,
                     "output": output,
                 }
             )
@@ -621,15 +645,19 @@ def chat_responses_body(request: ChatRequest) -> JsonObject:
             parts.append({"type": "refusal", "refusal": message["refusal"]})
         if parts:
             items.append({"role": role, "content": parts})
-        items.extend(
-            {
-                "type": "function_call",
-                "call_id": call["id"],
-                "name": json_object(call["function"])["name"],
-                "arguments": json_object(call["function"])["arguments"],
-            }
-            for call in function_calls(message)
-        )
+        for call in json_objects(message.get("tool_calls") or []):
+            kind = json_text(call["type"])
+            detail = json_object(call[kind])
+            call_id = json_text(call["id"])
+            field = "input" if kind == "custom" else "arguments"
+            items.append(
+                {
+                    "type": "custom_tool_call" if kind == "custom" else "function_call",
+                    "call_id": call_id,
+                    "name": detail["name"],
+                    field: detail[field],
+                }
+            )
     result: JsonObject = {
         "model": request.model,
         "input": items,

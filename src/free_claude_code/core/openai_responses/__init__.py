@@ -20,13 +20,21 @@ from .ids import (
     new_reasoning_item_id,
     new_response_id,
 )
+from .input_history import (
+    InputCall,
+    InputMessage,
+    InputResult,
+    ReasoningItem,
+    Screenshot,
+    read_history,
+)
 from .messages_request import (
     ResponsesMessagesRequest,
     build_responses_messages_request,
     build_responses_messages_suffix,
 )
 from .messages_stream import AnthropicToResponsesStream
-from .models import OpenAIResponsesRequest, is_hosted_history, latest_user_input
+from .models import OpenAIResponsesRequest
 from .native import NativeResponsesRelay, build_native_responses_request
 from .provider_input import build_responses_provider_request
 from .provider_stream import (
@@ -59,9 +67,13 @@ from .tools import (
 __all__ = [
     "OPENAI_RESPONSES_SSE_HEADERS",
     "AnthropicToResponsesStream",
+    "InputCall",
+    "InputMessage",
+    "InputResult",
     "NativeResponsesRelay",
     "OpenAIResponsesRequest",
     "ReasoningBlockState",
+    "ReasoningItem",
     "ResponseBlockCompleter",
     "ResponseEventBuilder",
     "ResponsesChatRequest",
@@ -75,6 +87,7 @@ __all__ = [
     "ResponsesToolEventAdapter",
     "ResponsesToolIdentity",
     "ResponsesToolPolicy",
+    "Screenshot",
     "TextBlockState",
     "ToolBlockState",
     "build_native_responses_request",
@@ -88,8 +101,6 @@ __all__ = [
     "format_response_sse_event",
     "is_client_call",
     "is_client_search",
-    "is_hosted_history",
-    "latest_user_input",
     "new_call_id",
     "new_message_item_id",
     "new_reasoning_item_id",
@@ -98,6 +109,7 @@ __all__ = [
     "openai_error_payload",
     "openai_error_type_for_failure",
     "openai_failure_payload",
+    "read_history",
     "reasoning_output_item",
     "responses_event_index",
     "responses_reasoning_config",

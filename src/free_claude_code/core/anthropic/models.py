@@ -183,6 +183,12 @@ class MessagesRequest(BaseModel):
     betas: list[str] | None = Field(default=None, exclude=True)
 
     @property
+    def uses_container(self) -> bool:
+        return (self.model_extra or {}).get("container") is not None or (
+            self.extra_body or {}
+        ).get("container") is not None
+
+    @property
     def named_tools(self) -> list[Tool]:
         return [tool for tool in self.tools or () if isinstance(tool, Tool)]
 

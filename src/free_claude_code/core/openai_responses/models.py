@@ -1,6 +1,6 @@
 """Pydantic models for OpenAI Responses-compatible ingress."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -10,37 +10,6 @@ from free_claude_code.core.json_types import JsonObject, JsonValue
 from .errors import ResponsesConversionError
 from .tool_search import ClientSearchHistory, resolve_client_search_history
 from .tools import ResponsesToolIdentity, definition_identity, optional_str
-
-
-def latest_user_input(items: Sequence[JsonValue]) -> JsonValue:
-    for item in reversed(items):
-        if isinstance(item, str):
-            return item
-        if isinstance(item, Mapping):
-            kind = item.get("type", "message")
-            if (kind == "message" and item.get("role", "user") == "user") or kind in (
-                "input_text",
-                "text",
-                "input_image",
-            ):
-                return item
-    return None
-
-
-def is_hosted_history(kind: JsonValue) -> bool:
-    return kind in (
-        "web_search_call",
-        "file_search_call",
-        "image_generation_call",
-        "code_interpreter_call",
-        "mcp_call",
-        "mcp_list_tools",
-        "computer_call",
-        "shell_call",
-        "local_shell_call",
-        "apply_patch_call",
-        "tool_search_call",
-    )
 
 
 class OpenAIResponsesRequest(BaseModel):
@@ -75,17 +44,6 @@ class OpenAIResponsesRequest(BaseModel):
                 raise ResponsesConversionError(
                     f"Cannot translate Responses context from {field}"
                 )
-        items = self.input if isinstance(self.input, list) else [self.input]
-        for item in items:
-            if isinstance(item, dict) and item.get("type") in (
-                "compaction",
-                "item_reference",
-                "mcp_approval_request",
-                "mcp_approval_response",
-            ):
-                raise ResponsesConversionError(
-                    f"Cannot translate Responses context from {item['type']}"
-                )
 
     def select_direct_tools(self, history: ClientSearchHistory | None = None) -> Self:
         """Apply the caller's restrictions to the declarations available on this turn."""
@@ -116,6 +74,13 @@ class OpenAIResponsesRequest(BaseModel):
                 nested = tool.get(str(kind))
                 if isinstance(nested, dict):
                     source = nested
+                format_ = source.get("format")
+                if (
+                    kind == "custom"
+                    and isinstance(format_, dict)
+                    and format_.get("type") not in (None, "text")
+                ):
+                    return False
                 callers = tool.get("allowed_callers", source.get("allowed_callers"))
                 if callers is not None and (
                     not isinstance(callers, list) or "direct" not in callers
