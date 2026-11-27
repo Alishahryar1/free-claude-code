@@ -6,6 +6,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
+CODE_EXECUTION_INPUT_FIELDS = {
+    "code_execution": "code",
+    "bash_code_execution": "command",
+}
+
+
+def _stored_file(source: object) -> bool:
+    return isinstance(source, dict) and source.get("type") == "file"
+
 
 class _AnthropicBlockBase(BaseModel):
     """Pass through protocol extensions such as ``cache_control``."""
@@ -185,14 +194,45 @@ class MessagesRequest(BaseModel):
     @property
     def native_context(self) -> str | None:
         """Identify state that only an Anthropic continuation can interpret."""
-        if (self.model_extra or {}).get("container") is not None or (
-            self.extra_body or {}
-        ).get("container") is not None:
-            return "container"
+        for field in ("container", "thread"):
+            if any(
+                (fields or {}).get(field) is not None
+                for fields in (self.model_extra, self.extra_body)
+            ):
+                return field
         for turn in self.messages:
             if not isinstance(turn.content, list):
                 continue
             for block in turn.content:
+                if (
+                    isinstance(block, ContentBlockServerToolUse)
+                    and block.name not in ("web_search", "web_fetch")
+                    and block.name not in CODE_EXECUTION_INPUT_FIELDS
+                ):
+                    return block.name
+                if (
+                    isinstance(block, (ContentBlockToolUse, ContentBlockServerToolUse))
+                    and isinstance(
+                        caller := (block.model_extra or {}).get("caller"), dict
+                    )
+                    and caller.get("type") != "direct"
+                ):
+                    return "programmatic tool history"
+                if isinstance(
+                    block, (ContentBlockDocument, ContentBlockImage)
+                ) and _stored_file(block.source):
+                    return "stored file"
+                if (
+                    isinstance(block, ContentBlockToolResult)
+                    and isinstance(block.content, list)
+                    and any(
+                        isinstance(part, dict)
+                        and part.get("type") in ("document", "image")
+                        and _stored_file(part.get("source"))
+                        for part in block.content
+                    )
+                ):
+                    return "tool result with a stored file"
                 if isinstance(block, ExtensionBlock) and block.type in {
                     "compaction",
                     "container_upload",
@@ -205,6 +245,7 @@ class MessagesRequest(BaseModel):
                     "tool_search_tool_result",
                     "advisor_tool_result",
                     "search_result",
+                    "text_editor_code_execution_tool_result",
                 }:
                     return block.type
         return None

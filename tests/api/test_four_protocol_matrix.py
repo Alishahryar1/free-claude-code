@@ -1839,7 +1839,14 @@ def test_completed_responses_hosted_call_keeps_its_output(protocol: str) -> None
         "id": "ci_1",
         "status": "completed",
         "code": "previous computation",
-        "outputs": [{"type": "logs", "logs": "previous calculation result"}],
+        "outputs": [
+            {
+                "type": "logs",
+                "logs": "previous calculation result",
+                "provider_option": "private-log-setting",
+            }
+        ],
+        "container_id": "private-container-name",
     }
     path, body = ingress_request(
         "responses",
@@ -1854,6 +1861,10 @@ def test_completed_responses_hosted_call_keeps_its_output(protocol: str) -> None
     assert "[Earlier tool record]" in outgoing
     assert outgoing.index("previous computation") < outgoing.index(
         "previous calculation result"
+    )
+    assert (
+        "private-log-setting" not in outgoing
+        and "private-container-name" not in outgoing
     )
 
 
@@ -2048,6 +2059,7 @@ def test_completed_messages_code_execution_survives_intervening_client_tool(
         "id": "srv_1",
         "name": "bash_code_execution",
         "input": {"command": "historical_command"},
+        "provider_option": "private-execution-setting",
     }
     result: JsonObject = {
         "type": "bash_code_execution_tool_result",
@@ -2058,6 +2070,7 @@ def test_completed_messages_code_execution_survives_intervening_client_tool(
             "stderr": "",
             "return_code": 0,
             "content": [],
+            "provider_option": "private-result-setting",
         },
     }
     path, body = ingress_request(
@@ -2093,5 +2106,9 @@ def test_completed_messages_code_execution_survives_intervening_client_tool(
         < upstream.index("historical_output")
     )
     assert "[Earlier tool record]" in upstream
+    assert (
+        "private-execution-setting" not in upstream
+        and "private-result-setting" not in upstream
+    )
     result.update(type="web_search_tool_result", content=[])
     translation_error(protocol, path, body)

@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from ..history_replay import HistoryReplayError, tool_history_context
 from ..json_types import JsonObject, JsonValue
 from .models import (
+    CODE_EXECUTION_INPUT_FIELDS,
     ContentBlockDocument,
     ContentBlockRedactedThinking,
     ContentBlockServerToolUse,
@@ -18,8 +19,7 @@ from .models import (
     MessagesRequest,
 )
 
-_CODE_TOOLS = {"code_execution", "bash_code_execution", "text_editor_code_execution"}
-_CODE_RESULTS = {f"{name}_tool_result": name for name in _CODE_TOOLS}
+_CODE_RESULTS = {f"{name}_tool_result": name for name in CODE_EXECUTION_INPUT_FIELDS}
 
 _MESSAGES_REQUEST_FIELDS = (
     "model",
@@ -63,13 +63,19 @@ def quote_code_execution_history(messages: list[Message]) -> list[Message]:
         for block_index, block in enumerate(message.content):
             if (
                 isinstance(block, ContentBlockServerToolUse)
-                and block.name in _CODE_TOOLS
+                and block.name in CODE_EXECUTION_INPUT_FIELDS
             ):
                 if message.role != "assistant" or not block.id or block.id in calls:
                     raise HistoryReplayError(
                         "Invalid code execution call in Messages history"
                     )
                 calls[block.id] = block.name
+                field = CODE_EXECUTION_INPUT_FIELDS[block.name]
+                public: JsonObject = {
+                    "name": block.name,
+                    "id": block.id,
+                    field: block.input.get(field),
+                }
             elif isinstance(block, ExtensionBlock) and block.type in _CODE_RESULTS:
                 data = block.model_extra or {}
                 call_id = data.get("tool_use_id")
@@ -77,19 +83,36 @@ def quote_code_execution_history(messages: list[Message]) -> list[Message]:
                     message.role != "assistant"
                     or not isinstance(call_id, str)
                     or calls.get(call_id) != _CODE_RESULTS[block.type]
-                    or not isinstance(data.get("content"), dict)
+                    or not isinstance(result := data.get("content"), dict)
                 ):
                     raise HistoryReplayError(
                         "Unmatched code execution result in Messages history"
                     )
                 calls[call_id] = None
+                name = _CODE_RESULTS[block.type]
+                if result.get("type") not in {
+                    f"{name}_result",
+                    f"{name}_tool_result_error",
+                } or result.get("content"):
+                    raise HistoryReplayError(
+                        "This code execution result requires native Messages egress"
+                    )
+                public = {
+                    "type": block.type,
+                    "tool_use_id": call_id,
+                    **{
+                        field: result[field]
+                        for field in ("stdout", "stderr", "return_code", "error_code")
+                        if field in result
+                    },
+                }
             else:
                 continue
             if blocks is None:
                 blocks = message.content.copy()
             blocks[block_index] = ContentBlockText(
                 type="text",
-                text=tool_history_context(block.model_dump(exclude_unset=True)),
+                text=tool_history_context(public),
             )
         if blocks is not None:
             projected[turn_index] = message.model_copy(update={"content": blocks})

@@ -378,7 +378,7 @@ def test_build_responses_chat_request_relocates_rich_function_output() -> None:
                     "output": [
                         {"type": "input_text", "text": "before"},
                         {"type": "input_image", "image_url": image_url},
-                        {"type": "input_file", "file_id": "file_1"},
+                        {"type": "future_optional_part"},
                         {"type": "input_text", "text": "after"},
                     ],
                 },

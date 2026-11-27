@@ -62,6 +62,30 @@ def _declarations(
                 yield namespace, child
 
 
+def public_search_tools(tools: JsonValue) -> list[JsonObject]:
+    """Return only callable descriptions fit for a model-visible search result."""
+    if not isinstance(tools, list):
+        return []
+    public: list[JsonObject] = []
+    for namespace, tool in _declarations(tools):
+        kind = tool.get("type")
+        if kind not in ("function", "custom"):
+            continue
+        nested = tool.get(str(kind))
+        definition = nested if isinstance(nested, dict) else tool
+        fields = (
+            ("name", "description", "parameters", "strict")
+            if kind == "function"
+            else ("name", "description", "format")
+        )
+        entry = {key: definition[key] for key in fields if key in definition}
+        entry["type"] = kind
+        if namespace is not None:
+            entry["namespace"] = namespace
+        public.append(entry)
+    return public
+
+
 def resolve_client_search_history(items: JsonValue) -> ClientSearchHistory:
     """Infer omitted execution only from search records with the same call ID."""
     if not isinstance(items, list):

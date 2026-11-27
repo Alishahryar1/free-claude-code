@@ -296,6 +296,14 @@ def project_chat_request(request: ChatRequest) -> ChatProjection:
                 if part.get("type") in ("text", "image_url"):
                     parts.append(part)
                 elif (
+                    part.get("type") == "file"
+                    and isinstance(file := part.get("file"), dict)
+                    and file.get("file_id") is not None
+                ):
+                    raise ChatConversionError(
+                        "A stored file requires native Chat egress"
+                    )
+                elif (
                     message["role"] == "assistant"
                     and part.get("type") == "refusal"
                     and isinstance(refusal := part.get("refusal"), str)

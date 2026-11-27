@@ -20,6 +20,7 @@ from .tool_search import (
     is_client_search,
     is_unfinished_search_call,
     normalize_tool_search,
+    public_search_tools,
     resolve_client_search_history,
     search_function_name,
 )
@@ -315,10 +316,15 @@ class ResponsesToolAdapter:
                 }
             if kind == "tool_search_output":
                 active = self._search_history.output_tools[index]
+                output = self._tools(active, scope=_scope(item))
                 return {
                     **common,
                     "type": "function_call_output",
-                    "output": json.dumps(self._tools(active, scope=_scope(item))),
+                    "output": json.dumps(
+                        public_search_tools(output)
+                        if self._policy.direct_tools_only
+                        else output
+                    ),
                 }
         if kind == "tool_search_output":
             return {

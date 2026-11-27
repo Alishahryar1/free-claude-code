@@ -8,26 +8,9 @@ from ..history_replay import tool_history_context
 from ..json_types import JsonObject, JsonValue, load_json_value
 from ..openai_chat import computer_screenshot_label
 from .errors import ResponsesConversionError
+from .hosted_history import public_tool_record
 from .tool_calls import is_client_call
 from .tools import ResponsesToolIdentity, optional_str, required_str
-
-_TOOL_RECORDS = {
-    "web_search_call",
-    "file_search_call",
-    "image_generation_call",
-    "code_interpreter_call",
-    "mcp_call",
-    "mcp_list_tools",
-    "computer_call",
-    "shell_call",
-    "shell_call_output",
-    "local_shell_call",
-    "local_shell_call_output",
-    "apply_patch_call",
-    "apply_patch_call_output",
-    "tool_search_call",
-    "tool_search_output",
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +90,10 @@ def _content(
                 parts.append({"type": "input_text", "text": text})
         elif kind == "input_image":
             parts.append(part)
+        elif kind == "input_file" and part.get("file_id") is not None:
+            raise ResponsesConversionError(
+                "A stored file requires native Responses egress"
+            )
     return parts
 
 
@@ -115,11 +102,14 @@ def read_history(value: JsonValue) -> Iterator[tuple[int, HistoryItem]]:
     pending_actions: dict[str, str] = {}
     latest_user: InputMessage | None = None
     for index, raw in enumerate(input_items(value)):
-        item = _read_item(raw, pending_actions)
+        item = _read_item(raw)
+        if item is None:
+            continue
+        if isinstance(raw, dict):
+            _check_tool_action(raw, item, pending_actions)
         if isinstance(item, InputMessage) and item.role == "user":
             latest_user = item
-        if item is not None:
-            yield index, item
+        yield index, item
     if latest_user is not None and not latest_user.content:
         raise ResponsesConversionError(
             "The latest user message has no translatable content"
@@ -130,7 +120,39 @@ def read_history(value: JsonValue) -> Iterator[tuple[int, HistoryItem]]:
         )
 
 
-def _read_item(raw: JsonValue, pending_actions: dict[str, str]) -> HistoryItem | None:
+def _check_tool_action(
+    raw: JsonObject, item: HistoryItem, pending: dict[str, str]
+) -> None:
+    kind = raw.get("type")
+    if not isinstance(kind, str) or not kind.endswith(("_call", "_output")):
+        return
+    caller = raw.get("caller")
+    if isinstance(caller, dict) and caller.get("type") == "program":
+        raise ResponsesConversionError(
+            "Cannot translate Responses context from a program caller"
+        )
+    if kind.endswith("_output"):
+        reference = "id" if kind == "local_shell_call_output" else "call_id"
+        if isinstance(call_id := raw.get(reference), str):
+            expected = pending.pop(call_id, None)
+            if expected is not None and expected != kind:
+                raise ResponsesConversionError(
+                    "Tool output type does not match its call."
+                )
+    elif (
+        isinstance(item, InputMessage)
+        and is_client_call(raw)
+        and raw.get("status") in (None, "completed")
+    ):
+        call_id = required_str(raw.get("call_id"), "tool.call_id")
+        if call_id in pending:
+            raise ResponsesConversionError("Duplicate pending tool action")
+        pending[call_id] = (
+            "tool_search_output" if kind == "tool_search_call" else f"{kind}_output"
+        )
+
+
+def _read_item(raw: JsonValue) -> HistoryItem | None:
     if isinstance(raw, str):
         return InputMessage("user", raw)
     if not isinstance(raw, dict):
@@ -145,30 +167,6 @@ def _read_item(raw: JsonValue, pending_actions: dict[str, str]) -> HistoryItem |
         kind = "item_reference"
     if not isinstance(kind, str):
         raise ResponsesConversionError("Responses input item requires a type")
-    if (
-        (
-            kind
-            in (
-                "function_call",
-                "function_call_output",
-                "custom_tool_call",
-                "custom_tool_call_output",
-            )
-            or kind in _TOOL_RECORDS
-        )
-        and isinstance(caller := raw.get("caller"), dict)
-        and caller.get("type") == "program"
-    ):
-        raise ResponsesConversionError(
-            "Cannot translate Responses context from a program caller"
-        )
-    reference_field = "id" if kind == "local_shell_call_output" else "call_id"
-    if kind.endswith("_output") and isinstance(
-        call_id := raw.get(reference_field), str
-    ):
-        expected = pending_actions.pop(call_id, None)
-        if expected is not None and kind != expected:
-            raise ResponsesConversionError("Tool output type does not match its call.")
     if kind == "message":
         role = raw.get("role", "user")
         if not isinstance(role, str) or role not in (
@@ -179,7 +177,7 @@ def _read_item(raw: JsonValue, pending_actions: dict[str, str]) -> HistoryItem |
         ):
             raise ResponsesConversionError("Unsupported Responses message role.")
         return InputMessage(role, _content(raw.get("content")))
-    if kind in ("input_text", "output_text", "text", "input_image"):
+    if kind in ("input_text", "output_text", "text", "input_image", "input_file"):
         return InputMessage("user", _content([raw]))
     if kind == "reasoning":
         return ReasoningItem(raw)
@@ -234,26 +232,21 @@ def _read_item(raw: JsonValue, pending_actions: dict[str, str]) -> HistoryItem |
                 {**output, "type": "input_image"},
             ]
         )
-    if kind in _TOOL_RECORDS:
+    if (record := public_tool_record(kind, raw)) is not None:
         status = raw.get("status")
         if status not in (None, "completed", "failed", "incomplete", "interrupted"):
             raise ResponsesConversionError(
                 f"A different protocol cannot continue an active tool {kind!r}"
             )
-        if is_client_call(raw) and status in (None, "completed"):
-            call_id = required_str(raw.get("call_id"), "tool.call_id")
-            if call_id in pending_actions:
-                raise ResponsesConversionError("Duplicate pending tool action")
-            pending_actions[call_id] = (
-                "tool_search_output" if kind == "tool_search_call" else f"{kind}_output"
-            )
-        return InputMessage("assistant", tool_history_context(raw))
+        return InputMessage("assistant", tool_history_context(record))
     if kind in (
         "additional_tools",
         "compaction",
         "compaction_trigger",
         "item_reference",
         "configuration_update",
+        "image_generation_call",
+        "mcp_list_tools",
         "mcp_approval_request",
         "mcp_approval_response",
         "program",

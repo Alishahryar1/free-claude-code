@@ -1,6 +1,5 @@
 """Tests for DeepSeek OpenAI-compatible Chat Completions provider."""
 
-import json
 import logging
 from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
@@ -1465,7 +1464,11 @@ def test_strips_document_blocks_for_deepseek(
                         },
                         {
                             "type": "document",
-                            "source": {"type": "file", "file_id": "file_abc"},
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": "YQ==",
+                            },
                             "cache_control": {"type": "ephemeral"},
                         },
                     ],
@@ -1788,7 +1791,7 @@ def test_document_only_message_is_rejected(
         }
     )
 
-    with pytest.raises(InvalidRequestError, match="latest user"):
+    with pytest.raises(InvalidRequestError, match="stored file"):
         deepseek_provider._chat._build_request_body(
             request, reasoning=reasoning_for(request)
         )
@@ -1900,7 +1903,7 @@ def test_parallel_tool_results_close_before_image_content(
 
 
 @pytest.mark.parametrize("inside_tool_result", [False, True])
-def test_mixed_attachment_content_omits_only_document(
+def test_mixed_attachment_cannot_lose_a_stored_file(
     deepseek_provider: DeepSeekProvider, inside_tool_result: bool
 ) -> None:
     content = [
@@ -1931,19 +1934,9 @@ def test_mixed_attachment_content_omits_only_document(
     )
     original = request.model_dump()
 
-    body = deepseek_provider._chat._build_request_body(request, reasoning=REASONING_OFF)
-
-    images = [
-        part
-        for message in array_payload(body["messages"])
-        if isinstance(object_payload(message).get("content"), list)
-        for part in array_payload(object_payload(message)["content"])
-        if object_payload(part).get("type") == "image_url"
-    ]
-    assert images == [
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,YQ=="}}
-    ]
-    assert "private_pdf" not in json.dumps(body["messages"])
+    with pytest.raises(InvalidRequestError, match="stored file") as error:
+        deepseek_provider._chat._build_request_body(request, reasoning=REASONING_OFF)
+    assert "private_pdf" not in str(error.value)
     assert request.model_dump() == original
 
 
@@ -1960,7 +1953,7 @@ def test_mixed_attachment_content_omits_only_document(
         ),
         (
             {"type": "file", "file_id": "private_file"},
-            "cannot cross this protocol boundary",
+            "stored file",
         ),
         ({"type": "url", "url": ""}, "Image URL must be a non-empty string"),
     ],
