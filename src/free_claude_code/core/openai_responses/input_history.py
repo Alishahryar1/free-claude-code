@@ -12,6 +12,8 @@ from .hosted_history import public_tool_record
 from .tool_calls import is_client_call
 from .tools import ResponsesToolIdentity, optional_str, required_str
 
+_MESSAGE_ROLES = ("user", "assistant", "system", "developer")
+
 
 @dataclass(frozen=True, slots=True)
 class InputMessage:
@@ -88,12 +90,12 @@ def _content(
                 )
             if text or keep_empty_text:
                 parts.append({"type": "input_text", "text": text})
+        elif kind in ("input_file", "input_image") and part.get("file_id") is not None:
+            raise ResponsesConversionError(
+                f"Responses {kind}.file_id requires native Responses egress"
+            )
         elif kind == "input_image":
             parts.append(part)
-        elif kind == "input_file" and part.get("file_id") is not None:
-            raise ResponsesConversionError(
-                "A stored file requires native Responses egress"
-            )
     return parts
 
 
@@ -167,16 +169,6 @@ def _read_item(raw: JsonValue) -> HistoryItem | None:
         kind = "item_reference"
     if not isinstance(kind, str):
         raise ResponsesConversionError("Responses input item requires a type")
-    if kind == "message":
-        role = raw.get("role", "user")
-        if not isinstance(role, str) or role not in (
-            "user",
-            "assistant",
-            "system",
-            "developer",
-        ):
-            raise ResponsesConversionError("Unsupported Responses message role.")
-        return InputMessage(role, _content(raw.get("content")))
     if kind in ("input_text", "output_text", "text", "input_image", "input_file"):
         return InputMessage("user", _content([raw]))
     if kind == "reasoning":
@@ -216,10 +208,15 @@ def _read_item(raw: JsonValue) -> HistoryItem | None:
             is_error,
         )
     if kind == "computer_call_output":
+        if raw.get("acknowledged_safety_checks"):
+            raise ResponsesConversionError(
+                "Computer safety acknowledgements require native Responses egress"
+            )
         output = raw.get("output")
         if (
             not isinstance(output, dict)
             or output.get("type") != "computer_screenshot"
+            or output.get("file_id") is not None
             or not output.get("image_url")
         ):
             raise ResponsesConversionError(
@@ -255,4 +252,9 @@ def _read_item(raw: JsonValue) -> HistoryItem | None:
         raise ResponsesConversionError(
             f"Cannot translate Responses context from {kind}"
         )
+    role = raw.get("role", "user" if kind == "message" else None)
+    if isinstance(role, str) and role in _MESSAGE_ROLES:
+        return InputMessage(role, _content(raw.get("content")))
+    if kind == "message":
+        raise ResponsesConversionError("Unsupported Responses message role.")
     return None

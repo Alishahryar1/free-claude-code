@@ -9,6 +9,7 @@ from free_claude_code.core.openai_responses import (
     ResponsesConversionError,
     read_history,
 )
+from free_claude_code.core.openai_responses.hosted_history import public_tool_record
 from free_claude_code.core.openai_responses.input_history import InputMessage
 
 
@@ -35,6 +36,14 @@ from free_claude_code.core.openai_responses.input_history import InputMessage
             "name": "lookup",
             "arguments": "{}",
             "output": "public-output",
+        },
+        {
+            "type": "mcp_call",
+            "error": {
+                "type": "mcp_tool_execution_error",
+                "content": "public-explanation",
+                "internal": "private-setting",
+            },
         },
         {"type": "apply_patch_call_output", "output": "public-result"},
         {
@@ -82,6 +91,49 @@ def test_unknown_item_cannot_consume_a_pending_action() -> None:
         )
     )
     assert [index for index, _ in history] == [0, 2]
+
+
+@pytest.mark.parametrize(
+    ("kind", "field"),
+    [
+        ("file_search_call", "results"),
+        ("web_search_call", "sources"),
+        ("code_interpreter_call", "outputs"),
+    ],
+)
+def test_optional_tool_evidence_distinguishes_absence_and_empty(
+    kind: str, field: str
+) -> None:
+    cases: tuple[JsonObject, ...] = ({}, {field: None}, {field: []})
+    for fields in cases:
+        item: JsonObject = {"type": kind}
+        if kind == "web_search_call":
+            item["action"] = {"type": "search", "query": "catalog", **fields}
+        else:
+            item.update(fields)
+        record = public_tool_record(kind, item)
+        assert record is not None
+        public = record["action"] if kind == "web_search_call" else record
+        assert isinstance(public, dict)
+        if field not in fields:
+            assert field not in public
+        else:
+            assert public[field] == fields[field]
+
+
+def test_stored_image_in_a_custom_result_requires_native_responses() -> None:
+    with pytest.raises(ResponsesConversionError, match="file_id"):
+        list(
+            read_history(
+                [
+                    {
+                        "type": "custom_tool_call_output",
+                        "call_id": "call1",
+                        "output": [{"type": "input_image", "file_id": "file-private"}],
+                    }
+                ]
+            )
+        )
 
 
 def literal_strings(annotation: object) -> Iterator[str]:

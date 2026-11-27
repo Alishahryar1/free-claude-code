@@ -199,6 +199,12 @@ def _merge_tool_groups(
             declarations[identity] = definition
         active.update(declarations)
     result = list(hosted)
+    descriptions = {
+        required_str(tool.get("name"), "tool.namespace.name"): tool.get("description")
+        for group in groups
+        for tool in group
+        if tool.get("type") == "namespace"
+    }
     namespaces: dict[str, JsonObject] = {}
     for identity, definition in active.items():
         ns = identity.namespace
@@ -207,6 +213,8 @@ def _merge_tool_groups(
         else:
             if ns not in namespaces:
                 namespaces[ns] = {"type": "namespace", "name": ns, "tools": []}
+                if isinstance(description := descriptions.get(ns), str):
+                    namespaces[ns]["description"] = description
                 result.append(namespaces[ns])
             definition.pop("namespace", None)
             cast(list[JsonValue], namespaces[ns]["tools"]).append(definition)

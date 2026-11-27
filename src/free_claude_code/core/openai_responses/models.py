@@ -8,7 +8,11 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from .errors import ResponsesConversionError
-from .tool_search import ClientSearchHistory, resolve_client_search_history
+from .tool_search import (
+    ClientSearchHistory,
+    active_client_tools,
+    resolve_client_search_history,
+)
 from .tools import ResponsesToolIdentity, definition_identity, optional_str
 
 
@@ -47,6 +51,12 @@ class OpenAIResponsesRequest(BaseModel):
 
     def select_direct_tools(self, history: ClientSearchHistory | None = None) -> Self:
         """Apply the caller's restrictions to the declarations available on this turn."""
+        history = history or resolve_client_search_history(self.input)
+        candidates = (
+            active_client_tools(self.tools, history, keep_current_defer_loading=True)
+            if history.output_tools
+            else self.tools or []
+        )
         choice = self.tool_choice
         allowed: list[tuple[JsonValue, JsonValue, JsonValue]] | None = None
         if isinstance(choice, dict) and choice.get("type") == "allowed_tools":
@@ -88,9 +98,7 @@ class OpenAIResponsesRequest(BaseModel):
                     return False
                 if tool.get("defer_loading", source.get("defer_loading")):
                     if loaded is None:
-                        loaded = (
-                            history or resolve_client_search_history(self.input)
-                        ).loaded_tools()
+                        loaded = history.loaded_tools()
                     if definition_identity(tool, optional_str(namespace)) not in loaded:
                         return False
             identity = (
@@ -101,7 +109,7 @@ class OpenAIResponsesRequest(BaseModel):
             return allowed is None or identity in allowed
 
         retained: list[JsonObject] = []
-        for tool in self.tools or ():
+        for tool in candidates:
             if tool.get("type") == "namespace" and isinstance(
                 children := tool.get("tools"), list
             ):

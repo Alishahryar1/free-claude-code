@@ -1743,6 +1743,11 @@ def test_optional_strict_function_is_unavailable_on_gemini(wire: str) -> None:
     declarations = object_array(object_array(sent["tools"])[0]["functionDeclarations"])
     assert [tool["name"] for tool in declarations] == ["read"]
 
+    body.update(tool_choice="auto", parallel_tool_calls=False)
+    assert "parallel" in translation_error("gemini", path, body)
+    array_payload(body["tools"]).pop(0)
+    assert "tools" not in sent_request("gemini", path, body)
+
 
 @pytest.mark.parametrize("protocol", ["chat", "responses", "gemini"])
 def test_assistant_metadata_cannot_replace_the_latest_messages_user_input(

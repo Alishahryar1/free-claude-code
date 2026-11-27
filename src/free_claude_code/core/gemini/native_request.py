@@ -150,8 +150,14 @@ def apply_reasoning(
 
 
 def _tool_config(
-    choice: JsonValue, declarations: list[JsonObject], *, responses: bool = False
+    choice: JsonValue,
+    declarations: list[JsonObject],
+    *,
+    responses: bool = False,
+    serial: bool = False,
 ) -> JsonObject | None:
+    if serial and declarations and choice != "none":
+        raise GeminiConversionError("Native Gemini cannot disable parallel tool calls")
     if choice is None:
         return None
     if isinstance(choice, str):
@@ -328,12 +334,12 @@ def chat_to_gemini(
         )
     if declarations:
         result["tools"] = [{"functionDeclarations": declarations}]
-    if tool_config := _tool_config(body.get("tool_choice"), declarations):
+    if tool_config := _tool_config(
+        body.get("tool_choice"),
+        declarations,
+        serial=body.get("parallel_tool_calls") is False,
+    ):
         result["toolConfig"] = tool_config
-    if body.get("parallel_tool_calls") is False:
-        raise GeminiConversionError(
-            "Native Gemini cannot enforce parallel_tool_calls=false"
-        )
     return result
 
 
@@ -500,12 +506,13 @@ def messages_to_gemini(
         request.direct_client_tools, request.tool_choice
     )
     if resolved and request.tool_choice is not None:
-        if resolved.get("disable_parallel_tool_use") and resolved.get("type") != "none":
-            raise GeminiConversionError(
-                "Native Gemini cannot enforce disable_parallel_tool_use"
-            )
         choice = resolved if resolved.get("type") == "tool" else resolved["type"]
-        if config_choice := _tool_config(choice, declarations, responses=True):
+        if config_choice := _tool_config(
+            choice,
+            declarations,
+            responses=True,
+            serial=bool(resolved.get("disable_parallel_tool_use")),
+        ):
             result["toolConfig"] = config_choice
     return result
 
@@ -633,17 +640,12 @@ def responses_to_gemini(
     if declarations:
         result["tools"] = [{"functionDeclarations": declarations}]
     if config_choice := _tool_config(
-        body.get("tool_choice"), declarations, responses=True
+        body.get("tool_choice"),
+        declarations,
+        responses=True,
+        serial=request.parallel_tool_calls is False,
     ):
         result["toolConfig"] = config_choice
-    if (
-        declarations
-        and body.get("tool_choice") != "none"
-        and request.parallel_tool_calls is False
-    ):
-        raise GeminiConversionError(
-            "Native Gemini cannot enforce parallel_tool_calls=false"
-        )
     return result
 
 

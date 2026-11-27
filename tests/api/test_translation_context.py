@@ -165,10 +165,59 @@ def test_discovery_configuration_never_becomes_conversation_text(
             {"role": "user", "content": "Continue"},
         ],
     )
-    captured = json.dumps(sent_request(protocol, path, body))
+    sent = sent_request(protocol, path, body)
+    captured = json.dumps(sent)
     assert "inspect_catalog" in captured
     assert ("connector-only-value" in captured) == (protocol == "responses")
     assert ("registry-only-value" in captured) == (protocol == "responses")
+    if execution == "client" and protocol != "responses":
+        assert "inspect_catalog" in json.dumps(sent.get("tools"))
+        body["tool_choice"] = {"type": "function", "name": "inspect_catalog"}
+        sent_request(protocol, path, body)
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "gemini"])
+def test_extension_with_an_explicit_user_turn_preserves_the_question(
+    protocol: str,
+) -> None:
+    last: JsonObject = {
+        "type": "future_message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "Actual question"}],
+    }
+    path, body = ingress_request(
+        "responses", True, [{"role": "user", "content": "Older question"}, last]
+    )
+    assert "Actual question" in json.dumps(sent_request(protocol, path, body))
+    last["content"] = [{"type": "future_media"}]
+    assert "latest user" in translation_error(protocol, path, body).lower()
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses", "gemini"])
+def test_computer_approval_must_travel_with_the_screenshot(protocol: str) -> None:
+    path, body = ingress_request(
+        "responses",
+        True,
+        [
+            {"role": "user", "content": "Read the screen"},
+            {
+                "type": "computer_call_output",
+                "call_id": "c1",
+                "acknowledged_safety_checks": [
+                    {"id": "approved-item", "code": "example", "message": "Reviewed"}
+                ],
+                "output": {
+                    "type": "computer_screenshot",
+                    "image_url": "data:image/png;base64,iVBORw0KGgo=",
+                },
+            },
+            {"role": "user", "content": "What was visible?"},
+        ],
+    )
+    if protocol == "responses":
+        assert "approved-item" in json.dumps(sent_request(protocol, path, body))
+    else:
+        assert "safety" in translation_error(protocol, path, body).lower()
 
 
 @pytest.mark.parametrize(

@@ -13,21 +13,28 @@ def _fields(value: JsonValue, *names: str) -> JsonObject:
 
 def _entries(value: JsonValue) -> list[JsonObject]:
     try:
-        return list(json_objects(value)) if value is not None else []
+        return list(json_objects(value))
     except TypeError as error:
         raise ResponsesConversionError(
             "Expected a list of objects in Responses tool history"
         ) from error
 
 
+def _keep_entry_fields(record: JsonObject, field: str, *names: str) -> None:
+    if (value := record.get(field)) is not None:
+        record[field] = [_fields(entry, *names) for entry in _entries(value)]
+
+
 def public_tool_record(kind: str, item: JsonObject) -> JsonObject | None:
     """Select public fields before a provider tool record becomes conversation text."""
-    data = _fields(item, "type", "call_id", "id", "status")
+    data: JsonObject = {}
     match kind:
         case "tool_search_output":
-            data["tools"] = public_search_tools(item.get("tools"))
+            data = _fields(item, "tools")
+            if data.get("tools") is not None:
+                data["tools"] = public_search_tools(data["tools"])
         case "tool_search_call":
-            data["arguments"] = item.get("arguments")
+            data = _fields(item, "arguments")
         case "web_search_call":
             action = item.get("action")
             if not isinstance(action, dict) or action.get("type") not in (
@@ -38,34 +45,42 @@ def public_tool_record(kind: str, item: JsonObject) -> JsonObject | None:
                 raise ResponsesConversionError(
                     "This web search action requires native Responses"
                 )
-            data["action"] = _fields(
-                action, "type", "query", "queries", "pattern", "url"
+            public_action = _fields(
+                action, "type", "query", "queries", "pattern", "url", "sources"
             )
-            data["sources"] = [
-                _fields(source, "url") for source in _entries(action.get("sources"))
-            ]
+            _keep_entry_fields(public_action, "sources", "url")
+            data["action"] = public_action
         case "file_search_call":
-            data["queries"] = item.get("queries")
-            data["results"] = [
-                _fields(entry, "filename", "text")
-                for entry in _entries(item.get("results"))
-            ]
+            data = _fields(item, "queries", "results")
+            _keep_entry_fields(data, "results", "filename", "text")
         case "mcp_call":
-            data.update(_fields(item, "name", "server_label", "arguments", "output"))
-            if item.get("error") is not None:
-                data["error"] = _fields(item["error"], "type", "code", "message")
+            data = _fields(item, "name", "server_label", "arguments", "output", "error")
+            if (error := data.get("error")) is not None:
+                if not isinstance(error, dict):
+                    raise ResponsesConversionError(
+                        "Invalid MCP error in Responses history"
+                    )
+                if error.get("type") == "mcp_tool_execution_error":
+                    data["error"] = _fields(error, "type", "content")
+                elif error.get("type") in ("mcp_protocol_error", "http_error"):
+                    data["error"] = _fields(error, "type", "code", "message")
+                else:
+                    raise ResponsesConversionError(
+                        "This MCP error requires native Responses"
+                    )
         case "code_interpreter_call":
-            data["code"] = item.get("code")
-            logs: list[str] = []
-            for output in _entries(item.get("outputs")):
-                if output.get("type") != "logs" or not isinstance(
-                    log := output.get("logs"), str
+            data = _fields(item, "code", "outputs")
+            if (raw_outputs := data.get("outputs")) is not None:
+                entries = _entries(raw_outputs)
+                if any(
+                    entry.get("type") != "logs"
+                    or not isinstance(entry.get("logs"), str)
+                    for entry in entries
                 ):
                     raise ResponsesConversionError(
                         "This code interpreter output requires native Responses"
                     )
-                logs.append(log)
-            data["logs"] = logs
+                data["outputs"] = [_fields(entry, "type", "logs") for entry in entries]
         case "local_shell_call" | "shell_call":
             data["action"] = _fields(
                 item.get("action"), "type", "commands", "command", "working_directory"
@@ -95,4 +110,4 @@ def public_tool_record(kind: str, item: JsonObject) -> JsonObject | None:
             data["action"] = "screenshot"
         case _:
             return None
-    return data
+    return {**_fields(item, "type", "call_id", "id", "status"), **data}

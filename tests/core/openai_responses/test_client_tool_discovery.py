@@ -74,6 +74,49 @@ AGENTS: JsonObject = {
 }
 
 
+def test_client_discovery_preserves_the_current_namespace_description() -> None:
+    current: JsonObject = {
+        "type": "namespace",
+        "name": "catalog",
+        "description": "Current catalog",
+        "tools": [{"type": "function", "name": "count"}],
+    }
+    loaded: JsonObject = {
+        "type": "namespace",
+        "name": "catalog",
+        "description": "Earlier catalog",
+        "tools": [{"type": "function", "name": "lookup"}],
+    }
+    request = OpenAIResponsesRequest(
+        model="test",
+        tools=[current, SEARCH],
+        input=[
+            {
+                "type": "tool_search_call",
+                "execution": "client",
+                "call_id": "s",
+                "arguments": {},
+            },
+            {
+                "type": "tool_search_output",
+                "execution": "client",
+                "call_id": "s",
+                "tools": [loaded],
+            },
+        ],
+    )
+    namespace = next(
+        tool
+        for tool in request.select_direct_tools().tools or []
+        if tool.get("type") == "namespace"
+    )
+    assert namespace["description"] == "Current catalog"
+    assert {tool["name"] for tool in object_array(namespace["tools"])} == {
+        "count",
+        "lookup",
+    }
+
+
 def test_chat_exposes_client_search_as_a_callable_function() -> None:
     request = OpenAIResponsesRequest(
         model="example", input="Find an agent", tools=[SEARCH]

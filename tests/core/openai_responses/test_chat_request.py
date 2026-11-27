@@ -533,7 +533,7 @@ def test_build_responses_chat_request_relocates_computer_screenshot() -> None:
                         "type": "computer_screenshot",
                         "image_url": "https://images.example.test/screen.png",
                     },
-                    "acknowledged_safety_checks": [{"id": "check_1"}],
+                    "acknowledged_safety_checks": [],
                 }
             ]
         ),
