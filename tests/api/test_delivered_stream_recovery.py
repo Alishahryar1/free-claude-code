@@ -13,6 +13,11 @@ from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import SSEEvent, parse_sse_text
+from free_claude_code.core.history_replay import (
+    ReplayOrigin,
+    ReplayRecord,
+    encode_replay,
+)
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
@@ -993,3 +998,258 @@ async def test_seeded_text_start_participates_in_overlap_filter(
     events = parse_sse_text(result)
     assert_completed(events, wire)
     assert public_text(events, wire) == "The answer is 42"
+
+
+def unsigned_thinking(
+    thought: str, *, index: int = 0, closed: bool = True, empty_signature: bool = False
+) -> list[JsonObject]:
+    events: list[JsonObject] = [
+        {
+            "type": "content_block_start",
+            "index": index,
+            "content_block": {"type": "thinking", "thinking": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "thinking_delta", "thinking": thought},
+        },
+    ]
+    if empty_signature:
+        events.append(
+            {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "signature_delta", "signature": ""},
+            }
+        )
+    if closed:
+        events.append({"type": "content_block_stop", "index": index})
+    return events
+
+
+def public_thinking(events: list[SSEEvent], wire: str) -> list[str]:
+    if wire == "messages":
+        return [
+            string_payload(delta["thinking"])
+            for event in events
+            if (delta := object_payload(event.data.get("delta", {}))).get("type")
+            == "thinking_delta"
+        ]
+    return [
+        string_payload(event.data["delta"])
+        for event in events
+        if event.event == "response.reasoning_text.delta"
+    ]
+
+
+def shifted(events: list[JsonObject], offset: int) -> list[JsonObject]:
+    events = deepcopy(events)
+    for event in events:
+        if "index" in event:
+            event["index"] = int_payload(event["index"]) + offset
+    return events
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("empty_signature", [False, True])
+async def test_completed_unsigned_messages_thinking_continues(
+    wire: WireProtocol, empty_signature: bool
+) -> None:
+    thought = "Look at the request first."
+
+    def reply(bodies: list[JsonObject]):
+        start = _events_for("messages")[0]
+        if len(bodies) == 1:
+            return 200, [
+                start,
+                *unsigned_thinking(thought, empty_signature=empty_signature),
+            ]
+        # The replacement also starts with unsigned thinking before its answer.
+        return 200, [
+            start,
+            *unsigned_thinking(" Then answer."),
+            *shifted(text_events("messages", "Answer.")[1:], 1),
+        ]
+
+    async with _harness("messages", reply, max_attempts=2) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "answer"}]), wire
+        )
+    events = parse_sse_text(result)
+    assert_completed(events, wire)
+    assert public_text(events, wire) == "Answer."
+    assert public_thinking(events, wire) == [thought, " Then answer."]
+    if wire == "responses":
+        output = object_array(object_payload(events[-1].data["response"])["output"])
+        assert [
+            string_payload(part["text"])
+            for item in output
+            if item["type"] == "reasoning"
+            for part in object_array(item["content"])
+        ] == [thought, " Then answer."]
+    assert len(bodies) == 2
+    assert thought in str(bodies[-1])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_open_unsigned_messages_thinking_is_not_continued(
+    wire: WireProtocol,
+) -> None:
+    events = [_events_for("messages")[0], *unsigned_thinking("Still", closed=False)]
+    async with _harness("messages", lambda _: (200, events), max_attempts=2) as (
+        send,
+        bodies,
+        _,
+    ):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "think"}]), wire
+        )
+    assert len(bodies) == 1
+    assert parse_sse_text(result)[-1].event == (
+        "error" if wire == "messages" else "response.failed"
+    )
+
+
+def readable_carrier(thought: str) -> str:
+    return encode_replay(
+        ReplayRecord(
+            ReplayOrigin("deepseek", "chat", "", "", "upstream"),
+            {"reasoning_content": thought},
+        )
+    )
+
+
+def carrier_thinking(thought: str, *pieces: str) -> list[JsonObject]:
+    return [
+        *unsigned_thinking(thought, closed=False),
+        *(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "signature_delta", "signature": piece},
+            }
+            for piece in pieces
+        ),
+        {"type": "content_block_stop", "index": 0},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_split_signature_does_not_abort_a_healthy_stream(
+    wire: WireProtocol,
+) -> None:
+    carrier = readable_carrier("Plan.")
+    events = [
+        _events_for("messages")[0],
+        *carrier_thinking("Plan.", carrier[:20], carrier[20:]),
+        *shifted(text_events("messages", "Answer.")[1:], 1),
+    ]
+    async with _harness("messages", lambda _: (200, events), max_attempts=2) as (
+        send,
+        bodies,
+        _,
+    ):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "answer"}]), wire
+        )
+    events_out = parse_sse_text(result)
+    assert_completed(events_out, wire)
+    assert public_text(events_out, wire) == "Answer."
+    assert len(bodies) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_continuation_with_signed_thinking_is_not_combined(
+    wire: WireProtocol,
+) -> None:
+    # A readable carrier keeps the untrimmed thought, so it would repeat history.
+    def reply(bodies: list[JsonObject]):
+        start = _events_for("messages")[0]
+        if len(bodies) == 1:
+            return 200, [start, *unsigned_thinking("Earlier.")]
+        return 200, [
+            start,
+            *carrier_thinking("Earlier. After.", readable_carrier("Earlier. After.")),
+            *shifted(text_events("messages", "Answer.")[1:], 1),
+        ]
+
+    async with _harness("messages", reply, max_attempts=2) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "answer"}]), wire
+        )
+    assert len(bodies) == 2
+    assert parse_sse_text(result)[-1].event == (
+        "error" if wire == "messages" else "response.failed"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_continuation_call_is_not_published_before_later_protected_state(
+    wire: WireProtocol,
+) -> None:
+    def reply(bodies: list[JsonObject]):
+        if len(bodies) == 1:
+            return 200, text_events("messages", "Intro", complete=False)
+        calls = tool_events("messages", '{"path":"x"}')
+        return 200, [
+            *calls[:-2],
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "redacted_thinking", "data": "opaque"},
+            },
+            {"type": "content_block_stop", "index": 1},
+            *calls[-2:],
+        ]
+
+    async with _harness("messages", reply, max_attempts=2) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "read"}], tools=_tools(wire)), wire
+        )
+    assert len(bodies) == 2
+    assert "call_probe" not in result
+    assert parse_sse_text(result)[-1].event == (
+        "error" if wire == "messages" else "response.failed"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_unsupported_native_content_is_not_dropped_by_recovery(
+    wire: WireProtocol,
+) -> None:
+    def reply(bodies: list[JsonObject]):
+        if len(bodies) == 1:
+            return 200, [
+                *text_events("messages", "Intro", complete=False),
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {
+                        "type": "citations_delta",
+                        "citation": {
+                            "type": "char_location",
+                            "cited_text": "Intro",
+                            "document_index": 0,
+                            "start_char_index": 0,
+                            "end_char_index": 5,
+                        },
+                    },
+                },
+            ]
+        return 200, text_events("messages", " Answer.")
+
+    async with _harness("messages", reply, max_attempts=2) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "answer"}]), wire
+        )
+    assert len(bodies) == 1
+    assert parse_sse_text(result)[-1].event == (
+        "error" if wire == "messages" else "response.failed"
+    )

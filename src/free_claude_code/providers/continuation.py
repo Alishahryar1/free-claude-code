@@ -44,18 +44,24 @@ class SourceRecoveryState:
     ) -> None:
         self._execution = execution
         self._prior_unsafe_reason = (
-            previous.unsafe_reason or previous._prior_unsafe_reason
+            previous._attempt_unsafe_reason or previous._prior_unsafe_reason
             if previous is not None
             else None
         )
         self.unsafe_reason: str | None = None
         self._pending_reasoning: set[int | str] = set()
-        self._signed: set[int | str] = set()
         self._handoff_blocked = False
 
     @property
     def can_handoff(self) -> bool:
         return not self._handoff_blocked and not self._pending_reasoning
+
+    @property
+    def _attempt_unsafe_reason(self) -> str | None:
+        # The signature arrives last, so open thinking may still be signed.
+        return self.unsafe_reason or (
+            "open_thinking" if self._pending_reasoning else None
+        )
 
     def snapshot(
         self,
@@ -68,7 +74,7 @@ class SourceRecoveryState:
         return SourceRecoverySnapshot(
             normal_stop_seen=normal_stop_seen,
             structured_output=_structured_output(body, protocol),
-            unsafe_reason=self.unsafe_reason
+            unsafe_reason=self._attempt_unsafe_reason
             or (self._prior_unsafe_reason if for_model_fallback else None),
             can_handoff=self.can_handoff,
         )
@@ -150,14 +156,21 @@ class SourceRecoveryState:
                 # The Messages parser classifies malformed block events for retries.
                 return
             block = payload.get("content_block")
+            delta = json_object(payload.get("delta") or {})
+            # Stream pieces are not complete replay records, so nothing is decoded.
+            if any(
+                value.get("type") == "redacted_thinking"
+                or value.get("signature")
+                or value.get("extra_content")
+                for value in (block if isinstance(block, dict) else {}, delta)
+            ):
+                self.unsafe_reason = "signed_thinking"
             if isinstance(block, dict) and block.get("type") in (
                 "thinking",
                 "redacted_thinking",
             ):
-                self.unsafe_reason = "signed_thinking"
+                # A signature can still arrive until the block closes.
                 self._pending_reasoning.add(index)
-                if block.get("signature") or block.get("data"):
-                    self._signed.add(index)
             if isinstance(block, dict) and block.get("type") not in (
                 "text",
                 "tool_use",
@@ -166,17 +179,12 @@ class SourceRecoveryState:
             ):
                 self.unsafe_reason = "native_content"
                 self._handoff_blocked = True
-            delta = json_object(payload.get("delta") or {})
             if (isinstance(block, dict) and block.get("citations")) or delta.get(
                 "type"
             ) == "citations_delta":
                 self.unsafe_reason = "native_content"
                 self._handoff_blocked = True
-            if delta.get("type") in ("thinking_delta", "signature_delta"):
-                self.unsafe_reason = "signed_thinking"
-                if delta.get("signature"):
-                    self._signed.add(index)
-            if kind == "content_block_stop" and index in self._signed:
+            if kind == "content_block_stop":
                 self._pending_reasoning.discard(index)
         elif protocol == "responses":
             item = payload.get("item")

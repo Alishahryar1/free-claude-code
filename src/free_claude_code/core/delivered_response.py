@@ -348,7 +348,10 @@ class DeliveredResponse:
                 block["signature"] = json_text(block.get("signature", "")) + json_text(
                     delta.get("signature", "")
                 )
-                if unprotected_replay(block["signature"]) is None:
+                if (
+                    block["signature"]
+                    and unprotected_replay(block["signature"]) is None
+                ):
                     self.unsafe_reason = "opaque_delta"
             else:
                 self.unsafe_reason = "opaque_delta"

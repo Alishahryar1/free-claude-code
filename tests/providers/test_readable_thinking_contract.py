@@ -423,3 +423,25 @@ async def test_gemini_protected_owners_survive_reused_indices_and_client_echo(
     assert assistant.get("reasoning_content", "") == (
         "" if echo == "cli" else "Unsigned.Ordinary.Tail."
     )
+
+
+def test_retry_keeps_open_thinking_from_the_earlier_attempt_for_fallback() -> None:
+    source = SourceRecoveryState(Mock())
+    source.observe(
+        "messages",
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""},
+        },
+    )
+    retry = SourceRecoveryState(Mock(), previous=source)
+    assert (
+        retry.snapshot(
+            body={},
+            protocol="messages",
+            normal_stop_seen=False,
+            for_model_fallback=True,
+        ).unsafe_reason
+        == "open_thinking"
+    )
