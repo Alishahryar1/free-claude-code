@@ -271,6 +271,22 @@ def _load_opencode_go() -> ProviderFactory:
     return construct
 
 
+def _load_commandcode() -> ProviderFactory:
+    from free_claude_code.providers.commandcode import create_commandcode_provider
+
+    def construct(
+        config: ProviderConfig,
+        settings: Settings,
+        admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
+    ) -> BaseProvider:
+        return create_commandcode_provider(
+            config, admission, history_cache=history_cache
+        )
+
+    return construct
+
+
 _SPECIAL_PROVIDER_FACTORIES: dict[str, Callable[[], ProviderFactory]] = {
     "anthropic": _load_anthropic,
     "alibaba_cloud": _load_alibaba_cloud,
@@ -287,6 +303,7 @@ _SPECIAL_PROVIDER_FACTORIES: dict[str, Callable[[], ProviderFactory]] = {
     "groq": _load_groq,
     "opencode_zen": _load_opencode_zen,
     "opencode_go": _load_opencode_go,
+    "commandcode": _load_commandcode,
 }
 _INJECTED_PROVIDER_IDS = {"openai", "github_copilot"}
 

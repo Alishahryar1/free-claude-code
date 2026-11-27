@@ -183,6 +183,12 @@ class Settings(BaseModel):
         default=(), validation_alias="OPENCODE_API_KEY"
     )
 
+    # ==================== Command Code ====================
+    # API key from commandcode.ai/studio (plans with API access; not the Go plan).
+    commandcode_api_keys: ApiKeyList = Field(
+        default=(), validation_alias="COMMANDCODE_API_KEY"
+    )
+
     # ==================== Vercel AI Gateway ====================
     vercel_ai_gateway_api_keys: ApiKeyList = Field(
         default=(), validation_alias="AI_GATEWAY_API_KEY"
@@ -521,6 +527,9 @@ class Settings(BaseModel):
     )
     opencode_go_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="OPENCODE_GO_PROXY"
+    )
+    commandcode_proxy: OptionalNonEmptyString = Field(
+        default=None, validation_alias="COMMANDCODE_PROXY"
     )
     vercel_ai_gateway_proxy: OptionalNonEmptyString = Field(
         default=None, validation_alias="VERCEL_AI_GATEWAY_PROXY"
