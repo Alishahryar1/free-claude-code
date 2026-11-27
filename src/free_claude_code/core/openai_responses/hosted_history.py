@@ -4,6 +4,23 @@ from ..json_types import JsonObject, JsonValue, json_objects
 from .errors import ResponsesConversionError
 from .tool_search import public_search_tools
 
+_ACTION_FIELDS: dict[str, tuple[str, ...]] = {
+    "click": ("button", "x", "y", "keys"),
+    "double_click": ("x", "y", "keys"),
+    "drag": ("path", "keys"),
+    "keypress": ("keys",),
+    "move": ("x", "y", "keys"),
+    "screenshot": (),
+    "scroll": ("scroll_x", "scroll_y", "x", "y", "keys"),
+    "type": ("text",),
+    "wait": (),
+}
+_MCP_ERROR_FIELDS: dict[str, tuple[str, ...]] = {
+    "mcp_tool_execution_error": ("content",),
+    "mcp_protocol_error": ("code", "message"),
+    "http_error": ("code", "message"),
+}
+
 
 def _fields(value: JsonValue, *names: str) -> JsonObject:
     if not isinstance(value, dict):
@@ -23,6 +40,21 @@ def _entries(value: JsonValue) -> list[JsonObject]:
 def _keep_entry_fields(record: JsonObject, field: str, *names: str) -> None:
     if (value := record.get(field)) is not None:
         record[field] = [_fields(entry, *names) for entry in _entries(value)]
+
+
+def _variant(
+    value: JsonValue, shapes: dict[str, tuple[str, ...]], label: str
+) -> JsonObject:
+    kind = value.get("type") if isinstance(value, dict) else None
+    if not isinstance(kind, str) or kind not in shapes:
+        raise ResponsesConversionError(f"This {label} requires native Responses")
+    return _fields(value, "type", *shapes[kind])
+
+
+def _computer_action(value: JsonValue) -> JsonObject:
+    action = _variant(value, _ACTION_FIELDS, "computer action")
+    _keep_entry_fields(action, "path", "x", "y")
+    return action
 
 
 def public_tool_record(kind: str, item: JsonObject) -> JsonObject | None:
@@ -52,22 +84,11 @@ def public_tool_record(kind: str, item: JsonObject) -> JsonObject | None:
             data["action"] = public_action
         case "file_search_call":
             data = _fields(item, "queries", "results")
-            _keep_entry_fields(data, "results", "filename", "text")
+            _keep_entry_fields(data, "results", "file_id", "filename", "score", "text")
         case "mcp_call":
             data = _fields(item, "name", "server_label", "arguments", "output", "error")
             if (error := data.get("error")) is not None:
-                if not isinstance(error, dict):
-                    raise ResponsesConversionError(
-                        "Invalid MCP error in Responses history"
-                    )
-                if error.get("type") == "mcp_tool_execution_error":
-                    data["error"] = _fields(error, "type", "content")
-                elif error.get("type") in ("mcp_protocol_error", "http_error"):
-                    data["error"] = _fields(error, "type", "code", "message")
-                else:
-                    raise ResponsesConversionError(
-                        "This MCP error requires native Responses"
-                    )
+                data["error"] = _variant(error, _MCP_ERROR_FIELDS, "MCP error")
         case "code_interpreter_call":
             data = _fields(item, "code", "outputs")
             if (raw_outputs := data.get("outputs")) is not None:
@@ -97,17 +118,18 @@ def public_tool_record(kind: str, item: JsonObject) -> JsonObject | None:
         case "apply_patch_call":
             data["operation"] = _fields(item.get("operation"), "type", "path", "diff")
         case "computer_call":
-            action = item.get("action")
-            if (
-                not isinstance(action, dict)
-                or action.get("type") != "screenshot"
-                or item.get("pending_safety_checks")
-                or item.get("actions")
-            ):
+            if item.get("pending_safety_checks"):
                 raise ResponsesConversionError(
-                    "This computer action requires native Responses"
+                    "Pending computer safety checks require native Responses"
                 )
-            data["action"] = "screenshot"
+            if (action := item.get("action")) is not None:
+                data["action"] = _computer_action(action)
+            if (actions := item.get("actions")) is not None:
+                data["actions"] = [
+                    _computer_action(entry) for entry in _entries(actions)
+                ]
+            if not data:
+                raise ResponsesConversionError("Missing action in computer call")
         case _:
             return None
     return {**_fields(item, "type", "call_id", "id", "status"), **data}

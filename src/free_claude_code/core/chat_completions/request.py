@@ -9,7 +9,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from free_claude_code.core.json_types import load_json_value
 
-from ..history_replay import decode_replay, is_replay, readable_reasoning
+from ..history_replay import (
+    decode_replay,
+    google_thought_signature,
+    is_replay,
+    readable_reasoning,
+)
 from ..json_types import (
     JsonObject,
     JsonValue,
@@ -348,16 +353,6 @@ def project_chat_request(request: ChatRequest) -> ChatProjection:
         raise ChatConversionError("Chat request has no translatable conversation")
     body["messages"] = projected
     return ChatProjection(body, call_kinds)
-
-
-def google_thought_signature(extra_content: JsonValue) -> str | None:
-    if not isinstance(extra_content, dict):
-        return None
-    google = extra_content.get("google")
-    if not isinstance(google, dict):
-        return None
-    signature = google.get("thought_signature")
-    return signature if isinstance(signature, str) and signature else None
 
 
 def content_parts(value: JsonValue) -> list[JsonObject]:

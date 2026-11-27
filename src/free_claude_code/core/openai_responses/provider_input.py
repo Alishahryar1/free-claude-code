@@ -24,12 +24,12 @@ from free_claude_code.core.anthropic.tool_results import (
     ToolResultText,
     decompose_tool_result_content,
 )
+from free_claude_code.core.anthropic.web_history import web_history_text
 from free_claude_code.core.history_replay import (
     HistoryReplayError,
     has_readable_replay,
     is_replay,
     readable_reasoning,
-    tool_history_context,
     unprotected_replay,
     validate_hosted_tool_history,
 )
@@ -288,14 +288,9 @@ def _assistant_items(
             "web_search_tool_result",
             "web_fetch_tool_result",
         }:
-            native = (
-                block
-                if isinstance(block, dict)
-                else block.model_dump(mode="json", exclude_none=True)
-            )
             items.append(
                 _assistant_message(
-                    [{"type": "output_text", "text": tool_history_context(native)}]
+                    [{"type": "output_text", "text": web_history_text(block)}]
                 )
             )
         else:

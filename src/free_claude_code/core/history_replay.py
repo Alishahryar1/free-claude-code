@@ -20,6 +20,16 @@ _ASSOCIATED_PREFIX = "fcc:history:v2:"
 _LEGACY_PREFIX = "fcc:anthropic-reasoning:v1:"
 
 
+def google_thought_signature(extra_content: JsonValue) -> str | None:
+    if not isinstance(extra_content, dict):
+        return None
+    google = extra_content.get("google")
+    if not isinstance(google, dict):
+        return None
+    signature = google.get("thought_signature")
+    return signature if isinstance(signature, str) and signature else None
+
+
 class HistoryReplayError(ValueError):
     """A persisted replay record cannot be safely decoded or projected."""
 

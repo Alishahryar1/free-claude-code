@@ -27,6 +27,7 @@ from free_claude_code.core.openai_responses import (
     ResponsesToolPolicy,
     build_responses_chat_request,
 )
+from free_claude_code.core.openai_responses.tool_search import public_search_tools
 from free_claude_code.core.openai_tool_names import encode_openai_chat_tool_names
 from free_claude_code.providers.openai_chat.stream_output import (
     ChatStreamUsage,
@@ -115,6 +116,25 @@ def test_client_discovery_preserves_the_current_namespace_description() -> None:
         "count",
         "lookup",
     }
+
+
+def test_public_search_history_keeps_each_namespace_with_its_tool() -> None:
+    tools: list[JsonObject] = [
+        {"type": "function", "name": "lookup", "namespace": "alpha"},
+        {"type": "function", "namespace": "beta", "function": {"name": "lookup"}},
+        {"type": "function", "function": {"name": "lookup", "namespace": "gamma"}},
+        {
+            "type": "namespace",
+            "name": "delta",
+            "tools": [{"type": "function", "name": "lookup"}],
+        },
+    ]
+    assert [tool["namespace"] for tool in public_search_tools(tools)] == [
+        "alpha",
+        "beta",
+        "gamma",
+        "delta",
+    ]
 
 
 def test_chat_exposes_client_search_as_a_callable_function() -> None:

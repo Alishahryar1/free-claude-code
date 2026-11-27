@@ -79,9 +79,10 @@ def public_search_tools(tools: JsonValue) -> list[JsonObject]:
             else ("name", "description", "format")
         )
         entry = {key: definition[key] for key in fields if key in definition}
-        entry["type"] = kind
-        if namespace is not None:
-            entry["namespace"] = namespace
+        identity = definition_identity(tool, namespace)
+        entry["type"] = identity.kind
+        if identity.namespace is not None:
+            entry["namespace"] = identity.namespace
         public.append(entry)
     return public
 

@@ -1157,6 +1157,14 @@ async def test_automatic_web_search_restores_signed_gemini_turn(
         for block in array_payload(body["content"])
         if object_payload(block)["type"] == "tool_use"
     ] == ["retrieve"]
+    search_result = next(
+        block
+        for block in object_array(body["content"])
+        if block["type"] == "web_search_tool_result"
+    )
+    object_array(search_result["content"])[0]["encrypted_content"] = (
+        "opaque-search-state"
+    )
     request.messages.extend(
         [
             Message.model_validate({"role": "assistant", "content": body["content"]}),
@@ -1190,6 +1198,7 @@ async def test_automatic_web_search_restores_signed_gemini_turn(
     search_response, client_response = responses if search_first else responses[::-1]
     assert object_payload(search_response).get("id") == search_id
     assert "https://example.com/found" in json.dumps(search_response)
+    assert "opaque-search-state" not in json.dumps(search_response)
     assert object_payload(client_response)["id"] == "client_id"
     assert object_payload(client_response)["response"] == {"output": "retrieved body"}
 

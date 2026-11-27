@@ -4,7 +4,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from ..history_replay import tool_history_context
+from ..history_replay import google_thought_signature, tool_history_context
 from ..json_types import JsonObject, JsonValue, load_json_value
 from ..openai_chat import computer_screenshot_label
 from .errors import ResponsesConversionError
@@ -31,7 +31,6 @@ class InputCall:
     call_id: str
     identity: ResponsesToolIdentity
     arguments: JsonValue
-    extra_content: JsonValue
 
     def object_arguments(self) -> JsonObject:
         if self.identity.kind == "custom":
@@ -108,6 +107,13 @@ def read_history(value: JsonValue) -> Iterator[tuple[int, HistoryItem]]:
         if item is None:
             continue
         if isinstance(raw, dict):
+            if google_thought_signature(raw.get("extra_content")) and (
+                isinstance(item, InputCall)
+                or (isinstance(item, InputMessage) and item.role == "assistant")
+            ):
+                raise ResponsesConversionError(
+                    "Signed Google history requires native Responses egress"
+                )
             _check_tool_action(raw, item, pending_actions)
         if isinstance(item, InputMessage) and item.role == "user":
             latest_user = item
@@ -187,7 +193,6 @@ def _read_item(raw: JsonValue) -> HistoryItem | None:
             required_str(raw.get("call_id"), "tool.call_id"),
             identity,
             arguments,
-            raw.get("extra_content"),
         )
     if kind in ("function_call_output", "custom_tool_call_output"):
         output = raw.get("output")

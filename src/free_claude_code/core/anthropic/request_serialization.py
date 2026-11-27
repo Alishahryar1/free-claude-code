@@ -8,6 +8,7 @@ from ..json_types import JsonObject, JsonValue
 from .models import (
     CODE_EXECUTION_INPUT_FIELDS,
     ContentBlockDocument,
+    ContentBlockImage,
     ContentBlockRedactedThinking,
     ContentBlockServerToolUse,
     ContentBlockText,
@@ -123,23 +124,41 @@ def quote_code_execution_history(messages: list[Message]) -> list[Message]:
     return projected
 
 
-def _document_text(document: Mapping[str, object]) -> str | None:
+def _document_parts(
+    document: Mapping[str, object],
+) -> list[ContentBlockText | ContentBlockImage]:
     source = document.get("source")
-    if (
-        not isinstance(source, dict)
-        or source.get("type") != "text"
-        or not isinstance(data := source.get("data"), str)
-    ):
-        return None
+    if not isinstance(source, dict) or source.get("type") not in ("text", "content"):
+        return []
     if isinstance(citations := document.get("citations"), dict) and citations.get(
         "enabled"
     ):
         raise ValueError("Document citations require native Messages egress")
-    return "\n\n".join(
+    headings = [
         text
-        for text in (document.get("title"), document.get("context"), data)
+        for text in (document.get("title"), document.get("context"))
         if isinstance(text, str) and text
-    )
+    ]
+    content = source.get("data" if source["type"] == "text" else "content")
+    if isinstance(content, str):
+        text = "\n\n".join([*headings, content] if content else headings)
+        return [ContentBlockText(type="text", text=text)] if text else []
+    parts: list[ContentBlockText | ContentBlockImage] = []
+    if source["type"] == "content" and isinstance(content, list):
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if (
+                part.get("type") == "text"
+                and isinstance(text := part.get("text"), str)
+                and text
+            ):
+                parts.append(ContentBlockText(type="text", text=text))
+            elif part.get("type") == "image":
+                parts.append(ContentBlockImage.model_validate(part))
+    if headings and parts:
+        parts.insert(0, ContentBlockText(type="text", text="\n\n".join(headings)))
+    return parts
 
 
 def _translated_result(block: ContentBlockToolResult) -> ContentBlockToolResult:
@@ -148,8 +167,9 @@ def _translated_result(block: ContentBlockToolResult) -> ContentBlockToolResult:
     items: list[JsonValue] = []
     for item in block.content:
         if isinstance(item, dict) and item.get("type") == "document":
-            if (text := _document_text(item)) is not None:
-                items.append({"type": "text", "text": text})
+            items.extend(
+                part.model_dump(exclude_unset=True) for part in _document_parts(item)
+            )
         elif not isinstance(item, dict) or item.get("type") in (None, "text", "image"):
             items.append(item)
     if block.content and not items:
@@ -179,11 +199,8 @@ def translated_messages(request: MessagesRequest) -> list[Message]:
             if isinstance(block, ExtensionBlock):
                 continue
             if isinstance(block, ContentBlockDocument):
-                if (
-                    text := _document_text(block.model_dump(exclude_unset=True))
-                ) is None:
-                    continue
-                block = ContentBlockText(type="text", text=text)
+                blocks.extend(_document_parts(block.model_dump(exclude_unset=True)))
+                continue
             if turn.role == "user" and (
                 isinstance(block, (ContentBlockThinking, ContentBlockRedactedThinking))
                 or (isinstance(block, ContentBlockText) and not block.text)

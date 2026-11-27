@@ -3,8 +3,7 @@
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 
-from free_claude_code.core.chat_completions.request import google_thought_signature
-from free_claude_code.core.history_replay import is_replay
+from free_claude_code.core.history_replay import google_thought_signature, is_replay
 from free_claude_code.core.json_types import JsonObject, JsonValue, json_text
 
 GOOGLE_SKIP_THOUGHT_SIGNATURE_VALIDATOR = "skip_thought_signature_validator"

@@ -11,11 +11,11 @@ from free_claude_code.core.json_types import (
 
 from ..anthropic.content import get_block_attr, get_block_type
 from ..anthropic.server_tool_types import HIDDEN_WEB_SEARCH_NAME
+from ..anthropic.web_history import public_search_result, web_history_text
 from ..history_replay import (
     ReplayRecord,
     decode_replay,
     is_replay,
-    tool_history_context,
 )
 from .errors import GeminiConversionError
 
@@ -57,7 +57,7 @@ def restore_web_search_history(
             yield {
                 **message,
                 "content": [
-                    {"type": "text", "text": tool_history_context(block)}
+                    {"type": "text", "text": web_history_text(block)}
                     if _is_search(block) or _is_search_result(block)
                     else block
                     for block in blocks
@@ -132,7 +132,7 @@ def _restore_turn(
             "name": name,
             "input": args,
         }
-        payload = by_id[use_id]["content"]
+        payload = public_search_result(by_id[use_id]["content"])
         results.append(
             {
                 "type": "tool_result",

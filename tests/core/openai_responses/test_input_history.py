@@ -2,6 +2,9 @@ from collections.abc import Iterator, Mapping
 from typing import get_args, get_type_hints
 
 import pytest
+from openai.types.responses.computer_action_list_param import ComputerActionParam
+from openai.types.responses.mcp_tool_call_error_param import McpToolCallErrorParam
+from openai.types.responses.response_computer_tool_call_param import Action
 from openai.types.responses.response_input_item_param import ResponseInputItemParam
 
 from free_claude_code.core.json_types import JsonObject
@@ -136,6 +139,23 @@ def test_stored_image_in_a_custom_result_requires_native_responses() -> None:
         )
 
 
+def test_file_search_preserves_public_evidence_and_keeps_attributes_private() -> None:
+    result: JsonObject = {
+        "filename": "entry.md",
+        "file_id": "file-catalog",
+        "text": "Excerpt",
+        "score": 0.92345,
+    }
+    record = public_tool_record(
+        "file_search_call",
+        {
+            "type": "file_search_call",
+            "results": [{**result, "attributes": {"department": "internal"}}],
+        },
+    )
+    assert record is not None and record["results"] == [result]
+
+
 def literal_strings(annotation: object) -> Iterator[str]:
     arguments: tuple[object, ...] = get_args(annotation)
     for value in arguments:
@@ -143,6 +163,43 @@ def literal_strings(annotation: object) -> Iterator[str]:
             yield value
         else:
             yield from literal_strings(value)
+
+
+@pytest.mark.parametrize(
+    ("source", "kind", "field"),
+    [
+        (Action, "computer_call", "action"),
+        (ComputerActionParam, "computer_call", "action"),
+        (McpToolCallErrorParam, "mcp_call", "error"),
+    ],
+)
+def test_public_action_and_error_fields_follow_the_sdk(
+    source: object, kind: str, field: str
+) -> None:
+    examples: JsonObject = {
+        "button": "left",
+        "x": 1,
+        "y": 2,
+        "keys": ["Shift"],
+        "path": [{"x": 1, "y": 2}],
+        "scroll_x": 0,
+        "scroll_y": 30,
+        "text": "sample",
+        "code": 400,
+        "message": "Unavailable",
+        "content": "Lookup failed",
+    }
+    variants: tuple[object, ...] = get_args(source)
+    for variant in variants:
+        assert isinstance(variant, type)
+        fields: Mapping[str, object] = get_type_hints(variant)
+        [tag] = literal_strings(fields["type"])
+        value: JsonObject = {name: examples[name] for name in fields if name != "type"}
+        value["type"] = tag
+        record = public_tool_record(
+            kind, {"type": kind, field: {**value, "vendor_option": "private"}}
+        )
+        assert record is not None and record[field] == value
 
 
 def test_every_standard_input_item_is_translated_or_rejected() -> None:

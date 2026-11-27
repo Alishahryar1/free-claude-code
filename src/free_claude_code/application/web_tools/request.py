@@ -23,8 +23,10 @@ from free_claude_code.core.anthropic.request_serialization import (
     quote_code_execution_history,
 )
 from free_claude_code.core.anthropic.server_tool_types import HIDDEN_WEB_SEARCH_NAME
+from free_claude_code.core.anthropic.web_history import public_search_result
 from free_claude_code.core.gemini.web_search_replay import signed_gemini_turn
 from free_claude_code.core.history_replay import HistoryReplayError
+from free_claude_code.core.json_types import JsonObject
 
 WEB_SEARCH_TYPE = "web_search_20250305"
 WEB_FETCH_TYPE = "web_fetch_20250910"
@@ -291,8 +293,10 @@ def _normalized_search_history(messages: list[Message]) -> tuple[list[Message], 
                 if block.name == "web_search" and isinstance(
                     result, ContentBlockWebSearchToolResult
                 ):
-                    quoted = _search_history_text(block, result)
-                    projected.append(block if signed_turn else quoted)
+                    public = public_search_result(result.content)
+                    projected.append(
+                        block if signed_turn else _search_history_text(block, public)
+                    )
                     if (
                         not isinstance(result.content, dict)
                         or result.content.get("error_code") != "max_uses_exceeded"
@@ -327,29 +331,16 @@ def _normalized_search_history(messages: list[Message]) -> tuple[list[Message], 
 
 
 def _search_history_text(
-    use: ContentBlockServerToolUse, result: ContentBlockWebSearchToolResult
+    use: ContentBlockServerToolUse, content: list[JsonObject] | JsonObject
 ) -> ContentBlockText:
-    content = result.content
     if isinstance(content, list):
-        hits: list[dict[str, str]] = []
-        for hit in content:
-            if (
-                not isinstance(hit, dict)
-                or hit.get("type") != "web_search_result"
-                or not isinstance(hit.get("title"), str)
-                or not isinstance(hit.get("url"), str)
-            ):
-                raise InvalidRequestError(_INCOMPLETE_HISTORY)
-            hits.append({"title": hit["title"], "url": hit["url"]})
+        hits = [
+            {key: value for key, value in hit.items() if key != "type"}
+            for hit in content
+        ]
         record: dict[str, object] = {"query": use.input["query"], "results": hits}
-    elif (
-        isinstance(content, dict)
-        and content.get("type") == "web_search_tool_result_error"
-        and isinstance(content.get("error_code"), str)
-    ):
-        record = {"query": use.input["query"], "error_code": content["error_code"]}
     else:
-        raise InvalidRequestError(_INCOMPLETE_HISTORY)
+        record = {"query": use.input["query"], "error_code": content["error_code"]}
     return ContentBlockText(
         type="text",
         text="[Earlier web search data]\n"

@@ -13,7 +13,6 @@ from free_claude_code.core.history_replay import (
     is_replay,
     readable_reasoning,
     reasoning_detail,
-    tool_history_context,
     unprotected_replay,
     validate_hosted_tool_history,
 )
@@ -40,6 +39,7 @@ from .tool_results import (
     decompose_tool_result_content,
 )
 from .utils import set_if_not_none
+from .web_history import web_history_text
 
 
 class OpenAIConversionError(Exception):
@@ -698,19 +698,7 @@ class AnthropicToOpenAIConverter:
                 "web_search_tool_result",
                 "web_fetch_tool_result",
             }:
-                value = block
-                if not isinstance(value, dict):
-                    dump: object = getattr(block, "model_dump", None)
-                    if not callable(dump):
-                        raise OpenAIConversionError(
-                            "Anthropic hosted tool blocks require an object."
-                        )
-                    value = dump(mode="json", exclude_none=True)
-                if not isinstance(value, dict):
-                    raise OpenAIConversionError(
-                        "Anthropic hosted tool blocks require an object."
-                    )
-                content_parts.append(tool_history_context(value))
+                content_parts.append(web_history_text(block))
             elif block_type == "tool_use":
                 tool_calls.append(_tool_call_from_tool_use(block))
             else:

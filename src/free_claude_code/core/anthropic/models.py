@@ -13,7 +13,22 @@ CODE_EXECUTION_INPUT_FIELDS = {
 
 
 def _stored_file(source: object) -> bool:
-    return isinstance(source, dict) and source.get("type") == "file"
+    if not isinstance(source, dict):
+        return False
+    if source.get("type") == "file":
+        return True
+    contents = source.get("content")
+    return (
+        source.get("type") == "content"
+        and isinstance(contents, list)
+        and any(
+            isinstance(part, dict)
+            and part.get("type") == "image"
+            and isinstance(media := part.get("source"), dict)
+            and media.get("type") == "file"
+            for part in contents
+        )
+    )
 
 
 class _AnthropicBlockBase(BaseModel):

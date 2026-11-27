@@ -553,10 +553,6 @@ def responses_to_gemini(
                 _reasoning(item.data, item.data.get("encrypted_content")),
             )
         elif isinstance(item, InputCall):
-            if item.extra_content:
-                raise GeminiConversionError(
-                    "Saved compatibility tool metadata cannot be replayed on native Gemini; start a fresh conversation"
-                )
             if item.call_id in calls:
                 raise GeminiConversionError("Duplicate pending tool call ID")
             calls[item.call_id] = item
