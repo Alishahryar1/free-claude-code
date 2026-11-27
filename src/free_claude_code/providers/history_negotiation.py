@@ -151,6 +151,7 @@ class HistoryNegotiation:
         finalize: Callable[[JsonObject], JsonObject] | None = None,
         continuation: bool = False,
         native_chat: bool = False,
+        responses_reasoning: Callable[[JsonObject], JsonObject | None] | None = None,
     ) -> JsonObject:
         self._source = normalize_history_source(
             resolve_history_overrides(body), origin.protocol
@@ -184,6 +185,7 @@ class HistoryNegotiation:
                 source_paths=paths,
                 continuation=continuation,
                 native_chat=native_chat,
+                responses_reasoning=responses_reasoning,
             )
             return finalize(projected) if finalize is not None else projected
 
@@ -246,6 +248,7 @@ class RequestHistory:
         finalize: Callable[[JsonObject], JsonObject] | None = None,
         continuation: bool = False,
         native_chat: bool = False,
+        responses_reasoning: Callable[[JsonObject], JsonObject | None] | None = None,
     ) -> JsonObject:
         """Render history in this request's negotiated replay mode."""
         if self._negotiation is None:
@@ -258,6 +261,7 @@ class RequestHistory:
             finalize=finalize,
             continuation=continuation,
             native_chat=native_chat,
+            responses_reasoning=responses_reasoning,
         )
 
     @property
