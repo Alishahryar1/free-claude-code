@@ -1241,3 +1241,43 @@ async def test_thinking_with_unknown_native_fields_is_not_continued(
     assert parse_sse_text(result)[-1].event == (
         "error" if wire == "messages" else "response.failed"
     )
+
+
+@pytest.mark.asyncio
+async def test_native_continuation_with_unknown_delta_type_is_not_combined() -> None:
+    bodies = []
+    start = _events_for("messages")[0]
+    replies: list[list[JsonObject]] = [
+        [start, *unsigned_thinking("Earlier.")],
+        [
+            start,
+            *unsigned_thinking("Earlier. More.", closed=False),
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "encrypted_thinking_delta", "data": "opaque"},
+            },
+            {"type": "content_block_stop", "index": 0},
+            *shifted(text_events("messages", "Answer.")[1:], 1),
+        ],
+    ]
+
+    def reply(request: httpx.Request):
+        bodies.append(decode_object(request.content))
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=Wire([_sse(*replies[len(bodies) - 1])]),
+        )
+
+    p = provider(reply)
+    try:
+        result = await delivered(
+            p.stream_native_messages(NativeMessagesRequest(native_body(True))),
+            "messages",
+        )
+    finally:
+        await p.cleanup()
+    assert len(bodies) == 2
+    assert "opaque" not in result
+    assert parse_sse_text(result)[-1].event == "error"

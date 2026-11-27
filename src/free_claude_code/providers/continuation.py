@@ -187,6 +187,15 @@ class SourceRecoveryState:
             ):
                 self.unsafe_reason = "native_content"
                 self._handoff_blocked = True
+            if delta and delta.get("type") not in (
+                "text_delta",
+                "input_json_delta",
+                "thinking_delta",
+                "signature_delta",
+                "citations_delta",
+            ):
+                self.unsafe_reason = "native_content"
+                self._handoff_blocked = True
             if (isinstance(block, dict) and block.get("citations")) or delta.get(
                 "type"
             ) == "citations_delta":
