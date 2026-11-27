@@ -149,7 +149,7 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
         content = turn.content
         role = "assistant" if content.effective_role == "model" else "user"
         if turn is latest_user and not any(
-            part.text is not None
+            (part.text and not part.thought)
             or part.inline_data is not None
             or part.function_response is not None
             for part in content.parts

@@ -4,11 +4,13 @@ import json
 from collections.abc import Mapping
 
 from ..history_replay import HistoryReplayError, tool_history_context
-from ..json_types import JsonObject
+from ..json_types import JsonObject, JsonValue
 from .models import (
     ContentBlockDocument,
+    ContentBlockRedactedThinking,
     ContentBlockServerToolUse,
     ContentBlockText,
+    ContentBlockThinking,
     ContentBlockToolResult,
     ExtensionBlock,
     Message,
@@ -98,35 +100,77 @@ def quote_code_execution_history(messages: list[Message]) -> list[Message]:
     return projected
 
 
+def _document_text(document: Mapping[str, object]) -> str | None:
+    source = document.get("source")
+    if (
+        not isinstance(source, dict)
+        or source.get("type") != "text"
+        or not isinstance(data := source.get("data"), str)
+    ):
+        return None
+    if isinstance(citations := document.get("citations"), dict) and citations.get(
+        "enabled"
+    ):
+        raise ValueError("Document citations require native Messages egress")
+    return "\n\n".join(
+        text
+        for text in (document.get("title"), document.get("context"), data)
+        if isinstance(text, str) and text
+    )
+
+
+def _translated_result(block: ContentBlockToolResult) -> ContentBlockToolResult:
+    if not isinstance(block.content, list):
+        return block
+    items: list[JsonValue] = []
+    for item in block.content:
+        if isinstance(item, dict) and item.get("type") == "document":
+            if (text := _document_text(item)) is not None:
+                items.append({"type": "text", "text": text})
+        elif not isinstance(item, dict) or item.get("type") in (None, "text", "image"):
+            items.append(item)
+    if block.content and not items:
+        raise ValueError("The tool result has no translatable content")
+    return block.model_copy(update={"content": items})
+
+
 def translated_messages(request: MessagesRequest) -> list[Message]:
     """Keep usable source turns before a foreign builder coalesces their roles."""
-    if request.uses_container:
-        raise ValueError("A Messages container requires native Messages egress")
+    if context := request.native_context:
+        raise ValueError(f"Messages {context} requires native Messages egress")
+    turns = quote_code_execution_history(request.messages)
     latest = next(
-        (turn for turn in reversed(request.messages) if turn.role == "user"), None
+        (i for i in reversed(range(len(turns))) if turns[i].role == "user"), None
     )
     messages = []
-    for turn in quote_code_execution_history(request.messages):
+    for index, turn in enumerate(turns):
+        if turn.role == "user" and turn.reasoning_content is not None:
+            turn = turn.model_copy(update={"reasoning_content": None})
         if not isinstance(turn.content, list):
+            if index == latest and not turn.content:
+                raise ValueError("The latest user message has no translatable content")
             messages.append(turn)
             continue
-        blocks = []
+        blocks: list[MessageContentBlock] = []
         for block in turn.content:
-            if isinstance(block, (ExtensionBlock, ContentBlockDocument)):
+            if isinstance(block, ExtensionBlock):
                 continue
-            if isinstance(block, ContentBlockToolResult) and isinstance(
-                block.content, list
+            if isinstance(block, ContentBlockDocument):
+                if (
+                    text := _document_text(block.model_dump(exclude_unset=True))
+                ) is None:
+                    continue
+                block = ContentBlockText(type="text", text=text)
+            if turn.role == "user" and (
+                isinstance(block, (ContentBlockThinking, ContentBlockRedactedThinking))
+                or (isinstance(block, ContentBlockText) and not block.text)
             ):
-                items = [
-                    item
-                    for item in block.content
-                    if not isinstance(item, dict)
-                    or item.get("type") in (None, "text", "image")
-                ]
-                block = block.model_copy(update={"content": items})
+                continue
+            if isinstance(block, ContentBlockToolResult):
+                block = _translated_result(block)
             blocks.append(block)
         if not blocks and not turn.reasoning_content:
-            if turn is latest:
+            if index == latest:
                 raise ValueError("The latest user message has no translatable content")
             continue
         messages.append(turn.model_copy(update={"content": blocks}))

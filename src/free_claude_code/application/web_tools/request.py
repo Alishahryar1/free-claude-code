@@ -73,6 +73,10 @@ def forced_tool_turn_text(request: MessagesRequest) -> str:
     return ""
 
 
+def _can_run_locally(tool: Tool, request: MessagesRequest) -> bool:
+    return tool.allows_direct_call and request.native_context is None
+
+
 def forced_server_tool_name(request: MessagesRequest) -> str | None:
     """Return a forced supported server tool, never an ordinary same-name function."""
     choice = request.tool_choice
@@ -87,7 +91,7 @@ def forced_server_tool_name(request: MessagesRequest) -> str | None:
         return None
     if len(named) != 1:
         raise InvalidRequestError("Forced web tools require a unique tool name.")
-    return name if named[0].allows_direct_call else None
+    return name if _can_run_locally(named[0], request) else None
 
 
 def has_tool_named(request: MessagesRequest, name: str) -> bool:
@@ -122,7 +126,7 @@ def plan_automatic_web_search(
         raise InvalidRequestError("Automatic web_search requires unique tool names.")
 
     tool = server_tools[0]
-    if not tool.allows_direct_call:
+    if not _can_run_locally(tool, request):
         return None
     for other in request.direct_client_tools:
         if constraints := unrepresentable_client_tool_constraints(other):

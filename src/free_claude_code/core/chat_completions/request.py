@@ -298,12 +298,23 @@ def project_chat_request(request: ChatRequest) -> ChatProjection:
                 ):
                     parts.append({"type": "text", "text": refusal})
             message["content"] = parts
-        if not isinstance(content, str) and not message.get("content"):
-            if message is latest_user:
+            if message["role"] == "tool" and content and not parts:
+                raise ChatConversionError("The tool result has no translatable content")
+            if message is latest_user and not any(
+                part.get("type") == "image_url" or part.get("text") for part in parts
+            ):
                 raise ChatConversionError(
                     "The latest user message has no translatable content"
                 )
-            if message["role"] != "tool" and not (
+        elif message is latest_user and not content:
+            raise ChatConversionError(
+                "The latest user message has no translatable content"
+            )
+        if (
+            not isinstance(content, str)
+            and not message.get("content")
+            and message["role"] != "tool"
+            and not (
                 message["role"] == "assistant"
                 and any(
                     message.get(field)
@@ -315,8 +326,9 @@ def project_chat_request(request: ChatRequest) -> ChatProjection:
                         "reasoning_details",
                     )
                 )
-            ):
-                continue
+            )
+        ):
+            continue
         projected.append(message)
     if pending_custom:
         raise ChatConversionError("Unresolved custom tool call in Chat history")

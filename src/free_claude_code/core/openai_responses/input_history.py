@@ -92,7 +92,8 @@ def _content(
     parts: list[JsonObject] = []
     for part in input_items(value):
         if isinstance(part, str):
-            parts.append({"type": "input_text", "text": part})
+            if part or keep_empty_text:
+                parts.append({"type": "input_text", "text": part})
             continue
         if not isinstance(part, dict) or not isinstance(kind := part.get("type"), str):
             raise ResponsesConversionError("Responses content blocks require a type")
@@ -135,8 +136,32 @@ def _read_item(raw: JsonValue, pending_actions: dict[str, str]) -> HistoryItem |
     if not isinstance(raw, dict):
         raise ResponsesConversionError("Responses input items must be text or objects")
     kind = raw.get("type", "message")
+    if (
+        "id" in raw
+        and raw.get("type") is None
+        and "role" not in raw
+        and "content" not in raw
+    ):
+        kind = "item_reference"
     if not isinstance(kind, str):
         raise ResponsesConversionError("Responses input item requires a type")
+    if (
+        (
+            kind
+            in (
+                "function_call",
+                "function_call_output",
+                "custom_tool_call",
+                "custom_tool_call_output",
+            )
+            or kind in _TOOL_RECORDS
+        )
+        and isinstance(caller := raw.get("caller"), dict)
+        and caller.get("type") == "program"
+    ):
+        raise ResponsesConversionError(
+            "Cannot translate Responses context from a program caller"
+        )
     if kind.endswith("_output") and isinstance(call_id := raw.get("call_id"), str):
         expected = pending_actions.pop(call_id, None)
         if expected is not None and kind != expected:
@@ -221,11 +246,15 @@ def _read_item(raw: JsonValue, pending_actions: dict[str, str]) -> HistoryItem |
             )
         return InputMessage("assistant", tool_history_context(raw))
     if kind in (
+        "additional_tools",
         "compaction",
+        "compaction_trigger",
         "item_reference",
         "configuration_update",
         "mcp_approval_request",
         "mcp_approval_response",
+        "program",
+        "program_output",
     ):
         raise ResponsesConversionError(
             f"Cannot translate Responses context from {kind}"

@@ -183,10 +183,31 @@ class MessagesRequest(BaseModel):
     betas: list[str] | None = Field(default=None, exclude=True)
 
     @property
-    def uses_container(self) -> bool:
-        return (self.model_extra or {}).get("container") is not None or (
+    def native_context(self) -> str | None:
+        """Identify state that only an Anthropic continuation can interpret."""
+        if (self.model_extra or {}).get("container") is not None or (
             self.extra_body or {}
-        ).get("container") is not None
+        ).get("container") is not None:
+            return "container"
+        for turn in self.messages:
+            if not isinstance(turn.content, list):
+                continue
+            for block in turn.content:
+                if isinstance(block, ExtensionBlock) and block.type in {
+                    "compaction",
+                    "container_upload",
+                    "fallback",
+                    "mcp_tool_listing",
+                    "mcp_tool_use",
+                    "mcp_tool_result",
+                    "tool_addition",
+                    "tool_removal",
+                    "tool_search_tool_result",
+                    "advisor_tool_result",
+                    "search_result",
+                }:
+                    return block.type
+        return None
 
     @property
     def named_tools(self) -> list[Tool]:

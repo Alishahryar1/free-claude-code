@@ -1044,6 +1044,26 @@ def test_partial_gemini_upstream_call_never_becomes_a_complete_tool_call(
         {"previous_response_id": "resp_1"},
         {"type": "compaction", "encrypted_content": "opaque"},
         {"type": "item_reference", "id": "msg_1"},
+        {"type": "compaction_trigger"},
+        {
+            "type": "program",
+            "id": "program_1",
+            "call_id": "p1",
+            "code": "previous computation",
+            "fingerprint": "opaque",
+        },
+        {
+            "type": "program_output",
+            "id": "out1",
+            "call_id": "p1",
+            "result": "earlier result",
+            "status": "completed",
+        },
+        {
+            "type": "additional_tools",
+            "role": "developer",
+            "tools": [{"type": "function", "name": "late_tool"}],
+        },
         {
             "type": "configuration_update",
             "text": {
@@ -1067,12 +1087,107 @@ def test_foreign_provider_cannot_resolve_responses_context(
     protocol: str, saved_state: JsonObject
 ) -> None:
     path, body = ingress_request("responses", True)
-    if "type" in saved_state:
+    if saved_state.get("type") == "compaction_trigger":
+        array_payload(body["input"]).append(saved_state)
+    elif "type" in saved_state:
         array_payload(body["input"]).insert(0, saved_state)
     else:
         body.update(saved_state)
 
     assert "context" in translation_error(protocol, path, body).lower()
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "gemini"])
+def test_id_only_responses_reference_cannot_disappear_from_a_followup(
+    protocol: str,
+) -> None:
+    path, body = ingress_request(
+        "responses",
+        True,
+        [
+            {"id": "msg_prior_001"},
+            {"role": "user", "content": "Use that answer"},
+        ],
+    )
+    assert "item_reference" in translation_error(protocol, path, body)
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "gemini"])
+def test_program_owned_function_call_cannot_turn_into_a_direct_call(
+    protocol: str,
+) -> None:
+    path, body = ingress_request(
+        "responses",
+        True,
+        [
+            {"role": "user", "content": "Look it up"},
+            {
+                "type": "function_call",
+                "call_id": "c",
+                "name": "read",
+                "arguments": "{}",
+                "caller": {"type": "program", "caller_id": "p"},
+            },
+            {"type": "function_call_output", "call_id": "c", "output": "value"},
+            {"role": "user", "content": "Continue"},
+        ],
+    )
+    assert "program" in translation_error(protocol, path, body)
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses", "gemini"])
+@pytest.mark.parametrize(
+    "blocks",
+    [
+        [{"type": "compaction", "content": "earlier conversation summary"}],
+        [
+            {
+                "type": "mcp_tool_use",
+                "id": "mcpu_1",
+                "name": "lookup",
+                "server_name": "catalog",
+                "input": {},
+            },
+            {
+                "type": "mcp_tool_result",
+                "tool_use_id": "mcpu_1",
+                "content": [{"type": "text", "text": "earlier catalog result"}],
+            },
+        ],
+    ],
+)
+def test_messages_native_history_records_cannot_disappear_on_fallback(
+    protocol: str, blocks: list[JsonObject]
+) -> None:
+    path, body = ingress_request(
+        "messages",
+        True,
+        [
+            {"role": "assistant", "content": blocks},
+            {"role": "user", "content": "Use the earlier result"},
+        ],
+    )
+    assert "native Messages" in translation_error(protocol, path, body)
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
+def test_gemini_server_tool_history_cannot_disappear_on_fallback(protocol: str) -> None:
+    path, body = ingress_request(
+        "gemini",
+        False,
+        [
+            {"role": "user", "parts": [{"text": "Calculate it"}]},
+            {
+                "role": "model",
+                "parts": [
+                    {"executableCode": {"language": "PYTHON", "code": "value = 6"}},
+                    {"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": "6"}},
+                ],
+            },
+            {"role": "user", "parts": [{"text": "What was the result?"}]},
+        ],
+    )
+    assert "native Gemini" in translation_error(protocol, path, body)
 
 
 @pytest.mark.parametrize("protocol", ["chat", "messages", "gemini"])
@@ -1459,6 +1574,94 @@ def test_optional_strict_function_is_unavailable_on_gemini(wire: str) -> None:
     sent = sent_request("gemini", path, body)
     declarations = object_array(object_array(sent["tools"])[0]["functionDeclarations"])
     assert [tool["name"] for tool in declarations] == ["read"]
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses", "gemini"])
+def test_assistant_metadata_cannot_replace_the_latest_messages_user_input(
+    protocol: str,
+) -> None:
+    path, body = ingress_request(
+        "messages",
+        True,
+        [
+            {"role": "user", "content": "old question"},
+            {"role": "assistant", "content": "old answer"},
+            {
+                "role": "user",
+                "content": [{"type": "future_part"}],
+                "reasoning_content": "metadata only",
+            },
+        ],
+    )
+    assert "latest user" in translation_error(protocol, path, body).lower()
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses", "gemini"])
+def test_messages_tool_result_requires_its_returned_content(protocol: str) -> None:
+    document: JsonObject = {
+        "type": "document",
+        "title": "Report",
+        "source": {
+            "type": "text",
+            "media_type": "text/plain",
+            "data": "returned document text",
+        },
+    }
+    result: JsonObject = {
+        "type": "tool_result",
+        "tool_use_id": "c",
+        "content": [document],
+    }
+    path, body = ingress_request(
+        "messages",
+        True,
+        [
+            {"role": "user", "content": "Read it"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "c", "name": "read", "input": {}}
+                ],
+            },
+            {"role": "user", "content": [result]},
+            {"role": "user", "content": "Summarize the result"},
+        ],
+    )
+    sent = sent_request(protocol, path, body)
+    assert "returned document text" in json.dumps(sent)
+    assert "Report" in json.dumps(sent)
+    document["source"] = {"type": "file", "file_id": "file_remote"}
+    assert "tool result" in translation_error(protocol, path, body).lower()
+    array_payload(result["content"]).clear()
+    sent_request(protocol, path, body)
+
+
+@pytest.mark.parametrize("protocol", ["messages", "responses", "gemini"])
+def test_chat_tool_result_cannot_become_empty_during_translation(protocol: str) -> None:
+    path, body = ingress_request(
+        "chat",
+        True,
+        [
+            {"role": "user", "content": "Read it"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "id": "c",
+                        "function": {"name": "read", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "c",
+                "content": [{"type": "future_media"}],
+            },
+            {"role": "user", "content": "Summarize the result"},
+        ],
+    )
+    assert "tool result" in translation_error(protocol, path, body).lower()
 
 
 @pytest.mark.parametrize("protocol", ["chat", "messages", "gemini"])

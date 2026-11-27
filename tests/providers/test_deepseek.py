@@ -1718,7 +1718,7 @@ def test_image_only_tool_result_reaches_user_content(
         [{"type": "document", "source": {"type": "file", "file_id": "file_pdf"}}],
     ],
 )
-def test_document_or_empty_tool_result_retains_tool_association(
+def test_unreadable_document_is_distinguished_from_an_empty_tool_result(
     deepseek_provider: DeepSeekProvider,
     tool_content: list[JsonObject],
 ) -> None:
@@ -1750,6 +1750,13 @@ def test_document_or_empty_tool_result_retains_tool_association(
             ],
         }
     )
+
+    if tool_content:
+        with pytest.raises(InvalidRequestError, match="tool result"):
+            deepseek_provider._chat._build_request_body(
+                request, reasoning=reasoning_for(request)
+            )
+        return
 
     body = deepseek_provider._chat._build_request_body(
         request, reasoning=reasoning_for(request)

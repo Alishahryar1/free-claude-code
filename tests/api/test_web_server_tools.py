@@ -596,6 +596,18 @@ def test_search_selection_preserves_completed_code_execution_errors() -> None:
     assert history.count("[Earlier tool record]") == 2
 
 
+def test_native_container_keeps_optional_and_forced_web_tools_with_the_provider() -> (
+    None
+):
+    request = _automatic_search_request()
+    request = MessagesRequest.model_validate(
+        {**request.model_dump(), "container": "saved_container"}
+    )
+    assert plan_automatic_web_search(request, web_tools_enabled=True) is None
+    request.tool_choice = {"type": "tool", "name": "web_search"}
+    assert not is_web_server_tool_request(request)
+
+
 def test_plans_supported_search_beside_an_unhandled_tool() -> None:
     mixed = _automatic_search_request()
     mixed.tools = [
