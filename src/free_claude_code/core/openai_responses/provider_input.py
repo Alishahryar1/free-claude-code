@@ -58,7 +58,7 @@ def build_responses_provider_request(
         messages = translated_messages(request)
         output_schema = openai_output_schema(request)
         tool_choice = resolve_anthropic_tool_choice(
-            request.client_tools, request.tool_choice
+            request.direct_client_tools, request.tool_choice
         )
     except ValueError as error:
         raise ResponsesConversionError(str(error)) from error
@@ -98,7 +98,7 @@ def build_responses_provider_request(
         body["top_p"] = request.top_p
     if request.metadata is not None:
         body["metadata"] = request.metadata
-    if request.client_tools:
+    if request.direct_client_tools:
         body["tools"] = [
             {
                 "type": "function",
@@ -109,7 +109,7 @@ def build_responses_provider_request(
                 ),
                 "strict": (tool.model_extra or {}).get("strict", False),
             }
-            for tool in request.client_tools
+            for tool in request.direct_client_tools
         ]
     if (
         tool_choice
@@ -125,7 +125,7 @@ def build_responses_provider_request(
 
 
 def _validate_supported_request(request: MessagesRequest) -> None:
-    for tool in request.client_tools:
+    for tool in request.direct_client_tools:
         constraints = [
             key
             for key in unrepresentable_client_tool_constraints(tool)

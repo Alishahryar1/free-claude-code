@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from free_claude_code.core.json_types import JsonObject, load_json_value
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 
 from .errors import ResponsesConversionError
 from .ids import new_call_id
@@ -22,6 +22,23 @@ class ResponsesToolIdentity:
     kind: Literal["function", "custom"]
     name: str
     namespace: str | None = None
+
+
+def definition_identity(
+    value: Mapping[str, JsonValue], namespace: str | None = None
+) -> ResponsesToolIdentity:
+    kind = "custom" if value.get("type") == "custom" else "function"
+    nested = value.get(kind)
+    if value.get("type") == "tool" and isinstance(value.get("custom"), dict):
+        nested = value["custom"]
+    source = nested if isinstance(nested, dict) else value
+    return ResponsesToolIdentity(
+        kind=kind,
+        name=required_str(source.get("name"), "tool.name"),
+        namespace=namespace
+        or optional_str(source.get("namespace"))
+        or optional_str(value.get("namespace")),
+    )
 
 
 def flatten_responses_tool_name(name: str, *, namespace: str | None = None) -> str:

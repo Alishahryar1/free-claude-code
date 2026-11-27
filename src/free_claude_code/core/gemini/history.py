@@ -69,6 +69,11 @@ def normalized_history(request: GeminiRequest) -> tuple[GeminiTurn, ...]:
                     update={"function_call": call.model_copy(update={"id": call_id})}
                 )
             elif response is not None:
+                fields = response.model_extra or {}
+                if fields.get("willContinue") or fields.get("will_continue"):
+                    raise GeminiConversionError(
+                        "Cannot translate a partial Gemini functionResponse"
+                    )
                 matches = [
                     call_id
                     for call_id, name in pending.items()

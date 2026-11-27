@@ -131,6 +131,11 @@ class Tool(_AnthropicBlockBase):
     description: str | None = None
     input_schema: dict[str, Any] | None = None
 
+    @property
+    def allows_direct_call(self) -> bool:
+        callers = (self.model_extra or {}).get("allowed_callers")
+        return callers is None or (isinstance(callers, list) and "direct" in callers)
+
 
 class UnnamedTool(_AnthropicBlockBase):
     """Opaque hosted declaration whose protocol supplies no client function name."""
@@ -182,8 +187,12 @@ class MessagesRequest(BaseModel):
         return [tool for tool in self.tools or () if isinstance(tool, Tool)]
 
     @property
-    def client_tools(self) -> list[Tool]:
-        return [tool for tool in self.named_tools if tool.type in (None, "custom")]
+    def direct_client_tools(self) -> list[Tool]:
+        return [
+            tool
+            for tool in self.named_tools
+            if tool.type in (None, "custom") and tool.allows_direct_call
+        ]
 
     @field_validator("max_tokens", mode="before")
     @classmethod

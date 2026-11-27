@@ -1044,6 +1044,12 @@ def test_partial_gemini_upstream_call_never_becomes_a_complete_tool_call(
         {"previous_response_id": "resp_1"},
         {"type": "compaction", "encrypted_content": "opaque"},
         {"type": "item_reference", "id": "msg_1"},
+        {"type": "mcp_approval_request", "id": "approval_1", "name": "read"},
+        {
+            "type": "mcp_approval_response",
+            "approval_request_id": "approval_1",
+            "approve": False,
+        },
     ],
 )
 def test_foreign_provider_cannot_resolve_responses_context(
@@ -1174,6 +1180,25 @@ def test_chat_discovery_respects_the_current_responses_allowlist(mode: str) -> N
         {"function_call": {"name": "read"}},
         {"function_call": "none", "tool_choice": "required"},
         {
+            "tool_choice": {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "auto",
+                    "tools": [{"type": "function", "function": {"name": ["read"]}}],
+                },
+            }
+        },
+        {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "answer",
+                    "extra_content": {"google": {"thought_signature": "opaque"}},
+                },
+                {"role": "user", "content": "continue"},
+            ]
+        },
+        {
             "messages": [
                 {"role": "user", "content": "Read"},
                 {
@@ -1247,3 +1272,203 @@ def test_gemini_history_requires_a_complete_function_call(
         ],
     )
     assert "functionCall" in translation_error(protocol, path, body)
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
+def test_nonblocking_gemini_result_cannot_be_closed_early(protocol: str) -> None:
+    path, body = ingress_request(
+        "gemini",
+        False,
+        [
+            {
+                "role": "model",
+                "parts": [{"functionCall": {"name": "read", "args": {}}}],
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "name": "read",
+                            "response": {"value": 1},
+                            "willContinue": True,
+                        }
+                    }
+                ],
+            },
+        ],
+    )
+    object_array(object_array(body["tools"])[0]["functionDeclarations"])[0][
+        "behavior"
+    ] = "NON_BLOCKING"
+    assert "functionResponse" in translation_error(protocol, path, body)
+
+
+def sent_request(protocol: str, path: str, body: JsonObject) -> JsonObject:
+    sent: list[JsonObject] = []
+
+    def reply(request: httpx.Request | httpx2.Request):
+        sent.append(decode_object(request.content))
+        return matrix_reply(protocol)
+
+    with TestClient(
+        matrix_app(protocol, native_reply=reply, sdk_reply=reply)
+    ) as client:
+        response = client.post(path, json=body)
+    assert response.status_code == 200, response.text
+    (upstream,) = sent
+    return upstream
+
+
+@pytest.mark.parametrize("protocol", ["messages", "chat", "responses", "gemini"])
+def test_messages_caller_permissions_follow_the_tool(protocol: str) -> None:
+    path, body = ingress_request("messages", True)
+    declarations = [
+        {
+            "name": "read",
+            "input_schema": SCHEMA,
+            "allowed_callers": ["direct", "code_execution_20260120"],
+        },
+        {
+            "name": "container_only",
+            "input_schema": SCHEMA,
+            "allowed_callers": ["code_execution_20260120"],
+        },
+    ]
+    body["tools"] = declarations
+    upstream = sent_request(protocol, path, body)
+    if protocol == "messages":
+        assert upstream["tools"] == declarations
+    else:
+        assert '"read"' in json.dumps(upstream["tools"])
+        assert "container_only" not in json.dumps(upstream["tools"])
+        translation_error(
+            protocol,
+            path,
+            {**body, "tool_choice": {"type": "tool", "name": "container_only"}},
+        )
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "gemini"])
+@pytest.mark.parametrize("execution", ["client", "server"])
+def test_deferred_function_is_callable_only_after_discovery(
+    protocol: str, execution: str
+) -> None:
+    path, body = ingress_request("responses", True)
+    deferred: JsonObject = {
+        "type": "function",
+        "name": "lookup",
+        "description": "current schema",
+        "parameters": SCHEMA,
+        "defer_loading": True,
+    }
+    search: JsonObject = {
+        "type": "tool_search",
+        "execution": execution,
+        "parameters": SCHEMA,
+    }
+    body["tools"] = [*array_payload(body["tools"]), deferred, search]
+    choice: JsonObject = {"type": "function", "name": "lookup"}
+    before = sent_request(protocol, path, body)
+    assert '"lookup"' not in json.dumps(before["tools"])
+    translation_error(protocol, path, {**body, "tool_choice": choice})
+    call_id = "search_1" if execution == "client" else None
+    history: list[JsonValue] = [
+        {"role": "user", "content": "Find a tool"},
+        {
+            "type": "tool_search_call",
+            "execution": execution,
+            "status": "completed",
+            "call_id": call_id,
+            "arguments": {"query": "lookup"},
+        },
+        {
+            "type": "tool_search_output",
+            "execution": execution,
+            "status": "completed",
+            "call_id": call_id,
+            "tools": [{**deferred, "description": "old schema"}],
+        },
+        {"role": "user", "content": "Use it"},
+    ]
+    body.update(input=history, tool_choice=choice)
+    after = sent_request(protocol, path, body)
+    assert "current schema" in json.dumps(after["tools"])
+    assert "old schema" not in json.dumps(after["tools"])
+    object_payload(history[2])["status"] = "failed"
+    translation_error(protocol, path, body)
+
+
+def test_forcing_a_deferred_function_cannot_select_the_private_search_tool() -> None:
+    path, body = ingress_request("responses", True)
+    body.update(
+        tools=[
+            {
+                "type": "function",
+                "name": "fcc_tool_search",
+                "parameters": SCHEMA,
+                "defer_loading": True,
+            },
+            {"type": "tool_search", "execution": "client", "parameters": SCHEMA},
+        ],
+        tool_choice={"type": "function", "name": "fcc_tool_search"},
+    )
+    translation_error("chat", path, body)
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses", "gemini"])
+def test_completed_messages_code_execution_survives_intervening_client_tool(
+    protocol: str,
+) -> None:
+    call: JsonObject = {
+        "type": "server_tool_use",
+        "id": "srv_1",
+        "name": "bash_code_execution",
+        "input": {"command": "historical_command"},
+    }
+    result: JsonObject = {
+        "type": "bash_code_execution_tool_result",
+        "tool_use_id": "srv_1",
+        "content": {
+            "type": "bash_code_execution_result",
+            "stdout": "historical_output",
+            "stderr": "",
+            "return_code": 0,
+            "content": [],
+        },
+    }
+    path, body = ingress_request(
+        "messages",
+        True,
+        [
+            {"role": "user", "content": "Read"},
+            {
+                "role": "assistant",
+                "content": [
+                    call,
+                    {"type": "tool_use", "id": "tool_1", "name": "read", "input": {}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool_1",
+                        "content": "client result",
+                    }
+                ],
+            },
+            {"role": "assistant", "content": [result]},
+            {"role": "user", "content": "Summarize"},
+        ],
+    )
+    upstream = json.dumps(sent_request(protocol, path, body))
+    assert (
+        upstream.index("historical_command")
+        < upstream.index("client result")
+        < upstream.index("historical_output")
+    )
+    assert "[Earlier tool record]" in upstream
+    result.update(type="web_search_tool_result", content=[])
+    translation_error(protocol, path, body)

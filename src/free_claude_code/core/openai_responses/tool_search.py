@@ -1,6 +1,6 @@
 """Request-scoped client discovery and provider search argument schemas."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import cast
@@ -8,7 +8,12 @@ from typing import cast
 from free_claude_code.core.json_types import DecimalJsonValue, JsonObject, JsonValue
 
 from .errors import ResponsesConversionError
-from .tools import optional_str, required_str
+from .tools import (
+    ResponsesToolIdentity,
+    definition_identity,
+    optional_str,
+    required_str,
+)
 
 
 def is_client_search(value: Mapping[str, DecimalJsonValue]) -> bool:
@@ -28,6 +33,33 @@ class ClientSearchHistory:
     client_items: frozenset[int]
     output_tools: dict[int, list[JsonObject]]
     omitted_items: frozenset[int] = frozenset()
+    completed_outputs: tuple[list[JsonValue], ...] = ()
+
+    def loaded_tools(self) -> set[ResponsesToolIdentity]:
+        return {
+            definition_identity(tool, namespace)
+            for output in self.completed_outputs
+            for namespace, tool in _declarations(output)
+            if tool.get("type") in ("function", "custom")
+        }
+
+
+def _declarations(
+    tools: Iterable[JsonValue],
+) -> Iterator[tuple[str | None, JsonObject]]:
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("type") != "namespace":
+            yield None, tool
+            continue
+        namespace = required_str(tool.get("name"), "tool.namespace.name")
+        children = tool.get("tools")
+        if not isinstance(children, list):
+            raise ResponsesConversionError("Namespace tools must be a list.")
+        for child in children:
+            if isinstance(child, dict):
+                yield namespace, child
 
 
 def resolve_client_search_history(items: JsonValue) -> ClientSearchHistory:
@@ -57,92 +89,95 @@ def resolve_client_search_history(items: JsonValue) -> ClientSearchHistory:
     client_items: set[int] = set()
     outputs: dict[int, list[JsonObject]] = {}
     omitted_items: set[int] = set()
-    latest_calls: dict[str, int] = {}
+    completed_outputs: list[list[JsonValue]] = []
+    unfinished: dict[tuple[str, str | None], bool] = {}
     for index, item in searches.items():
         execution = item.get("execution")
         call_id = item.get("call_id")
         if execution is None and isinstance(call_id, str) and call_id:
             execution = executions.get(call_id)
-        if execution != "client":
+        if execution not in ("client", "server"):
             continue
+        key = (str(execution), optional_str(call_id))
         if item.get("type") == "tool_search_call":
-            if isinstance(call_id, str) and call_id:
-                latest_calls[call_id] = index
-            if is_unfinished_search_call(item):
+            unfinished[key] = is_unfinished_search_call(item)
+        if unfinished.get(key):
+            if execution == "client":
                 omitted_items.add(index)
-                continue
-        elif isinstance(call_id, str) and latest_calls.get(call_id) in omitted_items:
-            # Bind each result to its preceding occurrence, not every reused ID.
-            omitted_items.add(index)
             continue
-        client_items.add(index)
+        if execution == "client":
+            client_items.add(index)
         if item.get("type") == "tool_search_output":
             tools = item.get("tools")
-            accepted = item.get("status") in (None, "completed") and isinstance(
-                tools, list
+            accepted = (
+                tools
+                if item.get("status") in (None, "completed") and isinstance(tools, list)
+                else []
             )
-            outputs[index] = _merge_tool_groups(
-                [
-                    [tool for tool in tools if isinstance(tool, dict)]
-                    if accepted and isinstance(tools, list)
-                    else [],
-                    [],
-                ]
-            )
+            if accepted:
+                completed_outputs.append(accepted)
+            if execution == "client":
+                outputs[index] = _merge_tool_groups(
+                    [[tool for tool in accepted if isinstance(tool, dict)], []]
+                )
     return ClientSearchHistory(
-        frozenset(client_items), outputs, frozenset(omitted_items)
+        frozenset(client_items),
+        outputs,
+        frozenset(omitted_items),
+        tuple(completed_outputs),
     )
 
 
 def active_client_tools(
-    tools: list[JsonObject] | None, history: ClientSearchHistory
+    tools: list[JsonObject] | None,
+    history: ClientSearchHistory,
+    *,
+    keep_current_defer_loading: bool = False,
 ) -> list[JsonObject]:
     """Resolve discoveries in history order, with explicit current tools last."""
-    return _merge_tool_groups([*history.output_tools.values(), tools or []])
+    return _merge_tool_groups(
+        [*history.output_tools.values(), tools or []],
+        keep_current_defer_loading=keep_current_defer_loading,
+    )
 
 
-def _merge_tool_groups(groups: list[list[JsonObject]]) -> list[JsonObject]:
-    active: dict[tuple[str, str | None, str], JsonObject] = {}
+def _merge_tool_groups(
+    groups: list[list[JsonObject]], *, keep_current_defer_loading: bool = False
+) -> list[JsonObject]:
+    active: dict[ResponsesToolIdentity, JsonObject] = {}
     hosted: list[JsonObject] = []
     for group in groups:
-        declarations: dict[tuple[str, str | None, str], JsonObject] = {}
-        for tool in group:
-            namespace = None
-            children = [tool]
-            if tool.get("type") == "namespace":
-                namespace = required_str(tool.get("name"), "tool.namespace.name")
-                value = tool.get("tools")
-                if not isinstance(value, list):
-                    raise ResponsesConversionError("Namespace tools must be a list.")
-                children = [child for child in value if isinstance(child, dict)]
-            for child in children:
-                kind = child.get("type")
-                if kind not in {"function", "custom"}:
-                    if group is groups[-1]:
-                        hosted.append(deepcopy(child))
-                    continue
-                source = child.get(str(kind))
-                definition = deepcopy(source if isinstance(source, dict) else child)
-                if "allowed_callers" in child:
-                    definition["allowed_callers"] = deepcopy(child["allowed_callers"])
-                definition["type"] = kind
+        declarations: dict[ResponsesToolIdentity, JsonObject] = {}
+        for namespace, child in _declarations(group):
+            kind = child.get("type")
+            if kind not in {"function", "custom"}:
+                if group is groups[-1]:
+                    hosted.append(deepcopy(child))
+                continue
+            source = child.get(str(kind))
+            definition = deepcopy(source if isinstance(source, dict) else child)
+            if "allowed_callers" in child:
+                definition["allowed_callers"] = deepcopy(child["allowed_callers"])
+            definition["type"] = kind
+            if (
+                keep_current_defer_loading
+                and group is groups[-1]
+                and child.get("defer_loading", definition.get("defer_loading"))
+            ):
+                definition["defer_loading"] = True
+            else:
                 definition.pop("defer_loading", None)
-                name = required_str(definition.get("name"), "tool.name")
-                ns = (
-                    namespace
-                    or optional_str(definition.get("namespace"))
-                    or optional_str(child.get("namespace"))
-                )
-                if ns is not None:
-                    definition["namespace"] = ns
-                identity = (str(kind), ns, name)
-                if identity in declarations and declarations[identity] != definition:
-                    raise ResponsesConversionError("Conflicting tool definitions.")
-                declarations[identity] = definition
+            identity = definition_identity(child, namespace)
+            if identity.namespace is not None:
+                definition["namespace"] = identity.namespace
+            if identity in declarations and declarations[identity] != definition:
+                raise ResponsesConversionError("Conflicting tool definitions.")
+            declarations[identity] = definition
         active.update(declarations)
     result = list(hosted)
     namespaces: dict[str, JsonObject] = {}
-    for (_, ns, _), definition in active.items():
+    for identity, definition in active.items():
+        ns = identity.namespace
         if ns is None:
             result.append(definition)
         else:

@@ -89,14 +89,11 @@ def resolve_anthropic_tool_choice(
 def unrepresentable_client_tool_constraints(tool: Tool) -> list[str]:
     """Identify Anthropic constraints a plain upstream function cannot enforce."""
     options: Mapping[str, object] = tool.model_extra or {}
-    unsupported = [
+    return [
         key
         for key in ("strict", "defer_loading")
         if options.get(key) not in (None, False)
     ]
-    if options.get("allowed_callers") not in (None, ["direct"]):
-        unsupported.append("allowed_callers")
-    return unsupported
 
 
 def _set_replayed_reasoning(
@@ -856,7 +853,7 @@ def build_base_request_body(
     structured_reasoning_details: bool = False,
 ) -> dict[str, Any]:
     """Build the common parts of an OpenAI-format request body."""
-    tools = request_data.client_tools
+    tools = request_data.direct_client_tools
     try:
         source_messages = translated_messages(request_data)
         output_schema = openai_output_schema(request_data)

@@ -549,6 +549,53 @@ def test_does_not_plan_noncanonical_automatic_search(tool: Tool) -> None:
     assert plan_automatic_web_search(request, web_tools_enabled=True) is None
 
 
+@pytest.mark.parametrize(
+    ("name", "kind"),
+    [("web_search", "web_search_20250305"), ("web_fetch", "web_fetch_20250910")],
+)
+def test_restricted_web_tool_can_only_run_in_its_container(
+    name: str, kind: str
+) -> None:
+    tool = Tool(name=name, type=kind, allowed_callers=["code_execution_20260120"])
+    request = _automatic_search_request(tool=tool)
+    assert plan_automatic_web_search(request, web_tools_enabled=True) is None
+    request.tool_choice = {"type": "tool", "name": name}
+    assert not is_web_server_tool_request(request)
+
+
+def test_search_selection_preserves_completed_code_execution_errors() -> None:
+    request = _automatic_search_request()
+    request.messages.insert(
+        0,
+        Message.model_validate(
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "name": "code_execution",
+                        "id": "srv1",
+                        "input": {"code": "previous input"},
+                    },
+                    {
+                        "type": "code_execution_tool_result",
+                        "tool_use_id": "srv1",
+                        "content": {
+                            "type": "code_execution_tool_result_error",
+                            "error_code": "unavailable",
+                        },
+                    },
+                ],
+            }
+        ),
+    )
+    plan = plan_automatic_web_search(request, web_tools_enabled=True)
+    assert plan is not None
+    history = plan.request.messages[0].model_dump_json()
+    assert history.index("previous input") < history.index("unavailable")
+    assert history.count("[Earlier tool record]") == 2
+
+
 def test_plans_supported_search_beside_an_unhandled_tool() -> None:
     mixed = _automatic_search_request()
     mixed.tools = [
@@ -574,7 +621,6 @@ def test_plans_supported_search_beside_an_unhandled_tool() -> None:
 @pytest.mark.parametrize(
     "options",
     [
-        {"allowed_callers": ["code_execution_20260120"]},
         {"strict": True},
         {"defer_loading": True},
     ],

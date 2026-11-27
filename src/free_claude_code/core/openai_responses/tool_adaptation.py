@@ -29,6 +29,7 @@ from .tools import (
     custom_tool_input_schema,
     custom_tool_input_text,
     custom_tool_input_text_from_arguments,
+    definition_identity,
     flatten_responses_tool_name,
     optional_str,
     required_str,
@@ -98,10 +99,12 @@ class ResponsesToolAdapter:
         )
         if client_search:
             self.request.tools = active_client_tools(
-                self.request.tools, self._search_history
+                self.request.tools,
+                self._search_history,
+                keep_current_defer_loading=policy.direct_tools_only,
             )
         if policy.direct_tools_only:
-            self.request = self.request.select_direct_tools()
+            self.request = self.request.select_direct_tools(self._search_history)
         if (
             policy.custom_tools_as_functions
             or policy.flatten_namespaces
@@ -175,7 +178,7 @@ class ResponsesToolAdapter:
                     raise ResponsesConversionError("Namespace tools must be a list.")
                 self._register_tools(tool.get("tools"), _name(tool))
             elif tool.get("type") in ("function", "custom"):
-                identity = _definition_identity(tool, namespace)
+                identity = definition_identity(tool, namespace)
                 self._register_name(identity)
                 self._declared.add(identity)
 
@@ -242,7 +245,7 @@ class ResponsesToolAdapter:
         ) and kind in {"custom", "function"}:
             nested = tool.get(str(kind))
             source = nested if isinstance(nested, dict) else tool
-            identity = _definition_identity(tool, namespace)
+            identity = definition_identity(tool, namespace)
             # A past search describes tools even when they are no longer callable.
             wire_name = self._wire_name(identity)
             tool = {
@@ -359,12 +362,18 @@ class ResponsesToolAdapter:
             and choice.get("type") == "tool_search"
             and choice.get("execution") != "server"
         ):
+            if self._policy.direct_tools_only and not any(
+                is_client_search(tool) for tool in self.original.tools or ()
+            ):
+                raise ResponsesConversionError(
+                    "Named tool choice requires an available search tool"
+                )
             return {"type": "function", "name": self._search_name}
         kind = choice.get("type")
         if (
             self._policy.flatten_namespaces and kind in ("function", "custom", "tool")
         ) or (self._policy.custom_tools_as_functions and kind == "custom"):
-            identity = _definition_identity(choice)
+            identity = definition_identity(choice)
             if kind == "tool":
                 identity = next(
                     (
@@ -374,6 +383,10 @@ class ResponsesToolAdapter:
                         and declared.namespace == identity.namespace
                     ),
                     identity,
+                )
+            if self._policy.direct_tools_only and identity not in self._declared:
+                raise ResponsesConversionError(
+                    "Named tool choice requires an available function"
                 )
             result: JsonObject = {
                 **{
@@ -727,21 +740,6 @@ class ResponsesToolEventAdapter:
 
 def _name(value: Mapping[str, JsonValue]) -> str:
     return required_str(value.get("name"), "tool.name")
-
-
-def _definition_identity(
-    value: Mapping[str, JsonValue], namespace: str | None = None
-) -> ResponsesToolIdentity:
-    kind = "custom" if value.get("type") == "custom" else "function"
-    nested = value.get(kind)
-    if value.get("type") == "tool" and isinstance(value.get("custom"), dict):
-        nested = value["custom"]
-    source = nested if isinstance(nested, dict) else value
-    return ResponsesToolIdentity(
-        kind=kind,
-        name=_name(source),
-        namespace=namespace or _namespace(source) or _namespace(value),
-    )
 
 
 def _call_identity(item: Mapping[str, JsonValue]) -> ResponsesToolIdentity:

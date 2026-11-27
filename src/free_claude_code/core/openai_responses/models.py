@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
 from .errors import ResponsesConversionError
+from .tool_search import ClientSearchHistory, resolve_client_search_history
+from .tools import ResponsesToolIdentity, definition_identity, optional_str
 
 
 def latest_user_input(items: Sequence[JsonValue]) -> JsonValue:
@@ -78,12 +80,14 @@ class OpenAIResponsesRequest(BaseModel):
             if isinstance(item, dict) and item.get("type") in (
                 "compaction",
                 "item_reference",
+                "mcp_approval_request",
+                "mcp_approval_response",
             ):
                 raise ResponsesConversionError(
                     f"Cannot translate Responses context from {item['type']}"
                 )
 
-    def select_direct_tools(self) -> Self:
+    def select_direct_tools(self, history: ClientSearchHistory | None = None) -> Self:
         """Apply the caller's restrictions to the declarations available on this turn."""
         choice = self.tool_choice
         allowed: list[tuple[JsonValue, JsonValue, JsonValue]] | None = None
@@ -102,7 +106,10 @@ class OpenAIResponsesRequest(BaseModel):
                 )
             choice = mode
 
+        loaded: set[ResponsesToolIdentity] | None = None
+
         def permitted(tool: JsonObject, namespace: JsonValue = None) -> bool:
+            nonlocal loaded
             kind = tool.get("type")
             source = tool
             if kind in ("function", "custom"):
@@ -114,6 +121,13 @@ class OpenAIResponsesRequest(BaseModel):
                     not isinstance(callers, list) or "direct" not in callers
                 ):
                     return False
+                if tool.get("defer_loading", source.get("defer_loading")):
+                    if loaded is None:
+                        loaded = (
+                            history or resolve_client_search_history(self.input)
+                        ).loaded_tools()
+                    if definition_identity(tool, optional_str(namespace)) not in loaded:
+                        return False
             identity = (
                 kind,
                 source.get("name"),

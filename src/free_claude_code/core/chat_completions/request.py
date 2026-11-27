@@ -22,6 +22,16 @@ class ChatConversionError(ValueError):
     """The destination cannot represent a Chat request without data loss."""
 
 
+def _validate_tool_name(tool: JsonObject) -> None:
+    kind = tool.get("type")
+    if kind in ("function", "custom"):
+        declaration = tool.get(str(kind))
+        if not isinstance(declaration, dict) or not (
+            isinstance(name := declaration.get("name"), str) and name.strip()
+        ):
+            raise ValueError("Function and custom tools require a name")
+
+
 class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="allow", strict=True, allow_inf_nan=False)
 
@@ -47,14 +57,7 @@ class ChatRequest(BaseModel):
         ):
             raise ValueError("stream_options.include_usage must be a boolean")
         for tool in self.tools or []:
-            kind = tool.get("type")
-            declaration = tool.get(str(kind))
-            if kind in {"function", "custom"} and (
-                not isinstance(declaration, dict)
-                or not isinstance(name := declaration.get("name"), str)
-                or not name.strip()
-            ):
-                raise ValueError("Tool declarations require a name")
+            _validate_tool_name(tool)
         choice = self.tool_choice
         if isinstance(choice, str) and choice not in {"auto", "none", "required"}:
             raise ValueError("Unsupported Chat tool_choice")
@@ -65,15 +68,14 @@ class ChatRequest(BaseModel):
                     not isinstance(chosen, dict)
                     or chosen.get("mode") not in ("auto", "required")
                     or not isinstance(allowed := chosen.get("tools"), list)
-                    or any(not isinstance(tool, dict) for tool in allowed)
                 ):
                     raise ValueError("allowed_tools requires a mode and tool list")
-            elif choice.get("type") in ("function", "custom") and (
-                not isinstance(chosen, dict)
-                or not isinstance(chosen.get("name"), str)
-                or not chosen["name"]
-            ):
-                raise ValueError("Named tool_choice requires a tool name")
+                for entry in allowed:
+                    if not isinstance(entry, dict):
+                        raise ValueError("allowed_tools entries must be objects")
+                    _validate_tool_name(entry)
+            else:
+                _validate_tool_name(choice)
         if (
             self.response_format is not None
             and self.response_format.get("type") == "json_schema"
@@ -229,6 +231,12 @@ def translated_body(request: ChatRequest) -> JsonObject:
     seen_calls: set[str] = set()
     projected: list[JsonObject] = []
     for message in messages:
+        if message["role"] == "assistant" and google_thought_signature(
+            message.get("extra_content")
+        ):
+            raise ChatConversionError(
+                "Signed Google assistant messages require native Chat egress"
+            )
         if message["role"] == "function" or (
             message["role"] == "assistant" and message.get("function_call") is not None
         ):

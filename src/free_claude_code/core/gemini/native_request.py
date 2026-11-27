@@ -480,7 +480,7 @@ def messages_to_gemini(
     if system:
         result["systemInstruction"] = {"parts": system}
     declarations = []
-    for tool in request.client_tools:
+    for tool in request.direct_client_tools:
         if constraints := unrepresentable_client_tool_constraints(tool):
             raise GeminiConversionError(
                 f"Native Gemini cannot enforce {constraints} on tool {tool.name!r}"
@@ -496,7 +496,9 @@ def messages_to_gemini(
         declarations.append(declaration)
     if declarations:
         result["tools"] = [{"functionDeclarations": declarations}]
-    resolved = resolve_anthropic_tool_choice(request.client_tools, request.tool_choice)
+    resolved = resolve_anthropic_tool_choice(
+        request.direct_client_tools, request.tool_choice
+    )
     if resolved and request.tool_choice is not None:
         if resolved.get("disable_parallel_tool_use") and resolved.get("type") != "none":
             raise GeminiConversionError(

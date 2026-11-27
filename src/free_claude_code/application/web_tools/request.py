@@ -19,6 +19,9 @@ from free_claude_code.core.anthropic.models import (
     Message,
     MessageContentBlock,
 )
+from free_claude_code.core.anthropic.request_serialization import (
+    quote_code_execution_history,
+)
 from free_claude_code.core.anthropic.server_tool_types import HIDDEN_WEB_SEARCH_NAME
 from free_claude_code.core.gemini.web_search_replay import signed_gemini_turn
 from free_claude_code.core.history_replay import HistoryReplayError
@@ -84,7 +87,7 @@ def forced_server_tool_name(request: MessagesRequest) -> str | None:
         return None
     if len(named) != 1:
         raise InvalidRequestError("Forced web tools require a unique tool name.")
-    return name
+    return name if named[0].allows_direct_call else None
 
 
 def has_tool_named(request: MessagesRequest, name: str) -> bool:
@@ -119,11 +122,9 @@ def plan_automatic_web_search(
         raise InvalidRequestError("Automatic web_search requires unique tool names.")
 
     tool = server_tools[0]
-    for other in tools:
-        if other is tool:
-            continue
-        if other.type not in (None, "custom"):
-            continue
+    if not tool.allows_direct_call:
+        return None
+    for other in request.direct_client_tools:
         if constraints := unrepresentable_client_tool_constraints(other):
             raise InvalidRequestError(
                 f"Automatic web_search cannot enforce {constraints} for tool {other.name!r}."
@@ -230,7 +231,7 @@ def _normalized_search_history(messages: list[Message]) -> tuple[list[Message], 
     """Carry forward completed web results and count current-turn search attempts."""
     normalized: list[Message] = []
     used_this_turn = 0
-    for message in messages:
+    for message in quote_code_execution_history(messages):
         content = message.content
         if message.role == "user" and not (
             isinstance(content, list)

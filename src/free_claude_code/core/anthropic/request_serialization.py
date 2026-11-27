@@ -3,14 +3,21 @@
 import json
 from collections.abc import Mapping
 
+from ..history_replay import HistoryReplayError, tool_history_context
 from ..json_types import JsonObject
 from .models import (
     ContentBlockDocument,
+    ContentBlockServerToolUse,
+    ContentBlockText,
     ContentBlockToolResult,
     ExtensionBlock,
     Message,
+    MessageContentBlock,
     MessagesRequest,
 )
+
+_CODE_TOOLS = {"code_execution", "bash_code_execution", "text_editor_code_execution"}
+_CODE_RESULTS = {f"{name}_tool_result": name for name in _CODE_TOOLS}
 
 _MESSAGES_REQUEST_FIELDS = (
     "model",
@@ -43,13 +50,61 @@ def dump_messages_request(request: MessagesRequest) -> JsonObject:
     }
 
 
+def quote_code_execution_history(messages: list[Message]) -> list[Message]:
+    """Carry completed server code exchanges across turns in their original order."""
+    calls: dict[str, str | None] = {}
+    projected = messages.copy()
+    for turn_index, message in enumerate(messages):
+        if not isinstance(message.content, list):
+            continue
+        blocks: list[MessageContentBlock] | None = None
+        for block_index, block in enumerate(message.content):
+            if (
+                isinstance(block, ContentBlockServerToolUse)
+                and block.name in _CODE_TOOLS
+            ):
+                if message.role != "assistant" or not block.id or block.id in calls:
+                    raise HistoryReplayError(
+                        "Invalid code execution call in Messages history"
+                    )
+                calls[block.id] = block.name
+            elif isinstance(block, ExtensionBlock) and block.type in _CODE_RESULTS:
+                data = block.model_extra or {}
+                call_id = data.get("tool_use_id")
+                if (
+                    message.role != "assistant"
+                    or not isinstance(call_id, str)
+                    or calls.get(call_id) != _CODE_RESULTS[block.type]
+                    or not isinstance(data.get("content"), dict)
+                ):
+                    raise HistoryReplayError(
+                        "Unmatched code execution result in Messages history"
+                    )
+                calls[call_id] = None
+            else:
+                continue
+            if blocks is None:
+                blocks = message.content.copy()
+            blocks[block_index] = ContentBlockText(
+                type="text",
+                text=tool_history_context(block.model_dump(exclude_unset=True)),
+            )
+        if blocks is not None:
+            projected[turn_index] = message.model_copy(update={"content": blocks})
+    if any(calls.values()):
+        raise HistoryReplayError(
+            "An active server tool cannot continue through a different protocol."
+        )
+    return projected
+
+
 def translated_messages(request: MessagesRequest) -> list[Message]:
     """Keep usable source turns before a foreign builder coalesces their roles."""
     latest = next(
         (turn for turn in reversed(request.messages) if turn.role == "user"), None
     )
     messages = []
-    for turn in request.messages:
+    for turn in quote_code_execution_history(request.messages):
         if not isinstance(turn.content, list):
             messages.append(turn)
             continue
