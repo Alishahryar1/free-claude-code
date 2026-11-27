@@ -160,17 +160,17 @@ class SourceRecoveryState:
             block = payload.get("content_block")
             delta = json_object(payload.get("delta") or {})
             # Stream pieces are not complete replay records, so nothing is decoded.
-            if (
-                (
-                    isinstance(block, dict)
-                    and (
-                        block.get("type") == "redacted_thinking"
-                        or block.get("signature")
-                        or block.get("extra_content")
-                    )
+            if any(
+                value.get("type") == "redacted_thinking"
+                or value.get("signature")
+                or value.get("extra_content")
+                # Unknown fields on thinking may be native state, so only readable ones pass.
+                or (
+                    value.get("type")
+                    in ("thinking", "thinking_delta", "signature_delta")
+                    and not value.keys() <= {"type", "thinking", "signature"}
                 )
-                or delta.get("signature")
-                or delta.get("extra_content")
+                for value in (json_object(block or {}), delta)
             ):
                 self.unsafe_reason = "signed_thinking"
             if isinstance(block, dict) and block.get("type") in (

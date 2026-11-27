@@ -1217,3 +1217,27 @@ async def test_signature_named_only_by_sse_event_is_not_combined(
     assert parse_sse_text(result)[-1].event == (
         "error" if wire == "messages" else "response.failed"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize("on", ["block", "delta"])
+async def test_thinking_with_unknown_native_fields_is_not_continued(
+    wire: WireProtocol, on: str
+) -> None:
+    thinking = unsigned_thinking("Plan.")
+    target = thinking[0]["content_block"] if on == "block" else thinking[1]["delta"]
+    object_payload(target)["encrypted_content"] = "opaque"
+    events = [_events_for("messages")[0], *thinking]
+    async with _harness("messages", lambda _: (200, events), max_attempts=2) as (
+        send,
+        bodies,
+        _,
+    ):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "answer"}]), wire
+        )
+    assert len(bodies) == 1
+    assert parse_sse_text(result)[-1].event == (
+        "error" if wire == "messages" else "response.failed"
+    )
