@@ -50,7 +50,7 @@ from free_claude_code.core.reasoning import (
 )
 from free_claude_code.core.stream_output import StreamOutput, completed_output
 from free_claude_code.core.stream_recovery import ContinuationSeed
-from free_claude_code.core.tool_call_scope import ToolCallScope, has_tool_selection
+from free_claude_code.core.tool_call_scope import ToolCallScope
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderExecution,
@@ -381,7 +381,7 @@ class AnthropicMessagesTransport:
             request_id=request_id,
             response_model=response_model or request.model,
             continuation=continuation,
-            constrain_tool_calls=has_tool_selection(request.tools, request.tool_choice),
+            constrain_tool_calls=request.constrains_returned_calls,
             presenter_factory=lambda origin: ChatMessagesStream(
                 model=response_model or request.model,
                 origin=origin,

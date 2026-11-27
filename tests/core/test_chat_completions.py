@@ -239,7 +239,7 @@ def test_refusal_history_keeps_its_text_across_other_protocols(
 @pytest.mark.parametrize(
     "destination", [chat_messages_body, chat_responses_body, chat_to_gemini]
 )
-def test_untranslated_history_keeps_only_the_supported_call_and_its_result(
+def test_mixed_tool_history_cannot_drop_one_calls_result(
     destination: Callable[[ChatRequest], JsonObject],
 ) -> None:
     request = ChatRequest(
@@ -267,8 +267,8 @@ def test_untranslated_history_keeps_only_the_supported_call_and_its_result(
         ],
     )
     assert request.reserved_tool_ids() == {"kept", "future"}
-    body = destination(request)
-    assert "kept" in str(body) and "untranslated result" not in str(body)
+    with pytest.raises(ChatConversionError, match="future_action"):
+        destination(request)
 
 
 def test_result_cannot_be_assigned_to_an_ambiguous_source_call() -> None:
@@ -278,7 +278,11 @@ def test_result_cannot_be_assigned_to_an_ambiguous_source_call() -> None:
             {
                 "role": "assistant",
                 "tool_calls": [
-                    {"type": "future_action", "id": "duplicate"},
+                    {
+                        "type": "custom",
+                        "id": "duplicate",
+                        "custom": {"name": "lookup", "input": "value"},
+                    },
                     {
                         "type": "function",
                         "id": "duplicate",

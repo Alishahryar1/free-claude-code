@@ -27,9 +27,14 @@ from free_claude_code.providers.history_negotiation import (
     HistoryModeCache,
     HistoryNegotiation,
     RequestHistory,
+    effective_body,
     resolve_history_overrides,
 )
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    capture_openai_chat_wire_body,
+    immediate_admission,
+    make_provider_config,
+)
 from tests.providers.test_anthropic_messages_transport import (
     _events,
     _sse,
@@ -42,6 +47,27 @@ from tests.wire_payload import (
     object_array,
     object_payload,
 )
+
+
+@pytest.mark.asyncio
+async def test_effective_fields_follow_the_sdk_when_an_object_is_overridden() -> None:
+    body: JsonObject = {
+        "model": "test",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "tool_choice": {"type": "function", "function": {"name": "old"}},
+        "extra_body": {
+            "tool_choice": {
+                "type": "allowed_tools",
+                "allowed_tools": {"mode": "auto", "tools": []},
+            }
+        },
+    }
+    wire = await capture_openai_chat_wire_body(body)
+    assert (
+        effective_body(body)["tool_choice"]
+        == wire["tool_choice"]
+        == object_payload(body["extra_body"])["tool_choice"]
+    )
 
 
 def readable_history():

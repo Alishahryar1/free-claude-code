@@ -1,14 +1,19 @@
 """Verify which parts of a request or reply can cross a provider boundary."""
 
 import json
+from unittest.mock import patch
 
 import httpx
 import httpx2
 import pytest
 from fastapi.testclient import TestClient
+from openai import AsyncOpenAI
 
+from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
+from free_claude_code.providers.deepseek import DeepSeekProvider
+from tests.api.support import create_test_app
 from tests.api.test_four_protocol_matrix import (
     ingress_request,
     matrix_app,
@@ -16,8 +21,9 @@ from tests.api.test_four_protocol_matrix import (
     sent_request,
     translation_error,
 )
+from tests.providers.support import immediate_admission, make_provider_config
 from tests.providers.test_gemini import _sse
-from tests.wire_payload import object_array, object_payload
+from tests.wire_payload import decode_object, object_array, object_payload
 
 
 @pytest.mark.parametrize(
@@ -96,6 +102,132 @@ def _assert_read_is_rejected(
         )
     else:
         assert result.status_code == 502
+
+
+@pytest.mark.parametrize("target", ["chat", "messages", "responses", "gemini"])
+def test_legacy_chat_disable_is_still_an_explicit_tool_choice(target: str) -> None:
+    path, body = ingress_request("chat", False)
+    body.pop("tools")
+    body.update(
+        functions=[{"name": "read", "parameters": {"type": "object"}}],
+        function_call="none",
+    )
+    if target == "chat":
+        native = sent_request(target, path, body)
+        assert (
+            native["function_call"] == "none"
+            and native["functions"] == body["functions"]
+        )
+    else:
+        _assert_read_is_rejected("chat", target, path, body)
+
+
+@pytest.mark.parametrize("target", ["chat", "messages", "responses", "gemini"])
+def test_vendor_chat_action_and_its_result_are_kept_together(target: str) -> None:
+    path, body = ingress_request(
+        "chat",
+        False,
+        [
+            {"role": "user", "content": "Get the invoice amount"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "vendor_invoice",
+                        "id": "v",
+                        "vendor_invoice": {"invoice": "123"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "v",
+                "content": "The verified invoice is exactly $470.",
+            },
+        ],
+    )
+    if target == "chat":
+        assert sent_request(target, path, body)["messages"] == body["messages"]
+    else:
+        assert "vendor_invoice" in translation_error(target, path, body)
+
+
+@pytest.mark.parametrize(
+    ("original", "offered", "choice", "expected"),
+    [
+        ("old", "read", None, 200),
+        ("read", "old", None, 502),
+        (None, "old", None, 502),
+        ("read", "read", "none", 502),
+        (
+            "read",
+            "read",
+            {
+                "type": "allowed_tools",
+                "allowed_tools": {
+                    "mode": "auto",
+                    "tools": [{"type": "function", "function": {"name": "old"}}],
+                },
+            },
+            502,
+        ),
+    ],
+)
+def test_chat_provider_checks_the_tool_selection_on_the_wire(
+    original: str | None, offered: str, choice: JsonValue, expected: int
+) -> None:
+    sent: list[JsonObject] = []
+
+    def reply(request: httpx2.Request):
+        sent.append(decode_object(request.content))
+        response = matrix_reply("chat")
+        assert isinstance(response, httpx2.Response)
+        return response
+
+    sdk = AsyncOpenAI(
+        api_key="test",
+        base_url="https://upstream.invalid/v1",
+        max_retries=0,
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(reply)),
+    )
+    with patch(
+        "free_claude_code.providers.openai_chat.client.AsyncOpenAI", return_value=sdk
+    ):
+        provider = DeepSeekProvider(
+            make_provider_config(
+                api_key="test", base_url="https://upstream.invalid/v1"
+            ),
+            admission=immediate_admission(max_attempts=1),
+        )
+    path, body = ingress_request("messages", False)
+    if original:
+        body["tools"] = [{"name": original, "input_schema": {"type": "object"}}]
+    else:
+        body.pop("tools")
+    offered_names = (offered, "old") if isinstance(choice, dict) else (offered,)
+    extra: JsonObject = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": name, "parameters": {"type": "object"}},
+            }
+            for name in offered_names
+        ]
+    }
+    if choice is not None:
+        extra["tool_choice"] = choice
+    body["extra_body"] = extra
+    with TestClient(
+        create_test_app(
+            Settings(MODEL="deepseek/test"), providers={"deepseek": provider}
+        )
+    ) as client:
+        response = client.post(path, json=body)
+    assert len(sent) == 1 and sent[0]["tools"] == extra["tools"]
+    if choice is not None:
+        assert sent[0]["tool_choice"] == choice
+    assert response.status_code == expected, response.text
+    assert ('"tool_use"' in response.text) == (expected == 200)
 
 
 @pytest.mark.parametrize("target", ["chat", "responses", "gemini"])

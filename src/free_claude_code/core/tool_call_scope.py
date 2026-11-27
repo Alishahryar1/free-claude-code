@@ -16,6 +16,16 @@ def has_tool_selection(tools: object, choice: object) -> bool:
     return bool(tools) or mode not in (None, "auto")
 
 
+def has_chat_tool_selection(
+    tools: object, choice: object, fields: Mapping[str, object]
+) -> bool:
+    return (
+        has_tool_selection(tools, choice)
+        or bool(fields.get("functions"))
+        or fields.get("function_call") not in (None, "auto")
+    )
+
+
 def _identity(tool: Mapping[str, JsonValue], wire: _Wire) -> _Identity | None:
     kind = tool.get("type", "function")
     if wire == "messages":
@@ -30,6 +40,16 @@ def _identity(tool: Mapping[str, JsonValue], wire: _Wire) -> _Identity | None:
     return str(kind), name, namespace if isinstance(namespace, str) else None
 
 
+def _identities(tools: JsonValue, wire: _Wire) -> set[_Identity]:
+    if not isinstance(tools, list):
+        return set()
+    return {
+        identity
+        for tool in tools
+        if isinstance(tool, dict) and (identity := _identity(tool, wire)) is not None
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class ToolCallScope:
     identities: frozenset[_Identity]
@@ -38,18 +58,22 @@ class ToolCallScope:
     def from_body(cls, body: Mapping[str, JsonValue], wire: _Wire) -> ToolCallScope:
         choice = body.get("tool_choice")
         mode = choice.get("type") if isinstance(choice, dict) else choice
-        tools = body.get("tools")
-        if mode == "none" or not isinstance(tools, list):
+        if mode == "none" or (wire == "chat" and body.get("function_call") == "none"):
             return cls(frozenset())
-        identities = {
-            identity
-            for tool in tools
-            if isinstance(tool, dict)
-            and (identity := _identity(tool, wire)) is not None
-        }
+        identities = _identities(body.get("tools"), wire)
         if isinstance(choice, dict) and mode in ("tool", "function", "custom"):
             selected = _identity(choice, wire)
             identities = {name for name in identities if name == selected}
+        elif wire == "chat" and isinstance(choice, dict) and mode == "allowed_tools":
+            allowed = choice.get("allowed_tools")
+            entries = allowed.get("tools") if isinstance(allowed, dict) else None
+            identities.intersection_update(_identities(entries, wire))
+        if wire == "chat" and isinstance(legacy := body.get("function_call"), dict):
+            identities = {
+                identity
+                for identity in identities
+                if identity == ("function", legacy.get("name"), None)
+            }
         return cls(frozenset(identities))
 
     def require(self, kind: str, name: object, namespace: object = None) -> None:

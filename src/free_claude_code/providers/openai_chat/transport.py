@@ -75,7 +75,11 @@ from free_claude_code.core.reasoning import (
 )
 from free_claude_code.core.stream_output import StreamOutput, completed_output
 from free_claude_code.core.stream_recovery import ContinuationSeed
-from free_claude_code.core.tool_call_scope import ToolCallScope, has_tool_selection
+from free_claude_code.core.tool_call_scope import (
+    ToolCallScope,
+    has_chat_tool_selection,
+    has_tool_selection,
+)
 from free_claude_code.core.trace import provider_chat_body_snapshot, trace_event
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -101,6 +105,7 @@ from free_claude_code.providers.endpoint_types import EndpointContext
 from free_claude_code.providers.history_negotiation import (
     HistoryModeCache,
     RequestHistory,
+    effective_body,
     resolve_history_overrides,
 )
 from free_claude_code.providers.history_replay import (
@@ -1304,12 +1309,14 @@ class _ChatAttempt(TransportAttempt):
             on_event=self._observe,
             native_chat=runner._native_chat,
         )
-        presenter.bind_tools(
-            runner._tool_argument_aliases,
-            ToolCallScope.from_body(self.sent_body, "chat")
-            if runner._constrain_tool_calls
-            else None,
-        )
+        tool_scope = None
+        if not runner._native_chat:
+            wire = effective_body(self.sent_body)
+            if runner._constrain_tool_calls or has_chat_tool_selection(
+                wire.get("tools"), wire.get("tool_choice"), wire
+            ):
+                tool_scope = ToolCallScope.from_body(wire, "chat")
+        presenter.bind_tools(runner._tool_argument_aliases, tool_scope)
         async for chunk in stream:
             if not scope.attempt.accepted:
                 await scope.attempt.accept()

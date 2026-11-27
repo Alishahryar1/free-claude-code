@@ -94,20 +94,11 @@ def _normalize_chat_override(messages: list[JsonValue]) -> None:
 
 
 def effective_body(body: Mapping[str, JsonValue]) -> JsonObject:
-    result: JsonObject = deepcopy(dict(body))
+    """Resolve top-level extra_body overrides with the OpenAI SDK's precedence."""
+    result = dict(body)
     extra = result.pop("extra_body", None)
     if isinstance(extra, dict):
-
-        def merge(target: JsonObject, overlay: JsonObject) -> None:
-            for key, value in overlay.items():
-                if isinstance(value, dict) and isinstance(
-                    current := target.get(key), dict
-                ):
-                    merge(current, value)
-                else:
-                    target[key] = value
-
-        merge(result, extra)
+        result.update(extra)
     return result
 
 
@@ -199,7 +190,7 @@ class HistoryNegotiation:
 
     def _effective(self, wire: JsonObject) -> JsonObject:
         # Gemini sends this JSON directly. Only SDK request envelopes have an overlay.
-        return wire if self._key[2] == "gemini" else effective_body(wire)
+        return wire if self._key[2] == "gemini" else deepcopy(effective_body(wire))
 
     @property
     def source(self) -> JsonObject:

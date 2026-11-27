@@ -300,7 +300,7 @@ class OpenAIResponsesTransport:
             endpoint_context=endpoint_context,
             extra_headers=extra_headers,
             continuation=continuation,
-            constrain_tool_calls=has_tool_selection(request.tools, request.tool_choice),
+            constrain_tool_calls=request.constrains_returned_calls,
             presenter_factory=lambda _pad_empty, origin: ChatResponsesStream(
                 model=response_model,
                 origin=origin,

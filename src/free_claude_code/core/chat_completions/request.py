@@ -13,6 +13,7 @@ from free_claude_code.core.openai_chat import (
     openai_cache_breakpoint,
     shared_openai_request_options,
 )
+from free_claude_code.core.tool_call_scope import has_chat_tool_selection
 
 from ..history_replay import (
     decode_replay,
@@ -168,6 +169,12 @@ class ChatRequest(BaseModel):
         return self.model_dump(mode="json", exclude_unset=True)
 
     @property
+    def constrains_returned_calls(self) -> bool:
+        return has_chat_tool_selection(
+            self.tools, self.tool_choice, self.model_extra or {}
+        )
+
+    @property
     def include_usage(self) -> bool:
         options = self.body().get("stream_options")
         return not self.stream or (
@@ -268,30 +275,24 @@ def project_chat_request(
             raise ChatConversionError(
                 "Legacy function call history requires native Chat egress"
             )
-        calls = list(json_objects(message.get("tool_calls") or []))
-        if calls:
-            for call in calls:
-                if google_thought_signature(call.get("extra_content")):
-                    raise ChatConversionError(
-                        "Signed Google tool calls require native Chat egress"
-                    )
-                call_id = call.get("id")
-                if isinstance(call_id, str) and call_id:
-                    if call_id in call_kinds:
-                        raise ChatConversionError(
-                            "Duplicate tool call ID in Chat history"
-                        )
-                    kind = json_text(call["type"])
-                    call_kinds[call_id] = kind
-                    if kind == "custom":
-                        pending_custom.add(call_id)
-            message["tool_calls"] = [
-                call for call in calls if call.get("type") in ("function", "custom")
-            ]
+        for call in json_objects(message.get("tool_calls") or []):
+            kind = json_text(call["type"])
+            if kind not in ("function", "custom"):
+                raise ChatConversionError(
+                    f"A {kind} tool call requires native Chat egress"
+                )
+            if google_thought_signature(call.get("extra_content")):
+                raise ChatConversionError(
+                    "Signed Google tool calls require native Chat egress"
+                )
+            call_id = json_text(call["id"])
+            if call_id in call_kinds:
+                raise ChatConversionError("Duplicate tool call ID in Chat history")
+            call_kinds[call_id] = kind
+            if kind == "custom":
+                pending_custom.add(call_id)
         if message["role"] == "tool":
             result_id = json_text(message["tool_call_id"])
-            if call_kinds.get(result_id) not in (None, "function", "custom"):
-                continue
             if (
                 call_kinds.get(result_id) == "custom"
                 and result_id not in pending_custom
