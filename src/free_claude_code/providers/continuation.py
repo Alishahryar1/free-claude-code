@@ -150,8 +150,19 @@ class SourceRecoveryState:
                 # The Messages parser classifies malformed block events for retries.
                 return
             block = payload.get("content_block")
-            if isinstance(block, dict) and (
-                block.get("type") == "redacted_thinking" or protected_reasoning(block)
+            delta = json_object(payload.get("delta") or {})
+            # Stream pieces are not complete replay records, so nothing is decoded.
+            if (
+                (
+                    isinstance(block, dict)
+                    and (
+                        block.get("type") == "redacted_thinking"
+                        or block.get("signature")
+                        or block.get("extra_content")
+                    )
+                )
+                or delta.get("signature")
+                or delta.get("extra_content")
             ):
                 self.unsafe_reason = "signed_thinking"
             if isinstance(block, dict) and block.get("type") in (
@@ -168,14 +179,11 @@ class SourceRecoveryState:
             ):
                 self.unsafe_reason = "native_content"
                 self._handoff_blocked = True
-            delta = json_object(payload.get("delta") or {})
             if (isinstance(block, dict) and block.get("citations")) or delta.get(
                 "type"
             ) == "citations_delta":
                 self.unsafe_reason = "native_content"
                 self._handoff_blocked = True
-            if protected_reasoning(delta):
-                self.unsafe_reason = "signed_thinking"
             if kind == "content_block_stop":
                 self._pending_reasoning.discard(index)
         elif protocol == "responses":

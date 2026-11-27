@@ -13,6 +13,11 @@ from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic.passthrough import NativeMessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import SSEEvent, parse_sse_text
+from free_claude_code.core.history_replay import (
+    ReplayOrigin,
+    ReplayRecord,
+    encode_replay,
+)
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.providers.deepseek import DeepSeekProvider
 from free_claude_code.providers.recovery_errors import RetryableProviderProtocolError
@@ -1080,6 +1085,81 @@ async def test_open_unsigned_messages_thinking_is_not_continued(
             send(wire, [{"role": "user", "content": "think"}]), wire
         )
     assert len(bodies) == 1
+    assert parse_sse_text(result)[-1].event == (
+        "error" if wire == "messages" else "response.failed"
+    )
+
+
+def readable_carrier(thought: str) -> str:
+    return encode_replay(
+        ReplayRecord(
+            ReplayOrigin("deepseek", "chat", "", "", "upstream"),
+            {"reasoning_content": thought},
+        )
+    )
+
+
+def carrier_thinking(thought: str, *pieces: str) -> list[JsonObject]:
+    return [
+        *unsigned_thinking(thought, closed=False),
+        *(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "signature_delta", "signature": piece},
+            }
+            for piece in pieces
+        ),
+        {"type": "content_block_stop", "index": 0},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_split_signature_does_not_abort_a_healthy_stream(
+    wire: WireProtocol,
+) -> None:
+    carrier = readable_carrier("Plan.")
+    events = [
+        _events_for("messages")[0],
+        *carrier_thinking("Plan.", carrier[:20], carrier[20:]),
+        *shifted(text_events("messages", "Answer.")[1:], 1),
+    ]
+    async with _harness("messages", lambda _: (200, events), max_attempts=2) as (
+        send,
+        bodies,
+        _,
+    ):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "answer"}]), wire
+        )
+    events_out = parse_sse_text(result)
+    assert_completed(events_out, wire)
+    assert public_text(events_out, wire) == "Answer."
+    assert len(bodies) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_continuation_with_signed_thinking_is_not_combined(
+    wire: WireProtocol,
+) -> None:
+    # A readable carrier keeps the untrimmed thought, so it would repeat history.
+    def reply(bodies: list[JsonObject]):
+        start = _events_for("messages")[0]
+        if len(bodies) == 1:
+            return 200, [start, *unsigned_thinking("Earlier.")]
+        return 200, [
+            start,
+            *carrier_thinking("Earlier. After.", readable_carrier("Earlier. After.")),
+            *shifted(text_events("messages", "Answer.")[1:], 1),
+        ]
+
+    async with _harness("messages", reply, max_attempts=2) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "answer"}]), wire
+        )
+    assert len(bodies) == 2
     assert parse_sse_text(result)[-1].event == (
         "error" if wire == "messages" else "response.failed"
     )
