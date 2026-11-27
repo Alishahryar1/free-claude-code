@@ -44,7 +44,7 @@ class SourceRecoveryState:
     ) -> None:
         self._execution = execution
         self._prior_unsafe_reason = (
-            previous.unsafe_reason or previous._prior_unsafe_reason
+            previous._attempt_unsafe_reason or previous._prior_unsafe_reason
             if previous is not None
             else None
         )
@@ -55,6 +55,13 @@ class SourceRecoveryState:
     @property
     def can_handoff(self) -> bool:
         return not self._handoff_blocked and not self._pending_reasoning
+
+    @property
+    def _attempt_unsafe_reason(self) -> str | None:
+        # The signature arrives last, so open thinking may still be signed.
+        return self.unsafe_reason or (
+            "open_thinking" if self._pending_reasoning else None
+        )
 
     def snapshot(
         self,
@@ -67,8 +74,7 @@ class SourceRecoveryState:
         return SourceRecoverySnapshot(
             normal_stop_seen=normal_stop_seen,
             structured_output=_structured_output(body, protocol),
-            unsafe_reason=self.unsafe_reason
-            or ("open_thinking" if self._pending_reasoning else None)
+            unsafe_reason=self._attempt_unsafe_reason
             or (self._prior_unsafe_reason if for_model_fallback else None),
             can_handoff=self.can_handoff,
         )
