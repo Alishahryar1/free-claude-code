@@ -2,7 +2,7 @@
 
 import base64
 import json
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
@@ -666,6 +666,7 @@ def prepare_history(
     source_paths: dict[HistoryPath, HistoryPath] | None = None,
     continuation: bool = False,
     native_chat: bool = False,
+    responses_reasoning: Callable[[JsonObject], JsonObject | None] | None = None,
 ) -> JsonObject:
     """Restore native records and project readable history on a fresh wire copy.
 
@@ -681,7 +682,9 @@ def prepare_history(
         )
         return result
     if destination.protocol == "responses":
-        _prepare_response_history(result, destination, scope, paths, continuation)
+        _prepare_response_history(
+            result, destination, scope, paths, continuation, responses_reasoning
+        )
         return result
     messages = result.get("messages")
     if not isinstance(messages, list):
@@ -796,6 +799,7 @@ def _prepare_response_history(
     scope: HistoryMode,
     paths: dict[HistoryPath, HistoryPath],
     continuation: bool,
+    responses_reasoning: Callable[[JsonObject], JsonObject | None] | None,
 ) -> None:
     items = body.get("input")
     if isinstance(items, dict):
@@ -820,7 +824,14 @@ def _prepare_response_history(
         )
         include = scope.includes(index, last_user)
         if include and not has_reasoning:
-            projected.append(_unsigned_response([("", False)]))
+            placeholder = _unsigned_response([("", False)])
+            projected_placeholder = (
+                responses_reasoning(placeholder)
+                if responses_reasoning is not None
+                else placeholder
+            )
+            if projected_placeholder is not None:
+                projected.append(projected_placeholder)
         for source_index in range(index, end):
             item = items[source_index]
             assert isinstance(item, dict)
@@ -854,6 +865,14 @@ def _prepare_response_history(
                             _unsigned_response(readable_reasoning(record.native))
                         )
             for value in values:
+                if (
+                    responses_reasoning is not None
+                    and isinstance(value, dict)
+                    and value.get("type") == "reasoning"
+                ):
+                    value = responses_reasoning(value)
+                    if value is None:
+                        continue
                 paths[("input", len(projected))] = ("input", source_index)
                 projected.append(value)
         index = end

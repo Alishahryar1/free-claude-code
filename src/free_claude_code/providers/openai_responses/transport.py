@@ -127,6 +127,7 @@ class OpenAIResponsesTransport:
         correction_steps: Sequence[CorrectionStep] = (),
         omitted_request_fields: frozenset[str] = frozenset(),
         tool_policy: ResponsesToolPolicy = ResponsesToolPolicy(),
+        responses_reasoning: Callable[[JsonObject], JsonObject | None] | None = None,
     ) -> None:
         self._client = client
         self._endpoint_transport = endpoint_transport
@@ -134,6 +135,7 @@ class OpenAIResponsesTransport:
         self._correction_steps = tuple(correction_steps)
         self._omitted_request_fields = omitted_request_fields
         self._tool_policy = tool_policy
+        self._responses_reasoning = responses_reasoning
         self._admission = admission
         self._history_cache = (
             history_cache if history_cache is not None else HistoryModeCache()
@@ -575,6 +577,7 @@ class _ResponsesAttempt(TransportAttempt):
             origin,
             transport._history_cache,
             continuation=self.context.continuing,
+            responses_reasoning=transport._responses_reasoning,
         )
         self._presenter = self._presenter_factory(not self.context.continuing, origin)
         self._start_events = tuple(self._presenter.start())

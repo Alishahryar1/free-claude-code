@@ -19,6 +19,11 @@ from free_claude_code.core.anthropic.stream_contracts import (
     text_content,
 )
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
+from free_claude_code.core.history_replay import (
+    ReplayOrigin,
+    ReplayRecord,
+    encode_replay,
+)
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
@@ -520,6 +525,76 @@ async def test_provider_accepts_claude_client_controls_before_upstream_io() -> N
     assert request.model_dump() == original_request
     assert_anthropic_stream_contract(parse_sse_text(body))
     await provider.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("history", ["native", "unsigned", "no_thinking"])
+async def test_codex_replays_only_supported_reasoning_history(history: str) -> None:
+    requests: list[httpx2.Request] = []
+    summary = [{"type": "summary_text", "text": "A summary"}]
+    native: JsonObject = {
+        "id": "rs_test",
+        "type": "reasoning",
+        "encrypted_content": "opaque-state",
+        "summary": summary,
+        "content": [{"type": "reasoning_text", "text": "Prior reasoning"}],
+    }
+    blocks: list[JsonObject] = []
+    if history != "no_thinking":
+        thinking: JsonObject = {"type": "thinking", "thinking": "Prior reasoning"}
+        if history == "native":
+            origin = ReplayOrigin("OpenAI", "responses", "", "", "gpt-test")
+            thinking["signature"] = encode_replay(ReplayRecord(origin, native))
+        blocks.append(thinking)
+    blocks.append({"type": "text", "text": "Prior answer"})
+    request = MessagesRequest.model_validate(
+        {
+            "model": "gpt-test",
+            "messages": [
+                {"role": "user", "content": "First turn"},
+                {"role": "assistant", "content": blocks},
+                {"role": "user", "content": "Follow-up"},
+            ],
+        }
+    )
+    original = request.model_dump()
+
+    def handler(upstream: httpx2.Request) -> httpx2.Response:
+        requests.append(upstream)
+        return httpx2.Response(
+            200,
+            text=_complete_stream("Follow-up answer"),
+            headers={"content-type": "text/event-stream"},
+            request=upstream,
+        )
+
+    provider = OpenAICodexProvider(
+        _config(),
+        auth=_FakeAuth(),
+        admission=_admission(),
+        transport=httpx2.MockTransport(handler),
+    )
+    try:
+        body = await _collect(provider.stream_messages(request))
+    finally:
+        await provider.cleanup()
+
+    assert len(requests) == 1
+    items = object_array(decode_object(requests[0].content)["input"])
+    replayed = [item for item in items if item.get("type") == "reasoning"]
+    if history == "native":
+        assert replayed == [
+            {key: value for key, value in native.items() if key != "content"}
+        ]
+    else:
+        assert not replayed
+    assert [item["role"] for item in items if item.get("type") == "message"] == [
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert request.model_dump() == original
+    assert "Follow-up answer" in body
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,7 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.gemini import GeminiRequest
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.core.stream_output import StreamOutput
@@ -50,6 +51,13 @@ try:
     FCC_VERSION = version("free-claude-code")
 except PackageNotFoundError:
     FCC_VERSION = "dev"
+
+
+def _codex_responses_reasoning(item: JsonObject) -> JsonObject | None:
+    """Keep only the reasoning state the ChatGPT Codex backend can replay."""
+    if not item.get("encrypted_content") and not item.get("summary"):
+        return None
+    return {key: value for key, value in item.items() if key != "content"}
 
 
 class OpenAICodexProvider(BaseProvider):
@@ -98,6 +106,7 @@ class OpenAICodexProvider(BaseProvider):
             log_raw_sse_events=config.log_raw_sse_events,
             endpoint_transport=self._pool,
             omitted_request_fields=frozenset({"max_output_tokens", "metadata"}),
+            responses_reasoning=_codex_responses_reasoning,
         )
 
     def _endpoint(self, *, session_id: str | None = None) -> CodexEndpointContext:
