@@ -154,11 +154,17 @@ class SourceRecoveryState:
             "content_block_stop",
         ):
             index = payload.get("index")
-            if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+            block = payload.get("content_block")
+            delta = payload.get("delta") or {}
+            if (
+                not isinstance(index, int)
+                or isinstance(index, bool)
+                or index < 0
+                or (block is not None and not isinstance(block, dict))
+                or not isinstance(delta, dict)
+            ):
                 # The Messages parser classifies malformed block events for retries.
                 return
-            block = payload.get("content_block")
-            delta = json_object(payload.get("delta") or {})
             # Stream pieces are not complete replay records, so nothing is decoded.
             if any(
                 value.get("type") == "redacted_thinking"
@@ -170,7 +176,7 @@ class SourceRecoveryState:
                     in ("thinking", "thinking_delta", "signature_delta")
                     and not value.keys() <= {"type", "thinking", "signature"}
                 )
-                for value in (json_object(block or {}), delta)
+                for value in (block or {}, delta)
             ):
                 self.unsafe_reason = "signed_thinking"
             if isinstance(block, dict) and block.get("type") in (

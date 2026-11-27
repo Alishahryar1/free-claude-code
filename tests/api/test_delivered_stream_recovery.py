@@ -1281,3 +1281,30 @@ async def test_native_continuation_with_unknown_delta_type_is_not_combined() -> 
     assert len(bodies) == 2
     assert "opaque" not in result
     assert parse_sse_text(result)[-1].event == "error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {"type": "content_block_start", "index": 0, "content_block": "bad"},
+        {"type": "content_block_delta", "index": 0, "delta": "bad"},
+    ],
+)
+async def test_malformed_block_event_keeps_the_retry(
+    wire: WireProtocol, malformed: JsonObject
+) -> None:
+    def reply(bodies: list[JsonObject]):
+        if len(bodies) == 1:
+            return 200, [_events_for("messages")[0], malformed]
+        return 200, text_events("messages", "Answer.")
+
+    async with _harness("messages", reply, max_attempts=2) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "answer"}]), wire
+        )
+    events = parse_sse_text(result)
+    assert_completed(events, wire)
+    assert public_text(events, wire) == "Answer."
+    assert len(bodies) == 2
