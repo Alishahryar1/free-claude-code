@@ -50,7 +50,6 @@ class SourceRecoveryState:
         )
         self.unsafe_reason: str | None = None
         self._pending_reasoning: set[int | str] = set()
-        self._signed: set[int | str] = set()
         self._handoff_blocked = False
 
     @property
@@ -69,6 +68,7 @@ class SourceRecoveryState:
             normal_stop_seen=normal_stop_seen,
             structured_output=_structured_output(body, protocol),
             unsafe_reason=self.unsafe_reason
+            or ("open_thinking" if self._pending_reasoning else None)
             or (self._prior_unsafe_reason if for_model_fallback else None),
             can_handoff=self.can_handoff,
         )
@@ -150,14 +150,16 @@ class SourceRecoveryState:
                 # The Messages parser classifies malformed block events for retries.
                 return
             block = payload.get("content_block")
+            if isinstance(block, dict) and (
+                block.get("type") == "redacted_thinking" or protected_reasoning(block)
+            ):
+                self.unsafe_reason = "signed_thinking"
             if isinstance(block, dict) and block.get("type") in (
                 "thinking",
                 "redacted_thinking",
             ):
-                self.unsafe_reason = "signed_thinking"
+                # A signature can still arrive until the block closes.
                 self._pending_reasoning.add(index)
-                if block.get("signature") or block.get("data"):
-                    self._signed.add(index)
             if isinstance(block, dict) and block.get("type") not in (
                 "text",
                 "tool_use",
@@ -172,11 +174,9 @@ class SourceRecoveryState:
             ) == "citations_delta":
                 self.unsafe_reason = "native_content"
                 self._handoff_blocked = True
-            if delta.get("type") in ("thinking_delta", "signature_delta"):
+            if protected_reasoning(delta):
                 self.unsafe_reason = "signed_thinking"
-                if delta.get("signature"):
-                    self._signed.add(index)
-            if kind == "content_block_stop" and index in self._signed:
+            if kind == "content_block_stop":
                 self._pending_reasoning.discard(index)
         elif protocol == "responses":
             item = payload.get("item")
