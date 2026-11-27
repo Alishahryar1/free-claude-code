@@ -85,10 +85,8 @@ class SourceRecoveryState:
         payload: Mapping[str, JsonValue],
         *,
         continuing: bool = False,
-        event_type: str | None = None,
     ) -> None:
-        # Messages SSE can name the event only outside its data.
-        kind = event_type or str(payload.get("type", ""))
+        kind = str(payload.get("type", ""))
         usage = payload.get("usage")
         if protocol == "messages" and kind == "message_start":
             usage = json_object(payload.get("message", {})).get("usage")
@@ -154,17 +152,18 @@ class SourceRecoveryState:
             "content_block_stop",
         ):
             index = payload.get("index")
-            block = payload.get("content_block")
-            delta = payload.get("delta") or {}
-            if (
-                not isinstance(index, int)
-                or isinstance(index, bool)
-                or index < 0
-                or (block is not None and not isinstance(block, dict))
-                or not isinstance(delta, dict)
-            ):
+            if not isinstance(index, int) or isinstance(index, bool) or index < 0:
                 # The Messages parser classifies malformed block events for retries.
                 return
+            block = payload.get("content_block")
+            delta = payload.get("delta") or {}
+            if (block is not None and not isinstance(block, dict)) or not isinstance(
+                delta, dict
+            ):
+                # Passthrough publishes fields recovery cannot read; they may be native.
+                self.unsafe_reason = "native_content"
+                self._handoff_blocked = True
+                block, delta = None, json_object({})
             # Stream pieces are not complete replay records, so nothing is decoded.
             if any(
                 value.get("type") == "redacted_thinking"

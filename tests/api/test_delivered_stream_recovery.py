@@ -1244,7 +1244,25 @@ async def test_thinking_with_unknown_native_fields_is_not_continued(
 
 
 @pytest.mark.asyncio
-async def test_native_continuation_with_unknown_delta_type_is_not_combined() -> None:
+@pytest.mark.parametrize(
+    "unreadable",
+    [
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "encrypted_thinking_delta", "data": "opaque"},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "content_block": "opaque",
+            "delta": {"type": "thinking_delta", "thinking": " Then."},
+        },
+    ],
+)
+async def test_native_continuation_with_unreadable_event_is_not_combined(
+    unreadable: JsonObject,
+) -> None:
     bodies = []
     start = _events_for("messages")[0]
     replies: list[list[JsonObject]] = [
@@ -1252,11 +1270,7 @@ async def test_native_continuation_with_unknown_delta_type_is_not_combined() -> 
         [
             start,
             *unsigned_thinking("Earlier. More.", closed=False),
-            {
-                "type": "content_block_delta",
-                "index": 0,
-                "delta": {"type": "encrypted_thinking_delta", "data": "opaque"},
-            },
+            unreadable,
             {"type": "content_block_stop", "index": 0},
             *shifted(text_events("messages", "Answer.")[1:], 1),
         ],
@@ -1298,6 +1312,78 @@ async def test_malformed_block_event_keeps_the_retry(
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, [_events_for("messages")[0], malformed]
+        return 200, text_events("messages", "Answer.")
+
+    async with _harness("messages", reply, max_attempts=2) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "answer"}]), wire
+        )
+    events = parse_sse_text(result)
+    assert_completed(events, wire)
+    assert public_text(events, wire) == "Answer."
+    assert len(bodies) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_signature_beside_malformed_block_is_not_combined(
+    wire: WireProtocol,
+) -> None:
+    def reply(bodies: list[JsonObject]):
+        start = _events_for("messages")[0]
+        if len(bodies) == 1:
+            return 200, [start, *unsigned_thinking("Prior.")]
+        return 200, [
+            start,
+            *unsigned_thinking("Prior. New.", closed=False),
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "content_block": "",
+                "delta": {"type": "signature_delta", "signature": "SIG-VALUE"},
+            },
+            {"type": "content_block_stop", "index": 0},
+            *shifted(text_events("messages", "Answer.")[1:], 1),
+        ]
+
+    async with _harness("messages", reply, max_attempts=2) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "answer"}]), wire
+        )
+    assert len(bodies) == 2
+    assert "SIG-VALUE" not in result
+    assert parse_sse_text(result)[-1].event == (
+        "error" if wire == "messages" else "response.failed"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_rejected_delta_keeps_the_continuation(wire: WireProtocol) -> None:
+    def reply(bodies: list[JsonObject]):
+        if len(bodies) == 1:
+            return 200, [
+                *text_events("messages", "Intro", complete=False),
+                {"type": "content_block_delta", "index": 0, "delta": {"text": "bad"}},
+            ]
+        return 200, text_events("messages", " Answer.")
+
+    async with _harness("messages", reply, max_attempts=2) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "answer"}]), wire
+        )
+    events = parse_sse_text(result)
+    assert_completed(events, wire)
+    assert public_text(events, wire) == "Intro Answer."
+    assert len(bodies) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_malformed_message_start_keeps_the_retry(wire: WireProtocol) -> None:
+    def reply(bodies: list[JsonObject]):
+        if len(bodies) == 1:
+            return 200, [{"event": "message_start", "message": None}]
         return 200, text_events("messages", "Answer.")
 
     async with _harness("messages", reply, max_attempts=2) as (send, bodies, _):
