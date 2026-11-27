@@ -274,6 +274,102 @@ def test_past_custom_tool_cannot_authorize_a_new_call(target: str) -> None:
     _assert_read_is_rejected("responses", target, path, body)
 
 
+@pytest.mark.parametrize(
+    ("provider_kind", "turn"),
+    [
+        ("responses", "ordinary"),
+        ("responses", "historical"),
+        ("responses", "declared"),
+        ("responses", "absent"),
+        ("responses", "namespaced"),
+        ("opencode", "ordinary"),
+        ("opencode", "historical"),
+        ("opencode", "declared"),
+        ("opencode", "unrelated"),
+    ],
+)
+def test_chat_returns_a_custom_call_only_for_a_current_declaration(
+    provider_kind: str, turn: str
+) -> None:
+    from tests.providers.test_native_tool_arguments import tool_events
+    from tests.providers.test_opencode import (
+        _catalog_payload,
+        _provider_with_wire_transports,
+    )
+
+    events = tool_events("responses", '{"input":"green"}', name="label")
+    if provider_kind == "responses" and turn != "ordinary":
+        item: JsonObject = {
+            "type": "custom_tool_call",
+            "id": "ctc_label",
+            "call_id": "new_label",
+            "name": "label",
+            "input": "green",
+            "status": "completed",
+        }
+        if turn == "namespaced":
+            item.update(type="function_call", namespace="finance", arguments="{}")
+            item.pop("input")
+        events = [
+            events[0],
+            {"type": "response.output_item.done", "output_index": 0, "item": item},
+            events[-1],
+        ]
+        object_payload(events[-1]["response"])["output"] = [item]
+
+    def reply(_request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text="".join(f"data: {json.dumps(event)}\n\n" for event in events),
+        )
+
+    if provider_kind == "opencode":
+        provider, _, _ = _provider_with_wire_transports(
+            _catalog_payload(), generation_response=reply
+        )
+        app = create_test_app(
+            Settings(MODEL="opencode_zen/responses-selector"),
+            providers={"opencode_zen": provider},
+        )
+    else:
+        app = matrix_app("responses", sdk_reply=reply)
+    history: list[JsonObject] = [{"role": "user", "content": "Choose a label."}]
+    if turn in ("historical", "unrelated"):
+        history.extend(
+            [
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "old",
+                            "type": "custom",
+                            "custom": {
+                                "name": "label" if turn == "historical" else "prior",
+                                "input": "old",
+                            },
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "old", "content": "done"},
+            ]
+        )
+    history.append({"role": "user", "content": "What is the new label?"})
+    path, body = ingress_request("chat", False, history)
+    body.pop("tools")
+    if turn == "declared":
+        body["tools"] = [{"type": "custom", "custom": {"name": "label"}}]
+    with TestClient(app) as client:
+        response = client.post(path, json=body)
+    if turn in ("historical", "absent", "namespaced"):
+        assert response.status_code == 502 and '"tool_calls":[' not in response.text
+    else:
+        assert response.status_code == 200, response.text
+        choice = object_array(decode_object(response.content)["choices"])[0]
+        call = object_array(object_payload(choice["message"])["tool_calls"])[0]
+        assert call["type"] == ("custom" if turn == "declared" else "function")
+
+
 @pytest.mark.parametrize("kind", ["custom", "namespaced"])
 def test_an_unscoped_ordinary_reply_is_independent_of_past_tool_kinds(
     kind: str,
@@ -414,6 +510,111 @@ def test_unfinished_responses_actions_keep_their_source_status(
         )
     else:
         assert "in_progress" in translation_error(target, path, body)
+
+
+@pytest.mark.parametrize("target", ["chat", "messages", "responses", "gemini"])
+def test_named_chat_participants_and_citations_survive_a_follow_up(target: str) -> None:
+    path, body = ingress_request(
+        "chat",
+        False,
+        [
+            {"role": "user", "name": "Avery", "content": "Choose oak."},
+            {"role": "user", "name": "Brook", "content": "Choose birch."},
+            {
+                "role": "assistant",
+                "content": "Birch is listed.",
+                "annotations": [
+                    {
+                        "type": "url_citation",
+                        "url_citation": {
+                            "url": "https://example.invalid/trees",
+                            "title": "Tree guide",
+                            "start_index": 0,
+                            "end_index": 5,
+                            "internal_note": "provider-only metadata",
+                        },
+                    }
+                ],
+            },
+            {"role": "user", "content": "Who proposed birch and what is the URL?"},
+        ],
+    )
+    sent = json.dumps(sent_request(target, path, body))
+    for value in (
+        "Avery",
+        "Brook",
+        "Choose oak.",
+        "Choose birch.",
+        "Birch is listed.",
+        "https://example.invalid/trees",
+        "Tree guide",
+        "Who proposed birch",
+    ):
+        assert value in sent
+    assert ("provider-only metadata" in sent) == (target == "chat")
+
+
+@pytest.mark.parametrize("target", ["chat", "messages", "responses", "gemini"])
+@pytest.mark.parametrize("with_text", [False, True])
+def test_messages_tool_reference_loads_only_the_discovered_declaration(
+    target: str, with_text: bool
+) -> None:
+    result: list[JsonValue] = [
+        {"type": "tool_reference", "tool_name": "read_invoice"},
+        {"type": "tool_reference", "tool_name": "program_only"},
+    ]
+    if with_text:
+        result.insert(0, {"type": "text", "text": "Here are the matches."})
+    path, body = ingress_request(
+        "messages",
+        False,
+        [
+            {"role": "user", "content": "Find the invoice reader."},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "search1",
+                        "name": "catalog",
+                        "input": {},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "search1",
+                        "content": result,
+                    },
+                ],
+            },
+            {"role": "user", "content": "Read my invoice with the tool you found."},
+        ],
+    )
+    schema: JsonObject = {"type": "object", "properties": {}}
+    body["tools"] = [
+        {"name": "catalog", "input_schema": schema},
+        {"name": "read_invoice", "input_schema": schema, "defer_loading": True},
+        {"name": "unrelated", "input_schema": schema, "defer_loading": True},
+        {
+            "name": "program_only",
+            "input_schema": schema,
+            "defer_loading": True,
+            "allowed_callers": ["code_execution_20250825"],
+        },
+    ]
+    sent = sent_request(target, path, body)
+    declarations = json.dumps(sent["tools"])
+    history = json.dumps(
+        sent[{"responses": "input", "gemini": "contents"}.get(target, "messages")]
+    )
+    assert "read_invoice" in declarations and "read_invoice" in history
+    assert ("unrelated" in declarations) == (target == "messages")
+    assert ("program_only" in declarations) == (target == "messages")
+    assert ("Here are the matches." in history) == with_text
 
 
 @pytest.mark.parametrize("target", ["chat", "messages", "responses", "gemini"])

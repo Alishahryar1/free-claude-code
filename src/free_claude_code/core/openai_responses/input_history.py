@@ -1,13 +1,16 @@
 """Read the conversation in a Responses request for a foreign provider."""
 
-import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
 from ..history_replay import google_thought_signature, tool_history_context
 from ..json_types import JsonObject, JsonValue, load_json_value
-from ..openai_chat import computer_screenshot_label, openai_cache_breakpoint
+from ..openai_chat import (
+    computer_screenshot_label,
+    openai_cache_breakpoint,
+    url_citation_context,
+)
 from .errors import ResponsesConversionError
 from .hosted_history import public_tool_record
 from .tool_calls import is_client_call
@@ -94,34 +97,6 @@ def input_items(value: JsonValue) -> list[JsonValue]:
     return value if isinstance(value, list) else [] if value is None else [value]
 
 
-def _cited_text(text: str, annotations: JsonValue) -> str:
-    if annotations is None:
-        return text
-    if not isinstance(annotations, list):
-        raise ResponsesConversionError("Responses text annotations must be a list")
-    citations: list[JsonObject] = []
-    for annotation in annotations:
-        if not isinstance(annotation, dict):
-            raise ResponsesConversionError("Responses annotations must be objects")
-        kind = annotation.get("type")
-        if kind in ("file_citation", "container_file_citation", "file_path"):
-            raise ResponsesConversionError(f"A {kind} requires native Responses egress")
-        if kind == "url_citation":
-            citation: JsonObject = {
-                "url": required_str(annotation.get("url"), "url_citation.url")
-            }
-            if isinstance(title := annotation.get("title"), str):
-                citation["title"] = title
-            for key in ("start_index", "end_index"):
-                index = annotation.get(key)
-                if type(index) is int:
-                    citation[key] = index
-            citations.append(citation)
-    if not citations:
-        return text
-    return f"{text}\n\nURL citations: {json.dumps(citations, ensure_ascii=False)}"
-
-
 def _content(
     value: JsonValue, *, keep_empty_text: bool = False
 ) -> str | list[JsonObject]:
@@ -142,7 +117,14 @@ def _content(
                     "Responses text content requires a string"
                 )
             if kind == "output_text":
-                text = _cited_text(text, part.get("annotations"))
+                try:
+                    sources = url_citation_context(
+                        part.get("annotations"), wire="responses"
+                    )
+                except ValueError as error:
+                    raise ResponsesConversionError(str(error)) from error
+                if sources:
+                    text = f"{text}\n\n{sources}"
             if text or keep_empty_text:
                 parts.append(
                     {

@@ -73,7 +73,7 @@ def forced_tool_turn_text(request: MessagesRequest) -> str:
 
 
 def _can_run_locally(tool: Tool, request: MessagesRequest) -> bool:
-    return tool.available_for_direct_call and request.native_context is None
+    return tool.available_for_direct_call() and request.native_context is None
 
 
 def forced_server_tool_name(request: MessagesRequest) -> str | None:

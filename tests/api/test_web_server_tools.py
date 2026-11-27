@@ -975,6 +975,79 @@ async def test_automatic_web_search_uses_model_query_and_filters_domains(
 
 
 @pytest.mark.asyncio
+async def test_local_search_preserves_completed_provider_tool_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _provider_tool_events()
+    tail = events[-2:]
+    events = events[:-2]
+    hosted: list[JsonObject] = [
+        {
+            "type": "server_tool_use",
+            "id": "srv_calc",
+            "name": "code_execution",
+            "input": {"code": "print(42)"},
+        },
+        {
+            "type": "code_execution_tool_result",
+            "tool_use_id": "srv_calc",
+            "content": {
+                "type": "code_execution_result",
+                "stdout": "result 42",
+                "stderr": "",
+                "return_code": 0,
+                "content": [],
+            },
+        },
+    ]
+    for index, block in enumerate(hosted, start=1):
+        events.append(
+            format_sse_event(
+                "content_block_start",
+                {"type": "content_block_start", "index": index, "content_block": block},
+            )
+        )
+        events.append(
+            format_sse_event(
+                "content_block_stop", {"type": "content_block_stop", "index": index}
+            )
+        )
+    terminal = parse_sse_text(tail[0])[0].data
+    object_payload(terminal["usage"])["server_tool_use"] = {
+        "code_execution_requests": 1
+    }
+    events.extend([format_sse_event("message_delta", terminal), tail[1]])
+    request = _automatic_search_request(stream=False)
+    request.tools = [
+        *(request.tools or []),
+        Tool(name="code_execution", type="code_execution_20250825"),
+    ]
+    search = AsyncMock(return_value=[])
+    monkeypatch.setattr("tests.web_tools_support.StubWebToolsClient.search", search)
+    service = _automatic_search_service(ScriptedSelectionProvider(events))
+    response = await service.create(request)
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 200
+    message = _json_body(response)
+    content = object_array(message["content"])
+    assert [block["type"] for block in content] == [
+        "server_tool_use",
+        "web_search_tool_result",
+        "server_tool_use",
+        "code_execution_tool_result",
+        "text",
+    ]
+    assert content[2]["id"] == content[3]["tool_use_id"] == "srv_calc"
+    assert object_payload(content[3]["content"])["stdout"] == "result 42"
+    assert message["stop_reason"] == "end_turn"
+    assert object_payload(message["usage"])["server_tool_use"] == {
+        "code_execution_requests": 1,
+        "web_search_requests": 1,
+    }
+    search.assert_awaited_once_with("selected")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [True, False])
 @pytest.mark.parametrize("selection", ["client", "search-first", "client-first"])
 async def test_automatic_web_search_keeps_client_tool_and_its_result(

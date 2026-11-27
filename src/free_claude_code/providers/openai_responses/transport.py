@@ -289,6 +289,11 @@ class OpenAIResponsesTransport:
                         f"{self._provider_name} cannot represent Chat control {field}"
                     )
             translated = OpenAIResponsesRequest.model_validate(body)
+            caller_tools = (
+                ToolCallScope.from_body(body, "responses")
+                if request.constrains_returned_calls
+                else ToolCallScope(None)
+            )
             body, tools = self._build_native_body(translated, reasoning=reasoning)
             reserved = request.reserved_tool_ids()
         except ValueError as error:
@@ -307,6 +312,7 @@ class OpenAIResponsesTransport:
                 reserved_tool_ids=reserved,
                 include_usage=request.include_usage,
                 include_thoughts=reasoning.output_enabled,
+                caller_tools=caller_tools,
                 tool_events=tools.event_adapter(),
             ),
         )

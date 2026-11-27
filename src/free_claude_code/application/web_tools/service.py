@@ -255,6 +255,13 @@ class WebToolService:
             return
         provider_usage = _provider_usage(message)
         message_content: list[JsonObject] = message["content"]
+        # A turn can finish provider-hosted work alongside a local selection.
+        # Keep its blocks and ordering even when no client function is pending.
+        replay_provider_turn = bool(client_calls) or any(
+            block.get("type")
+            not in ("text", "thinking", "redacted_thinking", "tool_use")
+            for block in message_content
+        )
         preserve_signed_turn = (
             bool(client_calls) and signed_gemini_turn(message_content) is not None
         )
@@ -287,7 +294,7 @@ class WebToolService:
             if plan.remaining_uses is None
             else min(len(contexts), plan.remaining_uses)
         )
-        if not client_calls:
+        if not replay_provider_turn:
             for frame in server_tool_message_start_frames(contexts[0]):
                 yield StreamOutput((frame,))
 
@@ -325,49 +332,42 @@ class WebToolService:
                     yield StreamOutput((frame,))
                 summaries.append(summary)
 
-            if client_calls:
-                if preserve_signed_turn:
-                    schedule = {index: (slot,) for slot, index in enumerate(searches)}
-                else:
-                    # Finish local searches before placing the ordinary calls
-                    # the client still needs to execute. The search data then
-                    # stays in the assistant message that precedes tool results.
-                    first_call = min(searches.keys() | client_calls.keys())
-                    schedule = {first_call: tuple(range(len(contexts)))}
-                indices: dict[int, int] = {}
-                next_index = 0
-                for event in _messages_events(chunks):
-                    data = event.data
-                    kind = data.get("type")
-                    if kind in {"message_delta", "message_stop"}:
-                        continue
-                    index = data.get("index")
-                    proof = ()
-                    if isinstance(index, int):
-                        if kind == "content_block_start":
-                            for slot in schedule.get(index, ()):
-                                async for packet in search_frames(slot, next_index):
-                                    yield packet
-                                next_index += 2
-                            if index not in searches:
-                                indices[index] = next_index
-                                next_index += 1
-                            if index in client_calls:
-                                proof = (
-                                    replace(
-                                        client_calls[index],
-                                        position=(indices[index],),
-                                    ),
-                                )
-                        if index in searches:
-                            continue
-                        data["index"] = indices.get(index, index)
-                    yield StreamOutput((format_sse_event(event.event, data),), proof)
+            if client_calls and not preserve_signed_turn:
+                # Keep search results ahead of calls awaiting a client reply.
+                first_call = min(searches.keys() | client_calls.keys())
+                schedule = {first_call: tuple(range(len(contexts)))}
             else:
-                for slot in range(len(contexts)):
-                    async for packet in search_frames(slot, slot * 2):
-                        yield packet
-                next_index = len(contexts) * 2
+                schedule = {index: (slot,) for slot, index in enumerate(searches)}
+            indices: dict[int, int] = {}
+            next_index = 0
+            for event in _messages_events(chunks):
+                data = event.data
+                kind = data.get("type")
+                if kind in {"message_delta", "message_stop"}:
+                    continue
+                index = data.get("index")
+                if isinstance(index, int) and kind == "content_block_start":
+                    for slot in schedule.get(index, ()):
+                        async for packet in search_frames(slot, next_index):
+                            yield packet
+                        next_index += 2
+                if not replay_provider_turn or (
+                    isinstance(index, int) and index in searches
+                ):
+                    continue
+                proof = ()
+                if isinstance(index, int):
+                    if kind == "content_block_start":
+                        indices[index] = next_index
+                        next_index += 1
+                        if index in client_calls:
+                            proof = (
+                                replace(
+                                    client_calls[index], position=(indices[index],)
+                                ),
+                            )
+                    data["index"] = indices.get(index, index)
+                yield StreamOutput((format_sse_event(event.event, data),), proof)
 
         for frame in server_tool_finish_frames(
             contexts[0],

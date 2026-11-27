@@ -12,6 +12,7 @@ from ..history_replay import (
 )
 from ..json_types import JsonObject, JsonValue, json_object, json_objects
 from ..openai_responses import ResponsesToolEventAdapter, responses_event_index
+from ..tool_call_scope import ToolCallScope
 from .response import ChatOutput, chat_failure
 
 
@@ -26,12 +27,14 @@ class ChatResponsesStream:
         reserved_tool_ids: frozenset[str],
         include_usage: bool,
         include_thoughts: bool,
+        caller_tools: ToolCallScope,
         tool_events: ResponsesToolEventAdapter | None = None,
     ) -> None:
         self._output = ChatOutput(model, include_usage=include_usage)
         self._origin = origin
         self._reserved = set(reserved_tool_ids)
         self._include_thoughts = include_thoughts
+        self._caller_tools = caller_tools
         self._tool_events = tool_events
         self._items: dict[int, JsonObject] = {}
         self._text: dict[tuple[int, str, int], str] = {}
@@ -272,6 +275,8 @@ class ChatResponsesStream:
         name = item.get("name", "")
         if not isinstance(name, str) or not name:
             raise chat_failure("Responses function call requires a name")
+        tool_kind = "custom" if kind == "custom_tool_call" else "function"
+        self._caller_tools.require(tool_kind, name, item.get("namespace"))
         field = "input" if kind == "custom_tool_call" else "arguments"
         arguments = item.get(field, self._arguments.get(index, ""))
         if not isinstance(arguments, str) or not arguments.startswith(
@@ -287,7 +292,7 @@ class ChatResponsesStream:
             call_id,
             name,
             arguments,
-            kind="custom" if kind == "custom_tool_call" else "function",
+            kind=tool_kind,
         )
         self._calls += 1
         return events

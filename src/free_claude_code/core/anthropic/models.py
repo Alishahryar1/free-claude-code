@@ -79,6 +79,15 @@ class ContentBlockToolResult(_AnthropicBlockBase):
     content: str | list[JsonValue] | JsonObject
 
 
+def tool_reference_name(part: JsonValue) -> str | None:
+    if not isinstance(part, dict) or part.get("type") != "tool_reference":
+        return None
+    name = part.get("tool_name")
+    if not isinstance(name, str) or not name:
+        raise ValueError("A tool reference requires a tool_name")
+    return name
+
+
 class ContentBlockThinking(_AnthropicBlockBase):
     type: Literal["thinking"]
     thinking: str
@@ -193,11 +202,10 @@ class Tool(_AnthropicBlockBase):
     description: str | None = None
     input_schema: dict[str, Any] | None = None
 
-    @property
-    def available_for_direct_call(self) -> bool:
+    def available_for_direct_call(self, *, discovered: bool = False) -> bool:
         options = self.model_extra or {}
         callers = options.get("allowed_callers")
-        return not options.get("defer_loading") and (
+        return (discovered or not options.get("defer_loading")) and (
             callers is None or (isinstance(callers, list) and "direct" in callers)
         )
 
@@ -299,13 +307,45 @@ class MessagesRequest(BaseModel):
 
     def direct_client_tools(self, *, supports_strict: bool = True) -> list[Tool]:
         """The client functions a foreign provider can offer on this turn."""
+        tools = self.named_tools
+        discovered = (
+            self._discovered_tool_names()
+            if any((tool.model_extra or {}).get("defer_loading") for tool in tools)
+            else set()
+        )
         return [
             tool
-            for tool in self.named_tools
+            for tool in tools
             if tool.type in (None, "custom")
-            and tool.available_for_direct_call
+            and tool.available_for_direct_call(discovered=tool.name in discovered)
             and (supports_strict or not (tool.model_extra or {}).get("strict"))
         ]
+
+    def _discovered_tool_names(self) -> set[str]:
+        """Only completed client calls can load declarations for later turns."""
+        pending: set[str] = set()
+        discovered: set[str] = set()
+        for turn in self.messages:
+            if not isinstance(turn.content, list):
+                continue
+            for block in turn.content:
+                if turn.role == "assistant" and isinstance(block, ContentBlockToolUse):
+                    pending.add(block.id)
+                elif (
+                    turn.role == "user"
+                    and isinstance(block, ContentBlockToolResult)
+                    and block.tool_use_id in pending
+                ):
+                    pending.remove(block.tool_use_id)
+                    if isinstance(block.content, list) and not (
+                        block.model_extra or {}
+                    ).get("is_error"):
+                        discovered.update(
+                            name
+                            for part in block.content
+                            if (name := tool_reference_name(part)) is not None
+                        )
+        return discovered
 
     @field_validator("max_tokens", mode="before")
     @classmethod

@@ -1,5 +1,6 @@
 """Preserve native Chat requests and translate only representable fields."""
 
+import json
 from collections.abc import Iterator, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from free_claude_code.core.openai_chat import (
     inline_file_fields,
     openai_cache_breakpoint,
     shared_openai_request_options,
+    url_citation_context,
 )
 from free_claude_code.core.tool_call_scope import has_chat_tool_selection
 
@@ -361,6 +363,24 @@ def project_chat_request(
             )
         ):
             continue
+        if message["role"] != "tool":
+            evidence = []
+            if isinstance(name := message.get("name"), str) and name:
+                evidence.append(f"Participant: {json.dumps(name, ensure_ascii=False)}")
+            if message["role"] == "assistant":
+                try:
+                    citations = url_citation_context(
+                        message.get("annotations"), wire="chat"
+                    )
+                except ValueError as error:
+                    raise ChatConversionError(str(error)) from error
+                if citations:
+                    evidence.append(citations)
+            if evidence:
+                message["content"] = [
+                    *content_parts(message.get("content")),
+                    {"type": "text", "text": "\n".join(evidence)},
+                ]
         projected.append(message)
     if pending_custom:
         raise ChatConversionError("Unresolved custom tool call in Chat history")

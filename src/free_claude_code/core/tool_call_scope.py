@@ -52,7 +52,8 @@ def _identities(tools: JsonValue, wire: _Wire) -> set[_Identity]:
 
 @dataclass(frozen=True, slots=True)
 class ToolCallScope:
-    identities: frozenset[_Identity]
+    # An open translated request can return an ordinary, unqualified function.
+    identities: frozenset[_Identity] | None
 
     @classmethod
     def from_body(cls, body: Mapping[str, JsonValue], wire: _Wire) -> ToolCallScope:
@@ -78,13 +79,18 @@ class ToolCallScope:
 
     def require(self, kind: str, name: object, namespace: object = None) -> None:
         if (
-            not isinstance(name, str)
-            or not (namespace is None or isinstance(namespace, str))
-            or (kind, name, namespace) not in self.identities
+            isinstance(name, str)
+            and name
+            and (namespace is None or isinstance(namespace, str))
         ):
-            raise ExecutionFailure(
-                FailureKind.UPSTREAM,
-                502,
-                f"Upstream returned an undeclared or excluded tool for this turn: {name}",
-                False,
-            )
+            if self.identities is None:
+                if kind == "function" and namespace is None:
+                    return
+            elif (kind, name, namespace) in self.identities:
+                return
+        raise ExecutionFailure(
+            FailureKind.UPSTREAM,
+            502,
+            f"Upstream returned an undeclared or excluded tool for this turn: {name}",
+            False,
+        )

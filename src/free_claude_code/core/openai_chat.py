@@ -2,10 +2,53 @@
 
 import json
 from collections.abc import Mapping
+from typing import Literal
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
 TOOL_RESULT_ATTACHMENT_MARKER = "[Tool output attachments follow in user content.]"
+
+
+def url_citation_context(
+    annotations: JsonValue, *, wire: Literal["chat", "responses"]
+) -> str:
+    """Keep public evidence from a previous answer when changing protocols."""
+    if annotations is None:
+        return ""
+    if not isinstance(annotations, list):
+        raise ValueError("Text annotations must be a list")
+    citations: list[JsonObject] = []
+    for annotation in annotations:
+        if not isinstance(annotation, dict):
+            raise ValueError("Text annotations must be objects")
+        kind = annotation.get("type")
+        if wire == "responses" and kind in (
+            "file_citation",
+            "container_file_citation",
+            "file_path",
+        ):
+            raise ValueError(f"A {kind} requires native Responses egress")
+        if kind != "url_citation":
+            continue
+        source = annotation.get("url_citation") if wire == "chat" else annotation
+        if (
+            not isinstance(source, dict)
+            or not isinstance(url := source.get("url"), str)
+            or not url
+        ):
+            raise ValueError("A URL citation requires a URL")
+        citation: JsonObject = {"url": url}
+        if isinstance(title := source.get("title"), str):
+            citation["title"] = title
+        for key in ("start_index", "end_index"):
+            if type(index := source.get(key)) is int:
+                citation[key] = index
+        citations.append(citation)
+    return (
+        f"URL citations: {json.dumps(citations, ensure_ascii=False)}"
+        if citations
+        else ""
+    )
 
 
 def shared_openai_request_options(body: Mapping[str, JsonValue]) -> JsonObject:

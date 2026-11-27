@@ -19,6 +19,7 @@ from .models import (
     Message,
     MessageContentBlock,
     MessagesRequest,
+    tool_reference_name,
 )
 
 _MESSAGES_REQUEST_FIELDS = (
@@ -197,6 +198,8 @@ def _translated_result(block: ContentBlockToolResult) -> ContentBlockToolResult:
             )
         elif isinstance(item, dict) and item.get("type") == "search_result":
             items.append(_search_result_text(item).model_dump(exclude_unset=True))
+        elif (name := tool_reference_name(item)) is not None:
+            items.append({"type": "text", "text": f"Tool reference: {name}"})
         elif not isinstance(item, dict) or item.get("type") in (None, "text", "image"):
             items.append(item)
     if block.content and not items:
