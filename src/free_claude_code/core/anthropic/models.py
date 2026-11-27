@@ -16,6 +16,10 @@ CODE_EXECUTION_INPUT_FIELDS = {
 
 def _native_attachment(block: object) -> str | None:
     kind = get_block_type(block)
+    if kind in ("search_result", "document"):
+        citations = get_block_attr(block, "citations")
+        if isinstance(citations, dict) and citations.get("enabled"):
+            return f"{kind} citations"
     if kind not in ("document", "image"):
         return None
     source = get_block_attr(block, "source")
@@ -25,9 +29,6 @@ def _native_attachment(block: object) -> str | None:
     if kind == "document":
         if media not in ("text", "content"):
             return "document source"
-        citations = get_block_attr(block, "citations")
-        if isinstance(citations, dict) and citations.get("enabled"):
-            return "document citations"
         contents = get_block_attr(source, "content")
         if media == "content" and isinstance(contents, list):
             for part in contents:
@@ -164,9 +165,12 @@ class Tool(_AnthropicBlockBase):
     input_schema: dict[str, Any] | None = None
 
     @property
-    def allows_direct_call(self) -> bool:
-        callers = (self.model_extra or {}).get("allowed_callers")
-        return callers is None or (isinstance(callers, list) and "direct" in callers)
+    def available_for_direct_call(self) -> bool:
+        options = self.model_extra or {}
+        callers = options.get("allowed_callers")
+        return not options.get("defer_loading") and (
+            callers is None or (isinstance(callers, list) and "direct" in callers)
+        )
 
 
 class UnnamedTool(_AnthropicBlockBase):
@@ -241,10 +245,9 @@ class MessagesRequest(BaseModel):
                     and caller.get("type") != "direct"
                 ):
                     return "programmatic tool history"
-                if isinstance(block, (ContentBlockDocument, ContentBlockImage)):
-                    if reason := _native_attachment(block):
-                        return reason
-                elif isinstance(block, ContentBlockToolResult) and isinstance(
+                if reason := _native_attachment(block):
+                    return reason
+                if isinstance(block, ContentBlockToolResult) and isinstance(
                     block.content, list
                 ):
                     for part in block.content:
@@ -268,7 +271,6 @@ class MessagesRequest(BaseModel):
                     "tool_removal",
                     "tool_search_tool_result",
                     "advisor_tool_result",
-                    "search_result",
                     "text_editor_code_execution_tool_result",
                 }:
                     return block.type
@@ -284,8 +286,7 @@ class MessagesRequest(BaseModel):
             tool
             for tool in self.named_tools
             if tool.type in (None, "custom")
-            and tool.allows_direct_call
-            and not (tool.model_extra or {}).get("defer_loading")
+            and tool.available_for_direct_call
             and (supports_strict or not (tool.model_extra or {}).get("strict"))
         ]
 

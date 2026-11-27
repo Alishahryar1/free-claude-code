@@ -80,12 +80,14 @@ def test_client_discovery_preserves_the_current_namespace_description() -> None:
         "type": "namespace",
         "name": "catalog",
         "description": "Current catalog",
+        "vendor_header": "current-private",
         "tools": [{"type": "function", "name": "count"}],
     }
     loaded: JsonObject = {
         "type": "namespace",
         "name": "catalog",
         "description": "Earlier catalog",
+        "vendor_header": "earlier-private",
         "tools": [{"type": "function", "name": "lookup"}],
     }
     request = OpenAIResponsesRequest(
@@ -116,6 +118,17 @@ def test_client_discovery_preserves_the_current_namespace_description() -> None:
         "count",
         "lookup",
     }
+    adapter = ResponsesToolAdapter(
+        request, ResponsesToolPolicy(flatten_namespaces=True)
+    )
+    flattened = adapter.request.tools
+    assert "current-private" not in json.dumps(flattened)
+    assert json.dumps(flattened).count("Current catalog") == 1
+    assert adapter.restore_tools(flattened) == [current, SEARCH]
+    earlier = object_array(adapter.request.input)[1]
+    assert "earlier-private" not in json.dumps(earlier)
+    assert json.dumps(earlier).count("Earlier catalog") == 1
+    assert adapter.restore_item(earlier) == object_array(request.input)[1]
 
 
 def test_public_search_history_keeps_each_namespace_with_its_tool() -> None:

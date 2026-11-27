@@ -11,6 +11,7 @@ from .errors import ResponsesConversionError
 from .tools import (
     ResponsesToolIdentity,
     definition_identity,
+    include_namespace_description,
     optional_str,
     required_str,
 )
@@ -39,19 +40,19 @@ class ClientSearchHistory:
         return {
             definition_identity(tool, namespace)
             for output in self.completed_outputs
-            for namespace, tool in _declarations(output)
+            for namespace, _, tool in _declarations(output)
             if tool.get("type") in ("function", "custom")
         }
 
 
 def _declarations(
     tools: Iterable[JsonValue],
-) -> Iterator[tuple[str | None, JsonObject]]:
+) -> Iterator[tuple[str | None, str | None, JsonObject]]:
     for tool in tools:
         if not isinstance(tool, dict):
             continue
         if tool.get("type") != "namespace":
-            yield None, tool
+            yield None, None, tool
             continue
         namespace = required_str(tool.get("name"), "tool.namespace.name")
         children = tool.get("tools")
@@ -59,7 +60,7 @@ def _declarations(
             raise ResponsesConversionError("Namespace tools must be a list.")
         for child in children:
             if isinstance(child, dict):
-                yield namespace, child
+                yield namespace, optional_str(tool.get("description")), child
 
 
 def public_search_tools(tools: JsonValue) -> list[JsonObject]:
@@ -67,7 +68,7 @@ def public_search_tools(tools: JsonValue) -> list[JsonObject]:
     if not isinstance(tools, list):
         return []
     public: list[JsonObject] = []
-    for namespace, tool in _declarations(tools):
+    for namespace, description, tool in _declarations(tools):
         kind = tool.get("type")
         if kind not in ("function", "custom"):
             continue
@@ -83,6 +84,7 @@ def public_search_tools(tools: JsonValue) -> list[JsonObject]:
         entry["type"] = identity.kind
         if identity.namespace is not None:
             entry["namespace"] = identity.namespace
+            include_namespace_description(entry, identity.namespace, description)
         public.append(entry)
     return public
 
@@ -173,7 +175,7 @@ def _merge_tool_groups(
     hosted: list[JsonObject] = []
     for group in groups:
         declarations: dict[ResponsesToolIdentity, JsonObject] = {}
-        for namespace, child in _declarations(group):
+        for namespace, _, child in _declarations(group):
             kind = child.get("type")
             if kind not in {"function", "custom"}:
                 if group is groups[-1]:

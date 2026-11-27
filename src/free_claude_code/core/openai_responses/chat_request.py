@@ -114,7 +114,7 @@ class _ResponsesChatInputBuilder:
             self._add_tool_output(item, source_type=source_type)
         elif isinstance(item, Screenshot):
             self._flush_reasoning()
-            content = _message_content(item.content, allow_attachments=True)
+            content = _message_content(item.content)
             assert isinstance(content, list)
             self._pending_rich_output_parts.extend(content)
         else:
@@ -142,19 +142,21 @@ class _ResponsesChatInputBuilder:
 
     def _add_message(self, item: InputMessage) -> None:
         role = item.role
+        if role != "user":
+            item.require_text_only("Chat")
+        content = _message_content(item.content)
         if role in {"developer", "system"}:
-            text = _content_text(item.content)
-            if text:
+            assert isinstance(content, str)
+            if content:
                 if self.messages or not self._pending_reasoning.empty:
                     self._flush_reasoning()
-                    self.messages.append({"role": role, "content": text})
+                    self.messages.append({"role": role, "content": content})
                 else:
-                    self.system_parts.append(text)
+                    self.system_parts.append(content)
             return
 
         if role == "user":
             self._flush_reasoning()
-        content = _message_content(item.content, allow_attachments=role == "user")
         message: dict[str, object] = {"role": role, "content": content}
         if role == "assistant":
             self._apply_pending_reasoning(message)
@@ -403,14 +405,12 @@ def build_responses_chat_request(
     )
 
 
-def _message_content(
-    value: JsonValue, *, allow_attachments: bool
-) -> str | list[dict[str, object]]:
+def _message_content(value: JsonValue) -> str | list[dict[str, object]]:
     if isinstance(value, str):
         return value
     if not isinstance(value, Sequence) or isinstance(value, bytes | bytearray):
         if isinstance(value, Mapping):
-            return _message_content([value], allow_attachments=allow_attachments)
+            return _message_content([value])
         return ""
 
     parts: list[dict[str, object]] = []
@@ -424,15 +424,11 @@ def _message_content(
         if part_type in ("input_text", "output_text", "text", "refusal"):
             parts.append({"type": "text", "text": _text_from_part(part)})
             continue
-        if allow_attachments and part_type == "input_image":
+        if part_type == "input_image":
             parts.append(_image_part(part, context="input_image"))
         elif part_type == "input_file":
             fields = inline_file_fields(part, pdf_only=True)
-            if (
-                not allow_attachments
-                or fields is None
-                or part.get("detail") not in (None, "auto")
-            ):
+            if fields is None or part.get("detail") not in (None, "auto"):
                 raise ResponsesConversionError(
                     "A Chat file must be an inline PDF with automatic detail in user content"
                 )
@@ -446,15 +442,6 @@ def _message_content(
     if all(part.get("type") == "text" for part in parts):
         return "\n\n".join(str(part.get("text", "")) for part in parts)
     return parts
-
-
-def _content_text(value: JsonValue) -> str:
-    content = _message_content(value, allow_attachments=False)
-    if isinstance(content, str):
-        return content
-    return "\n\n".join(
-        str(part.get("text", "")) for part in content if isinstance(part, Mapping)
-    )
 
 
 def _text_from_part(part: Mapping[str, JsonValue]) -> str:
@@ -516,7 +503,7 @@ def _rich_tool_output_parts(
     ):
         return None
 
-    parts = _message_content(value, allow_attachments=True)
+    parts = _message_content(value)
     assert isinstance(parts, list)
     return [{"type": "text", "text": tool_result_attachment_label(call_id)}, *parts]
 

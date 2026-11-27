@@ -32,6 +32,7 @@ from .tools import (
     custom_tool_input_text_from_arguments,
     definition_identity,
     flatten_responses_tool_name,
+    include_namespace_description,
     optional_str,
     required_str,
 )
@@ -271,6 +272,11 @@ class ResponsesToolAdapter:
                 tool.pop("format", None)
                 if description := custom_tool_description(source):
                     tool["description"] = description
+            if self._policy.flatten_namespaces and namespace is not None:
+                header = self._namespace_headers[(scope, namespace)]
+                include_namespace_description(
+                    tool, namespace, header.get("description")
+                )
         if self._policy.flatten_namespaces:
             tool.pop("namespace", None)
         if self._policy.explicit_search_parameters:

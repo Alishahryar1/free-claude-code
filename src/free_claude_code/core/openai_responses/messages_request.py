@@ -37,6 +37,7 @@ from .tools import (
     ResponsesToolIdentity,
     custom_tool_input_schema,
     flatten_responses_tool_name,
+    include_namespace_description,
 )
 
 
@@ -100,11 +101,7 @@ class _ToolScope:
                     if child.get("type") not in ("function", "custom"):
                         continue
                     identity, body = self._definition(child, namespace)
-                    if description:
-                        own = body.get("description", "")
-                        body["description"] = (
-                            f"Namespace {namespace}: {description}\n\n{own}".rstrip()
-                        )
+                    include_namespace_description(body, namespace, description)
                     definitions.append((identity, body))
             elif tool.get("type") in ("function", "custom"):
                 definitions.append(self._definition(tool, None))
@@ -252,7 +249,7 @@ def _image(value: Mapping[str, JsonValue]) -> JsonObject:
     return {"type": "image", "source": source}
 
 
-def _content(value: JsonValue, *, images: bool, empty: bool = False) -> list[JsonValue]:
+def _content(value: JsonValue, *, empty: bool = False) -> list[JsonValue]:
     if isinstance(value, str):
         text = _string(value, "content", empty=empty)
         return [{"type": "text", "text": text}] if text else []
@@ -269,7 +266,7 @@ def _content(value: JsonValue, *, images: bool, empty: bool = False) -> list[Jso
             text = _string(item.get("text"), "content.text", empty=empty)
             if text:
                 blocks.append({"type": "text", "text": text})
-        elif kind == "input_image" and images:
+        elif kind == "input_image":
             blocks.append(_image(item))
         elif kind == "input_file":
             raise ResponsesConversionError(
@@ -321,16 +318,17 @@ class _MessagesInput:
     def add(self, item: HistoryItem) -> None:
         if isinstance(item, InputMessage):
             role = item.role
+            if role != "user":
+                item.require_text_only("Messages")
             if role in ("system", "developer"):
                 if self.messages:
                     raise ResponsesConversionError(
                         "Messages upstream supports only leading system/developer input."
                     )
-                self.system.extend(_content(item.content, images=False))
+                self.system.extend(_content(item.content))
             else:
                 parts = _content(
                     item.content,
-                    images=role == "user",
                     empty=self._assistant_fragment and role == "assistant",
                 )
                 if parts or self._assistant_fragment:
@@ -343,7 +341,7 @@ class _MessagesInput:
         elif isinstance(item, InputResult):
             self._result(item)
         elif isinstance(item, Screenshot):
-            self._append("user", _content(item.content, images=True))
+            self._append("user", _content(item.content))
         else:
             assert_never(item)
 
@@ -377,7 +375,7 @@ class _MessagesInput:
             "type": "tool_result",
             "tool_use_id": call_id,
         }
-        content = _content(item.output, images=True, empty=True)
+        content = _content(item.output, empty=True)
         if content:
             block["content"] = content
         if item.is_error is not None:

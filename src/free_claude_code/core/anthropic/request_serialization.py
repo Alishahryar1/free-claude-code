@@ -157,6 +157,33 @@ def _document_parts(
     return parts
 
 
+def _search_result_text(result: Mapping[str, object]) -> ContentBlockText:
+    title, source, content = (
+        result.get("title"),
+        result.get("source"),
+        result.get("content"),
+    )
+    if (
+        not isinstance(title, str)
+        or not isinstance(source, str)
+        or not isinstance(content, list)
+    ):
+        raise ValueError(
+            "Messages search_result requires a title, source and text content"
+        )
+    excerpts = [
+        text
+        for part in content
+        if isinstance(part, dict)
+        and part.get("type") == "text"
+        and isinstance(text := part.get("text"), str)
+        and text
+    ]
+    if not excerpts:
+        raise ValueError("Messages search_result contains no readable text")
+    return ContentBlockText(type="text", text="\n\n".join([title, source, *excerpts]))
+
+
 def _translated_result(block: ContentBlockToolResult) -> ContentBlockToolResult:
     if not isinstance(block.content, list):
         return block
@@ -166,6 +193,8 @@ def _translated_result(block: ContentBlockToolResult) -> ContentBlockToolResult:
             items.extend(
                 part.model_dump(exclude_unset=True) for part in _document_parts(item)
             )
+        elif isinstance(item, dict) and item.get("type") == "search_result":
+            items.append(_search_result_text(item).model_dump(exclude_unset=True))
         elif not isinstance(item, dict) or item.get("type") in (None, "text", "image"):
             items.append(item)
     if block.content and not items:
@@ -193,6 +222,8 @@ def translated_messages(request: MessagesRequest) -> list[Message]:
         blocks: list[MessageContentBlock] = []
         for block in turn.content:
             if isinstance(block, ExtensionBlock):
+                if block.type == "search_result":
+                    blocks.append(_search_result_text(block.model_extra or {}))
                 continue
             if isinstance(block, ContentBlockDocument):
                 blocks.extend(_document_parts(block.model_dump(exclude_unset=True)))

@@ -552,10 +552,14 @@ def test_does_not_plan_noncanonical_automatic_search(tool: Tool) -> None:
     ("name", "kind"),
     [("web_search", "web_search_20250305"), ("web_fetch", "web_fetch_20250910")],
 )
-def test_restricted_web_tool_can_only_run_in_its_container(
-    name: str, kind: str
+@pytest.mark.parametrize(
+    "restriction",
+    [{"allowed_callers": ["code_execution_20260120"]}, {"defer_loading": True}],
+)
+def test_web_tool_must_be_available_for_local_execution(
+    name: str, kind: str, restriction: dict[str, Any]
 ) -> None:
-    tool = Tool(name=name, type=kind, allowed_callers=["code_execution_20260120"])
+    tool = Tool(name=name, type=kind, **restriction)
     request = _automatic_search_request(tool=tool)
     assert plan_automatic_web_search(request, web_tools_enabled=True) is None
     request.tool_choice = {"type": "tool", "name": name}

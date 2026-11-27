@@ -41,6 +41,18 @@ def definition_identity(
     )
 
 
+def include_namespace_description(
+    tool: JsonObject, namespace: str, description: object
+) -> None:
+    """Carry a group's model-visible instructions onto its flattened child."""
+    if isinstance(description, str) and description:
+        prefix = f"Namespace {namespace}: {description}"
+        own = tool.get("description")
+        tool["description"] = (
+            f"{prefix}\n\n{own}" if isinstance(own, str) and own else prefix
+        )
+
+
 def flatten_responses_tool_name(name: str, *, namespace: str | None = None) -> str:
     """Return a deterministic flat tool name for a Responses tool identity."""
 

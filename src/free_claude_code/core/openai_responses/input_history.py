@@ -20,6 +20,14 @@ class InputMessage:
     role: str
     content: str | list[JsonObject]
 
+    def require_text_only(self, destination: str) -> None:
+        if isinstance(self.content, list):
+            for part in self.content:
+                if part["type"] != "input_text":
+                    raise ResponsesConversionError(
+                        f"{destination} cannot represent {part['type']} in a {self.role} message"
+                    )
+
 
 @dataclass(frozen=True, slots=True)
 class ReasoningItem:

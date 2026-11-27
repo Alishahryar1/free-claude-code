@@ -17,6 +17,167 @@ from tests.providers.test_gemini import _sse
 
 
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages", "gemini"])
+@pytest.mark.parametrize("via_tool", [False, True])
+def test_messages_search_results_preserve_public_evidence(
+    protocol: str, via_tool: bool
+) -> None:
+    hit: JsonObject = {
+        "type": "search_result",
+        "source": "https://example.invalid/report",
+        "title": "Seat report",
+        "content": [
+            {
+                "type": "text",
+                "text": "Available seats: 14",
+                "vendor_note": "private-note",
+            }
+        ],
+        "extra_data": "private-note",
+    }
+    history: list[JsonObject] = []
+    if via_tool:
+        history.extend(
+            [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "lookup",
+                            "name": "read",
+                            "input": {},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "lookup",
+                            "content": [hit],
+                        }
+                    ],
+                },
+            ]
+        )
+    else:
+        history.append({"role": "user", "content": [hit]})
+    history.append({"role": "user", "content": "How many seats are available?"})
+    path, body = ingress_request("messages", True, history)
+    actual = json.dumps(sent_request(protocol, path, body))
+    for value in (
+        "Seat report",
+        "https://example.invalid/report",
+        "Available seats: 14",
+        "How many seats",
+    ):
+        assert value in actual
+    assert ("private-note" in actual) == (protocol == "messages")
+    hit["citations"] = {"enabled": True}
+    if protocol != "messages":
+        assert "citations" in translation_error(protocol, path, body)
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses", "messages", "gemini"])
+def test_deferred_messages_web_search_waits_for_discovery(protocol: str) -> None:
+    path, body = ingress_request("messages", True)
+    hosted: JsonObject = {
+        "name": "web_search",
+        "type": "web_search_20250305",
+        "defer_loading": True,
+    }
+    body["tools"] = [
+        hosted,
+        {"name": "tool_search_tool_regex", "type": "tool_search_tool_regex_20251119"},
+        {"name": "read", "input_schema": {"type": "object"}},
+    ]
+    offered = sent_request(protocol, path, body)["tools"]
+    assert "fcc_web_search" not in json.dumps(offered)
+    assert "read" in json.dumps(offered)
+    if protocol == "messages":
+        assert isinstance(offered, list) and hosted in offered
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "gemini"])
+def test_flattened_tool_keeps_its_namespace_instructions(protocol: str) -> None:
+    history: list[JsonObject] = [
+        {"role": "user", "content": "Find billing tools"},
+        {
+            "type": "tool_search_call",
+            "execution": "client",
+            "call_id": "search",
+            "arguments": {},
+        },
+        {
+            "type": "tool_search_output",
+            "execution": "client",
+            "call_id": "search",
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "billing",
+                    "description": "Only read monthly statements.",
+                    "tools": [{"type": "function", "name": "statement"}],
+                }
+            ],
+        },
+        {"role": "user", "content": "What tools were found?"},
+    ]
+    path, body = ingress_request("responses", True, history)
+    body["tools"] = [
+        {
+            "type": "namespace",
+            "name": "billing",
+            "description": "Ask the owner before reading an account.",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "read",
+                    "description": "Read today's balance",
+                    "parameters": {"type": "object"},
+                },
+                {
+                    "type": "custom",
+                    "name": "edit",
+                    "description": "Edit a balance",
+                    "format": {"type": "text"},
+                },
+            ],
+        }
+    ]
+    sent = sent_request(protocol, path, body)
+    tools = json.dumps(sent["tools"])
+    assert tools.count("Ask the owner before reading an account.") == 3
+    assert "Read today's balance" in tools and "Edit a balance" in tools
+    transcript = json.dumps(sent.get("messages", sent.get("contents")))
+    assert "Only read monthly statements." in transcript
+    assert "Ask the owner before reading an account." not in transcript
+
+
+@pytest.mark.parametrize("role", ["assistant", "developer", "system"])
+@pytest.mark.parametrize("protocol", ["chat", "messages"])
+def test_reference_image_in_a_text_only_role_cannot_disappear(
+    role: str, protocol: str
+) -> None:
+    path, body = ingress_request(
+        "responses",
+        True,
+        [
+            {
+                "role": role,
+                "content": [
+                    {"type": "input_text", "text": "Reference"},
+                    {"type": "input_image", "image_url": "data:image/png;base64,YQ=="},
+                ],
+            },
+            {"role": "user", "content": "What does the reference show?"},
+        ],
+    )
+    assert "image" in translation_error(protocol, path, body).lower()
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses", "messages", "gemini"])
 def test_forced_messages_tool_survives_an_unavailable_sibling(protocol: str) -> None:
     path, body = ingress_request("messages", True)
     schema: JsonObject = {"type": "object", "properties": {}}
