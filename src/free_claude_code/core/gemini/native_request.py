@@ -22,6 +22,7 @@ from ..chat_completions.request import (
 )
 from ..history_replay import (
     decode_replay,
+    google_thought_signature,
     is_replay,
     messages_replay_key,
     protected_reasoning,
@@ -386,7 +387,7 @@ def messages_to_gemini(
                 key = messages_replay_key(block)
                 parts.extend(_reasoning(block, block.get(key) if key else None))
             elif kind == "tool_use":
-                if block.get("extra_content"):
+                if google_thought_signature(block.get("extra_content")):
                     raise GeminiConversionError(
                         "Saved compatibility tool metadata cannot be replayed on native Gemini; start a fresh conversation"
                     )

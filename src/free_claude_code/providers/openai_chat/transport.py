@@ -75,6 +75,7 @@ from free_claude_code.core.reasoning import (
 )
 from free_claude_code.core.stream_output import StreamOutput, completed_output
 from free_claude_code.core.stream_recovery import ContinuationSeed
+from free_claude_code.core.tool_call_scope import ToolCallScope, has_tool_selection
 from free_claude_code.core.trace import provider_chat_body_snapshot, trace_event
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -266,6 +267,7 @@ class _ChatStreamPresenter:
         self._provider_name = provider_name
         self._output_reasoning = output_reasoning
         self._tool_names = tool_names
+        self._tool_scope: ToolCallScope | None = None
         self._tool_buffer = ChatToolCallBuffer()
         self._reserved_tool_ids = set(reserved_tool_ids)
         self._record_extra_content = record_extra_content
@@ -281,7 +283,7 @@ class _ChatStreamPresenter:
         self._usage_info: object = None
         self._tool_argument_aliases: dict[str, dict[str, str]] = {}
         self._started = False
-        self._aliases_bound = False
+        self._tools_bound = False
         self._upstream_finished = False
         self._completion: _OpenAIChatCompletion | None = None
         self._completed = False
@@ -318,11 +320,14 @@ class _ChatStreamPresenter:
         self._started = True
         yield from self._output.start_events()
 
-    def bind_tool_argument_aliases(self, aliases: dict[str, dict[str, str]]) -> None:
-        if self._aliases_bound:
-            raise RuntimeError("tool argument aliases already bound")
-        self._aliases_bound = True
+    def bind_tools(
+        self, aliases: dict[str, dict[str, str]], scope: ToolCallScope | None
+    ) -> None:
+        if self._tools_bound:
+            raise RuntimeError("tool scope and argument aliases already bound")
+        self._tools_bound = True
         self._tool_argument_aliases = aliases
+        self._tool_scope = scope
 
     def feed(self, chunk: ChatCompletionChunk) -> Iterator[StreamOutput]:
         if not self._started or self._upstream_finished:
@@ -369,6 +374,11 @@ class _ChatStreamPresenter:
                         502,
                         "Invalid completed Chat tool call",
                         False,
+                    )
+                if self._tool_scope is not None:
+                    canonical = self._output.canonical_function_name(name)
+                    self._tool_scope.require(
+                        "function", self._tool_names.encode(canonical)
                     )
                 raw_extra = call.body.get("extra_content")
                 extra = raw_extra if isinstance(raw_extra, dict) else None
@@ -969,6 +979,7 @@ class OpenAIChatTransport:
             body=body,
             tool_names=tool_names,
             reserved_tool_ids=_reserved_anthropic_tool_ids(request),
+            constrain_tool_calls=has_tool_selection(request.tools, request.tool_choice),
             output_factory=lambda: AnthropicChatStreamOutput(
                 message_id=message_id,
                 model=request.model if response_model is None else response_model,
@@ -1020,6 +1031,7 @@ class OpenAIChatTransport:
             body=body,
             tool_names=prepared.tool_names,
             reserved_tool_ids=prepared.reserved_tool_ids,
+            constrain_tool_calls=True,
             output_factory=lambda: GeminiChatStreamOutput(
                 response_id=response_id,
                 model=public_model,
@@ -1058,6 +1070,7 @@ class OpenAIChatTransport:
             body=translated.body,
             tool_names=translated.tool_names,
             reserved_tool_ids=translated.reserved_tool_ids,
+            constrain_tool_calls=translated.tool_adapter.constrains_returned_calls,
             output_factory=lambda: ResponsesChatStreamOutput(
                 translated.tool_adapter,
                 input_tokens=input_tokens,
@@ -1085,6 +1098,7 @@ class _OpenAIChatStreamRunner:
         tool_names: OpenAIToolNameCodec,
         reserved_tool_ids: frozenset[str],
         output_factory: _ChatOutputFactory,
+        constrain_tool_calls: bool = False,
         input_tokens: int,
         request_id: str | None,
         response_model: str,
@@ -1105,6 +1119,7 @@ class _OpenAIChatStreamRunner:
         self._tool_names = tool_names
         self._reserved_tool_ids = reserved_tool_ids
         self._output_factory = output_factory
+        self._constrain_tool_calls = constrain_tool_calls
         self._input_tokens = input_tokens
         self._request_id = request_id
         self._response_model = response_model
@@ -1289,7 +1304,12 @@ class _ChatAttempt(TransportAttempt):
             on_event=self._observe,
             native_chat=runner._native_chat,
         )
-        presenter.bind_tool_argument_aliases(runner._tool_argument_aliases)
+        presenter.bind_tools(
+            runner._tool_argument_aliases,
+            ToolCallScope.from_body(self.sent_body, "chat")
+            if runner._constrain_tool_calls
+            else None,
+        )
         async for chunk in stream:
             if not scope.attempt.accepted:
                 await scope.attempt.accept()

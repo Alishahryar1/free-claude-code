@@ -78,6 +78,9 @@ class ChatStreamOutput(ABC):
     consumes_terminal_failure = False
     pad_empty = True
 
+    def canonical_function_name(self, name: str) -> str:
+        return name
+
     def __init__(self, *, input_tokens: int) -> None:
         self.input_tokens = input_tokens
         self.replay_origin: ReplayOrigin | None = None
@@ -441,6 +444,10 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
 
     consumes_terminal_failure = True
 
+    @override
+    def canonical_function_name(self, name: str) -> str:
+        return self._tool_adapter.canonical_function_name(name)
+
     def __init__(
         self,
         tool_adapter: ResponsesToolAdapter,
@@ -450,6 +457,7 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
     ) -> None:
         super().__init__(input_tokens=input_tokens)
         self._request = tool_adapter.original
+        self._tool_adapter = tool_adapter
         self._response_model = response_model or self._request.model
         self._response_id = new_response_id()
         self._created_at = int(time.time())

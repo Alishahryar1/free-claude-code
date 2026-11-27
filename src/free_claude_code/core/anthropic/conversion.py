@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from free_claude_code.core.history_replay import (
     HistoryReplayError,
+    google_thought_signature,
     has_readable_replay,
     is_replay,
     readable_reasoning,
@@ -118,8 +119,10 @@ def _tool_call_from_tool_use(block: object) -> dict[str, Any]:
         },
     }
     extra_content = get_block_attr(block, "extra_content", None)
-    if isinstance(extra_content, dict) and extra_content:
-        tool_call["extra_content"] = deepcopy(extra_content)
+    if isinstance(extra_content, dict) and (
+        signature := google_thought_signature(extra_content)
+    ):
+        tool_call["extra_content"] = {"google": {"thought_signature": signature}}
     return tool_call
 
 

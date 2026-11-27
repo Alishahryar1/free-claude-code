@@ -399,6 +399,8 @@ def test_build_responses_provider_request_uses_resolved_reasoning_policy() -> No
         {"edits": []},
         {"edits": [_KEEP_ALL_THINKING_EDIT]},
         {"edits": [_KEEP_ALL_THINKING_EDIT, _KEEP_ALL_THINKING_EDIT]},
+        {"edits": [{**_KEEP_ALL_THINKING_EDIT, "extra": True}]},
+        {"edits": [], "extra": True},
     ],
 )
 def test_build_responses_provider_request_accepts_noop_context_management(
@@ -434,15 +436,6 @@ def test_build_responses_provider_request_accepts_noop_context_management(
         },
         {"edits": [{"type": "clear_tool_uses_20250919"}]},
         {"edits": [{"type": "unknown_edit", "keep": "all"}]},
-        {
-            "edits": [
-                {
-                    **_KEEP_ALL_THINKING_EDIT,
-                    "extra": True,
-                }
-            ]
-        },
-        {"edits": [], "extra": True},
         {"edits": None},
         {"edits": {}},
         {"edits": "not-a-list"},

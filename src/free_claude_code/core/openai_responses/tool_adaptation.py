@@ -11,6 +11,7 @@ import simplejson
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
+from ..tool_call_scope import has_tool_selection
 from .errors import ResponsesConversionError
 from .ids import tool_item_id_for_kind
 from .models import OpenAIResponsesRequest
@@ -467,6 +468,22 @@ class ResponsesToolAdapter:
         if len(candidates) > 1 and self._policy.flatten_namespaces:
             raise ResponsesConversionError("Ambiguous tool name returned by provider.")
         return next(iter(candidates)) if len(candidates) == 1 else None
+
+    @property
+    def constrains_returned_calls(self) -> bool:
+        if has_tool_selection(self.original.tools, self.original.tool_choice):
+            return True
+        # Restoring a custom, namespaced or search action requires a current
+        # declaration even when ordinary unscoped function replies are allowed.
+        return self._search_name is not None or any(
+            tool.kind == "custom" or tool.namespace is not None
+            for tool in self._wire_names
+        )
+
+    def canonical_function_name(self, name: str) -> str:
+        """Resolve a unique shortened provider name to the name in its declaration."""
+        identity = self._identity({"name": name})
+        return self._wire_name(identity) if identity is not None else name
 
     def restore_item(self, value: JsonValue) -> JsonValue:
         if not isinstance(value, dict):

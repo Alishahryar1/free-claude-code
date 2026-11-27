@@ -285,17 +285,12 @@ def serialize_tool_result_content(content: object) -> str:
 def is_noop_context_management(
     context_management: Mapping[str, object] | None,
 ) -> bool:
-    if not context_management:
+    if not context_management or "edits" not in context_management:
         return True
-    if set(context_management) != {"edits"}:
-        return False
     edits = context_management["edits"]
     return isinstance(edits, list) and all(
         isinstance(edit, dict)
-        and edit
-        == {
-            "type": "clear_thinking_20251015",
-            "keep": "all",
-        }
+        and edit.get("type") == "clear_thinking_20251015"
+        and edit.get("keep") == "all"
         for edit in edits
     )

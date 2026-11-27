@@ -121,8 +121,12 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
         (turn for turn in reversed(history) if turn.content.effective_role == "user"),
         None,
     )
+    choice = request.tool_config.function_calling_config
     declarations = [
-        item for tool in request.tools for item in tool.function_declarations
+        item
+        for tool in request.tools
+        for item in tool.function_declarations
+        if choice.permits(item.name)
     ]
     names = [item.name for item in declarations]
     for turn in history:
@@ -342,12 +346,8 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
             messages.insert(0, {"role": "system", "content": system})
         else:
             body["system" if destination == "messages" else "instructions"] = system
-    choice = request.tool_config.function_calling_config
-    allowed = set(choice.allowed_function_names)
     tools: list[JsonValue] = []
     for declaration in declarations:
-        if allowed and declaration.name not in allowed:
-            continue
         name = codec.encode(declaration.name)
         tool: JsonObject = {"name": name}
         if declaration.description is not None:
@@ -367,7 +367,6 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
         mode = {
             "MODE_UNSPECIFIED": "auto",
             "AUTO": "auto",
-            "NONE": "none",
             "ANY": "any" if destination == "messages" else "required",
         }[choice.mode]
         body["tool_choice"] = {"type": mode} if destination == "messages" else mode

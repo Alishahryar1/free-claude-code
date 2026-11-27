@@ -329,7 +329,17 @@ def test_conflicting_echoed_replay_bundles_are_not_silently_deduplicated() -> No
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 def test_allowed_function_names_use_the_declared_intersection(protocol: str) -> None:
     value = request(
-        tools=[{"functionDeclarations": [{"name": "read"}, {"name": "write"}]}],
+        tools=[
+            {
+                "functionDeclarations": [
+                    {"name": "read"},
+                    {
+                        "name": "write",
+                        "parameters": {"type": "OBJECT", "propertyOrdering": ["field"]},
+                    },
+                ]
+            }
+        ],
         toolConfig={
             "functionCallingConfig": {
                 "mode": "ANY",
@@ -337,7 +347,9 @@ def test_allowed_function_names_use_the_declared_intersection(protocol: str) -> 
             }
         },
     )
-    tools = object_array(build(value, protocol).body["tools"])
+    prepared = build(value, protocol)
+    assert prepared.declared_names == {"read"}
+    tools = object_array(prepared.body["tools"])
     if protocol == "chat":
         assert [object_payload(tool["function"])["name"] for tool in tools] == ["read"]
     else:

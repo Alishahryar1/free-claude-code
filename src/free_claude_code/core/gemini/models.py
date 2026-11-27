@@ -181,6 +181,11 @@ class FunctionCallingConfig(GeminiModel):
     mode: Literal["MODE_UNSPECIFIED", "AUTO", "ANY", "NONE"] = "AUTO"
     allowed_function_names: list[str] = Field(default_factory=list)
 
+    def permits(self, name: str) -> bool:
+        return self.mode != "NONE" and (
+            not self.allowed_function_names or name in self.allowed_function_names
+        )
+
     @model_validator(mode="after")
     def allowed_mode(self) -> Self:
         if self.allowed_function_names and self.mode != "ANY":

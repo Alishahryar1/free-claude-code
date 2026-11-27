@@ -1404,6 +1404,13 @@ def test_discovery_optional_status_preserves_valid_tools(
         items = object_array(adapter.request.input)
         payload = load_json_value(string_payload(items[-1]["output"]))
         assert items[-1]["call_id"] == "search"
+    elif status in ("in_progress", "incomplete", "failed"):
+        with pytest.raises(ResponsesConversionError, match="tool result with status"):
+            build_responses_chat_request(
+                request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
+            )
+        assert request.model_dump() == original
+        return
     else:
         body = build_responses_chat_request(
             request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT

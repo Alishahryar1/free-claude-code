@@ -1,5 +1,6 @@
 """Read the conversation in a Responses request for a foreign provider."""
 
+import json
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Literal
@@ -81,6 +82,34 @@ def input_items(value: JsonValue) -> list[JsonValue]:
     return value if isinstance(value, list) else [] if value is None else [value]
 
 
+def _cited_text(text: str, annotations: JsonValue) -> str:
+    if annotations is None:
+        return text
+    if not isinstance(annotations, list):
+        raise ResponsesConversionError("Responses text annotations must be a list")
+    citations: list[JsonObject] = []
+    for annotation in annotations:
+        if not isinstance(annotation, dict):
+            raise ResponsesConversionError("Responses annotations must be objects")
+        kind = annotation.get("type")
+        if kind in ("file_citation", "container_file_citation", "file_path"):
+            raise ResponsesConversionError(f"A {kind} requires native Responses egress")
+        if kind == "url_citation":
+            citation: JsonObject = {
+                "url": required_str(annotation.get("url"), "url_citation.url")
+            }
+            if isinstance(title := annotation.get("title"), str):
+                citation["title"] = title
+            for key in ("start_index", "end_index"):
+                index = annotation.get(key)
+                if type(index) is int:
+                    citation[key] = index
+            citations.append(citation)
+    if not citations:
+        return text
+    return f"{text}\n\nURL citations: {json.dumps(citations, ensure_ascii=False)}"
+
+
 def _content(
     value: JsonValue, *, keep_empty_text: bool = False
 ) -> str | list[JsonObject]:
@@ -100,6 +129,8 @@ def _content(
                 raise ResponsesConversionError(
                     "Responses text content requires a string"
                 )
+            if kind == "output_text":
+                text = _cited_text(text, part.get("annotations"))
             if text or keep_empty_text:
                 parts.append(
                     {
@@ -216,6 +247,10 @@ def _read_item(raw: JsonValue) -> HistoryItem | None:
             arguments,
         )
     if kind in ("function_call_output", "custom_tool_call_output"):
+        if (status := raw.get("status")) not in (None, "completed"):
+            raise ResponsesConversionError(
+                f"A tool result with status {status!r} requires native Responses egress"
+            )
         output = raw.get("output")
         if isinstance(output, list):
             content = _content(output, keep_empty_text=True)

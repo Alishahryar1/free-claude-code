@@ -3,18 +3,271 @@
 import json
 
 import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
+from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from tests.api.test_four_protocol_matrix import (
     ingress_request,
     matrix_app,
+    matrix_reply,
     sent_request,
     translation_error,
 )
 from tests.providers.test_gemini import _sse
 from tests.wire_payload import object_array, object_payload
+
+
+@pytest.mark.parametrize(
+    ("wire", "target"),
+    [
+        (wire, target)
+        for wire in ("chat", "messages", "responses", "gemini")
+        for target in ("chat", "messages", "responses", "gemini")
+        if wire != target
+    ],
+)
+@pytest.mark.parametrize("choice", ["named", "none"])
+def test_foreign_reply_cannot_call_a_function_the_caller_excluded(
+    wire: str, target: str, choice: str
+) -> None:
+    path, body = ingress_request(wire, wire == "responses")
+    if wire == "gemini":
+        body["tools"] = [
+            {"functionDeclarations": [{"name": "read"}, {"name": "allowed"}]}
+        ]
+        config: JsonObject = (
+            {"mode": "NONE"}
+            if choice == "none"
+            else {"mode": "ANY", "allowedFunctionNames": ["allowed"]}
+        )
+        body["toolConfig"] = {"functionCallingConfig": config}
+    elif wire == "messages":
+        body["tools"] = [
+            {"name": name, "input_schema": {"type": "object"}}
+            for name in ("read", "allowed")
+        ]
+        body["tool_choice"] = (
+            {"type": "none"}
+            if choice == "none"
+            else {"type": "tool", "name": "allowed"}
+        )
+    else:
+
+        def declaration(name: str) -> JsonObject:
+            return (
+                {"type": "function", "function": {"name": name}}
+                if wire == "chat"
+                else {"type": "function", "name": name}
+            )
+
+        body["tools"] = [declaration("read"), declaration("allowed")]
+        body["tool_choice"] = "none" if choice == "none" else declaration("allowed")
+    _assert_read_is_rejected(wire, target, path, body)
+
+
+def _assert_read_is_rejected(
+    wire: str, target: str, path: str, body: JsonObject
+) -> None:
+    attempts: list[str] = []
+
+    def wrong_tool(request: httpx.Request | httpx2.Request):
+        attempts.append(request.url.path)
+        return matrix_reply(target)
+
+    with TestClient(
+        matrix_app(
+            target, native_reply=wrong_tool, sdk_reply=wrong_tool, max_attempts=1
+        )
+    ) as client:
+        result = client.post(path, json=body)
+    assert attempts
+    if result.status_code == 200:
+        assert wire == "responses"
+        events = parse_sse_text(result.text)
+        assert events[-1].event == "response.failed"
+        assert not any(
+            isinstance(item := event.data.get("item"), dict)
+            and item.get("type")
+            in ("function_call", "custom_tool_call", "tool_search_call")
+            for event in events
+        )
+    else:
+        assert result.status_code == 502
+
+
+@pytest.mark.parametrize("target", ["chat", "responses", "gemini"])
+@pytest.mark.parametrize("use_local_search", [False, True])
+def test_program_only_tool_cannot_be_returned_as_a_direct_call(
+    target: str, use_local_search: bool
+) -> None:
+    path, body = ingress_request("messages", False)
+    tools: list[JsonObject] = [
+        {
+            "name": "read",
+            "input_schema": {"type": "object"},
+            "allowed_callers": ["code_execution_20250825"],
+        }
+    ]
+    if use_local_search:
+        tools.append({"type": "web_search_20250305", "name": "web_search"})
+    body["tools"] = tools
+    _assert_read_is_rejected("messages", target, path, body)
+
+
+@pytest.mark.parametrize("target", ["chat", "messages", "gemini"])
+def test_past_custom_tool_cannot_authorize_a_new_call(target: str) -> None:
+    path, body = ingress_request(
+        "responses",
+        True,
+        [
+            {"role": "user", "content": "Read the file"},
+            {
+                "type": "custom_tool_call",
+                "name": "read",
+                "call_id": "old",
+                "input": "file",
+            },
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "old",
+                "output": "I have read it.",
+            },
+            {"role": "user", "content": "What did the tool return?"},
+        ],
+    )
+    body.pop("tools")
+    _assert_read_is_rejected("responses", target, path, body)
+
+
+@pytest.mark.parametrize("target", ["chat", "messages", "responses", "gemini"])
+def test_cited_answer_reaches_the_next_turn_with_its_source(target: str) -> None:
+    citation: JsonObject = {
+        "type": "url_citation",
+        "title": "2025 budget",
+        "url": "https://example.invalid/report",
+        "start_index": 8,
+        "end_index": 14,
+        "vendor_note": "private citation metadata",
+    }
+    path, body = ingress_request(
+        "responses",
+        True,
+        [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "See the report.",
+                        "annotations": [citation],
+                    }
+                ],
+            },
+            {"role": "user", "content": "What was the URL for the report?"},
+        ],
+    )
+    sent = json.dumps(sent_request(target, path, body))
+    for value in (
+        "See the report.",
+        "2025 budget",
+        "https://example.invalid/report",
+        "What was the URL",
+    ):
+        assert value in sent
+    assert ("private citation metadata" in sent) == (target == "responses")
+    citation.update(
+        type="file_citation", file_id="file-001", filename="report.pdf", index=8
+    )
+    if target != "responses":
+        assert "file_citation" in translation_error(target, path, body)
+
+
+@pytest.mark.parametrize("target", ["chat", "messages", "responses", "gemini"])
+@pytest.mark.parametrize("status", ["in_progress", "incomplete"])
+def test_incomplete_responses_tool_result_never_becomes_a_completed_reply(
+    target: str, status: str
+) -> None:
+    path, body = ingress_request(
+        "responses",
+        True,
+        [
+            {"role": "user", "content": "Read both pages."},
+            {
+                "type": "function_call",
+                "name": "read",
+                "call_id": "r",
+                "arguments": "{}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "r",
+                "status": status,
+                "output": "first page only",
+            },
+            {"role": "user", "content": "Summarize both pages."},
+        ],
+    )
+    if target == "responses":
+        turns = object_array(sent_request(target, path, body)["input"])
+        assert (
+            next(
+                turn["status"]
+                for turn in turns
+                if turn.get("type") == "function_call_output"
+            )
+            == status
+        )
+    else:
+        assert status in translation_error(target, path, body)
+
+
+@pytest.mark.parametrize("target", ["chat", "messages", "responses", "gemini"])
+def test_metadata_on_a_noop_edit_and_a_past_tool_call_is_optional(target: str) -> None:
+    path, body = ingress_request(
+        "messages",
+        False,
+        [
+            {"role": "user", "content": "Read"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "r",
+                        "name": "read",
+                        "input": {},
+                        "extra_content": {"vendor_note": "call trace"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "r",
+                        "content": "Public result",
+                    }
+                ],
+            },
+        ],
+    )
+    body["context_management"] = {
+        "edits": [
+            {
+                "type": "clear_thinking_20251015",
+                "keep": "all",
+                "vendor_option": "edit trace",
+            }
+        ]
+    }
+    sent = json.dumps(sent_request(target, path, body))
+    assert "Public result" in sent
+    assert ("edit trace" in sent) == (target == "messages")
+    assert ("call trace" in sent) == (target == "messages")
 
 
 @pytest.mark.parametrize(

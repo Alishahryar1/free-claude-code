@@ -203,7 +203,7 @@ class WebToolService:
                 request_id=request_id,
             )
         completed = {call for packet in packets for call in packet.completed_calls}
-        names = {tool.name for tool in plan.request.named_tools}
+        names = {tool.name for tool in plan.request.direct_client_tools()}
         searches: dict[int, str] = {}
         client_calls: dict[int, CompletedCall] = {}
         seen_ids: set[str] = set()
