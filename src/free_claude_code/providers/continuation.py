@@ -85,15 +85,11 @@ class SourceRecoveryState:
         payload: Mapping[str, JsonValue],
         *,
         continuing: bool = False,
-        event_type: str | None = None,
     ) -> None:
-        # Messages SSE can name the event only outside its data.
-        kind = event_type or str(payload.get("type", ""))
+        kind = str(payload.get("type", ""))
         usage = payload.get("usage")
         if protocol == "messages" and kind == "message_start":
-            message = payload.get("message")
-            # The parser rejects a malformed message; recovery only reads usage.
-            usage = message.get("usage") if isinstance(message, dict) else None
+            usage = json_object(payload.get("message", {})).get("usage")
         elif protocol == "responses":
             usage = json_object(payload.get("response", {})).get("usage")
         if isinstance(usage, dict) and usage:
@@ -159,25 +155,14 @@ class SourceRecoveryState:
             if not isinstance(index, int) or isinstance(index, bool) or index < 0:
                 # The Messages parser classifies malformed block events for retries.
                 return
-            # Wrong-typed fields are the parser's to reject, so they count as absent.
             block = payload.get("content_block")
-            if not isinstance(block, dict):
-                block = None
-            delta = payload.get("delta")
-            if not isinstance(delta, dict):
-                delta = json_object({})
+            delta = json_object(payload.get("delta") or {})
             # Stream pieces are not complete replay records, so nothing is decoded.
             if any(
                 value.get("type") == "redacted_thinking"
                 or value.get("signature")
                 or value.get("extra_content")
-                # Unknown fields on thinking may be native state, so only readable ones pass.
-                or (
-                    value.get("type")
-                    in ("thinking", "thinking_delta", "signature_delta")
-                    and not value.keys() <= {"type", "thinking", "signature"}
-                )
-                for value in (block or {}, delta)
+                for value in (block if isinstance(block, dict) else {}, delta)
             ):
                 self.unsafe_reason = "signed_thinking"
             if isinstance(block, dict) and block.get("type") in (
@@ -191,16 +176,6 @@ class SourceRecoveryState:
                 "tool_use",
                 "thinking",
                 "redacted_thinking",
-            ):
-                self.unsafe_reason = "native_content"
-                self._handoff_blocked = True
-            # Passthrough forwards a typeless delta, so it counts as unknown too.
-            if delta and delta.get("type") not in (
-                "text_delta",
-                "input_json_delta",
-                "thinking_delta",
-                "signature_delta",
-                "citations_delta",
             ):
                 self.unsafe_reason = "native_content"
                 self._handoff_blocked = True
