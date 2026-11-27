@@ -462,3 +462,85 @@ def test_ci_ps1_fail_fast_runs_checks_sequentially() -> None:
         < pytest_index
         < playwright_index
     )
+
+
+def _run_install_with_stubbed_uv(
+    tmp_path: Path, uv_system_certs: str | None
+) -> list[str]:
+    """Run configure_uv_environment and install_free_claude_code against stubs.
+
+    Returns one line per recorded ``uv`` call: its arguments and the
+    UV_SYSTEM_CERTS value that call inherited.
+    """
+    text = _script_text("install.sh")
+    functions_only = text[: text.index('\nparse_args "$@"\n')]
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "uv-calls.log"
+    stubs = {
+        "uv": f'#!/bin/sh\necho "$* UV_SYSTEM_CERTS=${{UV_SYSTEM_CERTS-unset}}" >> "{calls}"\n',
+        "uname": "#!/bin/sh\necho Darwin\n",
+        "pgrep": "#!/bin/sh\nexit 1\n",
+    }
+    for name, body in stubs.items():
+        stub = bin_dir / name
+        stub.write_text(body, encoding="utf-8", newline="\n")
+        stub.chmod(0o755)
+
+    harness = tmp_path / "harness.sh"
+    harness.write_text(
+        functions_only
+        + '\ntrap - EXIT INT HUP TERM\nPYTHON_VERSION=3.14.10\ninstall_log=""\n'
+        + "configure_uv_environment\ninstall_free_claude_code\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    env = {
+        "PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin",
+        "HOME": str(tmp_path),
+    }
+    if uv_system_certs is not None:
+        env["UV_SYSTEM_CERTS"] = uv_system_certs
+    subprocess.run(["sh", str(harness)], env=env, check=True, capture_output=True)
+    return calls.read_text(encoding="utf-8").splitlines()
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("sh") is None,
+    reason="requires a POSIX shell and POSIX paths",
+)
+def test_install_sh_installs_managed_python_before_pinned_tool_install(
+    tmp_path: Path,
+) -> None:
+    calls = _run_install_with_stubbed_uv(tmp_path, None)
+
+    assert len(calls) == 2
+    assert calls[0].startswith("python install --managed-python 3.14.10 ")
+    assert calls[1].startswith(
+        "tool install --force --refresh-package free-claude-code"
+    )
+    assert "--python 3.14.10+gil" in calls[1]
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("sh") is None,
+    reason="requires a POSIX shell and POSIX paths",
+)
+def test_install_sh_defaults_uv_system_certs_when_unset(tmp_path: Path) -> None:
+    calls = _run_install_with_stubbed_uv(tmp_path, None)
+
+    assert calls
+    assert all(call.endswith("UV_SYSTEM_CERTS=1") for call in calls)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("sh") is None,
+    reason="requires a POSIX shell and POSIX paths",
+)
+def test_install_sh_keeps_explicit_uv_system_certs_opt_out(tmp_path: Path) -> None:
+    calls = _run_install_with_stubbed_uv(tmp_path, "0")
+
+    assert calls
+    assert all(call.endswith("UV_SYSTEM_CERTS=0") for call in calls)
