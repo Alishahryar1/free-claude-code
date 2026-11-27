@@ -7,13 +7,18 @@ from pathlib import Path
 import pytest
 
 from free_claude_code.config import env_migrations
-from free_claude_code.config.env_files import dotenv_values_from_file
+from free_claude_code.config.env_files import (
+    dotenv_values_from_file,
+    dotenv_values_from_text,
+)
 from free_claude_code.config.env_migrations import (
     CONFIG_SCHEMA_VERSION,
     HUGGINGFACE_TOKEN_MIGRATION,
     OPENCODE_ZEN_MODEL_REF_MIGRATIONS,
+    atomic_write_managed_config,
     consolidate_managed_config,
     migrate_env_setting_in_text,
+    quote_env_value,
 )
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.model_refs import ModelFallback, decode_model_fallbacks
@@ -521,3 +526,59 @@ def test_newer_managed_schema_fails_closed(
 
     with pytest.raises(ValueError, match="unsupported schema"):
         consolidate_managed_config({})
+
+@pytest.mark.parametrize(
+    "raw_value",
+    [
+        "'123:abc",
+        "'quoted'",
+        "hello'world",
+        "it's",
+        "back\\slash",
+        "with space",
+        'has"double',
+        "has#hash",
+        "has=equal",
+        "has$dollar",
+        "",
+        "   ",
+        "'",
+        "''",
+    ],
+)
+def test_quote_env_value_roundtrips_special_characters_and_quotes(raw_value: str) -> None:
+    quoted = quote_env_value(raw_value)
+    parsed = dotenv_values_from_text(f"TEST_KEY={quoted}\n")
+    assert parsed.get("TEST_KEY") == raw_value
+
+
+def test_atomic_write_managed_config_preserves_single_quoted_values(tmp_path: Path) -> None:
+    target = tmp_path / "managed.env"
+    values = {
+        "TELEGRAM_BOT_TOKEN": "'123:abc",
+        "MODEL_SONNET": "'custom-model'",
+        "PROMPT_CACHE": "plain_val",
+    }
+    atomic_write_managed_config(values, path=target)
+
+    loaded = dotenv_values_from_file(target)
+    assert loaded["TELEGRAM_BOT_TOKEN"] == "'123:abc"
+    assert loaded["MODEL_SONNET"] == "'custom-model'"
+    assert loaded["PROMPT_CACHE"] == "plain_val"
+
+
+def test_atomic_write_managed_config_validates_rendered_syntax_before_writing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    target = tmp_path / "managed.env"
+    monkeypatch.setattr(
+        env_migrations,
+        "render_managed_config",
+        lambda *args, **kwargs: "INVALID_DOTENV_LINE='unterminated\n",
+    )
+    with pytest.raises(ValueError, match="Invalid dotenv syntax"):
+        atomic_write_managed_config({"MODEL": "test"}, path=target)
+
+    assert not target.exists()
+    assert list(tmp_path.glob("*.tmp")) == []
+
