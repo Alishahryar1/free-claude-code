@@ -1244,7 +1244,16 @@ async def test_thinking_with_unknown_native_fields_is_not_continued(
 
 
 @pytest.mark.asyncio
-async def test_native_continuation_with_unknown_delta_type_is_not_combined() -> None:
+@pytest.mark.parametrize(
+    "delta",
+    [
+        {"type": "encrypted_thinking_delta", "data": "opaque"},
+        {"vendor_state": "opaque"},
+    ],
+)
+async def test_native_continuation_with_unknown_delta_is_not_combined(
+    delta: JsonObject,
+) -> None:
     bodies = []
     start = _events_for("messages")[0]
     replies: list[list[JsonObject]] = [
@@ -1255,7 +1264,7 @@ async def test_native_continuation_with_unknown_delta_type_is_not_combined() -> 
             {
                 "type": "content_block_delta",
                 "index": 0,
-                "delta": {"type": "encrypted_thinking_delta", "data": "opaque"},
+                "delta": delta,
             },
             {"type": "content_block_stop", "index": 0},
             *shifted(text_events("messages", "Answer.")[1:], 1),
@@ -1345,7 +1354,8 @@ async def test_signature_beside_malformed_block_is_not_combined(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_rejected_delta_keeps_the_continuation(wire: WireProtocol) -> None:
+async def test_typeless_delta_stops_recovery(wire: WireProtocol) -> None:
+    # Passthrough would publish it, so an unknown delta is never continued.
     def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, [
@@ -1358,10 +1368,10 @@ async def test_rejected_delta_keeps_the_continuation(wire: WireProtocol) -> None
         result = await delivered(
             send(wire, [{"role": "user", "content": "answer"}]), wire
         )
-    events = parse_sse_text(result)
-    assert_completed(events, wire)
-    assert public_text(events, wire) == "Intro Answer."
-    assert len(bodies) == 2
+    assert len(bodies) == 1
+    assert parse_sse_text(result)[-1].event == (
+        "error" if wire == "messages" else "response.failed"
+    )
 
 
 @pytest.mark.asyncio

@@ -194,8 +194,8 @@ class SourceRecoveryState:
             ):
                 self.unsafe_reason = "native_content"
                 self._handoff_blocked = True
-            # A delta without a string type is malformed and stays with the parser.
-            if isinstance(delta.get("type"), str) and delta["type"] not in (
+            # Passthrough forwards a typeless delta, so it counts as unknown too.
+            if delta and delta.get("type") not in (
                 "text_delta",
                 "input_json_delta",
                 "thinking_delta",
