@@ -227,7 +227,9 @@ def integration_report(settings: Settings) -> dict[str, JsonObject]:
     return result
 
 
-def probe_harness(binary: str, args: tuple[str, ...]) -> dict[str, Any]:
+def probe_harness(
+    binary: str, args: tuple[str, ...], timeout: float = 5.0
+) -> JsonObject:
     path = shutil.which(binary)
     result: JsonObject = {
         "installed": path is not None,
@@ -244,7 +246,7 @@ def probe_harness(binary: str, args: tuple[str, ...]) -> dict[str, Any]:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=5,
+            timeout=timeout,
             check=False,
         )
         if probe.returncode != 0:
@@ -270,8 +272,8 @@ def probe_harness(binary: str, args: tuple[str, ...]) -> dict[str, Any]:
     return result
 
 
-def harness_report() -> dict[str, Any]:
-    result = {}
+def harness_report() -> dict[str, JsonObject]:
+    result: dict[str, JsonObject] = {}
     from free_claude_code.cli.launchers.runner import HarnessSpec
 
     for name in HARNESS_NAMES:
@@ -284,7 +286,12 @@ def harness_report() -> dict[str, Any]:
             if spec.compatibility_check
             else ("--version",)
         )
-        result[name] = probe_harness(spec.binary_name, args)
+        timeout = (
+            spec.compatibility_check.timeout_seconds
+            if spec.compatibility_check
+            else 5.0
+        )
+        result[name] = probe_harness(spec.binary_name, args, timeout=timeout)
     return result
 
 
@@ -383,7 +390,29 @@ def collect_report() -> dict[str, Any]:
                 errors.append(
                     {"section": f"integrations.{name}", "code": "unavailable"}
                 )
+        discovery = report.get("model_discovery")
+        if isinstance(discovery, dict) and discovery.get("status") == "available":
+            providers = discovery.get("providers")
+            if isinstance(providers, dict):
+                for provider_id, info in providers.items():
+                    if isinstance(info, dict) and info.get("state") == "failed":
+                        errors.append(
+                            {
+                                "section": f"model_discovery.{provider_id}",
+                                "code": "failed",
+                            }
+                        )
     if configuration["status"] != "available":
         errors.append({"section": "configuration", "code": configuration["status"]})
-    report["harnesses"] = harness_report()
+    harnesses = harness_report()
+    report["harnesses"] = harnesses
+    for name, probe in harnesses.items():
+        if (
+            isinstance(probe, dict)
+            and probe.get("installed")
+            and probe.get("status") != "available"
+        ):
+            status = probe.get("status")
+            if isinstance(status, str):
+                errors.append({"section": f"harnesses.{name}", "code": status})
     return report
