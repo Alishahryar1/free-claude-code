@@ -1163,3 +1163,34 @@ async def test_continuation_with_signed_thinking_is_not_combined(
     assert parse_sse_text(result)[-1].event == (
         "error" if wire == "messages" else "response.failed"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_signature_named_only_by_sse_event_is_not_combined(
+    wire: WireProtocol,
+) -> None:
+    def reply(bodies: list[JsonObject]):
+        start = _events_for("messages")[0]
+        if len(bodies) == 1:
+            return 200, [start, *unsigned_thinking("Prior.")]
+        return 200, [
+            start,
+            *unsigned_thinking("Prior. Suffix.", closed=False),
+            {
+                "event": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "signature_delta", "signature": "sig"},
+            },
+            {"type": "content_block_stop", "index": 0},
+            *shifted(text_events("messages", "Answer.")[1:], 1),
+        ]
+
+    async with _harness("messages", reply, max_attempts=2) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "answer"}]), wire
+        )
+    assert len(bodies) == 2
+    assert parse_sse_text(result)[-1].event == (
+        "error" if wire == "messages" else "response.failed"
+    )

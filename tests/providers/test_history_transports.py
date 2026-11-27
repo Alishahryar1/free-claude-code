@@ -285,8 +285,14 @@ async def _harness(
         frames: list[str] = []
         for event in payload:
             assert isinstance(event, dict)
-            name = f"event: {event['type']}\n" if protocol == "messages" else ""
-            frames.append(f"{name}data: {json.dumps(event)}\n\n")
+            # An "event" key names the SSE event without putting it in the data.
+            name = (
+                f"event: {event.get('event') or event['type']}\n"
+                if protocol == "messages"
+                else ""
+            )
+            data = {key: value for key, value in event.items() if key != "event"}
+            frames.append(f"{name}data: {json.dumps(data)}\n\n")
         return "".join(frames)
 
     def reply_messages(request: httpx.Request) -> httpx.Response:

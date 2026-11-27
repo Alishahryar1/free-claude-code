@@ -79,8 +79,10 @@ class SourceRecoveryState:
         payload: Mapping[str, JsonValue],
         *,
         continuing: bool = False,
+        event_type: str | None = None,
     ) -> None:
-        kind = str(payload.get("type", ""))
+        # Messages SSE can name the event only outside its data.
+        kind = event_type or str(payload.get("type", ""))
         usage = payload.get("usage")
         if protocol == "messages" and kind == "message_start":
             usage = json_object(payload.get("message", {})).get("usage")

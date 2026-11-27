@@ -611,7 +611,10 @@ class _MessagesAttempt(TransportAttempt):
                     event_type, payload, native=forwarding is not None
                 )
                 self.context.source.observe(
-                    "messages", payload, continuing=self.context.continuing
+                    "messages",
+                    payload,
+                    continuing=self.context.continuing,
+                    event_type=event_type,
                 )
                 history.accepted()
                 if not attempt.accepted:
