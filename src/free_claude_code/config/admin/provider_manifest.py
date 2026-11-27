@@ -308,6 +308,14 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "api.atlascloud.ai/v1; create one at console.atlascloud.ai/api-keys."
         ),
     },
+    "TRUSTEDROUTER_API_KEY": {
+        "label": "TrustedRouter API Keys",
+        "description": (
+            "TrustedRouter OpenAI-compatible multi-provider gateway API key for "
+            "api.trustedrouter.com/v1; create one at "
+            "trustedrouter.com/console/api-keys."
+        ),
+    },
     "XKIRO_API_KEY": {
         "label": "xKiro API Keys",
         "description": (
