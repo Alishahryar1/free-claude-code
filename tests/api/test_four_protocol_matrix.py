@@ -1113,6 +1113,37 @@ def test_id_only_responses_reference_cannot_disappear_from_a_followup(
 
 
 @pytest.mark.parametrize("protocol", ["chat", "messages", "gemini"])
+def test_local_shell_history_uses_the_results_documented_reference(
+    protocol: str,
+) -> None:
+    result: JsonObject = {
+        "type": "local_shell_call_output",
+        "id": "model_call_1",
+        "output": "previous directory",
+    }
+    path, body = ingress_request(
+        "responses",
+        True,
+        [
+            {"role": "user", "content": "Which directory?"},
+            {
+                "type": "local_shell_call",
+                "id": "shell_item_1",
+                "call_id": "model_call_1",
+                "status": "completed",
+                "action": {"type": "exec", "command": ["pwd"]},
+            },
+            result,
+            {"role": "user", "content": "Use the result"},
+        ],
+    )
+    sent = sent_request(protocol, path, body)
+    assert "previous directory" in json.dumps(sent)
+    result["id"] = "shell_item_1"
+    assert "unresolved" in translation_error(protocol, path, body)
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "gemini"])
 def test_program_owned_function_call_cannot_turn_into_a_direct_call(
     protocol: str,
 ) -> None:
@@ -1188,6 +1219,143 @@ def test_gemini_server_tool_history_cannot_disappear_on_fallback(protocol: str) 
         ],
     )
     assert "native Gemini" in translation_error(protocol, path, body)
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses", "gemini"])
+def test_gemini_file_reference_in_a_function_result_remains_resolvable(
+    protocol: str,
+) -> None:
+    path, body = ingress_request(
+        "gemini",
+        True,
+        [
+            {"role": "user", "parts": [{"text": "Read the receipt"}]},
+            {
+                "role": "model",
+                "parts": [{"functionCall": {"name": "read", "id": "r", "args": {}}}],
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "name": "read",
+                            "id": "r",
+                            "response": {"output": {"$ref": "receipt.png"}},
+                            "parts": [
+                                {
+                                    "fileData": {
+                                        "mimeType": "image/png",
+                                        "displayName": "receipt.png",
+                                        "fileUri": "https://generativelanguage.googleapis.com/v1beta/files/receipt",
+                                    }
+                                }
+                            ],
+                        }
+                    }
+                ],
+            },
+        ],
+    )
+    if protocol == "gemini":
+        sent = sent_request(protocol, path, body)
+        assert (
+            object_array(sent["contents"])[-1]["parts"]
+            == object_array(body["contents"])[-1]["parts"]
+        )
+    else:
+        assert "native Gemini" in translation_error(protocol, path, body)
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses", "gemini"])
+def test_chat_audio_handle_is_kept_by_its_own_provider(protocol: str) -> None:
+    path, body = ingress_request(
+        "chat",
+        True,
+        [
+            {"role": "user", "content": "Read the number aloud"},
+            {"role": "assistant", "content": None, "audio": {"id": "audio_saved"}},
+            {"role": "user", "content": "What number did you say?"},
+        ],
+    )
+    if protocol == "chat":
+        assert object_array(sent_request(protocol, path, body)["messages"])[1][
+            "audio"
+        ] == {"id": "audio_saved"}
+    else:
+        assert "audio" in translation_error(protocol, path, body).lower()
+
+
+@pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
+def test_gemini_named_result_images_stay_with_their_references(protocol: str) -> None:
+    images = [("second.png", "c2Vjb25k"), ("first.png", "Zmlyc3Q=")]
+    path, body = ingress_request(
+        "gemini",
+        True,
+        [
+            {"role": "user", "parts": [{"text": "Compare receipts"}]},
+            {
+                "role": "model",
+                "parts": [{"functionCall": {"name": "read", "id": "r", "args": {}}}],
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "name": "read",
+                            "id": "r",
+                            "response": {
+                                "output": [
+                                    {"$ref": "first.png"},
+                                    {"$ref": "second.png"},
+                                ]
+                            },
+                            "parts": [
+                                {
+                                    "inlineData": {
+                                        "mimeType": "image/png",
+                                        "data": data,
+                                        "displayName": name,
+                                    }
+                                }
+                                for name, data in images
+                            ],
+                        }
+                    }
+                ],
+            },
+        ],
+    )
+    sent = sent_request(protocol, path, body)
+    if protocol == "responses":
+        result = next(
+            item
+            for item in object_array(sent["input"])
+            if item.get("type") == "function_call_output"
+        )
+        parts = object_array(result["output"])
+    elif protocol == "messages":
+        result = next(
+            block
+            for turn in object_array(sent["messages"])
+            for block in object_array(turn["content"])
+            if block.get("type") == "tool_result"
+        )
+        parts = object_array(result["content"])
+    else:
+        parts = next(
+            object_array(turn["content"])
+            for turn in object_array(sent["messages"])
+            if isinstance(turn.get("content"), list)
+            and any(
+                block.get("type") == "image_url"
+                for block in object_array(turn["content"])
+            )
+        )
+    for name, data in images:
+        index = next(i for i, part in enumerate(parts) if data in json.dumps(part))
+        assert index > 0 and name in string_payload(parts[index - 1]["text"])
 
 
 @pytest.mark.parametrize("protocol", ["chat", "messages", "gemini"])

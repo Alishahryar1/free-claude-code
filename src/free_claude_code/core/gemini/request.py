@@ -229,11 +229,19 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
             elif result is not None:
                 assert result.id is not None
                 text = _dump(result.response)
-                media = [
-                    _image(part.inline_data, destination)
-                    for part in result.parts
-                    if part.inline_data is not None
-                ]
+                media: list[JsonObject] = []
+                for attachment in result.parts:
+                    if image := attachment.inline_data:
+                        if image.display_name:
+                            media.append(
+                                {
+                                    "type": "input_text"
+                                    if destination == "responses"
+                                    else "text",
+                                    "text": f"Attachment {json.dumps(image.display_name, ensure_ascii=False)}",
+                                }
+                            )
+                        media.append(_image(image, destination))
                 if destination == "messages":
                     output: list[JsonValue] = [{"type": "text", "text": text}]
                     output.extend(media)

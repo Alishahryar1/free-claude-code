@@ -47,6 +47,7 @@ class GeminiModel(BaseModel):
 class InlineData(GeminiModel):
     mime_type: Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
     data: str = Field(min_length=1)
+    display_name: str | None = None
 
     @model_validator(mode="after")
     def valid_image(self) -> Self:
@@ -66,12 +67,23 @@ class FunctionCall(GeminiModel):
     args: JsonObject = Field(default_factory=dict)
 
 
-class FunctionResponsePart(GeminiModel):
+class MediaPart(GeminiModel):
     inline_data: InlineData | None = None
+    file_data: JsonObject | None = None
 
+
+class FunctionResponsePart(MediaPart):
     @model_validator(mode="after")
     def has_media(self) -> Self:
-        if self.inline_data is None and not self.has_extension():
+        if self.inline_data is not None and self.file_data is not None:
+            raise ValueError(
+                "A function response part must have exactly one media source"
+            )
+        if (
+            self.inline_data is None
+            and self.file_data is None
+            and not self.has_extension()
+        ):
             raise ValueError("A function response part requires media")
         return self
 
@@ -83,9 +95,12 @@ class FunctionResponse(GeminiModel):
     parts: list[FunctionResponsePart] = Field(default_factory=list)
 
 
-class Part(GeminiModel):
+class Part(MediaPart):
     text: str | None = None
-    inline_data: InlineData | None = None
+    executable_code: JsonObject | None = None
+    code_execution_result: JsonObject | None = None
+    tool_call: JsonObject | None = None
+    tool_response: JsonObject | None = None
     function_call: FunctionCall | None = None
     function_response: FunctionResponse | None = None
     thought: bool = False
@@ -98,6 +113,11 @@ class Part(GeminiModel):
             for value in (
                 self.text,
                 self.inline_data,
+                self.file_data,
+                self.executable_code,
+                self.code_execution_result,
+                self.tool_call,
+                self.tool_response,
                 self.function_call,
                 self.function_response,
             )

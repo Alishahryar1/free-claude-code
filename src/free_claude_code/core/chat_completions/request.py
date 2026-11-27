@@ -241,6 +241,10 @@ def project_chat_request(request: ChatRequest) -> ChatProjection:
     call_kinds: dict[str, str] = {}
     projected: list[JsonObject] = []
     for message in messages:
+        if message["role"] == "assistant" and message.get("audio") is not None:
+            raise ChatConversionError(
+                "Assistant audio history requires native Chat egress"
+            )
         if message["role"] == "assistant" and google_thought_signature(
             message.get("extra_content")
         ):

@@ -162,7 +162,10 @@ def _read_item(raw: JsonValue, pending_actions: dict[str, str]) -> HistoryItem |
         raise ResponsesConversionError(
             "Cannot translate Responses context from a program caller"
         )
-    if kind.endswith("_output") and isinstance(call_id := raw.get("call_id"), str):
+    reference_field = "id" if kind == "local_shell_call_output" else "call_id"
+    if kind.endswith("_output") and isinstance(
+        call_id := raw.get(reference_field), str
+    ):
         expected = pending_actions.pop(call_id, None)
         if expected is not None and kind != expected:
             raise ResponsesConversionError("Tool output type does not match its call.")

@@ -57,7 +57,7 @@ def _image(url: str) -> JsonObject:
         raise GeminiConversionError("Native Gemini requires inline base64 images")
     media, data = url[5:].split(";base64,", 1)
     image = InlineData.model_validate({"mimeType": media, "data": data})
-    return {"inlineData": image.model_dump(by_alias=True)}
+    return {"inlineData": image.model_dump(by_alias=True, exclude_none=True)}
 
 
 def _text_parts(value: JsonValue, *, responses: bool = False) -> list[JsonObject]:
