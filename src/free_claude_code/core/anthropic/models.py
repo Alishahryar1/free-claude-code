@@ -12,6 +12,9 @@ CODE_EXECUTION_INPUT_FIELDS = {
     "code_execution": "code",
     "bash_code_execution": "command",
 }
+CODE_EXECUTION_RESULTS = {
+    f"{name}_tool_result": name for name in CODE_EXECUTION_INPUT_FIELDS
+}
 
 
 def _native_attachment(block: object) -> str | None:
@@ -117,6 +120,32 @@ class ExtensionBlock(_AnthropicBlockBase):
     """A tagged block outside the set of known message variants."""
 
     type: str = Field(min_length=1)
+
+    @property
+    def requires_native_context(self) -> bool:
+        if self.type in {
+            "compaction",
+            "container_upload",
+            "fallback",
+            "mcp_tool_listing",
+            "mcp_tool_use",
+            "mcp_tool_result",
+            "tool_addition",
+            "tool_removal",
+            "tool_search_tool_result",
+            "advisor_tool_result",
+            "text_editor_code_execution_tool_result",
+        }:
+            return True
+        if self.type == "search_result" or self.type in CODE_EXECUTION_RESULTS:
+            return False
+        fields = self.model_extra or {}
+        return (
+            self.type.endswith("_tool_use")
+            and isinstance(fields.get("id"), str)
+            and isinstance(fields.get("name"), str)
+            and "input" in fields
+        ) or (isinstance(fields.get("tool_use_id"), str) and "content" in fields)
 
     @field_validator("type")
     @classmethod
@@ -260,19 +289,7 @@ class MessagesRequest(BaseModel):
                     and (reason := _native_attachment(block.content.get("content")))
                 ):
                     return f"web fetch with {reason}"
-                if isinstance(block, ExtensionBlock) and block.type in {
-                    "compaction",
-                    "container_upload",
-                    "fallback",
-                    "mcp_tool_listing",
-                    "mcp_tool_use",
-                    "mcp_tool_result",
-                    "tool_addition",
-                    "tool_removal",
-                    "tool_search_tool_result",
-                    "advisor_tool_result",
-                    "text_editor_code_execution_tool_result",
-                }:
+                if isinstance(block, ExtensionBlock) and block.requires_native_context:
                     return block.type
         return None
 

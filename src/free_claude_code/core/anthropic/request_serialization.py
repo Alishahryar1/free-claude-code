@@ -7,6 +7,7 @@ from ..history_replay import HistoryReplayError, tool_history_context
 from ..json_types import JsonObject, JsonValue
 from .models import (
     CODE_EXECUTION_INPUT_FIELDS,
+    CODE_EXECUTION_RESULTS,
     ContentBlockDocument,
     ContentBlockImage,
     ContentBlockRedactedThinking,
@@ -19,8 +20,6 @@ from .models import (
     MessageContentBlock,
     MessagesRequest,
 )
-
-_CODE_RESULTS = {f"{name}_tool_result": name for name in CODE_EXECUTION_INPUT_FIELDS}
 
 _MESSAGES_REQUEST_FIELDS = (
     "model",
@@ -77,20 +76,23 @@ def quote_code_execution_history(messages: list[Message]) -> list[Message]:
                     "id": block.id,
                     field: block.input.get(field),
                 }
-            elif isinstance(block, ExtensionBlock) and block.type in _CODE_RESULTS:
+            elif (
+                isinstance(block, ExtensionBlock)
+                and block.type in CODE_EXECUTION_RESULTS
+            ):
                 data = block.model_extra or {}
                 call_id = data.get("tool_use_id")
                 if (
                     message.role != "assistant"
                     or not isinstance(call_id, str)
-                    or calls.get(call_id) != _CODE_RESULTS[block.type]
+                    or calls.get(call_id) != CODE_EXECUTION_RESULTS[block.type]
                     or not isinstance(result := data.get("content"), dict)
                 ):
                     raise HistoryReplayError(
                         "Unmatched code execution result in Messages history"
                     )
                 calls[call_id] = None
-                name = _CODE_RESULTS[block.type]
+                name = CODE_EXECUTION_RESULTS[block.type]
                 if result.get("type") not in {
                     f"{name}_result",
                     f"{name}_tool_result_error",

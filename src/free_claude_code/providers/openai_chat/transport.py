@@ -380,8 +380,8 @@ class _ChatStreamPresenter:
                         "Invalid completed Chat tool call",
                         False,
                     )
+                canonical = self._output.canonical_function_name(name)
                 if self._tool_scope is not None:
-                    canonical = self._output.canonical_function_name(name)
                     self._tool_scope.require(
                         "function", self._tool_names.encode(canonical)
                     )
@@ -1075,7 +1075,7 @@ class OpenAIChatTransport:
             body=translated.body,
             tool_names=translated.tool_names,
             reserved_tool_ids=translated.reserved_tool_ids,
-            constrain_tool_calls=translated.tool_adapter.constrains_returned_calls,
+            constrain_tool_calls=has_tool_selection(request.tools, request.tool_choice),
             output_factory=lambda: ResponsesChatStreamOutput(
                 translated.tool_adapter,
                 input_tokens=input_tokens,

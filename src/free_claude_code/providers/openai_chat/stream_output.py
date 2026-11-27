@@ -446,7 +446,12 @@ class ResponsesChatStreamOutput(ChatStreamOutput):
 
     @override
     def canonical_function_name(self, name: str) -> str:
-        return self._tool_adapter.canonical_function_name(name)
+        try:
+            return self._tool_adapter.canonical_function_name(name)
+        except ResponsesConversionError as error:
+            raise ExecutionFailure(
+                FailureKind.UPSTREAM, 502, str(error), False
+            ) from error
 
     def __init__(
         self,

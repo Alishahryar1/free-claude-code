@@ -274,6 +274,148 @@ def test_past_custom_tool_cannot_authorize_a_new_call(target: str) -> None:
     _assert_read_is_rejected("responses", target, path, body)
 
 
+@pytest.mark.parametrize("kind", ["custom", "namespaced"])
+def test_an_unscoped_ordinary_reply_is_independent_of_past_tool_kinds(
+    kind: str,
+) -> None:
+    call: JsonObject = (
+        {"type": "custom_tool_call", "input": "file"}
+        if kind == "custom"
+        else {"type": "function_call", "namespace": "old", "arguments": "{}"}
+    )
+    call.update(name="former_tool", call_id="previous")
+    path, body = ingress_request(
+        "responses",
+        True,
+        [
+            {"role": "user", "content": "Read the old file"},
+            call,
+            {"type": f"{call['type']}_output", "call_id": "previous", "output": "Done"},
+            {"role": "user", "content": "Continue"},
+        ],
+    )
+    body.pop("tools")
+    with TestClient(
+        matrix_app("chat", sdk_reply=lambda _: matrix_reply("chat"), max_attempts=1)
+    ) as client:
+        response = client.post(path, json=body)
+    assert response.status_code == 200
+    final = parse_sse_text(response.text)[-1]
+    assert final.event == "response.completed"
+    outputs = object_array(object_payload(final.data["response"])["output"])
+    assert any(
+        item.get("type") == "function_call" and item.get("name") == "read"
+        for item in outputs
+    )
+
+
+@pytest.mark.parametrize("wire", ["responses", "messages"])
+@pytest.mark.parametrize("target", ["chat", "responses", "messages", "gemini"])
+def test_identified_vendor_tool_history_cannot_lose_the_only_evidence(
+    wire: str, target: str
+) -> None:
+    history: list[JsonObject] = [{"role": "user", "content": "Look up the invoice"}]
+    if wire == "responses":
+        history.extend(
+            [
+                {
+                    "type": "vendor_invoice_call",
+                    "id": "v1",
+                    "status": "completed",
+                    "query": "A123",
+                },
+                {
+                    "type": "vendor_invoice_result",
+                    "call_id": "v1",
+                    "status": "completed",
+                    "output": "470 euros",
+                },
+            ]
+        )
+    else:
+        history.extend(
+            [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "vendor_invoice_tool_use",
+                            "id": "v1",
+                            "name": "lookup",
+                            "input": {"invoice": "A123"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "vendor_invoice_tool_result",
+                            "tool_use_id": "v1",
+                            "content": "470 euros",
+                        }
+                    ],
+                },
+            ]
+        )
+    history.append({"role": "user", "content": "What was the verified amount?"})
+    path, body = ingress_request(wire, wire == "responses", history)
+    if wire == target:
+        assert "470 euros" in json.dumps(sent_request(target, path, body))
+    else:
+        assert "vendor_invoice" in translation_error(target, path, body)
+
+
+@pytest.mark.parametrize("target", ["chat", "messages", "responses", "gemini"])
+@pytest.mark.parametrize("kind", ["function_call", "computer_call_output"])
+def test_unfinished_responses_actions_keep_their_source_status(
+    target: str, kind: str
+) -> None:
+    history: list[JsonObject] = [{"role": "user", "content": "Look at the result"}]
+    if kind == "function_call":
+        history.extend(
+            [
+                {
+                    "type": kind,
+                    "name": "read",
+                    "call_id": "c",
+                    "arguments": "{}",
+                    "status": "in_progress",
+                },
+                {"type": "function_call_output", "call_id": "c", "output": "partial"},
+            ]
+        )
+    else:
+        history.extend(
+            [
+                {
+                    "type": "computer_call",
+                    "call_id": "c",
+                    "status": "completed",
+                    "action": {"type": "screenshot"},
+                },
+                {
+                    "type": kind,
+                    "call_id": "c",
+                    "status": "in_progress",
+                    "output": {
+                        "type": "computer_screenshot",
+                        "image_url": "data:image/png;base64,aGVsbG8=",
+                    },
+                },
+            ]
+        )
+    history.append({"role": "user", "content": "What did it show?"})
+    path, body = ingress_request("responses", True, history)
+    if target == "responses":
+        assert any(
+            item.get("type") == kind and item.get("status") == "in_progress"
+            for item in object_array(sent_request(target, path, body)["input"])
+        )
+    else:
+        assert "in_progress" in translation_error(target, path, body)
+
+
 @pytest.mark.parametrize("target", ["chat", "messages", "responses", "gemini"])
 def test_cited_answer_reaches_the_next_turn_with_its_source(target: str) -> None:
     citation: JsonObject = {

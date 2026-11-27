@@ -19,6 +19,18 @@ from .tools import (
 )
 
 _MESSAGE_ROLES = ("user", "assistant", "system", "developer")
+_NATIVE_CONTEXT_ITEMS = {
+    "additional_tools",
+    "compaction",
+    "compaction_trigger",
+    "item_reference",
+    "configuration_update",
+    "mcp_list_tools",
+    "mcp_approval_request",
+    "mcp_approval_response",
+    "program",
+    "program_output",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +169,13 @@ def read_history(value: JsonValue) -> Iterator[tuple[int, HistoryItem]]:
         if item is None:
             continue
         if isinstance(raw, dict):
+            if isinstance(item, (InputCall, InputResult, Screenshot)) and (
+                status := raw.get("status")
+            ) not in (None, "completed"):
+                what = "tool call" if isinstance(item, InputCall) else "tool result"
+                raise ResponsesConversionError(
+                    f"A {what} with status {status!r} requires native Responses egress"
+                )
             if google_thought_signature(raw.get("extra_content")) and (
                 isinstance(item, InputCall)
                 or (isinstance(item, InputMessage) and item.role == "assistant")
@@ -247,10 +266,6 @@ def _read_item(raw: JsonValue) -> HistoryItem | None:
             arguments,
         )
     if kind in ("function_call_output", "custom_tool_call_output"):
-        if (status := raw.get("status")) not in (None, "completed"):
-            raise ResponsesConversionError(
-                f"A tool result with status {status!r} requires native Responses egress"
-            )
         output = raw.get("output")
         if isinstance(output, list):
             content = _content(output, keep_empty_text=True)
@@ -297,18 +312,14 @@ def _read_item(raw: JsonValue) -> HistoryItem | None:
                 f"A different protocol cannot continue an active tool {kind!r}"
             )
         return InputMessage("assistant", tool_history_context(record))
-    if kind in (
-        "additional_tools",
-        "compaction",
-        "compaction_trigger",
-        "item_reference",
-        "configuration_update",
-        "image_generation_call",
-        "mcp_list_tools",
-        "mcp_approval_request",
-        "mcp_approval_response",
-        "program",
-        "program_output",
+    if (
+        kind in _NATIVE_CONTEXT_ITEMS
+        or kind.endswith(("_call", "_call_output", "_result"))
+        or (
+            kind.endswith("_output")
+            and isinstance(raw.get("call_id"), str)
+            and ("output" in raw or "status" in raw)
+        )
     ):
         raise ResponsesConversionError(
             f"Cannot translate Responses context from {kind}"

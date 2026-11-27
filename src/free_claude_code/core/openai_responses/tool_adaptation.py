@@ -11,7 +11,6 @@ import simplejson
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
-from ..tool_call_scope import has_tool_selection
 from .errors import ResponsesConversionError
 from .ids import tool_item_id_for_kind
 from .models import OpenAIResponsesRequest
@@ -76,6 +75,9 @@ class ResponsesToolAdapter:
         self._namespace_headers: dict[tuple[str | None, str], JsonObject] = {}
         self._edits: list[_DefinitionEdit] = []
         self._search_name: str | None = None
+        self._declares_client_search = policy.client_tool_search and any(
+            is_client_search(tool) for tool in request.tools or ()
+        )
         self._search_history = (
             resolve_client_search_history(self.request.input)
             if policy.client_tool_search
@@ -100,9 +102,8 @@ class ResponsesToolAdapter:
             )
         if policy == ResponsesToolPolicy():
             return
-        client_search = policy.client_tool_search and (
+        client_search = self._declares_client_search or bool(
             self._search_history.client_items
-            or any(is_client_search(tool) for tool in request.tools or [])
         )
         if policy.direct_tools_only:
             self.request = self.request.select_direct_tools(
@@ -393,9 +394,7 @@ class ResponsesToolAdapter:
             and choice.get("type") == "tool_search"
             and choice.get("execution") != "server"
         ):
-            if self._policy.direct_tools_only and not any(
-                is_client_search(tool) for tool in self.original.tools or ()
-            ):
+            if self._policy.direct_tools_only and not self._declares_client_search:
                 raise ResponsesConversionError(
                     "Named tool choice requires an available search tool"
                 )
@@ -469,21 +468,22 @@ class ResponsesToolAdapter:
             raise ResponsesConversionError("Ambiguous tool name returned by provider.")
         return next(iter(candidates)) if len(candidates) == 1 else None
 
-    @property
-    def constrains_returned_calls(self) -> bool:
-        if has_tool_selection(self.original.tools, self.original.tool_choice):
-            return True
-        # Restoring a custom, namespaced or search action requires a current
-        # declaration even when ordinary unscoped function replies are allowed.
-        return self._search_name is not None or any(
-            tool.kind == "custom" or tool.namespace is not None
-            for tool in self._wire_names
-        )
-
     def canonical_function_name(self, name: str) -> str:
-        """Resolve a unique shortened provider name to the name in its declaration."""
+        """Restore the name of a new call using its current declaration."""
+        if name == self._search_name and not self._declares_client_search:
+            raise ResponsesConversionError(
+                "A past search cannot authorize a new tool search"
+            )
         identity = self._identity({"name": name})
-        return self._wire_name(identity) if identity is not None else name
+        if identity is None:
+            return name
+        if identity not in self._declared and (
+            identity.kind == "custom" or identity.namespace is not None
+        ):
+            raise ResponsesConversionError(
+                "A past tool cannot authorize a new custom or namespaced call"
+            )
+        return self._wire_name(identity)
 
     def restore_item(self, value: JsonValue) -> JsonValue:
         if not isinstance(value, dict):
