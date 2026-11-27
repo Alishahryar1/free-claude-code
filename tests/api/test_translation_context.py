@@ -17,6 +17,52 @@ from tests.providers.test_gemini import _sse
 
 
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages", "gemini"])
+def test_forced_messages_tool_survives_an_unavailable_sibling(protocol: str) -> None:
+    path, body = ingress_request("messages", True)
+    schema: JsonObject = {"type": "object", "properties": {}}
+    body["tools"] = [
+        {"name": "read", "input_schema": schema},
+        {"name": "catalogued_lookup", "input_schema": schema, "defer_loading": True},
+        {"name": "strict_lookup", "input_schema": schema, "strict": True},
+    ]
+    body["tool_choice"] = {"type": "tool", "name": "read"}
+    observed = sent_request(protocol, path, body)
+    declarations = json.dumps(observed["tools"])
+    assert "read" in declarations
+    assert ("catalogued_lookup" in declarations) == (protocol == "messages")
+    assert ("strict_lookup" in declarations) == (protocol != "gemini")
+    body["tool_choice"] = {"type": "tool", "name": "catalogued_lookup"}
+    if protocol != "messages":
+        assert "available" in translation_error(protocol, path, body)
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses", "messages", "gemini"])
+def test_chat_audio_input_keeps_its_recording_or_fails_before_inference(
+    protocol: str,
+) -> None:
+    path, body = ingress_request(
+        "chat",
+        True,
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"format": "wav", "data": "UklGRg=="},
+                    },
+                    {"type": "text", "text": "Transcribe this clip"},
+                ],
+            }
+        ],
+    )
+    if protocol == "chat":
+        assert "UklGRg==" in json.dumps(sent_request(protocol, path, body))
+    else:
+        assert "audio" in translation_error(protocol, path, body).lower()
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses", "messages", "gemini"])
 @pytest.mark.parametrize("in_tool_result", [False, True])
 def test_messages_document_is_never_replaced_by_its_caption(
     protocol: str, in_tool_result: bool

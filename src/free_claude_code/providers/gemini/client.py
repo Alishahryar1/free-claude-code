@@ -17,7 +17,7 @@ from free_claude_code.core.gemini.native_request import (
     chat_to_gemini,
     messages_to_gemini,
     native_gemini_body,
-    responses_to_gemini,
+    prepare_responses_for_gemini,
 )
 from free_claude_code.core.json_types import (
     DecimalJsonObject,
@@ -26,8 +26,6 @@ from free_claude_code.core.json_types import (
 )
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
-    ResponsesToolAdapter,
-    ResponsesToolPolicy,
 )
 from free_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
@@ -231,12 +229,11 @@ class GeminiProvider(BaseProvider):
         continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[StreamOutput]:
         try:
-            body = responses_to_gemini(request)
+            body, adapter = prepare_responses_for_gemini(request)
             apply_reasoning(body, reasoning, native=False)
         except ValueError as error:
             raise InvalidRequestError(str(error)) from error
         public_model = response_model or request.model
-        adapter = ResponsesToolAdapter(request, ResponsesToolPolicy())
         return self._gemini.stream(
             body,
             endpoint_context=self._snapshot,

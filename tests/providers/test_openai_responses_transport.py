@@ -1703,6 +1703,6 @@ async def test_claude_artifact_pattern_is_portable_on_the_sdk_wire() -> None:
     )
     assert regex.fullmatch("demo")
     assert not regex.fullmatch("bad\U000e0001name")
-    schema = request.direct_client_tools[0].input_schema
+    schema = request.direct_client_tools()[0].input_schema
     assert schema is not None
     assert schema["properties"]["name"]["pattern"] == pattern

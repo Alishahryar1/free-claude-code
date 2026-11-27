@@ -119,7 +119,10 @@ class ContinuationRequest:
                 ],
             )
         if self.protocol == "gemini":
-            from .gemini.native_request import messages_to_gemini, responses_to_gemini
+            from .gemini.native_request import (
+                messages_to_gemini,
+                prepare_responses_for_gemini,
+            )
 
             if seed.wire_api == "gemini":
                 # Public frame parsing retains Decimal; use the native JSON
@@ -153,15 +156,11 @@ class ContinuationRequest:
                         allow_pending_calls=allow_pending_calls,
                     )["contents"],
                 )
-            return cast(
-                list[Any],
-                responses_to_gemini(
-                    OpenAIResponsesRequest.model_validate(
-                        {"model": model, "input": items}
-                    ),
-                    allow_pending_calls=allow_pending_calls,
-                )["contents"],
+            gemini_body, _ = prepare_responses_for_gemini(
+                OpenAIResponsesRequest.model_validate({"model": model, "input": items}),
+                allow_pending_calls=allow_pending_calls,
             )
+            return cast(list[Any], gemini_body["contents"])
         if seed.wire_api == "messages":
             if self.protocol == "messages":
                 return [{"role": "assistant", "content": items}]

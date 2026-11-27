@@ -6,9 +6,6 @@ from dataclasses import dataclass
 
 from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.core.anthropic import MessagesRequest, Tool
-from free_claude_code.core.anthropic.conversion import (
-    unrepresentable_client_tool_constraints,
-)
 from free_claude_code.core.anthropic.models import (
     ContentBlockServerToolUse,
     ContentBlockText,
@@ -130,11 +127,6 @@ def plan_automatic_web_search(
     tool = server_tools[0]
     if not _can_run_locally(tool, request):
         return None
-    for other in request.direct_client_tools:
-        if constraints := unrepresentable_client_tool_constraints(other):
-            raise InvalidRequestError(
-                f"Automatic web_search cannot enforce {constraints} for tool {other.name!r}."
-            )
     names = {definition.name for definition in tools}
     if len(names) != len(tools):
         raise InvalidRequestError("Automatic web_search requires unique tool names.")

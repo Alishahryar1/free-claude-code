@@ -45,6 +45,7 @@ class ResponsesToolPolicy:
     client_tool_search: bool = False
     flatten_namespaces: bool = False
     direct_tools_only: bool = False
+    supports_strict: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +100,10 @@ class ResponsesToolAdapter:
             or any(is_client_search(tool) for tool in request.tools or [])
         )
         if policy.direct_tools_only:
-            self.request = self.request.select_direct_tools(self._search_history)
+            self.request = self.request.select_direct_tools(
+                self._search_history if policy.client_tool_search else None,
+                supports_strict=policy.supports_strict,
+            )
         elif client_search:
             self.request.tools = active_client_tools(
                 self.request.tools, self._search_history

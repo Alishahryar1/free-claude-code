@@ -1,7 +1,7 @@
 """Message and tool format converters."""
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -84,16 +84,6 @@ def resolve_anthropic_tool_choice(
     if kind not in ("auto", "any", "required", "none", "tool"):
         raise ValueError("Unsupported tool choice")
     return (tool_choice or {"type": "auto"}) if tools else None
-
-
-def unrepresentable_client_tool_constraints(tool: Tool) -> list[str]:
-    """Identify Anthropic constraints a plain upstream function cannot enforce."""
-    options: Mapping[str, object] = tool.model_extra or {}
-    return [
-        key
-        for key in ("strict", "defer_loading")
-        if options.get(key) not in (None, False)
-    ]
 
 
 def _set_replayed_reasoning(
@@ -838,7 +828,7 @@ def build_base_request_body(
     structured_reasoning_details: bool = False,
 ) -> dict[str, Any]:
     """Build the common parts of an OpenAI-format request body."""
-    tools = request_data.direct_client_tools
+    tools = request_data.direct_client_tools()
     try:
         source_messages = translated_messages(request_data)
         output_schema = openai_output_schema(request_data)
@@ -878,12 +868,6 @@ def build_base_request_body(
             options = tool.model_extra or {}
             if "strict" in options:
                 declaration["function"]["strict"] = options["strict"]
-            if any(
-                key != "strict" for key in unrepresentable_client_tool_constraints(tool)
-            ):
-                raise OpenAIConversionError(
-                    f"Unsupported caller constraints on tool {tool.name!r}"
-                )
     if (
         tool_choice
         and tool_choice.get("disable_parallel_tool_use")

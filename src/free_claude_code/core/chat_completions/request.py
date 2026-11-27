@@ -302,6 +302,8 @@ def project_chat_request(
             for part in json_objects(content):
                 if part.get("type") in ("text", "image_url"):
                     parts.append(part)
+                elif part.get("type") == "input_audio":
+                    raise ChatConversionError("Audio input requires native Chat egress")
                 elif part.get("type") == "file":
                     fields = inline_file_fields(part.get("file"))
                     if message["role"] != "user" or fields is None:

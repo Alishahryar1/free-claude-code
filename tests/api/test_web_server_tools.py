@@ -60,7 +60,6 @@ from free_claude_code.core.gemini.native_request import messages_to_gemini
 from free_claude_code.core.history_replay import ReplayOrigin, prepare_history
 from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
-from free_claude_code.core.openai_responses.errors import ResponsesConversionError
 from free_claude_code.core.openai_responses.provider_input import (
     build_responses_provider_request,
 )
@@ -684,7 +683,7 @@ def test_plans_supported_search_beside_an_unhandled_tool() -> None:
         {"defer_loading": True},
     ],
 )
-def test_automatic_web_search_rejects_unrepresentable_client_tool_constraints(
+def test_automatic_web_search_keeps_provider_tool_selection_at_egress(
     options: dict[str, Any],
 ) -> None:
     request = _automatic_search_request()
@@ -693,19 +692,18 @@ def test_automatic_web_search_rejects_unrepresentable_client_tool_constraints(
     )
     assert request.tools is not None
     request.tools.append(tool)
-    field = next(iter(options))
-    with pytest.raises(InvalidRequestError, match=field):
-        plan_automatic_web_search(request, web_tools_enabled=True)
-
-    request.tools = [tool]
-    if field == "strict":
-        body: JsonObject = build_responses_provider_request(
-            request, reasoning=ReasoningPolicy.off()
-        )
-        assert object_array(body["tools"])[0]["strict"] is True
-        return
-    with pytest.raises(ResponsesConversionError, match=field):
-        build_responses_provider_request(request, reasoning=ReasoningPolicy.off())
+    plan = plan_automatic_web_search(request, web_tools_enabled=True)
+    assert plan is not None
+    assert tool in plan.request.named_tools
+    body: JsonObject = build_responses_provider_request(
+        plan.request, reasoning=ReasoningPolicy.off()
+    )
+    offered = {entry["name"]: entry for entry in object_array(body["tools"])}
+    assert plan.private_name in offered
+    if options.get("strict"):
+        assert offered["lookup"]["strict"] is True
+    else:
+        assert "lookup" not in offered
 
 
 @pytest.mark.parametrize(

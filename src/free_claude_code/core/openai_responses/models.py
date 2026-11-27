@@ -62,7 +62,12 @@ class OpenAIResponsesRequest(BaseModel):
                     f"Cannot translate Responses context from {field}"
                 )
 
-    def select_direct_tools(self, history: ClientSearchHistory | None = None) -> Self:
+    def select_direct_tools(
+        self,
+        history: ClientSearchHistory | None = None,
+        *,
+        supports_strict: bool = True,
+    ) -> Self:
         """Apply the caller's restrictions to the declarations available on this turn."""
         history = history or resolve_client_search_history(self.input)
         candidates = (
@@ -97,6 +102,8 @@ class OpenAIResponsesRequest(BaseModel):
                 nested = tool.get(str(kind))
                 if isinstance(nested, dict):
                     source = nested
+                if kind == "function" and source.get("strict") and not supports_strict:
+                    return False
                 format_ = source.get("format")
                 if (
                     kind == "custom"

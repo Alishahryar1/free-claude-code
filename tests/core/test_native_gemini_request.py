@@ -157,7 +157,7 @@ def test_gemini_25_effort_uses_supported_numeric_budget() -> None:
             }
 
 
-def test_messages_strict_tool_guarantee_is_rejected_for_gemini() -> None:
+def test_messages_strict_tool_is_unavailable_on_gemini() -> None:
     from free_claude_code.core.anthropic.models import MessagesRequest
     from free_claude_code.core.gemini.native_request import messages_to_gemini
 
@@ -166,7 +166,9 @@ def test_messages_strict_tool_guarantee_is_rejected_for_gemini() -> None:
         messages=[{"role": "user", "content": "hello"}],
         tools=[{"name": "read", "input_schema": {"type": "object"}, "strict": True}],
     )
-    with pytest.raises(ValueError, match="strict"):
+    assert "tools" not in messages_to_gemini(request)
+    request.tool_choice = {"type": "tool", "name": "read"}
+    with pytest.raises(ValueError, match="available"):
         messages_to_gemini(request)
 
 

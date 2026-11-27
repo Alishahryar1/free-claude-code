@@ -6,7 +6,6 @@ from typing import assert_never
 
 from ..anthropic.conversion import (
     resolve_anthropic_tool_choice,
-    unrepresentable_client_tool_constraints,
 )
 from ..anthropic.image_sources import portable_anthropic_image_url
 from ..anthropic.models import MessagesRequest
@@ -43,6 +42,8 @@ from ..openai_responses import (
     InputResult,
     OpenAIResponsesRequest,
     ReasoningItem,
+    ResponsesToolAdapter,
+    ResponsesToolPolicy,
     Screenshot,
     read_history,
 )
@@ -488,11 +489,8 @@ def messages_to_gemini(
     if system:
         result["systemInstruction"] = {"parts": system}
     declarations = []
-    for tool in request.direct_client_tools:
-        if constraints := unrepresentable_client_tool_constraints(tool):
-            raise GeminiConversionError(
-                f"Native Gemini cannot enforce {constraints} on tool {tool.name!r}"
-            )
+    tools = request.direct_client_tools(supports_strict=False)
+    for tool in tools:
         declaration: JsonObject = {
             "name": tool.name,
             "parametersJsonSchema": tool.input_schema
@@ -504,9 +502,7 @@ def messages_to_gemini(
         declarations.append(declaration)
     if declarations:
         result["tools"] = [{"functionDeclarations": declarations}]
-    resolved = resolve_anthropic_tool_choice(
-        request.direct_client_tools, request.tool_choice
-    )
+    resolved = resolve_anthropic_tool_choice(tools, request.tool_choice)
     if resolved and request.tool_choice is not None:
         choice = resolved if resolved.get("type") == "tool" else resolved["type"]
         if config_choice := _tool_config(
@@ -519,11 +515,17 @@ def messages_to_gemini(
     return result
 
 
-def responses_to_gemini(
+def prepare_responses_for_gemini(
     request: OpenAIResponsesRequest, *, allow_pending_calls: bool = False
-) -> JsonObject:
+) -> tuple[JsonObject, ResponsesToolAdapter]:
     request.require_translatable_request()
-    request = request.select_direct_tools()
+    adapter = ResponsesToolAdapter(
+        request,
+        ResponsesToolPolicy(
+            flatten_namespaces=True, direct_tools_only=True, supports_strict=False
+        ),
+    )
+    request = adapter.request
     body: JsonObject = request.model_dump(mode="json", exclude_none=True)
     if body.get("store"):
         raise GeminiConversionError(
@@ -618,9 +620,7 @@ def responses_to_gemini(
         result["systemInstruction"] = {"parts": system}
     declarations = []
     for tool in json_objects(body.get("tools") or []):
-        if tool.get("type") != "function" or tool.get("namespace") is not None:
-            continue
-        if tool.get("strict"):
+        if tool.get("type") != "function":
             continue
         if not isinstance(tool.get("name"), str) or not tool["name"]:
             raise GeminiConversionError("Function declarations require a name")
@@ -644,7 +644,7 @@ def responses_to_gemini(
         serial=request.parallel_tool_calls is False,
     ):
         result["toolConfig"] = config_choice
-    return result
+    return result, adapter
 
 
 def native_gemini_body(request: GeminiRequest) -> JsonObject:

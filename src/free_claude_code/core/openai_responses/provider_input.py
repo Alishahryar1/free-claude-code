@@ -6,7 +6,6 @@ from typing import Any
 from free_claude_code.core.anthropic.content import get_block_attr, get_block_type
 from free_claude_code.core.anthropic.conversion import (
     resolve_anthropic_tool_choice,
-    unrepresentable_client_tool_constraints,
 )
 from free_claude_code.core.anthropic.image_sources import (
     AnthropicImageSourceError,
@@ -50,15 +49,14 @@ def build_responses_provider_request(
     """Build a stateless Responses request without silently dropping fields."""
 
     _validate_supported_request(request)
+    tools = request.direct_client_tools()
     tool_names = OpenAIToolNameCodec.from_request(request)
     instructions = _system_text(request)
     input_items: list[dict[str, Any]] = []
     try:
         messages = translated_messages(request)
         output_schema = openai_output_schema(request)
-        tool_choice = resolve_anthropic_tool_choice(
-            request.direct_client_tools, request.tool_choice
-        )
+        tool_choice = resolve_anthropic_tool_choice(tools, request.tool_choice)
         for message in messages:
             if message.role == "assistant":
                 input_items.extend(
@@ -99,7 +97,7 @@ def build_responses_provider_request(
         body["top_p"] = request.top_p
     if request.metadata is not None:
         body["metadata"] = request.metadata
-    if request.direct_client_tools:
+    if tools:
         body["tools"] = [
             {
                 "type": "function",
@@ -110,7 +108,7 @@ def build_responses_provider_request(
                 ),
                 "strict": (tool.model_extra or {}).get("strict", False),
             }
-            for tool in request.direct_client_tools
+            for tool in tools
         ]
     if (
         tool_choice
@@ -126,16 +124,6 @@ def build_responses_provider_request(
 
 
 def _validate_supported_request(request: MessagesRequest) -> None:
-    for tool in request.direct_client_tools:
-        constraints = [
-            key
-            for key in unrepresentable_client_tool_constraints(tool)
-            if key != "strict"
-        ]
-        if constraints:
-            raise ResponsesConversionError(
-                f"OpenAI Responses cannot enforce {constraints} for tool {tool.name!r}."
-            )
     unsupported: list[str] = []
     if request.stop_sequences:
         unsupported.append("stop_sequences")

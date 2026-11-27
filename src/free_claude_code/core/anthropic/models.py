@@ -278,12 +278,15 @@ class MessagesRequest(BaseModel):
     def named_tools(self) -> list[Tool]:
         return [tool for tool in self.tools or () if isinstance(tool, Tool)]
 
-    @property
-    def direct_client_tools(self) -> list[Tool]:
+    def direct_client_tools(self, *, supports_strict: bool = True) -> list[Tool]:
+        """The client functions a foreign provider can offer on this turn."""
         return [
             tool
             for tool in self.named_tools
-            if tool.type in (None, "custom") and tool.allows_direct_call
+            if tool.type in (None, "custom")
+            and tool.allows_direct_call
+            and not (tool.model_extra or {}).get("defer_loading")
+            and (supports_strict or not (tool.model_extra or {}).get("strict"))
         ]
 
     @field_validator("max_tokens", mode="before")
