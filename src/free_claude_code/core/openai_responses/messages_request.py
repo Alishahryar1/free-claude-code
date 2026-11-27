@@ -462,7 +462,7 @@ def build_responses_messages_request(
 ) -> ResponsesMessagesRequest:
     """Convert caller-owned history directly to the native Messages wire shape."""
 
-    request.require_inline_context()
+    request.require_translatable_request()
     request = request.select_direct_tools()
     raw = cast(JsonObject, request.model_dump(mode="json", exclude_none=True))
     if raw.get("truncation") not in (None, "disabled"):

@@ -185,30 +185,40 @@ class ChatProjection:
     call_kinds: Mapping[str, str]
 
 
-def project_chat_request(request: ChatRequest) -> ChatProjection:
+def _tool_identity(tool: JsonObject) -> tuple[str, str] | None:
+    kind = tool.get("type")
+    if kind not in ("function", "custom"):
+        return None
+    return kind, json_text(json_object(tool[kind])["name"])
+
+
+def project_chat_request(
+    request: ChatRequest, *, custom_formats: tuple[str, ...] = ()
+) -> ChatProjection:
     """Project the shared Chat input before building a foreign request."""
     body = request.body()
     if request.n not in (None, 1):
         raise ChatConversionError("This destination supports only n=1")
+    if body.get("moderation") is not None:
+        raise ChatConversionError("Requested moderation requires native Chat egress")
     modalities = body.get("modalities")
     if isinstance(modalities, list) and "audio" in modalities:
         raise ChatConversionError("Audio output requires native Chat egress")
-    tools = [
-        tool
-        for tool in json_objects(body.get("tools") or [])
-        if tool.get("type") == "function"
-    ]
+    tools: list[JsonObject] = []
+    for tool in json_objects(body.get("tools") or []):
+        if tool.get("type") == "function":
+            tools.append(tool)
+        elif tool.get("type") == "custom" and custom_formats:
+            format_ = json_object(tool["custom"]).get("format")
+            if format_ is None or (
+                isinstance(format_, dict) and format_.get("type") in custom_formats
+            ):
+                tools.append(tool)
     choice = request.tool_choice
     if isinstance(choice, dict) and choice.get("type") == "allowed_tools":
         allowed = json_object(choice["allowed_tools"])
-        names = {
-            json_object(tool["function"]).get("name")
-            for tool in json_objects(allowed["tools"])
-            if tool.get("type") == "function" and isinstance(tool.get("function"), dict)
-        }
-        tools = [
-            tool for tool in tools if json_object(tool["function"])["name"] in names
-        ]
+        permitted = {_tool_identity(tool) for tool in json_objects(allowed["tools"])}
+        tools = [tool for tool in tools if _tool_identity(tool) in permitted]
         choice = json_text(allowed["mode"])
     legacy_choice = body.get("function_call")
     if legacy_choice == "none":
@@ -219,21 +229,12 @@ def project_chat_request(request: ChatRequest) -> ChatProjection:
         raise ChatConversionError(
             "A forced legacy function_call requires native Chat egress"
         )
-    if isinstance(choice, dict):
-        chosen = choice.get("function")
-        if (
-            choice.get("type") != "function"
-            or not isinstance(chosen, dict)
-            or not any(
-                json_object(tool["function"])["name"] == chosen.get("name")
-                for tool in tools
-            )
-        ):
-            raise ChatConversionError(
-                "Named tool_choice requires an available function"
-            )
+    if isinstance(choice, dict) and _tool_identity(choice) not in {
+        _tool_identity(tool) for tool in tools
+    }:
+        raise ChatConversionError("Named tool_choice requires an available tool")
     if choice == "required" and not tools:
-        raise ChatConversionError("Required tool_choice has no available functions")
+        raise ChatConversionError("Required tool_choice has no available tools")
     body["tools"] = tools
     body["tool_choice"] = choice if tools else None
     if not tools or choice == "none":
@@ -499,16 +500,36 @@ def _reasoning_items(message: JsonObject) -> list[JsonObject]:
 def _tools(body: JsonObject) -> list[JsonObject]:
     result = []
     for tool in json_objects(body.get("tools") or []):
-        function = tool.get("function")
-        if tool.get("type") != "function" or not isinstance(function, dict):
-            raise ChatConversionError("Only function tools can be translated")
-        result.append(
-            {
-                key: function[key]
-                for key in ("name", "description", "parameters", "strict")
-                if key in function
-            }
+        kind = json_text(tool["type"])
+        source = json_object(tool[kind])
+        fields = (
+            ("name", "description", "parameters", "strict")
+            if kind == "function"
+            else ("name", "description")
         )
+        definition: JsonObject = {
+            "type": kind,
+            **{key: source[key] for key in fields if key in source},
+        }
+        if kind == "custom" and isinstance(format_ := source.get("format"), dict):
+            if format_.get("type") == "grammar":
+                grammar = format_.get("grammar")
+                if (
+                    not isinstance(grammar, dict)
+                    or grammar.get("syntax") not in ("lark", "regex")
+                    or not isinstance(grammar.get("definition"), str)
+                ):
+                    raise ChatConversionError(
+                        "Custom tool grammar requires a syntax and definition"
+                    )
+                definition["format"] = {
+                    "type": "grammar",
+                    "syntax": grammar["syntax"],
+                    "definition": grammar["definition"],
+                }
+            else:
+                definition["format"] = {"type": "text"}
+        result.append(definition)
     return result
 
 
@@ -642,8 +663,13 @@ def _responses_content(value: JsonValue, *, role: str) -> list[JsonObject]:
     return parts
 
 
-def chat_responses_body(request: ChatRequest) -> JsonObject:
-    projected = project_chat_request(request)
+def chat_responses_body(
+    request: ChatRequest, *, custom_tool_grammar: bool = True
+) -> JsonObject:
+    projected = project_chat_request(
+        request,
+        custom_formats=("text", "grammar") if custom_tool_grammar else ("text",),
+    )
     body = projected.body
     if body.get("stop"):
         raise ChatConversionError("Responses cannot represent stop sequences")
@@ -708,23 +734,18 @@ def chat_responses_body(request: ChatRequest) -> JsonObject:
         result["max_output_tokens"] = limit
     if tools := _tools(body):
         # Responses defaults to strict normalization; Chat defaults to non-strict.
-        result["tools"] = [
-            {
-                "type": "function",
-                **tool,
-                "strict": tool["strict"] if tool.get("strict") is not None else False,
-            }
-            for tool in tools
-        ]
+        for tool in tools:
+            if tool["type"] == "function" and tool.get("strict") is None:
+                tool["strict"] = False
+        result["tools"] = tools
     if (choice := body.get("tool_choice")) is not None:
-        result["tool_choice"] = (
-            choice
-            if isinstance(choice, str)
-            else {
-                "type": "function",
-                "name": json_object(json_object(choice)["function"])["name"],
-            }
-        )
+        if isinstance(choice, dict):
+            identity = _tool_identity(choice)
+            assert identity is not None
+            kind, name = identity
+            result["tool_choice"] = {"type": kind, "name": name}
+        else:
+            result["tool_choice"] = choice
     if body.get("reasoning_effort") is not None:
         result["reasoning"] = {"effort": body["reasoning_effort"]}
     if fmt := request.response_format:

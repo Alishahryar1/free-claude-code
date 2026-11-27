@@ -272,7 +272,10 @@ class OpenAIResponsesTransport:
         continuation: ContinuationSeed | None = None,
     ) -> AsyncIterator[StreamOutput]:
         try:
-            body = chat_responses_body(request)
+            body = chat_responses_body(
+                request,
+                custom_tool_grammar=not self._tool_policy.custom_tools_as_functions,
+            )
             for field in self._omitted_request_fields - {
                 "store",
                 "include",
@@ -283,7 +286,7 @@ class OpenAIResponsesTransport:
                         f"{self._provider_name} cannot represent Chat control {field}"
                     )
             translated = OpenAIResponsesRequest.model_validate(body)
-            body, _ = self._build_native_body(translated, reasoning=reasoning)
+            body, tools = self._build_native_body(translated, reasoning=reasoning)
             reserved = request.reserved_tool_ids()
         except ValueError as error:
             raise InvalidRequestError(str(error)) from error
@@ -300,6 +303,7 @@ class OpenAIResponsesTransport:
                 reserved_tool_ids=reserved,
                 include_usage=request.include_usage,
                 include_thoughts=reasoning.output_enabled,
+                tool_events=tools.event_adapter(),
             ),
         )
 

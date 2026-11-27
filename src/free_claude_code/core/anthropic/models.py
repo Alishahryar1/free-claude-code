@@ -6,29 +6,37 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
+from .content import get_block_attr, get_block_type
+
 CODE_EXECUTION_INPUT_FIELDS = {
     "code_execution": "code",
     "bash_code_execution": "command",
 }
 
 
-def _stored_file(source: object) -> bool:
-    if not isinstance(source, dict):
-        return False
-    if source.get("type") == "file":
-        return True
-    contents = source.get("content")
-    return (
-        source.get("type") == "content"
-        and isinstance(contents, list)
-        and any(
-            isinstance(part, dict)
-            and part.get("type") == "image"
-            and isinstance(media := part.get("source"), dict)
-            and media.get("type") == "file"
-            for part in contents
-        )
-    )
+def _native_attachment(block: object) -> str | None:
+    kind = get_block_type(block)
+    if kind not in ("document", "image"):
+        return None
+    source = get_block_attr(block, "source")
+    media = get_block_type(source)
+    if media == "file":
+        return "stored file"
+    if kind == "document":
+        if media not in ("text", "content"):
+            return "document source"
+        citations = get_block_attr(block, "citations")
+        if isinstance(citations, dict) and citations.get("enabled"):
+            return "document citations"
+        contents = get_block_attr(source, "content")
+        if media == "content" and isinstance(contents, list):
+            for part in contents:
+                if (
+                    get_block_type(part) == "image"
+                    and get_block_type(get_block_attr(part, "source")) == "file"
+                ):
+                    return "stored file"
+    return None
 
 
 class _AnthropicBlockBase(BaseModel):
@@ -233,21 +241,22 @@ class MessagesRequest(BaseModel):
                     and caller.get("type") != "direct"
                 ):
                     return "programmatic tool history"
-                if isinstance(
-                    block, (ContentBlockDocument, ContentBlockImage)
-                ) and _stored_file(block.source):
-                    return "stored file"
-                if (
-                    isinstance(block, ContentBlockToolResult)
-                    and isinstance(block.content, list)
-                    and any(
-                        isinstance(part, dict)
-                        and part.get("type") in ("document", "image")
-                        and _stored_file(part.get("source"))
-                        for part in block.content
-                    )
+                if isinstance(block, (ContentBlockDocument, ContentBlockImage)):
+                    if reason := _native_attachment(block):
+                        return reason
+                elif isinstance(block, ContentBlockToolResult) and isinstance(
+                    block.content, list
                 ):
-                    return "tool result with a stored file"
+                    for part in block.content:
+                        if reason := _native_attachment(part):
+                            return f"tool result with {reason}"
+                elif (
+                    isinstance(block, ContentBlockWebFetchToolResult)
+                    and isinstance(block.content, dict)
+                    and block.content.get("type") == "web_fetch_result"
+                    and (reason := _native_attachment(block.content.get("content")))
+                ):
+                    return f"web fetch with {reason}"
                 if isinstance(block, ExtensionBlock) and block.type in {
                     "compaction",
                     "container_upload",

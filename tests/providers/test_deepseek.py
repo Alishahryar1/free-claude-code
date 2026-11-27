@@ -964,8 +964,7 @@ def test_forwards_user_image_for_any_model(
     ]
 
 
-def test_vision_model_strips_user_document() -> None:
-    """Vision models must receive the text alongside an unsupported document."""
+def test_vision_model_rejects_an_unreadable_user_document() -> None:
     request = MessagesRequest(
         model="deepseek-v4-flash-vision-exp",
         messages=[
@@ -992,11 +991,8 @@ def test_vision_model_strips_user_document() -> None:
         ),
         admission=immediate_admission(),
     )
-    body = provider._chat._build_request_body(request, reasoning=reasoning_for(request))
-    assert (
-        object_payload(array_payload(body["messages"])[0])["content"]
-        == "what is a PDF?"
-    )
+    with pytest.raises(InvalidRequestError, match="document"):
+        provider._chat._build_request_body(request, reasoning=reasoning_for(request))
 
 
 def test_request_omits_mcp_servers() -> None:
@@ -1446,10 +1442,9 @@ def test_normalizes_tool_result_content_array_to_string(
     assert "file2.txt" in string_payload(object_payload(tool_result)["content"])
 
 
-def test_strips_document_blocks_for_deepseek(
+def test_tool_result_cannot_hide_an_unreadable_sibling_document(
     deepseek_provider: DeepSeekProvider,
 ) -> None:
-    """Document blocks (e.g. PDFs from Claude Code) are stripped since DeepSeek can't process them."""
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -1477,15 +1472,10 @@ def test_strips_document_blocks_for_deepseek(
         }
     )
 
-    body = deepseek_provider._chat._build_request_body(
-        request, reasoning=reasoning_for(request)
-    )
-
-    assert array_payload(body["messages"])[0] == {
-        "role": "tool",
-        "tool_call_id": "t1",
-        "content": "PDF text extracted",
-    }
+    with pytest.raises(InvalidRequestError, match="document"):
+        deepseek_provider._chat._build_request_body(
+            request, reasoning=reasoning_for(request)
+        )
 
 
 def test_preserves_user_image_and_text_order(

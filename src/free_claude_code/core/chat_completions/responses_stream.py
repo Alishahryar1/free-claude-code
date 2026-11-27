@@ -11,7 +11,7 @@ from ..history_replay import (
     protected_reasoning,
 )
 from ..json_types import JsonObject, JsonValue, json_object, json_objects
-from ..openai_responses import responses_event_index
+from ..openai_responses import ResponsesToolEventAdapter, responses_event_index
 from .response import ChatOutput, chat_failure
 
 
@@ -26,11 +26,13 @@ class ChatResponsesStream:
         reserved_tool_ids: frozenset[str],
         include_usage: bool,
         include_thoughts: bool,
+        tool_events: ResponsesToolEventAdapter | None = None,
     ) -> None:
         self._output = ChatOutput(model, include_usage=include_usage)
         self._origin = origin
         self._reserved = set(reserved_tool_ids)
         self._include_thoughts = include_thoughts
+        self._tool_events = tool_events
         self._items: dict[int, JsonObject] = {}
         self._text: dict[tuple[int, str, int], str] = {}
         self._arguments: dict[int, str] = {}
@@ -46,6 +48,15 @@ class ChatResponsesStream:
         return self._output.start()
 
     def feed(self, event_type: str, payload: JsonObject) -> list[str]:
+        if self._tool_events is None:
+            return self._feed(event_type, payload)
+        return [
+            frame
+            for kind, adapted in self._tool_events.feed(event_type, payload)
+            for frame in self._feed(kind, adapted)
+        ]
+
+    def _feed(self, event_type: str, payload: JsonObject) -> list[str]:
         data = payload
         if self.completed:
             raise chat_failure("Responses event arrived after completion")
@@ -107,8 +118,15 @@ class ChatResponsesStream:
         if event_type in {
             "response.function_call_arguments.delta",
             "response.function_call_arguments.done",
+            "response.custom_tool_call_input.delta",
+            "response.custom_tool_call_input.done",
         }:
-            value = data.get("arguments" if event_type.endswith(".done") else "delta")
+            field = (
+                "input"
+                if event_type.startswith("response.custom_tool_call_input.")
+                else "arguments"
+            )
+            value = data.get(field if event_type.endswith(".done") else "delta")
             if not isinstance(value, str):
                 raise chat_failure("Responses function arguments must be a string")
             previous = self._arguments.get(index, "")
@@ -243,7 +261,7 @@ class ChatResponsesStream:
                     )
                 )
             return events
-        if kind != "function_call":
+        if kind not in ("function_call", "custom_tool_call"):
             raise chat_failure(f"Chat cannot represent Responses output {kind}")
         if not complete or item.get("status") in (
             "in_progress",
@@ -254,7 +272,8 @@ class ChatResponsesStream:
         name = item.get("name", "")
         if not isinstance(name, str) or not name:
             raise chat_failure("Responses function call requires a name")
-        arguments = item.get("arguments", self._arguments.get(index, ""))
+        field = "input" if kind == "custom_tool_call" else "arguments"
+        arguments = item.get(field, self._arguments.get(index, ""))
         if not isinstance(arguments, str) or not arguments.startswith(
             self._arguments.get(index, "")
         ):
@@ -263,7 +282,13 @@ class ChatResponsesStream:
         if not isinstance(call_id, str) or not call_id or call_id in self._reserved:
             call_id = f"call_{uuid4().hex}"
         self._reserved.add(call_id)
-        events = self._output.tool(self._calls, call_id, name, arguments)
+        events = self._output.tool(
+            self._calls,
+            call_id,
+            name,
+            arguments,
+            kind="custom" if kind == "custom_tool_call" else "function",
+        )
         self._calls += 1
         return events
 

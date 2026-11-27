@@ -479,34 +479,31 @@ class AnthropicToOpenAIConverter:
     ) -> list[dict[str, Any]]:
         ledger = _OpenAIChatHistoryLedger()
 
-        for msg in messages:
-            role = msg.role
-            content = msg.content
-            reasoning_content = _clean_reasoning_content(
-                getattr(msg, "reasoning_content", None)
-            )
-
-            if role == "user" and isinstance(content, list):
-                ledger.add_user_blocks(content)
-                continue
-
-            try:
+        try:
+            for msg in messages:
+                role = msg.role
+                content = msg.content
+                if role == "user" and isinstance(content, list):
+                    ledger.add_user_blocks(content)
+                    continue
                 segments = AnthropicToOpenAIConverter._convert_message_to_segments(
                     role,
                     content,
-                    reasoning_content=reasoning_content,
+                    reasoning_content=_clean_reasoning_content(
+                        getattr(msg, "reasoning_content", None)
+                    ),
                     reasoning_replay=reasoning_replay,
                     structured_reasoning_details=structured_reasoning_details,
                 )
-            except HistoryReplayError as error:
-                raise OpenAIConversionError(str(error)) from error
-            for segment in segments:
-                if isinstance(segment, _PlainSegment):
-                    ledger.add_plain(segment.messages)
-                else:
-                    ledger.add_tool_turn(segment)
+                for segment in segments:
+                    if isinstance(segment, _PlainSegment):
+                        ledger.add_plain(segment.messages)
+                    else:
+                        ledger.add_tool_turn(segment)
+            ordered_messages = ledger.finish()
+        except HistoryReplayError as error:
+            raise OpenAIConversionError(str(error)) from error
 
-        ordered_messages = ledger.finish()
         closed_messages = close_chat_tool_result_turns(ordered_messages)
         return _coalesce_openai_user_messages(closed_messages)
 

@@ -130,10 +130,6 @@ def _document_parts(
     source = document.get("source")
     if not isinstance(source, dict) or source.get("type") not in ("text", "content"):
         return []
-    if isinstance(citations := document.get("citations"), dict) and citations.get(
-        "enabled"
-    ):
-        raise ValueError("Document citations require native Messages egress")
     headings = [
         text
         for text in (document.get("title"), document.get("context"))

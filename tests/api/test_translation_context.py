@@ -6,7 +6,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from free_claude_code.core.json_types import JsonObject
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from tests.api.test_four_protocol_matrix import (
     ingress_request,
     matrix_app,
@@ -14,6 +14,125 @@ from tests.api.test_four_protocol_matrix import (
     translation_error,
 )
 from tests.providers.test_gemini import _sse
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses", "messages", "gemini"])
+@pytest.mark.parametrize("in_tool_result", [False, True])
+def test_messages_document_is_never_replaced_by_its_caption(
+    protocol: str, in_tool_result: bool
+) -> None:
+    content: list[JsonObject] = [
+        {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": "application/pdf",
+                "data": "JVBERi0xLjQK",
+            },
+        },
+        {"type": "text", "text": "Read the attached report"},
+    ]
+    history: list[JsonObject] = []
+    if in_tool_result:
+        history.append(
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "name": "read", "id": "r", "input": {}}
+                ],
+            }
+        )
+        content = [{"type": "tool_result", "tool_use_id": "r", "content": content}]
+    history.append({"role": "user", "content": content})
+    path, body = ingress_request("messages", True, history)
+    if protocol == "messages":
+        captured = json.dumps(sent_request(protocol, path, body))
+        assert "JVBERi0xLjQK" in captured and "Read the attached report" in captured
+    else:
+        assert "document" in translation_error(protocol, path, body).lower()
+
+
+@pytest.mark.parametrize("protocol", ["chat", "responses", "messages", "gemini"])
+def test_cache_prewarming_cannot_turn_into_inference(protocol: str) -> None:
+    path, body = ingress_request("responses", True)
+    body["prompt_cache_options"] = {"prewarm": True}
+    if protocol == "responses":
+        assert sent_request(protocol, path, body)["prompt_cache_options"] == {
+            "prewarm": True
+        }
+    else:
+        assert "prewarm" in translation_error(protocol, path, body)
+        body["prompt_cache_options"] = {"prewarm": False}
+        assert "hello" in json.dumps(sent_request(protocol, path, body))
+
+
+@pytest.mark.parametrize(
+    ("wire", "field", "control"),
+    [
+        ("responses", "background", True),
+        (
+            "responses",
+            "moderation",
+            {"model": "omni-moderation-latest", "policy": {"input": {"mode": "block"}}},
+        ),
+        (
+            "chat",
+            "moderation",
+            {
+                "model": "omni-moderation-latest",
+                "policy": {"output": {"mode": "score"}},
+            },
+        ),
+    ],
+)
+@pytest.mark.parametrize("protocol", ["chat", "responses", "messages", "gemini"])
+def test_request_execution_controls_require_a_capable_route(
+    wire: str, field: str, control: JsonValue, protocol: str
+) -> None:
+    path, body = ingress_request(wire, True)
+    body[field] = control
+    if wire == protocol:
+        assert sent_request(protocol, path, body)[field] == control
+    else:
+        assert field in translation_error(protocol, path, body)
+
+
+def test_chat_classifies_a_deferred_hosted_result_as_a_client_error() -> None:
+    path, body = ingress_request(
+        "messages",
+        True,
+        [
+            {"role": "user", "content": "Read both sources"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "name": "read", "id": "r", "input": {}},
+                    {
+                        "type": "server_tool_use",
+                        "name": "web_search",
+                        "id": "s",
+                        "input": {"query": "sources"},
+                    },
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": "s",
+                        "content": [{"type": "future_search_result"}],
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "r",
+                        "content": "Read completed",
+                    }
+                ],
+            },
+        ],
+    )
+    assert "web search result" in translation_error("chat", path, body)
 
 
 @pytest.mark.parametrize("wire", ["chat", "messages", "responses"])

@@ -36,9 +36,22 @@ class OpenAIResponsesRequest(BaseModel):
     previous_response_id: str | None = None
     store: bool | None = None
 
-    def require_inline_context(self) -> None:
-        """Foreign providers can only use context included in the request."""
+    def require_translatable_request(self) -> None:
+        """A foreign generator needs inline input and the same requested operation."""
         extra: Mapping[str, JsonValue] = self.model_extra or {}
+        cache = extra.get("prompt_cache_options")
+        if isinstance(cache, dict) and cache.get("prewarm") is True:
+            raise ResponsesConversionError(
+                "Cache prewarming requires native Responses egress"
+            )
+        if extra.get("background") is True:
+            raise ResponsesConversionError(
+                "A background response requires native Responses egress"
+            )
+        if extra.get("moderation") is not None:
+            raise ResponsesConversionError(
+                "Requested moderation requires native Responses egress"
+            )
         for field, value in (
             ("previous_response_id", self.previous_response_id),
             ("conversation", extra.get("conversation")),

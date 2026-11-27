@@ -33,6 +33,41 @@ def test_legacy_none_disables_modern_tools_and_auto_allows_them() -> None:
         assert [tool["name"] for tool in object_array(body["tools"])] == ["read"]
 
 
+def test_custom_tool_allowlist_preserves_kind_and_grammar_on_a_capable_route() -> None:
+    grammar = {"syntax": "regex", "definition": "[a-z]+"}
+    selected = {"type": "custom", "custom": {"name": "edit"}}
+    request = ChatRequest.model_validate(
+        {
+            "model": "example",
+            "messages": [{"role": "user", "content": "edit this"}],
+            "tools": [
+                {"type": "function", "function": {"name": "edit"}},
+                {
+                    "type": "custom",
+                    "custom": {
+                        "name": "edit",
+                        "format": {"type": "grammar", "grammar": grammar},
+                    },
+                },
+            ],
+            "tool_choice": {
+                "type": "allowed_tools",
+                "allowed_tools": {"mode": "required", "tools": [selected]},
+            },
+        }
+    )
+    body = chat_responses_body(request)
+    assert body["tools"] == [
+        {"type": "custom", "name": "edit", "format": {"type": "grammar", **grammar}}
+    ]
+    assert body["tool_choice"] == "required"
+    with pytest.raises(ChatConversionError, match="no available"):
+        chat_responses_body(request, custom_tool_grammar=False)
+    for destination in (chat_messages_body, chat_to_gemini):
+        with pytest.raises(ChatConversionError, match="no available"):
+            destination(request)
+
+
 def test_chat_preserves_native_fields_and_nulls() -> None:
     body = {
         "model": "model",

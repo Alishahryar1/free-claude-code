@@ -596,13 +596,60 @@ def test_search_selection_preserves_completed_code_execution_errors() -> None:
     assert history.count("[Earlier tool record]") == 2
 
 
-def test_native_container_keeps_optional_and_forced_web_tools_with_the_provider() -> (
-    None
-):
+@pytest.mark.parametrize(
+    "context",
+    [
+        {"container": "saved_container"},
+        {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "url",
+                                "url": "https://example.invalid/report.pdf",
+                            },
+                        },
+                        {"type": "text", "text": "Search for the report's author"},
+                    ],
+                }
+            ]
+        },
+        {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "web_fetch_tool_result",
+                            "tool_use_id": "w",
+                            "content": {
+                                "type": "web_fetch_result",
+                                "url": "https://example.invalid",
+                                "content": {
+                                    "type": "document",
+                                    "citations": {"enabled": True},
+                                    "source": {
+                                        "type": "text",
+                                        "media_type": "text/plain",
+                                        "data": "Report",
+                                    },
+                                },
+                            },
+                        },
+                    ],
+                }
+            ]
+        },
+    ],
+)
+def test_native_context_keeps_optional_and_forced_web_tools_with_the_provider(
+    context: JsonObject,
+) -> None:
     request = _automatic_search_request()
-    request = MessagesRequest.model_validate(
-        {**request.model_dump(), "container": "saved_container"}
-    )
+    request = MessagesRequest.model_validate({**request.model_dump(), **context})
     assert plan_automatic_web_search(request, web_tools_enabled=True) is None
     request.tool_choice = {"type": "tool", "name": "web_search"}
     assert not is_web_server_tool_request(request)

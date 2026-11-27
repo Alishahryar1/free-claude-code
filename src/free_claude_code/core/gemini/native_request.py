@@ -522,7 +522,7 @@ def messages_to_gemini(
 def responses_to_gemini(
     request: OpenAIResponsesRequest, *, allow_pending_calls: bool = False
 ) -> JsonObject:
-    request.require_inline_context()
+    request.require_translatable_request()
     request = request.select_direct_tools()
     body: JsonObject = request.model_dump(mode="json", exclude_none=True)
     if body.get("store"):
