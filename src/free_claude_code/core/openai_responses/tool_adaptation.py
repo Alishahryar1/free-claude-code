@@ -42,6 +42,7 @@ class ResponsesToolPolicy:
     text_only_web_search: bool = False
     client_tool_search: bool = False
     flatten_namespaces: bool = False
+    direct_tools_only: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +100,8 @@ class ResponsesToolAdapter:
             self.request.tools = active_client_tools(
                 self.request.tools, self._search_history
             )
+        if policy.direct_tools_only:
+            self.request = self.request.select_direct_tools()
         if (
             policy.custom_tools_as_functions
             or policy.flatten_namespaces
@@ -111,9 +114,10 @@ class ResponsesToolAdapter:
                         "function_call",
                         "custom_tool_call",
                     ):
-                        self._wire_name(_call_identity(item))
+                        self._register_name(_call_identity(item))
                     elif (
-                        isinstance(item, dict)
+                        not policy.direct_tools_only
+                        and isinstance(item, dict)
                         and item.get("type") == "tool_search_output"
                     ):
                         self._register_tools(
@@ -136,15 +140,10 @@ class ResponsesToolAdapter:
         ):
             self.request.tool_choice = self._choice(self.request.tool_choice)
 
-    def _wire_name(self, identity: ResponsesToolIdentity) -> str:
+    def _register_name(self, identity: ResponsesToolIdentity) -> str:
         if identity in self._wire_names:
             return self._wire_names[identity]
-        wire_name = (
-            flatten_responses_tool_name(identity.name, namespace=identity.namespace)
-            if self._policy.flatten_namespaces
-            or (identity.kind == "custom" and self._policy.custom_tools_as_functions)
-            else identity.name
-        )
+        wire_name = self._wire_name(identity)
         key = (
             None if self._policy.flatten_namespaces else identity.namespace,
             wire_name,
@@ -155,6 +154,15 @@ class ResponsesToolAdapter:
         self._identities[key] = identity
         self._wire_names[identity] = wire_name
         return wire_name
+
+    def _wire_name(self, identity: ResponsesToolIdentity) -> str:
+        if self._policy.flatten_namespaces or (
+            identity.kind == "custom" and self._policy.custom_tools_as_functions
+        ):
+            return flatten_responses_tool_name(
+                identity.name, namespace=identity.namespace
+            )
+        return identity.name
 
     def _register_tools(self, tools: JsonValue, namespace: str | None = None) -> None:
         if not isinstance(tools, list):
@@ -168,7 +176,7 @@ class ResponsesToolAdapter:
                 self._register_tools(tool.get("tools"), _name(tool))
             elif tool.get("type") in ("function", "custom"):
                 identity = _definition_identity(tool, namespace)
-                self._wire_name(identity)
+                self._register_name(identity)
                 self._declared.add(identity)
 
     def _tools(
@@ -235,6 +243,7 @@ class ResponsesToolAdapter:
             nested = tool.get(str(kind))
             source = nested if isinstance(nested, dict) else tool
             identity = _definition_identity(tool, namespace)
+            # A past search describes tools even when they are no longer callable.
             wire_name = self._wire_name(identity)
             tool = {
                 **{key: child for key, child in tool.items() if key != kind},
@@ -373,7 +382,7 @@ class ResponsesToolAdapter:
                     if key not in ("custom", "function")
                 },
                 "type": "function",
-                "name": self._wire_name(identity),
+                "name": self._register_name(identity),
             }
             if self._policy.flatten_namespaces:
                 result.pop("namespace", None)

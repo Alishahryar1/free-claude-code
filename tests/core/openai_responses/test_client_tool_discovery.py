@@ -132,6 +132,50 @@ def test_chat_discovery_preserves_pairing_and_activates_returned_tool() -> None:
     assert request.model_dump() == original
 
 
+@pytest.mark.parametrize("restricted_current", [False, True])
+def test_discovery_and_current_declarations_are_selected_before_flattening(
+    restricted_current: bool,
+) -> None:
+    discovered: JsonObject = {"type": "function", "name": "count"}
+    group: JsonObject = {"type": "namespace", "name": "math", "tools": [discovered]}
+    flat: JsonObject = {"type": "function", "name": "math__count"}
+    tools = [flat]
+    if restricted_current:
+        tools.append(
+            {**group, "tools": [{**discovered, "allowed_callers": ["programmatic"]}]}
+        )
+    request = OpenAIResponsesRequest(
+        model="example",
+        tools=tools,
+        tool_choice=None
+        if restricted_current
+        else {"type": "allowed_tools", "mode": "required", "tools": [flat]},
+        input=[
+            {"role": "user", "content": "Count"},
+            {
+                "type": "tool_search_call",
+                "call_id": "s",
+                "execution": "client",
+                "arguments": {},
+            },
+            {
+                "type": "tool_search_output",
+                "call_id": "s",
+                "execution": "client",
+                "tools": [group],
+            },
+        ],
+    )
+    prepared = build_responses_chat_request(
+        request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
+    )
+    assert [
+        object_payload(tool["function"])["name"]
+        for tool in object_array(prepared.body["tools"])
+    ] == ["math__count"]
+    assert prepared.tool_adapter.original is request
+
+
 def test_unique_bare_tool_name_restores_declared_namespace() -> None:
     item = cast(
         dict[str, Any],

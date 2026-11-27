@@ -22,6 +22,7 @@ from free_claude_code.core.anthropic.models import (
     Tool,
 )
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
+from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_chat import is_synthetic_chat_tool_turn_boundary
 from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
@@ -37,6 +38,7 @@ from tests.providers.support import (
     reasoning_for,
     sdk_chat_chunk,
 )
+from tests.providers.test_history_transports import _events_for, _harness
 from tests.wire_payload import (
     array_payload,
     object_array,
@@ -366,8 +368,10 @@ def test_build_request_body_tool_choice_keeps_thinking(
     assert body["tool_choice"] == "auto"
 
 
-def test_build_request_body_forced_tool_choice_is_rejected(
-    deepseek_provider: DeepSeekProvider,
+@pytest.mark.asyncio
+@pytest.mark.parametrize("thinking", ["disabled", "enabled"])
+async def test_named_choice_reaches_deepseek_in_either_thinking_mode(
+    thinking: str,
 ) -> None:
     request = MessagesRequest.model_validate(
         {
@@ -381,14 +385,33 @@ def test_build_request_body_forced_tool_choice_is_rejected(
                     "input_schema": {"type": "object", "properties": {}},
                 }
             ],
-            "thinking": {"type": "enabled", "budget_tokens": 2000},
         }
     )
 
-    with pytest.raises(InvalidRequestError, match="named tool_choice"):
-        deepseek_provider._chat._build_request_body(
-            request, reasoning=reasoning_for(request)
+    def reply(bodies: list[JsonObject]):
+        if object_payload(bodies[-1]["thinking"])["type"] == "enabled":
+            return 400, {"message": "Forced tool choice is unavailable while thinking"}
+        return 200, _events_for("chat")
+
+    async with _harness(
+        "chat",
+        reply,
+        chat_provider_factory=lambda: DeepSeekProvider(
+            make_provider_config(api_key="a", base_url="https://provider.invalid/v1"),
+            admission=immediate_admission(),
+        ),
+    ) as (_, bodies, provider):
+        stream = provider.stream_messages(
+            request, reasoning=REASONING_ON if thinking == "enabled" else REASONING_OFF
         )
+        if thinking == "enabled":
+            with pytest.raises(ExecutionFailure, match="Forced tool choice"):
+                _ = [chunk async for chunk in stream]
+        else:
+            assert [chunk async for chunk in stream]
+    (sent,) = bodies
+    assert sent["tool_choice"] == {"type": "function", "function": {"name": "Read"}}
+    assert sent["thinking"] == {"type": thinking}
 
 
 def test_build_request_body_encodes_reasoning_off() -> None:

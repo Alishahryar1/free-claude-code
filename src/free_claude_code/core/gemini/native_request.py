@@ -171,6 +171,7 @@ def _tool_config(
         )
         if (
             choice.get("type") in ("function", "tool")
+            and (not responses or choice.get("namespace") is None)
             and isinstance(name, str)
             and any(tool["name"] == name for tool in declarations)
         ):
@@ -510,9 +511,10 @@ def messages_to_gemini(
 def responses_to_gemini(
     request: OpenAIResponsesRequest, *, allow_pending_calls: bool = False
 ) -> JsonObject:
-    request = request.restrict_allowed_tools()
+    request.require_inline_context()
+    request = request.select_direct_tools()
     body: JsonObject = request.model_dump(mode="json", exclude_none=True)
-    if body.get("store") or body.get("previous_response_id"):
+    if body.get("store"):
         raise GeminiConversionError(
             "Native Gemini cannot access stored Responses state"
         )
@@ -593,10 +595,12 @@ def responses_to_gemini(
             )
         elif kind in ("input_text", "output_text", "text", "input_image"):
             _append(contents, "user", _text_parts([item], responses=True))
-        elif kind == "item_reference" or (
-            is_hosted_history(kind)
-            and item.get("status")
-            not in (None, "completed", "failed", "incomplete", "interrupted")
+        elif is_hosted_history(kind) and item.get("status") not in (
+            None,
+            "completed",
+            "failed",
+            "incomplete",
+            "interrupted",
         ):
             raise GeminiConversionError(f"Native Gemini cannot replay {kind!r}")
         elif not isinstance(kind, str):
@@ -631,7 +635,7 @@ def responses_to_gemini(
         result["systemInstruction"] = {"parts": system}
     declarations = []
     for tool in json_objects(body.get("tools") or []):
-        if tool.get("type") != "function":
+        if tool.get("type") != "function" or tool.get("namespace") is not None:
             continue
         if tool.get("strict"):
             raise GeminiConversionError(

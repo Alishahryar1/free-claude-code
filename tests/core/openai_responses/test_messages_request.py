@@ -128,7 +128,6 @@ def test_text_controls_and_stateless_history_policy() -> None:
             "instructions": "Be concise.",
             "stream": False,
             "store": True,
-            "previous_response_id": "old",
             "max_output_tokens": 99999,
             "temperature": 0.2,
             "top_p": 0.8,

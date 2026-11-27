@@ -123,6 +123,8 @@ def _merge_tool_groups(groups: list[list[JsonObject]]) -> list[JsonObject]:
                     continue
                 source = child.get(str(kind))
                 definition = deepcopy(source if isinstance(source, dict) else child)
+                if "allowed_callers" in child:
+                    definition["allowed_callers"] = deepcopy(child["allowed_callers"])
                 definition["type"] = kind
                 definition.pop("defer_loading", None)
                 name = required_str(definition.get("name"), "tool.name")

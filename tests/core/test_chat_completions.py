@@ -17,6 +17,22 @@ from free_claude_code.core.json_types import JsonObject
 from tests.wire_payload import object_array
 
 
+def test_legacy_none_disables_modern_tools_and_auto_allows_them() -> None:
+    request = ChatRequest(
+        model="model",
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[{"type": "function", "function": {"name": "read"}}],
+        tool_choice="auto",
+        functions=[{"name": "legacy"}],
+    )
+    for legacy in ("none", "auto"):
+        body = chat_responses_body(
+            ChatRequest.model_validate({**request.body(), "function_call": legacy})
+        )
+        assert body["tool_choice"] == legacy
+        assert [tool["name"] for tool in object_array(body["tools"])] == ["read"]
+
+
 def test_chat_preserves_native_fields_and_nulls() -> None:
     body = {
         "model": "model",

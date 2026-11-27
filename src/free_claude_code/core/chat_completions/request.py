@@ -172,6 +172,9 @@ def translated_body(request: ChatRequest) -> JsonObject:
     body = request.body()
     if request.n not in (None, 1):
         raise ChatConversionError("This destination supports only n=1")
+    modalities = body.get("modalities")
+    if isinstance(modalities, list) and "audio" in modalities:
+        raise ChatConversionError("Audio output requires native Chat egress")
     tools = [
         tool
         for tool in json_objects(body.get("tools") or [])
@@ -189,6 +192,15 @@ def translated_body(request: ChatRequest) -> JsonObject:
             tool for tool in tools if json_object(tool["function"])["name"] in names
         ]
         choice = json_text(allowed["mode"])
+    legacy_choice = body.get("function_call")
+    if legacy_choice == "none":
+        if choice not in (None, "auto", "none"):
+            raise ChatConversionError("function_call=none conflicts with tool_choice")
+        choice = "none"
+    elif legacy_choice not in (None, "auto"):
+        raise ChatConversionError(
+            "A forced legacy function_call requires native Chat egress"
+        )
     if isinstance(choice, dict):
         chosen = choice.get("function")
         if (
@@ -217,13 +229,19 @@ def translated_body(request: ChatRequest) -> JsonObject:
     seen_calls: set[str] = set()
     projected: list[JsonObject] = []
     for message in messages:
-        if message["role"] == "function":
+        if message["role"] == "function" or (
+            message["role"] == "assistant" and message.get("function_call") is not None
+        ):
             raise ChatConversionError(
-                "Legacy function messages require native Chat egress"
+                "Legacy function call history requires native Chat egress"
             )
         calls = list(json_objects(message.get("tool_calls") or []))
         if calls:
             for call in calls:
+                if google_thought_signature(call.get("extra_content")):
+                    raise ChatConversionError(
+                        "Signed Google tool calls require native Chat egress"
+                    )
                 call_id = call.get("id")
                 if isinstance(call_id, str) and call_id:
                     if call_id in seen_calls:
@@ -246,31 +264,40 @@ def translated_body(request: ChatRequest) -> JsonObject:
                 if part.get("type") in ("text", "image_url")
             ]
             message["content"] = parts
-        if (
-            message["role"] != "tool"
-            and not isinstance(content, str)
-            and not any(
-                message.get(field)
-                for field in (
-                    "content",
-                    "tool_calls",
-                    "refusal",
-                    "reasoning",
-                    "reasoning_content",
-                    "reasoning_details",
-                )
-            )
-        ):
+        if not isinstance(content, str) and not message.get("content"):
             if message is latest_user:
                 raise ChatConversionError(
                     "The latest user message has no translatable content"
                 )
-            continue
+            if message["role"] != "tool" and not (
+                message["role"] == "assistant"
+                and any(
+                    message.get(field)
+                    for field in (
+                        "tool_calls",
+                        "refusal",
+                        "reasoning",
+                        "reasoning_content",
+                        "reasoning_details",
+                    )
+                )
+            ):
+                continue
         projected.append(message)
     if not any(message["role"] not in ("system", "developer") for message in projected):
         raise ChatConversionError("Chat request has no translatable conversation")
     body["messages"] = projected
     return body
+
+
+def google_thought_signature(extra_content: JsonValue) -> str | None:
+    if not isinstance(extra_content, dict):
+        return None
+    google = extra_content.get("google")
+    if not isinstance(google, dict):
+        return None
+    signature = google.get("thought_signature")
+    return signature if isinstance(signature, str) and signature else None
 
 
 def content_parts(value: JsonValue) -> list[JsonObject]:

@@ -61,31 +61,65 @@ class OpenAIResponsesRequest(BaseModel):
     previous_response_id: str | None = None
     store: bool | None = None
 
-    def restrict_allowed_tools(self) -> Self:
-        choice = self.tool_choice
-        if not isinstance(choice, dict) or choice.get("type") != "allowed_tools":
-            return self
-        mode, allowed = choice.get("mode"), choice.get("tools")
-        if mode not in ("auto", "required") or not isinstance(allowed, list):
-            raise ResponsesConversionError(
-                "allowed_tools requires a mode and tool list"
-            )
-        if not all(isinstance(tool, dict) for tool in allowed):
-            raise ResponsesConversionError("Allowed tools must be objects")
+    def require_inline_context(self) -> None:
+        """Foreign providers can only use context included in the request."""
+        extra: Mapping[str, JsonValue] = self.model_extra or {}
+        for field, value in (
+            ("previous_response_id", self.previous_response_id),
+            ("conversation", extra.get("conversation")),
+            ("prompt", extra.get("prompt")),
+        ):
+            if value is not None:
+                raise ResponsesConversionError(
+                    f"Cannot translate Responses context from {field}"
+                )
+        items = self.input if isinstance(self.input, list) else [self.input]
+        for item in items:
+            if isinstance(item, dict) and item.get("type") in (
+                "compaction",
+                "item_reference",
+            ):
+                raise ResponsesConversionError(
+                    f"Cannot translate Responses context from {item['type']}"
+                )
 
-        allowed_entries = allowed
+    def select_direct_tools(self) -> Self:
+        """Apply the caller's restrictions to the declarations available on this turn."""
+        choice = self.tool_choice
+        allowed: list[tuple[JsonValue, JsonValue, JsonValue]] | None = None
+        if isinstance(choice, dict) and choice.get("type") == "allowed_tools":
+            mode, entries = choice.get("mode"), choice.get("tools")
+            if mode not in ("auto", "required") or not isinstance(entries, list):
+                raise ResponsesConversionError(
+                    "allowed_tools requires a mode and tool list"
+                )
+            allowed = []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    raise ResponsesConversionError("Allowed tools must be objects")
+                allowed.append(
+                    (entry.get("type"), entry.get("name"), entry.get("namespace"))
+                )
+            choice = mode
 
         def permitted(tool: JsonObject, namespace: JsonValue = None) -> bool:
-            return any(
-                isinstance(entry, dict)
-                and (entry.get("type"), entry.get("name"), entry.get("namespace"))
-                == (
-                    tool.get("type"),
-                    tool.get("name"),
-                    tool.get("namespace", namespace),
-                )
-                for entry in allowed_entries
+            kind = tool.get("type")
+            source = tool
+            if kind in ("function", "custom"):
+                nested = tool.get(str(kind))
+                if isinstance(nested, dict):
+                    source = nested
+                callers = tool.get("allowed_callers", source.get("allowed_callers"))
+                if callers is not None and (
+                    not isinstance(callers, list) or "direct" not in callers
+                ):
+                    return False
+            identity = (
+                kind,
+                source.get("name"),
+                namespace or source.get("namespace") or tool.get("namespace"),
             )
+            return allowed is None or identity in allowed
 
         retained: list[JsonObject] = []
         for tool in self.tools or ():
@@ -101,7 +135,7 @@ class OpenAIResponsesRequest(BaseModel):
                     retained.append({**tool, "tools": selected})
             elif permitted(tool):
                 retained.append(tool)
-        return self.model_copy(update={"tools": retained, "tool_choice": mode})
+        return self.model_copy(update={"tools": retained, "tool_choice": choice})
 
     @field_validator("max_output_tokens", mode="before")
     @classmethod

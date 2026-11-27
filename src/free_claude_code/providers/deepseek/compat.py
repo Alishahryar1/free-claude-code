@@ -2,7 +2,6 @@
 
 from loguru import logger
 
-from free_claude_code.application.errors import InvalidRequestError
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.core.anthropic import (
     ReasoningReplayMode,
@@ -70,9 +69,6 @@ def finalize_deepseek_chat_body(body: JsonObject, reasoning: ReasoningPolicy) ->
             ):
                 message["reasoning_content"] = message.get("reasoning") or ""
 
-    choice = body.get("tool_choice")
-    if isinstance(choice, dict) and choice.get("type") == "function":
-        raise InvalidRequestError("DeepSeek cannot enforce a named tool_choice")
     _apply_deepseek_chat_extras(body, reasoning)
     if body.get("max_tokens") is None:
         body["max_tokens"] = ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS

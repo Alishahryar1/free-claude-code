@@ -387,12 +387,14 @@ def build_responses_chat_request(
     structured_reasoning_details: bool = False,
 ) -> ResponsesChatRequest:
     """Translate a Responses request directly into one Chat Completions body."""
+    request.require_inline_context()
     adapter = ResponsesToolAdapter(
-        request.restrict_allowed_tools(),
+        request,
         ResponsesToolPolicy(
             custom_tools_as_functions=True,
             flatten_namespaces=True,
             client_tool_search=True,
+            direct_tools_only=True,
         ),
     )
     request = adapter.request

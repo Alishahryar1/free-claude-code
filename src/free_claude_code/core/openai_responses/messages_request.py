@@ -393,11 +393,7 @@ class _MessagesInput:
                 "assistant", [{"type": "text", "text": tool_history_context(value)}]
             )
             return
-        if (
-            not isinstance(kind, str)
-            or is_hosted_history(kind)
-            or kind == "item_reference"
-        ):
+        if not isinstance(kind, str) or is_hosted_history(kind):
             raise ResponsesConversionError(
                 f"Messages upstream cannot represent input item {kind!r}."
             )
@@ -527,7 +523,8 @@ def build_responses_messages_request(
 ) -> ResponsesMessagesRequest:
     """Convert caller-owned history directly to the native Messages wire shape."""
 
-    request = request.restrict_allowed_tools()
+    request.require_inline_context()
+    request = request.select_direct_tools()
     raw = cast(JsonObject, request.model_dump(mode="json", exclude_none=True))
     if raw.get("truncation") not in (None, "disabled"):
         raise ResponsesConversionError(
