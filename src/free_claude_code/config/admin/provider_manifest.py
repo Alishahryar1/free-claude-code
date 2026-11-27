@@ -315,6 +315,13 @@ _PROVIDER_FIELD_OVERRIDES: dict[str, ProviderFieldOverride] = {
             "Create one at xkiro.com/dashboard/api/keys."
         ),
     },
+    "EMPIRIOLABS_API_KEY": {
+        "label": "EmpirioLabs AI API Keys",
+        "description": (
+            "EmpirioLabs AI OpenAI-compatible API key for api.empiriolabs.ai/v1. "
+            "Create one at platform.empiriolabs.ai/dashboard/api-keys."
+        ),
+    },
     "AGNES_API_KEY": {
         "label": "Agnes AI API Keys",
         "description": (

@@ -19,6 +19,7 @@ The LLaMA.cpp icon comes from the upstream llama.cpp repository; its MIT license
 | `cohere-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/cohere-color.svg |
 | `deepinfra-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/deepinfra-color.svg |
 | `deepseek-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/deepseek-color.svg |
+| `empiriolabs.svg` | https://models.dev/logos/empiriolabs.svg (provided by EmpirioLabs AI, single-colour `currentColor` mark) |
 | `experiential.svg` | https://www.experientiallabs.ai/icon.svg?d749d3cd48f6539d |
 | `featherless-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/featherless-color.svg |
 | `fireworks-color.svg` | https://unpkg.com/@lobehub/icons-static-svg@1.95.0/icons/fireworks-color.svg |
