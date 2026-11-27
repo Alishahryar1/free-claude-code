@@ -85,11 +85,15 @@ class SourceRecoveryState:
         payload: Mapping[str, JsonValue],
         *,
         continuing: bool = False,
+        event_type: str | None = None,
     ) -> None:
-        kind = str(payload.get("type", ""))
+        # Messages SSE can name the event only outside its data.
+        kind = event_type or str(payload.get("type", ""))
         usage = payload.get("usage")
         if protocol == "messages" and kind == "message_start":
-            usage = json_object(payload.get("message", {})).get("usage")
+            message = payload.get("message")
+            # The parser rejects a malformed message; recovery only reads usage.
+            usage = message.get("usage") if isinstance(message, dict) else None
         elif protocol == "responses":
             usage = json_object(payload.get("response", {})).get("usage")
         if isinstance(usage, dict) and usage:
@@ -155,15 +159,13 @@ class SourceRecoveryState:
             if not isinstance(index, int) or isinstance(index, bool) or index < 0:
                 # The Messages parser classifies malformed block events for retries.
                 return
+            # Wrong-typed fields are the parser's to reject, so they count as absent.
             block = payload.get("content_block")
-            delta = payload.get("delta") or {}
-            if (block is not None and not isinstance(block, dict)) or not isinstance(
-                delta, dict
-            ):
-                # Passthrough publishes fields recovery cannot read; they may be native.
-                self.unsafe_reason = "native_content"
-                self._handoff_blocked = True
-                block, delta = None, json_object({})
+            if not isinstance(block, dict):
+                block = None
+            delta = payload.get("delta")
+            if not isinstance(delta, dict):
+                delta = json_object({})
             # Stream pieces are not complete replay records, so nothing is decoded.
             if any(
                 value.get("type") == "redacted_thinking"
@@ -192,7 +194,8 @@ class SourceRecoveryState:
             ):
                 self.unsafe_reason = "native_content"
                 self._handoff_blocked = True
-            if delta and delta.get("type") not in (
+            # A delta without a string type is malformed and stays with the parser.
+            if isinstance(delta.get("type"), str) and delta["type"] not in (
                 "text_delta",
                 "input_json_delta",
                 "thinking_delta",

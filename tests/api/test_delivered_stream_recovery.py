@@ -1244,25 +1244,7 @@ async def test_thinking_with_unknown_native_fields_is_not_continued(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "unreadable",
-    [
-        {
-            "type": "content_block_delta",
-            "index": 0,
-            "delta": {"type": "encrypted_thinking_delta", "data": "opaque"},
-        },
-        {
-            "type": "content_block_delta",
-            "index": 0,
-            "content_block": "opaque",
-            "delta": {"type": "thinking_delta", "thinking": " Then."},
-        },
-    ],
-)
-async def test_native_continuation_with_unreadable_event_is_not_combined(
-    unreadable: JsonObject,
-) -> None:
+async def test_native_continuation_with_unknown_delta_type_is_not_combined() -> None:
     bodies = []
     start = _events_for("messages")[0]
     replies: list[list[JsonObject]] = [
@@ -1270,7 +1252,11 @@ async def test_native_continuation_with_unreadable_event_is_not_combined(
         [
             start,
             *unsigned_thinking("Earlier. More.", closed=False),
-            unreadable,
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "encrypted_thinking_delta", "data": "opaque"},
+            },
             {"type": "content_block_stop", "index": 0},
             *shifted(text_events("messages", "Answer.")[1:], 1),
         ],
@@ -1394,3 +1380,70 @@ async def test_malformed_message_start_keeps_the_retry(wire: WireProtocol) -> No
     assert_completed(events, wire)
     assert public_text(events, wire) == "Answer."
     assert len(bodies) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_continuation_call_is_not_published_before_later_protected_state(
+    wire: WireProtocol,
+) -> None:
+    def reply(bodies: list[JsonObject]):
+        if len(bodies) == 1:
+            return 200, text_events("messages", "Intro", complete=False)
+        calls = tool_events("messages", '{"path":"x"}')
+        return 200, [
+            *calls[:-2],
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "redacted_thinking", "data": "opaque"},
+            },
+            {"type": "content_block_stop", "index": 1},
+            *calls[-2:],
+        ]
+
+    async with _harness("messages", reply, max_attempts=2) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "read"}], tools=_tools(wire)), wire
+        )
+    assert len(bodies) == 2
+    assert "call_probe" not in result
+    assert parse_sse_text(result)[-1].event == (
+        "error" if wire == "messages" else "response.failed"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wire", ["messages", "responses"])
+async def test_unsupported_native_content_is_not_dropped_by_recovery(
+    wire: WireProtocol,
+) -> None:
+    def reply(bodies: list[JsonObject]):
+        if len(bodies) == 1:
+            return 200, [
+                *text_events("messages", "Intro", complete=False),
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {
+                        "type": "citations_delta",
+                        "citation": {
+                            "type": "char_location",
+                            "cited_text": "Intro",
+                            "document_index": 0,
+                            "start_char_index": 0,
+                            "end_char_index": 5,
+                        },
+                    },
+                },
+            ]
+        return 200, text_events("messages", " Answer.")
+
+    async with _harness("messages", reply, max_attempts=2) as (send, bodies, _):
+        result = await delivered(
+            send(wire, [{"role": "user", "content": "answer"}]), wire
+        )
+    assert len(bodies) == 1
+    assert parse_sse_text(result)[-1].event == (
+        "error" if wire == "messages" else "response.failed"
+    )

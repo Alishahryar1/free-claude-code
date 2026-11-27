@@ -610,11 +610,17 @@ class _MessagesAttempt(TransportAttempt):
                 check_messages_failure(
                     event_type, payload, native=forwarding is not None
                 )
+                self.context.source.observe(
+                    "messages",
+                    payload,
+                    continuing=self.context.continuing,
+                    event_type=event_type,
+                )
                 history.accepted()
                 if not attempt.accepted:
                     await attempt.accept()
                 for group in self._tool_buffer.feed(event_type, payload):
-                    if frames := self._present(group):
+                    if frames := _present(presenter, group):
                         yield completed_output(frames)
                 if presenter.completed:
                     break
@@ -636,22 +642,8 @@ class _MessagesAttempt(TransportAttempt):
         if self._presenter is None:
             return
         for group in self._tool_buffer.abandon():
-            if frames := self._present(group):
+            if frames := _present(self._presenter, group):
                 yield completed_output(frames)
-
-    def _present(
-        self, group: Iterable[tuple[str, Mapping[str, JsonValue]]]
-    ) -> list[str]:
-        assert self._presenter is not None
-        frames: list[str] = []
-        for kind, value in group:
-            output = self._presenter.feed(kind, value)
-            # Recovery judges only accepted events, before their frames are sent.
-            self.context.source.observe(
-                "messages", value, continuing=self.context.continuing
-            )
-            frames.extend((output,) if isinstance(output, str) else output or ())
-        return frames
 
     @override
     def failure_payload(
@@ -666,3 +658,13 @@ class _MessagesAttempt(TransportAttempt):
         if isinstance(self._presenter, GeminiMessagesStream):
             for event in self._presenter.handoff():
                 yield StreamOutput((event,))
+
+
+def _present(
+    presenter: _Presenter, group: Iterable[tuple[str, Mapping[str, JsonValue]]]
+) -> list[str]:
+    frames: list[str] = []
+    for kind, value in group:
+        output = presenter.feed(kind, value)
+        frames.extend((output,) if isinstance(output, str) else output or ())
+    return frames
