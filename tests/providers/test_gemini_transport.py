@@ -1,21 +1,36 @@
 """Direct Gemini ingress through the real upstream transport adapters."""
 
 import json
+from collections.abc import AsyncIterable, AsyncIterator
+from copy import deepcopy
 
 import httpx
 import httpx2
 import pytest
 from openai import AsyncOpenAI
 
+from free_claude_code.application.response_collection import collected_frames
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.gemini.replay import decode_bundle
 from free_claude_code.core.gemini.response import GeminiResponseAccumulator
+from free_claude_code.core.history_replay import readable_reasoning
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.reasoning import ReasoningPolicy
-from free_claude_code.providers.gemini.client import _PROFILE as GOOGLE_PROFILE
+from free_claude_code.core.stream_output import StreamOutput
+from free_claude_code.providers.anthropic_messages.transport import (
+    AnthropicMessagesTransport,
+)
 from free_claude_code.providers.google_openai.provider import GoogleChatBehavior
-from free_claude_code.providers.openai_chat import OpenAIChatTransport
+from free_claude_code.providers.openai_chat import (
+    OpenAIChatProvider,
+    OpenAIChatTransport,
+)
+from free_claude_code.providers.openai_responses.transport import (
+    OpenAIResponsesTransport,
+)
+from free_claude_code.providers.vertex.client import _PROFILE as GOOGLE_PROFILE
 from tests.providers.support import immediate_admission
 from tests.providers.test_anthropic_messages_transport import (
     Endpoint,
@@ -29,7 +44,7 @@ from tests.providers.test_anthropic_messages_transport import (
 from tests.providers.test_anthropic_messages_transport import (
     _transport as messages_transport,
 )
-from tests.providers.test_history_transports import _harness
+from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
 from tests.providers.test_openai_chat_transport import _transport
 from tests.providers.test_openai_responses_transport import (
@@ -38,16 +53,28 @@ from tests.providers.test_openai_responses_transport import (
 from tests.providers.test_openai_responses_transport import (
     _transport as responses_transport,
 )
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
-def gemini_request(**values):
+def gemini_request(**values: object):
     return GeminiRequest.model_validate(
         {"model": "model", "contents": [{"parts": [{"text": "hello"}]}], **values}
     )
 
 
-def chat_response(deltas, *, finish="stop", usage=None):
-    chunks = [
+def chat_response(
+    deltas: list[JsonObject],
+    *,
+    finish: str | None = "stop",
+    usage: JsonObject | None = None,
+):
+    chunks: list[JsonObject] = [
         {
             "id": "upstream",
             "object": "chat.completion.chunk",
@@ -75,20 +102,53 @@ def chat_response(deltas, *, finish="stop", usage=None):
     )
 
 
-async def collect(stream):
+def gemini_stream(
+    transport: AnthropicMessagesTransport
+    | OpenAIChatProvider
+    | OpenAIResponsesTransport,
+    request: GeminiRequest,
+    *,
+    request_id: str,
+) -> AsyncIterator[StreamOutput]:
+    reasoning = ReasoningPolicy.provider_default()
+    if isinstance(transport, AnthropicMessagesTransport):
+        return transport.stream_gemini(
+            request,
+            endpoint_context=Endpoint(),
+            request_id=request_id,
+            response_model="public",
+            reasoning=reasoning,
+        )
+    return transport.stream_gemini(
+        request,
+        input_tokens=0,
+        request_id=request_id,
+        response_model="public",
+        reasoning=reasoning,
+    )
+
+
+async def collect_frames(stream: AsyncIterable[str | bytes | memoryview]):
     aggregate = GeminiResponseAccumulator()
-    chunks = [chunk async for chunk in stream]
+    chunks: list[str] = []
+    async for frame in stream:
+        assert isinstance(frame, str)
+        chunks.append(frame)
     for event in parse_sse_text("".join(chunks)):
         aggregate.feed(event.data)
     return aggregate.result(), chunks
 
 
+async def collect(stream: AsyncIterator[StreamOutput]):
+    return await collect_frames(collected_frames(stream, protocol="gemini"))
+
+
 @pytest.mark.asyncio
-async def test_chat_gemini_stream_preserves_text_identity_and_reported_usage():
+async def test_chat_gemini_stream_preserves_text_identity_and_reported_usage() -> None:
     sent = []
 
-    def reply(request):
-        sent.append(json.loads(request.content))
+    def reply(request: httpx2.Request):
+        sent.append(decode_object(request.content))
         return chat_response(
             [{"content": "hello "}, {"content": "world"}],
             usage={
@@ -124,8 +184,10 @@ async def test_chat_gemini_stream_preserves_text_identity_and_reported_usage():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("arguments", ["{", "[]", "null"])
-async def test_chat_gemini_never_releases_invalid_executable_arguments(arguments):
-    def reply(request):
+async def test_chat_gemini_never_releases_invalid_executable_arguments(
+    arguments: str,
+) -> None:
+    def reply(request: object):
         return chat_response(
             [
                 {
@@ -151,15 +213,15 @@ async def test_chat_gemini_never_releases_invalid_executable_arguments(arguments
         request = gemini_request(tools=[{"functionDeclarations": [{"name": "read"}]}])
         with pytest.raises(ExecutionFailure):
             async for chunk in _transport(client).stream_gemini(request):
-                assert "functionCall" not in chunk
+                assert "functionCall" not in "".join(chunk.frames)
 
 
 @pytest.mark.asyncio
-async def test_messages_gemini_text_and_native_thinking_replay():
+async def test_messages_gemini_text_and_native_thinking_replay() -> None:
     sent = []
 
-    def reply(request):
-        sent.append(json.loads(request.content))
+    def reply(request: httpx.Request):
+        sent.append(decode_object(request.content))
         events = messages_events()
         events[1:1] = [
             {
@@ -206,7 +268,7 @@ async def test_messages_gemini_text_and_native_thinking_replay():
 
 
 @pytest.mark.asyncio
-async def test_responses_gemini_text_complete_call_and_late_reasoning_replay():
+async def test_responses_gemini_text_complete_call_and_late_reasoning_replay() -> None:
     sent = []
     reasoning = {
         "id": "rs_one",
@@ -214,7 +276,7 @@ async def test_responses_gemini_text_complete_call_and_late_reasoning_replay():
         "summary": [{"type": "summary_text", "text": "thought"}],
         "encrypted_content": "opaque",
     }
-    message = {
+    message: JsonObject = {
         "id": "msg_one",
         "type": "message",
         "role": "assistant",
@@ -230,8 +292,8 @@ async def test_responses_gemini_text_complete_call_and_late_reasoning_replay():
         "arguments": '{"path":"a"}',
     }
 
-    def reply(request):
-        sent.append(json.loads(request.content))
+    def reply(request: httpx2.Request):
+        sent.append(decode_object(request.content))
         return httpx2.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -287,20 +349,162 @@ async def test_responses_gemini_text_complete_call_and_late_reasoning_replay():
     bundle = decode_bundle(parts[-1]["thoughtSignature"])
     assert bundle is not None and bundle.records[0].native == reasoning
     assert "usageMetadata" not in value
-    assert sent[0]["input"][0]["role"] == "user"
+    assert object_array(sent[0]["input"])[0]["role"] == "user"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", ["response.completed", "response.incomplete"])
+@pytest.mark.parametrize("visible", [False, True])
+@pytest.mark.parametrize("first_only_at_terminal", [False, True])
+async def test_responses_gemini_replay_uses_output_order_not_completion_order(
+    terminal: str, visible: bool, first_only_at_terminal: bool
+) -> None:
+    first = {
+        "type": "reasoning",
+        "id": "rs_first",
+        "summary": [{"type": "summary_text", "text": "Alpha"}],
+        "encrypted_content": "cipher-first",
+    }
+    second = {
+        "type": "reasoning",
+        "id": "rs_second",
+        "summary": [{"type": "summary_text", "text": "Beta"}],
+        "encrypted_content": "cipher-second",
+    }
+    ordinary = {
+        "type": "reasoning",
+        "id": "rs_ordinary",
+        "summary": [{"type": "summary_text", "text": "Independent"}],
+    }
+    response = deepcopy(object_payload(_events_for("responses")[-1]["response"]))
+    response.update(output=[first, ordinary, second], usage=None)
+    if terminal == "response.incomplete":
+        response.update(
+            status="incomplete", incomplete_details={"reason": "max_output_tokens"}
+        )
+    events: list[JsonObject] = [
+        {"type": "response.output_item.done", "output_index": 2, "item": second},
+        {"type": "response.output_item.done", "output_index": 1, "item": ordinary},
+    ]
+    if not first_only_at_terminal:
+        events.append(
+            {"type": "response.output_item.done", "output_index": 0, "item": first}
+        )
+    events.append({"type": terminal, "response": response})
+    async with _harness("responses", lambda _: (200, events)) as (_, bodies, adapter):
+
+        async def send(request: GeminiRequest):
+            return await collect(
+                adapter.stream_gemini(
+                    request,
+                    input_tokens=0,
+                    request_id="ordered-replay",
+                    response_model="public",
+                    reasoning=ReasoningPolicy.provider_default(),
+                )
+            )
+
+        value, _ = await send(
+            gemini_request(
+                generationConfig={"thinkingConfig": {"includeThoughts": visible}}
+            )
+        )
+        content = value["candidates"][0]["content"]
+        bundle = decode_bundle(content["parts"][-1]["thoughtSignature"])
+        assert bundle is not None
+        assert [record.native for record in bundle.records] == [first, second]
+        if visible:
+            assert (
+                "".join(p.get("text", "") for p in content["parts"] if p.get("thought"))
+                == "BetaIndependentAlpha"
+            )
+            assert bundle.protected_echo == ((1, 0, 4), (0, 15, 20))
+        await send(
+            gemini_request(
+                contents=[content, {"role": "user", "parts": [{"text": "next"}]}]
+            )
+        )
+    assert len(bodies) == 2
+    native = [
+        item
+        for item in object_array(bodies[-1]["input"])
+        if item.get("encrypted_content")
+    ]
+    assert native == [first, second]
+    unsigned = [
+        item
+        for item in object_array(bodies[-1]["input"])
+        if item.get("type") == "reasoning" and not item.get("encrypted_content")
+    ]
+    assert "".join(
+        text for item in unsigned for text, _ in readable_reasoning(item)
+    ) == ("Independent" if visible else "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("visible", [False, True])
+@pytest.mark.parametrize(
+    "kind,breakdown,expected",
+    [
+        ("none", None, {"candidatesTokenCount": 20}),
+        ("unsigned", None, {}),
+        ("protected", None, {}),
+        ("unsigned", 7, {"candidatesTokenCount": 13, "thoughtsTokenCount": 7}),
+        ("protected", 0, {"candidatesTokenCount": 20, "thoughtsTokenCount": 0}),
+    ],
+)
+async def test_responses_gemini_usage_accounts_for_terminal_only_reasoning(
+    visible: bool, kind: str, breakdown: int | None, expected: JsonObject
+) -> None:
+    item = {
+        "type": "reasoning",
+        "id": "rs_terminal",
+        "summary": [{"type": "summary_text", "text": "Think"}],
+    }
+    if kind == "protected":
+        item["encrypted_content"] = "cipher"
+    response = deepcopy(object_payload(_events_for("responses")[-1]["response"]))
+    response.update(
+        output=[] if kind == "none" else [item],
+        usage={"input_tokens": 10, "output_tokens": 20, "total_tokens": 30},
+    )
+    if breakdown is not None:
+        object_payload(response["usage"])["output_tokens_details"] = {
+            "reasoning_tokens": breakdown
+        }
+    async with _harness(
+        "responses",
+        lambda _: (200, [{"type": "response.completed", "response": response}]),
+    ) as (_, _, adapter):
+        value, _ = await collect(
+            adapter.stream_gemini(
+                gemini_request(
+                    generationConfig={"thinkingConfig": {"includeThoughts": visible}}
+                ),
+                input_tokens=0,
+                request_id="terminal-usage",
+                response_model="public",
+                reasoning=ReasoningPolicy.provider_default(),
+            )
+        )
+    assert value["usageMetadata"] == {
+        "promptTokenCount": 10,
+        "totalTokenCount": 30,
+        **expected,
+    }
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool_call", [False, True])
 @pytest.mark.parametrize("same_connection", [False, True])
 async def test_google_replay_survives_client_replacement_and_preserves_edited_args(
-    tool_call, same_connection
-):
+    tool_call: bool, same_connection: bool
+) -> None:
     sent = []
     opaque = {"google": {"thought_signature": "native-signed-bytes"}}
 
-    def reply(request):
-        sent.append(json.loads(request.content))
+    def reply(request: httpx2.Request):
+        sent.append(decode_object(request.content))
         if len(sent) > 1:
             return chat_response([{"content": "continued"}])
         if tool_call:
@@ -325,7 +529,7 @@ async def test_google_replay_survives_client_replacement_and_preserves_edited_ar
             )
         return chat_response([{"content": "answer", "extra_content": opaque}])
 
-    async def execute(request, key):
+    async def execute(request: GeminiRequest, key: str):
         async with AsyncOpenAI(
             api_key=key,
             base_url="https://provider.invalid/v1",
@@ -373,17 +577,30 @@ async def test_google_replay_survives_client_replacement_and_preserves_edited_ar
         gemini_request(tools=tools, contents=history),
         "first-account" if same_connection else "different-account",
     )
-    assert any(item["role"] == "assistant" for item in sent[1]["messages"]), sent[1]
+    assert any(
+        object_payload(item)["role"] == "assistant"
+        for item in array_payload(sent[1]["messages"])
+    ), sent[1]
     assistant = next(
-        item for item in sent[1]["messages"] if item["role"] == "assistant"
+        item
+        for item in array_payload(sent[1]["messages"])
+        if object_payload(item)["role"] == "assistant"
     )
-    target = assistant["tool_calls"][0] if tool_call else assistant
+    target = (
+        array_payload(object_payload(assistant)["tool_calls"])[0]
+        if tool_call
+        else assistant
+    )
     if same_connection:
-        assert target["extra_content"] == opaque
+        assert object_payload(target)["extra_content"] == opaque
     else:
         assert "native-signed-bytes" not in json.dumps(sent[1])
     if tool_call:
-        assert json.loads(target["function"]["arguments"]) == {"path": "edited"}
+        assert load_json_value(
+            string_payload(
+                object_payload(object_payload(target)["function"])["arguments"]
+            )
+        ) == {"path": "edited"}
     assert "fcc:history" not in json.dumps(sent[1])
 
 
@@ -393,13 +610,8 @@ async def test_google_replay_survives_client_replacement_and_preserves_edited_ar
     "arguments", ['{"path":42,"extra":null}', '{"path":', "[]", "null", '{"path":NaN}']
 )
 async def test_fragmented_tools_require_object_json_without_schema_coercion(
-    protocol, arguments
-):
-    options = (
-        {"endpoint_context": Endpoint()}
-        if protocol == "messages"
-        else {"input_tokens": 0}
-    )
+    protocol: str, arguments: str
+) -> None:
     request = gemini_request(
         tools=[
             {
@@ -421,13 +633,7 @@ async def test_fragmented_tools_require_object_json_without_schema_coercion(
     async with _harness(
         protocol, lambda _: (200, tool_events(protocol, arguments)), max_attempts=1
     ) as (_, bodies, transport):
-        stream = transport.stream_gemini(
-            request,
-            request_id="fragmented",
-            response_model="public",
-            reasoning=ReasoningPolicy.provider_default(),
-            **options,
-        )
+        stream = gemini_stream(transport, request, request_id="fragmented")
         if arguments.startswith('{"path":42'):
             result, chunks = await collect(stream)
             calls = [
@@ -445,29 +651,20 @@ async def test_fragmented_tools_require_object_json_without_schema_coercion(
         else:
             with pytest.raises(ExecutionFailure):
                 async for chunk in stream:
-                    chunks.append(chunk)
+                    chunks.extend(chunk.frames)
             assert not any("functionCall" in chunk for chunk in chunks)
         assert len(bodies) == 1
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
-async def test_unknown_upstream_function_is_rejected(protocol):
-    options = (
-        {"endpoint_context": Endpoint()}
-        if protocol == "messages"
-        else {"input_tokens": 0}
-    )
+async def test_unknown_upstream_function_is_rejected(protocol: str) -> None:
     async with _harness(
         protocol, lambda _: (200, tool_events(protocol, "{}")), max_attempts=1
     ) as (_, bodies, transport):
         with pytest.raises(ExecutionFailure, match="undeclared"):
-            async for chunk in transport.stream_gemini(
-                gemini_request(),
-                request_id="unknown",
-                response_model="public",
-                reasoning=ReasoningPolicy.provider_default(),
-                **options,
+            async for chunk in gemini_stream(
+                transport, gemini_request(), request_id="unknown"
             ):
-                assert "functionCall" not in chunk
+                assert "functionCall" not in "".join(chunk.frames)
         assert len(bodies) == 1

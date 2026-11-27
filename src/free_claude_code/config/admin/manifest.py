@@ -9,7 +9,6 @@ from free_claude_code.config.reasoning import (
     ROUTE_REASONING_PREFERENCES,
     ReasoningPreference,
 )
-from free_claude_code.config.settings import Settings
 
 from .provider_manifest import provider_field_specs
 from .specs import ConfigFieldSpec, ConfigOptionSpec, ConfigSectionSpec
@@ -224,17 +223,15 @@ _NON_PROVIDER_FIELDS: tuple[ConfigFieldSpec, ...] = (
         settings_attr="provider_max_concurrency",
     ),
     ConfigFieldSpec(
-        "PROVIDER_PROGRESS_TIMEOUT",
-        "Provider Progress Timeout",
+        "PROVIDER_MAX_ATTEMPTS",
+        "Provider Max Attempts",
         "runtime",
         "number",
-        settings_attr="provider_progress_timeout",
+        settings_attr="provider_max_attempts",
         description=(
-            "Maximum seconds without a non-empty protocol event, including "
-            "provider admission, retries, and backoff. Independent of HTTP Read "
-            "Timeout."
+            "Total tries per model for one request, including the first. Retries, "
+            "mid-stream continuations, and model discovery all count against it."
         ),
-        advanced=True,
     ),
     ConfigFieldSpec(
         "HTTP_READ_TIMEOUT",
@@ -543,18 +540,6 @@ FIELDS: tuple[ConfigFieldSpec, ...] = (
     *_catalog_smoke_fields(),
 )
 FIELD_BY_KEY = {field.key: field for field in FIELDS}
-
-
-def field_input_key(field: ConfigFieldSpec) -> str | None:
-    """Return the Settings input key used for a manifest field."""
-
-    if field.settings_attr is None:
-        return None
-    model_field = Settings.model_fields[field.settings_attr]
-    alias = model_field.validation_alias
-    if alias is None:
-        return field.settings_attr
-    return str(alias)
 
 
 def env_keys() -> frozenset[str]:

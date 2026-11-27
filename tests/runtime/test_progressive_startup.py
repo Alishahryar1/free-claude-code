@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -16,6 +17,7 @@ from free_claude_code.config.api_keys import normalize_api_keys
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.async_tasks import run_sync_owned
+from free_claude_code.providers.admission_registry import ProviderAdmissionRegistry
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.runtime.runtime import ProviderRuntime
 from free_claude_code.runtime.application import ApplicationRuntime
@@ -38,7 +40,7 @@ def _settings():
 
 
 @pytest.mark.asyncio
-async def test_http_and_admin_serve_while_selected_catalog_is_held():
+async def test_http_and_admin_serve_while_selected_catalog_is_held() -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     provider = MagicMock(spec=BaseProvider)
 
@@ -49,15 +51,23 @@ async def test_http_and_admin_serve_while_selected_catalog_is_held():
 
     provider.list_model_infos = AsyncMock(side_effect=list_models)
 
-    async def construct(_provider_id, _settings, _admission_registry, _api_key_number):
+    async def construct(
+        _provider_id,
+        _settings,
+        _admission_registry,
+        _api_key_number,
+        _history_cache=None,
+    ):
         return provider
 
     manager = ProviderRuntimeManager(
         _settings(),
-        runtime_factory=lambda settings, admission_registry: ProviderRuntime(
-            settings,
-            admission_registry,
-            provider_constructor=construct,
+        runtime_factory=lambda settings, admission_registry, history_cache=None: (
+            ProviderRuntime(
+                settings,
+                admission_registry,
+                provider_constructor=construct,
+            )
         ),
     )
     runtime = ApplicationRuntime(
@@ -66,7 +76,13 @@ async def test_http_and_admin_serve_while_selected_catalog_is_held():
         transcriber=None,
     )
     app = create_app(
-        ApiServices(manager, runtime, runtime, web_tools=StubWebToolsClient())
+        ApiServices(
+            manager,
+            runtime,
+            runtime,
+            web_tools=StubWebToolsClient(),
+            integrations=runtime.integrations,
+        )
     )
     try:
         await asyncio.wait_for(runtime.start(), 1)
@@ -84,7 +100,7 @@ async def test_http_and_admin_serve_while_selected_catalog_is_held():
 
 
 @pytest.mark.asyncio
-async def test_independent_provider_and_cancelled_waiter_share_initialization():
+async def test_independent_provider_and_cancelled_waiter_share_initialization() -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     slow, fast = MagicMock(spec=BaseProvider), MagicMock(spec=BaseProvider)
 
@@ -98,15 +114,23 @@ async def test_independent_provider_and_cancelled_waiter_share_initialization():
         return_value=frozenset({ProviderModelInfo("one")})
     )
 
-    async def construct(provider_id, _settings, _admission_registry, _api_key_number):
+    async def construct(
+        provider_id: str,
+        _settings,
+        _admission_registry,
+        _api_key_number,
+        _history_cache=None,
+    ):
         return slow if provider_id == "groq" else fast
 
     manager = ProviderRuntimeManager(
         _settings(),
-        runtime_factory=lambda settings, admission_registry: ProviderRuntime(
-            settings,
-            admission_registry,
-            provider_constructor=construct,
+        runtime_factory=lambda settings, admission_registry, history_cache=None: (
+            ProviderRuntime(
+                settings,
+                admission_registry,
+                provider_constructor=construct,
+            )
         ),
     )
     manager.start_model_list_refresh()
@@ -134,7 +158,9 @@ async def test_independent_provider_and_cancelled_waiter_share_initialization():
 
 
 @pytest.mark.asyncio
-async def test_wait_timeout_does_not_cancel_initializer_and_settled_work_still_works():
+async def test_wait_timeout_does_not_cancel_initializer_and_settled_work_still_works() -> (
+    None
+):
     release = asyncio.Event()
     task = asyncio.create_task(release.wait())
     wait = InitializationWait(0.01)
@@ -144,7 +170,7 @@ async def test_wait_timeout_does_not_cancel_initializer_and_settled_work_still_w
         assert not task.done()
         release.set()
         await task
-        assert await wait.wait(task) is True
+        assert await wait.wait(task)
     finally:
         release.set()
         await task
@@ -152,14 +178,18 @@ async def test_wait_timeout_does_not_cancel_initializer_and_settled_work_still_w
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("refresh", [False, True])
-async def test_failed_discovery_construction_recovers_in_same_generation(refresh):
+async def test_failed_discovery_construction_recovers_in_same_generation(
+    refresh: bool,
+) -> None:
     provider = MagicMock(spec=BaseProvider)
     provider.list_model_infos = AsyncMock(
         return_value=frozenset({ProviderModelInfo("one")})
     )
     attempts = 0
 
-    async def construct(_id, _settings, _admission_registry, _api_key_number):
+    async def construct(
+        _id, _settings, _admission_registry, _api_key_number, _history_cache=None
+    ):
         nonlocal attempts
         attempts += 1
         if attempts == 1:
@@ -168,10 +198,12 @@ async def test_failed_discovery_construction_recovers_in_same_generation(refresh
 
     manager = ProviderRuntimeManager(
         _settings(),
-        runtime_factory=lambda settings, admission_registry: ProviderRuntime(
-            settings,
-            admission_registry,
-            provider_constructor=construct,
+        runtime_factory=lambda settings, admission_registry, history_cache=None: (
+            ProviderRuntime(
+                settings,
+                admission_registry,
+                provider_constructor=construct,
+            )
         ),
     )
     generation = manager.current_generation_id
@@ -194,14 +226,16 @@ async def test_failed_discovery_construction_recovers_in_same_generation(refresh
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_recovery_wait_uses_remaining_budget_without_orphaning_waiter(
-    monkeypatch, cancel
-):
+    monkeypatch: pytest.MonkeyPatch, cancel: bool
+) -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     provider = MagicMock(spec=BaseProvider)
     attempts = 0
     construction = None
 
-    async def construct(_id, _settings, _admission_registry, _api_key_number):
+    async def construct(
+        _id, _settings, _admission_registry, _api_key_number, _history_cache=None
+    ):
         nonlocal attempts, construction
         attempts += 1
         if attempts == 1:
@@ -213,10 +247,12 @@ async def test_recovery_wait_uses_remaining_budget_without_orphaning_waiter(
 
     manager = ProviderRuntimeManager(
         _settings(),
-        runtime_factory=lambda settings, admission_registry: ProviderRuntime(
-            settings,
-            admission_registry,
-            provider_constructor=construct,
+        runtime_factory=lambda settings, admission_registry, history_cache=None: (
+            ProviderRuntime(
+                settings,
+                admission_registry,
+                provider_constructor=construct,
+            )
         ),
     )
     wait = InitializationWait(1 if cancel else 0.01)
@@ -255,7 +291,7 @@ async def test_recovery_wait_uses_remaining_budget_without_orphaning_waiter(
 
 
 @pytest.mark.asyncio
-async def test_cancellation_drains_the_actual_worker():
+async def test_cancellation_drains_the_actual_worker() -> None:
     entered, release = threading.Event(), threading.Event()
 
     def worker():
@@ -275,11 +311,15 @@ async def test_cancellation_drains_the_actual_worker():
 
 
 @pytest.mark.asyncio
-async def test_late_retired_discovery_cannot_replace_current_metadata():
+async def test_late_retired_discovery_cannot_replace_current_metadata() -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     providers = []
 
-    def factory(settings, admission_registry):
+    def factory(
+        settings: Settings,
+        admission_registry: ProviderAdmissionRegistry,
+        history_cache: object = None,
+    ):
         provider = MagicMock(spec=BaseProvider)
         providers.append(provider)
         ordinal = len(providers)
@@ -293,7 +333,11 @@ async def test_late_retired_discovery_cannot_replace_current_metadata():
         provider.list_model_infos = AsyncMock(side_effect=models)
 
         async def construct(
-            _provider_id, _settings, _admission_registry, _api_key_number
+            _provider_id,
+            _settings,
+            _admission_registry,
+            _api_key_number,
+            _history_cache=None,
         ):
             return provider
 
@@ -328,8 +372,8 @@ async def test_late_retired_discovery_cannot_replace_current_metadata():
 
 @pytest.mark.asyncio
 async def test_catalog_publication_exposes_configured_models_before_discovery(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     path = tmp_path / "catalog.json"
     path.write_text("prior complete catalog", encoding="utf-8")
@@ -342,15 +386,23 @@ async def test_catalog_publication_exposes_configured_models_before_discovery(
 
     provider.list_model_infos = AsyncMock(side_effect=models)
 
-    async def construct(_provider_id, _settings, _admission_registry, _api_key_number):
+    async def construct(
+        _provider_id,
+        _settings,
+        _admission_registry,
+        _api_key_number,
+        _history_cache=None,
+    ):
         return provider
 
     manager = ProviderRuntimeManager(
         _settings(),
-        runtime_factory=lambda settings, admission_registry: ProviderRuntime(
-            settings,
-            admission_registry,
-            provider_constructor=construct,
+        runtime_factory=lambda settings, admission_registry, history_cache=None: (
+            ProviderRuntime(
+                settings,
+                admission_registry,
+                provider_constructor=construct,
+            )
         ),
         model_catalog_publisher=CodexModelCatalogPublisher(path),
     )
@@ -373,11 +425,17 @@ async def test_catalog_publication_exposes_configured_models_before_discovery(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("retained_request", [False, True])
-async def test_catalog_wait_follows_replacement(tmp_path, retained_request):
+async def test_catalog_wait_follows_replacement(
+    tmp_path: Path, retained_request: bool
+) -> None:
     entered, release = asyncio.Event(), asyncio.Event()
     count = 0
 
-    def runtime(settings, admission_registry):
+    def runtime(
+        settings: Settings,
+        admission_registry: ProviderAdmissionRegistry,
+        history_cache: object = None,
+    ):
         nonlocal count
         count += 1
         old = count == 1
@@ -391,7 +449,9 @@ async def test_catalog_wait_follows_replacement(tmp_path, retained_request):
 
         provider.list_model_infos = AsyncMock(side_effect=models)
 
-        async def construct(_id, _settings, _admission_registry, _api_key_number):
+        async def construct(
+            _id, _settings, _admission_registry, _api_key_number, _history_cache=None
+        ):
             return provider
 
         return ProviderRuntime(
@@ -437,7 +497,9 @@ async def test_catalog_wait_follows_replacement(tmp_path, retained_request):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
-async def test_catalog_waiter_exit_preserves_shared_discovery(monkeypatch, cancel):
+async def test_catalog_waiter_exit_preserves_shared_discovery(
+    monkeypatch: pytest.MonkeyPatch, cancel: bool
+) -> None:
     existing_tasks = asyncio.all_tasks()
     entered, release = asyncio.Event(), asyncio.Event()
     provider = MagicMock(spec=BaseProvider)
@@ -449,15 +511,19 @@ async def test_catalog_waiter_exit_preserves_shared_discovery(monkeypatch, cance
 
     provider.list_model_infos = AsyncMock(side_effect=models)
 
-    async def construct(_id, _settings, _admission_registry, _api_key_number):
+    async def construct(
+        _id, _settings, _admission_registry, _api_key_number, _history_cache=None
+    ):
         return provider
 
     manager = ProviderRuntimeManager(
         _settings(),
-        runtime_factory=lambda settings, admission_registry: ProviderRuntime(
-            settings,
-            admission_registry,
-            provider_constructor=construct,
+        runtime_factory=lambda settings, admission_registry, history_cache=None: (
+            ProviderRuntime(
+                settings,
+                admission_registry,
+                provider_constructor=construct,
+            )
         ),
     )
     wait = InitializationWait(1 if cancel else 0.01)

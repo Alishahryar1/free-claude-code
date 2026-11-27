@@ -153,6 +153,10 @@ class ApplicationRuntime:
         )
 
     @property
+    def integrations(self) -> IntegrationService:
+        return self._integrations
+
+    @property
     def instance_id(self) -> str:
         """Identity shared by this runtime's status responses and logs."""
         return self._instance_id
@@ -293,20 +297,17 @@ class ApplicationRuntime:
             checks = await check_credentials(
                 prepared.settings, prepared.credential_submissions
             )
-            check_response: list[JsonObject] = [
-                {
+            check_response: list[JsonObject] = []
+            for check in checks:
+                entry: JsonObject = {
                     "key": check.key,
                     "index": check.index,
                     "status": check.status.value,
                     "message": check.message,
                 }
-                | (
-                    {"provider_id": check.provider_id}
-                    if check.provider_id is not None
-                    else {}
-                )
-                for check in checks
-            ]
+                if check.provider_id is not None:
+                    entry["provider_id"] = check.provider_id
+                check_response.append(entry)
             rejected = [
                 check for check in checks if check.status == CredentialStatus.REJECTED
             ]
@@ -378,93 +379,6 @@ class ApplicationRuntime:
 
     async def admin_values(self) -> ValueState:
         return await self._configuration.admin_values()
-
-    async def antigravity_status(self) -> JsonObject:
-        return await self._integrations.antigravity_status()
-
-    async def connect_antigravity(self) -> JsonObject:
-        return await self._integrations.connect_antigravity()
-
-    async def disconnect_antigravity(self) -> JsonObject:
-        return await self._integrations.disconnect_antigravity()
-
-    async def vscode_chat_status(self) -> JsonObject:
-        return await self._integrations.vscode_chat_status()
-
-    async def connect_vscode_chat(self) -> JsonObject:
-        return await self._integrations.connect_vscode_chat()
-
-    async def disconnect_vscode_chat(self) -> JsonObject:
-        return await self._integrations.disconnect_vscode_chat()
-
-    async def refresh_vscode_chat(self) -> JsonObject:
-        return await self._integrations.refresh_vscode_chat()
-
-    async def claude_vscode_status(self) -> JsonObject:
-        return await self._integrations.claude_vscode_status()
-
-    async def claude_onboarding_status(self) -> JsonObject:
-        return await self._integrations.claude_onboarding_status()
-
-    async def complete_claude_onboarding(self) -> JsonObject:
-        return await self._integrations.complete_claude_onboarding()
-
-    async def connect_claude_vscode(self) -> JsonObject:
-        return await self._integrations.connect_claude_vscode()
-
-    async def disconnect_claude_vscode(self) -> JsonObject:
-        return await self._integrations.disconnect_claude_vscode()
-
-    async def refresh_claude_vscode(self) -> JsonObject:
-        return await self._integrations.refresh_claude_vscode()
-
-    async def refresh_codex_integration(self) -> JsonObject:
-        return await self._integrations.refresh_codex_integration()
-
-    async def jetbrains_acp_status(self) -> JsonObject:
-        return await self._integrations.jetbrains_acp_status()
-
-    async def connect_jetbrains_acp(self) -> JsonObject:
-        return await self._integrations.connect_jetbrains_acp()
-
-    async def disconnect_jetbrains_acp(self) -> JsonObject:
-        return await self._integrations.disconnect_jetbrains_acp()
-
-    async def refresh_jetbrains_acp(self) -> JsonObject:
-        return await self._integrations.refresh_jetbrains_acp()
-
-    async def dsh_desktop_status(self) -> JsonObject:
-        return await self._integrations.dsh_desktop_status()
-
-    async def connect_dsh_desktop(self) -> JsonObject:
-        return await self._integrations.connect_dsh_desktop()
-
-    async def disconnect_dsh_desktop(self) -> JsonObject:
-        return await self._integrations.disconnect_dsh_desktop()
-
-    async def refresh_dsh_desktop(self) -> JsonObject:
-        return await self._integrations.refresh_dsh_desktop()
-
-    async def claude_desktop_status(self) -> JsonObject:
-        return await self._integrations.claude_desktop_status()
-
-    async def connect_claude_desktop(self) -> JsonObject:
-        return await self._integrations.connect_claude_desktop()
-
-    async def disconnect_claude_desktop(self) -> JsonObject:
-        return await self._integrations.disconnect_claude_desktop()
-
-    async def refresh_claude_desktop(self) -> JsonObject:
-        return await self._integrations.refresh_claude_desktop()
-
-    async def codex_integration_status(self) -> JsonObject:
-        return await self._integrations.codex_integration_status()
-
-    async def connect_codex(self) -> JsonObject:
-        return await self._integrations.connect_codex()
-
-    async def disconnect_codex(self) -> JsonObject:
-        return await self._integrations.disconnect_codex()
 
     async def admin_status(self) -> JsonObject:
         values = await self.admin_values()

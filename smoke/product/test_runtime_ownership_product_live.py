@@ -6,7 +6,7 @@ import time
 from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import httpx
 import pytest
@@ -14,6 +14,12 @@ import pytest
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from smoke.lib.config import SmokeConfig
 from smoke.lib.server import RunningServer, start_server
+from tests.wire_payload import (
+    array_payload,
+    object_payload,
+    response_object,
+    string_payload,
+)
 
 pytestmark = [pytest.mark.live, pytest.mark.smoke_target("api")]
 
@@ -34,7 +40,7 @@ class FakeOpenAIUpstream:
     def base_url(self) -> str:
         if self._server is None:
             raise RuntimeError("Fake upstream is not running")
-        port = int(self._server.server_address[1])
+        port = self._server.server_address[1]
         return f"http://127.0.0.1:{port}/v1"
 
     def __enter__(self) -> FakeOpenAIUpstream:
@@ -43,6 +49,7 @@ class FakeOpenAIUpstream:
         class Handler(BaseHTTPRequestHandler):
             protocol_version = "HTTP/1.1"
 
+            @override
             def log_message(self, format: str, *args: Any) -> None:
                 return
 
@@ -287,10 +294,10 @@ def test_provider_hot_swap_preserves_inflight_stream_e2e(
             timeout=smoke_config.timeout_s,
         )
         assert apply_response.status_code == 200, apply_response.text
-        apply_body = apply_response.json()
+        apply_body = response_object(apply_response)
         assert apply_body["applied"] is True
         assert apply_body["pending_fields"] == []
-        assert apply_body["restart"]["required"] is False
+        assert object_payload(apply_body["restart"])["required"] is False
 
         new_response = httpx.post(
             f"{server.base_url}/v1/messages",
@@ -299,7 +306,8 @@ def test_provider_hot_swap_preserves_inflight_stream_e2e(
         )
         assert new_response.status_code == 200, new_response.text
         new_text = "".join(
-            block.get("text", "") for block in new_response.json()["content"]
+            string_payload(object_payload(block).get("text", ""))
+            for block in array_payload(response_object(new_response)["content"])
         )
         assert new_text == "provider-b-start provider-b-finish"
         assert not old_body

@@ -2,13 +2,14 @@
 
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import replace
-from typing import Any
+from typing import override
 
 import httpx2
 from openai import AsyncOpenAI
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
@@ -17,6 +18,7 @@ from free_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningPolicy,
 )
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
@@ -24,6 +26,7 @@ from free_claude_code.providers.admission import (
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
 from free_claude_code.providers.endpoint_types import EndpointContext
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.model_listing import (
     extract_openai_model_infos,
     merge_model_list_pages,
@@ -47,13 +50,14 @@ class OpenAIChatProvider(BaseProvider):
         profile: OpenAIChatProfile | None = None,
         behavior: OpenAIChatBehavior | None = None,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         default_headers: Mapping[str, str] | None = None,
         api_key_provider: OpenAIAsyncCredentialProvider | None = None,
         client: AsyncOpenAI | None = None,
         endpoint_transport: httpx2.AsyncBaseTransport | None = None,
         validate_prepared_body: PreparedBodyValidator | None = None,
     ) -> None:
-        super().__init__(config)
+        super().__init__(config, history_cache=history_cache)
         if behavior is None:
             if profile is None:
                 raise ValueError("A Chat profile or behavior is required")
@@ -77,6 +81,7 @@ class OpenAIChatProvider(BaseProvider):
         self._chat = OpenAIChatTransport(
             client=self._client,
             admission=admission,
+            history_cache=self._history_cache,
             behavior=behavior,
             read_timeout_s=config.http_read_timeout,
             log_raw_sse_events=config.log_raw_sse_events,
@@ -88,7 +93,7 @@ class OpenAIChatProvider(BaseProvider):
 
     async def cleanup(self) -> None:
         """Release HTTP client resources."""
-        client = getattr(self, "_client", None)
+        client: AsyncOpenAI | None = getattr(self, "_client", None)
         if self._owns_client and client is not None:
             await client.close()
 
@@ -136,11 +141,11 @@ class OpenAIChatProvider(BaseProvider):
             )
         return frozenset(model_infos_by_id.values())
 
-    async def _list_models_payload(self) -> Any:
+    async def _list_models_payload(self) -> object:
         """Fetch one OpenAI-compatible model-list payload with shared retries."""
         return await self._fetch_models_payload()
 
-    async def _fetch_models_payload(self) -> Any:
+    async def _fetch_models_payload(self) -> object:
         """Fetch the complete profile-selected model-list payload."""
         listing = self._profile.model_listing
         if listing.path is not None and listing.pagination is not None:
@@ -152,7 +157,7 @@ class OpenAIChatProvider(BaseProvider):
             provider_failure_override=self._behavior.failure_override,
         )
 
-    async def _fetch_models_payload_once(self) -> Any:
+    async def _fetch_models_payload_once(self) -> object:
         """Fetch the profile-selected model-list endpoint once."""
         listing = self._profile.model_listing
         path = listing.path
@@ -166,14 +171,14 @@ class OpenAIChatProvider(BaseProvider):
             )
         return await self._client.get(path, cast_to=object)
 
-    async def _fetch_paginated_models_payload(self, path: str) -> Any:
+    async def _fetch_paginated_models_payload(self, path: str) -> object:
         """Fetch a bounded model catalog with one execution per physical page."""
         listing = self._profile.model_listing
         pagination = listing.pagination
         if pagination is None:
             raise RuntimeError("paginated model fetch requires a pagination policy")
 
-        payloads: list[Any] = []
+        payloads: list[object] = []
         total_pages: int | None = None
         page = pagination.first_page
         while total_pages is None or page < pagination.first_page + total_pages:
@@ -219,7 +224,7 @@ class OpenAIChatProvider(BaseProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._chat.stream_messages(
             request,
             input_tokens=input_tokens,
@@ -231,6 +236,31 @@ class OpenAIChatProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
+    def stream_chat(
+        self,
+        request: ChatRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        endpoint_context: EndpointContext | None = None,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[StreamOutput]:
+        return self._chat.stream_chat(
+            request,
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=response_model,
+            reasoning=reasoning,
+            endpoint_context=endpoint_context,
+            continuation=continuation,
+        )
+
+    @override
     def stream_gemini(
         self,
         request: GeminiRequest,
@@ -243,7 +273,7 @@ class OpenAIChatProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._chat.stream_gemini(
             request,
             input_tokens=input_tokens,
@@ -266,7 +296,7 @@ class OpenAIChatProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._chat.stream_responses(
             request,
             input_tokens=input_tokens,

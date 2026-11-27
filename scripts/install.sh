@@ -14,7 +14,7 @@ DSH_PACKAGE="@deepseek-ai/dsh@latest"
 GROK_INSTALL_URL="https://x.ai/cli/install.sh"
 MUSE_INSTALL_URL="https://dev.meta.ai/install.sh"
 AGY_INSTALL_URL="https://antigravity.google/cli/install.sh"
-MIN_AGY_VERSION="1.4.7"
+MIN_AGY_VERSION="1.5.9"
 RTK_VERSION="0.44.2"
 HEADROOM_PACKAGE="headroom-ai[mcp]==0.40.0"
 RTK_RELEASE_BASE_URL="https://github.com/rtk-ai/rtk/releases/download/v$RTK_VERSION"
@@ -23,6 +23,7 @@ UV_INSTALL_URL="https://astral.sh/uv/install.sh"
 FCC_COMMANDS="fcc-desktop fcc-server fcc-claude fcc-codex fcc-pi fcc-opencode fcc-cline fcc-hermes fcc-dsh fcc-grok fcc-muse fcc-aider fcc-agy fcc-doctor fcc-update fcc-init free-claude-code"
 
 dry_run=0
+update_only=0
 voice_local=0
 fcc_install_version=${FCC_INSTALL_VERSION:-}
 install_claude=1
@@ -72,6 +73,7 @@ Options:
   --voice-local            Install local Whisper voice transcription support.
   --torch-backend VALUE    Use a uv PyTorch backend, such as cu130. Requires local voice.
   --rtk-headroom           Install and configure RTK + Headroom token optimization.
+  --update                 Skip when FCC is already this release or newer.
   --dry-run                Print commands without running them.
   --help                   Show this help text.
 USAGE
@@ -945,28 +947,70 @@ run_opencode_installer() {
     VERSION= bash "$@"
 }
 
+latest_opencode_v1() {
+    tags=$(curl -fsSL --max-time 10 "https://registry.npmjs.org/-/package/opencode-ai/dist-tags") ||
+        fail "Could not discover the latest OpenCode 1 release. Upgrade OpenCode manually, then rerun the installer."
+    latest=$(printf '%s' "$tags" | tr '\r\n' '  ' | tr ',{}' '\n' | sed -n 's/^[[:space:]]*"latest"[[:space:]]*:[[:space:]]*//p' | sed 's/[[:space:]]*$//')
+    version=$(printf '%s' "$latest" | sed -n 's/^"\(1\.[0-9][0-9]*\.[0-9][0-9]*\)"$/\1/p')
+    if [ "$latest" != "\"$version\"" ] ||
+        ! printf '%s\n' "$version" | grep -Eq '^1\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ||
+        ! stable_version_is_supported "$version" "1.19.0"; then
+        fail "The OpenCode registry did not return one stable v1 release at or above 1.19.0. Upgrade OpenCode manually, then rerun the installer."
+    fi
+    printf '%s\n' "$version"
+}
+
+run_opencode_upgrade() {
+    opencode_upgrade_target=$1
+    assert_no_opencode_processes_running
+    opencode_saved_path=$PATH
+    if [ -n "${original_opencode_path:-}" ] && [ -n "${original_opencode_search_path:-}" ]; then
+        # Installer-added directories must not hide a failed upgrade behind another copy.
+        PATH=$original_opencode_search_path
+        export PATH
+    fi
+    print_command "$opencode_path" upgrade "$opencode_upgrade_target"
+    write_install_log "$(print_command "$opencode_path" upgrade "$opencode_upgrade_target")"
+    if VERSION= "$opencode_path" upgrade "$opencode_upgrade_target"; then
+        :
+    else
+        status=$?
+        fail "OpenCode upgrade $opencode_upgrade_target failed (exit code $status). Finish the official upgrade manually, then rerun the installer."
+    fi
+    hash -r 2>/dev/null || true
+    opencode_path=$(command -v opencode || true)
+    [ -n "$opencode_path" ] || fail "OpenCode is missing from PATH after upgrade $opencode_upgrade_target. Finish the official upgrade manually, then rerun the installer."
+    opencode_current=$(opencode_version "$opencode_path") ||
+        fail "Could not read OpenCode at $opencode_path after upgrade $opencode_upgrade_target. Finish the official upgrade manually, then rerun the installer."
+    PATH=$opencode_saved_path
+    export PATH
+    if [ "$opencode_upgrade_target" = --major ]; then
+        case "$opencode_current" in
+            2.*) ;;
+            *) fail "OpenCode upgrade --major left '$opencode_current' at $opencode_path. Finish the official upgrade manually, then rerun the installer." ;;
+        esac
+    fi
+}
+
 check_opencode_install() {
     [ -n "${HOME:-}" ] || fail "HOME is required to install OpenCode."
     opencode_native="$HOME/.opencode/bin/opencode"
     opencode_path=${original_opencode_path:-$(command -v opencode || true)}
-    opencode_install=1
+    opencode_action=install
     if [ -n "$opencode_path" ]; then
         opencode_current=$(opencode_version "$opencode_path") ||
             fail "Could not read OpenCode version at $opencode_path. Correct that installation, then rerun the installer."
         case "$opencode_current" in
-            2.*) opencode_install=0 ;;
-            1.*)
-                [ "$opencode_path" = "$opencode_native" ] ||
-                    fail "OpenCode 1 at $opencode_path requires manual migration. Remove it with its package manager (npm: npm uninstall -g opencode-ai), then rerun this installer. See https://opencode.ai/v2/docs/migrate-v1/"
-                ;;
+            2.*) opencode_action=reuse ;;
+            1.*) opencode_action=upgrade ;;
             *) fail "OpenCode at $opencode_path is not a recognized stable v1 or v2. Correct that installation, then rerun the installer. See https://opencode.ai/v2/docs/migrate-v1/" ;;
         esac
     fi
     opencode_plugin=$(opencode_rtk_plugin) || return $?
-    if [ "$opencode_install" -eq 1 ] || [ -n "$opencode_plugin" ]; then
+    if [ "$opencode_action" != reuse ] || [ -n "$opencode_plugin" ]; then
         assert_no_opencode_processes_running
     fi
-    if [ "$opencode_install" -eq 1 ]; then
+    if [ "$opencode_action" = install ]; then
         for opencode_target in "$HOME/.opencode" "$HOME/.opencode/bin" "$opencode_native"; do
             [ ! -L "$opencode_target" ] || fail "OpenCode installation path is linked: $opencode_target. Migrate it manually."
         done
@@ -979,7 +1023,9 @@ ensure_opencode() {
     opencode_path=${original_opencode_path:-$(command -v opencode || true)}
     if [ "$dry_run" -eq 1 ]; then
         print_command opencode --version
-        printf 'Install stable OpenCode 2 if absent, or migrate v1 at %s; external v1 requires manual upgrade.\n' "$opencode_native"
+        printf 'Install stable OpenCode 2 if absent; retain stable v2.\n'
+        printf 'For v1 below 1.19.0: discover latest stable v1 and run opencode upgrade <latest-v1>, then verify.\n'
+        printf 'For remaining stable v1 at or above 1.19.0: run opencode upgrade --major, then verify stable v2.\n'
         printf 'Check and back up the recognized old OpenCode RTK plugin if present.\n'
         if [ -z "$opencode_path" ]; then
             download_and_run "$OPENCODE_INSTALL_URL" bash "OpenCode"
@@ -988,7 +1034,7 @@ ensure_opencode() {
     fi
 
     check_opencode_install
-    if [ "$opencode_install" -eq 1 ]; then
+    if [ "$opencode_action" = install ]; then
         download_and_run "$OPENCODE_INSTALL_URL" run_opencode_installer "OpenCode"
         add_known_bin_directories
         hash -r 2>/dev/null || true
@@ -997,8 +1043,23 @@ ensure_opencode() {
             2.*) ;;
             *) fail "The OpenCode installer did not install stable OpenCode 2. See https://opencode.ai/v2/docs/" ;;
         esac
+    elif [ "$opencode_action" = upgrade ]; then
+        if ! stable_version_is_supported "$opencode_current" "1.19.0"; then
+            opencode_v1_target=$(latest_opencode_v1) || return $?
+            run_opencode_upgrade "$opencode_v1_target"
+            case "$opencode_current" in
+                2.*) ;;
+                *)
+                    [ "${opencode_current%%+*}" = "$opencode_v1_target" ] ||
+                        fail "OpenCode upgrade $opencode_v1_target left '$opencode_current' at $opencode_path. Finish the official upgrade manually, then rerun the installer."
+                    ;;
+            esac
+        fi
+        case "$opencode_current" in
+            1.*) run_opencode_upgrade --major ;;
+        esac
     fi
-    if [ "$opencode_install" -eq 0 ] && [ -z "$opencode_plugin" ]; then
+    if [ "$opencode_action" = reuse ] && [ -z "$opencode_plugin" ]; then
         install_step_outcome=Reused
     fi
     # Check the command selected after the installer's PATH additions.
@@ -1008,7 +1069,7 @@ ensure_opencode() {
     opencode_current=$(opencode_version "$opencode_path") || fail "Could not verify OpenCode at $opencode_path."
     case "$opencode_current" in
         2.*) printf 'Verified OpenCode %s at %s.\n' "$opencode_current" "$opencode_path" ;;
-        *) fail "OpenCode at $opencode_path is not stable OpenCode 2. Correct PATH, then rerun the installer." ;;
+        *) fail "OpenCode at $opencode_path is not stable OpenCode 2 (found '$opencode_current'). Correct PATH or finish the official upgrade manually, then rerun the installer." ;;
     esac
     if [ -n "$opencode_plugin" ]; then
         opencode_plugin=$(opencode_rtk_plugin) || return $?
@@ -1543,6 +1604,9 @@ parse_args() {
             --dry-run)
                 dry_run=1
                 ;;
+            --update)
+                update_only=1
+                ;;
             --help|-h)
                 show_usage
                 exit 0
@@ -1588,6 +1652,12 @@ install_free_claude_code() {
 
     set -- uv tool install --force --refresh-package free-claude-code
     if [ "$(uname -s)" = "Darwin" ]; then
+        # Keep interpreter discovery outside the caller's project. uv can select
+        # an installed +gil build but needs the plain version to download it.
+        if [ "$dry_run" -eq 1 ] || ! env -u UV_PYTHON_PREFERENCE uv python find \
+            --project / --system --managed-python --no-python-downloads "$PYTHON_VERSION+gil" >/dev/null 2>&1; then
+            run env -u UV_PYTHON_PREFERENCE uv python install --project / --no-bin "$PYTHON_VERSION"
+        fi
         set -- env -u UV_PYTHON_PREFERENCE "$@" --managed-python --python "$PYTHON_VERSION+gil"
     else
         set -- "$@" --python "$PYTHON_VERSION"
@@ -1672,9 +1742,59 @@ show_installer_next_steps() {
         printf 'Run Aider with: fcc-aider\n'
     fi
     if [ "$install_agy" -eq 1 ]; then
-        printf "Connect Antigravity CLI on FCC's Integrations page first.\n"
         printf 'Run Antigravity CLI with: fcc-agy\n'
     fi
+}
+
+installed_fcc_version() {
+    # Look where uv usually lives without changing the PATH the installer preserves.
+    listing=$(
+        add_known_bin_directories
+        command -v uv >/dev/null 2>&1 || exit 1
+        uv tool list 2>/dev/null
+    ) || return 1
+    version=$(printf '%s\n' "$listing" | awk '$1 == "free-claude-code" && $2 ~ /^v/ { print substr($2, 2); exit }')
+    [ -n "$version" ] || return 1
+    printf '%s\n' "$version"
+}
+
+compare_fcc_versions() {
+    # Prints older, current, or newer for an installed version against a release.
+    printf '%s %s\n' "$1" "$2" | awk '
+        function parse(value, parts) {
+            if (!match(value, /^[0-9]+[.][0-9]+[.][0-9]+/)) return 0
+            split(substr(value, 1, RLENGTH), parts, ".")
+            parts[4] = substr(value, RLENGTH + 1)
+            return 1
+        }
+        {
+            if (!parse($1, installed) || !parse($2, release) || release[4] != "") exit 1
+            for (i = 1; i <= 3; i++) {
+                if (installed[i] + 0 > release[i] + 0) { print "newer"; exit }
+                if (installed[i] + 0 < release[i] + 0) { print "older"; exit }
+            }
+            # Local and post builds follow the release; dev and pre-releases precede it.
+            if (installed[4] == "") print "current"
+            else if (installed[4] ~ /^([+]|[.]post)/) print "newer"
+            else print "older"
+        }
+    '
+}
+
+fcc_update_is_needed() {
+    installed=$(installed_fcc_version) || return 0
+    comparison=$(compare_fcc_versions "$installed" "$fcc_install_version") || return 0
+    case "$comparison" in
+        current)
+            printf 'FCC %s is already up to date.\n' "$installed"
+            return 1
+            ;;
+        newer)
+            printf 'FCC %s is newer than the published version %s. No update needed.\n' "$installed" "$fcc_install_version"
+            return 1
+            ;;
+    esac
+    printf 'FCC update available: %s -> %s.\n' "$installed" "$fcc_install_version"
 }
 
 dispatch_release() {
@@ -1756,6 +1876,9 @@ if [ "$dry_run" -eq 0 ]; then
     [ -z "$installer_release" ] || [ "$installer_release" = "$fcc_install_version" ] || fail "Invalid FCC release handoff."
     unset _FCC_INSTALLER_RELEASE
     [ -n "$installer_release" ] || dispatch_release "$@"
+    if [ "$update_only" -eq 1 ] && ! fcc_update_is_needed; then
+        exit 0
+    fi
     load_toolchain
 fi
 initialize_install_log
@@ -1763,6 +1886,7 @@ if [ "$dry_run" -eq 0 ]; then install_report_started=1; fi
 start_install_step Preflight
 # Preserve the user's winning command before adding installer search paths.
 original_opencode_path=$(command -v opencode || true)
+original_opencode_search_path=$PATH
 add_known_bin_directories
 if command -v cline >/dev/null 2>&1 || command -v npm >/dev/null 2>&1; then
     install_cline=1

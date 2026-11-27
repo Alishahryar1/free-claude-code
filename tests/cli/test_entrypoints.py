@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tomllib
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -38,7 +39,6 @@ def test_cli_scripts_are_registered() -> None:
     )
 
     assert pyproject["project"]["scripts"] == {
-        "_fcc-update-check": "free_claude_code.updater.check:main",
         "fcc-server": "free_claude_code.cli.entrypoints:serve",
         "fcc-doctor": "free_claude_code.cli.entrypoints:doctor",
         "fcc-claude": "free_claude_code.cli.launchers.claude:launch",
@@ -108,7 +108,7 @@ def test_non_version_entrypoint_delegates_to_server_command() -> None:
     command.assert_called_once_with(console_logging=True)
 
 
-def test_explicit_open_admin_waits_for_owned_http_ready():
+def test_explicit_open_admin_waits_for_owned_http_ready() -> None:
     from free_claude_code.cli.commands import ServerSupervisor
 
     supervisor = ServerSupervisor()
@@ -292,39 +292,58 @@ def test_serve_supervisor_restarts_when_app_requests_restart() -> None:
     servers: list[object] = []
     restart_callbacks: list[Callable[[], None]] = []
 
-    apps: list[SimpleNamespace] = []
+    @dataclass
+    class FakeRuntime:
+        instance_id: str
+        is_closed: bool = False
+        close: AsyncMock = field(default_factory=lambda: AsyncMock(return_value=True))
+
+        def begin_shutdown(self) -> None:
+            pass
+
+        def http_started(self) -> None:
+            pass
+
+    @dataclass
+    class FakeApp:
+        runtime: FakeRuntime
+
+    @dataclass
+    class FakeConfig:
+        app: FakeApp
+
+    apps: list[FakeApp] = []
 
     def build_asgi_app(_settings: Settings, restart_callback: Callable[[], None]):
         restart_callbacks.append(restart_callback)
-        app = SimpleNamespace(
-            runtime=SimpleNamespace(
-                instance_id=f"instance-{len(apps)}",
-                is_closed=False,
-                begin_shutdown=lambda: None,
-                http_started=lambda: None,
-                close=AsyncMock(return_value=True),
-            )
-        )
+        app = FakeApp(runtime=FakeRuntime(instance_id=f"instance-{len(apps)}"))
         apps.append(app)
         return app
 
     class FakeServer:
-        def __init__(self, config, *, begin_shutdown, on_started, close_runtime):
+        def __init__(
+            self,
+            config: FakeConfig,
+            *,
+            begin_shutdown: object,
+            on_started: Callable[[], None],
+            close_runtime: object,
+        ):
             self.config = config
             self.on_started = on_started
             self.started = True
             self.should_exit = False
             servers.append(self)
 
-        def run(self, sockets=None):
+        def run(self, sockets: object = None):
             self.on_started()
             if len(servers) == 1:
                 restart_callbacks[-1]()
                 assert self.should_exit is True
                 self.config.app.runtime.is_closed = True
 
-    def fake_config(app, **kwargs):
-        return SimpleNamespace(app=app, kwargs=kwargs)
+    def fake_config(app: FakeApp, **kwargs: object):
+        return FakeConfig(app)
 
     with (
         patch.object(commands, "get_settings", get_settings),
@@ -369,19 +388,26 @@ def test_serve_supervisor_refuses_restart_after_incomplete_shutdown() -> None:
         )
 
     class FakeServer:
-        def __init__(self, config, *, begin_shutdown, on_started, close_runtime):
+        def __init__(
+            self,
+            config: SimpleNamespace,
+            *,
+            begin_shutdown: object,
+            on_started: Callable[[], None],
+            close_runtime: object,
+        ):
             self.config = config
             self.on_started = on_started
             self.started = True
             self.should_exit = False
             servers.append(self)
 
-        def run(self, sockets=None):
+        def run(self, sockets: object = None):
             self.on_started()
             restart_callbacks[-1]()
             assert self.should_exit is True
 
-    def fake_config(app, **kwargs):
+    def fake_config(app: SimpleNamespace, **kwargs: object):
         return SimpleNamespace(app=app, kwargs=kwargs)
 
     with (
@@ -455,7 +481,7 @@ def test_claude_child_env_targets_current_proxy_config() -> None:
     assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
     assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0"
     assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "190000"
-    assert env["DISABLE_AUTOUPDATER"] == "1"
+    assert env["DISABLE_AUTOUPDATER"] == "0"
     assert env["DISABLE_FEEDBACK_COMMAND"] == "1"
     assert env["DISABLE_ERROR_REPORTING"] == "1"
     assert env["DISABLE_TELEMETRY"] == "0"

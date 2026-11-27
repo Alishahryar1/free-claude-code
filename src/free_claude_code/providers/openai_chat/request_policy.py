@@ -14,6 +14,7 @@ from free_claude_code.core.anthropic import (
 )
 from free_claude_code.core.anthropic.conversion import OpenAIConversionError
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.json_types import JsonObject, JsonValue, json_array
 from free_claude_code.core.openai_tool_names import (
     OpenAIToolNameCodec,
     encode_openai_chat_tool_names,
@@ -53,7 +54,7 @@ def build_openai_chat_request_body(
     policy: OpenAIChatRequestPolicy,
     postprocessors: Iterable[OpenAIChatPostprocessor] = (),
     structured_reasoning_details: bool = False,
-) -> dict[str, Any]:
+) -> JsonObject:
     """Build an OpenAI-compatible chat request body from an Anthropic request."""
     request_data = normalize_messages_history(request_data)
     logger.debug(
@@ -63,7 +64,7 @@ def build_openai_chat_request_body(
         len(request_data.messages),
     )
     try:
-        body = build_base_request_body(
+        body: JsonObject = build_base_request_body(
             request_data,
             default_max_tokens=policy.default_max_tokens,
             reasoning_replay=policy.reasoning_replay,
@@ -96,8 +97,8 @@ def build_openai_chat_request_body(
         "{}_REQUEST: conversion done model={} msgs={} tools={}",
         policy.provider_name,
         body.get("model"),
-        len(body.get("messages", [])),
-        len(body.get("tools", [])),
+        len(json_array(body.get("messages", []))),
+        len(json_array(body.get("tools", []))),
     )
     return body
 
@@ -141,4 +142,5 @@ def _normalize_max_completion_tokens(body: dict[str, Any]) -> None:
         body.pop("max_tokens", None)
         return
     if "max_tokens" in body and body["max_tokens"] is not None:
-        body["max_completion_tokens"] = body.pop("max_tokens")
+        max_tokens: JsonValue = body.pop("max_tokens")
+        body["max_completion_tokens"] = max_tokens

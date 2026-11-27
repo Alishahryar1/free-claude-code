@@ -56,12 +56,13 @@ def native_request(
         for value in incoming.get("anthropic-beta", "").split(",")
         if value.strip()
     ]
+    valid_betas: dict[str, None] = {}
     for beta in [*values, *betas]:
         if not isinstance(beta, str) or _BETA.fullmatch(beta) is None:
             raise InvalidRequestError(
                 "Messages beta names must be valid header tokens."
             )
-    merged = tuple(dict.fromkeys([*values, *betas]))
-    if merged:
-        protocol["anthropic-beta"] = ",".join(merged)
+        valid_betas[beta] = None
+    if valid_betas:
+        protocol["anthropic-beta"] = ",".join(valid_betas)
     return result, protocol

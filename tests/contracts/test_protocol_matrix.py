@@ -14,8 +14,10 @@ from free_claude_code.core.anthropic.stream_contracts import (
     parse_sse_text,
     text_content,
 )
+from free_claude_code.core.json_types import JsonObject, load_json_value
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
     OpenAIChatProfile,
@@ -23,7 +25,18 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatRequestPolicy,
 )
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
-from tests.providers.support import immediate_admission, make_provider_config
+from tests.providers.support import (
+    immediate_admission,
+    make_provider_config,
+    without_empty_reasoning,
+)
+from tests.wire_payload import (
+    array_payload,
+    decode_object,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 def _messages_request() -> MessagesRequest:
@@ -125,7 +138,7 @@ def _client(handler: Callable[[httpx2.Request], httpx2.Response]) -> AsyncOpenAI
 
 
 def _chat_sse(text: str) -> str:
-    chunks = (
+    chunks: tuple[JsonObject, ...] = (
         {
             "id": "chatcmpl_matrix",
             "object": "chat.completion.chunk",
@@ -157,8 +170,8 @@ def _chat_sse(text: str) -> str:
     )
 
 
-def _response_payload(*, status: str, text: str) -> dict[str, object]:
-    output = (
+def _response_payload(*, status: str, text: str) -> JsonObject:
+    output: list[JsonObject] = (
         []
         if status == "in_progress"
         else [
@@ -224,7 +237,7 @@ def _response_payload(*, status: str, text: str) -> dict[str, object]:
 
 
 def _responses_sse(text: str) -> str:
-    events = (
+    events: tuple[JsonObject, ...] = (
         {
             "type": "response.created",
             "sequence_number": 0,
@@ -248,8 +261,8 @@ def _responses_sse(text: str) -> str:
     return "".join(f"data: {json.dumps(event)}\n\n" for event in events)
 
 
-async def _collect(stream: AsyncIterator[str]) -> str:
-    return "".join([chunk async for chunk in stream])
+async def _collect(stream: AsyncIterator[StreamOutput]) -> str:
+    return "".join([frame async for packet in stream for frame in packet.frames])
 
 
 @pytest.mark.asyncio
@@ -278,7 +291,7 @@ async def test_chat_upstream_accepts_both_ingress_protocols_directly() -> None:
             profile=OpenAIChatProfile(
                 OpenAIChatRequestPolicy(
                     provider_name="MATRIX_CHAT",
-                    reasoning_replay=ReasoningReplayMode.DISABLED,
+                    reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
                 ),
                 NO_REASONING,
             ),
@@ -314,9 +327,15 @@ async def test_chat_upstream_accepts_both_ingress_protocols_directly() -> None:
     responses_events = parse_sse_text(responses_body)
     assert responses_events[0].event == "response.created"
     assert responses_events[-1].event == "response.completed"
-    assert responses_events[-1].data["response"]["model"] == "public-model"
     assert (
-        responses_events[-1].data["response"]["output"][0]["content"][0]["text"]
+        object_payload(responses_events[-1].data["response"])["model"] == "public-model"
+    )
+    assert (
+        object_array(
+            object_array(
+                object_payload(responses_events[-1].data["response"])["output"]
+            )[0]["content"]
+        )[0]["text"]
         == "chat-ok"
     )
 
@@ -376,10 +395,16 @@ async def test_responses_upstream_accepts_both_ingress_protocols_directly() -> N
         "response.output_text.delta",
         "response.completed",
     ]
-    assert responses_events[0].data["response"]["id"] == "resp_matrix"
-    assert responses_events[-1].data["response"]["model"] == "public-model"
+    assert object_payload(responses_events[0].data["response"])["id"] == "resp_matrix"
     assert (
-        responses_events[-1].data["response"]["output"][0]["content"][0]["text"]
+        object_payload(responses_events[-1].data["response"])["model"] == "public-model"
+    )
+    assert (
+        object_array(
+            object_array(
+                object_payload(responses_events[-1].data["response"])["output"]
+            )[0]["content"]
+        )[0]["text"]
         == "responses-ok"
     )
 
@@ -419,7 +444,7 @@ async def test_image_tool_output_remains_visual_across_all_protocol_cells() -> N
             profile=OpenAIChatProfile(
                 OpenAIChatRequestPolicy(
                     provider_name="MATRIX_CHAT",
-                    reasoning_replay=ReasoningReplayMode.DISABLED,
+                    reasoning_replay=ReasoningReplayMode.REASONING_CONTENT,
                 ),
                 NO_REASONING,
             ),
@@ -474,24 +499,27 @@ async def test_image_tool_output_remains_visual_across_all_protocol_cells() -> N
         await responses_client.close()
 
     image_url = "https://images.example.test/result.png"
-    messages_chat = json.loads(chat_requests[0].content)
-    responses_chat = json.loads(chat_requests[1].content)
-    messages_responses = json.loads(responses_requests[0].content)
-    responses_responses = json.loads(responses_requests[1].content)
+    messages_chat = load_json_value(chat_requests[0].content)
+    responses_chat = load_json_value(chat_requests[1].content)
+    messages_responses = decode_object(responses_requests[0].content)
+    responses_responses = decode_object(responses_requests[1].content)
 
     for chat_body in (messages_chat, responses_chat):
         tool_message = next(
-            message for message in chat_body["messages"] if message["role"] == "tool"
+            message
+            for message in object_array(object_payload(chat_body)["messages"])
+            if message["role"] == "tool"
         )
-        assert image_url not in tool_message["content"]
+        assert image_url not in string_payload(tool_message["content"])
         assert any(
-            part.get("image_url", {}).get("url") == image_url
-            for message in chat_body["messages"]
+            object_payload(object_payload(part).get("image_url", {})).get("url")
+            == image_url
+            for message in object_array(object_payload(chat_body)["messages"])
             if message["role"] == "user" and isinstance(message["content"], list)
             for part in message["content"]
         )
 
-    assert messages_responses["input"][1] == {
+    assert array_payload(without_empty_reasoning(messages_responses["input"]))[1] == {
         "type": "function_call_output",
         "call_id": "call_image",
         "output": [
@@ -499,4 +527,7 @@ async def test_image_tool_output_remains_visual_across_all_protocol_cells() -> N
             {"type": "input_image", "image_url": image_url},
         ],
     }
-    assert responses_responses["input"] == _image_responses_request().input
+    assert (
+        without_empty_reasoning(responses_responses["input"])
+        == _image_responses_request().input
+    )

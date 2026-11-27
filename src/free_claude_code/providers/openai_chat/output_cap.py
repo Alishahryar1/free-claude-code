@@ -12,9 +12,13 @@ so later requests clamp proactively instead of paying the 400 every time.
 """
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 import openai
+
+from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.providers.request_correction import Proposal, Rejection
 
 # Body keys that carry the output-token budget across OpenAI-compatible policies.
 _OUTPUT_TOKEN_FIELDS = ("max_completion_tokens", "max_tokens")
@@ -69,10 +73,10 @@ def _normalized_output_field(value: object) -> str | None:
     return field if field in _OUTPUT_TOKEN_FIELDS else None
 
 
-def _structured_error_texts(body: dict[str, Any] | list[Any]) -> tuple[str, ...]:
+def _structured_error_texts(body: JsonObject | list[JsonValue]) -> tuple[str, ...]:
     """Extract messages without discarding their structured parameter scope."""
     texts: list[str] = []
-    pending: list[dict[str, Any] | list[Any]] = [body]
+    pending: list[JsonObject | list[JsonValue]] = [body]
     while pending:
         value = pending.pop()
         if isinstance(value, list):
@@ -159,3 +163,50 @@ def clamp_output_tokens(body: dict[str, Any], cap: int) -> dict[str, Any] | None
                 clamped = dict(body)
             clamped[field] = cap
     return clamped
+
+
+class OutputCapMemory:
+    """Learn each model's output-token cap from rejections and apply it."""
+
+    def __init__(self) -> None:
+        self._caps: dict[str, int] = {}
+
+    def clamp(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Clamp output tokens to the cap already learned for this model."""
+        model = body.get("model")
+        cap = self._caps.get(model) if isinstance(model, str) else None
+        if cap is None:
+            return body
+        clamped = clamp_output_tokens(body, cap)
+        return clamped if clamped is not None else body
+
+    def correct(self, rejection: Rejection) -> Proposal | None:
+        """Clamp the rejected body to the cap the rejection names, and learn it."""
+        cap = parse_output_token_cap(rejection.error)
+        if cap is None:
+            return None
+        model = rejection.body.get("model")
+        lesson = None
+        if isinstance(model, str):
+            previous = self._caps.get(model)
+            cap = cap if previous is None else min(previous, cap)
+            lesson = OutputCapLearned(self, model, cap)
+        clamped = clamp_output_tokens(rejection.body, cap)
+        if clamped is None:
+            return None
+        return Proposal(clamped, f"clamped output tokens to {cap}", lesson)
+
+    def learn(self, model: str, cap: int) -> None:
+        self._caps[model] = cap
+
+
+@dataclass(frozen=True, slots=True)
+class OutputCapLearned:
+    """A model's output-token cap, named by an upstream rejection."""
+
+    memory: OutputCapMemory
+    model: str
+    cap: int
+
+    def apply(self) -> None:
+        self.memory.learn(self.model, self.cap)

@@ -24,6 +24,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload, object_payload
 
 _MODEL = "openai/gpt-oss-120b"
 _SELECTOR_IDS = frozenset({"default", "fast", "pro"})
@@ -109,7 +110,12 @@ def test_preserves_provider_reasoning_default_and_standard_request_fields(
 
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
     assert body["model"] == _MODEL
-    assert body["tools"][0]["function"]["name"] == "read_file"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "read_file"
+    )
     assert "reasoning" not in body
     assert "reasoning_effort" not in body
     assert "thinking" not in body
@@ -153,7 +159,7 @@ def test_replays_reasoning_content_with_tool_history(
         reasoning=reasoning_for(request),
     )
 
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "assistant",
         "content": "I will inspect it.",
         "reasoning_content": "Read it first.",
@@ -168,7 +174,7 @@ def test_replays_reasoning_content_with_tool_history(
             }
         ],
     }
-    assert body["messages"][2] == {
+    assert array_payload(body["messages"])[2] == {
         "role": "tool",
         "tool_call_id": "toolu_1",
         "content": "print('hello')",
@@ -177,29 +183,34 @@ def test_replays_reasoning_content_with_tool_history(
 
 @pytest.mark.asyncio
 async def test_filters_catalog_and_adds_live_authoritative_selectors(
+    monkeypatch: pytest.MonkeyPatch,
     llm7_provider: OpenAIChatProvider,
 ) -> None:
-    llm7_provider._client.get = AsyncMock(
-        return_value={
-            "data": [
-                _catalog_model(
-                    "reasoning-model",
-                    reasoning=True,
-                    input_modalities=("text", "image"),
-                ),
-                _catalog_model("plain-model", reasoning=False),
-                _catalog_model("unknown-reasoning-model"),
-                _catalog_model(
-                    "default",
-                    reasoning=True,
-                    context_window_tokens=114688,
-                ),
-                _catalog_model("image-generator", model_type="image"),
-                _catalog_model("video-generator", model_type="video"),
-                _catalog_model("nonstreaming-chat", stream=False),
-                _catalog_model("chat-without-tools", tools_calling=False),
-            ]
-        }
+    monkeypatch.setattr(
+        llm7_provider._client,
+        "get",
+        AsyncMock(
+            return_value={
+                "data": [
+                    _catalog_model(
+                        "reasoning-model",
+                        reasoning=True,
+                        input_modalities=("text", "image"),
+                    ),
+                    _catalog_model("plain-model", reasoning=False),
+                    _catalog_model("unknown-reasoning-model"),
+                    _catalog_model(
+                        "default",
+                        reasoning=True,
+                        context_window_tokens=114688,
+                    ),
+                    _catalog_model("image-generator", model_type="image"),
+                    _catalog_model("video-generator", model_type="video"),
+                    _catalog_model("nonstreaming-chat", stream=False),
+                    _catalog_model("chat-without-tools", tools_calling=False),
+                ]
+            }
+        ),
     )
 
     model_infos = await llm7_provider.list_model_infos()
@@ -249,6 +260,7 @@ async def test_filters_catalog_and_adds_live_authoritative_selectors(
 )
 @pytest.mark.asyncio
 async def test_rejects_missing_or_wrongly_typed_required_catalog_metadata(
+    monkeypatch: pytest.MonkeyPatch,
     llm7_provider: OpenAIChatProvider,
     field: str,
     value: object,
@@ -258,7 +270,9 @@ async def test_rejects_missing_or_wrongly_typed_required_catalog_metadata(
         item.pop(field)
     else:
         item[field] = value
-    llm7_provider._client.get = AsyncMock(return_value={"data": [item]})
+    monkeypatch.setattr(
+        llm7_provider._client, "get", AsyncMock(return_value={"data": [item]})
+    )
 
     with pytest.raises(ModelListResponseError, match=f"include {field} as"):
         await llm7_provider.list_model_infos()
@@ -266,11 +280,14 @@ async def test_rejects_missing_or_wrongly_typed_required_catalog_metadata(
 
 @pytest.mark.asyncio
 async def test_wrongly_typed_optional_reasoning_metadata_is_unknown(
+    monkeypatch: pytest.MonkeyPatch,
     llm7_provider: OpenAIChatProvider,
 ) -> None:
     item = _catalog_model()
     item["reasoning"] = "true"
-    llm7_provider._client.get = AsyncMock(return_value={"data": [item]})
+    monkeypatch.setattr(
+        llm7_provider._client, "get", AsyncMock(return_value={"data": [item]})
+    )
 
     assert await llm7_provider.list_model_infos() == frozenset(
         {
@@ -287,10 +304,13 @@ async def test_wrongly_typed_optional_reasoning_metadata_is_unknown(
 
 @pytest.mark.asyncio
 async def test_selectors_do_not_mask_wholly_ineligible_catalog(
+    monkeypatch: pytest.MonkeyPatch,
     llm7_provider: OpenAIChatProvider,
 ) -> None:
-    llm7_provider._client.get = AsyncMock(
-        return_value={"data": [_catalog_model(model_type="image")]}
+    monkeypatch.setattr(
+        llm7_provider._client,
+        "get",
+        AsyncMock(return_value={"data": [_catalog_model(model_type="image")]}),
     )
 
     with pytest.raises(ModelListResponseError, match="did not include any model ids"):

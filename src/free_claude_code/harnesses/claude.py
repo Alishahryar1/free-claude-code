@@ -13,6 +13,8 @@ def claude_proxy_values(proxy_root_url: str, auth_token: str) -> dict[str, str]:
     return {
         "ANTHROPIC_BASE_URL": proxy_root_url,
         "ANTHROPIC_AUTH_TOKEN": auth_token,
+        # Ignore provider, endpoint and auth values from Claude settings files.
+        "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST": "1",
         "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
         # FCC uses Claude's separate classifier requests, not Anthropic server checks.
         "CLAUDE_CODE_AUTO_MODE_SERVER": "0",
@@ -24,7 +26,6 @@ def claude_proxy_values(proxy_root_url: str, auth_token: str) -> dict[str, str]:
         "API_FORCE_IDLE_TIMEOUT": "0",
         # Zero retains Claude's 5-minute non-streaming timeout. Use its timer cap.
         "API_TIMEOUT_MS": "2147483647",
-        "DISABLE_AUTOUPDATER": "1",
         "DISABLE_FEEDBACK_COMMAND": "1",
         "DISABLE_ERROR_REPORTING": "1",
     }

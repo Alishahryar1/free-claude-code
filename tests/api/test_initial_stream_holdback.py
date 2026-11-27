@@ -2,18 +2,22 @@
 
 import asyncio
 import json
+from collections.abc import Mapping, Sequence
+from typing import override
 
 import httpx
 import httpx2
 import pytest
+from starlette.types import Message
 
 from free_claude_code.api.response_streams import (
     ManagedStreamingResponse,
     anthropic_sse_streaming_response,
     bind_response_lifetime,
 )
+from free_claude_code.application.response_collection import WireProtocol
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from tests.api.test_delivered_stream_recovery import (
     assert_completed,
     public_text,
@@ -29,17 +33,10 @@ from tests.api.test_tool_call_buffer import _response
 from tests.api.test_tool_call_buffer_transports import _tools
 from tests.providers.test_history_transports import _events_for, _harness
 from tests.providers.test_native_tool_arguments import tool_events
+from tests.wire_payload import object_payload
 
 
-@pytest.fixture
-def short_holdback(monkeypatch):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(holdback_seconds=0.02),
-    )
-
-
-def encode(protocol, events):
+def encode(protocol: str, events: Sequence[Mapping[str, JsonValue]]):
     return "".join(
         (f"event: {event['type']}\n" if protocol == "messages" else "")
         + f"data: {json.dumps(event)}\n\n"
@@ -48,7 +45,7 @@ def encode(protocol, events):
 
 
 class GatedBody(httpx.AsyncByteStream, httpx2.AsyncByteStream):
-    def __init__(self, prefix, suffix):
+    def __init__(self, prefix: bytes, suffix: bytes):
         self.prefix = prefix
         self.suffix = suffix
         self.waiting = asyncio.Event()
@@ -56,6 +53,7 @@ class GatedBody(httpx.AsyncByteStream, httpx2.AsyncByteStream):
         self.cancelled = False
         self.close_count = 0
 
+    @override
     async def __aiter__(self):
         yield self.prefix
         self.waiting.set()
@@ -66,6 +64,7 @@ class GatedBody(httpx.AsyncByteStream, httpx2.AsyncByteStream):
             raise
         yield self.suffix
 
+    @override
     async def aclose(self):
         self.close_count += 1
 
@@ -74,8 +73,8 @@ class GatedBody(httpx.AsyncByteStream, httpx2.AsyncByteStream):
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 async def test_initial_text_reaches_http_without_another_upstream_event(
-    protocol, wire, short_holdback
-):
+    protocol: str, wire: WireProtocol
+) -> None:
     events = text_events(protocol, "buffered text")
     prefix_size = len(text_events(protocol, "buffered text", complete=False))
     body = GatedBody(
@@ -85,8 +84,8 @@ async def test_initial_text_reaches_http_without_another_upstream_event(
     visible = asyncio.Event()
     sent = []
 
-    async def capture(message):
-        data = message.get("body", b"")
+    async def capture(message: Message):
+        data: bytes = message.get("body", b"")
         sent.append(data)
         if b"buffered text" in data:
             visible.set()
@@ -125,34 +124,16 @@ async def test_initial_text_reaches_http_without_another_upstream_event(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("ending", ["eof", "error"])
 @pytest.mark.parametrize("read_state", ["pending", "between_reads"])
-async def test_ready_failure_at_deadline_retries_without_releasing_old_text(
-    protocol, wire, ending, read_state, monkeypatch
-):
-    now = [0.0]
-
-    class ClockedBuffer(RecoveryHoldbackBuffer):
-        def __init__(self):
-            super().__init__(now=lambda: now[0])
-
-        def push(self, event):
-            output = super().push(event)
-            if read_state == "between_reads" and "abandoned" in event:
-                # Time passes after buffering text, before asking for the next
-                # event already available in this same HTTP body.
-                now[0] = 1.0
-            return output
-
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        ClockedBuffer,
-    )
+async def test_cutoff_continues_already_released_text(
+    protocol: str, wire: WireProtocol, ending: str, read_state: str
+) -> None:
     error = {"type": "api_error", "message": "internal server error"}
     if protocol == "responses":
         failure = {
             "type": "response.failed",
             "sequence_number": 4,
             "response": {
-                **text_events(protocol, "abandoned")[-1]["response"],
+                **object_payload(text_events(protocol, "abandoned")[-1]["response"]),
                 "status": "failed",
                 "error": {"code": "server_error", "message": "interrupted"},
             },
@@ -167,7 +148,7 @@ async def test_ready_failure_at_deadline_retries_without_releasing_old_text(
         first = GatedBody(prefix + suffix, b"")
         first.release.set()
 
-    def reply(bodies):
+    def reply(bodies: list[JsonObject]):
         if len(bodies) == 1:
             return 200, first
         assert first.close_count == 1
@@ -175,8 +156,9 @@ async def test_ready_failure_at_deadline_retries_without_releasing_old_text(
 
     sent = []
 
-    async def capture(message):
-        sent.append(message.get("body", b""))
+    async def capture(message: Message):
+        body: bytes = message.get("body", b"")
+        sent.append(body)
 
     async with _harness(protocol, reply) as (send, bodies, _):
 
@@ -189,9 +171,6 @@ async def test_ready_failure_at_deadline_retries_without_releasing_old_text(
         try:
             if read_state == "pending":
                 await asyncio.wait_for(first.waiting.wait(), 2)
-                # The pending read completes after its logical deadline. Its
-                # failure must be validated before the transport flushes.
-                now[0] = 1.0
                 first.release.set()
             await asyncio.wait_for(serving, 2)
         finally:
@@ -200,27 +179,28 @@ async def test_ready_failure_at_deadline_retries_without_releasing_old_text(
                 serving.cancel()
             await asyncio.gather(serving, return_exceptions=True)
         assert len(bodies) == 2
-        assert bodies[0] == bodies[1]
+        assert bodies[1] != bodies[0]
+        assert "abandoned" in json.dumps(bodies[1])
 
     output = parse_sse_text(b"".join(sent).decode())
-    assert public_text(output, wire) == "winning"
+    assert public_text(output, wire) == "abandonedwinning"
     assert_completed(output, wire)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_failure_after_timed_release_continues_the_visible_answer(
-    protocol, wire, short_holdback
-):
+async def test_failure_after_immediate_release_continues_the_visible_answer(
+    protocol: str, wire: WireProtocol
+) -> None:
     first = GatedBody(
         encode(protocol, text_events(protocol, "Hello ", complete=False)), b""
     )
     visible = asyncio.Event()
     sent = []
 
-    async def capture(message):
-        data = message.get("body", b"")
+    async def capture(message: Message):
+        data: bytes = message.get("body", b"")
         sent.append(data)
         if b"Hello " in data:
             visible.set()
@@ -259,25 +239,29 @@ async def test_failure_after_timed_release_continues_the_visible_answer(
 @pytest.mark.parametrize("wire", ["messages", "responses"])
 @pytest.mark.parametrize("released", [False, True])
 async def test_cancellation_drains_the_read_before_closing_its_http_body(
-    protocol, wire, released, monkeypatch
-):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(holdback_seconds=0.01 if released else 60),
-    )
+    protocol: str, wire: WireProtocol, released: bool
+) -> None:
     body = GatedBody(
-        encode(protocol, text_events(protocol, "visible", complete=False)), b""
+        encode(
+            protocol,
+            text_events(protocol, "visible", complete=False)
+            if released
+            else partial_tool(protocol),
+        ),
+        b"",
     )
     visible = asyncio.Event()
 
-    async def capture(message):
+    async def capture(message: Message):
         if b"visible" in message.get("body", b""):
             visible.set()
 
     async with _harness(protocol, lambda _: (200, body)) as (send, bodies, _):
 
         async def serve():
-            source = send(wire, [{"role": "user", "content": "hello"}])
+            source = send(
+                wire, [{"role": "user", "content": "hello"}], tools=_tools(wire)
+            )
             response = await _response(wire, executed(source, wire))
             await _serve(response, send=capture)
 
@@ -304,9 +288,9 @@ async def test_cancellation_drains_the_read_before_closing_its_http_body(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_closing_prefetched_response_drains_timed_read(
-    protocol, wire, short_holdback
-):
+async def test_closing_prefetched_response_closes_without_starting_another_read(
+    protocol: str, wire: WireProtocol
+) -> None:
     body = GatedBody(
         encode(protocol, text_events(protocol, "held", complete=False)), b""
     )
@@ -320,11 +304,11 @@ async def test_closing_prefetched_response_drains_timed_read(
         response = await asyncio.wait_for(_response(wire, executed(source, wire)), 2)
         await bind_response_lifetime(response, release)
         try:
-            assert body.waiting.is_set()
+            assert not body.waiting.is_set()
             assert not body.release.is_set()
             await response.aclose()
             await response.aclose()
-            assert body.cancelled
+            assert not body.cancelled
             assert body.close_count == 1
             assert released == ["released"]
             assert len(bodies) == 1
@@ -336,17 +320,18 @@ async def test_closing_prefetched_response_drains_timed_read(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-async def test_timed_release_keeps_incomplete_tools_hidden_and_retryable(
-    protocol, wire, short_holdback
-):
+async def test_immediate_delivery_keeps_incomplete_tools_hidden_and_retryable(
+    protocol: str, wire: WireProtocol
+) -> None:
     first = GatedBody(encode(protocol, partial_tool(protocol)), b"")
     started = asyncio.Event()
     sent = []
 
-    async def capture(message):
+    async def capture(message: Message):
         if message["type"] == "http.response.start":
             started.set()
-        sent.append(message.get("body", b""))
+        body: bytes = message.get("body", b"")
+        sent.append(body)
 
     async with _harness(
         protocol,
@@ -379,18 +364,19 @@ async def test_timed_release_keeps_incomplete_tools_hidden_and_retryable(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ["chat", "messages", "responses"])
-async def test_timed_release_keeps_projected_reasoning_hidden_and_retryable(
-    protocol, short_holdback
-):
+async def test_immediate_delivery_keeps_projected_reasoning_hidden_and_retryable(
+    protocol: str,
+) -> None:
     prefix_size = {"chat": 1, "messages": 3, "responses": 4}[protocol]
     first = GatedBody(encode(protocol, _events_for(protocol)[:prefix_size]), b"")
     started = asyncio.Event()
     sent = []
 
-    async def capture(message):
+    async def capture(message: Message):
         if message["type"] == "http.response.start":
             started.set()
-        sent.append(message.get("body", b""))
+        body: bytes = message.get("body", b"")
+        sent.append(body)
 
     async with _harness(
         protocol,

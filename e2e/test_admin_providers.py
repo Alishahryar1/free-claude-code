@@ -4,6 +4,7 @@ import pytest
 from playwright.sync_api import ConsoleMessage, Page, Route, ViewportSize, expect
 
 from e2e.provider_support import api_key_input, close_provider, open_provider
+from tests.wire_payload import object_payload, response_object, response_payload
 
 
 @pytest.mark.parametrize(
@@ -74,14 +75,10 @@ def test_missing_provider_configuration_opens_modal_and_focuses_exact_field(
     if desktop:
         sidebar = page.locator(".sidebar")
         expect(sidebar).to_have_css("position", "sticky")
-        assert (
-            round(
-                float(
-                    sidebar.evaluate("element => element.getBoundingClientRect().top")
-                )
-            )
-            == 0
+        sidebar_top: float = sidebar.evaluate(
+            "element => element.getBoundingClientRect().top"
         )
+        assert round(sidebar_top) == 0
 
 
 def test_desktop_sidebar_stays_pinned_at_document_bottom(
@@ -93,8 +90,8 @@ def test_desktop_sidebar_stays_pinned_at_document_bottom(
 
     page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
 
-    sidebar_top = float(
-        sidebar.evaluate("element => element.getBoundingClientRect().top")
+    sidebar_top: float = sidebar.evaluate(
+        "element => element.getBoundingClientRect().top"
     )
     assert sidebar_top == pytest.approx(0, abs=0.5)
 
@@ -144,9 +141,11 @@ def test_startup_model_count_handles_empty_and_single_model_catalogs(
     page: Page, admin_base_url: str, models: list[str]
 ) -> None:
     def status(route: Route) -> None:
-        data = route.fetch().json()
-        data["startup"]["providers"]["open_router"] = "ready"
-        data["cached_models"]["open_router"] = models
+        data = response_object(route.fetch())
+        object_payload(object_payload(data["startup"])["providers"])["open_router"] = (
+            "ready"
+        )
+        object_payload(data["cached_models"])["open_router"] = models
         route.fulfill(json=data)
 
     page.route("**/admin/api/status", status)
@@ -163,7 +162,7 @@ def test_delayed_startup_status_does_not_replace_a_manual_provider_check(
 ) -> None:
     _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
     page.wait_for_function("!state.startupRequest && !state.startupTimer")
-    snapshot = page.request.get(f"{admin_base_url}/admin/api/status").json()
+    snapshot = response_payload(page.request.get(f"{admin_base_url}/admin/api/status"))
     startup: list[Route] = []
     manual: list[Route] = []
 
@@ -239,9 +238,11 @@ def test_local_model_discovery_takes_precedence_over_reachability(
     )
     _open_admin(page, admin_base_url, {"width": 1280, "height": 720})
     page.wait_for_function("!!state.startupRequest && !!state.localStatusRequest")
-    snapshot = page.request.get(f"{admin_base_url}/admin/api/status").json()
-    snapshot["startup"]["providers"]["lmstudio"] = discovery
-    snapshot["cached_models"]["lmstudio"] = ["local-model"]
+    snapshot = response_object(page.request.get(f"{admin_base_url}/admin/api/status"))
+    object_payload(object_payload(snapshot["startup"])["providers"])["lmstudio"] = (
+        discovery
+    )
+    object_payload(snapshot["cached_models"])["lmstudio"] = ["local-model"]
     primary = {
         "starting": "Checking models…",
         "ready": "1 model available",
@@ -341,7 +342,7 @@ def test_admin_loading_finishes_before_local_availability_checks(
 ) -> None:
     pending: list[Route] = []
 
-    def hold(route):
+    def hold(route: Route):
         pending.append(route)
         page.evaluate("window.localChecks = (window.localChecks || 0) + 1")
 
@@ -355,7 +356,7 @@ def test_admin_loading_finishes_before_local_availability_checks(
 
     page.wait_for_function("window.localChecks === 3")
     for route in pending:
-        payload = route.fetch().json()
+        payload = response_object(route.fetch())
         if payload["provider_id"] == "llamacpp":
             payload.update(status="offline", label="Offline", status_code=503)
         elif payload["provider_id"] == "ollama":
@@ -591,11 +592,13 @@ def test_anthropic_standard_modal_groups_key_workspace_and_proxy(
     dialog.get_by_role("button", name="Save", exact=True).click()
     expect(dialog).not_to_be_visible()
     assert len(submissions) == 1
-    assert set(submissions[0]["values"]) == {
+    submitted = submissions[0]
+    assert isinstance(submitted, dict)
+    assert set(submitted["values"]) == {
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_WORKSPACE_ID",
     }
-    assert submissions[0]["values"]["ANTHROPIC_API_KEY"]["entries"] == [
+    assert submitted["values"]["ANTHROPIC_API_KEY"]["entries"] == [
         {"value": "test-api-key"}
     ]
-    assert submissions[0]["values"]["ANTHROPIC_WORKSPACE_ID"] == "wrkspc_test"
+    assert submitted["values"]["ANTHROPIC_WORKSPACE_ID"] == "wrkspc_test"

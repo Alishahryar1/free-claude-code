@@ -10,15 +10,21 @@ from fastapi.responses import JSONResponse
 
 from free_claude_code.api.handlers import MessagesHandler
 from free_claude_code.application.execution import ProviderExecutor
+from free_claude_code.application.response_collection import (
+    WireProtocol,
+    collect_response,
+)
 from free_claude_code.application.routing import ModelRouter
-from free_claude_code.config.reasoning import FALLBACK_REASONING_PREFERENCES
+from free_claude_code.config.reasoning import (
+    FALLBACK_REASONING_PREFERENCES,
+    ReasoningPreference,
+)
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.providers.custom import CustomProvider
 from free_claude_code.providers.runtime.config import build_custom_provider_config
-from free_claude_code.providers.stream_recovery import RecoveryHoldbackBuffer
 from tests.api.model_fallback_support import (
     ControlledFallbackProvider,
     execution_failure,
@@ -30,18 +36,27 @@ from tests.api.test_delivered_stream_recovery import (
     text_events,
 )
 from tests.api.test_hidden_stream_retries import delivered
-from tests.providers.support import immediate_admission
+from tests.application.test_execution import stream_routed_request
+from tests.providers.support import assistant_history_text, immediate_admission
 from tests.providers.test_custom_provider import completion, definition, provider
 from tests.web_tools_support import StubWebToolsClient
+from tests.wire_payload import (
+    decode_object,
+    int_payload,
+    object_payload,
+    string_payload,
+)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("effort", FALLBACK_REASONING_PREFERENCES)
-async def test_classifier_fallback_keeps_manual_thinking_compatible(effort):
+async def test_classifier_fallback_keeps_manual_thinking_compatible(
+    effort: ReasoningPreference,
+) -> None:
     captured = []
 
-    def reply(request):
-        captured.append(json.loads(request.content))
+    def reply(request: httpx.Request):
+        captured.append(decode_object(request.content))
         return httpx.Response(
             200,
             text=completion("anthropic_messages").replace(
@@ -62,13 +77,13 @@ async def test_classifier_fallback_keeps_manual_thinking_compatible(effort):
             {"model": f"{configuration.provider_id}/backup", "reasoning": effort}
         ],
     )
+
+    def resolve_provider(provider_id: str, _api_key_number: int):
+        return primary if provider_id == "nvidia_nim" else fallback
+
     handler = MessagesHandler(
         settings,
-        provider_resolver=AsyncMock(
-            side_effect=lambda provider_id, _api_key_number: (
-                primary if provider_id == "nvidia_nim" else fallback
-            )
-        ),
+        provider_resolver=AsyncMock(side_effect=resolve_provider),
         web_tools=StubWebToolsClient(),
     )
     try:
@@ -81,7 +96,7 @@ async def test_classifier_fallback_keeps_manual_thinking_compatible(effort):
         ]
         assert len(captured) == 1
         assert captured[0]["thinking"] == {"type": "disabled"}
-        assert captured[0]["max_tokens"] > 64
+        assert int_payload(captured[0]["max_tokens"]) > 64
     finally:
         await fallback.cleanup()
 
@@ -91,12 +106,12 @@ async def test_classifier_fallback_keeps_manual_thinking_compatible(effort):
 @pytest.mark.parametrize("egress", ["openai_chat", "openai_responses"])
 @pytest.mark.parametrize("effort", ["off", "low", "high", "max"])
 async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
-    wire_api, egress, effort
-):
+    wire_api: WireProtocol, egress: str, effort: str
+) -> None:
     captured = []
 
-    def reply(request):
-        captured.append(json.loads(request.content))
+    def reply(request: httpx2.Request):
+        captured.append(decode_object(request.content))
         response = completion(egress)
         if egress == "openai_chat":
             delta = {
@@ -132,13 +147,12 @@ async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
             {"model": f"{configuration.provider_id}/backup", "reasoning": effort}
         ],
     )
+
+    def resolve_provider(provider_id: str, _api_key_number: int):
+        return primary if provider_id == "nvidia_nim" else fallback
+
     executor = ProviderExecutor(
-        AsyncMock(
-            side_effect=lambda provider_id, _api_key_number: (
-                primary if provider_id == "nvidia_nim" else fallback
-            )
-        ),
-        progress_timeout_seconds=10,
+        AsyncMock(side_effect=resolve_provider),
     )
     router = ModelRouter(settings)
     if wire_api == "messages":
@@ -163,12 +177,16 @@ async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
     before = request.model_dump()
     try:
         output = "".join(
-            [
-                event
-                async for event in getattr(executor, f"stream_{wire_api}")(
-                    routed, raw_log_payload=dict, request_id="fallback-wire"
-                )
-            ]
+            await collect_response(
+                stream_routed_request(
+                    executor,
+                    wire_api,
+                    routed,
+                    raw_log_payload=dict,
+                    request_id="fallback-wire",
+                ),
+                protocol=wire_api,
+            )
         )
         assert "Hello" in output and request.model_dump() == before
         assert len(captured) == 1 and captured[0]["model"] == "backup"
@@ -184,10 +202,10 @@ async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
             assert body["reasoning_effort"] == expected
             assert ("Candidate reasoning" in output) is (effort != "off")
         else:
-            assert body["reasoning"]["effort"] == expected
+            assert object_payload(body["reasoning"])["effort"] == expected
             if wire_api == "responses":
-                assert body["reasoning"]["summary"] == "detailed"
-                assert body["reasoning"]["context"] == "all_turns"
+                assert object_payload(body["reasoning"])["summary"] == "detailed"
+                assert object_payload(body["reasoning"])["context"] == "all_turns"
                 assert body["metadata"] == {"keep": True}
     finally:
         await fallback.cleanup()
@@ -195,18 +213,16 @@ async def test_fallback_effort_replaces_budget_and_preserves_wire_options(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("wire_api", ["messages", "responses"])
-async def test_candidate_efforts_survive_retry_and_continuation(monkeypatch, wire_api):
-    monkeypatch.setattr(
-        "free_claude_code.providers.stream_recovery.RecoveryHoldbackBuffer",
-        lambda: RecoveryHoldbackBuffer(max_bytes=1),
-    )
+async def test_candidate_efforts_survive_retry_and_continuation(
+    monkeypatch: pytest.MonkeyPatch, wire_api: WireProtocol
+) -> None:
     bodies = []
     attempts = {"primary": 0, "low": 0, "inherited": 0}
 
-    def reply(request):
-        body = json.loads(request.content)
+    def reply(request: httpx2.Request):
+        body = decode_object(request.content)
         bodies.append(body)
-        model = body["model"]
+        model = string_payload(body["model"])
         attempts[model] += 1
         text = (
             ["Hello ", "there. "][attempts[model] - 1]
@@ -241,9 +257,7 @@ async def test_candidate_efforts_survive_retry_and_continuation(monkeypatch, wir
         admission=immediate_admission(max_attempts=2),
         openai_transport=httpx2.MockTransport(reply),
     )
-    executor = ProviderExecutor(
-        AsyncMock(return_value=instance), progress_timeout_seconds=10
-    )
+    executor = ProviderExecutor(AsyncMock(return_value=instance))
     router = ModelRouter(settings)
     if wire_api == "messages":
         routed = router.resolve_messages_request(
@@ -262,20 +276,27 @@ async def test_candidate_efforts_survive_retry_and_continuation(monkeypatch, wir
             )
         )
     try:
-        stream = getattr(executor, f"stream_{wire_api}")(
-            routed, raw_log_payload=dict, request_id="fallback-continuation"
+        stream = stream_routed_request(
+            executor,
+            wire_api,
+            routed,
+            raw_log_payload=dict,
+            request_id="fallback-continuation",
         )
         events = parse_sse_text(await delivered(stream, wire_api))
         assert_completed(events, wire_api)
         assert public_text(events, wire_api) == "Hello there. Low work. Finished."
-        assert [(body["model"], body["reasoning"]["effort"]) for body in bodies] == [
+        assert [
+            (body["model"], object_payload(body["reasoning"])["effort"])
+            for body in bodies
+        ] == [
             ("primary", "high"),
             ("primary", "high"),
             ("low", "low"),
             ("low", "low"),
             ("inherited", "high"),
         ]
-        assert "Hello there. " in str(bodies[2]["input"])
-        assert "Low work. " in str(bodies[4]["input"])
+        assert assistant_history_text(bodies[2]["input"]) == "Hello there. "
+        assert assistant_history_text(bodies[4]["input"]) == "Hello there. Low work. "
     finally:
         await instance.cleanup()

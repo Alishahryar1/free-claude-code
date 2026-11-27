@@ -16,6 +16,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload, object_payload
 
 
 @pytest.fixture
@@ -30,17 +31,19 @@ def fireworks_provider():
     )
 
 
-def test_init_uses_openai_chat_provider(fireworks_provider):
+def test_init_uses_openai_chat_provider(fireworks_provider: OpenAIChatProvider) -> None:
     assert isinstance(fireworks_provider, OpenAIChatProvider)
     assert fireworks_provider._api_key == "test_fireworks_key"
     assert fireworks_provider._base_url == FIREWORKS_DEFAULT_BASE
 
 
-def test_base_url_constant():
+def test_base_url_constant() -> None:
     assert FIREWORKS_DEFAULT_BASE == "https://api.fireworks.ai/inference/v1"
 
 
-def test_build_request_body_openai_chat_shape(fireworks_provider):
+def test_build_request_body_openai_chat_shape(
+    fireworks_provider: OpenAIChatProvider,
+) -> None:
     request = MessagesRequest(
         model="accounts/fireworks/models/glm-5p1",
         max_tokens=100,
@@ -60,7 +63,9 @@ def test_build_request_body_openai_chat_shape(fireworks_provider):
     ]
 
 
-def test_build_request_body_default_max_tokens(fireworks_provider):
+def test_build_request_body_default_max_tokens(
+    fireworks_provider: OpenAIChatProvider,
+) -> None:
     request = MessagesRequest(
         model="m",
         messages=[Message(role="user", content="x")],
@@ -73,7 +78,7 @@ def test_build_request_body_default_max_tokens(fireworks_provider):
     assert body["max_tokens"] == ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 
 
-def test_replay_is_independent_of_current_turn_reasoning_control():
+def test_replay_is_independent_of_current_turn_reasoning_control() -> None:
     provider = profiled_provider(
         "fireworks",
         make_provider_config(
@@ -96,11 +101,16 @@ def test_replay_is_independent_of_current_turn_reasoning_control():
 
     body = provider._chat._build_request_body(request, reasoning=REASONING_OFF)
 
-    assert body["messages"][0]["reasoning_content"] == "hidden"
+    assert (
+        object_payload(array_payload(body["messages"])[0])["reasoning_content"]
+        == "hidden"
+    )
     assert body["reasoning_effort"] == "none"
 
 
-def test_build_request_body_preserves_validated_extra_body(fireworks_provider):
+def test_build_request_body_preserves_validated_extra_body(
+    fireworks_provider: OpenAIChatProvider,
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -116,7 +126,9 @@ def test_build_request_body_preserves_validated_extra_body(fireworks_provider):
     assert body["extra_body"] == {"custom_param": "value"}
 
 
-def test_build_request_body_rejects_reserved_extra_body_keys(fireworks_provider):
+def test_build_request_body_rejects_reserved_extra_body_keys(
+    fireworks_provider: OpenAIChatProvider,
+) -> None:
     request = MessagesRequest.model_validate(
         {
             "model": "m",
@@ -132,7 +144,9 @@ def test_build_request_body_rejects_reserved_extra_body_keys(fireworks_provider)
 
 
 @pytest.mark.asyncio
-async def test_cleanup_closes_openai_client(fireworks_provider):
+async def test_cleanup_closes_openai_client(
+    fireworks_provider: OpenAIChatProvider,
+) -> None:
     fireworks_provider._client = MagicMock()
     fireworks_provider._client.close = AsyncMock()
 

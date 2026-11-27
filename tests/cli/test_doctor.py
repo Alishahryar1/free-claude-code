@@ -2,6 +2,8 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
+from pathlib import Path
 
 import httpx
 import pytest
@@ -11,23 +13,27 @@ from free_claude_code.config import paths
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.server_urls import local_proxy_root_url
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.providers.openai_codex import auth as openai_auth
 from free_claude_code.runtime import diagnostics
+from tests.wire_payload import decode_object, object_payload
 
 
 @pytest.fixture(autouse=True)
-def offline_discovery_status(monkeypatch):
-    def unavailable(*args, **kwargs):
+def offline_discovery_status(monkeypatch: pytest.MonkeyPatch):
+    def unavailable(*args: object, **kwargs: object):
         raise httpx.ConnectError("private-canary")
 
     monkeypatch.setattr(httpx, "get", unavailable)
 
 
-def test_live_discovery_report_projects_only_safe_current_errors(monkeypatch):
+def test_live_discovery_report_projects_only_safe_current_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     requests = []
     message = "The network proxy rejected or failed the connection. Check your proxy settings."
 
-    def get(url, **kwargs):
+    def get(url: str, **kwargs: object):
         requests.append((url, kwargs))
         return httpx.Response(
             200,
@@ -83,13 +89,16 @@ def test_live_discovery_report_projects_only_safe_current_errors(monkeypatch):
         {"status": "running", "startup": {"providers": []}},
     ],
 )
-def test_missing_or_incompatible_live_status_is_unavailable(monkeypatch, payload):
+def test_missing_or_incompatible_live_status_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, payload: JsonValue
+) -> None:
+    def replace_get(url: str, **kwargs: object):
+        return httpx.Response(200, request=httpx.Request("GET", url), json=payload)
+
     monkeypatch.setattr(
         httpx,
         "get",
-        lambda url, **kwargs: httpx.Response(
-            200, request=httpx.Request("GET", url), json=payload
-        ),
+        replace_get,
     )
     assert diagnostics.model_discovery_report(Settings())["status"] == "unavailable"
 
@@ -103,11 +112,11 @@ def test_missing_or_incompatible_live_status_is_unavailable(monkeypatch, payload
         None,
     ],
 )
-def test_doctor_does_not_trust_arbitrary_server_failure_text(monkeypatch, message):
-    monkeypatch.setattr(
-        httpx,
-        "get",
-        lambda url, **kwargs: httpx.Response(
+def test_doctor_does_not_trust_arbitrary_server_failure_text(
+    monkeypatch: pytest.MonkeyPatch, message: JsonValue
+) -> None:
+    def replace_get(url: str, **kwargs: object):
+        return httpx.Response(
             200,
             request=httpx.Request("GET", url),
             json={
@@ -117,7 +126,12 @@ def test_doctor_does_not_trust_arbitrary_server_failure_text(monkeypatch, messag
                     "provider_errors": {"nvidia_nim": message},
                 },
             },
-        ),
+        )
+
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        replace_get,
     )
     result = diagnostics.model_discovery_report(Settings())
     assert result["providers"]["nvidia_nim"] == {
@@ -131,16 +145,21 @@ def test_doctor_does_not_trust_arbitrary_server_failure_text(monkeypatch, messag
     "status, body",
     [(302, "private-canary"), (500, "private-canary"), (200, "private-canary")],
 )
-def test_unusable_local_http_response_is_unavailable(monkeypatch, status, body):
-    monkeypatch.setattr(
-        httpx,
-        "get",
-        lambda url, **kwargs: httpx.Response(
+def test_unusable_local_http_response_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, status: int, body: str
+) -> None:
+    def replace_get(url: str, **kwargs: object):
+        return httpx.Response(
             status,
             request=httpx.Request("GET", url),
             text=body,
             headers={"Location": "https://private-canary.test"},
-        ),
+        )
+
+    monkeypatch.setattr(
+        httpx,
+        "get",
+        replace_get,
     )
     result = diagnostics.model_discovery_report(Settings())
     assert result["status"] == "unavailable"
@@ -148,11 +167,11 @@ def test_unusable_local_http_response_is_unavailable(monkeypatch, status, body):
 
 
 def test_discovery_status_failure_does_not_expose_exception_or_contact_remote_host(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     assert diagnostics.model_discovery_report(Settings())["status"] == "unavailable"
 
-    def forbidden(*args, **kwargs):
+    def forbidden(*args: object, **kwargs: object):
         pytest.fail("doctor must only contact the local server")
 
     monkeypatch.setattr(httpx, "get", forbidden)
@@ -165,18 +184,24 @@ def test_discovery_status_failure_does_not_expose_exception_or_contact_remote_ho
 @pytest.mark.parametrize(
     "host", ["http://127.0.0.1", "[::1", "[::1]:8082", "local\nhost"]
 )
-def test_malformed_host_still_produces_a_doctor_report(monkeypatch, host):
+def test_malformed_host_still_produces_a_doctor_report(
+    monkeypatch: pytest.MonkeyPatch, host: str
+) -> None:
     ManagedConfigStore().initialize({})
     monkeypatch.setenv("HOST", host)
 
     # Exercise real URL validation without connecting to a user-owned server.
-    def validate_url(url, **kwargs):
+    def validate_url(url: str, **kwargs: object):
         httpx.Request("GET", url)
         raise httpx.ConnectError("unavailable")
 
     monkeypatch.setattr(httpx, "get", validate_url)
     monkeypatch.setattr(diagnostics, "harness_report", lambda: {})
-    monkeypatch.setattr(diagnostics, "integration_report", lambda settings: {})
+
+    def replace_integration_report(settings: Settings) -> JsonObject:
+        return {}
+
+    monkeypatch.setattr(diagnostics, "integration_report", replace_integration_report)
     report = diagnostics.collect_report()
     assert report["configuration"]["status"] == "available"
     assert report["runtime"]["host"] == host
@@ -184,7 +209,9 @@ def test_malformed_host_still_produces_a_doctor_report(monkeypatch, host):
     assert json.dumps(report)
 
 
-def test_missing_configuration_still_produces_report(monkeypatch):
+def test_missing_configuration_still_produces_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(diagnostics, "harness_report", lambda: {})
     report = diagnostics.collect_report()
     assert next(iter(report)) == "version"
@@ -194,7 +221,7 @@ def test_missing_configuration_still_produces_report(monkeypatch):
     assert report["system"]["python_version"]
 
 
-def test_settings_projection_excludes_secrets_and_url_credentials():
+def test_settings_projection_excludes_secrets_and_url_credentials() -> None:
     settings = Settings(
         OPENAI_API_KEY="secret-api-key",
         ANTHROPIC_API_KEY="secret-anthropic-key",
@@ -215,18 +242,21 @@ def test_settings_projection_excludes_secrets_and_url_credentials():
         result["providers"]["lmstudio"]["base_url"]["origin"] == "http://localhost:1234"
     )
     assert result["model_routing"]["model"] == "openai_api/gpt-example"
+    assert "provider_progress_timeout" not in result["runtime"]
 
 
-def test_all_settings_have_an_explicit_reporting_policy():
+def test_all_settings_have_an_explicit_reporting_policy() -> None:
     assert diagnostics.classified_settings() == set(Settings.model_fields)
 
 
-def test_collection_does_not_initialize_or_expose_validation_input(monkeypatch):
+def test_collection_does_not_initialize_or_expose_validation_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = ManagedConfigStore()
     store.path.parent.mkdir(parents=True)
     store.path.write_text("FCC_CONFIG_SCHEMA=invalid\nOPENAI_API_KEY=secret-value\n")
 
-    def forbidden(*args, **kwargs):
+    def forbidden(*args: object, **kwargs: object):
         pytest.fail("doctor must not initialize configuration")
 
     monkeypatch.setattr(ManagedConfigStore, "initialize", forbidden)
@@ -237,8 +267,8 @@ def test_collection_does_not_initialize_or_expose_validation_input(monkeypatch):
 
 
 def test_complete_report_reads_real_files_without_mutation(
-    monkeypatch, tmp_path, capsys
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     store = ManagedConfigStore()
     store.initialize({})
     store.commit(
@@ -270,24 +300,41 @@ def test_complete_report_reads_real_files_without_mutation(
     )
     before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
 
-    def forbidden(*args, **kwargs):
+    def forbidden(*args: object, **kwargs: object):
         pytest.fail("diagnostics must not initialize config or construct HTTP clients")
 
     monkeypatch.setattr(ManagedConfigStore, "initialize", forbidden)
     monkeypatch.setattr(openai_auth.httpx, "AsyncClient", forbidden)
-    monkeypatch.setattr(diagnostics.shutil, "which", lambda binary: None)
-    copied = []
+
+    def replace_which(binary: object):
+        return None
+
+    monkeypatch.setattr(diagnostics.shutil, "which", replace_which)
+    copied: list[str] = []
     monkeypatch.setattr(doctor, "copy_text", copied.append)
     doctor.main([])
     stdout = capsys.readouterr().out
-    report = json.loads(stdout)
+    report = decode_object(stdout)
     assert copied == [stdout]
-    assert report["model_routing"]["model"] == "openai_api/process"
-    assert report["integrations"]["claude-vscode"]["connected"] is True
-    assert report["providers"]["github_copilot"]["saved_connection"] == "connected"
+    assert object_payload(report["model_routing"])["model"] == "openai_api/process"
+    assert (
+        object_payload(object_payload(report["integrations"])["claude-vscode"])[
+            "connected"
+        ]
+        is True
+    )
+    assert (
+        object_payload(object_payload(report["providers"])["github_copilot"])[
+            "saved_connection"
+        ]
+        == "connected"
+    )
     assert report["errors"] == []
-    assert report["model_discovery"]["status"] == "unavailable"
-    assert all(not item["installed"] for item in report["harnesses"].values())
+    assert object_payload(report["model_discovery"])["status"] == "unavailable"
+    assert all(
+        not object_payload(item)["installed"]
+        for item in object_payload(report["harnesses"]).values()
+    )
     for private in (
         "managed-secret",
         "ignored-secret",
@@ -298,7 +345,7 @@ def test_complete_report_reads_real_files_without_mutation(
     assert before == {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
 
 
-def test_every_credential_and_private_identifier_is_excluded():
+def test_every_credential_and_private_identifier_is_excluded() -> None:
     values = dict.fromkeys(diagnostics.EXCLUDED_FIELDS, "private-canary")
     encoded = json.dumps(
         diagnostics.settings_report(Settings.model_validate(values), {})
@@ -306,13 +353,19 @@ def test_every_credential_and_private_identifier_is_excluded():
     assert "private-canary" not in encoded
 
 
-def test_one_unreadable_integration_does_not_hide_other_sections(monkeypatch):
+def test_one_unreadable_integration_does_not_hide_other_sections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = ManagedConfigStore()
     store.initialize({})
     codex_path = diagnostics.codex_integration.config_path()
     codex_path.parent.mkdir(parents=True)
     codex_path.write_text("not valid toml private-content")
-    monkeypatch.setattr(diagnostics.shutil, "which", lambda binary: None)
+
+    def replace_which(binary: object):
+        return None
+
+    monkeypatch.setattr(diagnostics.shutil, "which", replace_which)
     report = diagnostics.collect_report()
     assert report["runtime"] is not None
     assert report["integrations"]["codex"]["connected"] is None
@@ -324,15 +377,15 @@ def test_one_unreadable_integration_does_not_hide_other_sections(monkeypatch):
     "banner, redirect", [("", ""), ("echo private-banner\n", ""), ("", " >&2")]
 )
 def test_native_version_probe_works_with_platform_command_shim(
-    monkeypatch, tmp_path, banner, redirect
-):
-    suffix = ".cmd" if sys.platform == "win32" else ""
-    binary = tmp_path / ("doctor-test-harness" + suffix)
-    binary.write_text(
-        ("@echo off\n" if suffix else "#!/bin/sh\n")
-        + banner
-        + f"echo 1.2.3{redirect}\n"
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, banner: str, redirect: str
+) -> None:
+    filename, header = (
+        ("doctor-test-harness.cmd", "@echo off\n")
+        if sys.platform == "win32"
+        else ("doctor-test-harness", "#!/bin/sh\n")
     )
+    binary = tmp_path / filename
+    binary.write_text(header + banner + f"echo 1.2.3{redirect}\n")
     binary.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     assert diagnostics.probe_harness("doctor-test-harness", ("--version",)) == {
@@ -342,8 +395,10 @@ def test_native_version_probe_works_with_platform_command_shim(
     }
 
 
-def test_command_prints_and_copies_identical_json(monkeypatch, capsys):
-    copied = []
+def test_command_prints_and_copies_identical_json(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    copied: list[str] = []
     monkeypatch.setattr(
         doctor, "collect_report", lambda: {"version": "1.2.3", "errors": []}
     )
@@ -355,10 +410,12 @@ def test_command_prints_and_copies_identical_json(monkeypatch, capsys):
     assert json.loads(captured.out)["errors"] == []
 
 
-def test_clipboard_failure_leaves_valid_stdout(monkeypatch, capsys):
+def test_clipboard_failure_leaves_valid_stdout(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setattr(doctor, "collect_report", lambda: {"version": "1.2.3"})
 
-    def unavailable(text):
+    def unavailable(text: object):
         raise doctor.ClipboardUnavailable
 
     monkeypatch.setattr(doctor, "copy_text", unavailable)
@@ -375,10 +432,17 @@ def test_clipboard_failure_leaves_valid_stdout(monkeypatch, capsys):
         (OSError("secret-path"), "unavailable"),
     ],
 )
-def test_version_probe_failure_is_bounded_and_sanitized(monkeypatch, failure, status):
-    monkeypatch.setattr(diagnostics.shutil, "which", lambda binary: "stub")
+def test_version_probe_failure_is_bounded_and_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: OSError | subprocess.TimeoutExpired,
+    status: str,
+) -> None:
+    def replace_which(binary: object):
+        return "stub"
 
-    def run(args, **kwargs):
+    monkeypatch.setattr(diagnostics.shutil, "which", replace_which)
+
+    def run(args: object, **kwargs: object):
         assert kwargs["timeout"] == 5
         assert kwargs["stdin"] == subprocess.DEVNULL
         raise failure
@@ -404,22 +468,35 @@ def test_version_probe_failure_is_bounded_and_sanitized(monkeypatch, failure, st
         ("claude", "unknown secret-output", "secret-error", None),
     ],
 )
-def test_probe_returns_only_version(monkeypatch, name, output, stderr, expected):
-    monkeypatch.setattr(diagnostics.shutil, "which", lambda binary: "stub")
-    monkeypatch.setattr(
-        diagnostics.subprocess,
-        "run",
-        lambda args, **kwargs: subprocess.CompletedProcess(args, 0, output, stderr),
-    )
+def test_probe_returns_only_version(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    output: str,
+    stderr: str,
+    expected: str | None,
+) -> None:
+    def replace_which(binary: object):
+        return "stub"
+
+    monkeypatch.setattr(diagnostics.shutil, "which", replace_which)
+
+    def run_probe(
+        args: Sequence[str], **options: object
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, 0, output, stderr)
+
+    monkeypatch.setattr(diagnostics.subprocess, "run", run_probe)
     result = diagnostics.probe_harness(name, ("--version",))
     assert result["version"] == expected
     assert "secret-" not in json.dumps(result)
 
 
-def test_clipboard_adapter_maps_backend_failure(monkeypatch):
+def test_clipboard_adapter_maps_backend_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from free_claude_code.cli import clipboard
 
-    def unavailable(text):
+    def unavailable(text: object):
         raise clipboard.pyperclip.PyperclipException("no desktop")
 
     monkeypatch.setattr(clipboard.pyperclip, "copy", unavailable)
@@ -427,7 +504,9 @@ def test_clipboard_adapter_maps_backend_failure(monkeypatch):
         clipboard.copy_text("diagnostic text")
 
 
-def test_doctor_version_does_not_collect_or_copy(monkeypatch, capsys):
+def test_doctor_version_does_not_collect_or_copy(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     from free_claude_code.cli import entrypoints
 
     def forbidden():
@@ -439,21 +518,29 @@ def test_doctor_version_does_not_collect_or_copy(monkeypatch, capsys):
     assert capsys.readouterr().out == "free-claude-code 1.2.3\n"
 
 
-def test_fallback_model_efforts_are_json_serializable_in_doctor_report():
+def test_fallback_model_efforts_are_json_serializable_in_doctor_report() -> None:
     entries = [
         {"model": "groq/one", "reasoning": "low"},
         {"model": "open_router/vendor/two", "reasoning": "client"},
     ]
     settings = Settings(MODEL_FALLBACKS=entries)
-    report = json.loads(json.dumps(diagnostics.settings_report(settings, {})))
-    assert report["model_routing"]["model_fallbacks"] == [
+    report = decode_object(json.dumps(diagnostics.settings_report(settings, {})))
+    assert object_payload(report["model_routing"])["model_fallbacks"] == [
         entry | {"api_key_number": 1} for entry in entries
     ]
-    assert report["providers"]["groq"]["referenced"] is True
-    assert report["providers"]["open_router"]["referenced"] is True
+    assert (
+        object_payload(object_payload(report["providers"])["groq"])["referenced"]
+        is True
+    )
+    assert (
+        object_payload(object_payload(report["providers"])["open_router"])["referenced"]
+        is True
+    )
 
 
-def test_disconnect_mode_does_not_collect_or_copy_diagnostics(monkeypatch, capsys):
+def test_disconnect_mode_does_not_collect_or_copy_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     from free_claude_code.harnesses import integration_cleanup
 
     calls = []
@@ -463,7 +550,7 @@ def test_disconnect_mode_does_not_collect_or_copy_diagnostics(monkeypatch, capsy
         lambda: calls.append("disconnect"),
     )
 
-    def forbidden(*args):
+    def forbidden(*args: object):
         pytest.fail("cleanup must not collect diagnostics or use the clipboard")
 
     monkeypatch.setattr(doctor, "collect_report", forbidden)
@@ -476,7 +563,9 @@ def test_disconnect_mode_does_not_collect_or_copy_diagnostics(monkeypatch, capsy
     )
 
 
-def test_disconnect_mode_reports_failure_and_nonzero_exit(monkeypatch, capsys):
+def test_disconnect_mode_reports_failure_and_nonzero_exit(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     from free_claude_code.harnesses import integration_cleanup
 
     def fail():

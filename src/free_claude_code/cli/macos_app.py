@@ -43,7 +43,7 @@ def runtime_settings() -> tuple[dict[str, str], str]:
     executable = Path(sys.executable).absolute()
     if not executable.is_file() or not os.access(executable, os.X_OK):
         raise ValueError("The installed Python executable is missing or inaccessible.")
-    library_name = sysconfig.get_config_var("LDLIBRARY")
+    library_name: object = sysconfig.get_config_var("LDLIBRARY")
     if not isinstance(library_name, str) or Path(library_name).name != library_name:
         raise ValueError("The managed Python shared library is unavailable.")
     library = Path(sys.base_prefix) / "lib" / library_name

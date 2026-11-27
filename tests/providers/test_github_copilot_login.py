@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import suppress
+from typing import override
 from unittest.mock import AsyncMock
 
 import pytest
@@ -15,6 +16,7 @@ class Pipe(asyncio.StreamReader):
         self.drained = asyncio.Event()
         self.feed_data(b"child output")
 
+    @override
     async def read(self, n: int = -1) -> bytes:
         data = await super().read(n)
         if not data:
@@ -50,8 +52,11 @@ async def test_cancel_during_spawn_drains_pipes_before_waiting_for_child(
 ) -> None:
     child = Child()
     spawned, return_child = asyncio.Event(), asyncio.Event()
+    launch_args: tuple[object, ...] = ()
 
-    async def spawn(*_args: object, **_kwargs: object) -> Child:
+    async def spawn(*args: object, **_kwargs: object) -> Child:
+        nonlocal launch_args
+        launch_args = args
         spawned.set()
         await return_child.wait()
         return child
@@ -79,3 +84,4 @@ async def test_cancel_during_spawn_drains_pipes_before_waiting_for_child(
             await asyncio.gather(discard(child.stdout), discard(child.stderr))
         with suppress(asyncio.CancelledError):
             await task
+    assert launch_args == ("inert-cli", "--no-auto-update", "login", "--device-code")

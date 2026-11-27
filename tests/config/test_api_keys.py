@@ -12,36 +12,44 @@ from free_claude_code.config.loader import (
     ManagedConfigStore,
     compose_settings_snapshot,
 )
-from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
+from free_claude_code.config.provider_catalog import (
+    PROVIDER_CATALOG,
+    ProviderDescriptor,
+)
 from free_claude_code.config.settings import Settings
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.providers.runtime.config import (
     build_custom_provider_config,
     build_provider_config,
 )
+from tests.assertions import require_present
+from tests.wire_payload import array_payload
 
 
 @pytest.mark.parametrize(
     "descriptor",
     [provider for provider in PROVIDER_CATALOG.values() if provider.credential_env],
 )
-def test_every_catalog_owner_loads_an_ordered_secret_collection(descriptor):
+def test_every_catalog_owner_loads_an_ordered_secret_collection(
+    descriptor: ProviderDescriptor,
+) -> None:
     settings = Settings.model_validate(
         {descriptor.credential_env: '["primary", "extra"]'}
     )
-    assert getattr(settings, descriptor.credential_attr) == (
+    assert getattr(settings, require_present(descriptor.credential_attr)) == (
         SecretStr("primary"),
         SecretStr("extra"),
     )
 
 
 @pytest.mark.parametrize("value", [" first ", '[" first "]'])
-def test_single_key_input_normalizes_to_one_secret(value):
+def test_single_key_input_normalizes_to_one_secret(value: str) -> None:
     settings = Settings(OPENAI_API_KEY=value)
     assert settings.openai_api_keys == (SecretStr("first"),)
     assert "first" not in repr(settings)
 
 
-def test_array_keeps_order_and_selects_only_first_at_provider_boundary():
+def test_array_keeps_order_and_selects_only_first_at_provider_boundary() -> None:
     settings = Settings(OPENAI_API_KEY='["first", "second", "third"]')
     assert settings.openai_api_keys == tuple(
         map(SecretStr, ("first", "second", "third"))
@@ -55,14 +63,14 @@ def test_array_keeps_order_and_selects_only_first_at_provider_boundary():
 @pytest.mark.parametrize(
     "value", ['["first", ""]', '["first", " first "]', '["first", 3]', '["first"']
 )
-def test_invalid_array_is_rejected_without_disclosing_inputs(value):
+def test_invalid_array_is_rejected_without_disclosing_inputs(value: str) -> None:
     with pytest.raises(ValidationError) as error:
         Settings(OPENAI_API_KEY=value)
     assert "first" not in str(error.value)
 
 
 @pytest.mark.parametrize("value", ["", "[]"])
-def test_empty_process_collection_overrides_managed_keys(value):
+def test_empty_process_collection_overrides_managed_keys(value: str) -> None:
     snapshot = compose_settings_snapshot(
         {"OPENAI_API_KEY": '["managed"]'}, {"OPENAI_API_KEY": value}
     )
@@ -73,7 +81,7 @@ def test_empty_process_collection_overrides_managed_keys(value):
 @pytest.mark.parametrize(
     "providers", [("zai", "zai_api"), ("opencode_zen", "opencode_go")]
 )
-def test_shared_providers_use_one_ordered_owner(providers):
+def test_shared_providers_use_one_ordered_owner(providers: tuple[str, ...]) -> None:
     first, second = (PROVIDER_CATALOG[provider] for provider in providers)
     assert first.credential_env == second.credential_env
     settings = Settings.model_validate({first.credential_env: '["primary", "extra"]'})
@@ -84,7 +92,7 @@ def test_shared_providers_use_one_ordered_owner(providers):
 @pytest.mark.parametrize(
     "credential", [{"api_key": " first "}, {"api_keys": [" first ", "second"]}]
 )
-def test_custom_input_normalizes_and_uses_first(credential):
+def test_custom_input_normalizes_and_uses_first(credential: JsonObject) -> None:
     settings = Settings(
         custom_providers=[
             {
@@ -99,10 +107,10 @@ def test_custom_input_normalizes_and_uses_first(credential):
     assert definition.api_keys[0] == SecretStr("first")
     assert build_custom_provider_config(definition, settings).api_key == "first"
     assert "api_key" not in definition.private_values()
-    assert definition.private_values()["api_keys"][0] == "first"
+    assert array_payload(definition.private_values()["api_keys"])[0] == "first"
 
 
-def test_schema_one_upgrade_preserves_custom_order_and_unknown_values():
+def test_schema_one_upgrade_preserves_custom_order_and_unknown_values() -> None:
     store = ManagedConfigStore()
     store.path.parent.mkdir(parents=True, exist_ok=True)
     custom = [
@@ -133,7 +141,7 @@ def test_schema_one_upgrade_preserves_custom_order_and_unknown_values():
     assert (store.path.read_bytes(), store.path.stat().st_mtime_ns) == before
 
 
-def _old_store(values, schema="1"):
+def _old_store(values: dict[str, str], schema: str | None = "1"):
     store = ManagedConfigStore()
     store.path.parent.mkdir(parents=True, exist_ok=True)
     lines = [f"FCC_CONFIG_SCHEMA={schema}"] if schema else []
@@ -158,8 +166,8 @@ def _old_store(values, schema="1"):
     ],
 )
 def test_upgrade_preserves_shadowed_invalid_credential_list(
-    schema, stored, override, expected
-):
+    schema: str | None, stored: str, override: str, expected: tuple[SecretStr, ...]
+) -> None:
     store = _old_store(
         {
             "OPENAI_API_KEY": stored,
@@ -195,8 +203,8 @@ def test_upgrade_preserves_shadowed_invalid_credential_list(
     ],
 )
 def test_upgrade_converts_custom_credentials_before_effective_definition_validation(
-    saved, converted
-):
+    saved: list[JsonObject], converted: list[JsonObject]
+) -> None:
     store = _old_store({"FCC_CUSTOM_PROVIDERS": json.dumps(saved)})
     process = {"FCC_CUSTOM_PROVIDERS": "[]"}
     store.initialize(process)
@@ -209,7 +217,7 @@ def test_upgrade_converts_custom_credentials_before_effective_definition_validat
         store.read({})
 
 
-def test_upgrade_preserves_custom_noncredential_members():
+def test_upgrade_preserves_custom_noncredential_members() -> None:
     store = _old_store(
         {
             "FCC_CUSTOM_PROVIDERS": json.dumps(
@@ -240,7 +248,7 @@ def test_upgrade_preserves_custom_noncredential_members():
     assert snapshot.settings.custom_providers[0].model_ids == ("raw",)
 
 
-def test_upgrade_preserves_conflicting_custom_credential_forms_for_validation():
+def test_upgrade_preserves_conflicting_custom_credential_forms_for_validation() -> None:
     saved = [{"api_key": "old-secret", "api_keys": ["new-secret"]}]
     store = _old_store({"FCC_CUSTOM_PROVIDERS": json.dumps(saved)})
     process = {"FCC_CUSTOM_PROVIDERS": "[]"}
@@ -261,7 +269,9 @@ def test_upgrade_preserves_conflicting_custom_credential_forms_for_validation():
         '[{"api_keys":["duplicate","duplicate"]}]',
     ],
 )
-def test_upgrade_preserves_unconvertible_custom_owner_when_shadowed(stored):
+def test_upgrade_preserves_unconvertible_custom_owner_when_shadowed(
+    stored: str,
+) -> None:
     store = _old_store({"FCC_CUSTOM_PROVIDERS": stored})
     process = {"FCC_CUSTOM_PROVIDERS": "[]"}
     store.initialize(process)
@@ -280,7 +290,9 @@ def test_upgrade_preserves_unconvertible_custom_owner_when_shadowed(stored):
         ("FCC_CUSTOM_PROVIDERS", '[{"api_keys":[3]}]'),
     ],
 )
-def test_unshadowed_credential_conversion_failure_preserves_original_file(key, value):
+def test_unshadowed_credential_conversion_failure_preserves_original_file(
+    key: str, value: str
+) -> None:
     store = _old_store({key: value, "GROQ_API_KEY": "managed-good"})
     before = store.path.read_bytes()
     with pytest.raises(ValueError):
@@ -289,7 +301,7 @@ def test_unshadowed_credential_conversion_failure_preserves_original_file(key, v
     assert list(store.path.parent.glob("*.tmp")) == []
 
 
-def test_upgrade_converts_valid_stored_credential_even_when_shadowed():
+def test_upgrade_converts_valid_stored_credential_even_when_shadowed() -> None:
     store = _old_store({"OPENAI_API_KEY": " managed-first "})
     process = {"OPENAI_API_KEY": "[]"}
     store.initialize(process)

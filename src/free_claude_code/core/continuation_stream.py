@@ -1,17 +1,22 @@
 """Map continuation events into an existing public response lifecycle."""
 
 from copy import deepcopy
-from typing import Any
+from dataclasses import replace
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4, uuid5
 
 from .continuation_overlap import ContinuationOverlap
 from .delivered_response import (
     DeliveredResponse,
-    client_call,
     responses_text_constraint,
 )
 from .failures import ExecutionFailure, FailureKind
-from .gemini.response import gemini_finished
+from .gemini.response import gemini_finished, gemini_parts
+from .json_types import DecimalJsonObject, json_index, json_object, json_objects
+from .openai_responses import is_client_call
+
+if TYPE_CHECKING:
+    from .stream_output import CompletedCall
 
 
 class ContinuationStream:
@@ -23,11 +28,11 @@ class ContinuationStream:
         self.handoff = False
         self._offset = 0
         self._namespace = uuid4()
-        self._boundary: list[dict[str, Any]] = []
-        self._expected = ""
-        self._overlap = ContinuationOverlap("")
+        self._boundary: list[DecimalJsonObject] = []
+        self._expected: dict[Literal["text", "thinking"], str] = {}
+        self._overlaps: list[ContinuationOverlap] = []
         self._initial_progress = 0
-        self._prefix_items: list[dict[str, Any]] = []
+        self._prefix_items: list[DecimalJsonObject] = []
 
     @property
     def made_progress(self) -> bool:
@@ -38,40 +43,53 @@ class ContinuationStream:
         self.handoff = handoff
         self._offset = max(self.delivered.items, default=-1) + 1
         self._boundary = self.delivered.closing_events()
-        self._expected = self.delivered.snapshot().text
+        prefix = self.delivered.snapshot().continuation
+        assert prefix is not None
+        self._expected = {
+            channel: prefix.readable_text(channel) for channel in ("text", "thinking")
+        }
         self.restart_attempt()
         finalized = deepcopy(self.delivered.items)
         for event in self._boundary:
             if event["type"] == "response.output_item.done":
-                finalized[event["output_index"]] = deepcopy(event["item"])
+                finalized[json_index(event["output_index"])] = deepcopy(
+                    json_object(event["item"])
+                )
         self._prefix_items = [item for _, item in sorted(finalized.items())]
 
     def restart_attempt(self) -> None:
         """Replace an invisible attempt without losing its finalized prefix."""
         self._namespace = uuid4()
-        self._overlap = ContinuationOverlap(self._expected)
+        self._overlaps = [
+            ContinuationOverlap(expected, channel=channel)
+            for channel, expected in self._expected.items()
+        ]
         self._initial_progress = self.delivered.progress
 
-    def boundary(self) -> list[dict[str, Any]]:
-        events, self._boundary = self._boundary, []
-        return [self._sequence(event) for event in events]
-
-    def _sequence(self, event: dict[str, Any]) -> dict[str, Any]:
-        if self.delivered.wire_api == "responses":
-            self.delivered.sequence += 1
-            event["sequence_number"] = self.delivered.sequence
-        return event
+    def boundary(self) -> list[DecimalJsonObject]:
+        events = self._boundary
+        self._boundary = []
+        return events
 
     def _item_id(self, value: str) -> str:
         return f"{value.split('_')[0]}_{uuid5(self._namespace, value).hex}"
 
-    def prepare(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    def map_call_reference(self, call: CompletedCall) -> CompletedCall:
+        if not self.active or self.handoff or call.protocol in {"chat", "gemini"}:
+            return call
+        return replace(
+            call,
+            position=(call.position[0] + self._offset,),
+            item_id=self._item_id(call.item_id) if call.item_id is not None else None,
+        )
+
+    def prepare(self, payload: DecimalJsonObject) -> list[DecimalJsonObject]:
         if not self.active:
             return [payload]
         if (
             self.delivered.wire_api == "responses"
             and payload.get("type")
-            not in {"response.failed", "response.error", "error"}
+            not in ("response.failed", "response.error", "error")
             and responses_text_constraint(payload)
         ):
             raise ExecutionFailure(
@@ -80,26 +98,64 @@ class ContinuationStream:
                 message="The continuation returned text with a native output contract that cannot be reconstructed.",
                 retryable=False,
             )
-        if payload.get("type") in {
+        if payload.get("type") in (
             "message_start",
             "response.created",
             "response.in_progress",
-        }:
+        ):
             return []
-        events = [deepcopy(payload)] if self.handoff else self._overlap.feed(payload)
+        if self.delivered.wire_api == "chat":
+            for choice in json_objects(payload.get("choices", [])):
+                delta = json_object(choice.get("delta") or {})
+                if (
+                    choice.get("logprobs") is not None
+                    or choice.get("index") != 0
+                    or any(
+                        key
+                        not in {
+                            "role",
+                            "content",
+                            "reasoning",
+                            "reasoning_content",
+                            "reasoning_details",
+                            "tool_calls",
+                        }
+                        and value is not None
+                        for key, value in delta.items()
+                    )
+                ):
+                    raise ExecutionFailure(
+                        kind=FailureKind.UPSTREAM,
+                        status_code=502,
+                        message="Chat continuation returned an unsupported native output contract.",
+                        retryable=False,
+                    )
+        events = [deepcopy(payload)]
+        if not self.handoff:
+            for overlap in self._overlaps:
+                events = [ready for event in events for ready in overlap.feed(event)]
         return [self._map(event) for event in events]
 
-    def _map(self, data: dict[str, Any]) -> dict[str, Any]:
+    def _map(self, data: DecimalJsonObject) -> DecimalJsonObject:
+        if self.delivered.wire_api == "chat":
+            for key in ("id", "model", "created"):
+                if key in self.delivered.header and key in data:
+                    data[key] = self.delivered.header[key]
+            for choice in json_objects(data.get("choices", [])):
+                delta = json_object(choice.get("delta") or {})
+                for detail in json_objects(delta.get("reasoning_details", [])):
+                    if isinstance(detail.get("id"), str):
+                        detail["id"] = self._item_id(detail["id"])
+            return data
         if self.delivered.wire_api == "gemini":
             for key in ("responseId", "modelVersion"):
                 if key in self.delivered.header:
                     data[key] = self.delivered.header[key]
             return data
         if not self.handoff:
-            if isinstance(data.get("index"), int):
-                data["index"] += self._offset
-            if isinstance(data.get("output_index"), int):
-                data["output_index"] += self._offset
+            for key in ("index", "output_index"):
+                if isinstance(index := data.get(key), int):
+                    data[key] = index + self._offset
             if isinstance(data.get("item_id"), str):
                 data["item_id"] = self._item_id(data["item_id"])
             item = data.get("item")
@@ -113,33 +169,81 @@ class ContinuationStream:
             if "created_at" in self.delivered.header:
                 response["created_at"] = self.delivered.header["created_at"]
             if not self.handoff:
-                for item in response.get("output", []):
+                for item in json_objects(response.get("output", [])):
                     if isinstance(item.get("id"), str):
                         item["id"] = self._item_id(item["id"])
-        return self._sequence(data)
+        return data
 
-    def finalize(self, data: dict[str, Any]) -> dict[str, Any]:
+    def finalize(self, data: DecimalJsonObject) -> DecimalJsonObject:
         """Finish the response only after preceding frames have been published."""
         if not self.active:
             return data
-        if self.delivered.wire_api == "gemini":
-            if gemini_finished(data) and not self.handoff and not self.made_progress:
+        if self.delivered.wire_api == "chat":
+            if (
+                any(
+                    choice.get("finish_reason") is not None
+                    for choice in json_objects(data.get("choices", []))
+                )
+                and not self.handoff
+                and not self.made_progress
+                and not any(
+                    any(
+                        json_object(choice.get("delta") or {}).get(key)
+                        for key in (
+                            "content",
+                            "reasoning",
+                            "reasoning_content",
+                            "reasoning_details",
+                            "tool_calls",
+                        )
+                    )
+                    for choice in json_objects(data.get("choices", []))
+                )
+            ):
                 raise ExecutionFailure(
                     kind=FailureKind.UPSTREAM,
                     status_code=502,
                     message="The provider continuation completed without adding output.",
                     retryable=False,
                 )
+            data.pop("usage", None)
+            return data
+        if self.delivered.wire_api == "gemini":
+            if (
+                gemini_finished(data)
+                and not self.handoff
+                and not self.made_progress
+                and not any(
+                    part.get("text") or part.get("functionCall")
+                    for part in gemini_parts(data)
+                )
+            ):
+                raise ExecutionFailure(
+                    kind=FailureKind.UPSTREAM,
+                    status_code=502,
+                    message="The provider continuation completed without adding output.",
+                    retryable=False,
+                )
+            # After overlap removal, keep an empty terminal valid for SDK chat
+            # history. This adds no output and cannot satisfy the progress check.
+            for candidate in json_objects(data.get("candidates", [])):
+                content = json_object(candidate.get("content", {}))
+                if candidate.get("finishReason") and not content.get("parts"):
+                    candidate["content"] = {"role": "model", "parts": [{"text": ""}]}
             # Per-attempt usage cannot describe a synthesized multi-attempt answer.
             data.pop("usageMetadata", None)
             return data
         kind = data.get("type")
         response = data.get("response")
-        output = response.get("output", []) if isinstance(response, dict) else []
-        terminal = kind in {"response.completed", "response.incomplete", "message_stop"}
+        output = (
+            list(json_objects(response.get("output", [])))
+            if isinstance(response, dict)
+            else []
+        )
+        terminal = kind in ("response.completed", "response.incomplete", "message_stop")
         terminal |= (
             kind == "message_delta"
-            and data.get("delta", {}).get("stop_reason") is not None
+            and json_object(data.get("delta", {})).get("stop_reason") is not None
         )
         if (
             terminal
@@ -163,12 +267,13 @@ class ContinuationStream:
         return data
 
     @staticmethod
-    def _has_output(items: list[dict[str, Any]]) -> bool:
+    def _has_output(items: list[DecimalJsonObject]) -> bool:
         return any(
-            client_call(item)
+            is_client_call(item)
             or any(
                 part.get("text") or part.get("refusal")
-                for part in [*(item.get("content") or []), *(item.get("summary") or [])]
+                for field in ("content", "summary")
+                for part in json_objects(item.get(field) or [])
             )
             for item in items
         )

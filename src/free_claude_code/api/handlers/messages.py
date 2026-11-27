@@ -25,6 +25,10 @@ from free_claude_code.api.response_streams import (
 from free_claude_code.application.errors import ApplicationError
 from free_claude_code.application.execution import ProviderExecutor, TokenCounter
 from free_claude_code.application.ports import ModelInfoLookup, ProviderResolver
+from free_claude_code.application.response_collection import (
+    collect_response,
+    collected_frames,
+)
 from free_claude_code.application.routing import (
     ModelRouter,
     RoutedMessagesRequest,
@@ -46,6 +50,7 @@ from free_claude_code.core.diagnostics import safe_exception_message
 from free_claude_code.core.failures import ExecutionFailure, find_execution_failure
 from free_claude_code.core.reasoning import ReasoningControl, ReasoningPolicy
 from free_claude_code.core.request_outcomes import record_request_route
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.trace import close_stream_input, trace_event
 
 from .classifier_response import classifier_response
@@ -71,7 +76,6 @@ class MessagesHandler:
         self._model_router = model_router or ModelRouter(settings)
         self._provider_executor = provider_executor or ProviderExecutor(
             provider_resolver,
-            progress_timeout_seconds=settings.provider_progress_timeout,
             token_counter=token_counter,
             generation_id=generation_id,
             log_raw_payloads=settings.log_raw_api_payloads,
@@ -100,7 +104,7 @@ class MessagesHandler:
                 request_id=request_id,
             )
         try:
-            chunks = [chunk async for chunk in body]
+            chunks = await collect_response(body, protocol="messages", native_json=True)
             return Response(content="".join(chunks), media_type="application/json")
         except (Exception, BaseExceptionGroup) as error:
             return self._pre_start_error_response(error, request_id=request_id)
@@ -152,7 +156,7 @@ class MessagesHandler:
 
     async def _to_public_response(
         self,
-        body: AsyncIterator[str],
+        body: AsyncIterator[StreamOutput],
         *,
         stream: bool,
         request_id: str,
@@ -163,8 +167,9 @@ class MessagesHandler:
             # complete JSON Message; the internal pipeline is always SSE, so
             # serving that raw here breaks the client SDK's response parse.
             try:
+                frames = collected_frames(body, protocol="messages")
                 message, error, _complete = await aggregate_anthropic_sse_to_message(
-                    classifier_response(body) if hide_reasoning else body
+                    classifier_response(frames) if hide_reasoning else frames
                 )
             except GeneratorExit:
                 raise

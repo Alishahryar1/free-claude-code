@@ -3,6 +3,7 @@ param(
     [string] $TorchBackend = "",
     [switch] $RtkHeadroom,
     [switch] $DryRun,
+    [switch] $Update,
     [switch] $Help,
     [Parameter(ValueFromRemainingArguments = $true)]
     [object[]] $RemainingArgs = @()
@@ -19,13 +20,14 @@ $ClaudeInstallUrl = "https://claude.ai/install.ps1"
 $CodexInstallUrl = "https://chatgpt.com/codex/install.ps1"
 $PiInstallUrl = "https://pi.dev/install.ps1"
 $OpenCodeReleaseBaseUrl = "https://opencode.ai/files/bin"
+$script:OriginalOpenCodeSearchPath = ""
 $HermesInstallUrl = "https://hermes-agent.nousresearch.com/install.ps1"
 $DshMinimumVersion = "0.2.0-rc.2"
 $DshPackage = "@deepseek-ai/dsh@latest"
 $GrokInstallUrl = "https://x.ai/cli/install.ps1"
 $MuseInstallUrl = "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install-muse.ps1"
 $AgyInstallUrl = "https://antigravity.google/cli/install.ps1"
-$AgyMinimumVersion = "1.4.7"
+$AgyMinimumVersion = "1.5.9"
 $RtkVersion = "0.44.2"
 $HeadroomPackage = "headroom-ai[mcp]==0.40.0"
 $RtkReleaseBaseUrl = "https://github.com/rtk-ai/rtk/releases/download/v$RtkVersion"
@@ -90,6 +92,7 @@ Options:
   -VoiceLocal            Install local Whisper voice transcription support.
   -TorchBackend VALUE    Use a uv PyTorch backend, such as cu130. Requires local voice.
   -RtkHeadroom           Install and configure RTK + Headroom token optimization.
+  -Update                Skip when FCC is already this release or newer.
   -DryRun                Print commands without running them.
   -Help                  Show this help text.
 "@
@@ -1114,29 +1117,80 @@ function Install-OpenCode {
     }
 }
 
+function Get-LatestOpenCodeV1 {
+    $metadataPath = [IO.Path]::GetTempFileName()
+    try {
+        Invoke-RestMethod -Uri "https://registry.npmjs.org/-/package/opencode-ai/dist-tags" -OutFile $metadataPath -TimeoutSec 10 -ErrorAction Stop
+        $text = [IO.File]::ReadAllText($metadataPath)
+        if ([regex]::Matches($text, '"latest"\s*:').Count -ne 1) {
+            throw "The registry must contain exactly one latest tag."
+        }
+        $version = ($text | ConvertFrom-Json -ErrorAction Stop).latest
+        if ($version -isnot [string] -or $version -notmatch '^1\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' -or [version] $version -lt [version] "1.19.0") {
+            throw "The latest tag must be a stable v1 release at or above 1.19.0."
+        }
+        return $version
+    }
+    catch {
+        throw "Could not discover the latest OpenCode 1 release: $($_.Exception.Message) Upgrade OpenCode manually, then rerun the installer."
+    }
+    finally {
+        Remove-Item -LiteralPath $metadataPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-OpenCodeUpgrade {
+    param([string] $OpenCodePath, [string] $Target)
+
+    Assert-NoOpenCodeProcessesRunning
+    $savedPath = $env:Path
+    $savedVersion = $env:VERSION
+    try {
+        $env:VERSION = $null
+        if ($script:OriginalOpenCode -and $script:OriginalOpenCodeSearchPath) {
+            # Installer-added directories must not hide a failed upgrade behind another copy.
+            $env:Path = $script:OriginalOpenCodeSearchPath
+        }
+        Invoke-NativeCommand -FilePath $OpenCodePath -Arguments @("upgrade", $Target) | Out-Host
+        $command = Get-ApplicationCommand "opencode"
+        if (-not $command) { throw "OpenCode is missing from PATH." }
+        $version = Get-OpenCodeVersion $command.Source
+        if ($Target -eq "--major" -and $version -notmatch '^2\.') {
+            throw "Found '$version' at '$($command.Source)' instead of stable OpenCode 2."
+        }
+        return [pscustomobject] @{ Command = $command; Version = $version }
+    }
+    catch {
+        throw "OpenCode upgrade $Target failed: $($_.Exception.Message) Finish the official upgrade manually, then rerun the installer."
+    }
+    finally {
+        $env:Path = $savedPath
+        $env:VERSION = $savedVersion
+    }
+}
+
 function Get-OpenCodeInstallState {
     $command = if ($script:OriginalOpenCode) { $script:OriginalOpenCode } else { Get-ApplicationCommand "opencode" }
     $nativePath = Join-Path $env:USERPROFILE ".opencode\bin\opencode.exe"
-    $install = $true
+    $action = "install"
+    $version = ""
     if ($command) {
         $version = Get-OpenCodeVersion $command.Source
         if ($version -match '^2\.') {
-            $install = $false
+            $action = "reuse"
         }
         elseif ($version -match '^1\.') {
-            if (-not (Test-EquivalentPath $command.Source $nativePath)) {
-                throw "OpenCode 1 at '$($command.Source)' requires manual migration. Remove it with its package manager (npm: npm uninstall -g opencode-ai), then rerun this installer. See https://opencode.ai/v2/docs/migrate-v1/"
-            }
+            $action = "upgrade"
         }
         else {
             throw "OpenCode at '$($command.Source)' is not a recognized stable v1 or v2. Correct that installation, then rerun the installer. See https://opencode.ai/v2/docs/migrate-v1/"
         }
     }
     $pluginPath = Get-OpenCodeRtkPlugin
-    if ($install -or $pluginPath) {
+    if ($action -ne "reuse" -or $pluginPath) {
         Assert-NoOpenCodeProcessesRunning
     }
-    if ($install) {
+    if ($action -eq "install") {
         foreach ($target in @((Join-Path $env:USERPROFILE ".opencode"), (Split-Path -Parent $nativePath), $nativePath)) {
             $item = Get-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
             if ($null -ne $item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
@@ -1144,7 +1198,7 @@ function Get-OpenCodeInstallState {
             }
         }
     }
-    return [pscustomobject] @{ Install = $install; PluginPath = $pluginPath }
+    return [pscustomobject] @{ Action = $action; Command = $command; Version = $version; PluginPath = $pluginPath }
 }
 
 function Ensure-OpenCode {
@@ -1152,7 +1206,9 @@ function Ensure-OpenCode {
     $nativePath = Join-Path $env:USERPROFILE ".opencode\bin\opencode.exe"
     if ($DryRun) {
         Write-Host "+ opencode --version"
-        Write-Host "Install stable OpenCode 2 if absent, or migrate v1 at '$nativePath'; external v1 requires manual upgrade."
+        Write-Host "Install stable OpenCode 2 if absent; retain stable v2."
+        Write-Host "For v1 below 1.19.0: discover latest stable v1 and run opencode upgrade <latest-v1>, then verify."
+        Write-Host "For remaining stable v1 at or above 1.19.0: run opencode upgrade --major, then verify stable v2."
         Write-Host "Check and back up the recognized old OpenCode RTK plugin if present."
         if (-not $command) { Install-OpenCode }
         return
@@ -1160,11 +1216,27 @@ function Ensure-OpenCode {
 
     $state = Get-OpenCodeInstallState
     $pluginPath = $state.PluginPath
-    if ($state.Install) {
+    if ($state.Action -eq "install") {
         Install-OpenCode
         Add-KnownBinDirectories
         if ((Get-OpenCodeVersion $nativePath) -notmatch '^2\.') {
             throw "The OpenCode installer did not install stable OpenCode 2 at '$nativePath'."
+        }
+    }
+    elseif ($state.Action -eq "upgrade") {
+        $command = $state.Command
+        $version = $state.Version
+        if ([version] ($version -replace '\+.*$', '') -lt [version] "1.19.0") {
+            $target = Get-LatestOpenCodeV1
+            $upgraded = Invoke-OpenCodeUpgrade -OpenCodePath $command.Source -Target $target
+            $command = $upgraded.Command
+            $version = $upgraded.Version
+            if ($version -notmatch '^2\.' -and ($version -replace '\+.*$', '') -ne $target) {
+                throw "OpenCode upgrade $target left '$version' at '$($command.Source)'. Finish the official upgrade manually, then rerun the installer."
+            }
+        }
+        if ($version -match '^1\.') {
+            $null = Invoke-OpenCodeUpgrade -OpenCodePath $command.Source -Target "--major"
         }
     }
     else {
@@ -1175,7 +1247,7 @@ function Ensure-OpenCode {
     if (-not $command) { throw "OpenCode is not available on PATH after installation." }
     $version = Get-OpenCodeVersion $command.Source
     if ($version -notmatch '^2\.') {
-        throw "OpenCode at '$($command.Source)' is not stable OpenCode 2. Correct PATH, then rerun the installer."
+        throw "OpenCode at '$($command.Source)' is not stable OpenCode 2 (found '$version'). Correct PATH or finish the official upgrade manually, then rerun the installer."
     }
     Write-Host "Verified OpenCode $version at '$($command.Source)'."
     if ($pluginPath) {
@@ -1560,7 +1632,7 @@ function Confirm-SelectedPrerequisites {
     if ($script:InstallHermes -and -not (Get-ApplicationCommand "hermes")) { Confirm-HermesArchitecture }
     if ($script:InstallOpenCode) {
         $state = Get-OpenCodeInstallState
-        if ($state.Install) { [void] (Get-OpenCodeWindowsAssetName) }
+        if ($state.Action -eq "install") { [void] (Get-OpenCodeWindowsAssetName) }
     }
 }
 
@@ -1953,10 +2025,71 @@ function Show-InstallerNextSteps {
         Write-Host "Run Aider with: fcc-aider"
     }
     if ($script:InstallAgy) {
-        Write-Host "Connect Antigravity CLI on FCC's Integrations page first."
         Write-Host "Run Antigravity CLI with: fcc-agy"
     }
 
+}
+
+function Get-InstalledFccVersion {
+    # Look where uv usually lives without changing the PATH the installer preserves.
+    $originalPath = $env:Path
+    $originalErrorPreference = $ErrorActionPreference
+    try {
+        Add-KnownBinDirectories
+        $uv = Get-ApplicationCommand "uv"
+        if (-not $uv) { return $null }
+        $ErrorActionPreference = "Continue"
+        $global:LASTEXITCODE = $null
+        $listing = @(& $uv.Source tool list 2>$null)
+        if ($LASTEXITCODE -ne 0) { return $null }
+        foreach ($line in $listing) {
+            if ("$line" -cmatch '\Afree-claude-code v(\S+)') { return $Matches[1] }
+        }
+        return $null
+    }
+    catch { return $null }
+    finally {
+        $ErrorActionPreference = $originalErrorPreference
+        $env:Path = $originalPath
+    }
+}
+
+function Compare-FccVersions {
+    # Returns older, current, or newer for an installed version against a release.
+    param([string] $Installed, [string] $Release)
+
+    $pattern = '\A(\d+)\.(\d+)\.(\d+)(.*)\z'
+    if ($Release -cnotmatch $pattern -or $Matches[4]) { return $null }
+    $releaseParts = @([Numerics.BigInteger]::Parse($Matches[1]), [Numerics.BigInteger]::Parse($Matches[2]), [Numerics.BigInteger]::Parse($Matches[3]))
+    if ($Installed -cnotmatch $pattern) { return $null }
+    $installedParts = @([Numerics.BigInteger]::Parse($Matches[1]), [Numerics.BigInteger]::Parse($Matches[2]), [Numerics.BigInteger]::Parse($Matches[3]))
+    $suffix = $Matches[4]
+    for ($i = 0; $i -lt 3; $i++) {
+        if ($installedParts[$i] -gt $releaseParts[$i]) { return "newer" }
+        if ($installedParts[$i] -lt $releaseParts[$i]) { return "older" }
+    }
+    # Local and post builds follow the release; dev and pre-releases precede it.
+    if (-not $suffix) { return "current" }
+    if ($suffix -cmatch '\A(\+|\.post)') { return "newer" }
+    return "older"
+}
+
+function Test-FccUpdateNeeded {
+    $installed = Get-InstalledFccVersion
+    if (-not $installed) { return $true }
+    $comparison = Compare-FccVersions -Installed $installed -Release $FccInstallVersion
+    if ($comparison -eq "current") {
+        Write-Host "FCC $installed is already up to date."
+        return $false
+    }
+    if ($comparison -eq "newer") {
+        Write-Host "FCC $installed is newer than the published version $FccInstallVersion. No update needed."
+        return $false
+    }
+    if ($comparison -eq "older") {
+        Write-Host "FCC update available: $installed -> $FccInstallVersion."
+    }
+    return $true
 }
 
 function Invoke-SelectedReleaseInstaller {
@@ -2069,6 +2202,9 @@ if (-not $DryRun) {
         Invoke-SelectedReleaseInstaller -InstallerArguments $installerParameters
         return
     }
+    if ($Update -and -not (Test-FccUpdateNeeded)) {
+        return
+    }
     try {
         $requirements = Get-ReleaseToolchain
     } catch {
@@ -2090,6 +2226,7 @@ try {
     Start-InstallStep "Preflight"
     # Preserve the user's winning command before adding installer search paths.
     $script:OriginalOpenCode = Get-ApplicationCommand "opencode"
+    $script:OriginalOpenCodeSearchPath = $env:Path
     Add-KnownBinDirectories
     $script:InstallCline = [bool] ((Get-ApplicationCommand "cline") -or (Get-ApplicationCommand "npm"))
     Write-Step "Checking for running Free Claude Code processes"

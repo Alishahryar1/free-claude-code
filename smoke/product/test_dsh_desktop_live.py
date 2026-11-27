@@ -26,6 +26,7 @@ from smoke.product.test_client_product_live import (
     _start_attached_process,
     _stop_attached_process,
 )
+from tests.wire_payload import decode_object
 
 pytestmark = [pytest.mark.live, pytest.mark.smoke_target("clients")]
 
@@ -81,6 +82,7 @@ def test_dsh_desktop_native_composition_e2e(
     )
 
     def composed() -> dict[str, object]:
+        assert node is not None
         result = subprocess.run(
             [
                 node,
@@ -105,7 +107,6 @@ def test_dsh_desktop_native_composition_e2e(
         "http://127.0.0.1:8182",
         "fixture-only",
         ModelCatalog((model,), model.wire_slug),
-        provider_progress_timeout=600,
     )
     assert composed()["providers"] == ["free-claude-code", "native-user-provider"]
     assert composed()["default"] == {
@@ -283,7 +284,6 @@ def test_dsh_desktop_live_catalog_credentials_and_restart_e2e(
                 url,
                 token,
                 catalog,
-                provider_progress_timeout=600,
             )
 
         configure(server.base_url, "desktop-first", "FCC Desktop Fixture")
@@ -321,7 +321,7 @@ def test_dsh_desktop_live_catalog_credentials_and_restart_e2e(
             while (line := lines.get(timeout=60)) is not None:
                 transcript.append(line)
                 try:
-                    event = json.loads(line)
+                    event = decode_object(line)
                 except ValueError:
                     continue
                 if not isinstance(event, dict):

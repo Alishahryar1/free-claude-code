@@ -17,6 +17,7 @@ from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from tests.api.support import create_test_app
 
@@ -216,7 +217,7 @@ class ControlledFallbackProvider:
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         del input_tokens, request_id
         if self._validation_error is not None:
             raise self._validation_error
@@ -227,12 +228,12 @@ class ControlledFallbackProvider:
         self.response_models.append(public_model)
         try:
             for chunk in self._chunks_before_failure:
-                yield chunk
+                yield StreamOutput((chunk,))
             if self._failure is not None:
                 raise self._failure
             assert self._text is not None
             for chunk in text_stream(self._text, model=public_model):
-                yield chunk
+                yield StreamOutput((chunk,))
         finally:
             self.close_calls += 1
 
@@ -247,7 +248,7 @@ class ControlledFallbackProvider:
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         del input_tokens, request_id
         if self._validation_error is not None:
             raise self._validation_error
@@ -258,15 +259,17 @@ class ControlledFallbackProvider:
         self.response_models.append(public_model)
         try:
             for chunk in self._responses_chunks_before_failure:
-                yield chunk
+                yield StreamOutput((chunk,))
             if self._failure is not None:
                 if self._responses_chunks_before_failure:
-                    yield responses_failure_event(self._failure, model=public_model)
+                    yield StreamOutput(
+                        (responses_failure_event(self._failure, model=public_model),)
+                    )
                     return
                 raise self._failure
             assert self._text is not None
             for chunk in responses_text_stream(self._text, model=public_model):
-                yield chunk
+                yield StreamOutput((chunk,))
         finally:
             self.close_calls += 1
 

@@ -75,7 +75,7 @@ class ThrottledTranscriptEditor:
                 self._node_id,
                 self._chat_id,
                 self._status_msg_id,
-                bool(force),
+                force,
                 status,
                 len(display),
             )

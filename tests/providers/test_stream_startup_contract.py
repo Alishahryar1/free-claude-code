@@ -1,9 +1,11 @@
 """The shared OpenAI-chat provider owns request conversion during stream construction."""
 
+from typing import override
 from unittest.mock import MagicMock
 
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import Message, MessagesRequest
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -19,18 +21,19 @@ class RecordingChatBehavior(OpenAIChatBehavior):
     def __init__(self) -> None:
         super().__init__(
             OpenAIChatProfile(
-                OpenAIChatRequestPolicy("TEST", ReasoningReplayMode.DISABLED),
+                OpenAIChatRequestPolicy("TEST", ReasoningReplayMode.REASONING_CONTENT),
                 NO_REASONING,
             )
         )
         self.build_calls: list[tuple[MessagesRequest, ReasoningPolicy]] = []
 
+    @override
     def build_messages_body(
         self,
         request: MessagesRequest,
         *,
         reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
-    ) -> dict:
+    ) -> JsonObject:
         self.build_calls.append((request, reasoning))
         return {}
 

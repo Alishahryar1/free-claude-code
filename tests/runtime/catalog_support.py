@@ -3,6 +3,8 @@
 import asyncio
 from contextlib import asynccontextmanager
 
+import pytest
+
 from free_claude_code.core.async_rwlock import AsyncReadWriteLock
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 
@@ -17,7 +19,7 @@ async def finish_publication(manager: ProviderRuntimeManager) -> None:
         await task
 
 
-def pause_next_write(monkeypatch, lock: AsyncReadWriteLock):
+def pause_next_write(monkeypatch: pytest.MonkeyPatch, lock: AsyncReadWriteLock):
     """Pause one operation before ownership, allowing a later action to overtake it."""
     entered, release = asyncio.Event(), asyncio.Event()
     original = lock.write

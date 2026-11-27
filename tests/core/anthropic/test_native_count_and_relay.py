@@ -11,6 +11,7 @@ from free_claude_code.core.anthropic import (
 )
 from free_claude_code.core.anthropic.native import NativeMessagesError
 from free_claude_code.core.anthropic.passthrough import NativeMessagesPassthrough
+from free_claude_code.core.json_types import JsonObject
 
 
 @pytest.mark.parametrize(
@@ -21,7 +22,7 @@ from free_claude_code.core.anthropic.passthrough import NativeMessagesPassthroug
         {"type": "ping", "extra": "\ud800"},
     ],
 )
-def test_suppressed_leading_ping_still_validates_envelope(block):
+def test_suppressed_leading_ping_still_validates_envelope(block: JsonObject) -> None:
     relay = NativeMessagesPassthrough("alias")
     with pytest.raises(NativeMessagesError):
         relay.feed("ping", block)
@@ -29,14 +30,14 @@ def test_suppressed_leading_ping_still_validates_envelope(block):
 
 
 @pytest.mark.parametrize("in_tool", [False, True])
-def test_native_count_retains_existing_text_and_image_estimation(in_tool):
+def test_native_count_retains_existing_text_and_image_estimation(in_tool: bool) -> None:
     image = {
         "type": "image",
         "source": {"type": "base64", "media_type": "image/png", "data": "A" * 300_000},
     }
     text = {"type": "text", "text": "Screenshot captured"}
 
-    def payload(with_image):
+    def payload(with_image: bool):
         blocks = [text, image] if with_image else [text]
         if in_tool:
             blocks = [{"type": "tool_result", "tool_use_id": "t1", "content": blocks}]

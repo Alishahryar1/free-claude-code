@@ -64,7 +64,7 @@ def read_yaml(path: Path, *, sequence: bool = False) -> CommentedMap | Commented
     except FileNotFoundError:
         source = ""
     try:
-        document = yaml_parser().load(source)
+        document: object = yaml_parser().load(source)
     except YAMLError, UnicodeError:
         # YAML parser messages can quote a line containing a credential.
         raise DshConfigError(

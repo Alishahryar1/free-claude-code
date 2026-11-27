@@ -12,7 +12,7 @@ from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 
 
-def test_custom_display_names_sort_as_labels_without_changing_model_identity():
+def test_custom_display_names_sort_as_labels_without_changing_model_identity() -> None:
     names = ["Team/West", "/Gateway", "Team", "z"]
     definitions = tuple(
         CustomProviderDefinition(
@@ -47,7 +47,7 @@ def test_custom_display_names_sort_as_labels_without_changing_model_identity():
     )
 
 
-def test_catalog_sorts_components_and_preserves_exact_identity_and_default():
+def test_catalog_sorts_components_and_preserves_exact_identity_and_default() -> None:
     settings = Settings.model_construct(
         model="open_router/Zulu",
         model_fable=None,
@@ -100,7 +100,7 @@ def test_catalog_sorts_components_and_preserves_exact_identity_and_default():
     )
 
 
-def test_catalog_retains_configured_models_and_enriches_each_reference_once():
+def test_catalog_retains_configured_models_and_enriches_each_reference_once() -> None:
     settings = Settings.model_construct(
         model="open_router/shared",
         model_opus="open_router/shared",

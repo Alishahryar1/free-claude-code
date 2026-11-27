@@ -183,10 +183,12 @@ def test_client_models_deduplicate_wire_slugs_deterministically() -> None:
 
 
 @pytest.mark.parametrize("default", [None, "", 1, "provider/missing"])
-def test_catalog_rejects_missing_or_unroutable_default(default) -> None:
+def test_catalog_rejects_missing_or_unroutable_default(
+    default: int | str | None,
+) -> None:
     from free_claude_code.cli.launchers.catalog_http import model_catalog_from_response
 
-    payload = {
+    payload: JsonObject = {
         "data": [{"id": "provider/model", "provider_model_ref": "provider/model"}]
     }
     if default is not None:
@@ -198,7 +200,7 @@ def test_catalog_rejects_missing_or_unroutable_default(default) -> None:
 def test_http_catalog_preserves_nonblank_identity_and_selects_default_by_id() -> None:
     from free_claude_code.cli.launchers.catalog_http import model_catalog_from_response
 
-    payload = {
+    payload: JsonObject = {
         "default_model_id": "provider/padded ",
         "data": [
             {"id": "provider/padded", "provider_model_ref": "provider/padded"},

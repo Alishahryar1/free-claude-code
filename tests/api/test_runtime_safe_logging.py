@@ -13,7 +13,9 @@ from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 
 
 @pytest.mark.asyncio
-async def test_messaging_start_failure_default_logs_exclude_traceback(caplog):
+async def test_messaging_start_failure_default_logs_exclude_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     settings = Settings().model_copy(
         update={
             "messaging_platform": "telegram",
@@ -43,7 +45,9 @@ async def test_messaging_start_failure_default_logs_exclude_traceback(caplog):
 
 
 @pytest.mark.asyncio
-async def test_best_effort_default_logs_exclude_exception_text(caplog):
+async def test_best_effort_default_logs_exclude_exception_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     async def boom():
         raise ValueError("SECRET_SHUTDOWN")
 
@@ -56,7 +60,9 @@ async def test_best_effort_default_logs_exclude_exception_text(caplog):
 
 
 @pytest.mark.asyncio
-async def test_best_effort_verbose_includes_exception_text(caplog):
+async def test_best_effort_verbose_includes_exception_text(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     async def boom():
         raise ValueError("VISIBLE_SHUTDOWN")
 

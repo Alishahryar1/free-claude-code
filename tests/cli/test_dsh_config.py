@@ -1,14 +1,15 @@
 """Contracts for the process-local DeepSeek Harness configuration."""
 
 import json
-import math
 from pathlib import Path
 
 import pytest
 
 from free_claude_code.application.model_catalog import CatalogModel
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.harnesses.dsh_config import build_dsh_launch_config
+from tests.wire_payload import object_payload
 
 
 def _models() -> tuple[CatalogModel, ...]:
@@ -41,7 +42,7 @@ def _models() -> tuple[CatalogModel, ...]:
     )
 
 
-def _row_by_id(patch: tuple[dict, ...], row_id: str) -> dict:
+def _row_by_id(patch: tuple[JsonObject, ...], row_id: str) -> JsonObject:
     return next(row for row in patch if row["id"] == row_id)
 
 
@@ -54,7 +55,6 @@ def test_dsh_config_pins_responses_models_retries_and_private_state(
         default_model_id="nvidia_nim/vendor/model",
         proxy_root_url="http://127.0.0.1:9191/",
         credentials_path=credentials_path,
-        provider_progress_timeout=600.0,
     )
 
     assert all(row["id"] != "settings" for row in launch)
@@ -66,7 +66,9 @@ def test_dsh_config_pins_responses_models_retries_and_private_state(
     }
 
     llm = _row_by_id(launch, "llm-pi-ai")
-    provider = llm["config"]["providers"]["free-claude-code"]
+    provider = object_payload(object_payload(llm["config"])["providers"])[
+        "free-claude-code"
+    ]
     assert provider == {
         "displayName": "Free Claude Code",
         "apiKeyEnv": "FCC_DSH_API_KEY",
@@ -114,7 +116,7 @@ def test_dsh_config_pins_responses_models_retries_and_private_state(
         ],
         "defaultInput": ["text"],
         "retryPolicy": {"mode": "normal", "maxRetries": 0},
-        "streamIdleTimeoutMs": 660_000,
+        "streamIdleTimeoutMs": 2_147_483_647,
     }
     assert _row_by_id(launch, "agent-default-model") == {
         "id": "agent-default-model",
@@ -143,21 +145,6 @@ def test_dsh_config_pins_responses_models_retries_and_private_state(
         assert unsupported not in serialized
 
 
-def test_dsh_config_rounds_fractional_progress_timeout_up() -> None:
-    launch = build_dsh_launch_config(
-        _models(),
-        default_model_id="nvidia_nim/vendor/model",
-        proxy_root_url="http://127.0.0.1:9191",
-        credentials_path=Path("credentials.yaml"),
-        provider_progress_timeout=0.0001,
-    )
-
-    provider = _row_by_id(launch, "llm-pi-ai")["config"]["providers"][
-        "free-claude-code"
-    ]
-    assert provider["streamIdleTimeoutMs"] == 60_001
-
-
 def test_dsh_config_rejects_empty_catalog() -> None:
     with pytest.raises(ValueError, match="at least one"):
         build_dsh_launch_config(
@@ -165,28 +152,4 @@ def test_dsh_config_rejects_empty_catalog() -> None:
             default_model_id="nvidia_nim/vendor/model",
             proxy_root_url="http://127.0.0.1:9191",
             credentials_path=Path("credentials.yaml"),
-            provider_progress_timeout=600,
-        )
-
-
-@pytest.mark.parametrize("timeout", [0.0, -1.0, math.inf, math.nan])
-def test_dsh_config_rejects_invalid_progress_timeout(timeout: float) -> None:
-    with pytest.raises(ValueError, match="positive finite"):
-        build_dsh_launch_config(
-            _models(),
-            default_model_id="nvidia_nim/vendor/model",
-            proxy_root_url="http://127.0.0.1:9191",
-            credentials_path=Path("credentials.yaml"),
-            provider_progress_timeout=timeout,
-        )
-
-
-def test_dsh_config_rejects_timeout_beyond_node_timer_limit() -> None:
-    with pytest.raises(ValueError, match="too large"):
-        build_dsh_launch_config(
-            _models(),
-            default_model_id="nvidia_nim/vendor/model",
-            proxy_root_url="http://127.0.0.1:9191",
-            credentials_path=Path("credentials.yaml"),
-            provider_progress_timeout=2_147_424,
         )

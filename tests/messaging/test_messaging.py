@@ -5,13 +5,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from free_claude_code.messaging.trees.transitions import NodeClaim
+
 # --- Existing Tests ---
 
 
 class TestMessagingModels:
     """Test messaging models."""
 
-    def test_incoming_message_creation(self):
+    def test_incoming_message_creation(self) -> None:
         """Test IncomingMessage dataclass."""
         from free_claude_code.messaging.models import IncomingMessage
 
@@ -27,7 +29,7 @@ class TestMessagingModels:
         assert msg.platform == "telegram"
         assert msg.is_reply() is False
 
-    def test_incoming_message_with_reply(self):
+    def test_incoming_message_with_reply(self) -> None:
         """Test IncomingMessage as a reply."""
         from free_claude_code.messaging.models import IncomingMessage
 
@@ -46,7 +48,7 @@ class TestMessagingModels:
 class TestMessagingPorts:
     """Test explicit messaging platform component ports."""
 
-    def test_components_bundle_runtime_and_outbound(self):
+    def test_components_bundle_runtime_and_outbound(self) -> None:
         """Verify the factory handoff shape is explicit."""
         from free_claude_code.messaging.platforms.ports import (
             MessagingPlatformComponents,
@@ -76,7 +78,7 @@ class TestMessagingPorts:
 class TestTreeQueueManager:
     """Test TreeQueueManager."""
 
-    def test_tree_queue_manager_init(self):
+    def test_tree_queue_manager_init(self) -> None:
         from free_claude_code.messaging.trees import TreeQueueManager
 
         async def process(_claim):
@@ -86,13 +88,13 @@ class TestTreeQueueManager:
         assert mgr.get_tree_count() == 0
 
     @pytest.mark.asyncio
-    async def test_admit_creates_tree_and_claim(self):
+    async def test_admit_creates_tree_and_claim(self) -> None:
         from free_claude_code.messaging.models import IncomingMessage
         from free_claude_code.messaging.trees import TreeQueueManager
 
         processed = asyncio.Event()
 
-        async def processor(claim):
+        async def processor(claim: NodeClaim):
             assert claim.node.node_id == "1"
             processed.set()
 
@@ -112,7 +114,7 @@ class TestTreeQueueManager:
         await processed.wait()
 
     @pytest.mark.asyncio
-    async def test_cancel_unknown_node_is_empty(self):
+    async def test_cancel_unknown_node_is_empty(self) -> None:
         from free_claude_code.messaging.models import MessageScope
         from free_claude_code.messaging.trees import TreeQueueManager
 

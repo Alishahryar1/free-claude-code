@@ -12,8 +12,10 @@ import pytest
 from free_claude_code.application.reasoning import client_reasoning_policy
 from free_claude_code.cli.launchers.pi import pi_extension_path
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.json_types import load_json_value
 from free_claude_code.providers.github_copilot.types import CopilotEgress
 from tests.providers.test_github_copilot_provider import Harness, collect
+from tests.wire_payload import decode_object, object_array, object_payload
 
 
 def test_pi_sends_current_conversation_id_only_on_fcc_requests() -> None:
@@ -252,14 +254,14 @@ async def test_pi_named_effort_reaches_each_copilot_transport(
                 request, reasoning=client_reasoning_policy(request)
             )
         )
-        body = json.loads(harness.seen[0].content)
+        body = decode_object(harness.seen[0].content)
         if egress is CopilotEgress.CHAT:
             assert body["reasoning_effort"] == "high"
         elif egress is CopilotEgress.RESPONSES:
-            assert body["reasoning"]["effort"] == "high"
+            assert object_payload(body["reasoning"])["effort"] == "high"
         elif adaptive == "required":
             assert body["thinking"] == {"type": "adaptive"}
-            assert body["output_config"]["effort"] == "high"
+            assert object_payload(body["output_config"])["effort"] == "high"
         else:
             assert body["thinking"] == {"type": "enabled", "budget_tokens": 2048}
     finally:
@@ -323,19 +325,25 @@ console.log(JSON.stringify(projectFccModels(payload)));
     )
 
     assert result.returncode == 0, result.stderr
-    projected = json.loads(result.stdout)
-    assert [model["id"] for model in projected] == [
+    projected = load_json_value(result.stdout)
+    assert [object_payload(model)["id"] for model in object_array(projected)] == [
         "provider/vision-reasoning",
         "claude-3-freecc-no-thinking/provider/text-only",
         "provider/unknown ",
     ]
-    assert projected[-1]["name"] == "provider/unknown "
-    assert [(model["reasoning"], model["input"]) for model in projected] == [
+    assert object_array(projected)[-1]["name"] == "provider/unknown "
+    assert [
+        (object_payload(model)["reasoning"], object_payload(model)["input"])
+        for model in object_array(projected)
+    ] == [
         (True, ["text", "image"]),
         (False, ["text"]),
         (True, ["text"]),
     ]
-    assert [(model["contextWindow"], model["maxTokens"]) for model in projected] == [
+    assert [
+        (object_payload(model)["contextWindow"], object_payload(model)["maxTokens"])
+        for model in object_array(projected)
+    ] == [
         (131072, 8192),
         (65536, 16384),
         (200000, 16384),

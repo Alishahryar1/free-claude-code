@@ -10,16 +10,6 @@ def clone_body_without_chat_template(body: dict[str, Any]) -> dict[str, Any] | N
     return _clone_strip_extra_body(body, _strip_chat_template_fields)
 
 
-def clone_body_without_reasoning_content(
-    body: dict[str, Any],
-) -> dict[str, Any] | None:
-    """Move rejected native reasoning fields into readable assistant context."""
-    cloned_body = deepcopy(body)
-    if not _strip_message_reasoning_content(cloned_body):
-        return None
-    return cloned_body
-
-
 def _clone_strip_extra_body(
     body: dict[str, Any],
     strip: Callable[[dict[str, Any]], bool],
@@ -39,30 +29,4 @@ def _strip_chat_template_fields(extra_body: dict[str, Any]) -> bool:
     removed = extra_body.pop("chat_template", None) is not None
     if extra_body.pop("chat_template_kwargs", None) is not None:
         removed = True
-    return removed
-
-
-def _strip_message_reasoning_content(body: dict[str, Any]) -> bool:
-    removed = False
-    messages = body.get("messages")
-    if not isinstance(messages, list):
-        return False
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        reasoning = message.pop("reasoning_content", None)
-        if reasoning is not None:
-            removed = True
-        if (
-            isinstance(reasoning, str)
-            and reasoning
-            and message.get("role") == "assistant"
-        ):
-            content = message.get("content")
-            if isinstance(content, list):
-                content.append({"type": "text", "text": reasoning})
-            else:
-                message["content"] = (
-                    f"{content}\n\n{reasoning}" if content else reasoning
-                )
     return removed

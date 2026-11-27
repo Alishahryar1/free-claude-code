@@ -1,17 +1,26 @@
 """Independent answer partitions exercise the overlap policy and its bounds."""
 
 from copy import deepcopy
+from typing import Literal
 
 import pytest
 
 from free_claude_code.core.continuation_overlap import ContinuationOverlap
 from free_claude_code.core.delivered_response import DeliveredResponse
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject
 from tests.api.test_continuation_overlap import responses_parts
+from tests.wire_payload import (
+    array_payload,
+    int_payload,
+    object_array,
+    object_payload,
+    string_payload,
+)
 
 
 @pytest.mark.parametrize("wire", ["messages", "responses"])
-def test_empty_delta_stays_invisible_with_no_prior_answer_text(wire):
+def test_empty_delta_stays_invisible_with_no_prior_answer_text(wire: str) -> None:
     event = (
         {
             "type": "content_block_delta",
@@ -30,7 +39,40 @@ def test_empty_delta_stays_invisible_with_no_prior_answer_text(wire):
     assert ContinuationOverlap("").feed(event) == []
 
 
-def retained_parts(prefix, parts):
+@pytest.mark.parametrize("channel", ["text", "thinking", "summary"])
+def test_complete_prefix_match_releases_other_channels_before_item_closes(
+    channel: Literal["text", "thinking"],
+) -> None:
+    kind = {
+        "text": "response.output_text.delta",
+        "thinking": "response.reasoning_text.delta",
+        "summary": "response.reasoning_summary_text.delta",
+    }[channel]
+    overlap = ContinuationOverlap("Plan", channel=channel)
+    prefix = {
+        "type": kind,
+        "output_index": 0,
+        "item_id": "prefix",
+        "delta": "Pl",
+    }
+    assert overlap.feed(prefix) == []
+    assert overlap.feed({**prefix, "delta": "an"}) == []
+    other = {
+        "type": (
+            "response.reasoning_text.delta"
+            if channel == "text"
+            else "response.output_text.delta"
+        ),
+        "output_index": 1,
+        "item_id": "other",
+        "delta": "Answer",
+    }
+    assert overlap.feed(other) == [other]
+    more = {**prefix, "delta": " then act"}
+    assert overlap.feed(more) == [more]
+
+
+def retained_parts(prefix: str, parts: list[str]):
     text = "".join(parts)
     overlap = max(
         size
@@ -70,8 +112,8 @@ def retained_parts(prefix, parts):
 )
 @pytest.mark.parametrize("separate_items", [False, True])
 def test_text_representation_preserves_each_source_part(
-    prefix, parts, representation, separate_items
-):
+    prefix: str, parts: list[str], representation: str, separate_items: bool
+) -> None:
     source = responses_parts(
         parts, representation=representation, separate_items=separate_items
     )
@@ -79,35 +121,48 @@ def test_text_representation_preserves_each_source_part(
     overlap = ContinuationOverlap(prefix)
     events = [ready for event in source for ready in overlap.feed(event)]
     expected = retained_parts(prefix, parts)
-    output = events[-1]["response"]["output"]
-    assert [part["text"] for item in output for part in item["content"]] == expected
+    output = object_payload(events[-1]["response"])["output"]
+    assert [
+        part["text"]
+        for item in object_array(output)
+        for part in object_array(item["content"])
+    ] == expected
     assert source == original
-    finals = {item["id"]: item for item in output}
+    finals = {item["id"]: item for item in object_array(output)}
     deltas = {}
     for event in events:
         kind = event["type"]
         if kind == "response.output_text.delta":
             key = (event["item_id"], event["content_index"])
-            deltas[key] = deltas.get(key, "") + event["delta"]
+            deltas[key] = deltas.get(key, "") + string_payload(event["delta"])
         elif kind == "response.output_text.done":
             assert (
                 event["text"]
-                == finals[event["item_id"]]["content"][event["content_index"]]["text"]
+                == object_payload(
+                    array_payload(finals[event["item_id"]]["content"])[
+                        int_payload(object_payload(event)["content_index"])
+                    ]
+                )["text"]
             )
         elif kind == "response.content_part.done":
             assert (
                 event["part"]
-                == finals[event["item_id"]]["content"][event["content_index"]]
+                == array_payload(finals[event["item_id"]]["content"])[
+                    int_payload(object_payload(event)["content_index"])
+                ]
             )
         elif kind == "response.output_item.done":
-            assert event["item"] == finals[event["item"]["id"]]
+            assert event["item"] == finals[object_payload(event["item"])["id"]]
     if representation == "deltas":
-        for item in output:
-            for position, part in enumerate(item["content"]):
-                assert deltas.get((item["id"], position), "") == part["text"]
+        for item in object_array(output):
+            for position, part in enumerate(array_payload(item["content"])):
+                assert (
+                    deltas.get((item["id"], position), "")
+                    == object_payload(part)["text"]
+                )
 
 
-def test_pending_snapshots_are_idempotent_and_lifecycle_frames_keep_order():
+def test_pending_snapshots_are_idempotent_and_lifecycle_frames_keep_order() -> None:
     source = responses_parts(["He", "llo world."], representation="text_done")
     source.insert(4, deepcopy(source[3]))
     source.insert(5, {"type": "ping", "marker": "between repeated snapshots"})
@@ -120,11 +175,16 @@ def test_pending_snapshots_are_idempotent_and_lifecycle_frames_keep_order():
         released.extend(ready)
     assert [event["type"] for event in released] == [event["type"] for event in source]
     assert [
-        part["text"] for part in released[-1]["response"]["output"][0]["content"]
+        part["text"]
+        for part in object_array(
+            object_payload(
+                array_payload(object_payload(released[-1]["response"])["output"])[0]
+            )["content"]
+        )
     ] == ["", "world."]
 
 
-def test_interleaved_parts_wait_for_the_earlier_open_part():
+def test_interleaved_parts_wait_for_the_earlier_open_part() -> None:
     source = responses_parts(["He", "llo world."], representation="text_done")
     earlier_done = source[3:5]
     later = source[5:8]
@@ -137,7 +197,9 @@ def test_interleaved_parts_wait_for_the_earlier_open_part():
         released.extend(ready)
     for event in [*earlier_done, *source[8:]]:
         released.extend(overlap.feed(event))
-    assert released[-1]["response"]["output"][0]["content"] == [
+    assert object_payload(
+        array_payload(object_payload(released[-1]["response"])["output"])[0]
+    )["content"] == [
         {"type": "output_text", "text": "", "annotations": []},
         {"type": "output_text", "text": "world.", "annotations": []},
     ]
@@ -149,7 +211,7 @@ def test_interleaved_parts_wait_for_the_earlier_open_part():
 
 
 @pytest.mark.parametrize("change", ["prefix", "order", "insert"])
-def test_late_snapshot_cannot_rewrite_a_decided_prefix(change):
+def test_late_snapshot_cannot_rewrite_a_decided_prefix(change: str) -> None:
     source = responses_parts(
         ["He", "llo world."], representation="text_done", separate_items=True
     )
@@ -157,30 +219,32 @@ def test_late_snapshot_cannot_rewrite_a_decided_prefix(change):
     for event in source[:-1]:
         overlap.feed(event)
     terminal = source[-1]
-    items = terminal["response"]["output"]
+    items = array_payload(object_payload(terminal["response"])["output"])
     if change == "prefix":
-        items[0]["content"][0]["text"] = "Ha"
+        object_array(object_payload(items[0])["content"])[0]["text"] = "Ha"
     elif change == "order":
         items.reverse()
     else:
         extra = deepcopy(items[0])
-        extra["id"] = "msg_late"
+        object_payload(extra)["id"] = "msg_late"
         items.insert(0, extra)
-    with pytest.raises(ExecutionFailure, match="observed answer prefix"):
+    with pytest.raises(ExecutionFailure, match=r"observed .* prefix"):
         overlap.feed(terminal)
 
 
-def test_terminal_cannot_omit_pending_source_text():
+def test_terminal_cannot_omit_pending_source_text() -> None:
     source = responses_parts(["He"], representation="text_done")
     overlap = ContinuationOverlap("Hello ")
     for event in source[:-1]:
         overlap.feed(event)
-    source[-1]["response"]["output"] = []
-    with pytest.raises(ExecutionFailure, match="observed answer prefix"):
+    object_payload(source[-1]["response"])["output"] = []
+    with pytest.raises(ExecutionFailure, match=r"observed .* prefix"):
         overlap.feed(source[-1])
 
 
-def test_unresolved_frames_are_bounded_and_discarded_on_failure(monkeypatch):
+def test_unresolved_frames_are_bounded_and_discarded_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         "free_claude_code.core.continuation_overlap.RECOVERY_RETENTION_BYTES", 1000
     )
@@ -191,23 +255,34 @@ def test_unresolved_frames_are_bounded_and_discarded_on_failure(monkeypatch):
     with pytest.raises(ExecutionFailure, match="retained-data limit"):
         for _ in range(30):
             overlap.feed({"type": "ping", "padding": "x" * 60})
-    failure = {"type": "response.failed", "response": {"output": []}}
+    failure: JsonObject = {"type": "response.failed", "response": {"output": []}}
     assert overlap.feed(failure) == [failure]
 
 
 def test_large_immediately_resolvable_snapshot_does_not_fill_the_pending_buffer(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         "free_claude_code.core.continuation_overlap.RECOVERY_RETENTION_BYTES", 300
     )
     overlap = ContinuationOverlap("Hello ")
     source = responses_parts(["Hello " + "x" * 10000], representation="terminal")
     events = [ready for event in source for ready in overlap.feed(event)]
-    assert events[-1]["response"]["output"][0]["content"][0]["text"] == "x" * 10000
+    assert (
+        object_payload(
+            array_payload(
+                object_payload(
+                    array_payload(object_payload(events[-1]["response"])["output"])[0]
+                )["content"]
+            )[0]
+        )["text"]
+        == "x" * 10000
+    )
 
 
-def test_resolved_overlap_does_not_retain_unaffected_later_items(monkeypatch):
+def test_resolved_overlap_does_not_retain_unaffected_later_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         "free_claude_code.core.continuation_overlap.RECOVERY_RETENTION_BYTES", 400
     )
@@ -231,7 +306,7 @@ def test_resolved_overlap_does_not_retain_unaffected_later_items(monkeypatch):
 @pytest.mark.parametrize(
     "surface", ["item_added", "part_added", "text_done", "part_done", "item_done"]
 )
-def test_snapshot_only_text_counts_as_new_public_progress_once(surface):
+def test_snapshot_only_text_counts_as_new_public_progress_once(surface: str) -> None:
     response = DeliveredResponse("responses")
     source = responses_parts(["Novel"], representation=surface)
     kind = {

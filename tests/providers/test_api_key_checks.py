@@ -1,6 +1,7 @@
 """Save checks every submitted key with bounded work and stable row results."""
 
 import asyncio
+from collections.abc import Callable, Coroutine
 
 import httpx
 import pytest
@@ -11,12 +12,21 @@ from free_claude_code.config.settings import Settings
 from free_claude_code.providers import credential_validation as validation
 
 
-def mock_http(monkeypatch, respond):
+def mock_http(
+    monkeypatch: pytest.MonkeyPatch,
+    respond: Callable[[httpx.Request], httpx.Response]
+    | Callable[[httpx.Request], Coroutine[None, None, httpx.Response]],
+):
     original = httpx.AsyncClient
     clients = []
 
-    def create(**kwargs):
-        client = original(transport=httpx.MockTransport(respond), **kwargs)
+    def create(*, proxy: str | None, timeout: float, follow_redirects: bool):
+        client = original(
+            proxy=proxy,
+            timeout=timeout,
+            follow_redirects=follow_redirects,
+            transport=httpx.MockTransport(respond),
+        )
         clients.append(client)
         return client
 
@@ -25,10 +35,12 @@ def mock_http(monkeypatch, respond):
 
 
 @pytest.mark.asyncio
-async def test_all_rows_use_their_own_credential_and_keep_result_order(monkeypatch):
+async def test_all_rows_use_their_own_credential_and_keep_result_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     seen = []
 
-    async def respond(request):
+    async def respond(request: httpx.Request):
         credential = request.headers["Authorization"].removeprefix("Bearer ")
         seen.append(credential)
         if credential == "key-0":
@@ -55,11 +67,13 @@ async def test_all_rows_use_their_own_credential_and_keep_result_order(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_queued_rows_each_get_an_attempt_and_timeout(monkeypatch):
+async def test_queued_rows_each_get_an_attempt_and_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     active = peak = 0
     seen = []
 
-    async def respond(request):
+    async def respond(request: httpx.Request):
         nonlocal active, peak
         active += 1
         peak = max(peak, active)
@@ -68,6 +82,7 @@ async def test_queued_rows_each_get_an_attempt_and_timeout(monkeypatch):
             await asyncio.Event().wait()
         finally:
             active -= 1
+        raise AssertionError("The request should be cancelled")
 
     clients = mock_http(monkeypatch, respond)
     monkeypatch.setattr(validation, "MAX_CONCURRENCY", 2)
@@ -87,9 +102,9 @@ async def test_queued_rows_each_get_an_attempt_and_timeout(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_custom_keys_get_individual_unverified_rows_without_public_probe(
-    monkeypatch,
-):
-    def unexpected(request):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected(request: object):
         pytest.fail("A custom public model list cannot verify a key")
 
     mock_http(monkeypatch, unexpected)
@@ -107,12 +122,15 @@ async def test_custom_keys_get_individual_unverified_rows_without_public_probe(
 
 
 @pytest.mark.asyncio
-async def test_cancelled_batch_closes_every_active_probe(monkeypatch):
+async def test_cancelled_batch_closes_every_active_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     started = asyncio.Event()
 
-    async def respond(request):
+    async def respond(request: object):
         started.set()
         await asyncio.Event().wait()
+        raise AssertionError("The request should be cancelled")
 
     clients = mock_http(monkeypatch, respond)
     credentials = tuple(SecretStr(f"key-{index}") for index in range(20))

@@ -2,33 +2,40 @@
 
 import re
 from collections.abc import AsyncIterator, Mapping
+from typing import override
 
 import httpx2
 from openai import APIError, APIStatusError, AsyncOpenAI, DefaultAsyncHttpx2Client
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.chat_completions.request import ChatRequest
 from free_claude_code.core.gemini import GeminiRequest
-from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
     OpenAIResponsesRequest,
     ResponsesStreamFailure,
 )
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
 )
 from free_claude_code.providers.base import BaseProvider, ProviderConfig
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.model_listing import extract_openai_model_infos
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
+from free_claude_code.providers.request_correction import (
+    CorrectionStep,
+    Proposal,
+    Rejection,
+)
 
 
-def _sampling_retry_body(
-    error: Exception, body: JsonObject, sent_body: JsonObject
-) -> JsonObject | None:
+def _sampling_retry_body(rejection: Rejection) -> Proposal | None:
     """Omit only a sampling field explicitly rejected on this outbound attempt."""
+    error, body, sent_body = rejection.error, rejection.body, rejection.sent_body
     if not isinstance(error, APIError | ResponsesStreamFailure):
         return None
     if isinstance(error, APIStatusError) and error.status_code != 400:
@@ -59,7 +66,10 @@ def _sampling_retry_body(
             return None
     elif code != "unsupported_parameter":
         return None
-    return {key: value for key, value in body.items() if key != param}
+    return Proposal(
+        {key: value for key, value in body.items() if key != param},
+        f"dropped the rejected {param}",
+    )
 
 
 class OpenAIAPIProvider(BaseProvider):
@@ -70,9 +80,10 @@ class OpenAIAPIProvider(BaseProvider):
         config: ProviderConfig,
         *,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
-        super().__init__(config)
+        super().__init__(config, history_cache=history_cache)
         if not config.api_key:
             raise ValueError("OpenAI API requires an API key")
         timeout = httpx2.Timeout(
@@ -97,10 +108,13 @@ class OpenAIAPIProvider(BaseProvider):
         self._responses = OpenAIResponsesTransport(
             client=self._client,
             admission=admission,
+            history_cache=self._history_cache,
             provider_name="OpenAI API",
             read_timeout_s=config.http_read_timeout,
             log_raw_sse_events=config.log_raw_sse_events,
-            request_correction=_sampling_retry_body,
+            correction_steps=(
+                CorrectionStep("sampling", _sampling_retry_body, once=False),
+            ),
         )
 
     async def cleanup(self) -> None:
@@ -124,7 +138,7 @@ class OpenAIAPIProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._responses.stream_messages(
             request,
             input_tokens=input_tokens,
@@ -135,6 +149,29 @@ class OpenAIAPIProvider(BaseProvider):
             continuation=continuation,
         )
 
+    @override
+    def stream_chat(
+        self,
+        request: ChatRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[StreamOutput]:
+        return self._responses.stream_chat(
+            request,
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=response_model or request.model,
+            reasoning=reasoning,
+            continuation=continuation,
+        )
+
+    @override
     def stream_gemini(
         self,
         request: GeminiRequest,
@@ -146,7 +183,7 @@ class OpenAIAPIProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._responses.stream_gemini(
             request,
             input_tokens=input_tokens,
@@ -167,7 +204,7 @@ class OpenAIAPIProvider(BaseProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         return self._responses.stream_responses(
             request,
             input_tokens=input_tokens,

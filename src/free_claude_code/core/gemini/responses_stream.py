@@ -1,12 +1,12 @@
 """Direct Responses-source projection to Gemini candidates."""
 
 from copy import deepcopy
-from typing import Any
 from uuid import uuid4
 
 from ..failures import ExecutionFailure
 from ..history_replay import ReplayOrigin, ReplayRecord
-from ..json_types import JsonObject
+from ..json_types import JsonObject, JsonValue, json_object, json_objects
+from ..openai_responses import responses_event_index
 from ..openai_tool_names import OpenAIToolNameCodec
 from .response import GeminiOutput, conversion_failure, function_arguments
 
@@ -32,11 +32,10 @@ class GeminiResponsesStream:
         self._names = tool_names
         self._declared = declared_names
         self._reserved = set(reserved_tool_ids)
-        self._items: dict[int, dict[str, Any]] = {}
+        self._items: dict[int, JsonObject] = {}
         self._text: dict[tuple[int, str, int], str] = {}
         self._arguments: dict[int, str] = {}
-        self._calls: dict[int, dict[str, Any]] = {}
-        self._reasoning: dict[int, JsonObject] = {}
+        self._calls: dict[int, JsonObject] = {}
         self._refusal = False
 
     @property
@@ -47,31 +46,62 @@ class GeminiResponsesStream:
         return []
 
     def handoff(self) -> list[str]:
-        self._output.replace_records(
-            [
-                ReplayRecord(self._origin, record)
-                for _, record in sorted(self._reasoning.items())
-            ]
-        )
+        self._output.order_records(sorted(self._items))
         return self._output.handoff()
 
     def feed(self, event_type: str, payload: JsonObject) -> list[str]:
         # Upstream SDK events have already been decoded to JSON objects.
-        data: dict[str, Any] = dict(payload)
+        data = payload
         if self.completed:
             raise conversion_failure("Responses event arrived after completion")
-        index = data.get("output_index", 0)
         if event_type in {
             "response.created",
             "response.in_progress",
             "response.queued",
         }:
             return []
+        if event_type in {"response.completed", "response.incomplete"}:
+            response = json_object(data.get("response", {}))
+            events: list[str] = []
+            for position, item in enumerate(json_objects(response.get("output", []))):
+                index = next(
+                    (
+                        i
+                        for i, known in self._items.items()
+                        if item.get("id") and known.get("id") == item["id"]
+                    ),
+                    position,
+                )
+                events.extend(self._item(index, item, complete=True))
+            self._output.order_records(sorted(self._items))
+            reason = "SAFETY" if self._refusal else "STOP"
+            if event_type == "response.incomplete":
+                incomplete = json_object(response.get("incomplete_details") or {}).get(
+                    "reason"
+                )
+                if incomplete not in ("max_output_tokens", "content_filter"):
+                    raise conversion_failure(
+                        f"Gemini cannot represent Responses incomplete reason {incomplete}"
+                    )
+                reason = "MAX_TOKENS" if incomplete == "max_output_tokens" else "SAFETY"
+            events.extend(
+                self._output.finish(
+                    reason,
+                    _usage(
+                        response.get("usage"),
+                        has_reasoning=any(
+                            item.get("type") == "reasoning"
+                            for item in self._items.values()
+                        ),
+                    ),
+                )
+            )
+            return events
+        index = responses_event_index(data.get("output_index", 0))
         if event_type == "response.output_item.added":
             item = data.get("item")
             if not isinstance(item, dict):
                 raise conversion_failure("Responses output item is missing")
-            self._items[index] = deepcopy(item)
             return self._item(index, item, complete=False)
         if event_type in {
             "response.output_text.delta",
@@ -81,8 +111,8 @@ class GeminiResponsesStream:
         }:
             thought = "reasoning" in event_type
             field = "summary" if "summary" in event_type else "content"
-            position = data.get(
-                "summary_index" if field == "summary" else "content_index", 0
+            position = responses_event_index(
+                data.get("summary_index" if field == "summary" else "content_index", 0)
             )
             self._refusal |= "refusal" in event_type
             value = data.get("delta")
@@ -91,7 +121,8 @@ class GeminiResponsesStream:
             key = (index, field, position)
             self._text[key] = self._text.get(key, "") + value
             return self._output.part(
-                {"text": value, **({"thought": True} if thought else {})}
+                {"text": value, **({"thought": True} if thought else {})},
+                source=index if thought else None,
             )
         if event_type == "response.function_call_arguments.delta":
             value = data.get("delta")
@@ -119,8 +150,8 @@ class GeminiResponsesStream:
             "response.reasoning_summary_text.done",
         }:
             field = "summary" if "summary" in event_type else "content"
-            position = data.get(
-                "summary_index" if field == "summary" else "content_index", 0
+            position = responses_event_index(
+                data.get("summary_index" if field == "summary" else "content_index", 0)
             )
             self._refusal |= "refusal" in event_type
             return self._snapshot_text(
@@ -136,46 +167,17 @@ class GeminiResponsesStream:
             "response.reasoning_summary_part.added",
             "response.reasoning_summary_part.done",
         }:
-            part = data.get("part", {})
+            part = json_object(data.get("part", {}))
             field = "summary" if "summary" in event_type else "content"
-            position = data.get(
-                "summary_index" if field == "summary" else "content_index", 0
+            position = responses_event_index(
+                data.get("summary_index" if field == "summary" else "content_index", 0)
             )
             return self._part(index, field, position, part)
         if event_type == "response.output_item.done":
             item = data.get("item")
             if not isinstance(item, dict):
                 raise conversion_failure("Responses completed item is missing")
-            self._items[index] = deepcopy(item)
             return self._item(index, item, complete=True)
-        if event_type in {"response.completed", "response.incomplete"}:
-            response = data.get("response", {})
-            events: list[str] = []
-            for position, item in enumerate(response.get("output", [])):
-                index = next(
-                    (
-                        i
-                        for i, known in self._items.items()
-                        if item.get("id") and known.get("id") == item["id"]
-                    ),
-                    position,
-                )
-                events.extend(self._item(index, item, complete=True))
-            reason = "SAFETY" if self._refusal else "STOP"
-            if event_type == "response.incomplete":
-                incomplete = (response.get("incomplete_details") or {}).get("reason")
-                if incomplete not in {"max_output_tokens", "content_filter"}:
-                    raise conversion_failure(
-                        f"Gemini cannot represent Responses incomplete reason {incomplete}"
-                    )
-                reason = "MAX_TOKENS" if incomplete == "max_output_tokens" else "SAFETY"
-            events.extend(
-                self._output.finish(
-                    reason,
-                    _usage(response.get("usage"), has_reasoning=bool(self._reasoning)),
-                )
-            )
-            return events
         if event_type == "response.output_text.annotation.added":
             raise conversion_failure(
                 "Gemini cannot represent upstream native annotations"
@@ -185,7 +187,7 @@ class GeminiResponsesStream:
         )
 
     def _snapshot_text(
-        self, index: int, field: str, position: int, text: str, *, thought: bool
+        self, index: int, field: str, position: int, text: object, *, thought: bool
     ) -> list[str]:
         if not isinstance(text, str):
             raise conversion_failure("Responses snapshot text must be a string")
@@ -197,17 +199,23 @@ class GeminiResponsesStream:
         suffix = text[len(previous) :]
         return (
             self._output.part(
-                {"text": suffix, **({"thought": True} if thought else {})}
+                {"text": suffix, **({"thought": True} if thought else {})},
+                source=index if thought else None,
             )
             if suffix
             else []
         )
 
     def _part(
-        self, index: int, field: str, position: int, part: dict[str, Any]
+        self, index: int, field: str, position: int, part: JsonObject
     ) -> list[str]:
         kind = part.get("type")
-        if kind not in {"output_text", "refusal", "summary_text", "reasoning_text"}:
+        if not isinstance(kind, str) or kind not in {
+            "output_text",
+            "refusal",
+            "summary_text",
+            "reasoning_text",
+        }:
             raise conversion_failure(
                 f"Gemini cannot represent Responses content {kind}"
             )
@@ -224,29 +232,26 @@ class GeminiResponsesStream:
             thought=kind in {"summary_text", "reasoning_text"},
         )
 
-    def _item(self, index: int, item: dict[str, Any], *, complete: bool) -> list[str]:
+    def _item(self, index: int, item: JsonObject, *, complete: bool) -> list[str]:
         kind = item.get("type")
+        self._items[index] = {"id": item.get("id"), "type": kind}
         events: list[str] = []
-        if kind in {"message", "reasoning"}:
+        if kind in ("message", "reasoning"):
             for field in ("summary", "content"):
-                for position, part in enumerate(item.get(field) or []):
+                for position, part in enumerate(json_objects(item.get(field) or [])):
                     events.extend(self._part(index, field, position, part))
             if complete and kind == "reasoning":
-                self._reasoning[index] = deepcopy(item)
-                self._output.replace_records(
-                    [
-                        ReplayRecord(self._origin, record)
-                        for _, record in sorted(self._reasoning.items())
-                    ]
+                self._output.capture(
+                    ReplayRecord(self._origin, deepcopy(item)), source=index
                 )
             return events
         if kind != "function_call":
             raise conversion_failure(f"Gemini cannot represent Responses output {kind}")
-        if not complete or item.get("status") in {
+        if not complete or item.get("status") in (
             "in_progress",
             "incomplete",
             "failed",
-        }:
+        ):
             return []
         if index in self._calls:
             if self._calls[index] != item:
@@ -279,7 +284,7 @@ class GeminiResponsesStream:
         return None
 
 
-def _usage(value: object, *, has_reasoning: bool) -> JsonObject:
+def _usage(value: JsonValue, *, has_reasoning: bool) -> JsonObject:
     if not isinstance(value, dict):
         return {}
     result: JsonObject = {}
@@ -295,7 +300,8 @@ def _usage(value: object, *, has_reasoning: bool) -> JsonObject:
         ("input_tokens_details", "cached_tokens", "cachedContentTokenCount"),
         ("output_tokens_details", "reasoning_tokens", "thoughtsTokenCount"),
     ):
-        count = (value.get(field) or {}).get(source)
+        details = value.get(field)
+        count = details.get(source) if isinstance(details, dict) else None
         if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
             result[target] = count
     output, thoughts = (

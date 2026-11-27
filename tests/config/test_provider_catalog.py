@@ -15,13 +15,13 @@ def test_provider_descriptors_are_immutable_values() -> None:
         display_name="Local",
         website_url="https://example.test/",
         logo_filename="local.svg",
-        local=True,
+        local_probe_path="/models",
     )
 
     assert descriptor.local is True
     assert not hasattr(descriptor, "__dict__")
     with pytest.raises(FrozenInstanceError):
-        descriptor.__setattr__("local", False)
+        descriptor.__setattr__("local_probe_path", None)
 
 
 def test_catalog_has_no_transport_metadata() -> None:
@@ -35,6 +35,12 @@ def test_catalog_local_assignments_are_exact() -> None:
         for provider_id, descriptor in PROVIDER_CATALOG.items()
         if descriptor.local
     } == {"lmstudio", "llamacpp", "ollama"}
+
+
+def test_each_local_provider_has_a_configurable_base_url() -> None:
+    for descriptor in PROVIDER_CATALOG.values():
+        if descriptor.local:
+            assert descriptor.base_url_attr
 
 
 def test_ollama_cloud_is_remote_and_distinct_from_local_ollama() -> None:

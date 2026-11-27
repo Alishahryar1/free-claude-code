@@ -8,6 +8,7 @@ from free_claude_code.application.model_catalog import CatalogModel
 from free_claude_code.cli.launchers.hermes_config import (
     build_hermes_managed_config,
 )
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.model_capabilities import ModelInputModality
 
 
@@ -124,7 +125,7 @@ def test_hermes_config_pins_responses_catalog_and_fallbacks() -> None:
     }
     for task, task_config in auxiliary.items():
         assert isinstance(task_config, dict)
-        expected = {
+        expected: JsonObject = {
             "provider": "custom:fcc-a1b2c3",
             "model": "",
             "base_url": "",

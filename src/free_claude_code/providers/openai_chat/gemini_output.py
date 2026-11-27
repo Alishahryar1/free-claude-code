@@ -1,6 +1,7 @@
 """Direct Gemini presentation of the shared Chat stream assembler."""
 
 from copy import deepcopy
+from typing import override
 
 from free_claude_code.core.failures import ExecutionFailure
 from free_claude_code.core.gemini.replay import CallReplay
@@ -9,10 +10,14 @@ from free_claude_code.core.gemini.response import (
     conversion_failure,
     function_arguments,
 )
-from free_claude_code.core.history_replay import ReplayRecord, decode_replay, is_replay
+from free_claude_code.core.history_replay import (
+    ReplayRecord,
+    decode_replay,
+    is_replay,
+)
 from free_claude_code.core.json_types import JsonObject
 
-from .stream_output import ChatStreamOutput, ChatStreamUsage, ChatToolState
+from .stream_output import ChatStreamOutput, ChatStreamUsage, CompletedToolCall
 
 
 class GeminiChatStreamOutput(ChatStreamOutput):
@@ -33,9 +38,22 @@ class GeminiChatStreamOutput(ChatStreamOutput):
         )
         self._tool_names = tool_names
 
-    def capture_reasoning_record(self, native: JsonObject) -> bool:
+    @override
+    def capture_reasoning_record(
+        self,
+        native: JsonObject,
+        *,
+        replay_owner: int | None = None,
+        completed: bool = True,
+    ) -> bool:
+        if not completed:
+            if replay_owner is not None:
+                self._gemini.discard(replay_owner)
+            return True
         assert self.replay_origin is not None
-        self._gemini.capture(ReplayRecord(self.replay_origin, deepcopy(native)))
+        self._gemini.capture(
+            ReplayRecord(self.replay_origin, deepcopy(native)), source=replay_owner
+        )
         return True
 
     def _start_events(self) -> list[str]:
@@ -45,9 +63,16 @@ class GeminiChatStreamOutput(ChatStreamOutput):
         return []
 
     def _emit_reasoning_delta(
-        self, content: str, *, summary: bool = False, source: int = 0
+        self,
+        content: str,
+        *,
+        summary: bool = False,
+        source: int = 0,
+        replay_owner: int | None = None,
     ) -> str:
-        return "".join(self._gemini.part({"text": content, "thought": True}))
+        return "".join(
+            self._gemini.part({"text": content, "thought": True}, source=replay_owner)
+        )
 
     def _emit_opaque_reasoning(self, data: str) -> list[str]:
         if is_replay(data):
@@ -73,32 +98,26 @@ class GeminiChatStreamOutput(ChatStreamOutput):
     def _stop_text_block(self) -> list[str]:
         return []
 
-    def _start_tool_block(self, tool_index: int, state: ChatToolState) -> str:
-        return ""
-
-    def _emit_tool_delta(
-        self, tool_index: int, state: ChatToolState, partial_json: str
-    ) -> str:
-        return ""
-
-    def _stop_tool_block(self, tool_index: int, state: ChatToolState) -> list[str]:
-        if state.name not in self._tool_names:
+    def _emit_complete_tool(
+        self, tool_index: int, call: CompletedToolCall
+    ) -> list[str]:
+        if call.name not in self._tool_names:
             raise conversion_failure(
-                f"Upstream called an undeclared function: {state.name}"
+                f"Upstream called an undeclared function: {call.name}"
             )
-        arguments = function_arguments(state.content)
-        if state.extra_content:
+        arguments = function_arguments(call.content)
+        if call.extra_content:
             assert self.replay_origin is not None
-            self._gemini.calls.append(
+            self._gemini.capture_call(
                 CallReplay(
-                    self.replay_origin, state.tool_id, deepcopy(state.extra_content)
+                    self.replay_origin, call.tool_id, deepcopy(call.extra_content)
                 )
             )
         return self._gemini.part(
             {
                 "functionCall": {
-                    "id": state.tool_id,
-                    "name": state.name,
+                    "id": call.tool_id,
+                    "name": call.name,
                     "args": arguments,
                 }
             }

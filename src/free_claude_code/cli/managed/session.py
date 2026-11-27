@@ -12,6 +12,7 @@ from free_claude_code.cli.process_registry import (
     register_pid,
     unregister_pid,
 )
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.trace import trace_event
 
 from .claude import (
@@ -95,7 +96,7 @@ class ManagedClaudeSession:
 
     async def start_task(
         self, prompt: str, session_id: str | None = None, fork_session: bool = False
-    ) -> AsyncGenerator[dict]:
+    ) -> AsyncGenerator[JsonObject]:
         """
         Start a new task or continue an existing session.
 
@@ -250,7 +251,7 @@ class ManagedClaudeSession:
 
     async def _handle_line_gen(
         self, line_str: str, parse_state: ManagedClaudeParseState
-    ) -> AsyncGenerator[dict]:
+    ) -> AsyncGenerator[JsonObject]:
         """Process a single line and yield events."""
         for event in parse_managed_claude_stdout_line(line_str, parse_state):
             if isinstance(event, dict) and event.get("type") == "session_info":

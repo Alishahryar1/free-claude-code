@@ -13,6 +13,7 @@ from free_claude_code.config.provider_catalog import (
 )
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.openai_responses.models import OpenAIResponsesRequest
+from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.mistral import MistralProvider
 from free_claude_code.providers.mistral.caching import (
     MISTRAL_AFFINITY_HEADER,
@@ -27,6 +28,7 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
     reasoning_for,
+    sdk_chat_chunk,
 )
 
 SESSION_HEADERS = {"x-opencode-session": "sess-123"}
@@ -41,7 +43,7 @@ def mistral_config():
 
 
 @pytest.fixture
-def mistral_provider(mistral_config):
+def mistral_provider(mistral_config: ProviderConfig):
     return MistralProvider(mistral_config, admission=immediate_admission())
 
 
@@ -54,7 +56,7 @@ def _text_chunk(text: str = "Hello back!"):
         )
     ]
     chunk.usage = MagicMock(completion_tokens=5, prompt_tokens=10)
-    return chunk
+    return sdk_chat_chunk(chunk)
 
 
 async def _single_chunk_stream():
@@ -68,7 +70,7 @@ def _make_bad_request_error(message: str) -> openai.BadRequestError:
     return openai.BadRequestError(message, response=response, body=body)
 
 
-def test_extract_prefers_the_most_specific_session_header():
+def test_extract_prefers_the_most_specific_session_header() -> None:
     headers = {
         "session-id": "generic",
         "anthropic-session-id": "anthropic",
@@ -78,14 +80,14 @@ def test_extract_prefers_the_most_specific_session_header():
 
 
 @pytest.mark.parametrize("name", MISTRAL_SESSION_HEADER_NAMES)
-def test_extract_accepts_every_known_session_header(name):
+def test_extract_accepts_every_known_session_header(name: str) -> None:
     assert extract_mistral_affinity_key({name: "sess-1"}) == "sess-1"
 
 
 @pytest.mark.parametrize(
     "name", [name for name in MISTRAL_SESSION_HEADER_NAMES if name != "x-fcc-launch-id"]
 )
-def test_conversation_identity_takes_precedence_over_launch_identity(name):
+def test_conversation_identity_takes_precedence_over_launch_identity(name: str) -> None:
     assert (
         extract_mistral_affinity_key(
             {"x-fcc-launch-id": "launch-1", name: "conversation-1"}
@@ -95,7 +97,7 @@ def test_conversation_identity_takes_precedence_over_launch_identity(name):
 
 
 @pytest.mark.parametrize("blank", ["", "   "])
-def test_blank_conversation_identity_falls_back_to_launch_identity(blank):
+def test_blank_conversation_identity_falls_back_to_launch_identity(blank: str) -> None:
     assert (
         extract_mistral_affinity_key(
             {"x-opencode-session": blank, "x-fcc-launch-id": "launch-1"}
@@ -104,11 +106,11 @@ def test_blank_conversation_identity_falls_back_to_launch_identity(blank):
     )
 
 
-def test_extract_matches_header_names_case_insensitively():
+def test_extract_matches_header_names_case_insensitively() -> None:
     assert extract_mistral_affinity_key({"X-OpenCode-Session": "sess-2"}) == "sess-2"
 
 
-def test_extract_strips_surrounding_whitespace():
+def test_extract_strips_surrounding_whitespace() -> None:
     assert extract_mistral_affinity_key({"x-opencode-session": "  sess-3 "}) == "sess-3"
 
 
@@ -121,12 +123,14 @@ def test_extract_strips_surrounding_whitespace():
         {"unrelated-header": "value"},
     ],
 )
-def test_extract_returns_none_without_a_usable_session_header(headers):
+def test_extract_returns_none_without_a_usable_session_header(
+    headers: dict[str, str],
+) -> None:
     assert extract_mistral_affinity_key(headers) is None
 
 
 @pytest.mark.parametrize("blank", ["", "   "])
-def test_extract_falls_through_blank_preferred_header(blank):
+def test_extract_falls_through_blank_preferred_header(blank: str) -> None:
     headers = {
         "x-opencode-session": blank,
         "anthropic-session-id": "anthropic",
@@ -135,11 +139,13 @@ def test_extract_falls_through_blank_preferred_header(blank):
 
 
 @pytest.mark.parametrize("headers", [None, {}])
-def test_affinity_headers_are_empty_without_a_session_header(headers):
+def test_affinity_headers_are_empty_without_a_session_header(
+    headers: dict[str, str] | None,
+) -> None:
     assert mistral_affinity_headers(headers) == {}
 
 
-def test_affinity_headers_forward_only_the_affinity_header():
+def test_affinity_headers_forward_only_the_affinity_header() -> None:
     headers = {
         "authorization": "Bearer secret",
         "user-agent": "fcc-test/1.0",
@@ -149,7 +155,9 @@ def test_affinity_headers_forward_only_the_affinity_header():
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_sends_affinity_header(mistral_provider):
+async def test_stream_messages_sends_affinity_header(
+    mistral_provider: MistralProvider,
+) -> None:
     req = make_messages_request("devstral-small-latest")
 
     with patch.object(
@@ -158,10 +166,11 @@ async def test_stream_messages_sends_affinity_header(mistral_provider):
         mock_create.return_value = SDKStreamDouble(_single_chunk_stream())
 
         events = [
-            event
+            frame
             async for event in mistral_provider.stream_messages(
                 req, request_headers=SESSION_HEADERS
             )
+            for frame in event.frames
         ]
 
     assert any("Hello back!" in event for event in events)
@@ -181,8 +190,8 @@ async def test_stream_messages_sends_affinity_header(mistral_provider):
     ],
 )
 async def test_stream_messages_without_session_header_sends_no_extra_headers(
-    mistral_provider, request_headers
-):
+    mistral_provider: MistralProvider, request_headers: dict[str, str] | None
+) -> None:
     req = make_messages_request("devstral-small-latest")
 
     with patch.object(
@@ -191,10 +200,11 @@ async def test_stream_messages_without_session_header_sends_no_extra_headers(
         mock_create.return_value = SDKStreamDouble(_single_chunk_stream())
 
         events = [
-            event
+            frame
             async for event in mistral_provider.stream_messages(
                 req, request_headers=request_headers
             )
+            for frame in event.frames
         ]
 
     assert any("Hello back!" in event for event in events)
@@ -204,8 +214,8 @@ async def test_stream_messages_without_session_header_sends_no_extra_headers(
 
 @pytest.mark.asyncio
 async def test_stream_messages_affinity_header_survives_reasoning_retry(
-    mistral_provider,
-):
+    mistral_provider: MistralProvider,
+) -> None:
     req = make_messages_request("devstral-small-latest")
     error = _make_bad_request_error("Unsupported field: reasoning_effort")
 
@@ -215,12 +225,13 @@ async def test_stream_messages_affinity_header_survives_reasoning_retry(
         mock_create.side_effect = [error, SDKStreamDouble(_single_chunk_stream())]
 
         events = [
-            event
+            frame
             async for event in mistral_provider.stream_messages(
                 req,
                 reasoning=reasoning_for(req),
                 request_headers=SESSION_HEADERS,
             )
+            for frame in event.frames
         ]
 
     assert mock_create.await_count == 2
@@ -230,7 +241,9 @@ async def test_stream_messages_affinity_header_survives_reasoning_retry(
 
 
 @pytest.mark.asyncio
-async def test_stream_responses_sends_affinity_header(mistral_provider):
+async def test_stream_responses_sends_affinity_header(
+    mistral_provider: MistralProvider,
+) -> None:
     request = OpenAIResponsesRequest(model="devstral-small-latest", input="hi")
 
     with patch.object(
@@ -239,10 +252,11 @@ async def test_stream_responses_sends_affinity_header(mistral_provider):
         mock_create.return_value = SDKStreamDouble(_single_chunk_stream())
 
         chunks = [
-            chunk
+            frame
             async for chunk in mistral_provider.stream_responses(
                 request, request_headers=SESSION_HEADERS
             )
+            for frame in chunk.frames
         ]
 
     assert chunks
@@ -254,8 +268,8 @@ async def test_stream_responses_sends_affinity_header(mistral_provider):
 
 @pytest.mark.asyncio
 async def test_stream_responses_without_session_header_sends_no_extra_headers(
-    mistral_provider,
-):
+    mistral_provider: MistralProvider,
+) -> None:
     request = OpenAIResponsesRequest(model="devstral-small-latest", input="hi")
 
     with patch.object(
@@ -263,7 +277,11 @@ async def test_stream_responses_without_session_header_sends_no_extra_headers(
     ) as mock_create:
         mock_create.return_value = SDKStreamDouble(_single_chunk_stream())
 
-        chunks = [chunk async for chunk in mistral_provider.stream_responses(request)]
+        chunks = [
+            frame
+            async for chunk in mistral_provider.stream_responses(request)
+            for frame in chunk.frames
+        ]
 
     assert chunks
     assert mock_create.await_args is not None
@@ -271,7 +289,7 @@ async def test_stream_responses_without_session_header_sends_no_extra_headers(
 
 
 @pytest.mark.asyncio
-async def test_other_openai_chat_providers_do_not_send_affinity_headers():
+async def test_other_openai_chat_providers_do_not_send_affinity_headers() -> None:
     provider = profiled_provider(
         "xai",
         make_provider_config(api_key="test-xai-key", base_url=XAI_DEFAULT_BASE),
@@ -285,10 +303,11 @@ async def test_other_openai_chat_providers_do_not_send_affinity_headers():
         mock_create.return_value = SDKStreamDouble(_single_chunk_stream())
 
         events = [
-            event
+            frame
             async for event in provider.stream_messages(
                 req, request_headers=SESSION_HEADERS
             )
+            for frame in event.frames
         ]
 
     assert any("Hello back!" in event for event in events)
@@ -297,39 +316,47 @@ async def test_other_openai_chat_providers_do_not_send_affinity_headers():
 
 
 @pytest.mark.asyncio
-async def test_stream_messages_maps_cached_usage_to_anthropic_fields(mistral_provider):
+async def test_stream_messages_maps_cached_usage_to_anthropic_fields(
+    mistral_provider: MistralProvider,
+) -> None:
     req = make_messages_request("devstral-small-latest")
 
     async def fake_stream():
-        yield SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    delta=SimpleNamespace(
-                        content="hello", reasoning_content=None, tool_calls=None
-                    ),
-                    finish_reason=None,
-                )
-            ],
-            usage=None,
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content="hello", reasoning_content=None, tool_calls=None
+                        ),
+                        finish_reason=None,
+                    )
+                ],
+                usage=None,
+            )
         )
-        yield SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    delta=SimpleNamespace(
-                        content=None, reasoning_content=None, tool_calls=None
-                    ),
-                    finish_reason="stop",
-                )
-            ],
-            usage=None,
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None, reasoning_content=None, tool_calls=None
+                        ),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=None,
+            )
         )
-        yield SimpleNamespace(
-            choices=[],
-            usage=SimpleNamespace(
-                completion_tokens=5,
-                prompt_tokens=1000,
-                prompt_tokens_details={"cached_tokens": 640},
-            ),
+        yield sdk_chat_chunk(
+            SimpleNamespace(
+                choices=[],
+                usage=SimpleNamespace(
+                    completion_tokens=5,
+                    prompt_tokens=1000,
+                    prompt_tokens_details={"cached_tokens": 640},
+                ),
+            )
         )
 
     with patch.object(
@@ -338,10 +365,11 @@ async def test_stream_messages_maps_cached_usage_to_anthropic_fields(mistral_pro
         mock_create.return_value = SDKStreamDouble(fake_stream())
 
         chunks = [
-            chunk
+            frame
             async for chunk in mistral_provider.stream_messages(
                 req, request_headers=SESSION_HEADERS
             )
+            for frame in chunk.frames
         ]
 
     parsed = parse_sse_text("".join(chunks))

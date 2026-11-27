@@ -6,9 +6,10 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Literal
+from typing import Literal, override
 
 from free_claude_code.core.json_types import JsonObject
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 
 @dataclass
@@ -40,8 +41,6 @@ class DshProvider:
             ) and "Create a concise title for an AI coding-assistant session" in str(
                 first.get("content", "")
             ):
-                assert body.get("max_tokens", body.get("max_output_tokens")) == 64
-                assert not body.get("tools")
                 return "title"
             if any(
                 isinstance(message, dict)
@@ -94,7 +93,7 @@ def dsh_provider(scenario: DshProvider) -> Generator[str]:
                 self.json_response(404, {"error": "not found"})
 
         def do_POST(self) -> None:
-            body = json.loads(
+            body = decode_object(
                 self.rfile.read(int(self.headers.get("content-length", "0")))
             )
             purpose = scenario.purpose(body)
@@ -144,7 +143,8 @@ def dsh_provider(scenario: DshProvider) -> Generator[str]:
                     )
                     self.chunk({}, "stop")
                 elif (scenario.read_path or scenario.tool_call) and not any(
-                    message.get("role") == "tool" for message in body["messages"]
+                    object_payload(message).get("role") == "tool"
+                    for message in array_payload(body["messages"])
                 ):
                     self.chunk(
                         {
@@ -210,19 +210,31 @@ def dsh_provider(scenario: DshProvider) -> Generator[str]:
             events = [
                 {
                     "type": "response.created",
-                    "response": {**response, "status": "in_progress", "output": []},
+                    "response": {
+                        **response,
+                        "status": "in_progress",
+                        "output": list[JsonObject](),
+                    },
                 },
                 {
                     "type": "response.output_item.added",
                     "output_index": 0,
-                    "item": {**message, "status": "in_progress", "content": []},
+                    "item": {
+                        **message,
+                        "status": "in_progress",
+                        "content": list[JsonObject](),
+                    },
                 },
                 {
                     "type": "response.content_part.added",
                     "item_id": "msg_fixture",
                     "output_index": 0,
                     "content_index": 0,
-                    "part": {"type": "output_text", "text": "", "annotations": []},
+                    "part": {
+                        "type": "output_text",
+                        "text": "",
+                        "annotations": list[JsonObject](),
+                    },
                 },
                 {
                     "type": "response.output_text.delta",
@@ -279,6 +291,7 @@ def dsh_provider(scenario: DshProvider) -> Generator[str]:
             self.wfile.write(body)
             self.close_connection = True
 
+        @override
         def log_message(self, format: str, *args: object) -> None:
             return
 

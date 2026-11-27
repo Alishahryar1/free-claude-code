@@ -3,13 +3,13 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from dataclasses import replace
 from typing import cast
 
 import pytest
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from free_claude_code.api.app import create_app
-from free_claude_code.api.ports import AdminRuntimePort, ApiServices
+from free_claude_code.api.dependencies import app_services
 from free_claude_code.api.request_lifetime import (
     ClientRequestLifetimeMiddleware,
 )
@@ -18,17 +18,18 @@ from free_claude_code.application.ports import (
     ProviderPort,
     RequestRuntimeLease,
     RequestRuntimePort,
-    TaskController,
 )
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
 from free_claude_code.core.anthropic.streaming import format_sse_event
 from free_claude_code.core.gemini import GeminiRequest
 from free_claude_code.core.gemini.response import GeminiOutput
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
-from tests.web_tools_support import StubWebToolsClient
+from tests.api.support import create_test_app
 
 
 def _http_scope(
@@ -404,12 +405,12 @@ class _ControlledProvider:
         self.request_ids: list[str] = []
 
     async def stream_gemini(
-        self, _request: GeminiRequest, **kwargs
-    ) -> AsyncIterator[str]:
-        self.request_ids.append(kwargs["request_id"])
+        self, _request: GeminiRequest, *, request_id: str, **kwargs: object
+    ) -> AsyncIterator[StreamOutput]:
+        self.request_ids.append(request_id)
         try:
             for chunk in self._chunks:
-                yield chunk
+                yield StreamOutput((chunk,))
             self.blocked.set()
             await asyncio.Event().wait()
         finally:
@@ -426,12 +427,12 @@ class _ControlledProvider:
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         del input_tokens, response_model, reasoning
         self.request_ids.append(request_id)
         try:
             for chunk in self._chunks:
-                yield chunk
+                yield StreamOutput((chunk,))
             self.blocked.set()
             await asyncio.Event().wait()
         finally:
@@ -448,12 +449,12 @@ class _ControlledProvider:
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         del input_tokens, response_model, reasoning
         self.request_ids.append(request_id)
         try:
             for chunk in self._chunks:
-                yield chunk
+                yield StreamOutput((chunk,))
             self.blocked.set()
             await asyncio.Event().wait()
         finally:
@@ -530,7 +531,7 @@ def _message_start() -> str:
 
 
 def _response_created() -> str:
-    payload = {
+    payload: JsonObject = {
         "type": "response.created",
         "sequence_number": 0,
         "response": {
@@ -574,16 +575,12 @@ async def _disconnect_real_app(
     payload: dict[str, object],
     provider: _ControlledProvider,
 ) -> tuple[list[Message], _Lease]:
-    settings = Settings(provider_progress_timeout=60.0)
+    settings = Settings()
     lease = _Lease(settings, cast(ProviderPort, provider))
     requests = _Requests(lease)
-    app = create_app(
-        ApiServices(
-            requests=cast(RequestRuntimePort, requests),
-            admin=cast(AdminRuntimePort, object()),
-            tasks=cast(TaskController, object()),
-            web_tools=StubWebToolsClient(),
-        )
+    app = create_test_app(settings)
+    app.state.services = replace(
+        app_services(app), requests=cast(RequestRuntimePort, requests)
     )
     body = json.dumps(payload).encode()
     route, _, query = path.partition("?")
@@ -651,7 +648,9 @@ def _responses_payload() -> dict[str, object]:
         {"functionCall": {"id": "a", "name": "read", "args": {}}},
     ],
 )
-async def test_real_gemini_disconnect_closes_provider_and_lease(streaming, part):
+async def test_real_gemini_disconnect_closes_provider_and_lease(
+    streaming: bool, part: JsonObject | None
+) -> None:
     output = GeminiOutput("lifetime", "public", include_thoughts=False)
     provider = _ControlledProvider(tuple(output.part(part)) if part is not None else ())
     suffix = "streamGenerateContent?alt=sse" if streaming else "generateContent"

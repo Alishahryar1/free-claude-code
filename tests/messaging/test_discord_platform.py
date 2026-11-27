@@ -1,10 +1,12 @@
 """Tests for Discord platform adapter."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from free_claude_code.messaging.models import IncomingMessage
 from free_claude_code.messaging.platforms.discord import (
     DISCORD_AVAILABLE,
     DiscordRuntime,
@@ -15,6 +17,7 @@ from free_claude_code.messaging.platforms.discord_inbound import (
     parse_allowed_channels,
 )
 from free_claude_code.messaging.platforms.discord_io import truncate_discord_message
+from free_claude_code.messaging.voice import Transcriber
 
 
 def _limiter_mock() -> MagicMock:
@@ -24,19 +27,29 @@ def _limiter_mock() -> MagicMock:
     return limiter
 
 
-def _discord_runtime(*args, limiter=None, transcriber=None, **kwargs) -> DiscordRuntime:
+def _discord_runtime(
+    bot_token: str | None = None,
+    allowed_channel_ids: str | None = None,
+    *,
+    limiter: MagicMock | None = None,
+    transcriber: Transcriber | None = None,
+    log_raw_messaging_content: bool = False,
+    log_api_error_tracebacks: bool = False,
+) -> DiscordRuntime:
     return DiscordRuntime(
-        *args,
+        bot_token,
+        allowed_channel_ids,
         limiter=limiter or _limiter_mock(),
         transcriber=transcriber,
-        **kwargs,
+        log_raw_messaging_content=log_raw_messaging_content,
+        log_api_error_tracebacks=log_api_error_tracebacks,
     )
 
 
 class TestGetDiscord:
     """Tests for _get_discord helper."""
 
-    def test_raises_when_discord_not_available(self):
+    def test_raises_when_discord_not_available(self) -> None:
         import free_claude_code.messaging.platforms.discord as discord_mod
 
         with (
@@ -50,28 +63,28 @@ class TestGetDiscord:
 class TestParseAllowedChannels:
     """Tests for _parse_allowed_channels helper."""
 
-    def test_empty_string_returns_empty_set(self):
+    def test_empty_string_returns_empty_set(self) -> None:
         assert parse_allowed_channels("") == set()
         assert parse_allowed_channels(None) == set()
 
-    def test_whitespace_only_returns_empty_set(self):
+    def test_whitespace_only_returns_empty_set(self) -> None:
         assert parse_allowed_channels("   ") == set()
 
-    def test_single_channel(self):
+    def test_single_channel(self) -> None:
         assert parse_allowed_channels("123456789") == {"123456789"}
 
-    def test_comma_separated(self):
+    def test_comma_separated(self) -> None:
         assert parse_allowed_channels("111,222,333") == {"111", "222", "333"}
 
-    def test_strips_whitespace(self):
+    def test_strips_whitespace(self) -> None:
         assert parse_allowed_channels(" 111 , 222 ") == {"111", "222"}
 
-    def test_empty_parts_ignored(self):
+    def test_empty_parts_ignored(self) -> None:
         assert parse_allowed_channels("111,,222,") == {"111", "222"}
 
 
 class TestDiscordInbound:
-    def test_text_message_normalizes_accepted_event(self):
+    def test_text_message_normalizes_accepted_event(self) -> None:
         msg = MagicMock()
         msg.author.id = 456
         msg.author.display_name = "User"
@@ -96,7 +109,7 @@ class TestDiscordInbound:
 class TestDiscordRuntime:
     """Tests for Discord runtime and messenger behavior."""
 
-    def test_init_with_token(self):
+    def test_init_with_token(self) -> None:
         platform = _discord_runtime(
             bot_token="test_token",
             allowed_channel_ids="123,456",
@@ -104,43 +117,43 @@ class TestDiscordRuntime:
         assert platform.bot_token == "test_token"
         assert platform.allowed_channel_ids == {"123", "456"}
 
-    def test_init_without_allowed_channels(self):
+    def test_init_without_allowed_channels(self) -> None:
         with patch.dict("os.environ", {"ALLOWED_DISCORD_CHANNELS": ""}, clear=False):
             platform = _discord_runtime(bot_token="token", allowed_channel_ids="")
         assert platform.allowed_channel_ids == set()
 
-    def test_empty_allowed_channels_rejects_all_messages(self):
+    def test_empty_allowed_channels_rejects_all_messages(self) -> None:
         """When allowed_channel_ids is empty, no channels are allowed (secure default)."""
         with patch.dict("os.environ", {"ALLOWED_DISCORD_CHANNELS": ""}, clear=False):
             platform = _discord_runtime(bot_token="token", allowed_channel_ids="")
         assert platform.allowed_channel_ids == set()
         # Empty set means: not self.allowed_channel_ids is True -> reject
 
-    def test_truncate_long_message(self):
+    def test_truncate_long_message(self) -> None:
         long_text = "x" * 2500
         truncated = truncate_discord_message(long_text)
         assert len(truncated) == 2000
         assert truncated.endswith("...")
 
-    def test_truncate_short_message_unchanged(self):
+    def test_truncate_short_message_unchanged(self) -> None:
         short = "hello"
         assert truncate_discord_message(short) == short
 
-    def test_truncate_exactly_at_limit_unchanged(self):
+    def test_truncate_exactly_at_limit_unchanged(self) -> None:
         exact = "x" * 2000
         assert truncate_discord_message(exact) == exact
 
-    def test_truncate_one_over_limit_truncates(self):
+    def test_truncate_one_over_limit_truncates(self) -> None:
         over = "x" * 2001
         result = truncate_discord_message(over)
         assert len(result) == 2000
         assert result.endswith("...")
 
-    def test_truncate_empty_string(self):
+    def test_truncate_empty_string(self) -> None:
         assert truncate_discord_message("") == ""
 
     @pytest.mark.asyncio
-    async def test_send_message_returns_message_id(self):
+    async def test_send_message_returns_message_id(self) -> None:
         platform = _discord_runtime(bot_token="token")
         mock_msg = MagicMock()
         mock_msg.id = 999
@@ -154,7 +167,7 @@ class TestDiscordRuntime:
         assert msg_id == "999"
 
     @pytest.mark.asyncio
-    async def test_edit_message(self):
+    async def test_edit_message(self) -> None:
         platform = _discord_runtime(bot_token="token")
         mock_msg = AsyncMock()
         mock_channel = AsyncMock()
@@ -167,7 +180,7 @@ class TestDiscordRuntime:
         mock_msg.edit.assert_called_once_with(content="Updated text")
 
     @pytest.mark.asyncio
-    async def test_send_message_channel_not_found_raises(self):
+    async def test_send_message_channel_not_found_raises(self) -> None:
         platform = _discord_runtime(bot_token="token")
         platform._connected = True
         with (
@@ -177,7 +190,7 @@ class TestDiscordRuntime:
             await platform.outbound.send_message("123", "Hello")
 
     @pytest.mark.asyncio
-    async def test_send_message_channel_no_send_raises(self):
+    async def test_send_message_channel_no_send_raises(self) -> None:
         platform = _discord_runtime(bot_token="token")
         platform._connected = True
         mock_channel = MagicMock(spec=[])  # No send attr
@@ -190,13 +203,18 @@ class TestDiscordRuntime:
             await platform.outbound.send_message("123", "Hello")
 
     @pytest.mark.asyncio
-    async def test_queue_send_message_uses_required_limiter(self):
+    async def test_queue_send_message_uses_required_limiter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         platform = _discord_runtime(bot_token="token")
 
-        async def enqueue(operation, dedup_key=None):
+        async def enqueue(
+            operation: Callable[[], Awaitable[object]], dedup_key: object = None
+        ):
             return await operation()
 
-        platform._limiter.enqueue = AsyncMock(side_effect=enqueue)
+        mock_enqueue = AsyncMock(side_effect=enqueue)
+        monkeypatch.setattr(platform._limiter, "enqueue", mock_enqueue)
         platform._connected = True
         mock_channel = AsyncMock()
         mock_msg = MagicMock()
@@ -209,17 +227,22 @@ class TestDiscordRuntime:
                 "123", "hi", fire_and_forget=False
             )
         assert result == "42"
-        platform._limiter.enqueue.assert_awaited_once()
+        mock_enqueue.assert_awaited_once()
         mock_channel.send.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_queue_edit_message_uses_required_limiter(self):
+    async def test_queue_edit_message_uses_required_limiter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         platform = _discord_runtime(bot_token="token")
 
-        async def enqueue(operation, dedup_key=None):
+        async def enqueue(
+            operation: Callable[[], Awaitable[object]], dedup_key: object = None
+        ):
             return await operation()
 
-        platform._limiter.enqueue = AsyncMock(side_effect=enqueue)
+        mock_enqueue_next = AsyncMock(side_effect=enqueue)
+        monkeypatch.setattr(platform._limiter, "enqueue", mock_enqueue_next)
         platform._connected = True
         mock_msg = AsyncMock()
         mock_channel = AsyncMock()
@@ -230,11 +253,11 @@ class TestDiscordRuntime:
             await platform.outbound.queue_edit_message(
                 "123", "456", "Updated", fire_and_forget=False
             )
-        platform._limiter.enqueue.assert_awaited_once()
+        mock_enqueue_next.assert_awaited_once()
         mock_msg.edit.assert_called_once_with(content="Updated")
 
     @pytest.mark.asyncio
-    async def test_on_discord_message_bot_ignored(self):
+    async def test_on_discord_message_bot_ignored(self) -> None:
         platform = _discord_runtime(bot_token="token", allowed_channel_ids="123")
         handler = AsyncMock()
         platform.on_message(handler)
@@ -246,7 +269,7 @@ class TestDiscordRuntime:
         handler.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_on_discord_message_empty_content_ignored(self):
+    async def test_on_discord_message_empty_content_ignored(self) -> None:
         platform = _discord_runtime(bot_token="token", allowed_channel_ids="123")
         handler = AsyncMock()
         platform.on_message(handler)
@@ -258,7 +281,7 @@ class TestDiscordRuntime:
         handler.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_on_discord_message_channel_not_allowed_ignored(self):
+    async def test_on_discord_message_channel_not_allowed_ignored(self) -> None:
         platform = _discord_runtime(bot_token="token", allowed_channel_ids="123")
         handler = AsyncMock()
         platform.on_message(handler)
@@ -270,7 +293,7 @@ class TestDiscordRuntime:
         handler.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_on_discord_message_valid_calls_handler(self):
+    async def test_on_discord_message_valid_calls_handler(self) -> None:
         platform = _discord_runtime(bot_token="token", allowed_channel_ids="123")
         handler = AsyncMock()
         platform.on_message(handler)
@@ -284,14 +307,17 @@ class TestDiscordRuntime:
         msg.reference = None
         await platform._on_discord_message(msg)
         handler.assert_awaited_once()
-        call = handler.call_args[0][0]
+        awaited = handler.await_args
+        assert awaited is not None
+        call: object = awaited.args[0]
+        assert isinstance(call, IncomingMessage)
         assert call.text == "hello"
         assert call.chat_id == "123"
         assert call.message_id == "789"
         assert call.platform == "discord"
 
     @pytest.mark.asyncio
-    async def test_send_message_with_reply_to(self):
+    async def test_send_message_with_reply_to(self) -> None:
         platform = _discord_runtime(bot_token="token")
         mock_msg = MagicMock()
         mock_msg.id = 999
@@ -314,11 +340,12 @@ class TestDiscordRuntime:
             )
         assert msg_id == "999"
         mock_channel.send.assert_awaited_once()
-        call_kw = mock_channel.send.call_args[1]
-        assert call_kw.get("reference") is not None
+        awaited = mock_channel.send.await_args
+        assert awaited is not None
+        assert awaited.kwargs.get("reference") is not None
 
     @pytest.mark.asyncio
-    async def test_edit_message_not_found_returns_gracefully(self):
+    async def test_edit_message_not_found_returns_gracefully(self) -> None:
         import discord as discord_pkg
 
         platform = _discord_runtime(bot_token="token")
@@ -336,7 +363,7 @@ class TestDiscordRuntime:
         # Should not raise - NotFound is caught and we return
 
     @pytest.mark.asyncio
-    async def test_delete_message(self):
+    async def test_delete_message(self) -> None:
         platform = _discord_runtime(bot_token="token")
         mock_msg = AsyncMock()
         mock_channel = AsyncMock()
@@ -356,7 +383,7 @@ class TestDiscordRuntime:
         mock_msg.delete.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_fire_and_forget_with_coroutine(self):
+    async def test_fire_and_forget_with_coroutine(self) -> None:
         platform = _discord_runtime(bot_token="token")
         completed = asyncio.Event()
 
@@ -368,21 +395,21 @@ class TestDiscordRuntime:
         await platform.outbound.close()
         assert platform.outbound._outbox._background_tasks == set()
 
-    def test_on_message_registers_handler(self):
+    def test_on_message_registers_handler(self) -> None:
         platform = _discord_runtime(bot_token="token")
         handler = AsyncMock()
         platform.on_message(handler)
         assert platform._message_handler is handler
 
     @pytest.mark.asyncio
-    async def test_start_requires_token(self):
+    async def test_start_requires_token(self) -> None:
         with patch.dict("os.environ", {"DISCORD_BOT_TOKEN": ""}, clear=False):
             platform = _discord_runtime(bot_token="")
             with pytest.raises(ValueError, match="DISCORD_BOT_TOKEN"):
                 await platform.start()
 
     @pytest.mark.asyncio
-    async def test_start_connects(self):
+    async def test_start_connects(self) -> None:
         limiter = _limiter_mock()
         platform = _discord_runtime(bot_token="token", limiter=limiter)
         keep_running = asyncio.Event()
@@ -404,7 +431,9 @@ class TestDiscordRuntime:
         await platform.close()
 
     @pytest.mark.asyncio
-    async def test_client_failure_after_readiness_marks_runtime_disconnected(self):
+    async def test_client_failure_after_readiness_marks_runtime_disconnected(
+        self,
+    ) -> None:
         limiter = _limiter_mock()
         platform = _discord_runtime(bot_token="token", limiter=limiter)
         fail_client = asyncio.Event()
@@ -432,12 +461,12 @@ class TestDiscordRuntime:
             assert isinstance(result[0], RuntimeError)
             await asyncio.sleep(0)
 
-        assert platform.is_connected is False
+        assert not platform.is_connected
         await platform.quiesce()
         await platform.close()
 
     @pytest.mark.asyncio
-    async def test_quiesce_when_client_already_closed_then_close_delivery(self):
+    async def test_quiesce_when_client_already_closed_then_close_delivery(self) -> None:
         limiter = _limiter_mock()
         platform = _discord_runtime(bot_token="token", limiter=limiter)
         platform._connected = True
@@ -453,7 +482,7 @@ class TestDiscordRuntime:
         limiter.shutdown.assert_awaited_once_with()
 
     @pytest.mark.asyncio
-    async def test_quiesce_closes_client_without_closing_delivery(self):
+    async def test_quiesce_closes_client_without_closing_delivery(self) -> None:
         limiter = _limiter_mock()
         platform = _discord_runtime(bot_token="token", limiter=limiter)
         platform._connected = True
@@ -478,7 +507,7 @@ class TestDiscordRuntime:
         limiter.shutdown.assert_awaited_once_with()
 
     @pytest.mark.asyncio
-    async def test_quiesce_drains_start_task_when_client_close_fails(self):
+    async def test_quiesce_drains_start_task_when_client_close_fails(self) -> None:
         limiter = _limiter_mock()
         platform = _discord_runtime(bot_token="token", limiter=limiter)
         platform._connected = True
@@ -516,7 +545,7 @@ class TestDiscordRuntime:
         limiter.shutdown.assert_awaited_once_with()
 
     @pytest.mark.asyncio
-    async def test_start_propagates_client_failure_immediately(self):
+    async def test_start_propagates_client_failure_immediately(self) -> None:
         limiter = _limiter_mock()
         platform = _discord_runtime(bot_token="token", limiter=limiter)
 
@@ -537,7 +566,7 @@ class TestDiscordRuntime:
         await platform.close()
 
     @pytest.mark.asyncio
-    async def test_quiesce_waits_for_tracked_inbound_handler(self):
+    async def test_quiesce_waits_for_tracked_inbound_handler(self) -> None:
         platform = _discord_runtime(bot_token="token")
         platform._accepting_messages = True
         entered = asyncio.Event()
@@ -572,7 +601,7 @@ class TestDiscordRuntime:
         await platform.close()
 
     @pytest.mark.asyncio
-    async def test_quiesce_preserves_caller_cancellation(self):
+    async def test_quiesce_preserves_caller_cancellation(self) -> None:
         platform = _discord_runtime(bot_token="token")
         entered = asyncio.Event()
 
@@ -596,3 +625,148 @@ class TestDiscordRuntime:
                 await quiesce_task
 
         await platform.close()
+
+
+@pytest.fixture
+def discord_sleeps(monkeypatch: pytest.MonkeyPatch):
+    sleep = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    return sleep
+
+
+def _messenger(channel: MagicMock):
+    import discord as discord_pkg
+
+    from free_claude_code.messaging.platforms.discord_io import DiscordMessenger
+
+    client = MagicMock()
+    client.get_channel = MagicMock(return_value=channel)
+    return DiscordMessenger(
+        get_client=lambda: client,
+        get_discord=lambda: discord_pkg,
+        limiter=_limiter_mock(),
+    )
+
+
+def _http_exception(status: int):
+    import discord as discord_pkg
+
+    response = MagicMock()
+    response.status = status
+    response.reason = "error"
+    return discord_pkg.HTTPException(response, "rejected")
+
+
+class TestDiscordDeliveryRetry:
+    """Network failures discord.py does not retry are retried by the messenger."""
+
+    @pytest.mark.asyncio
+    async def test_edit_is_delivered_after_a_linux_connection_reset(
+        self, discord_sleeps: AsyncMock
+    ) -> None:
+        import aiohttp
+
+        msg = AsyncMock()
+        msg.edit = AsyncMock(
+            side_effect=[aiohttp.ClientOSError(104, "Connection reset by peer"), None]
+        )
+        channel = AsyncMock()
+        channel.fetch_message = AsyncMock(return_value=msg)
+
+        await _messenger(channel).edit_message("123", "456", "Stopped.")
+
+        assert msg.edit.await_count == 2
+        msg.edit.assert_awaited_with(content="Stopped.")
+
+    @pytest.mark.asyncio
+    async def test_send_is_retried_with_the_same_nonce(
+        self, discord_sleeps: AsyncMock
+    ) -> None:
+        import aiohttp
+
+        sent = MagicMock()
+        sent.id = 999
+        channel = AsyncMock()
+        channel.send = AsyncMock(side_effect=[aiohttp.ServerDisconnectedError(), sent])
+
+        msg_id = await _messenger(channel).send_message("123", "Hello")
+
+        assert msg_id == "999"
+        nonces = [call.kwargs.get("nonce") for call in channel.send.await_args_list]
+        assert len(nonces) == 2
+        assert nonces[0]
+        assert nonces[0] == nonces[1]
+
+    @pytest.mark.asyncio
+    async def test_rejected_edit_is_not_retried(
+        self, discord_sleeps: AsyncMock
+    ) -> None:
+        msg = AsyncMock()
+        msg.edit = AsyncMock(side_effect=_http_exception(400))
+        channel = AsyncMock()
+        channel.fetch_message = AsyncMock(return_value=msg)
+
+        with pytest.raises(Exception, match="rejected"):
+            await _messenger(channel).edit_message("123", "456", "text")
+
+        assert msg.edit.await_count == 1
+        discord_sleeps.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_network_failures_stop_after_the_attempt_budget(
+        self, discord_sleeps: AsyncMock
+    ) -> None:
+        import aiohttp
+
+        from free_claude_code.messaging.delivery_failures import MAX_ATTEMPTS
+
+        msg = AsyncMock()
+        msg.edit = AsyncMock(
+            side_effect=aiohttp.ClientOSError(104, "Connection reset by peer")
+        )
+        channel = AsyncMock()
+        channel.fetch_message = AsyncMock(return_value=msg)
+
+        with pytest.raises(aiohttp.ClientOSError):
+            await _messenger(channel).edit_message("123", "456", "text")
+
+        assert msg.edit.await_count == MAX_ATTEMPTS
+
+    @pytest.mark.asyncio
+    async def test_edit_is_delivered_after_a_truncated_response(
+        self, discord_sleeps: AsyncMock
+    ) -> None:
+        import aiohttp
+
+        msg = AsyncMock()
+        channel = AsyncMock()
+        channel.fetch_message = AsyncMock(
+            side_effect=[
+                aiohttp.ClientPayloadError("Response payload is not completed"),
+                msg,
+            ]
+        )
+
+        await _messenger(channel).edit_message("123", "456", "Stopped.")
+
+        assert channel.fetch_message.await_count == 2
+        msg.edit.assert_awaited_once_with(content="Stopped.")
+
+    @pytest.mark.asyncio
+    async def test_certificate_failure_is_not_retried(
+        self, discord_sleeps: AsyncMock
+    ) -> None:
+        import aiohttp
+
+        channel = AsyncMock()
+        channel.send = AsyncMock(
+            side_effect=aiohttp.ClientConnectorCertificateError(
+                MagicMock(), Exception("hostname mismatch")
+            )
+        )
+
+        with pytest.raises(aiohttp.ClientConnectorCertificateError):
+            await _messenger(channel).send_message("123", "Hello")
+
+        assert channel.send.await_count == 1
+        discord_sleeps.assert_not_awaited()

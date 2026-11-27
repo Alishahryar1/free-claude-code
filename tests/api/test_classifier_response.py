@@ -1,24 +1,30 @@
 import asyncio
 import json
+from collections.abc import Mapping, Sequence
 
 import pytest
 
 from free_claude_code.api.handlers.classifier_response import classifier_response
 from free_claude_code.core.anthropic.stream_contracts import parse_sse_text
 from free_claude_code.core.anthropic.streaming import format_sse_event
+from free_claude_code.core.json_types import JsonObject, JsonValue
+from tests.wire_payload import string_payload
 
 
-def wire(payloads):
-    return "".join(format_sse_event(payload["type"], payload) for payload in payloads)
+def wire(payloads: Sequence[Mapping[str, JsonValue]]):
+    return "".join(
+        format_sse_event(string_payload(payload["type"]), dict(payload))
+        for payload in payloads
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("chunk_size", [1, 17, 10000])
 async def test_projection_preserves_text_extensions_and_sparse_interleaved_blocks(
-    chunk_size,
-):
+    chunk_size: int,
+) -> None:
     literal = "<thinking>Classifier explanation</thinking><severity>0</severity>"
-    start = {
+    start: JsonObject = {
         "type": "message_start",
         "message": {
             "id": "original",
@@ -33,7 +39,7 @@ async def test_projection_preserves_text_extensions_and_sparse_interleaved_block
         "delta": {"stop_reason": "stop_sequence", "stop_sequence": "custom"},
         "usage": {"output_tokens": 50, "extra": 7},
     }
-    payloads = [
+    payloads: Sequence[Mapping[str, JsonValue]] = [
         start,
         {
             "type": "content_block_start",
@@ -114,8 +120,10 @@ async def test_projection_preserves_text_extensions_and_sparse_interleaved_block
 
 
 @pytest.mark.asyncio
-async def test_reasoning_only_completion_stays_empty_with_original_termination():
-    start = {"type": "message_start", "message": {"content": []}}
+async def test_reasoning_only_completion_stays_empty_with_original_termination() -> (
+    None
+):
+    start: JsonObject = {"type": "message_start", "message": {"content": []}}
     end = {
         "type": "message_delta",
         "delta": {"stop_reason": "max_tokens"},
@@ -147,7 +155,7 @@ async def test_reasoning_only_completion_stays_empty_with_original_termination()
 
 
 @pytest.mark.asyncio
-async def test_cancellation_during_hidden_reasoning_closes_input():
+async def test_cancellation_during_hidden_reasoning_closes_input() -> None:
     blocked = asyncio.Event()
     closed = asyncio.Event()
 
@@ -184,7 +192,7 @@ async def test_cancellation_during_hidden_reasoning_closes_input():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fails", [False, True])
-async def test_only_normal_exhaustion_flushes_unterminated_event(fails):
+async def test_only_normal_exhaustion_flushes_unterminated_event(fails: bool) -> None:
     failure = RuntimeError("upstream failed")
     raw = "event: error\ndata: " + json.dumps(
         {"type": "error", "error": {"message": "unchanged"}}

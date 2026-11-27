@@ -14,6 +14,7 @@ from tests.providers.support import (
     make_provider_config,
     profiled_provider,
 )
+from tests.wire_payload import array_payload, object_payload
 
 BEDROCK_MODEL = "openai.gpt-oss-120b"
 
@@ -78,15 +79,23 @@ def test_request_uses_portable_chat_fields_without_invented_reasoning() -> None:
     body = _provider()._chat._build_request_body(request)
 
     assert body["model"] == BEDROCK_MODEL
-    assert body["messages"][0] == {"role": "system", "content": "System prompt"}
+    assert array_payload(body["messages"])[0] == {
+        "role": "system",
+        "content": "System prompt",
+    }
     assert body["max_tokens"] == 100
-    assert body["tools"][0]["function"]["name"] == "read_file"
+    assert (
+        object_payload(object_payload(array_payload(body["tools"])[0])["function"])[
+            "name"
+        ]
+        == "read_file"
+    )
     assert "reasoning_effort" not in body
     assert "reasoning" not in body
     assert "thinking" not in body
 
 
-def test_reasoning_history_replays_as_portable_think_tags() -> None:
+def test_reasoning_history_replays_in_native_field() -> None:
     request = make_messages_request(
         BEDROCK_MODEL,
         messages=[
@@ -118,21 +127,27 @@ def test_reasoning_history_replays_as_portable_think_tags() -> None:
 
     body = _provider()._chat._build_request_body(request)
     assistant = next(
-        message for message in body["messages"] if message["role"] == "assistant"
+        message
+        for message in array_payload(body["messages"])
+        if object_payload(message)["role"] == "assistant"
     )
 
-    assert assistant["content"] == (
-        "<think>\nInspect the repository.\n</think>\n\nI found the file."
+    assert object_payload(assistant)["content"] == "I found the file."
+    assert object_payload(assistant)["reasoning_content"] == "Inspect the repository."
+    assert (
+        object_payload(array_payload(object_payload(assistant)["tool_calls"])[0])["id"]
+        == "call_1"
     )
-    assert assistant["tool_calls"][0]["id"] == "call_1"
-    assert "reasoning_content" not in assistant
-    assert "reasoning" not in assistant
+    assert object_payload(assistant)["reasoning_content"] == "Inspect the repository."
+    assert "reasoning" not in object_payload(assistant)
 
 
 @pytest.mark.asyncio
-async def test_model_discovery_uses_mantle_openai_models_endpoint() -> None:
+async def test_model_discovery_uses_mantle_openai_models_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     provider = _provider()
-    provider._client.models.list = AsyncMock(
+    mock_list = AsyncMock(
         return_value=SimpleNamespace(
             data=[
                 SimpleNamespace(id="openai.gpt-oss-120b"),
@@ -140,6 +155,7 @@ async def test_model_discovery_uses_mantle_openai_models_endpoint() -> None:
             ]
         )
     )
+    monkeypatch.setattr(provider._client.models, "list", mock_list)
 
     assert await provider.list_model_infos() == frozenset(
         {
@@ -147,4 +163,4 @@ async def test_model_discovery_uses_mantle_openai_models_endpoint() -> None:
             ProviderModelInfo("amazon.nova-pro-v1:0"),
         }
     )
-    provider._client.models.list.assert_awaited_once_with()
+    mock_list.assert_awaited_once_with()

@@ -207,7 +207,7 @@ def test_dsh_native_settings_migration_and_dump_e2e(
                 timeout=45,
             )
             assert dumped.returncode == 0, dumped.stdout + dumped.stderr
-            parsed = YAML(typ="rt").load(dumped.stdout)
+            parsed: object = YAML(typ="rt").load(dumped.stdout)
             assert "caller-precedence" in str(parsed)
             assert "openai-responses" in str(parsed)
         for invalid in (

@@ -1,9 +1,11 @@
+from pathlib import Path
+
 import pytest
-from playwright.sync_api import expect
+from playwright.sync_api import Page, expect
 
 
 @pytest.fixture
-def admin_client_files(tmp_path):
+def admin_client_files(tmp_path: Path):
     source = tmp_path / ".fcc/agent_workspace/sessions.json"
     source.parent.mkdir(parents=True)
     source.write_text('{"conversation":')
@@ -11,7 +13,7 @@ def admin_client_files(tmp_path):
 
 
 def test_damaged_legacy_history_warns_without_blocking_settings(
-    page, admin_base_url, admin_client_files
+    page: Page, admin_base_url: str, admin_client_files: Path
 ):
     page.goto(f"{admin_base_url}/admin")
     page.get_by_role("button", name="Messaging", exact=True).click()

@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import Never
 
 import httpx
 import httpx2
@@ -10,13 +11,15 @@ from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.config.custom_providers import CustomProviderDefinition
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.anthropic import MessagesRequest
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
-from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.custom import CustomProvider
 from free_claude_code.providers.runtime.config import build_custom_provider_config
+from tests.providers.support import MockHandler, continuation_seed, mock_response
+from tests.wire_payload import array_payload, decode_object, int_payload, object_payload
 
 pytestmark = pytest.mark.asyncio
 
@@ -24,10 +27,10 @@ pytestmark = pytest.mark.asyncio
 @pytest.mark.parametrize(
     "api_format", ["openai_chat", "openai_responses", "anthropic_messages"]
 )
-async def test_custom_requests_use_first_key_in_each_protocol(api_format):
+async def test_custom_requests_use_first_key_in_each_protocol(api_format: str) -> None:
     requests = []
 
-    def reply(request):
+    def reply(request: httpx.Request | httpx2.Request):
         requests.append(request)
         response = (
             httpx.Response if api_format == "anthropic_messages" else httpx2.Response
@@ -54,7 +57,7 @@ async def test_custom_requests_use_first_key_in_each_protocol(api_format):
                 messages=[{"role": "user", "content": "Hello"}],
             )
         )
-        assert [event async for event in stream]
+        assert [frame async for event in stream for frame in event.frames]
     finally:
         await instance.cleanup()
     assert len(requests) == 1
@@ -74,11 +77,13 @@ async def test_custom_requests_use_first_key_in_each_protocol(api_format):
         {"type": "enabled", "budget_tokens": 1536},
     ],
 )
-async def test_native_default_preserves_controls_without_advertised_support(thinking):
+async def test_native_default_preserves_controls_without_advertised_support(
+    thinking: JsonObject | None,
+) -> None:
     bodies = []
 
-    def reply(request):
-        bodies.append(json.loads(request.content))
+    def reply(request: httpx.Request):
+        bodies.append(decode_object(request.content))
         return httpx.Response(
             200,
             text=completion("anthropic_messages"),
@@ -101,10 +106,11 @@ async def test_native_default_preserves_controls_without_advertised_support(thin
     before = request.model_dump()
     try:
         assert [
-            item
+            frame
             async for item in instance.stream_messages(
                 request, reasoning=ReasoningPolicy.off()
             )
+            for frame in item.frames
         ]
         assert bodies[0].get("thinking") == thinking
         assert bodies[0]["output_config"] == request.output_config
@@ -118,11 +124,13 @@ async def test_native_default_preserves_controls_without_advertised_support(thin
     "limit,cap,expected",
     [(2048, 4096, 2048), (8192, 4096, 4096), (None, 4096, 4096), (8192, None, 8192)],
 )
-async def test_messages_egress_obeys_request_model_limit(ingress, limit, cap, expected):
+async def test_messages_egress_obeys_request_model_limit(
+    ingress: str, limit: int | None, cap: int | None, expected: int
+) -> None:
     bodies = []
 
-    def reply(request):
-        bodies.append(json.loads(request.content))
+    def reply(request: httpx.Request):
+        bodies.append(decode_object(request.content))
         return httpx.Response(
             200,
             text=completion("anthropic_messages"),
@@ -150,10 +158,10 @@ async def test_messages_egress_obeys_request_model_limit(ingress, limit, cap, ex
             )
             stream = instance.stream_responses(request, model_info=info)
         before = request.model_dump()
-        assert [item async for item in stream]
+        assert [frame async for item in stream for frame in item.frames]
         assert bodies[0]["max_tokens"] == expected
         assert "thinking" not in bodies[0]
-        assert "effort" not in bodies[0].get("output_config", {})
+        assert "effort" not in object_payload(bodies[0].get("output_config", {}))
         assert request.model_dump() == before
     finally:
         await instance.cleanup()
@@ -162,11 +170,13 @@ async def test_messages_egress_obeys_request_model_limit(ingress, limit, cap, ex
 @pytest.mark.parametrize("ingress", ["messages", "responses"])
 @pytest.mark.parametrize("exact", [False, True])
 @pytest.mark.parametrize("cap", [1024, 4096])
-async def test_manual_preset_respects_cap_before_resolving_budget(ingress, exact, cap):
+async def test_manual_preset_respects_cap_before_resolving_budget(
+    ingress: str, exact: bool, cap: int
+) -> None:
     bodies = []
 
-    def reply(request):
-        bodies.append(json.loads(request.content))
+    def reply(request: httpx.Request):
+        bodies.append(decode_object(request.content))
         return httpx.Response(
             200,
             text=completion("anthropic_messages"),
@@ -203,7 +213,7 @@ async def test_manual_preset_respects_cap_before_resolving_budget(ingress, exact
                 reasoning=policy,
                 model_info=info,
             )
-        return [item async for item in stream]
+        return [frame async for item in stream for frame in item.frames]
 
     try:
         if exact or cap == 1024:
@@ -213,7 +223,11 @@ async def test_manual_preset_respects_cap_before_resolving_budget(ingress, exact
         else:
             assert await consume()
             assert bodies[0]["max_tokens"] == cap
-            assert 1024 <= bodies[0]["thinking"]["budget_tokens"] < cap
+            assert (
+                1024
+                <= int_payload(object_payload(bodies[0]["thinking"])["budget_tokens"])
+                < cap
+            )
     finally:
         await instance.cleanup()
 
@@ -225,11 +239,15 @@ async def test_manual_preset_respects_cap_before_resolving_budget(ingress, exact
         ({"type": "enabled", "budget_tokens": 6000}, "below max_tokens"),
     ],
 )
-async def test_native_default_does_not_invent_or_shrink_exact_budget(thinking, error):
-    bodies = []
+async def test_native_default_does_not_invent_or_shrink_exact_budget(
+    thinking: JsonObject | None, error: str
+) -> None:
+    def unexpected_request(request: httpx.Request) -> Never:
+        raise AssertionError("Invalid request reached the provider")
+
     instance = provider(
         definition(api_format="anthropic_messages"),
-        messages_handler=lambda request: bodies.append(request),
+        messages_handler=unexpected_request,
     )
     try:
         with pytest.raises(InvalidRequestError, match=error):
@@ -242,18 +260,17 @@ async def test_native_default_does_not_invent_or_shrink_exact_budget(thinking, e
                 ),
                 model_info=ProviderModelInfo("m", max_output_tokens=4096),
             )
-            [item async for item in stream]
-        assert not bodies
+            [frame async for item in stream for frame in item.frames]
     finally:
         await instance.cleanup()
 
 
-async def test_concurrent_models_keep_independent_limits():
+async def test_concurrent_models_keep_independent_limits() -> None:
     bodies = []
     both_started = asyncio.Event()
 
-    async def reply(request):
-        bodies.append(json.loads(request.content))
+    async def reply(request: httpx.Request):
+        bodies.append(decode_object(request.content))
         if len(bodies) == 2:
             both_started.set()
         await asyncio.wait_for(both_started.wait(), timeout=2)
@@ -267,7 +284,7 @@ async def test_concurrent_models_keep_independent_limits():
         definition(api_format="anthropic_messages"), messages_handler=reply
     )
 
-    async def call(model, cap):
+    async def call(model: str, cap: int):
         stream = instance.stream_messages(
             MessagesRequest(
                 model=model,
@@ -276,7 +293,7 @@ async def test_concurrent_models_keep_independent_limits():
             ),
             model_info=ProviderModelInfo(model, max_output_tokens=cap),
         )
-        return [item async for item in stream]
+        return [frame async for item in stream for frame in item.frames]
 
     try:
         await asyncio.gather(call("small", 2048), call("large", 6000))
@@ -288,7 +305,7 @@ async def test_concurrent_models_keep_independent_limits():
         await instance.cleanup()
 
 
-def definition(**changes):
+def definition(**changes: object):
     return CustomProviderDefinition.model_validate(
         {
             "provider_id": "custom_" + "a" * 32,
@@ -299,7 +316,20 @@ def definition(**changes):
     )
 
 
-def provider(config, *, openai_handler=None, messages_handler=None):
+def provider(
+    config: CustomProviderDefinition,
+    *,
+    openai_handler: MockHandler[httpx2.Request] | None = None,
+    messages_handler: MockHandler[httpx.Request] | None = None,
+):
+    async def openai_reply(request: httpx2.Request) -> httpx2.Response:
+        assert openai_handler is not None
+        return await mock_response(openai_handler(request), httpx2.Response)
+
+    async def messages_reply(request: httpx.Request) -> httpx.Response:
+        assert messages_handler is not None
+        return await mock_response(messages_handler(request), httpx.Response)
+
     settings = Settings(provider_rate_limit=1000)
     return CustomProvider(
         build_custom_provider_config(config, settings),
@@ -310,20 +340,18 @@ def provider(config, *, openai_handler=None, messages_handler=None):
             rate_window=1,
             max_concurrency=2,
         ),
-        openai_transport=httpx2.MockTransport(openai_handler)
-        if openai_handler
-        else None,
-        messages_transport=httpx.MockTransport(messages_handler)
+        openai_transport=httpx2.MockTransport(openai_reply) if openai_handler else None,
+        messages_transport=httpx.MockTransport(messages_reply)
         if messages_handler
         else None,
     )
 
 
-def event(name, data):
+def event(name: str, data: JsonObject):
     return f"event: {name}\ndata: {json.dumps(data)}\n\n"
 
 
-def completion(api_format):
+def completion(api_format: str):
     if api_format == "openai_chat":
         data = {
             "id": "chat",
@@ -441,14 +469,19 @@ def completion(api_format):
 @pytest.mark.parametrize("key", [None, "custom-key"])
 @pytest.mark.parametrize("seeded", [False, True])
 async def test_six_paths_use_exact_endpoint_and_credentials(
-    api_format, path, ingress, key, seeded, monkeypatch
-):
+    api_format: str,
+    path: str,
+    ingress: str,
+    key: str | None,
+    seeded: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated-key")
     monkeypatch.setenv("OPENAI_ORG_ID", "unrelated-org")
     monkeypatch.setenv("OPENAI_PROJECT_ID", "unrelated-project")
     requests = []
 
-    def reply(request):
+    def reply(request: httpx.Request | httpx2.Request):
         requests.append(request)
         cls = httpx.Response if api_format == "anthropic_messages" else httpx2.Response
         return cls(
@@ -465,7 +498,7 @@ async def test_six_paths_use_exact_endpoint_and_credentials(
     try:
         policy = ReasoningPolicy.on(effort=ReasoningEffort.MEDIUM)
         continuation = (
-            ContinuationSeed("Prefix text", "Prior reasoning") if seeded else None
+            continuation_seed("Prefix text", "Prior reasoning") if seeded else None
         )
         if ingress == "messages":
             request = MessagesRequest(
@@ -483,7 +516,7 @@ async def test_six_paths_use_exact_endpoint_and_credentials(
             stream = instance.stream_responses(
                 request, reasoning=policy, continuation=continuation
             )
-        output = "".join([chunk async for chunk in stream])
+        output = "".join([frame async for chunk in stream for frame in chunk.frames])
         assert "Hello" in output
         assert len(requests) == 1
         sent = requests[0]
@@ -496,14 +529,15 @@ async def test_six_paths_use_exact_endpoint_and_credentials(
         )
         assert "openai-organization" not in sent.headers
         assert "openai-project" not in sent.headers
-        body = json.loads(sent.content)
+        body = decode_object(sent.content)
         if seeded:
             history = body.get("messages", body.get("input"))
-            assert "Prefix text" in str(history[-2])
-            assert "Prior reasoning" in str(history[-1])
+            assert "Prefix text" in str(array_payload(history)[-2])
+            assert "Prior reasoning" in str(array_payload(history)[:-1])
+            assert "Prior reasoning" not in str(array_payload(history)[-1])
             assert "Prefix text" not in str(request.model_dump())
         if ingress == "responses" and api_format == "openai_responses":
-            assert body["reasoning"]["effort"] == "medium"
+            assert object_payload(body["reasoning"])["effort"] == "medium"
         else:
             assert "reasoning_effort" not in body
             assert not body.get("reasoning")
@@ -519,12 +553,12 @@ async def test_six_paths_use_exact_endpoint_and_credentials(
     "api_format", ["openai_chat", "openai_responses", "anthropic_messages"]
 )
 async def test_discovery_is_bound_and_manual_inventory_needs_no_network(
-    api_format, monkeypatch
-):
+    api_format: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "do-not-send")
     requests = []
 
-    def reply(request):
+    def reply(request: httpx.Request | httpx2.Request):
         requests.append(request)
         cls = httpx.Response if api_format == "anthropic_messages" else httpx2.Response
         return cls(200, json={"data": [{"id": "org/model"}], "has_more": False})
@@ -585,12 +619,12 @@ async def test_discovery_is_bound_and_manual_inventory_needs_no_network(
     ],
 )
 async def test_reasoning_presets_encode_controls_on_the_wire(
-    api_format, mode, field, expected
-):
+    api_format: str, mode: str, field: str, expected: JsonValue
+) -> None:
     bodies = []
 
-    def reply(request):
-        bodies.append(json.loads(request.content))
+    def reply(request: httpx.Request | httpx2.Request):
+        bodies.append(decode_object(request.content))
         cls = httpx.Response if api_format == "anthropic_messages" else httpx2.Response
         return cls(
             200,
@@ -608,10 +642,11 @@ async def test_reasoning_presets_encode_controls_on_the_wire(
             model="m", max_tokens=4096, messages=[{"role": "user", "content": "Hello"}]
         )
         assert [
-            chunk
+            frame
             async for chunk in instance.stream_messages(
                 request, reasoning=ReasoningPolicy.on(effort=ReasoningEffort.HIGH)
             )
+            for frame in chunk.frames
         ]
         assert bodies[0][field] == expected
     finally:
@@ -622,11 +657,13 @@ async def test_reasoning_presets_encode_controls_on_the_wire(
     "api_format", ["openai_chat", "openai_responses", "anthropic_messages"]
 )
 @pytest.mark.parametrize("ingress", ["messages", "responses"])
-async def test_tool_continuation_keeps_tool_results_and_images(api_format, ingress):
+async def test_tool_continuation_keeps_tool_results_and_images(
+    api_format: str, ingress: str
+) -> None:
     bodies = []
 
-    def reply(request):
-        bodies.append(json.loads(request.content))
+    def reply(request: httpx.Request | httpx2.Request):
+        bodies.append(decode_object(request.content))
         cls = httpx.Response if api_format == "anthropic_messages" else httpx2.Response
         return cls(
             200,
@@ -725,10 +762,12 @@ async def test_tool_continuation_keeps_tool_results_and_images(api_format, ingre
         await instance.cleanup()
 
 
-async def test_messages_discovery_rejects_repeating_cursor_without_partial_results():
+async def test_messages_discovery_rejects_repeating_cursor_without_partial_results() -> (
+    None
+):
     calls = []
 
-    def reply(request):
+    def reply(request: httpx.Request):
         calls.append(request)
         return httpx.Response(
             200, json={"data": [{"id": "same"}], "has_more": True, "last_id": "same"}
@@ -747,7 +786,9 @@ async def test_messages_discovery_rejects_repeating_cursor_without_partial_resul
 
 
 @pytest.mark.parametrize("vision", [True, False])
-async def test_messages_discovery_retains_text_and_advertised_limits(vision):
+async def test_messages_discovery_retains_text_and_advertised_limits(
+    vision: bool,
+) -> None:
     instance = provider(
         definition(api_format="anthropic_messages"),
         messages_handler=lambda request: httpx.Response(

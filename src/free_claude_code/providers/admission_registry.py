@@ -41,6 +41,7 @@ class ProviderAdmissionRegistry:
                 rate_limit=self._limits.rate_limit,
                 rate_window=self._limits.rate_window,
                 max_concurrency=self._limits.max_concurrency,
+                max_attempts=self._limits.max_attempts,
                 capacity=self._capacities[provider_id],
             )
         return controllers[credential]
@@ -50,6 +51,9 @@ class ProviderAdmissionRegistry:
         self._limits = limits
         for capacity in self._capacities.values():
             capacity.reconfigure(limits)
+        for controllers in self._controllers.values():
+            for controller in controllers.values():
+                controller.reconfigure(limits)
 
     def retain_custom(self, provider_ids: Iterable[str]) -> None:
         retained = set(provider_ids)

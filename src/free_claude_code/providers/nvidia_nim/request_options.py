@@ -6,6 +6,7 @@ from typing import Any
 from free_claude_code.config.constants import ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS
 from free_claude_code.core.anthropic import ReasoningReplayMode, set_if_not_none
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.reasoning import ReasoningEffort, ReasoningPolicy
 from free_claude_code.providers.openai_chat import (
     NamedEffortReasoning,
@@ -30,7 +31,7 @@ NIM_REQUEST_POLICY = OpenAIChatRequestPolicy(
 
 def build_nim_request_body(
     request_data: MessagesRequest, *, reasoning: ReasoningPolicy
-) -> dict[str, Any]:
+) -> JsonObject:
     """Build an OpenAI-format request with NIM protocol adaptation."""
     return build_openai_chat_request_body(
         request_data,
@@ -60,7 +61,7 @@ def apply_nim_request_options(
     """Apply source-independent NIM policy to one Chat body."""
     sanitize_nim_tool_schemas(body)
 
-    max_tokens = body.get("max_tokens")
+    max_tokens: int | None = body.get("max_tokens")
     default_max_tokens = NIM_REQUEST_POLICY.default_max_tokens
     if max_tokens is None:
         max_tokens = default_max_tokens
@@ -97,7 +98,7 @@ def apply_nim_request_options(
 
 
 def _set_extra(
-    extra_body: dict[str, Any], key: str, value: Any, ignore_value: Any = None
+    extra_body: JsonObject, key: str, value: JsonValue, ignore_value: JsonValue = None
 ) -> None:
     if key in extra_body:
         return

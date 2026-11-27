@@ -20,11 +20,11 @@ def _isolate_powershell_module_cache(
 
 
 @pytest.fixture(scope="session")
-def powershell_module_paths(tmp_path_factory):
+def powershell_module_paths(tmp_path_factory: pytest.TempPathFactory) -> dict[str, str]:
     if os.name != "nt":
         return {}
     root = tmp_path_factory.mktemp("powershell-modules")
-    paths = {}
+    paths: dict[str, str] = {}
     for shell in dict.fromkeys(
         path for name in ("pwsh", "powershell") if (path := shutil.which(name))
     ):

@@ -1,8 +1,8 @@
 """HTML parsing for web_search / web_fetch."""
 
-import html
 from html.parser import HTMLParser
-from urllib.parse import parse_qs, unquote, urlparse
+from typing import override
+from urllib.parse import parse_qs, urlparse
 
 from free_claude_code.core.web_tools import WebSearchResult
 
@@ -16,6 +16,7 @@ class SearchResultParser(HTMLParser):
         self._href: str | None = None
         self._title_parts: list[str] = []
 
+    @override
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag != "a":
             return
@@ -27,21 +28,21 @@ class SearchResultParser(HTMLParser):
         uddg = query.get("uddg", [""])[0]
         if not uddg:
             return
-        self._href = unquote(uddg)
+        self._href = uddg
         self._title_parts = []
 
+    @override
     def handle_data(self, data: str) -> None:
         if self._href is not None:
             self._title_parts.append(data)
 
+    @override
     def handle_endtag(self, tag: str) -> None:
         if tag != "a" or self._href is None:
             return
         title = " ".join("".join(self._title_parts).split())
         if title and not any(result.url == self._href for result in self.results):
-            self.results.append(
-                WebSearchResult(title=html.unescape(title), url=self._href)
-            )
+            self.results.append(WebSearchResult(title=title, url=self._href))
         self._href = None
         self._title_parts = []
 
@@ -56,18 +57,21 @@ class HTMLTextParser(HTMLParser):
         self._in_title = False
         self._skip_depth = 0
 
+    @override
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag in {"script", "style", "noscript"}:
             self._skip_depth += 1
         elif tag == "title":
             self._in_title = True
 
+    @override
     def handle_endtag(self, tag: str) -> None:
         if tag in {"script", "style", "noscript"} and self._skip_depth:
             self._skip_depth -= 1
         elif tag == "title":
             self._in_title = False
 
+    @override
     def handle_data(self, data: str) -> None:
         text = " ".join(data.split())
         if not text:

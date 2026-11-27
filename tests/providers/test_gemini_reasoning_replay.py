@@ -28,8 +28,8 @@ from tests.providers.test_gemini_transport import chat_response, collect, gemini
     ids=["default", "on", "prefer_off", "off"],
 )
 async def test_native_fallback_field_and_computation_policy(
-    visible, structured, policy
-):
+    visible: bool, structured: bool, policy: ReasoningPolicy
+) -> None:
     profile = replace(
         _PROFILE,
         reasoning_delta_field="reasoning",
@@ -38,7 +38,7 @@ async def test_native_fallback_field_and_computation_policy(
     )
     details = [{"type": "reasoning.encrypted", "data": "signed", "index": 0}]
 
-    def reply(request):
+    def reply(request: object):
         return chat_response(
             [
                 {
@@ -70,8 +70,8 @@ async def test_native_fallback_field_and_computation_policy(
         if "thoughtSignature" in part
     ]
     records = [record for bundle in bundles if bundle for record in bundle.records]
-    assert bool(records) == (policy.output_enabled or structured)
-    if policy.output_enabled:
+    assert bool(records) == structured
+    if policy.output_enabled and structured:
         assert records[0].native["reasoning_content"] == "native thought"
         assert "reasoning" not in records[0].native
     elif structured:
@@ -83,10 +83,12 @@ async def test_native_fallback_field_and_computation_policy(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native", ["full thought", "different native"])
-async def test_mixed_native_and_structured_reasoning_retains_distinct_text(native):
+async def test_mixed_native_and_structured_reasoning_retains_distinct_text(
+    native: str,
+) -> None:
     profile = replace(_PROFILE, structured_reasoning_details=True)
 
-    def reply(request):
+    def reply(request: object):
         return chat_response(
             [
                 {"reasoning_content": native},
@@ -138,10 +140,10 @@ async def test_mixed_native_and_structured_reasoning_retains_distinct_text(nativ
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("structured", [False, True])
-async def test_equal_independent_groups_are_not_deduplicated(structured):
+async def test_equal_independent_groups_are_not_deduplicated(structured: bool) -> None:
     profile = replace(_PROFILE, structured_reasoning_details=structured)
 
-    def reply(request):
+    def reply(request: object):
         return chat_response(
             [
                 {"reasoning_content": "same thought"},
@@ -159,21 +161,22 @@ async def test_equal_independent_groups_are_not_deduplicated(structured):
     ) as client:
         value, _ = await collect(
             transport(client, DeepSeekChatBehavior(profile)).stream_gemini(
-                gemini_request()
+                gemini_request(
+                    generationConfig={"thinkingConfig": {"includeThoughts": True}}
+                )
             )
         )
-    bundle = decode_bundle(
-        value["candidates"][0]["content"]["parts"][-1]["thoughtSignature"]
+    parts = value["candidates"][0]["content"]["parts"]
+    assert all("thoughtSignature" not in part for part in parts)
+    assert (
+        "".join(part.get("text", "") for part in parts if part.get("thought"))
+        == "same thoughtsame thought"
     )
-    assert bundle is not None
-    assert [record.native for record in bundle.records] == [
-        {"reasoning_content": "same thought"}
-    ] * 2
 
 
 @pytest.mark.asyncio
-async def test_parsed_think_tags_do_not_become_native_reasoning_fields():
-    def reply(request):
+async def test_parsed_think_tags_do_not_become_native_reasoning_fields() -> None:
+    def reply(request: object):
         return chat_response([{"content": "<think>parsed thought</think>answer"}])
 
     async with AsyncOpenAI(
@@ -196,10 +199,12 @@ async def test_parsed_think_tags_do_not_become_native_reasoning_fields():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("visible", [False, True])
-async def test_abandoned_invisible_attempt_does_not_publish_its_reasoning(visible):
+async def test_abandoned_invisible_attempt_does_not_publish_its_reasoning(
+    visible: bool,
+) -> None:
     calls = 0
 
-    def reply(request):
+    def reply(request: object):
         nonlocal calls
         calls += 1
         prefix = "discarded" if calls == 1 else "winning"
@@ -226,10 +231,8 @@ async def test_abandoned_invisible_attempt_does_not_publish_its_reasoning(visibl
         )
     assert calls == 2
     assert "discarded" not in "".join(chunks)
-    bundle = decode_bundle(
-        value["candidates"][0]["content"]["parts"][-1]["thoughtSignature"]
+    parts = value["candidates"][0]["content"]["parts"]
+    assert all("thoughtSignature" not in part for part in parts)
+    assert "".join(part.get("text", "") for part in parts if part.get("thought")) == (
+        "winning thought" if visible else ""
     )
-    assert bundle is not None
-    assert [record.native for record in bundle.records] == [
-        {"reasoning_content": "winning thought"}
-    ]

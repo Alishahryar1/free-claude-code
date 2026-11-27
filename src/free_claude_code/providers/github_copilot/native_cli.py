@@ -46,6 +46,7 @@ async def verified_cli_path(env: Mapping[str, str]) -> str:
         )
     process = await asyncio.create_subprocess_exec(
         path,
+        "--no-auto-update",
         "--version",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,

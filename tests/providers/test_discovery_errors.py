@@ -17,8 +17,8 @@ from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
 )
-from free_claude_code.providers.failure_policy import ProviderRecoveryExhausted
 from free_claude_code.providers.model_listing import ModelListResponseError
+from free_claude_code.providers.recovery_errors import ProviderRecoveryExhausted
 from free_claude_code.providers.runtime.discovery import _provider_query_failure_reason
 
 
@@ -40,7 +40,9 @@ from free_claude_code.providers.runtime.discovery import _provider_query_failure
         ),
     ],
 )
-def test_wrapped_discovery_errors_are_specific_and_secret_safe(cause, expected):
+def test_wrapped_discovery_errors_are_specific_and_secret_safe(
+    cause: BaseException, expected: str
+) -> None:
     error = openai.APIConnectionError(
         message="secret-canary", request=httpx2.Request("GET", "https://example.test")
     )
@@ -50,7 +52,7 @@ def test_wrapped_discovery_errors_are_specific_and_secret_safe(cause, expected):
     assert "secret-canary" not in message
 
 
-def test_sdk_status_error_preserves_status_without_body():
+def test_sdk_status_error_preserves_status_without_body() -> None:
     response = httpx2.Response(
         401, request=httpx2.Request("GET", "https://example.test")
     )
@@ -68,8 +70,8 @@ def test_sdk_status_error_preserves_status_without_body():
     "failure, expected", [("dns", "DNS"), ("certificate", "certificate")]
 )
 async def test_sdk_connection_pool_preserves_os_failure_diagnostics(
-    monkeypatch, failure, expected
-):
+    monkeypatch: pytest.MonkeyPatch, failure: str, expected: str
+) -> None:
     stream = AsyncMock(spec=anyio.abc.ByteStream)
     connect = AsyncMock(return_value=stream)
     if failure == "dns":
@@ -93,17 +95,30 @@ async def test_sdk_connection_pool_preserves_os_failure_diagnostics(
     assert "secret-canary" not in message
 
 
-@pytest.mark.parametrize("client", [httpx, httpx2])
-def test_http_status_is_preserved_without_url_body_or_exception_message(client):
-    request = client.Request("GET", "https://user:secret-canary@example.test/models")
-    response = client.Response(403, request=request, text="secret-canary")
-    error = client.HTTPStatusError("secret-canary", request=request, response=response)
+@pytest.mark.parametrize("sdk", [False, True])
+def test_http_status_is_preserved_without_url_body_or_exception_message(
+    sdk: bool,
+) -> None:
+    url = "https://user:secret-canary@example.test/models"
+    error: httpx.HTTPStatusError | httpx2.HTTPStatusError
+    if sdk:
+        sdk_request = httpx2.Request("GET", url)
+        sdk_response = httpx2.Response(403, request=sdk_request, text="secret-canary")
+        error = httpx2.HTTPStatusError(
+            "secret-canary", request=sdk_request, response=sdk_response
+        )
+    else:
+        request = httpx.Request("GET", url)
+        response = httpx.Response(403, request=request, text="secret-canary")
+        error = httpx.HTTPStatusError(
+            "secret-canary", request=request, response=response
+        )
     message = _provider_query_failure_reason(error)
     assert "HTTP 403" in message
     assert "secret-canary" not in message
 
 
-def test_exception_context_and_cycles_are_safe():
+def test_exception_context_and_cycles_are_safe() -> None:
     error = RuntimeError("secret-canary")
     cause = socket.gaierror(-2, "secret-canary")
     error.__context__ = cause
@@ -119,7 +134,9 @@ def test_exception_context_and_cycles_are_safe():
 @pytest.mark.parametrize(
     "error", [httpx2.ReadTimeout("secret-canary"), httpx2.ConnectError("secret-canary")]
 )
-async def test_real_admission_cooldown_retains_discovery_failure(error):
+async def test_real_admission_cooldown_retains_discovery_failure(
+    error: httpx2.ConnectError | httpx2.ReadTimeout,
+) -> None:
     controller = ProviderAdmissionController(
         provider_name="TEST",
         max_attempts=1,
@@ -144,9 +161,10 @@ async def test_real_admission_cooldown_retains_discovery_failure(error):
     ) == _provider_query_failure_reason(error)
 
 
-def test_recovery_wrapper_cycles_do_not_hang_classification():
-    wrapper = ProviderRecoveryExhausted(RuntimeError("secret-canary"))
-    wrapper.last_error = wrapper
+def test_recovery_wrapper_cycles_do_not_hang_classification() -> None:
+    error = RuntimeError("unclassified failure")
+    wrapper = ProviderRecoveryExhausted(error)
+    error.__cause__ = wrapper
     assert (
         _provider_query_failure_reason(wrapper)
         == "Could not load models. Check the provider's settings and retry."

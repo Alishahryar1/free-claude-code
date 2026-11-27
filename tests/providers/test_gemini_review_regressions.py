@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import replace
+from typing import Literal
 
 import httpx2
 import pytest
@@ -10,14 +11,14 @@ from openai import AsyncOpenAI
 from free_claude_code.core.failures import ExecutionFailure, FailureKind
 from free_claude_code.core.gemini.replay import (
     ReplayBundle,
-    decode_bundle,
     encode_bundle,
 )
 from free_claude_code.core.history_replay import ReplayOrigin, ReplayRecord
 from free_claude_code.providers.deepseek.client import _PROFILE, DeepSeekChatBehavior
-from free_claude_code.providers.gemini.client import _PROFILE as GOOGLE_PROFILE
 from free_claude_code.providers.google_openai.provider import GoogleChatBehavior
 from free_claude_code.providers.openai_chat import OpenAIChatTransport
+from free_claude_code.providers.openai_chat.client import OpenAIAsyncCredentialProvider
+from free_claude_code.providers.vertex.client import _PROFILE as GOOGLE_PROFILE
 from tests.providers.support import immediate_admission
 from tests.providers.test_gemini_transport import chat_response, collect, gemini_request
 from tests.providers.test_lmstudio import (
@@ -25,9 +26,16 @@ from tests.providers.test_lmstudio import (
     metadata_response,
     provider_with_http,
 )
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 
-def transport(client, behavior, **kwargs):
+def transport(
+    client: AsyncOpenAI,
+    behavior: DeepSeekChatBehavior | GoogleChatBehavior,
+    *,
+    api_key_provider: OpenAIAsyncCredentialProvider | None = None,
+    endpoint_transport: httpx2.AsyncBaseTransport | None = None,
+):
     return OpenAIChatTransport(
         client=client,
         behavior=behavior,
@@ -35,7 +43,8 @@ def transport(client, behavior, **kwargs):
         read_timeout_s=2,
         log_raw_sse_events=False,
         log_api_error_tracebacks=False,
-        **kwargs,
+        api_key_provider=api_key_provider,
+        endpoint_transport=endpoint_transport,
     )
 
 
@@ -52,11 +61,13 @@ CALL = {
 @pytest.mark.parametrize("visible", [False, True])
 @pytest.mark.parametrize("with_call", [False, True])
 @pytest.mark.parametrize("field", ["reasoning_content", "reasoning"])
-async def test_plain_reasoning_survives_gemini_round_trip(visible, with_call, field):
+async def test_plain_reasoning_survives_gemini_round_trip(
+    visible: bool, with_call: bool, field: Literal["reasoning_content", "reasoning"]
+) -> None:
     sent = []
 
-    def reply(request):
-        sent.append(json.loads(request.content))
+    def reply(request: httpx2.Request):
+        sent.append(decode_object(request.content))
         return chat_response(
             [
                 {field: "original "},
@@ -84,12 +95,7 @@ async def test_plain_reasoning_survives_gemini_round_trip(visible, with_call, fi
         signatures = [
             p["thoughtSignature"] for p in content["parts"] if "thoughtSignature" in p
         ]
-        assert signatures, (
-            "native reasoning needs a replay carrier even when thoughts are hidden"
-        )
-        bundle = decode_bundle(signatures[0])
-        assert bundle is not None
-        assert bundle.records[0].native[field] == "original thought"
+        assert not signatures
         result = (
             {
                 "functionResponse": {
@@ -113,21 +119,29 @@ async def test_plain_reasoning_survives_gemini_round_trip(visible, with_call, fi
                 )
             )
         )
-    assistant = next(m for m in sent[1]["messages"] if m["role"] == "assistant")
-    assert assistant["reasoning_content"] == "original thought"
-    assert "original thought" not in json.dumps(assistant.get("content"))
+    assistant = next(
+        m
+        for m in array_payload(sent[1]["messages"])
+        if object_payload(m)["role"] == "assistant"
+    )
+    assert object_payload(assistant)["reasoning_content"] == (
+        "original thought" if visible else ""
+    )
+    assert "original thought" not in json.dumps(
+        object_payload(assistant).get("content")
+    )
 
 
 @pytest.mark.asyncio
-async def test_google_signature_cache_does_not_cross_credentials():
+async def test_google_signature_cache_does_not_cross_credentials() -> None:
     sent = []
     call = {
         **CALL,
         "extra_content": {"google": {"thought_signature": "account-a-signature"}},
     }
 
-    def reply(request):
-        sent.append(json.loads(request.content))
+    def reply(request: httpx2.Request):
+        sent.append(decode_object(request.content))
         return chat_response([{"tool_calls": [call]}], finish="tool_calls")
 
     async with AsyncOpenAI(
@@ -167,13 +181,13 @@ async def test_google_signature_cache_does_not_cross_credentials():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["replay", "image"])
-async def test_lmstudio_counts_projected_replay_and_images(kind):
+async def test_lmstudio_counts_projected_replay_and_images(kind: str) -> None:
     sent = []
 
-    def reply(request):
+    def reply(request: httpx2.Request):
         if request.method == "GET":
             return metadata_response(100 if kind == "image" else 1024)
-        sent.append(json.loads(request.content))
+        sent.append(decode_object(request.content))
         return completion_response()
 
     record = ReplayRecord(

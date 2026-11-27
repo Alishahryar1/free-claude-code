@@ -24,6 +24,7 @@ from tests.providers.support import (
     profiled_provider,
     reasoning_for,
 )
+from tests.wire_payload import array_payload
 
 
 @pytest.fixture
@@ -78,7 +79,7 @@ def test_build_request_body_uses_provider_defaults_when_reasoning_is_inherited(
     assert "extra_body" not in body
 
 
-def test_build_request_body_drops_undocumented_reasoning_replay_but_keeps_tools(
+def test_build_request_body_uses_native_reasoning_field_and_keeps_tools(
     wandb_provider: OpenAIChatProvider,
 ) -> None:
     request = _request(
@@ -115,9 +116,10 @@ def test_build_request_body_drops_undocumented_reasoning_replay_but_keeps_tools(
         reasoning=reasoning_for(request),
     )
 
-    assert body["messages"][1] == {
+    assert array_payload(body["messages"])[1] == {
         "role": "assistant",
-        "content": "Read it first.\n\nI will inspect it.",
+        "content": "I will inspect it.",
+        "reasoning": "Read it first.",
         "tool_calls": [
             {
                 "id": "toolu_1",
@@ -129,7 +131,7 @@ def test_build_request_body_drops_undocumented_reasoning_replay_but_keeps_tools(
             }
         ],
     }
-    assert body["messages"][2] == {
+    assert array_payload(body["messages"])[2] == {
         "role": "tool",
         "tool_call_id": "toolu_1",
         "content": "print('hello')",

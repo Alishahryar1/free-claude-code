@@ -1,12 +1,13 @@
 """Google Vertex AI provider using the OpenAI-compatible Chat Completions API."""
 
 from dataclasses import replace
-from typing import Any
+from typing import override
 
 import httpx
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic import ReasoningReplayMode
+from free_claude_code.core.json_types import JsonValue
 from free_claude_code.providers.admission import (
     ProviderAdmissionController,
     ProviderOperationKind,
@@ -17,6 +18,7 @@ from free_claude_code.providers.google_openai import (
     VertexReasoningEncoder,
     validate_google_extra_body,
 )
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.http import maybe_await_aclose
 from free_claude_code.providers.model_listing import (
     ModelListResponseError,
@@ -50,6 +52,7 @@ class VertexProvider(GoogleOpenAIProvider):
         project_id: str,
         location: str,
         admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
         access_token_provider: GoogleAccessTokenProvider | None = None,
     ) -> None:
         self._project_id = project_id.strip()
@@ -72,10 +75,12 @@ class VertexProvider(GoogleOpenAIProvider):
             replace(config, base_url=base_url),
             profile=_PROFILE,
             admission=admission,
+            history_cache=history_cache,
             api_key_provider=self._access_token_provider,
             default_headers={"x-goog-user-project": self._project_id},
         )
 
+    @override
     async def cleanup(self) -> None:
         """Release both OpenAI-compatible and native model-list clients."""
         try:
@@ -83,6 +88,7 @@ class VertexProvider(GoogleOpenAIProvider):
         finally:
             await self._model_list_client.aclose()
 
+    @override
     async def list_model_infos(self) -> frozenset[ProviderModelInfo]:
         """List Vertex publisher models and translate their resource names."""
         model_ids: set[str] = set()
@@ -106,7 +112,7 @@ class VertexProvider(GoogleOpenAIProvider):
             )
         return model_infos_from_ids(model_ids)
 
-    async def _list_model_page(self, page_token: str | None) -> Any:
+    async def _list_model_page(self, page_token: str | None) -> JsonValue:
         async def request() -> httpx.Response:
             token = await self._access_token_provider()
             response = await self._model_list_client.get(

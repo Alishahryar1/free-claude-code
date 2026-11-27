@@ -18,6 +18,7 @@ from free_claude_code.core.anthropic.stream_contracts import (
     thinking_content,
 )
 from free_claude_code.core.anthropic.streaming import format_sse_event
+from free_claude_code.core.anthropic.thinking import ContentChunk
 
 
 def test_interleaved_thinking_text_blocks_are_valid() -> None:
@@ -159,7 +160,7 @@ def _events_from_text_chunks(
 
 def _emit_parser_parts(
     builder: AnthropicStreamLedger,
-    parts: Iterable,
+    parts: Iterable[ContentChunk],
     enable_thinking: bool,
 ) -> list[str]:
     out: list[str] = []

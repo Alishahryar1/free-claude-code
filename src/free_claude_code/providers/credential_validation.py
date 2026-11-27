@@ -49,15 +49,51 @@ def _identity(name: str) -> Callable[[JsonValue], bool]:
     return lambda payload: isinstance(_field(payload, name), str)
 
 
+def _bearer_headers(credential: str, _settings: Settings) -> dict[str, str]:
+    return {"Authorization": f"Bearer {credential}"}
+
+
+def _anthropic_headers(credential: str, settings: Settings) -> dict[str, str]:
+    from free_claude_code.providers.anthropic.headers import api_headers
+
+    return api_headers(credential, settings.anthropic_workspace_id)
+
+
+def _rejects_api_error(*statuses: int) -> Callable[[int, JsonValue], bool]:
+    def rejects(status: int, payload: JsonValue) -> bool:
+        # An intermediary's auth challenge alone does not identify a rejected key.
+        return (
+            status in statuses
+            and isinstance(payload, Mapping)
+            and bool(
+                payload.get("error") or payload.get("message") or payload.get("detail")
+            )
+        )
+
+    return rejects
+
+
+def _invalid_google_key(status: int, payload: JsonValue) -> bool:
+    details = _field(_field(payload, "error"), "details")
+    return (
+        status == 400
+        and isinstance(details, list)
+        and any(_field(detail, "reason") == "API_KEY_INVALID" for detail in details)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _Probe:
     provider_id: str
     path: str
     accepts: Callable[[JsonValue], bool]
-    rejected_statuses: frozenset[int] = frozenset()
+    rejects: Callable[[int, JsonValue], bool] | None = None
+    headers: Callable[[str, Settings], dict[str, str]] = _bearer_headers
+    restricted: Callable[[JsonValue], bool] | None = None
+    unverified_message: str | None = None
 
 
-_AUTH_401 = frozenset({401})
+_AUTH_401 = _rejects_api_error(401)
 _MODELS = _list_field("data")
 
 # Sources document both authenticated reads and (where enabled) rejection codes.
@@ -80,7 +116,17 @@ _MODELS = _list_field("data")
 # https://platform.experientiallabs.ai/docs/authentication
 _PROBES = (
     # https://platform.claude.com/docs/en/api/models/list
-    _Probe("anthropic", "/models?limit=1", _MODELS, _AUTH_401),
+    _Probe(
+        "anthropic",
+        "/models?limit=1",
+        _MODELS,
+        _AUTH_401,
+        headers=_anthropic_headers,
+        unverified_message=(
+            "Could not verify this key. Check the Workspace ID, API permissions, "
+            "billing, or rate limits. You can still save it."
+        ),
+    ),
     _Probe(
         "open_router",
         "/key",
@@ -97,8 +143,18 @@ _PROBES = (
             and isinstance(_field(p, "balance_infos"), list)
         ),
         _AUTH_401,
+        restricted=lambda p: _field(p, "is_available") is False,
     ),
-    _Probe("xai", "/api-key", _identity("api_key_id"), _AUTH_401),
+    _Probe(
+        "xai",
+        "/api-key",
+        _identity("api_key_id"),
+        _AUTH_401,
+        restricted=lambda p: any(
+            _field(p, flag) is True
+            for flag in ("api_key_disabled", "api_key_blocked", "team_blocked")
+        ),
+    ),
     _Probe(
         "siliconflow",
         "/user/info",
@@ -107,12 +163,17 @@ _PROBES = (
             and _field(p, "status") is True
             and isinstance(_field(p, "data"), Mapping)
         ),
-        _AUTH_401,
+        # SiliconFlow also documents a JSON string for a rejected key.
+        rejects=lambda status, p: (
+            _AUTH_401(status, p) or (status == 401 and isinstance(p, str))
+        ),
     ),
     _Probe(
         "gemini",
         "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1",
         _list_field("models"),
+        rejects=_invalid_google_key,
+        headers=lambda credential, _: {"x-goog-api-key": credential},
     ),
     _Probe("nebius", "/models", _MODELS, _AUTH_401),
     _Probe("scaleway", "/models", _MODELS, _AUTH_401),
@@ -133,7 +194,7 @@ _PROBES = (
         "cohere",
         "https://api.cohere.com/v1/models?page_size=1",
         _list_field("models"),
-        frozenset({401, 498}),
+        _rejects_api_error(401, 498),
     ),
     _Probe(
         "wafer",
@@ -184,6 +245,10 @@ _PROBES = (
         "novita",
         "https://api.novita.ai/openapi/v1/billing/balance/detail",
         _identity("availableBalance"),
+        headers=lambda credential, settings: {
+            **_bearer_headers(credential, settings),
+            "Content-Type": "application/json",
+        },
     ),
     _Probe("cerebras", "/models", _MODELS),
     _Probe("sambanova", "/models", _MODELS),
@@ -203,13 +268,6 @@ def _unverified(key: str, message: str) -> CredentialCheck:
     return CredentialCheck(key, CredentialStatus.UNVERIFIED, message)
 
 
-def _invalid_google_key(payload: JsonValue) -> bool:
-    details = _field(_field(payload, "error"), "details")
-    return isinstance(details, list) and any(
-        _field(detail, "reason") == "API_KEY_INVALID" for detail in details
-    )
-
-
 def _interpret(key: str, probe: _Probe, response: httpx.Response) -> CredentialCheck:
     try:
         payload: JsonValue = response.json()
@@ -218,43 +276,20 @@ def _interpret(key: str, probe: _Probe, response: httpx.Response) -> CredentialC
             key, "Could not verify this key: unexpected provider response."
         )
     if response.is_success and probe.accepts(payload):
-        if (
-            probe.provider_id == "deepseek" and _field(payload, "is_available") is False
-        ) or (
-            probe.provider_id == "xai"
-            and any(
-                _field(payload, flag) is True
-                for flag in ("api_key_disabled", "api_key_blocked", "team_blocked")
-            )
-        ):
+        if probe.restricted is not None and probe.restricted(payload):
             return _unverified(
                 key,
                 "The key was recognized, but the provider reports a billing or access restriction.",
             )
         return CredentialCheck(key, CredentialStatus.VERIFIED, "API key accepted.")
-    # Require an API error body; an HTML intermediary's auth challenge is not
-    # evidence that the provider rejected the submitted credential.
-    api_error = isinstance(payload, Mapping) and bool(
-        payload.get("error") or payload.get("message") or payload.get("detail")
-    )
-    # SiliconFlow's /user/info OpenAPI defines 401 JSON as StringData.
-    if probe.provider_id == "siliconflow" and isinstance(payload, str):
-        api_error = True
-    if (api_error and response.status_code in probe.rejected_statuses) or (
-        probe.provider_id == "gemini"
-        and response.status_code == 400
-        and _invalid_google_key(payload)
-    ):
+    if probe.rejects is not None and probe.rejects(response.status_code, payload):
         return CredentialCheck(
             key,
             CredentialStatus.REJECTED,
             "The provider rejected this API key. Check it or create a new key.",
         )
-    if probe.provider_id == "anthropic":
-        return _unverified(
-            key,
-            "Could not verify this key. Check the Workspace ID, API permissions, billing, or rate limits. You can still save it.",
-        )
+    if probe.unverified_message is not None:
+        return _unverified(key, probe.unverified_message)
     if response.status_code in {402, 403}:
         return _unverified(
             key,
@@ -283,17 +318,7 @@ async def _check_one(
         if probe.path.startswith("https://")
         else base.rstrip("/") + probe.path
     )
-    headers = {"Accept": "application/json"}
-    if probe.provider_id == "gemini":
-        headers["x-goog-api-key"] = credential
-    else:
-        headers["Authorization"] = f"Bearer {credential}"
-    if probe.provider_id == "anthropic":
-        from free_claude_code.providers.anthropic.headers import api_headers
-
-        headers.update(api_headers(credential, settings.anthropic_workspace_id))
-    if probe.provider_id == "novita":
-        headers["Content-Type"] = "application/json"
+    headers = {"Accept": "application/json", **probe.headers(credential, settings)}
     try:
         async with asyncio.timeout(REQUEST_TIMEOUT):
             async with httpx.AsyncClient(

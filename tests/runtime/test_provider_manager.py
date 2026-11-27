@@ -1,5 +1,5 @@
 import asyncio
-from typing import cast
+from typing import cast, override
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx2
@@ -15,6 +15,7 @@ from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.nvidia_nim import NvidiaNimProvider
 from free_claude_code.providers.runtime import ProviderRuntime
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
+from tests.mock_calls import keyword_arguments, positional_arguments
 from tests.runtime.catalog_support import finish_discovery, finish_publication
 
 
@@ -28,9 +29,11 @@ class FakeRuntime(ProviderRuntime):
         self.provider = MagicMock()
         self.provider.list_model_infos = AsyncMock(return_value=frozenset())
 
+    @override
     def is_cached(self, provider_id: str, api_key_number: int = 1) -> bool:
         return provider_id == "cached"
 
+    @override
     async def resolve_provider(
         self, provider_id: str, api_key_number: int = 1
     ) -> BaseProvider:
@@ -38,6 +41,7 @@ class FakeRuntime(ProviderRuntime):
             raise ConnectionError("Local fixture is offline")
         return cast(BaseProvider, self.provider)
 
+    @override
     async def cleanup(self) -> None:
         self.cleanup_calls += 1
         if self.cleanup_started is not None:
@@ -53,7 +57,12 @@ class RuntimeFactory:
         self.runtimes: list[FakeRuntime] = []
         self.error: Exception | None = None
 
-    def __call__(self, settings: Settings, admission_registry) -> ProviderRuntime:
+    def __call__(
+        self,
+        settings: Settings,
+        admission_registry: object,
+        history_cache: object = None,
+    ) -> ProviderRuntime:
         if self.error is not None:
             raise self.error
         runtime = FakeRuntime(settings)
@@ -86,7 +95,9 @@ def _settings(model: str) -> Settings:
 
 
 @pytest.mark.asyncio
-async def test_discovery_error_follows_attempt_and_generation_without_losing_cache():
+async def test_discovery_error_follows_attempt_and_generation_without_losing_cache() -> (
+    None
+):
     factory = RuntimeFactory()
     settings = _settings("nvidia_nim/one")
     manager = ProviderRuntimeManager(settings, runtime_factory=factory)
@@ -161,7 +172,9 @@ async def test_startup_generation_lease_and_shutdown_close_exactly_once() -> Non
 
 
 @pytest.mark.asyncio
-async def test_custom_tail_edit_preserves_metadata_and_first_key_change_evicts_it():
+async def test_custom_tail_edit_preserves_metadata_and_first_key_change_evicts_it() -> (
+    None
+):
     provider_id = "custom_" + "c" * 32
     definition = {
         "provider_id": provider_id,
@@ -170,7 +183,7 @@ async def test_custom_tail_edit_preserves_metadata_and_first_key_change_evicts_i
         "api_keys": ["catalog-first", "catalog-tail"],
     }
 
-    def settings(keys):
+    def settings(keys: list[str]):
         return Settings.model_validate(
             {
                 "FCC_CUSTOM_PROVIDERS": [{**definition, "api_keys": keys}],
@@ -181,7 +194,7 @@ async def test_custom_tail_edit_preserves_metadata_and_first_key_change_evicts_i
     async def held_models():
         await asyncio.Event().wait()
 
-    def factory(config, registry):
+    def factory(config: Settings, registry: object, history_cache: object = None):
         runtime = FakeRuntime(config)
         runtime.provider.list_model_infos = AsyncMock(side_effect=held_models)
         return runtime
@@ -515,7 +528,7 @@ async def test_catalog_publication_failure_is_warning_only_and_secret_safe() -> 
     log_blob = " ".join(
         str(value)
         for call in warning.call_args_list
-        for value in (*call.args, *call.kwargs.values())
+        for value in (*positional_arguments(call), *keyword_arguments(call).values())
     )
     assert "PermissionError" in log_blob
     assert secret not in log_blob
@@ -799,7 +812,7 @@ async def test_failed_candidate_cleanup_is_retried_at_shutdown() -> None:
     assert factory.runtimes[1].cleanup_calls == 3
     assert manager._unpublished == set()
     assert manager.cached_model_ids() == {}
-    assert manager._closed is True
+    assert manager._closed
 
 
 @pytest.mark.asyncio
@@ -987,7 +1000,7 @@ async def test_cancelled_shutdown_reuses_the_same_owned_cleanup_task() -> None:
 
     assert cleanup_calls == 1
     assert manager._retired == {}
-    assert manager._closed is True
+    assert manager._closed
 
 
 @pytest.mark.asyncio
@@ -1018,7 +1031,7 @@ async def test_failed_shutdown_cleanup_is_retryable() -> None:
     assert factory.runtimes[0].cleanup_calls == 2
     assert manager._retired == {}
     assert manager.cached_model_ids() == {}
-    assert manager._closed is True
+    assert manager._closed
 
 
 @pytest.mark.asyncio

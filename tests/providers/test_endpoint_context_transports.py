@@ -4,6 +4,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from copy import deepcopy
+from typing import override
 
 import httpx
 import httpx2
@@ -13,8 +14,10 @@ from openai import AsyncOpenAI
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
 from free_claude_code.core.failures import ExecutionFailure
+from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.providers.endpoint_types import HttpEndpoint
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
@@ -25,6 +28,7 @@ from free_claude_code.providers.openai_chat import (
 )
 from free_claude_code.providers.openai_responses import OpenAIResponsesTransport
 from tests.providers.support import immediate_admission, make_provider_config
+from tests.wire_payload import decode_object
 
 
 class Context:
@@ -54,7 +58,7 @@ class Context:
 
 def _response(request: httpx2.Request) -> httpx2.Response:
     if request.url.path.endswith("/responses"):
-        payload = {
+        payload: JsonObject = {
             "type": "response.completed",
             "response": {
                 "id": "resp",
@@ -118,7 +122,7 @@ def _stream(
     context: Context,
     *,
     responses_ingress: bool,
-) -> AsyncIterator[str]:
+) -> AsyncIterator[StreamOutput]:
     if responses_ingress:
         return transport.stream_responses(
             OpenAIResponsesRequest(model="upstream", input="hi"),
@@ -138,8 +142,8 @@ def _stream(
     )
 
 
-async def _consume(stream: AsyncIterator[str]) -> None:
-    assert [event async for event in stream]
+async def _consume(stream: AsyncIterator[StreamOutput]) -> None:
+    assert [frame async for event in stream for frame in event.frames]
 
 
 @pytest.mark.asyncio
@@ -150,6 +154,7 @@ async def test_responses_credential_failure_does_not_retry_generation(
     responses_ingress: bool,
 ) -> None:
     class FailingContext(Context):
+        @override
         async def endpoint(self, *, force_refresh: bool = False) -> HttpEndpoint:
             if not refresh or force_refresh:
                 self.calls.append(force_refresh)
@@ -363,7 +368,7 @@ async def test_stream_authentication_precedes_overlapping_request_correction(
     bodies = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        bodies.append(json.loads(request.content))
+        bodies.append(decode_object(request.content))
         if len(bodies) > 1:
             return _response(request)
         failure = {

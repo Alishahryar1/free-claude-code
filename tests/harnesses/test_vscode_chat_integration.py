@@ -2,47 +2,58 @@ import json
 import os
 import stat
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from free_claude_code.application.model_catalog import CatalogModel
+from free_claude_code.core.json_types import load_json_value
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.harnesses import vscode_chat_integration as vscode
+from tests.wire_payload import array_payload, object_array, object_payload
 
 URL = "http://127.0.0.1:8082"
 MODEL = CatalogModel("nim/model", "nim/model", "NIM Model", None)
 native_config_path = vscode.config_path
 
 
-def test_connect_refresh_disconnect_preserves_other_groups_and_options(tmp_path):
+def test_connect_refresh_disconnect_preserves_other_groups_and_options(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "chatLanguageModels.json"
     other = {"name": "Other", "vendor": "customendpoint", "apiKey": "other"}
     path.write_text(json.dumps([other]))
     assert not vscode.status(path)["connected"]
     assert vscode.configure(path, URL, "secret", (MODEL,))
-    data = json.loads(path.read_text())
-    assert data[0] == other
-    assert data[1]["models"][0]["url"] == URL + "/v1/messages"
-    data[1].update(name="My FCC", settings={"keep": True}, url="old", apiKey="old")
+    data = load_json_value(path.read_text())
+    assert array_payload(data)[0] == other
+    assert (
+        object_array(object_array(data)[1]["models"])[0]["url"] == URL + "/v1/messages"
+    )
+    object_payload(array_payload(data)[1]).update(
+        name="My FCC", settings={"keep": True}, url="old", apiKey="old"
+    )
     path.write_text(json.dumps(data))
     assert vscode.configure(path, URL, "new", (MODEL,), only_existing=True)
-    saved = json.loads(path.read_text())
-    assert saved[1]["settings"] == {"keep": True}
-    assert saved[1]["name"] == "My FCC"
-    assert "url" not in saved[1]
-    assert "apiKey" not in saved[1]
-    assert saved[1]["models"][0]["requestHeaders"] == {"x-api-key": "new"}
+    saved = load_json_value(path.read_text())
+    assert object_array(saved)[1]["settings"] == {"keep": True}
+    assert object_array(saved)[1]["name"] == "My FCC"
+    assert "url" not in object_array(saved)[1]
+    assert "apiKey" not in object_array(saved)[1]
+    assert object_array(object_payload(array_payload(saved)[1])["models"])[0][
+        "requestHeaders"
+    ] == {"x-api-key": "new"}
     before = path.stat().st_mtime_ns
     assert not vscode.configure(path, URL, "new", (MODEL,), only_existing=True)
     assert path.stat().st_mtime_ns == before
     assert vscode.status(path)["connected"] is True
     assert "new" not in json.dumps(vscode.status(path))
     vscode.disconnect(path)
-    assert json.loads(path.read_text()) == [other]
+    assert load_json_value(path.read_text()) == [other]
     assert not vscode.configure(path, URL, "new", (MODEL,), only_existing=True)
 
 
-def test_missing_file_read_refresh_disconnect_never_creates_it(tmp_path):
+def test_missing_file_read_refresh_disconnect_never_creates_it(tmp_path: Path) -> None:
     path = tmp_path / "missing/chatLanguageModels.json"
     assert vscode.status(path) == {
         "connected": False,
@@ -56,7 +67,7 @@ def test_missing_file_read_refresh_disconnect_never_creates_it(tmp_path):
 @pytest.mark.parametrize(
     "source", ["{bad", "{}", "[1]", '[{"x":NaN}]', '[{"x":1,"x":2}]']
 )
-def test_invalid_document_is_never_overwritten(tmp_path, source):
+def test_invalid_document_is_never_overwritten(tmp_path: Path, source: str) -> None:
     path = tmp_path / "models.json"
     path.write_text(source)
     for operation in (
@@ -69,7 +80,7 @@ def test_invalid_document_is_never_overwritten(tmp_path, source):
         assert path.read_text() == source
 
 
-def test_conflict_does_not_claim_an_unmarked_group(tmp_path):
+def test_conflict_does_not_claim_an_unmarked_group(tmp_path: Path) -> None:
     path = tmp_path / "models.json"
     source = '[{"name":"Free Claude Code","vendor":"customendpoint"}]'
     path.write_text(source)
@@ -79,20 +90,22 @@ def test_conflict_does_not_claim_an_unmarked_group(tmp_path):
     assert not vscode.status(path)["connected"]
 
 
-def test_duplicate_markers_fail_but_disconnect_recovers_name_collision(tmp_path):
+def test_duplicate_markers_fail_but_disconnect_recovers_name_collision(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "models.json"
     vscode.configure(path, URL, "secret", (MODEL,))
-    owned = json.loads(path.read_text())[0]
+    owned = array_payload(load_json_value(path.read_text()))[0]
     path.write_text(json.dumps([owned, owned]))
     with pytest.raises(ValueError):
         vscode.disconnect(path)
-    other = {"vendor": "customendpoint", "name": owned["name"]}
+    other = {"vendor": "customendpoint", "name": object_payload(owned)["name"]}
     path.write_text(json.dumps([owned, other]))
     with pytest.raises(ValueError):
         vscode.configure(path, URL, "secret", (MODEL,))
     assert vscode.status(path)["connected"]
     vscode.disconnect(path)
-    assert json.loads(path.read_text()) == [other]
+    assert load_json_value(path.read_text()) == [other]
 
 
 @pytest.mark.parametrize(
@@ -106,7 +119,9 @@ def test_duplicate_markers_fail_but_disconnect_recovers_name_collision(tmp_path)
         (1, 0, (118080, 81920)),
     ],
 )
-def test_token_allocation_and_capabilities(context, output, expected):
+def test_token_allocation_and_capabilities(
+    context: int | None, output: int | None, expected: tuple[int, int]
+) -> None:
     model = replace(MODEL, context_window_tokens=context, max_output_tokens=output)
     entry = vscode.model_entry(model, URL)
     assert (entry["maxInputTokens"], entry["maxOutputTokens"]) == expected
@@ -122,19 +137,24 @@ def test_token_allocation_and_capabilities(context, output, expected):
     )
 
 
-def test_comment_input_and_order_are_preserved_semantically(tmp_path):
+def test_comment_input_and_order_are_preserved_semantically(tmp_path: Path) -> None:
     path = tmp_path / "models.json"
     path.write_text('[/* comment */ {"vendor":"other", "name":"Other",},]')
     second = replace(MODEL, wire_slug="custom/z", display_name="Custom Z")
     vscode.configure(path, URL, "secret", (MODEL, second))
-    assert [m["id"] for m in json.loads(path.read_text())[1]["models"]] == [
+    assert [
+        m["id"]
+        for m in object_array(
+            object_array(load_json_value(path.read_text()))[1]["models"]
+        )
+    ] == [
         MODEL.wire_slug,
         second.wire_slug,
     ]
 
 
 @pytest.mark.parametrize("support", [True, None, False])
-def test_native_effort_capability(support):
+def test_native_effort_capability(support: bool | None) -> None:
     entry = vscode.model_entry(replace(MODEL, supports_reasoning=support), URL)
     if support is False:
         assert "supportsReasoningEffort" not in entry
@@ -152,29 +172,34 @@ def test_native_effort_capability(support):
 
 
 def test_refresh_preserves_native_preferences_and_replaces_generated_capabilities(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "models.json"
     removed = replace(MODEL, wire_slug="nim/removed")
     vscode.configure(path, URL, "old", (MODEL, removed))
-    data = json.loads(path.read_text())
+    data = load_json_value(path.read_text())
     preferences = {MODEL.wire_slug: {"reasoningEffort": "high"}}
-    data[0]["settings"] = preferences
-    data[0]["models"][0]["maxOutputTokens"] = 777
+    object_array(data)[0]["settings"] = preferences
+    object_array(object_array(data)[0]["models"])[0]["maxOutputTokens"] = 777
     path.write_text(json.dumps(data))
     vscode.configure(path, URL, "new", (replace(MODEL, supports_reasoning=False),))
-    saved = json.loads(path.read_text())[0]
-    assert saved["settings"] == preferences
-    assert [m["id"] for m in saved["models"]] == [MODEL.wire_slug]
-    assert saved["models"][0]["maxOutputTokens"] == 81920
-    assert "supportsReasoningEffort" not in saved["models"][0]
+    saved = array_payload(load_json_value(path.read_text()))[0]
+    assert object_payload(saved)["settings"] == preferences
+    assert [m["id"] for m in object_array(object_payload(saved)["models"])] == [
+        MODEL.wire_slug
+    ]
+    assert object_array(object_payload(saved)["models"])[0]["maxOutputTokens"] == 81920
+    assert (
+        "supportsReasoningEffort"
+        not in object_array(object_payload(saved)["models"])[0]
+    )
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file permissions")
 @pytest.mark.parametrize("already_connected", [False, True])
 def test_connect_and_unchanged_refresh_make_existing_file_private(
-    tmp_path, already_connected
-):
+    tmp_path: Path, already_connected: bool
+) -> None:
     path = tmp_path / "models.json"
     path.write_text("[]")
     if already_connected:
@@ -199,7 +224,13 @@ def test_connect_and_unchanged_refresh_make_existing_file_private(
         ),
     ],
 )
-def test_native_config_paths(tmp_path, monkeypatch, platform, env, tail):
+def test_native_config_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    env: str | None,
+    tail: str,
+) -> None:
     from free_claude_code.harnesses import claude_integration
 
     monkeypatch.setattr(claude_integration.sys, "platform", platform)
@@ -222,8 +253,8 @@ def test_native_config_paths(tmp_path, monkeypatch, platform, env, tail):
     ],
 )
 def test_native_effort_uses_shared_routing_and_provider_encoders(
-    effort, preference, no_thinking, expected
-):
+    effort: str | None, preference: str, no_thinking: bool, expected: str | None
+) -> None:
     from free_claude_code.application.routing import ModelRouter
     from free_claude_code.config.settings import Settings
     from free_claude_code.core.anthropic.models import MessagesRequest
@@ -271,8 +302,8 @@ def test_native_effort_uses_shared_routing_and_provider_encoders(
 
 
 def test_unchanged_permission_repair_failure_is_not_reported_as_success(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     path = tmp_path / "models.json"
     vscode.configure(path, URL, "secret", (MODEL,))
     before = path.read_bytes()

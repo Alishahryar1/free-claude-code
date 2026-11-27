@@ -4,7 +4,8 @@ import json
 import re
 import traceback
 from dataclasses import dataclass
-from typing import Any
+
+from free_claude_code.core.json_types import load_json_value
 
 from .failures import ExecutionFailure
 
@@ -140,11 +141,11 @@ def extract_upstream_error_detail(exc: Exception) -> UpstreamErrorDetail:
         exception_text, _ = _cap_text_bytes(exception_text)
 
     return UpstreamErrorDetail(
-        status_code=_status_code_from_exception(exc),
+        status_code=reported_http_status(exc),
         body_text=body_text,
         exception_text=exception_text,
         cause_chain_text=_exception_cause_chain_text(exc),
-        category_hint=_category_hint_from_body(raw_body, body_text),
+        category_hint=_category_hint_from_body(raw_body),
         body_truncated=body_truncated,
     )
 
@@ -180,7 +181,7 @@ def format_execution_failure_message(
     else:
         lines = [f"Upstream provider {upstream_name} returned an error."]
 
-    lines.append(f"Category: {detail.category_hint or failure.kind.value}")
+    lines.append(f"Category: {failure.kind.value}")
     if stable_message and stable_message != lines[0]:
         lines.append(f"Mapped message: {stable_message}")
     lines.extend(("", "Upstream error:"))
@@ -200,7 +201,8 @@ def _body_truncation_line_needed(detail: UpstreamErrorDetail) -> bool:
     )
 
 
-def _status_code_from_exception(exc: Exception) -> int | None:
+def reported_http_status(exc: BaseException) -> int | None:
+    """Return the HTTP status an exception or its attached response reports."""
     status = getattr(exc, "status_code", None)
     if isinstance(status, int):
         return status
@@ -209,21 +211,23 @@ def _status_code_from_exception(exc: Exception) -> int | None:
     return response_status if isinstance(response_status, int) else None
 
 
-def _body_from_response(exc: Exception) -> Any:
-    response = getattr(exc, "response", None)
+def _body_from_response(exc: Exception) -> object:
+    response: object = getattr(exc, "response", None)
     if response is None:
         return None
     try:
-        return response.json()
+        decode: object = getattr(response, "json", None)
+        if callable(decode):
+            return decode()
     except Exception:
         pass
     try:
-        return response.text
+        return getattr(response, "text", None)
     except Exception:
         return None
 
 
-def _normalize_body_text(body: Any) -> str | None:
+def _normalize_body_text(body: object) -> str | None:
     if body is None:
         return None
     if isinstance(body, bytes):
@@ -239,7 +243,7 @@ def _normalize_body_text(body: Any) -> str | None:
     if not stripped:
         return None
     try:
-        parsed = json.loads(stripped)
+        parsed = load_json_value(stripped)
     except ValueError:
         return stripped
     return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
@@ -285,13 +289,13 @@ def _exception_cause_chain_text(exc: BaseException) -> str | None:
     return text
 
 
-def _category_hint_from_body(body: Any, body_text: str | None) -> str | None:
+def _category_hint_from_body(body: object) -> str | None:
     parsed = body
     if isinstance(parsed, bytes):
         parsed = parsed.decode("utf-8", errors="replace")
     if isinstance(parsed, str):
         try:
-            parsed = json.loads(parsed)
+            parsed = load_json_value(parsed)
         except ValueError:
             parsed = None
     if isinstance(parsed, dict):
@@ -305,12 +309,6 @@ def _category_hint_from_body(body: Any, body_text: str | None) -> str | None:
             value = parsed.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
-    if (
-        body_text
-        and "model" in body_text.lower()
-        and "unsupported" in body_text.lower()
-    ):
-        return "upstream_model_error"
     return None
 
 

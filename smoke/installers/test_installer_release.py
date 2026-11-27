@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import threading
 from pathlib import Path
+from typing import Protocol, override
 
 import pytest
 
@@ -16,7 +17,9 @@ RAW = "https://raw.githubusercontent.com/Alishahryar1/free-claude-code"
 
 
 @contextlib.contextmanager
-def release_server(body, target="v2.0.0", status=200, metadata=""):
+def release_server(
+    body: str, target: str = "v2.0.0", status: int = 200, metadata: str = ""
+):
     requests = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -47,7 +50,8 @@ def release_server(body, target="v2.0.0", status=200, metadata=""):
             self.end_headers()
             self.wfile.write(payload)
 
-        def log_message(self, format, *args):
+        @override
+        def log_message(self, format: object, *args: object):
             pass
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -63,15 +67,38 @@ def release_server(body, target="v2.0.0", status=200, metadata=""):
         thread.join()
 
 
+class _RunInstaller(Protocol):
+    def __call__(
+        self,
+        url: str,
+        *args: str,
+        version: str = "",
+        marker: str = "",
+        input: str = "yes\n",
+        body: str | None = None,
+        inspect_environment: bool = False,
+        invocation: str | None = None,
+    ) -> subprocess.CompletedProcess[str]: ...
+
+
+type InstallerEntry = tuple[bool, str, _RunInstaller]
+
+
 @pytest.fixture(params=["sh", "powershell", "pwsh"])
-def installer_entry(request, tmp_path, powershell_module_paths):
-    shell_name = request.param
+def installer_entry(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    powershell_module_paths: dict[str, str],
+) -> InstallerEntry:
+    shell_name: object = getattr(request, "param", None)
+    assert isinstance(shell_name, str)
     windows = shell_name != "sh"
     if windows != (os.name == "nt"):
         pytest.skip("installer_entry is tested on its native platform")
-    shell = shutil.which(shell_name)
-    if shell is None:
+    shell_path = shutil.which(shell_name)
+    if shell_path is None:
         pytest.skip(f"{shell_name} is unavailable")
+    shell: str = shell_path
     suffix = "ps1" if windows else "sh"
     script = tmp_path / f"install.{suffix}"
     env = os.environ | {
@@ -86,15 +113,15 @@ def installer_entry(request, tmp_path, powershell_module_paths):
         env["APPDATA"] = str(tmp_path / "roaming")
 
     def run(
-        url,
-        *args,
-        version="",
-        marker="",
-        input="yes\n",
-        body=None,
-        inspect_environment=False,
-        invocation=None,
-    ):
+        url: str,
+        *args: str,
+        version: str = "",
+        marker: str = "",
+        input: str = "yes\n",
+        body: str | None = None,
+        inspect_environment: bool = False,
+        invocation: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         source = (
             body
             if body is not None
@@ -139,7 +166,7 @@ def installer_entry(request, tmp_path, powershell_module_paths):
 @pytest.mark.parametrize("explicit", [False, True])
 @pytest.mark.parametrize("exit_code", [0, 23])
 def test_installer_entry_freezes_release_and_preserves_invocation(
-    installer_entry, explicit, exit_code
+    installer_entry: InstallerEntry, explicit: bool, exit_code: int
 ):
     windows, suffix, run = installer_entry
     if windows:
@@ -181,7 +208,9 @@ def test_installer_entry_freezes_release_and_preserves_invocation(
         "../../other",
     ],
 )
-def test_installer_entry_rejects_invalid_selected_release(installer_entry, target):
+def test_installer_entry_rejects_invalid_selected_release(
+    installer_entry: InstallerEntry, target: str
+):
     _, _, run = installer_entry
     with release_server("exit 0", target=target) as (url, requests):
         result = run(url)
@@ -190,7 +219,9 @@ def test_installer_entry_rejects_invalid_selected_release(installer_entry, targe
 
 
 @pytest.mark.parametrize("body,status", [("", 200), ("exit 0", 503), ("if (", 200)])
-def test_installer_entry_rejects_bad_installer_download(installer_entry, body, status):
+def test_installer_entry_rejects_bad_installer_download(
+    installer_entry: InstallerEntry, body: str, status: int
+):
     _, _, run = installer_entry
     with release_server(body, status=status) as (url, requests):
         result = run(url)
@@ -201,7 +232,7 @@ def test_installer_entry_rejects_bad_installer_download(installer_entry, body, s
 
 @pytest.mark.parametrize("entry_state", ["fresh", "pinned", "tagged"])
 def test_installer_entry_and_tagged_installer_share_release_metadata(
-    installer_entry, entry_state
+    installer_entry: InstallerEntry, entry_state: str
 ):
     windows, suffix, run = installer_entry
     source = (ROOT / f"scripts/install.{suffix}").read_text(encoding="utf-8")
@@ -240,7 +271,7 @@ def test_installer_entry_and_tagged_installer_share_release_metadata(
 
 @pytest.mark.parametrize("failure", [False, True])
 def test_powershell_installer_entry_restores_release_environment(
-    installer_entry, failure
+    installer_entry: InstallerEntry, failure: bool
 ):
     windows, _, run = installer_entry
     if not windows:
@@ -260,7 +291,9 @@ def test_powershell_installer_entry_restores_release_environment(
 @pytest.mark.parametrize(
     "version,marker", [("", "2.0.0"), ("2.0.0", "3.0.0"), ("2.0.0", "2.0.0\n3.0.0")]
 )
-def test_invalid_handoff_is_rejected_before_download(installer_entry, version, marker):
+def test_invalid_handoff_is_rejected_before_download(
+    installer_entry: InstallerEntry, version: str, marker: str
+):
     _, _, run = installer_entry
     with release_server("exit 0") as (url, requests):
         result = run(url, version=version, marker=marker)
@@ -269,7 +302,7 @@ def test_invalid_handoff_is_rejected_before_download(installer_entry, version, m
     assert "handoff" in result.stdout + result.stderr
 
 
-def test_existing_backend_binding_is_preserved(installer_entry):
+def test_existing_backend_binding_is_preserved(installer_entry: InstallerEntry):
     windows, _, run = installer_entry
     if windows:
         body = """param([switch] $VoiceLocal, [string] $TorchBackend, [switch] $RtkHeadroom)

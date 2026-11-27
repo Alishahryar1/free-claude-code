@@ -1,10 +1,12 @@
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from free_claude_code.harnesses import claude_integration, claude_onboarding
+from free_claude_code.runtime.application import ApplicationRuntime
 from tests.api.support import create_test_app, runtime_for_app
 
 ROOT = "/admin/api/integrations/claude-onboarding"
@@ -20,13 +22,19 @@ def onboarding():
         yield client, runtime_for_app(app), claude_onboarding.state_path()
 
 
-def test_passive_status_and_independent_completion(onboarding):
+def test_passive_status_and_independent_completion(
+    monkeypatch: pytest.MonkeyPatch,
+    onboarding: tuple[TestClient, ApplicationRuntime, Path],
+) -> None:
     client, runtime, path = onboarding
-    runtime.provider_manager.wait_for_model_catalog = AsyncMock(
+    mock_wait_for_model_catalog = AsyncMock(
         side_effect=AssertionError("No model discovery needed")
     )
-    runtime._integrations._claude_update.state = "failed"
-    runtime._integrations._claude_update.message = "VS Code unavailable"
+    monkeypatch.setattr(
+        runtime.provider_manager, "wait_for_model_catalog", mock_wait_for_model_catalog
+    )
+    runtime.integrations._claude_update.state = "failed"
+    runtime.integrations._claude_update.message = "VS Code unavailable"
     result = client.get(ROOT)
     assert result.status_code == 200
     assert result.headers["cache-control"] == "no-store"
@@ -48,15 +56,15 @@ def test_passive_status_and_independent_completion(onboarding):
         "changed": False,
     }
     assert path.stat().st_mtime_ns == before
-    assert runtime._integrations._claude_update.state == "failed"
-    assert runtime._integrations._claude_update.message == "VS Code unavailable"
-    runtime.provider_manager.wait_for_model_catalog.assert_not_awaited()
+    assert runtime.integrations._claude_update.state == "failed"
+    assert runtime.integrations._claude_update.message == "VS Code unavailable"
+    mock_wait_for_model_catalog.assert_not_awaited()
 
 
 @pytest.mark.parametrize("action", ["", "/complete"])
 def test_invalid_onboarding_is_scoped_and_does_not_change_connection(
-    onboarding, action
-):
+    onboarding: tuple[TestClient, ApplicationRuntime, Path], action: str
+) -> None:
     client, _, path = onboarding
     assert client.post(f"{VSCODE}/connect").status_code == 200
     source = '{"onboarding-secret": invalid}'
@@ -74,7 +82,11 @@ def test_invalid_onboarding_is_scoped_and_does_not_change_connection(
 @pytest.mark.parametrize(
     "headers", [{"Host": "evil.test"}, {"Origin": "https://evil.test"}]
 )
-def test_loopback_admin_guard(onboarding, action, headers):
+def test_loopback_admin_guard(
+    onboarding: tuple[TestClient, ApplicationRuntime, Path],
+    action: str,
+    headers: dict[str, str],
+) -> None:
     client, _, path = onboarding
     assert (
         client.request(
@@ -85,7 +97,9 @@ def test_loopback_admin_guard(onboarding, action, headers):
     assert not path.exists()
 
 
-def test_remote_client_is_rejected(onboarding):
+def test_remote_client_is_rejected(
+    onboarding: tuple[TestClient, ApplicationRuntime, Path],
+) -> None:
     client, _, path = onboarding
     with TestClient(
         client.app, base_url="http://127.0.0.1", client=("192.0.2.1", 50000)
@@ -95,7 +109,9 @@ def test_remote_client_is_rejected(onboarding):
     assert not path.exists()
 
 
-def test_pending_restart_and_shutdown_do_not_write(onboarding):
+def test_pending_restart_and_shutdown_do_not_write(
+    onboarding: tuple[TestClient, ApplicationRuntime, Path],
+) -> None:
     client, runtime, path = onboarding
     runtime._pending_fields = ["PORT"]
     assert client.post(f"{ROOT}/complete").status_code == 503
@@ -106,10 +122,14 @@ def test_pending_restart_and_shutdown_do_not_write(onboarding):
 
 
 @pytest.mark.parametrize("action", ["", "/complete"])
-def test_io_failure_returns_safe_error(onboarding, monkeypatch, action):
+def test_io_failure_returns_safe_error(
+    onboarding: tuple[TestClient, ApplicationRuntime, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+) -> None:
     client, _, path = onboarding
 
-    def fail(*args):
+    def fail(*args: object):
         raise PermissionError("onboarding-secret")
 
     monkeypatch.setattr(claude_onboarding, "complete" if action else "status", fail)

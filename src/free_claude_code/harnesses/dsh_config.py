@@ -1,6 +1,5 @@
 """DeepSeek Harness provider metadata and process-local CLI overlays."""
 
-import math
 from pathlib import Path
 
 from free_claude_code.application.model_catalog import (
@@ -16,7 +15,6 @@ DSH_ENV_PREFIX = "FCC_DSH_"
 DSH_PROVIDER_ID = "free-claude-code"
 
 _MAX_TIMER_DELAY_MS = 2_147_483_647
-_STREAM_TIMEOUT_MARGIN_SECONDS = 60
 _REASONING_EFFORTS: JsonObject = {
     "off": "none",
     "minimal": "minimal",
@@ -34,15 +32,13 @@ def build_dsh_launch_config(
     default_model_id: str,
     proxy_root_url: str,
     credentials_path: Path,
-    provider_progress_timeout: float,
 ) -> tuple[JsonObject, ...]:
-    """Translate FCC's catalog and timeout into an isolated DSH overlay."""
+    """Translate FCC's catalog into an isolated DSH overlay."""
 
     provider = build_dsh_provider(
         models,
         proxy_root_url=proxy_root_url,
         credential_ref=DSH_API_KEY_ENV,
-        provider_progress_timeout=provider_progress_timeout,
     )
     return (
         _configured_row(
@@ -75,13 +71,11 @@ def build_dsh_provider(
     *,
     proxy_root_url: str,
     credential_ref: str,
-    provider_progress_timeout: float,
 ) -> JsonObject:
     """Build the same FCC Responses route for temporary and persistent clients."""
     if not models:
         raise ValueError("DeepSeek Harness requires at least one routable FCC model")
 
-    stream_idle_timeout_ms = _stream_idle_timeout_ms(provider_progress_timeout)
     return {
         "displayName": "Free Claude Code",
         "apiKeyEnv": credential_ref,
@@ -90,23 +84,8 @@ def build_dsh_provider(
         "models": [_model_profile(model) for model in models],
         "defaultInput": ["text"],
         "retryPolicy": {"mode": "normal", "maxRetries": 0},
-        "streamIdleTimeoutMs": stream_idle_timeout_ms,
+        "streamIdleTimeoutMs": _MAX_TIMER_DELAY_MS,
     }
-
-
-def _stream_idle_timeout_ms(provider_progress_timeout: float) -> int:
-    if not math.isfinite(provider_progress_timeout) or provider_progress_timeout <= 0:
-        raise ValueError("PROVIDER_PROGRESS_TIMEOUT must be a positive finite value")
-
-    timeout_ms = math.ceil(
-        (provider_progress_timeout + _STREAM_TIMEOUT_MARGIN_SECONDS) * 1000
-    )
-    if timeout_ms > _MAX_TIMER_DELAY_MS:
-        raise ValueError(
-            "PROVIDER_PROGRESS_TIMEOUT is too large for DeepSeek Harness; "
-            "lower it so the DSH stream timeout stays within Node's timer limit"
-        )
-    return timeout_ms
 
 
 def _model_profile(model: CatalogModel) -> JsonObject:

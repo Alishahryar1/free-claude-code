@@ -165,7 +165,7 @@ class MessagingTurnIntake:
         """Remove messages created by an admission that cannot commit."""
         message_ids = {status_message_id}
         if include_prompt:
-            message_ids.add(str(incoming.message_id))
+            message_ids.add(incoming.message_id)
         try:
             await self.outbound.queue_delete_messages(
                 incoming.chat_id,

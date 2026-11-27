@@ -12,11 +12,13 @@ from contextlib import contextmanager
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import override
 
 import httpx
 import pytest
 from playwright.sync_api import Page
 
+from free_claude_code.config.env_migrations import atomic_write_managed_config
 from free_claude_code.config.paths import managed_env_path
 from free_claude_code.config.provider_catalog import PROVIDER_CATALOG
 from free_claude_code.core.json_types import JsonObject, JsonValue
@@ -32,6 +34,7 @@ from smoke.lib.e2e import (
     assert_product_stream,
 )
 from smoke.lib.server import find_free_port
+from tests.wire_payload import array_payload, decode_object, object_payload
 
 pytestmark = [pytest.mark.live]
 
@@ -48,6 +51,25 @@ def _json_object_lines(text: str) -> list[JsonObject]:
         if isinstance(value, dict):
             objects.append(value)
     return objects
+
+
+def _access_request_count(text: str, method: str, path: str) -> int:
+    request = re.compile(
+        rf' - "{re.escape(method)} {re.escape(path)} HTTP/\d(?:\.\d)?" \d{{3}}$'
+    )
+    return sum(
+        1
+        for row in _json_object_lines(text)
+        if isinstance(record := row.get("record"), dict)
+        and isinstance(message := record.get("message"), str)
+        and request.search(message) is not None
+    )
+
+
+def _seed_client_auth(home: Path, auth_token: str) -> None:
+    atomic_write_managed_config(
+        {"ANTHROPIC_AUTH_TOKEN": auth_token}, path=home / ".fcc" / ".env"
+    )
 
 
 def _trace_log_events(text: str) -> list[JsonObject]:
@@ -277,6 +299,7 @@ def test_aider_cli_prompt_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> None
     auth_token = smoke_config.settings.proxy_auth_token
     isolated_home = tmp_path / "aider-home"
     isolated_home.mkdir()
+    _seed_client_auth(isolated_home, auth_token)
 
     with SmokeServerDriver(
         smoke_config,
@@ -346,6 +369,7 @@ def test_cline_cli_prompt_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> None
     auth_token = smoke_config.settings.proxy_auth_token
     isolated_home = tmp_path / "cline-home"
     isolated_home.mkdir()
+    _seed_client_auth(isolated_home, auth_token)
 
     with SmokeServerDriver(
         smoke_config,
@@ -412,6 +436,7 @@ def test_hermes_cli_prompt_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> Non
     isolated_home = tmp_path / "home"
     hermes_home = tmp_path / "hermes-home"
     isolated_home.mkdir()
+    _seed_client_auth(isolated_home, auth_token)
     hermes_home.mkdir()
     native_config = hermes_home / "config.yaml"
     native_env = hermes_home / ".env"
@@ -501,7 +526,7 @@ def test_hermes_cli_prompt_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> Non
     assert result.stdout == f"{marker}\n"
     assert result.stderr == ""
     assert "GET /v1/models" in server_log
-    assert server_log.count("POST /v1/responses") == 1
+    assert _access_request_count(server_log, "POST", "/v1/responses") == 1
     assert "POST /v1/chat/completions" not in server_log
     assert [request["path"] for request in provider_requests] == [
         "/v1/chat/completions"
@@ -814,7 +839,7 @@ def test_dsh_cli_web_startup_e2e(
             auth_token=auth_token,
             credential_env_keys=credential_env_keys,
         )
-        patches = []
+        patches: list[str] = []
         if workflow == "compact":
             patch = tmp_path / "compact.patch.yml"
             patch.write_text(
@@ -992,6 +1017,7 @@ def test_grok_cli_headless_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> Non
     ):
         isolated_home = tmp_path / "grok-home"
         isolated_home.mkdir()
+        _seed_client_auth(isolated_home, auth_token)
         env = os.environ.copy()
         for key in credential_env_keys:
             env.pop(key, None)
@@ -1036,7 +1062,7 @@ def test_grok_cli_headless_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> Non
     assert marker in result.stdout
     assert auth_token not in combined
     assert "GET /v1/models?view=responses" in server_log
-    responses_count = server_log.count("POST /v1/responses")
+    responses_count = _access_request_count(server_log, "POST", "/v1/responses")
     assert responses_count >= 1
     assert "POST /v1/chat/completions" not in server_log
     assert responses_count == len(provider_requests)
@@ -1077,6 +1103,7 @@ def test_muse_cli_headless_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> Non
     ):
         isolated_home = tmp_path / "muse-home"
         isolated_home.mkdir()
+        _seed_client_auth(isolated_home, auth_token)
         env = os.environ.copy()
         for key in credential_env_keys:
             env.pop(key, None)
@@ -1147,13 +1174,17 @@ def test_muse_cli_headless_e2e(smoke_config: SmokeConfig, tmp_path: Path) -> Non
     )
     assert catalog_files, "Muse did not persist its parsed provider catalog"
     visible_models = {
-        row["model_id"]
+        object_payload(row)["model_id"]: row
         for catalog_file in catalog_files
-        for row in json.loads(catalog_file.read_text(encoding="utf-8"))["rows"]
-        if row["visibility"] == "visible"
+        for row in array_payload(
+            decode_object(catalog_file.read_text(encoding="utf-8"))["rows"]
+        )
+        if object_payload(row)["visibility"] == "visible"
     }
     assert full_model in visible_models, "Muse hides the configured FCC model"
-    responses_count = server_log.count("POST /v1/responses")
+    assert object_payload(visible_models[full_model])["context_limit"] == 200000
+    assert object_payload(visible_models[full_model])["output_limit"] == 81920
+    responses_count = _access_request_count(server_log, "POST", "/v1/responses")
     assert responses_count >= 1
     assert responses_count == len(provider_requests)
     assert "POST /v1/chat/completions" not in server_log
@@ -1471,6 +1502,7 @@ def _isolated_dsh_env(
     isolated_home = tmp_path / "home"
     dsh_home = tmp_path / "dsh-home"
     isolated_home.mkdir(exist_ok=True)
+    _seed_client_auth(isolated_home, auth_token)
     dsh_home.mkdir(exist_ok=True)
     # DSH otherwise resolves the OS Documents folder even with an isolated HOME.
     storage = dsh_home / "storages"
@@ -1633,6 +1665,7 @@ def _deliberately_failing_openai_provider() -> Generator[tuple[str, list[str]]]:
                 },
             )
 
+        @override
         def log_message(self, format: str, *args: object) -> None:
             return
 
@@ -1648,7 +1681,7 @@ def _deliberately_failing_openai_provider() -> Generator[tuple[str, list[str]]]:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        port = int(server.server_address[1])
+        port = server.server_address[1]
         yield f"http://127.0.0.1:{port}/v1", provider_requests
     finally:
         server.shutdown()
@@ -1702,6 +1735,7 @@ def _successful_openai_provider(
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
 
+        @override
         def log_message(self, format: str, *args: object) -> None:
             return
 
@@ -1742,7 +1776,7 @@ def _successful_openai_provider(
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        port = int(server.server_address[1])
+        port = server.server_address[1]
         yield f"http://127.0.0.1:{port}/v1", provider_requests
     finally:
         server.shutdown()

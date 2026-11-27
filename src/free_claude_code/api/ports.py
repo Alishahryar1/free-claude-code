@@ -17,20 +17,8 @@ from free_claude_code.config.admin.state import ConfigInputValue, ValueState
 from free_claude_code.core.json_types import JsonObject
 
 
-class AdminRuntimePort(Protocol):
-    """Runtime operations exposed by the local Admin API."""
-
-    async def apply_admin_config(
-        self,
-        updates: Mapping[str, ConfigInputValue],
-        custom_provider: CustomProviderMutation | None = None,
-    ) -> JsonObject: ...
-
-    async def admin_config(self) -> JsonObject: ...
-
-    async def admin_values(self) -> ValueState: ...
-
-    async def admin_status(self) -> JsonObject: ...
+class AdminIntegrationsPort(Protocol):
+    """Integration actions exposed by the local Admin API."""
 
     async def claude_vscode_status(self) -> JsonObject: ...
 
@@ -51,12 +39,6 @@ class AdminRuntimePort(Protocol):
     async def disconnect_claude_vscode(self) -> JsonObject: ...
 
     async def refresh_claude_vscode(self) -> JsonObject: ...
-
-    async def antigravity_status(self) -> JsonObject: ...
-
-    async def connect_antigravity(self) -> JsonObject: ...
-
-    async def disconnect_antigravity(self) -> JsonObject: ...
 
     async def dsh_desktop_status(self) -> JsonObject: ...
 
@@ -89,6 +71,22 @@ class AdminRuntimePort(Protocol):
     async def disconnect_codex(self) -> JsonObject: ...
 
     async def refresh_codex_integration(self) -> JsonObject: ...
+
+
+class AdminRuntimePort(Protocol):
+    """Runtime operations exposed by the local Admin API."""
+
+    async def apply_admin_config(
+        self,
+        updates: Mapping[str, ConfigInputValue],
+        custom_provider: CustomProviderMutation | None = None,
+    ) -> JsonObject: ...
+
+    async def admin_config(self) -> JsonObject: ...
+
+    async def admin_values(self) -> ValueState: ...
+
+    async def admin_status(self) -> JsonObject: ...
 
     async def pick_folder(self, initial_path: str | None) -> str | None: ...
 
@@ -123,4 +121,5 @@ class ApiServices:
     admin: AdminRuntimePort
     tasks: TaskController
     web_tools: WebToolsPort
+    integrations: AdminIntegrationsPort
     code: CodeApplicationPort | None = None

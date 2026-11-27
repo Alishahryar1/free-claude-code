@@ -44,6 +44,7 @@ async def device_login(on_challenge: Callable[[DeviceChallenge], None]) -> None:
     spawning = asyncio.create_task(
         asyncio.create_subprocess_exec(
             path,
+            "--no-auto-update",
             "login",
             "--device-code",
             stdout=asyncio.subprocess.PIPE,

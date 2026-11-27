@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -13,6 +14,7 @@ from free_claude_code.api.ports import ApiServices
 from free_claude_code.application.code_sessions.models import CodeValidationError
 from free_claude_code.application.errors import ApplicationUnavailableError
 from free_claude_code.application.model_metadata import ProviderModelInfo
+from free_claude_code.application.ports import ModelCatalogPort
 from free_claude_code.application.readiness import InitializationWait
 from free_claude_code.config.loader import ManagedConfigStore
 from free_claude_code.config.settings import Settings
@@ -26,6 +28,7 @@ from free_claude_code.runtime.configuration import ConfigurationService
 from free_claude_code.runtime.provider_manager import ProviderRuntimeManager
 from tests.runtime.catalog_support import finish_discovery, finish_publication
 from tests.web_tools_support import StubWebToolsClient
+from tests.wire_payload import array_payload, object_payload, response_object
 
 
 @pytest_asyncio.fixture
@@ -42,7 +45,7 @@ async def catalog_runtime():
         }
     )
 
-    async def construct(provider_id, *_):
+    async def construct(provider_id: str, *_):
         provider = MagicMock(spec=BaseProvider)
 
         async def models():
@@ -61,7 +64,7 @@ async def catalog_runtime():
 
     manager = ProviderRuntimeManager(
         settings,
-        runtime_factory=lambda settings, registry: ProviderRuntime(
+        runtime_factory=lambda settings, registry, history_cache=None: ProviderRuntime(
             settings, registry, provider_constructor=construct
         ),
     )
@@ -84,29 +87,40 @@ async def catalog_runtime():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("path", ["/v1/models?view=responses", "/muse-code/models"])
 async def test_http_catalog_exposes_ready_models_while_another_provider_waits(
-    catalog_runtime, path
-):
+    catalog_runtime: tuple[ApplicationRuntime, asyncio.Event], path: str
+) -> None:
     runtime, release = catalog_runtime
     manager = runtime.provider_manager
     app = create_app(
-        ApiServices(manager, runtime, runtime, web_tools=StubWebToolsClient())
+        ApiServices(
+            manager,
+            runtime,
+            runtime,
+            web_tools=StubWebToolsClient(),
+            integrations=runtime.integrations,
+        )
     )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
     ) as client:
         response = await asyncio.wait_for(client.get(path), 1)
     assert response.status_code == 200
-    ids = {entry["id"] for entry in response.json()["data"]}
+    ids = {
+        object_payload(entry)["id"]
+        for entry in array_payload(response_object(response)["data"])
+    }
     assert {
         no_thinking_gateway_model_id("nvidia_nim/configured"),
         "nvidia_nim/discovered",
     } <= ids
     assert not release.is_set()
-    assert manager.catalog_status()["providers"]["groq"] == "starting"
+    assert object_payload(manager.catalog_status()["providers"])["groq"] == "starting"
 
 
 @pytest.mark.asyncio
-async def test_code_preparation_uses_only_its_selected_provider(catalog_runtime):
+async def test_code_preparation_uses_only_its_selected_provider(
+    catalog_runtime: tuple[ApplicationRuntime, asyncio.Event],
+) -> None:
     runtime, release = catalog_runtime
     factory = CodexHarnessFactory(runtime.provider_manager, binary="codex")
     selection = await asyncio.wait_for(
@@ -118,8 +132,8 @@ async def test_code_preparation_uses_only_its_selected_provider(catalog_runtime)
 
 @pytest.mark.asyncio
 async def test_code_waits_for_its_provider_and_validates_settled_metadata(
-    catalog_runtime,
-):
+    catalog_runtime: tuple[ApplicationRuntime, asyncio.Event],
+) -> None:
     runtime, release = catalog_runtime
     factory = CodexHarnessFactory(runtime.provider_manager, binary="codex")
     waiting = asyncio.create_task(factory.prepare("groq/configured", None, "config"))
@@ -141,8 +155,8 @@ async def test_code_waits_for_its_provider_and_validates_settled_metadata(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("replace_settings", [False, True])
 async def test_code_waits_for_model_absent_from_partial_catalog(
-    catalog_runtime, replace_settings
-):
+    catalog_runtime: tuple[ApplicationRuntime, asyncio.Event], replace_settings: bool
+) -> None:
     runtime, release = catalog_runtime
     manager = runtime.provider_manager
     factory = CodexHarnessFactory(manager, binary="codex")
@@ -167,7 +181,9 @@ async def test_code_waits_for_model_absent_from_partial_catalog(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model", ["unknown/model", "", "groq", "groq/"])
-async def test_code_rejects_invalid_selection_without_waiting(catalog_runtime, model):
+async def test_code_rejects_invalid_selection_without_waiting(
+    catalog_runtime: tuple[ApplicationRuntime, asyncio.Event], model: str
+) -> None:
     runtime, release = catalog_runtime
     factory = CodexHarnessFactory(runtime.provider_manager, binary="codex")
     with pytest.raises(CodeValidationError, match="model is unavailable"):
@@ -176,7 +192,9 @@ async def test_code_rejects_invalid_selection_without_waiting(catalog_runtime, m
 
 
 @pytest.mark.asyncio
-async def test_code_rejects_selection_when_its_provider_is_removed(catalog_runtime):
+async def test_code_rejects_selection_when_its_provider_is_removed(
+    catalog_runtime: tuple[ApplicationRuntime, asyncio.Event],
+) -> None:
     runtime, release = catalog_runtime
     manager = runtime.provider_manager
     factory = CodexHarnessFactory(manager, binary="codex")
@@ -189,7 +207,7 @@ async def test_code_rejects_selection_when_its_provider_is_removed(catalog_runti
         await manager.replace(settings, commit=AsyncMock())
         with pytest.raises(CodeValidationError, match="model is unavailable"):
             await asyncio.wait_for(waiting, 1)
-        assert "groq" not in manager.catalog_status()["providers"]
+        assert "groq" not in object_payload(manager.catalog_status()["providers"])
         assert not release.is_set()
     finally:
         release.set()
@@ -199,8 +217,10 @@ async def test_code_rejects_selection_when_its_provider_is_removed(catalog_runti
 @pytest.mark.asyncio
 @pytest.mark.parametrize("repair", [False, True])
 async def test_model_refresh_retries_failed_file_with_unchanged_metadata(
-    catalog_runtime, tmp_path, repair
-):
+    catalog_runtime: tuple[ApplicationRuntime, asyncio.Event],
+    tmp_path: Path,
+    repair: bool,
+) -> None:
     runtime, release = catalog_runtime
     manager = runtime.provider_manager
     release.set()
@@ -234,8 +254,10 @@ async def test_model_refresh_retries_failed_file_with_unchanged_metadata(
 
 @pytest.mark.asyncio
 async def test_unchanged_refresh_does_not_republish_current_file(
-    catalog_runtime, tmp_path, monkeypatch
-):
+    catalog_runtime: tuple[ApplicationRuntime, asyncio.Event],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     runtime, release = catalog_runtime
     manager = runtime.provider_manager
     release.set()
@@ -255,7 +277,9 @@ async def test_unchanged_refresh_does_not_republish_current_file(
 
 
 @pytest.mark.asyncio
-async def test_catalog_file_is_available_before_all_discovery(catalog_runtime):
+async def test_catalog_file_is_available_before_all_discovery(
+    catalog_runtime: tuple[ApplicationRuntime, asyncio.Event],
+) -> None:
     runtime, release = catalog_runtime
     manager = runtime.provider_manager
     await asyncio.wait_for(manager.wait_for_catalog_file(InitializationWait()), 1)
@@ -265,13 +289,13 @@ async def test_catalog_file_is_available_before_all_discovery(catalog_runtime):
 
 @pytest.mark.asyncio
 async def test_slow_file_publication_does_not_delay_catalog_notifications(
-    catalog_runtime,
-):
+    catalog_runtime: tuple[ApplicationRuntime, asyncio.Event],
+) -> None:
     entered, release = threading.Event(), threading.Event()
     notified = asyncio.Event()
 
     class Publisher:
-        def publish(self, snapshot):
+        def publish(self, runtime: object):
             entered.set()
             assert release.wait(5)
 
@@ -291,16 +315,16 @@ async def test_slow_file_publication_does_not_delay_catalog_notifications(
 
 @pytest.mark.asyncio
 async def test_file_publication_coalesces_changes_and_tracks_written_version(
-    catalog_runtime,
-):
+    catalog_runtime: tuple[ApplicationRuntime, asyncio.Event],
+) -> None:
     runtime, _ = catalog_runtime
     manager = runtime.provider_manager
     entered, release = threading.Event(), threading.Event()
     snapshots = []
 
     class Publisher:
-        def publish(self, snapshot):
-            snapshots.append(snapshot)
+        def publish(self, runtime: ModelCatalogPort):
+            snapshots.append(runtime)
             if len(snapshots) == 1:
                 entered.set()
                 assert release.wait(5)
@@ -329,19 +353,19 @@ async def test_file_publication_coalesces_changes_and_tracks_written_version(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fail_next", [False, True])
 async def test_file_waiter_follows_publication_started_after_previous_write(
-    catalog_runtime, fail_next
-):
+    catalog_runtime: tuple[ApplicationRuntime, asyncio.Event], fail_next: bool
+) -> None:
     runtime, _ = catalog_runtime
     manager = runtime.provider_manager
     await finish_publication(manager)
     entered = [threading.Event(), threading.Event()]
     release = [threading.Event(), threading.Event()]
-    snapshots = []
+    snapshots: list[ModelCatalogPort] = []
 
     class Publisher:
-        def publish(self, snapshot):
+        def publish(self, runtime: ModelCatalogPort):
             index = len(snapshots)
-            snapshots.append(snapshot)
+            snapshots.append(runtime)
             entered[index].set()
             assert release[index].wait(5)
             if index == 1 and fail_next:
@@ -384,13 +408,15 @@ async def test_file_waiter_follows_publication_started_after_previous_write(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel", [False, True])
-async def test_file_waiter_exit_preserves_owned_publication(catalog_runtime, cancel):
+async def test_file_waiter_exit_preserves_owned_publication(
+    catalog_runtime: tuple[ApplicationRuntime, asyncio.Event], cancel: bool
+) -> None:
     runtime, _ = catalog_runtime
     manager = runtime.provider_manager
     entered, release = threading.Event(), threading.Event()
 
     class Publisher:
-        def publish(self, snapshot):
+        def publish(self, runtime: object):
             entered.set()
             assert release.wait(5)
 

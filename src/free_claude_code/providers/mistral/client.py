@@ -1,21 +1,26 @@
 """Mistral La Plateforme provider implementation (OpenAI-compatible chat completions)."""
 
 from collections.abc import AsyncIterator, Mapping
-from typing import Any
+from typing import Any, override
 
-from loguru import logger
+from openai.types.chat import ChatCompletionChunk
 
 from free_claude_code.application.model_metadata import ProviderModelInfo
 from free_claude_code.core.anthropic import ReasoningReplayMode
 from free_claude_code.core.anthropic.models import MessagesRequest
+from free_claude_code.core.chat_completions.request import ChatRequest
+from free_claude_code.core.diagnostics import extract_upstream_error_detail
 from free_claude_code.core.gemini import GeminiRequest
+from free_claude_code.core.history_replay import ReplayOrigin
 from free_claude_code.core.model_capabilities import ModelInputModality
 from free_claude_code.core.openai_responses import OpenAIResponsesRequest
 from free_claude_code.core.reasoning import DEFAULT_REASONING_POLICY, ReasoningPolicy
+from free_claude_code.core.stream_output import StreamOutput
 from free_claude_code.core.stream_recovery import ContinuationSeed
 from free_claude_code.providers.admission import ProviderAdmissionController
 from free_claude_code.providers.base import ProviderConfig
 from free_claude_code.providers.endpoint_types import EndpointContext
+from free_claude_code.providers.history_negotiation import HistoryModeCache
 from free_claude_code.providers.openai_chat import (
     NO_REASONING,
     OpenAIChatBehavior,
@@ -24,9 +29,11 @@ from free_claude_code.providers.openai_chat import (
     OpenAIChatRequestPolicy,
     OpenAIModelListing,
 )
+from free_claude_code.providers.request_correction import Proposal
 
 from .caching import mistral_affinity_headers
 from .reasoning import (
+    apply_mistral_history_shape,
     apply_mistral_reasoning_request_shape,
     clone_body_without_mistral_reasoning,
     is_mistral_reasoning_rejection,
@@ -57,31 +64,48 @@ class MistralChatBehavior(OpenAIChatBehavior):
     """Mistral Chat adaptation without HTTP ownership."""
 
     @property
+    @override
     def reasoning_off_fields(self) -> tuple[tuple[str, ...], ...]:
         return (("reasoning_effort",),)
 
+    @override
     def finalize_chat_body(
         self,
         body: dict[str, Any],
         *,
         reasoning: ReasoningPolicy,
-    ) -> dict:
+    ) -> dict[str, Any]:
         apply_mistral_reasoning_request_shape(body, reasoning=reasoning)
         return body
 
-    def retry_request_body(self, error: Exception, body: dict) -> dict | None:
+    @override
+    def prepare_history_body(
+        self, body: dict[str, Any], origin: ReplayOrigin
+    ) -> dict[str, Any]:
+        apply_mistral_history_shape(body)
+        return body
+
+    @override
+    def retry_request_body(
+        self, error: Exception, body: dict[str, Any]
+    ) -> Proposal | None:
         """Retry once without Mistral reasoning fields when a model rejects them."""
-        if not is_mistral_reasoning_rejection(error):
+        detail = extract_upstream_error_detail(error)
+        if not is_mistral_reasoning_rejection(error) or "reasoning_effort" not in (
+            detail.body_text or detail.exception_text or ""
+        ):
             return None
         retry_body = clone_body_without_mistral_reasoning(body)
         if retry_body is None:
             return None
-        logger.warning(
-            "MISTRAL_STREAM: retrying without reasoning after upstream rejection"
-        )
-        return retry_body
+        return Proposal(retry_body, "dropped reasoning")
 
-    def normalize_stream(self, stream: Any, _body: Mapping[str, Any]) -> Any:
+    @override
+    def normalize_stream(
+        self,
+        stream: AsyncIterator[ChatCompletionChunk],
+        _body: Mapping[str, object],
+    ) -> AsyncIterator[ChatCompletionChunk]:
         return normalize_mistral_stream(stream)
 
 
@@ -89,14 +113,20 @@ class MistralProvider(OpenAIChatProvider):
     """Mistral API using ``https://api.mistral.ai/v1/chat/completions``."""
 
     def __init__(
-        self, config: ProviderConfig, *, admission: ProviderAdmissionController
+        self,
+        config: ProviderConfig,
+        *,
+        admission: ProviderAdmissionController,
+        history_cache: HistoryModeCache | None = None,
     ):
         super().__init__(
             config,
             behavior=MistralChatBehavior(_PROFILE),
             admission=admission,
+            history_cache=history_cache,
         )
 
+    @override
     def stream_messages(
         self,
         request: MessagesRequest,
@@ -109,7 +139,7 @@ class MistralProvider(OpenAIChatProvider):
         endpoint_context: EndpointContext | None = None,
         request_headers: Mapping[str, str] | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Stream with the Mistral prompt-cache affinity header when known.
 
         The base provider drops ``request_headers``; the transport accepts
@@ -128,6 +158,33 @@ class MistralProvider(OpenAIChatProvider):
             continuation=continuation,
         )
 
+    @override
+    def stream_chat(
+        self,
+        request: ChatRequest,
+        input_tokens: int = 0,
+        *,
+        request_id: str | None = None,
+        response_model: str | None = None,
+        reasoning: ReasoningPolicy = DEFAULT_REASONING_POLICY,
+        endpoint_context: EndpointContext | None = None,
+        request_headers: Mapping[str, str] | None = None,
+        model_info: ProviderModelInfo | None = None,
+        continuation: ContinuationSeed | None = None,
+    ) -> AsyncIterator[StreamOutput]:
+        """Stream Chat with the Mistral prompt-cache affinity header."""
+        return self._chat.stream_chat(
+            request,
+            input_tokens=input_tokens,
+            request_id=request_id,
+            response_model=response_model,
+            reasoning=reasoning,
+            endpoint_context=endpoint_context,
+            extra_headers=mistral_affinity_headers(request_headers),
+            continuation=continuation,
+        )
+
+    @override
     def stream_gemini(
         self,
         request: GeminiRequest,
@@ -140,7 +197,7 @@ class MistralProvider(OpenAIChatProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Stream Gemini with the Mistral prompt-cache affinity header."""
         return self._chat.stream_gemini(
             request,
@@ -153,6 +210,7 @@ class MistralProvider(OpenAIChatProvider):
             continuation=continuation,
         )
 
+    @override
     def stream_responses(
         self,
         request: OpenAIResponsesRequest,
@@ -165,7 +223,7 @@ class MistralProvider(OpenAIChatProvider):
         request_headers: Mapping[str, str] | None = None,
         model_info: ProviderModelInfo | None = None,
         continuation: ContinuationSeed | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamOutput]:
         """Stream Responses with the Mistral prompt-cache affinity header."""
         return self._chat.stream_responses(
             request,

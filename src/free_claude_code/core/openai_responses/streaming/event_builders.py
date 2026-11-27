@@ -240,8 +240,11 @@ class ResponseEventBuilder:
     def _project(
         self, event_type: str, data: dict[str, Any]
     ) -> Iterable[tuple[str, JsonObject]]:
-        data["sequence_number"] = self._next_sequence_number
-        self._next_sequence_number += 1
-        if self._transform is not None:
-            return self._transform(event_type, cast(JsonObject, data))
-        return ((event_type, cast(JsonObject, data)),)
+        events = (
+            self._transform(event_type, cast(JsonObject, data))
+            if self._transform is not None
+            else ((event_type, cast(JsonObject, data)),)
+        )
+        for kind, payload in events:
+            yield kind, {**payload, "sequence_number": self._next_sequence_number}
+            self._next_sequence_number += 1

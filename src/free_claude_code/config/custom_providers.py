@@ -13,6 +13,8 @@ from pydantic import (
     model_validator,
 )
 
+from free_claude_code.core.json_types import JsonObject
+
 from .api_keys import ApiKeyList, api_key_values, first_api_key
 
 CUSTOM_PROVIDERS_ENV = "FCC_CUSTOM_PROVIDERS"
@@ -87,6 +89,11 @@ class CustomProviderDefinition(BaseModel):
 
     @model_validator(mode="after")
     def validate_formats(self) -> CustomProviderDefinition:
+        if self.api_format == "openai_chat" and self.reasoning_history_format in {
+            "disabled",
+            "think_tags",
+        }:
+            object.__setattr__(self, "reasoning_history_format", "reasoning_content")
         if self.reasoning_format not in REASONING_FORMATS[self.api_format]:
             raise ValueError("Reasoning format is not supported by this API format")
         if (
@@ -98,7 +105,7 @@ class CustomProviderDefinition(BaseModel):
             )
         return self
 
-    def private_values(self) -> dict:
+    def private_values(self) -> JsonObject:
         return self.model_dump(mode="json") | {
             "api_keys": api_key_values(self.api_keys),
         }
@@ -114,7 +121,9 @@ class CustomProviderDefinition(BaseModel):
 def decode_custom_providers(value: object) -> object:
     if isinstance(value, str):
         try:
-            return json.loads(value) if value.strip() else []
+            if not value.strip():
+                return list[CustomProviderDefinition]()
+            return json.loads(value)
         except ValueError:
             raise ValueError("Custom providers must be a JSON array") from None
     return value

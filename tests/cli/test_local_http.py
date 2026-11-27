@@ -4,6 +4,7 @@ import threading
 from collections.abc import Generator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import override
 
 import pytest
 
@@ -20,6 +21,7 @@ def _status_server(status_code: int) -> Generator[tuple[str, list[str]]]:
             self.send_response(status_code)
             self.end_headers()
 
+        @override
         def log_message(self, format: str, *args: object) -> None:
             del format, args
 

@@ -41,7 +41,7 @@ COHERE_DEFAULT_BASE = "https://api.cohere.ai/compatibility/v1"
 ZAI_CODING_DEFAULT_BASE = "https://api.z.ai/api/coding/paas/v4"
 ZAI_API_DEFAULT_BASE = "https://api.z.ai/api/paas/v4"
 # Google AI Studio Gemini API OpenAI-compat layer (not Vertex AI).
-GEMINI_DEFAULT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
+GEMINI_DEFAULT_BASE = "https://generativelanguage.googleapis.com/v1beta/"
 # Vertex AI API root. The provider owns project/location endpoint composition.
 VERTEX_AI_API_ROOT = "https://aiplatform.googleapis.com"
 GROQ_DEFAULT_BASE = "https://api.groq.com/openai/v1"
@@ -121,7 +121,6 @@ class ProviderDescriptor:
     website_url: str
     logo_filename: str
     auth_kind: ProviderAuthKind = ProviderAuthKind.CONFIGURATION
-    local: bool = False
     credential_env: str | None = None
     credential_url: str | None = None
     credential_attr: str | None = None
@@ -131,6 +130,13 @@ class ProviderDescriptor:
     proxy_attr: str | None = None
     required_settings_attrs: tuple[str, ...] = ()
     native_messages_passthrough: bool = False
+    # Local providers run on the user's machine and are probed at this path.
+    local_probe_path: str | None = None
+
+    @property
+    def local(self) -> bool:
+        """Whether this provider runs on the user's machine."""
+        return self.local_probe_path is not None
 
     def configuration_attrs(self) -> tuple[str, ...]:
         """Return settings fields whose non-empty values configure this provider."""
@@ -798,7 +804,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         default_base_url=LMSTUDIO_DEFAULT_BASE,
         base_url_attr="lm_studio_base_url",
         proxy_attr="lmstudio_proxy",
-        local=True,
+        local_probe_path="/models",
     ),
     "llamacpp": ProviderDescriptor(
         provider_id="llamacpp",
@@ -809,7 +815,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         default_base_url=LLAMACPP_DEFAULT_BASE,
         base_url_attr="llamacpp_base_url",
         proxy_attr="llamacpp_proxy",
-        local=True,
+        local_probe_path="/models",
     ),
     "ollama": ProviderDescriptor(
         provider_id="ollama",
@@ -819,7 +825,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
         static_credential="ollama",
         default_base_url=OLLAMA_DEFAULT_BASE,
         base_url_attr="ollama_base_url",
-        local=True,
+        local_probe_path="/api/tags",
     ),
 }
 

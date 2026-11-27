@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from free_claude_code.providers.openai_chat import openai_v1_base_url
+from tests.wire_payload import response_object
 
 LOCAL_PROVIDER_PROBE_TIMEOUT_S = 1.5
 _ROOT_OR_V1_PROVIDERS = frozenset({"llamacpp", "ollama"})
@@ -41,7 +42,7 @@ def _first_openai_compatible_model_id(
     models_url = urljoin(base_url.rstrip("/") + "/", "models")
     response = _get_local_provider_response(provider, models_url, timeout_s=timeout_s)
     assert response.status_code == 200, response.text
-    payload = response.json()
+    payload = response_object(response)
     data = payload.get("data") if isinstance(payload, dict) else None
     if isinstance(data, list):
         for item in data:
