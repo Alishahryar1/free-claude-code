@@ -16,6 +16,7 @@ from ..json_types import (
     json_objects,
     json_text,
 )
+from ..openai_request_hints import OPENAI_REQUEST_HINTS
 
 
 class ChatConversionError(ValueError):
@@ -172,7 +173,7 @@ def translated_body(request: ChatRequest, *, supported: set[str]) -> JsonObject:
     unsupported = [
         key
         for key, value in body.items()
-        if key not in common | supported and value is not None
+        if key not in common | supported | OPENAI_REQUEST_HINTS and value is not None
     ]
     if set(request.stream_options or {}) - {"include_usage"}:
         unsupported.append("stream_options")
@@ -525,7 +526,6 @@ def chat_responses_body(request: ChatRequest) -> JsonObject:
             "metadata",
             "store",
             "service_tier",
-            "user",
         },
     )
     items: list[JsonObject] = []
@@ -574,7 +574,7 @@ def chat_responses_body(request: ChatRequest) -> JsonObject:
         "metadata",
         "store",
         "service_tier",
-        "user",
+        *sorted(OPENAI_REQUEST_HINTS),
     ):
         if body.get(key) is not None:
             result[key] = body[key]

@@ -32,6 +32,7 @@ from ..json_types import (
     json_objects,
     json_text,
 )
+from ..openai_request_hints import OPENAI_REQUEST_HINTS
 from ..openai_responses import OpenAIResponsesRequest
 from ..reasoning import ReasoningControl, ReasoningPolicy
 from .errors import GeminiConversionError
@@ -531,7 +532,7 @@ def responses_to_gemini(
         "text",
         "metadata",
     }
-    if unsupported := set(body) - supported:
+    if unsupported := set(body) - supported - OPENAI_REQUEST_HINTS:
         raise GeminiConversionError(
             f"Native Gemini cannot represent Responses fields: {sorted(unsupported)}"
         )

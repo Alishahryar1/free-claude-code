@@ -22,6 +22,7 @@ from free_claude_code.core.history_replay import (
     tool_history_context,
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.openai_request_hints import OPENAI_REQUEST_HINTS
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 
 from .errors import ResponsesConversionError
@@ -50,6 +51,7 @@ _REQUEST_FIELDS = {
     "text",
     "include",
     "truncation",
+    *OPENAI_REQUEST_HINTS,
 }
 
 
