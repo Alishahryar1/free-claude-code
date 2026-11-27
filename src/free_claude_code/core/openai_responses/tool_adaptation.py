@@ -34,6 +34,7 @@ from .tools import (
     flatten_responses_tool_name,
     include_namespace_description,
     optional_str,
+    required_custom_tool_input,
     required_str,
 )
 
@@ -65,6 +66,8 @@ class ResponsesToolAdapter:
     ) -> None:
         self.original = request
         self.request = request.model_copy(deep=True)
+        if policy.direct_tools_only and isinstance(self.request.input, dict):
+            self.request.input = [self.request.input]
         self._policy = policy
         self._identities: dict[tuple[str | None, str], ResponsesToolIdentity] = {}
         self._wire_names: dict[ResponsesToolIdentity, str] = {}
@@ -116,15 +119,23 @@ class ResponsesToolAdapter:
         ):
             self._register_tools(self.request.tools)
             if isinstance(self.request.input, list):
+                expected_results: dict[str, str] = {}
                 for index, item in retained_input:
-                    if isinstance(item, dict) and item.get("type") in (
+                    if not isinstance(item, dict):
+                        continue
+                    if policy.direct_tools_only:
+                        _check_original_call_pair(
+                            item,
+                            expected_results,
+                            client_search=index in self._search_history.client_items,
+                        )
+                    if item.get("type") in (
                         "function_call",
                         "custom_tool_call",
                     ):
                         self._register_name(_call_identity(item))
                     elif (
                         not policy.direct_tools_only
-                        and isinstance(item, dict)
                         and item.get("type") == "tool_search_output"
                     ):
                         self._register_tools(
@@ -347,12 +358,17 @@ class ResponsesToolAdapter:
         if kind in {"custom_tool_call", "function_call"}:
             wire_name = self._wire_name(_call_identity(item))
             if kind == "custom_tool_call":
+                text = (
+                    required_custom_tool_input(item.get("input"))
+                    if self._policy.direct_tools_only
+                    else custom_tool_input_text(item.get("input"))
+                )
                 call: JsonObject = {
                     **{key: value for key, value in item.items() if key != "input"},
                     "type": "function_call",
                     "name": wire_name,
                     "arguments": json.dumps(
-                        {"input": custom_tool_input_text(item.get("input"))},
+                        {"input": text},
                         ensure_ascii=False,
                     ),
                 }
@@ -754,6 +770,29 @@ class ResponsesToolEventAdapter:
 
 def _name(value: Mapping[str, JsonValue]) -> str:
     return required_str(value.get("name"), "tool.name")
+
+
+def _check_original_call_pair(
+    item: JsonObject, expected: dict[str, str], *, client_search: bool
+) -> None:
+    """Check source kinds before several kinds become the same function on the wire."""
+    kind = item.get("type")
+    if kind in ("function_call", "custom_tool_call") or (
+        client_search and kind == "tool_search_call"
+    ):
+        call_id = required_str(item.get("call_id"), "tool.call_id")
+        if call_id in expected:
+            raise ResponsesConversionError("Duplicate outstanding tool call ID")
+        expected[call_id] = "tool_search_output" if client_search else f"{kind}_output"
+    elif kind in ("function_call_output", "custom_tool_call_output") or (
+        client_search and kind == "tool_search_output"
+    ):
+        call_id = required_str(item.get("call_id"), "tool output.call_id")
+        original = expected.pop(call_id, None)
+        if original is not None and original != kind:
+            raise ResponsesConversionError(
+                "Tool result type does not match its original tool call"
+            )
 
 
 def _call_identity(item: Mapping[str, JsonValue]) -> ResponsesToolIdentity:

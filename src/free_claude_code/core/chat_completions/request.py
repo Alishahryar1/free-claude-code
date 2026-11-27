@@ -8,7 +8,11 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from free_claude_code.core.json_types import load_json_value
-from free_claude_code.core.openai_chat import inline_file_fields
+from free_claude_code.core.openai_chat import (
+    inline_file_fields,
+    openai_cache_breakpoint,
+    shared_openai_request_options,
+)
 
 from ..history_replay import (
     decode_replay,
@@ -310,12 +314,13 @@ def project_chat_request(
                         raise ChatConversionError(
                             "A translated Chat file needs inline file data in a user message"
                         )
-                    portable: JsonObject = {"type": "input_file", **fields}
-                    if "prompt_cache_breakpoint" in part:
-                        portable["prompt_cache_breakpoint"] = part[
-                            "prompt_cache_breakpoint"
-                        ]
-                    parts.append(portable)
+                    parts.append(
+                        {
+                            "type": "input_file",
+                            **fields,
+                            **openai_cache_breakpoint(part),
+                        }
+                    )
                 elif (
                     message["role"] == "assistant"
                     and part.get("type") == "refusal"
@@ -641,12 +646,19 @@ def chat_messages_body(request: ChatRequest) -> JsonObject:
 
 def _responses_content(value: JsonValue, *, role: str) -> list[JsonObject]:
     parts = []
-    for part in content_parts(value):
+    source = content_parts(value)
+    # A Responses assistant message is either output history or an input
+    # message. Only the input shape accepts breakpoints on its text parts.
+    output_text = role == "assistant" and not any(
+        "prompt_cache_breakpoint" in part for part in source
+    )
+    for part in source:
         if part.get("type") == "text":
             parts.append(
                 {
-                    "type": "output_text" if role == "assistant" else "input_text",
+                    "type": "output_text" if output_text else "input_text",
                     "text": part["text"],
+                    **openai_cache_breakpoint(part),
                 }
             )
         elif part.get("type") == "input_file" and role == "user":
@@ -658,6 +670,7 @@ def _responses_content(value: JsonValue, *, role: str) -> list[JsonObject]:
                     "type": "input_image",
                     "image_url": image["url"],
                     **({"detail": image["detail"]} if "detail" in image else {}),
+                    **openai_cache_breakpoint(part),
                 }
             )
         else:
@@ -695,8 +708,11 @@ def chat_responses_body(
             continue
         if role == "assistant":
             items.extend(_reasoning_items(message))
-        parts = _responses_content(message.get("content"), role=role)
+        parts: list[JsonObject] = _responses_content(message.get("content"), role=role)
         if message.get("refusal"):
+            if parts and parts[0]["type"] == "input_text" and role == "assistant":
+                items.append({"role": role, "content": parts})
+                parts = []
             parts.append({"type": "refusal", "refusal": message["refusal"]})
         if parts:
             items.append({"role": role, "content": parts})
@@ -719,6 +735,7 @@ def chat_responses_body(
         "stream": True,
         "store": False,
         "include": ["reasoning.encrypted_content"],
+        **shared_openai_request_options(body),
     }
     for key in (
         "temperature",
@@ -727,7 +744,6 @@ def chat_responses_body(
         "metadata",
         "store",
         "service_tier",
-        "prompt_cache_key",
         "user",
     ):
         if body.get(key) is not None:

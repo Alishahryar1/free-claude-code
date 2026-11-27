@@ -76,7 +76,7 @@ class OpenAIResponsesRequest(BaseModel):
             else self.tools or []
         )
         choice = self.tool_choice
-        allowed: list[tuple[JsonValue, JsonValue, JsonValue]] | None = None
+        allowed: list[JsonObject] | None = None
         if isinstance(choice, dict) and choice.get("type") == "allowed_tools":
             mode, entries = choice.get("mode"), choice.get("tools")
             if mode not in ("auto", "required") or not isinstance(entries, list):
@@ -87,9 +87,7 @@ class OpenAIResponsesRequest(BaseModel):
             for entry in entries:
                 if not isinstance(entry, dict):
                     raise ResponsesConversionError("Allowed tools must be objects")
-                allowed.append(
-                    (entry.get("type"), entry.get("name"), entry.get("namespace"))
-                )
+                allowed.append(entry)
             choice = mode
 
         loaded: set[ResponsesToolIdentity] | None = None
@@ -102,6 +100,8 @@ class OpenAIResponsesRequest(BaseModel):
                 nested = tool.get(str(kind))
                 if isinstance(nested, dict):
                     source = nested
+                if tool.get("async", source.get("async")) is True:
+                    return False
                 if kind == "function" and source.get("strict") and not supports_strict:
                     return False
                 format_ = source.get("format")
@@ -121,12 +121,18 @@ class OpenAIResponsesRequest(BaseModel):
                         loaded = history.loaded_tools()
                     if definition_identity(tool, optional_str(namespace)) not in loaded:
                         return False
-            identity = (
-                kind,
-                source.get("name"),
-                namespace or source.get("namespace") or tool.get("namespace"),
+            return allowed is None or any(
+                entry.get("type") == kind
+                and entry.get("name") == source.get("name")
+                and entry.get("namespace")
+                == (namespace or source.get("namespace") or tool.get("namespace"))
+                and (
+                    kind != "tool_search"
+                    or entry.get("execution") is None
+                    or entry["execution"] == tool.get("execution", "server")
+                )
+                for entry in allowed
             )
-            return allowed is None or identity in allowed
 
         retained: list[JsonObject] = []
         for tool in candidates:

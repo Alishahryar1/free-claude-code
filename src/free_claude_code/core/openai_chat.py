@@ -1,4 +1,4 @@
-"""OpenAI Chat Completions wire-history helpers."""
+"""Request and history fields shared by the two OpenAI protocols."""
 
 import json
 from collections.abc import Mapping
@@ -6,6 +6,37 @@ from collections.abc import Mapping
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
 TOOL_RESULT_ATTACHMENT_MARKER = "[Tool output attachments follow in user content.]"
+
+
+def shared_openai_request_options(body: Mapping[str, JsonValue]) -> JsonObject:
+    options = {
+        key: body[key]
+        for key in ("prompt_cache_key", "prompt_cache_retention", "safety_identifier")
+        if body.get(key) is not None
+    }
+    cache = body.get("prompt_cache_options")
+    if isinstance(cache, Mapping):
+        common: JsonObject = {}
+        if cache.get("mode") in ("implicit", "explicit"):
+            common["mode"] = cache["mode"]
+        # Both protocols support longer lifetimes per part, but only Responses
+        # supports 12h as the default for the entire request.
+        if cache.get("ttl") == "30m":
+            common["ttl"] = "30m"
+        if common:
+            options["prompt_cache_options"] = common
+    return options
+
+
+def openai_cache_breakpoint(part: Mapping[str, JsonValue]) -> JsonObject:
+    marker = part.get("prompt_cache_breakpoint")
+    if not isinstance(marker, Mapping):
+        return {}
+    return {
+        "prompt_cache_breakpoint": {
+            key: marker[key] for key in ("mode", "ttl") if key in marker
+        }
+    }
 
 
 def inline_file_fields(

@@ -78,6 +78,12 @@ def custom_tool_input_text(value: object) -> str:
     return _json_dumps(value)
 
 
+def required_custom_tool_input(value: JsonValue) -> str:
+    if not isinstance(value, str):
+        raise ResponsesConversionError("Custom tool calls require text input")
+    return value
+
+
 def custom_tool_input_text_from_wrapper(value: object) -> str:
     if isinstance(value, Mapping):
         raw_input = value.get("input")

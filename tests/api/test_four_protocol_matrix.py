@@ -2034,6 +2034,9 @@ def test_deferred_function_is_callable_only_after_discovery(
     after = sent_request(protocol, path, body)
     assert "current schema" in json.dumps(after["tools"])
     assert "old schema" not in json.dumps(after["tools"])
+    # Replayed hosted search outputs may omit execution and have no call ID.
+    object_payload(history[2]).pop("execution")
+    assert "current schema" in json.dumps(sent_request(protocol, path, body)["tools"])
     object_payload(history[2])["status"] = "failed"
     translation_error(protocol, path, body)
 

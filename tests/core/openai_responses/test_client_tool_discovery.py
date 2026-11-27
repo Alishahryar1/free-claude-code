@@ -27,7 +27,10 @@ from free_claude_code.core.openai_responses import (
     ResponsesToolPolicy,
     build_responses_chat_request,
 )
-from free_claude_code.core.openai_responses.tool_search import public_search_tools
+from free_claude_code.core.openai_responses.tool_search import (
+    public_search_tools,
+    resolve_client_search_history,
+)
 from free_claude_code.core.openai_tool_names import encode_openai_chat_tool_names
 from free_claude_code.providers.openai_chat.stream_output import (
     ChatStreamUsage,
@@ -1506,6 +1509,33 @@ def test_discovery_call_id_does_not_imply_client_execution(execution: str) -> No
     assert "agents__spawn_agent" not in [
         tool.get("name") for tool in prepared.tools or []
     ]
+
+
+def test_unkeyed_hosted_search_identifies_only_its_own_completed_output() -> None:
+    call: JsonObject = {
+        "type": "tool_search_call",
+        "execution": "server",
+        "call_id": None,
+    }
+
+    def output(name: str) -> JsonObject:
+        return {
+            "type": "tool_search_output",
+            "call_id": None,
+            "tools": [{"type": "function", "name": name}],
+        }
+
+    history = resolve_client_search_history(
+        [
+            output("orphan"),
+            call,
+            output("found"),
+            output("extra"),
+            {**call, "status": "failed"},
+            output("unavailable"),
+        ]
+    )
+    assert {identity.name for identity in history.loaded_tools()} == {"found"}
 
 
 @pytest.mark.parametrize("native", [False, True])

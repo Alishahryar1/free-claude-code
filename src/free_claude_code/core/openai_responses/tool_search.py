@@ -90,7 +90,7 @@ def public_search_tools(tools: JsonValue) -> list[JsonObject]:
 
 
 def resolve_client_search_history(items: JsonValue) -> ClientSearchHistory:
-    """Infer omitted execution only from search records with the same call ID."""
+    """Match search records by ID, or by the outstanding unkeyed hosted call."""
     if not isinstance(items, list):
         return ClientSearchHistory(frozenset(), {})
     searches = {
@@ -121,20 +121,29 @@ def resolve_client_search_history(items: JsonValue) -> ClientSearchHistory:
     for index, item in searches.items():
         execution = item.get("execution")
         call_id = item.get("call_id")
+        is_call = item.get("type") == "tool_search_call"
         if execution is None and isinstance(call_id, str) and call_id:
             execution = executions.get(call_id)
+        if call_id is None:
+            if is_call:
+                unfinished.pop(("server", None), None)
+            elif execution is None and ("server", None) in unfinished:
+                execution = "server"
         if execution not in ("client", "server"):
             continue
         key = (str(execution), optional_str(call_id))
-        if item.get("type") == "tool_search_call":
+        if is_call:
             unfinished[key] = is_unfinished_search_call(item)
-        if unfinished.get(key):
+        incomplete = unfinished.get(key)
+        if not is_call and call_id is None:
+            unfinished.pop(key, None)
+        if incomplete:
             if execution == "client":
                 omitted_items.add(index)
             continue
         if execution == "client":
             client_items.add(index)
-        if item.get("type") == "tool_search_output":
+        if not is_call:
             tools = item.get("tools")
             accepted = (
                 tools
@@ -183,8 +192,9 @@ def _merge_tool_groups(
                 continue
             source = child.get(str(kind))
             definition = deepcopy(source if isinstance(source, dict) else child)
-            if "allowed_callers" in child:
-                definition["allowed_callers"] = deepcopy(child["allowed_callers"])
+            for option in ("allowed_callers", "async"):
+                if option in child:
+                    definition[option] = deepcopy(child[option])
             definition["type"] = kind
             if (
                 keep_current_defer_loading

@@ -6,7 +6,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from free_claude_code.core.json_types import JsonObject, JsonValue
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from tests.api.test_four_protocol_matrix import (
     ingress_request,
     matrix_app,
@@ -14,6 +14,302 @@ from tests.api.test_four_protocol_matrix import (
     translation_error,
 )
 from tests.providers.test_gemini import _sse
+from tests.wire_payload import object_array, object_payload
+
+
+@pytest.mark.parametrize(
+    ("wire", "target"), [("chat", "responses"), ("responses", "chat")]
+)
+@pytest.mark.parametrize("role", ["user", "developer", "assistant"])
+def test_openai_cache_policy_and_exact_text_breakpoint_cross_together(
+    wire: str, target: str, role: str
+) -> None:
+    marker: JsonObject = {"mode": "explicit", "ttl": "30m"}
+    kind = "text" if wire == "chat" else "input_text"
+    path, body = ingress_request(
+        wire,
+        True,
+        [
+            {
+                "role": role,
+                "content": [
+                    {
+                        "type": kind,
+                        "text": "Reusable prefix",
+                        "prompt_cache_breakpoint": marker,
+                    },
+                    {"type": kind, "text": "After the boundary"},
+                ],
+            },
+            {"role": "user", "content": "Continue"},
+        ],
+    )
+    options: JsonObject = {"mode": "explicit", "ttl": "30m"}
+    body.update(
+        prompt_cache_key="cache-group",
+        prompt_cache_options=options,
+        prompt_cache_retention="in_memory",
+        safety_identifier="stable-user",
+    )
+    sent = sent_request(target, path, body)
+    for key in (
+        "prompt_cache_key",
+        "prompt_cache_options",
+        "prompt_cache_retention",
+        "safety_identifier",
+    ):
+        assert sent[key] == body[key]
+    messages = object_array(sent["messages" if target == "chat" else "input"])
+    first = object_array(
+        next(message["content"] for message in messages if message.get("role") == role)
+    )
+    assert (
+        first[0]["text"] == "Reusable prefix"
+        and first[0]["prompt_cache_breakpoint"] == marker
+    )
+    assert (
+        first[1]["text"] == "After the boundary"
+        and "prompt_cache_breakpoint" not in first[1]
+    )
+    if target == "responses":
+        assert [part["type"] for part in first] == ["input_text", "input_text"]
+
+
+def test_server_only_search_choice_cannot_enable_the_client_executor() -> None:
+    path, body = ingress_request("responses", True)
+    body["tools"] = [
+        {
+            "type": "tool_search",
+            "execution": "client",
+            "parameters": {"type": "object"},
+        },
+        {"type": "tool_search", "execution": "server"},
+    ]
+    allowed: JsonObject = {
+        "type": "allowed_tools",
+        "mode": "auto",
+        "tools": [{"type": "tool_search", "execution": "server"}],
+    }
+    body["tool_choice"] = allowed
+    sent = sent_request("chat", path, body)
+    assert "fcc_tool_search" not in json.dumps(sent.get("tools"))
+    allowed["mode"] = "required"
+    assert translation_error("chat", path, body)
+    allowed["tools"] = [{"type": "tool_search", "execution": "client"}]
+    assert "fcc_tool_search" in json.dumps(sent_request("chat", path, body)["tools"])
+
+
+@pytest.mark.parametrize(
+    ("wire", "target"), [("chat", "responses"), ("responses", "chat")]
+)
+def test_openai_breakpoints_stay_on_the_image_and_tool_result(
+    wire: str, target: str
+) -> None:
+    marker: JsonObject = {"mode": "explicit", "ttl": "12h"}
+    uri = "data:image/png;base64,iVBORw0KGgo="
+    if wire == "chat":
+        image: JsonObject = {"type": "image_url", "image_url": {"url": uri}}
+        assistant: JsonObject = {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "r",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": "{}"},
+                }
+            ],
+        }
+        result: JsonObject = {"role": "tool", "tool_call_id": "r"}
+        result["content"] = [
+            {"type": "text", "text": "found", "prompt_cache_breakpoint": marker}
+        ]
+    else:
+        image = {"type": "input_image", "image_url": uri}
+        assistant = {
+            "type": "function_call",
+            "call_id": "r",
+            "name": "read",
+            "arguments": "{}",
+        }
+        result = {
+            "type": "function_call_output",
+            "call_id": "r",
+            "output": [
+                {
+                    "type": "input_text",
+                    "text": "found",
+                    "prompt_cache_breakpoint": marker,
+                }
+            ],
+        }
+    image["prompt_cache_breakpoint"] = {**marker, "vendor_note": "private"}
+    path, body = ingress_request(
+        wire, True, [{"role": "user", "content": [image]}, assistant, result]
+    )
+    body["prompt_cache_options"] = {
+        "mode": "explicit",
+        "ttl": "12h" if wire == "responses" else "30m",
+        "vendor_note": "private",
+    }
+    sent = sent_request(target, path, body)
+    assert sent["prompt_cache_options"] == (
+        {"mode": "explicit"} if target == "chat" else {"mode": "explicit", "ttl": "30m"}
+    )
+    turns = object_array(sent["messages" if target == "chat" else "input"])
+    picture = object_array(turns[0]["content"])[0]
+    output = object_array(turns[-1]["content" if target == "chat" else "output"])[0]
+    assert (
+        picture["prompt_cache_breakpoint"]
+        == output["prompt_cache_breakpoint"]
+        == marker
+    )
+    assert output["text"] == "found"
+
+
+@pytest.mark.parametrize("target", ["gemini", "chat", "messages", "responses"])
+def test_gemini_resume_token_requires_the_original_protocol(target: str) -> None:
+    path, body = ingress_request("gemini", False)
+    body["continuationToken"] = "saved-turn"
+    if target == "gemini":
+        assert sent_request(target, path, body)["continuationToken"] == "saved-turn"
+    else:
+        assert "continuationToken" in translation_error(target, path, body)
+
+
+@pytest.mark.parametrize("target", ["gemini", "chat", "messages", "responses"])
+@pytest.mark.parametrize("kind", ["function", "custom"])
+def test_responses_async_functions_require_a_capable_route(
+    target: str, kind: str
+) -> None:
+    path, body = ingress_request("responses", True)
+    asynchronous: JsonObject = {
+        "type": kind,
+        "name": "background_lookup",
+        "async": True,
+    }
+    body["tools"] = [asynchronous, {"type": "function", "name": "read"}]
+    optional = sent_request(target, path, body)
+    assert ("background_lookup" in json.dumps(optional["tools"])) == (
+        target == "responses"
+    )
+    assert "read" in json.dumps(optional["tools"])
+    body["tool_choice"] = {"type": kind, "name": "background_lookup"}
+    if target == "responses":
+        assert sent_request(target, path, body)["tool_choice"] == body["tool_choice"]
+    else:
+        assert translation_error(target, path, body)
+
+
+@pytest.mark.parametrize("target", ["gemini", "chat", "messages", "responses"])
+@pytest.mark.parametrize(
+    "part",
+    [
+        {"fileData": {"fileUri": "files/manual", "mimeType": "application/pdf"}},
+        {"executableCode": {"language": "PYTHON", "code": "value = 1"}},
+        {"toolResponse": {"id": "s", "response": {"value": 1}}},
+    ],
+)
+def test_gemini_system_instruction_only_accepts_known_text(
+    target: str, part: JsonObject
+) -> None:
+    path, body = ingress_request("gemini", False)
+    body["systemInstruction"] = {"parts": [{"text": "Use this reference"}, part]}
+    assert "systemInstruction" in translation_error(target, path, body)
+
+
+@pytest.mark.parametrize("target", ["gemini", "chat", "messages"])
+@pytest.mark.parametrize(
+    ("call", "result_kind"),
+    [
+        (
+            {"type": "custom_tool_call", "name": "lookup", "call_id": "r"},
+            "custom_tool_call_output",
+        ),
+        (
+            {
+                "type": "function_call",
+                "name": "lookup",
+                "call_id": "r",
+                "arguments": "{}",
+            },
+            "custom_tool_call_output",
+        ),
+        (
+            {"type": "custom_tool_call", "name": "lookup", "call_id": "r", "input": ""},
+            "function_call_output",
+        ),
+    ],
+)
+def test_translation_checks_call_and_result_before_rewriting_their_types(
+    target: str, call: JsonObject, result_kind: str
+) -> None:
+    path, body = ingress_request(
+        "responses",
+        True,
+        [
+            {"role": "user", "content": "Run the lookup"},
+            call,
+            {"type": result_kind, "call_id": "r", "output": "result"},
+        ],
+    )
+    body.pop("tools")
+    assert "tool" in translation_error(target, path, body).lower()
+
+
+@pytest.mark.parametrize("target", ["gemini", "chat", "messages"])
+def test_empty_custom_input_is_a_valid_call(target: str) -> None:
+    path, body = ingress_request(
+        "responses",
+        True,
+        [
+            {"role": "user", "content": "Run lookup"},
+            {"type": "custom_tool_call", "name": "lookup", "call_id": "r", "input": ""},
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "r",
+                "output": "default entry",
+            },
+        ],
+    )
+    body["tools"] = [{"type": "custom", "name": "lookup"}]
+    sent = sent_request(target, path, body)
+    turns = object_array(sent["contents" if target == "gemini" else "messages"])
+    assistant = turns[1]
+    if target == "gemini":
+        call = object_payload(object_array(assistant["parts"])[0]["functionCall"])
+        args = call["args"]
+    elif target == "messages":
+        args = object_array(assistant["content"])[0]["input"]
+    else:
+        call = object_payload(object_array(assistant["tool_calls"])[0]["function"])
+        raw_args = call["arguments"]
+        assert isinstance(raw_args, str)
+        args = load_json_value(raw_args)
+    assert args == {"input": ""}
+    assert "default entry" in json.dumps(turns[-1])
+
+
+def test_client_search_cannot_complete_an_ordinary_function_call() -> None:
+    path, body = ingress_request(
+        "responses",
+        True,
+        [
+            {"role": "user", "content": "Read"},
+            {
+                "type": "function_call",
+                "call_id": "r",
+                "name": "read",
+                "arguments": "{}",
+            },
+            {
+                "type": "tool_search_output",
+                "execution": "client",
+                "call_id": "r",
+                "tools": [],
+            },
+        ],
+    )
+    assert "tool" in translation_error("chat", path, body).lower()
 
 
 @pytest.mark.parametrize("protocol", ["chat", "responses", "messages", "gemini"])

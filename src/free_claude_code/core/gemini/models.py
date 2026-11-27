@@ -106,9 +106,9 @@ class Part(MediaPart):
     thought: bool = False
     thought_signature: str | None = Field(default=None, min_length=1)
 
-    @model_validator(mode="after")
-    def one_content_variant(self) -> Self:
-        count = sum(
+    @property
+    def data_variant_count(self) -> int:
+        return sum(
             value is not None
             for value in (
                 self.text,
@@ -122,6 +122,10 @@ class Part(MediaPart):
                 self.function_response,
             )
         )
+
+    @model_validator(mode="after")
+    def one_content_variant(self) -> Self:
+        count = self.data_variant_count
         if count > 1 or (
             count == 0 and self.thought_signature is None and not self.has_extension()
         ):
@@ -294,6 +298,7 @@ class GeminiRequest(GeminiModel):
     # Supplied by routing, never taken from the HTTP request body.
     model: str = Field(min_length=1)
     cached_content: str | None = Field(default=None, min_length=1)
+    continuation_token: str | None = Field(default=None, min_length=1)
     safety_settings: list[JsonObject] | None = None
     contents: list[Content] = Field(min_length=1)
     system_instruction: Content | None = None
@@ -306,9 +311,7 @@ class GeminiRequest(GeminiModel):
         if not self.model.strip():
             raise ValueError("Model must not be blank")
         if self.system_instruction is not None and any(
-            part.inline_data is not None
-            or part.function_call is not None
-            or part.function_response is not None
+            (part.text is None and part.data_variant_count)
             or part.thought
             or part.thought_signature is not None
             for part in self.system_instruction.parts

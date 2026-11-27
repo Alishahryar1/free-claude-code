@@ -6,11 +6,16 @@ from typing import Literal
 
 from ..history_replay import google_thought_signature, tool_history_context
 from ..json_types import JsonObject, JsonValue, load_json_value
-from ..openai_chat import computer_screenshot_label
+from ..openai_chat import computer_screenshot_label, openai_cache_breakpoint
 from .errors import ResponsesConversionError
 from .hosted_history import public_tool_record
 from .tool_calls import is_client_call
-from .tools import ResponsesToolIdentity, optional_str, required_str
+from .tools import (
+    ResponsesToolIdentity,
+    optional_str,
+    required_custom_tool_input,
+    required_str,
+)
 
 _MESSAGE_ROLES = ("user", "assistant", "system", "developer")
 
@@ -96,7 +101,13 @@ def _content(
                     "Responses text content requires a string"
                 )
             if text or keep_empty_text:
-                parts.append({"type": "input_text", "text": text})
+                parts.append(
+                    {
+                        "type": "input_text",
+                        "text": text,
+                        **openai_cache_breakpoint(part),
+                    }
+                )
         elif kind in ("input_file", "input_image") and part.get("file_id") is not None:
             raise ResponsesConversionError(
                 f"Responses {kind}.file_id requires native Responses egress"
@@ -189,9 +200,11 @@ def _read_item(raw: JsonValue) -> HistoryItem | None:
         return ReasoningItem(raw)
     if kind in ("function_call", "custom_tool_call"):
         custom = kind == "custom_tool_call"
-        arguments = raw.get("input" if custom else "arguments")
-        if custom and not isinstance(arguments, str):
-            raise ResponsesConversionError("Custom tool calls require text input")
+        arguments = (
+            required_custom_tool_input(raw.get("input"))
+            if custom
+            else raw.get("arguments")
+        )
         identity = ResponsesToolIdentity(
             "custom" if custom else "function",
             required_str(raw.get("name"), "tool.name"),

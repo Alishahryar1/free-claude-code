@@ -19,6 +19,8 @@ from free_claude_code.core.openai_chat import (
     ChatToolResultAttachments,
     close_chat_tool_result_turns,
     inline_file_fields,
+    openai_cache_breakpoint,
+    shared_openai_request_options,
     tool_result_attachment_label,
 )
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
@@ -51,7 +53,6 @@ _CHAT_OPTION_FIELDS = (
     "logprobs",
     "n",
     "presence_penalty",
-    "prompt_cache_key",
     "seed",
     "service_tier",
     "stop",
@@ -146,9 +147,12 @@ class _ResponsesChatInputBuilder:
             item.require_text_only("Chat")
         content = _message_content(item.content)
         if role in {"developer", "system"}:
-            assert isinstance(content, str)
             if content:
-                if self.messages or not self._pending_reasoning.empty:
+                if (
+                    isinstance(content, list)
+                    or self.messages
+                    or not self._pending_reasoning.empty
+                ):
                     self._flush_reasoning()
                     self.messages.append({"role": role, "content": content})
                 else:
@@ -307,9 +311,16 @@ class _ResponsesChatInputBuilder:
             if encrypted and not signed:
                 details.extend(reasoning_detail(encrypted))
         if contexts:
-            message["content"] = "\n\n".join(
-                [*contexts, str(message.get("content") or "")]
-            ).rstrip()
+            content = message.get("content")
+            if isinstance(content, list):
+                message["content"] = [
+                    {"type": "text", "text": "\n\n".join(contexts)},
+                    *content,
+                ]
+            else:
+                message["content"] = "\n\n".join(
+                    [*contexts, str(content or "")]
+                ).rstrip()
         if details:
             existing = message.setdefault("reasoning_details", [])
             if isinstance(existing, list):
@@ -387,6 +398,7 @@ def build_responses_chat_request(
         body["metadata"] = request.metadata
 
     extra: JsonObject = request.model_extra or {}
+    body.update(shared_openai_request_options(extra))
     for field_name in _CHAT_OPTION_FIELDS:
         value = extra.get(field_name)
         if value is not None:
@@ -422,7 +434,13 @@ def _message_content(value: JsonValue) -> str | list[dict[str, object]]:
             continue
         part_type = part.get("type")
         if part_type in ("input_text", "output_text", "text", "refusal"):
-            parts.append({"type": "text", "text": _text_from_part(part)})
+            parts.append(
+                {
+                    "type": "text",
+                    "text": _text_from_part(part),
+                    **openai_cache_breakpoint(part),
+                }
+            )
             continue
         if part_type == "input_image":
             parts.append(_image_part(part, context="input_image"))
@@ -432,14 +450,16 @@ def _message_content(value: JsonValue) -> str | list[dict[str, object]]:
                 raise ResponsesConversionError(
                     "A Chat file must be an inline PDF with automatic detail in user content"
                 )
-            file: dict[str, object] = {"type": "file", "file": fields}
-            if "prompt_cache_breakpoint" in part:
-                file["prompt_cache_breakpoint"] = part["prompt_cache_breakpoint"]
-            parts.append(file)
+            parts.append(
+                {"type": "file", "file": fields, **openai_cache_breakpoint(part)}
+            )
 
     if not parts:
         return ""
-    if all(part.get("type") == "text" for part in parts):
+    if all(
+        part.get("type") == "text" and "prompt_cache_breakpoint" not in part
+        for part in parts
+    ):
         return "\n\n".join(str(part.get("text", "")) for part in parts)
     return parts
 
@@ -475,7 +495,11 @@ def _image_part(part: Mapping[str, JsonValue], *, context: str) -> dict[str, obj
     detail = part.get("detail")
     if isinstance(detail, str):
         image_url["detail"] = detail
-    return {"type": "image_url", "image_url": image_url}
+    return {
+        "type": "image_url",
+        "image_url": image_url,
+        **openai_cache_breakpoint(part),
+    }
 
 
 def _arguments_text(value: JsonValue) -> str:
@@ -484,11 +508,16 @@ def _arguments_text(value: JsonValue) -> str:
     return json.dumps(value if value is not None else {}, separators=(",", ":"))
 
 
-def _tool_output_text(value: JsonValue) -> str:
+def _tool_output_text(value: JsonValue) -> str | list[dict[str, object]]:
     if value is None:
         return ""
     if isinstance(value, str):
         return value
+    if isinstance(value, list) and any(
+        isinstance(part, Mapping) and "prompt_cache_breakpoint" in part
+        for part in value
+    ):
+        return _message_content(value)
     return json.dumps(value, separators=(",", ":"))
 
 

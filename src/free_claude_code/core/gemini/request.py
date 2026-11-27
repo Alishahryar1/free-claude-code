@@ -108,6 +108,10 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
         raise GeminiConversionError(
             "This destination cannot access the saved Gemini cachedContent"
         )
+    if request.continuation_token is not None:
+        raise GeminiConversionError(
+            "A Gemini continuationToken requires native Gemini egress"
+        )
     if request.safety_settings:
         raise GeminiConversionError(
             "This destination cannot enforce Gemini safetySettings"
