@@ -13,7 +13,7 @@ from free_claude_code.core.reasoning import (
     DEFAULT_REASONING_POLICY,
     ReasoningPolicy,
 )
-from free_claude_code.providers.request_correction import Proposal
+from free_claude_code.providers.request_correction import CorrectionStep, Proposal
 
 from .media_support import is_media_rejection
 from .profiles import OpenAIChatProfile
@@ -80,6 +80,16 @@ class OpenAIChatBehavior:
     ) -> Iterator[str]:
         """Hook for provider-specific reasoning."""
         return iter(())
+
+    def correction_steps(self) -> tuple[CorrectionStep, ...]:
+        return (
+            CorrectionStep(
+                "provider_specific",
+                lambda rejection: self.retry_request_body(
+                    rejection.error, rejection.body
+                ),
+            ),
+        )
 
     def retry_request_body(
         self, error: Exception, body: dict[str, Any]
