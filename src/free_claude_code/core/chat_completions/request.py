@@ -8,6 +8,7 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from free_claude_code.core.json_types import load_json_value
+from free_claude_code.core.openai_chat import inline_file_fields
 
 from ..history_replay import (
     decode_replay,
@@ -300,14 +301,18 @@ def project_chat_request(request: ChatRequest) -> ChatProjection:
             for part in json_objects(content):
                 if part.get("type") in ("text", "image_url"):
                     parts.append(part)
-                elif (
-                    part.get("type") == "file"
-                    and isinstance(file := part.get("file"), dict)
-                    and file.get("file_id") is not None
-                ):
-                    raise ChatConversionError(
-                        "A stored file requires native Chat egress"
-                    )
+                elif part.get("type") == "file":
+                    fields = inline_file_fields(part.get("file"))
+                    if message["role"] != "user" or fields is None:
+                        raise ChatConversionError(
+                            "A translated Chat file needs inline file data in a user message"
+                        )
+                    portable: JsonObject = {"type": "input_file", **fields}
+                    if "prompt_cache_breakpoint" in part:
+                        portable["prompt_cache_breakpoint"] = part[
+                            "prompt_cache_breakpoint"
+                        ]
+                    parts.append(portable)
                 elif (
                     message["role"] == "assistant"
                     and part.get("type") == "refusal"
@@ -318,7 +323,8 @@ def project_chat_request(request: ChatRequest) -> ChatProjection:
             if message["role"] == "tool" and content and not parts:
                 raise ChatConversionError("The tool result has no translatable content")
             if message is latest_user and not any(
-                part.get("type") == "image_url" or part.get("text") for part in parts
+                part.get("type") in ("image_url", "input_file") or part.get("text")
+                for part in parts
             ):
                 raise ChatConversionError(
                     "The latest user message has no translatable content"
@@ -620,6 +626,8 @@ def _responses_content(value: JsonValue, *, role: str) -> list[JsonObject]:
                     "text": part["text"],
                 }
             )
+        elif part.get("type") == "input_file" and role == "user":
+            parts.append(part)
         elif part.get("type") == "image_url" and role != "assistant":
             image = json_object(part["image_url"])
             parts.append(

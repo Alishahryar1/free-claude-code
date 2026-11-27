@@ -778,7 +778,17 @@ def test_interrupted_discovery_keeps_custom_output_source_and_later_discovery(
             item.get("tool_call_id") for item in messages if item["role"] == "tool"
         ] == ["edit", "found", "lookup"]
         assert messages[1]["reasoning_content"] == "Saved reasoning"
-        assert load_json_value(string_payload(messages[2]["content"])) == custom_output
+        relocated = next(
+            message
+            for message in messages
+            if message["role"] == "user" and isinstance(message["content"], list)
+        )
+        label, image = object_array(relocated["content"])
+        assert '"edit"' in string_payload(label["text"])
+        assert image == {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,cG5n"},
+        }
         found = next(item for item in messages if item.get("tool_call_id") == "found")
         wire_name = object_array(load_json_value(string_payload(found["content"])))[0][
             "name"
@@ -1989,7 +1999,7 @@ def test_interleaved_tool_kinds_keep_arguments_and_terminal_output_consistent(
     assert sequences == sorted(set(sequences))
 
 
-def test_chat_preserves_custom_result_text_serialization() -> None:
+def test_chat_delivers_a_custom_tool_result_image_as_an_image() -> None:
     result = [{"type": "input_image", "image_url": "https://example.com/result.png"}]
     request = OpenAIResponsesRequest(
         model="example",
@@ -2008,11 +2018,13 @@ def test_chat_preserves_custom_result_text_serialization() -> None:
         request, reasoning_replay=ReasoningReplayMode.REASONING_CONTENT
     ).body
     messages = object_array(body["messages"])
-    assert len(messages) == 2
-    assert messages[-1] == {
-        "role": "tool",
-        "tool_call_id": "edit",
-        "content": json.dumps(result, separators=(",", ":")),
+    assert messages[1]["role"] == "tool" and messages[1]["tool_call_id"] == "edit"
+    assert messages[-1]["role"] == "user"
+    label, image = object_array(messages[-1]["content"])
+    assert '"edit"' in string_payload(label["text"])
+    assert image == {
+        "type": "image_url",
+        "image_url": {"url": "https://example.com/result.png"},
     }
 
 

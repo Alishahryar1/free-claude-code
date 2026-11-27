@@ -1636,11 +1636,11 @@ def test_preserves_image_and_text_inside_tool_result(
     assert array_payload(body["messages"])[1] == {
         "role": "tool",
         "tool_call_id": "t1",
-        "content": "[Image-bearing tool output follows in user content.]",
+        "content": "[Tool output attachments follow in user content.]",
     }
     assert is_synthetic_chat_tool_turn_boundary(array_payload(body["messages"])[2])
     assert object_payload(array_payload(body["messages"])[3])["content"] == [
-        {"type": "text", "text": 'Image-bearing output for tool call "t1":'},
+        {"type": "text", "text": 'Attachments from tool call "t1":'},
         {"type": "text", "text": "screenshot saved"},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,YQ=="}},
         {"type": "text", "text": "inspect the screenshot"},
@@ -1702,11 +1702,11 @@ def test_image_only_tool_result_reaches_user_content(
     assert array_payload(body["messages"])[1] == {
         "role": "tool",
         "tool_call_id": "t1",
-        "content": "[Image-bearing tool output follows in user content.]",
+        "content": "[Tool output attachments follow in user content.]",
     }
     assert is_synthetic_chat_tool_turn_boundary(array_payload(body["messages"])[2])
     assert object_payload(array_payload(body["messages"])[3])["content"] == [
-        {"type": "text", "text": 'Image-bearing output for tool call "t1":'},
+        {"type": "text", "text": 'Attachments from tool call "t1":'},
         {
             "type": "image_url",
             "image_url": {"url": "https://images.example.test/shot.png"},
@@ -1891,13 +1891,13 @@ def test_parallel_tool_results_close_before_image_content(
     ] == ["t1", "t2"]
     assert (
         object_payload(array_payload(messages)[1])["content"]
-        == "[Image-bearing tool output follows in user content.]"
+        == "[Tool output attachments follow in user content.]"
     )
     assert object_payload(array_payload(messages)[2])["content"] == "text result"
     assert is_synthetic_chat_tool_turn_boundary(array_payload(messages)[3])
     assert object_payload(array_payload(messages)[3])["reasoning_content"] == ""
     assert object_payload(array_payload(messages)[4])["content"] == [
-        {"type": "text", "text": 'Image-bearing output for tool call "t1":'},
+        {"type": "text", "text": 'Attachments from tool call "t1":'},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,YQ=="}},
     ]
 

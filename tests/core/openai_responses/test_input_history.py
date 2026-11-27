@@ -5,7 +5,11 @@ import pytest
 from openai.types.responses.computer_action_list_param import ComputerActionParam
 from openai.types.responses.mcp_tool_call_error_param import McpToolCallErrorParam
 from openai.types.responses.response_computer_tool_call_param import Action
-from openai.types.responses.response_input_item_param import ResponseInputItemParam
+from openai.types.responses.response_input_item_param import (
+    LocalShellCallAction,
+    ResponseInputItemParam,
+    ShellCallAction,
+)
 
 from free_claude_code.core.json_types import JsonObject
 from free_claude_code.core.openai_responses import (
@@ -154,6 +158,43 @@ def test_file_search_preserves_public_evidence_and_keeps_attributes_private() ->
         },
     )
     assert record is not None and record["results"] == [result]
+
+
+@pytest.mark.parametrize(
+    ("kind", "schema"),
+    [("shell_call", ShellCallAction), ("local_shell_call", LocalShellCallAction)],
+)
+def test_recorded_shell_actions_keep_their_public_parameters(
+    kind: str, schema: type
+) -> None:
+    examples: JsonObject = {
+        "type": "exec",
+        "command": ["old-command"],
+        "commands": ["old-command"],
+        "timeout_ms": 1500,
+        "max_output_length": 50,
+        "working_directory": "/work",
+        "user": "worker",
+        "env": {"SETTING": "private-runtime-value"},
+    }
+    action = {name: examples[name] for name in get_type_hints(schema)}
+    record = public_tool_record(kind, {"type": kind, "action": action})
+    assert record is not None
+    assert record["action"] == {
+        name: value for name, value in action.items() if name != "env"
+    }
+    if kind == "shell_call":
+        output = public_tool_record(
+            "shell_call_output",
+            {
+                "type": "shell_call_output",
+                "max_output_length": 50,
+                "output": [
+                    {"stdout": "", "stderr": "", "outcome": {"type": "timeout"}}
+                ],
+            },
+        )
+        assert output is not None and output["max_output_length"] == 50
 
 
 def literal_strings(annotation: object) -> Iterator[str]:

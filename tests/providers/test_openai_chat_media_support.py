@@ -7,7 +7,7 @@ import openai
 import pytest
 
 from free_claude_code.core.json_types import JsonObject
-from free_claude_code.core.openai_chat import ChatToolResultImages
+from free_claude_code.core.openai_chat import ChatToolResultAttachments
 from free_claude_code.providers.openai_chat.media_support import (
     TextOnlyModels,
     is_media_rejection,
@@ -113,7 +113,7 @@ def test_note_asks_the_model_to_tell_the_user() -> None:
 
 def test_relocated_tool_images_keep_their_history_marker() -> None:
     parts: list[Any] = [{"type": "text", "text": "Image-bearing output:"}, IMAGE]
-    relocated = ChatToolResultImages(role="user", content=parts)
+    relocated = ChatToolResultAttachments(role="user", content=parts)
     body = {"model": "m", "messages": [relocated]}
 
     stripped = without_media(body)
@@ -121,7 +121,7 @@ def test_relocated_tool_images_keep_their_history_marker() -> None:
     assert stripped is not None
     corrected: JsonObject = stripped[0]
     message = object_array(corrected["messages"])[0]
-    assert type(message) is ChatToolResultImages
+    assert type(message) is ChatToolResultAttachments
     assert array_payload(message["content"])[1] == {
         "type": "text",
         "text": omitted_media_note("image"),

@@ -91,6 +91,8 @@ def _text_parts(value: JsonValue, *, responses: bool = False) -> list[JsonObject
             if not isinstance(url, str):
                 raise GeminiConversionError("Image requires a data URL")
             parts.append(_image(url))
+        elif kind == "input_file":
+            raise GeminiConversionError("FCC cannot translate this file to Gemini")
         elif not isinstance(kind, str):
             raise GeminiConversionError("Content block requires a type")
     return parts

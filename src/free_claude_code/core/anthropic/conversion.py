@@ -18,10 +18,10 @@ from free_claude_code.core.history_replay import (
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue
 from free_claude_code.core.openai_chat import (
-    IMAGE_TOOL_RESULT_MARKER,
-    ChatToolResultImages,
+    TOOL_RESULT_ATTACHMENT_MARKER,
+    ChatToolResultAttachments,
     close_chat_tool_result_turns,
-    image_tool_result_label,
+    tool_result_attachment_label,
 )
 from free_claude_code.core.tool_schema_patterns import translate_tool_schema_patterns
 
@@ -258,7 +258,7 @@ def _openai_chat_tool_result(block: object) -> _OpenAIChatToolResult:
         )
 
     rich_parts: list[JsonObject] = [
-        {"type": "text", "text": image_tool_result_label(tool_id)}
+        {"type": "text", "text": tool_result_attachment_label(tool_id)}
     ]
     for part in decomposed.parts:
         if isinstance(part, ToolResultText):
@@ -270,9 +270,9 @@ def _openai_chat_tool_result(block: object) -> _OpenAIChatToolResult:
         tool_message={
             "role": "tool",
             "tool_call_id": tool_id,
-            "content": IMAGE_TOOL_RESULT_MARKER,
+            "content": TOOL_RESULT_ATTACHMENT_MARKER,
         },
-        rich_user_message=ChatToolResultImages(role="user", content=rich_parts),
+        rich_user_message=ChatToolResultAttachments(role="user", content=rich_parts),
     )
 
 
@@ -490,13 +490,16 @@ class AnthropicToOpenAIConverter:
                 ledger.add_user_blocks(content)
                 continue
 
-            segments = AnthropicToOpenAIConverter._convert_message_to_segments(
-                role,
-                content,
-                reasoning_content=reasoning_content,
-                reasoning_replay=reasoning_replay,
-                structured_reasoning_details=structured_reasoning_details,
-            )
+            try:
+                segments = AnthropicToOpenAIConverter._convert_message_to_segments(
+                    role,
+                    content,
+                    reasoning_content=reasoning_content,
+                    reasoning_replay=reasoning_replay,
+                    structured_reasoning_details=structured_reasoning_details,
+                )
+            except HistoryReplayError as error:
+                raise OpenAIConversionError(str(error)) from error
             for segment in segments:
                 if isinstance(segment, _PlainSegment):
                     ledger.add_plain(segment.messages)
@@ -517,19 +520,16 @@ class AnthropicToOpenAIConverter:
         structured_reasoning_details: bool = False,
     ) -> list[_TranscriptSegment]:
         if role == "assistant" and isinstance(content, list):
-            try:
-                validate_hosted_tool_history(
-                    [
-                        {
-                            "type": get_block_type(block),
-                            "id": get_block_attr(block, "id", None),
-                            "tool_use_id": get_block_attr(block, "tool_use_id", None),
-                        }
-                        for block in content
-                    ]
-                )
-            except HistoryReplayError as error:
-                raise OpenAIConversionError(str(error)) from error
+            validate_hosted_tool_history(
+                [
+                    {
+                        "type": get_block_type(block),
+                        "id": get_block_attr(block, "id"),
+                        "tool_use_id": get_block_attr(block, "tool_use_id"),
+                    }
+                    for block in content
+                ]
+            )
             if (first_i := _index_first_tool_use(content)) is not None:
                 for block in content:
                     if get_block_type(block) == "tool_use":

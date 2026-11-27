@@ -15,10 +15,11 @@ from free_claude_code.core.history_replay import (
 )
 from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.core.openai_chat import (
-    IMAGE_TOOL_RESULT_MARKER,
-    ChatToolResultImages,
+    TOOL_RESULT_ATTACHMENT_MARKER,
+    ChatToolResultAttachments,
     close_chat_tool_result_turns,
-    image_tool_result_label,
+    inline_file_fields,
+    tool_result_attachment_label,
 )
 from free_claude_code.core.openai_tool_names import OpenAIToolNameCodec
 
@@ -113,7 +114,7 @@ class _ResponsesChatInputBuilder:
             self._add_tool_output(item, source_type=source_type)
         elif isinstance(item, Screenshot):
             self._flush_reasoning()
-            content = _message_content(item.content, allow_images=True)
+            content = _message_content(item.content, allow_attachments=True)
             assert isinstance(content, list)
             self._pending_rich_output_parts.extend(content)
         else:
@@ -153,7 +154,7 @@ class _ResponsesChatInputBuilder:
 
         if role == "user":
             self._flush_reasoning()
-        content = _message_content(item.content, allow_images=role == "user")
+        content = _message_content(item.content, allow_attachments=role == "user")
         message: dict[str, object] = {"role": role, "content": content}
         if role == "assistant":
             self._apply_pending_reasoning(message)
@@ -186,7 +187,6 @@ class _ResponsesChatInputBuilder:
         )
 
     def _add_tool_output(self, item: InputResult, *, source_type: str | None) -> None:
-        function = source_type != "custom_tool_call_output"
         call_id = item.call_id
         if not self._pending_reasoning.empty:
             previous = self._last_tool_call_message()
@@ -195,15 +195,13 @@ class _ResponsesChatInputBuilder:
             else:
                 self._flush_reasoning()
         output = item.output
-        rich_parts = (
-            _rich_function_output_parts(output, call_id=call_id) if function else None
-        )
+        rich_parts = _rich_tool_output_parts(output, call_id=call_id)
         self.messages.append(
             {
                 "role": "tool",
                 "tool_call_id": call_id,
                 "content": (
-                    IMAGE_TOOL_RESULT_MARKER
+                    TOOL_RESULT_ATTACHMENT_MARKER
                     if rich_parts is not None
                     else _tool_output_text(output)
                 ),
@@ -241,7 +239,7 @@ class _ResponsesChatInputBuilder:
         self.messages.append(
             cast(
                 dict[str, object],
-                ChatToolResultImages(
+                ChatToolResultAttachments(
                     role="user",
                     content=cast(
                         list[JsonValue], list(self._pending_rich_output_parts)
@@ -406,13 +404,13 @@ def build_responses_chat_request(
 
 
 def _message_content(
-    value: JsonValue, *, allow_images: bool
+    value: JsonValue, *, allow_attachments: bool
 ) -> str | list[dict[str, object]]:
     if isinstance(value, str):
         return value
     if not isinstance(value, Sequence) or isinstance(value, bytes | bytearray):
         if isinstance(value, Mapping):
-            return _message_content([value], allow_images=allow_images)
+            return _message_content([value], allow_attachments=allow_attachments)
         return ""
 
     parts: list[dict[str, object]] = []
@@ -426,8 +424,22 @@ def _message_content(
         if part_type in ("input_text", "output_text", "text", "refusal"):
             parts.append({"type": "text", "text": _text_from_part(part)})
             continue
-        if allow_images and part_type == "input_image":
+        if allow_attachments and part_type == "input_image":
             parts.append(_image_part(part, context="input_image"))
+        elif part_type == "input_file":
+            fields = inline_file_fields(part, pdf_only=True)
+            if (
+                not allow_attachments
+                or fields is None
+                or part.get("detail") not in (None, "auto")
+            ):
+                raise ResponsesConversionError(
+                    "A Chat file must be an inline PDF with automatic detail in user content"
+                )
+            file: dict[str, object] = {"type": "file", "file": fields}
+            if "prompt_cache_breakpoint" in part:
+                file["prompt_cache_breakpoint"] = part["prompt_cache_breakpoint"]
+            parts.append(file)
 
     if not parts:
         return ""
@@ -437,7 +449,7 @@ def _message_content(
 
 
 def _content_text(value: JsonValue) -> str:
-    content = _message_content(value, allow_images=False)
+    content = _message_content(value, allow_attachments=False)
     if isinstance(content, str):
         return content
     return "\n\n".join(
@@ -493,30 +505,20 @@ def _tool_output_text(value: JsonValue) -> str:
     return json.dumps(value, separators=(",", ":"))
 
 
-def _rich_function_output_parts(
+def _rich_tool_output_parts(
     value: JsonValue, *, call_id: str
 ) -> list[dict[str, object]] | None:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return None
     if not any(
-        isinstance(part, Mapping) and part.get("type") == "input_image"
+        isinstance(part, Mapping) and part.get("type") in ("input_image", "input_file")
         for part in value
     ):
         return None
 
-    result: list[dict[str, object]] = [
-        {"type": "text", "text": image_tool_result_label(call_id)}
-    ]
-    for part in value:
-        if isinstance(part, Mapping) and part.get("type") == "input_text":
-            result.append({"type": "text", "text": _text_from_part(part)})
-        elif isinstance(part, Mapping) and part.get("type") == "input_image":
-            result.append(
-                _image_part(part, context="function_call_output.output.input_image")
-            )
-        else:
-            result.append({"type": "text", "text": _tool_output_text(part)})
-    return result
+    parts = _message_content(value, allow_attachments=True)
+    assert isinstance(parts, list)
+    return [{"type": "text", "text": tool_result_attachment_label(call_id)}, *parts]
 
 
 def _apply_reasoning_text(

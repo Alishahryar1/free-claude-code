@@ -271,6 +271,10 @@ def _content(value: JsonValue, *, images: bool, empty: bool = False) -> list[Jso
                 blocks.append({"type": "text", "text": text})
         elif kind == "input_image" and images:
             blocks.append(_image(item))
+        elif kind == "input_file":
+            raise ResponsesConversionError(
+                "FCC cannot translate this Responses file to Messages"
+            )
         elif not isinstance(kind, str):
             raise ResponsesConversionError("Content block requires a type.")
     return blocks

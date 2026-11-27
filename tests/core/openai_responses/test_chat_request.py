@@ -398,12 +398,12 @@ def test_build_responses_chat_request_relocates_rich_function_output() -> None:
     assert messages[1] == {
         "role": "tool",
         "tool_call_id": "call_image",
-        "content": "[Image-bearing tool output follows in user content.]",
+        "content": "[Tool output attachments follow in user content.]",
     }
     assert messages[3]["content"] == [
         {
             "type": "text",
-            "text": 'Image-bearing output for tool call "call_image":',
+            "text": 'Attachments from tool call "call_image":',
         },
         {"type": "text", "text": "before"},
         {"type": "image_url", "image_url": {"url": image_url}},
@@ -471,7 +471,7 @@ def test_build_responses_chat_request_closes_parallel_tools_before_rich_outputs(
     assert messages[4]["content"] == [
         {
             "type": "text",
-            "text": 'Image-bearing output for tool call "call_a":',
+            "text": 'Attachments from tool call "call_a":',
         },
         {
             "type": "image_url",
@@ -479,7 +479,7 @@ def test_build_responses_chat_request_closes_parallel_tools_before_rich_outputs(
         },
         {
             "type": "text",
-            "text": 'Image-bearing output for tool call "call_b":',
+            "text": 'Attachments from tool call "call_b":',
         },
         {
             "type": "image_url",
@@ -516,9 +516,7 @@ def test_build_responses_chat_request_flushes_rich_output_before_later_input() -
 
     messages = translated.body["messages"]
     assert isinstance(messages, list)
-    assert messages[-2]["content"][0]["text"].startswith(
-        "Image-bearing output for tool call"
-    )
+    assert messages[-2]["content"][0]["text"].startswith("Attachments from tool call")
     assert messages[-1] == {"role": "user", "content": "Describe the image."}
 
 

@@ -104,11 +104,19 @@ def public_tool_record(kind: str, item: JsonObject) -> JsonObject | None:
                 data["outputs"] = [_fields(entry, "type", "logs") for entry in entries]
         case "local_shell_call" | "shell_call":
             data["action"] = _fields(
-                item.get("action"), "type", "commands", "command", "working_directory"
+                item.get("action"),
+                "type",
+                "commands",
+                "command",
+                "working_directory",
+                "user",
+                "timeout_ms",
+                "max_output_length",
             )
         case "local_shell_call_output" | "apply_patch_call_output":
             data.update(_fields(item, "output"))
         case "shell_call_output":
+            data = _fields(item, "max_output_length")
             outputs: list[JsonObject] = []
             for entry in _entries(item.get("output")):
                 output = _fields(entry, "stdout", "stderr")

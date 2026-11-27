@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from free_claude_code.config.model_refs import ModelFallback
 from free_claude_code.config.settings import Settings
 from free_claude_code.core.gemini.response import GeminiResponseAccumulator
-from free_claude_code.core.json_types import JsonObject, load_json_value
+from free_claude_code.core.json_types import JsonObject, JsonValue, load_json_value
 from free_claude_code.providers.base import BaseProvider
 from free_claude_code.providers.custom import CustomProvider
 from free_claude_code.providers.runtime.config import build_custom_provider_config
@@ -339,9 +339,10 @@ def test_public_fallback_omits_hidden_unsigned_history(streaming: bool) -> None:
     assert not signatures
 
 
-def test_responses_fallback_reuses_original_extensions_after_translated_primary() -> (
-    None
-):
+@pytest.mark.parametrize("primary_wire", ["anthropic_messages", "openai_chat"])
+def test_responses_fallback_reuses_original_extensions_after_translated_primary(
+    primary_wire: str,
+) -> None:
     captured: list[JsonObject] = []
 
     def primary_reply(request: httpx.Request) -> httpx.Response:
@@ -354,6 +355,10 @@ def test_responses_fallback_reuses_original_extensions_after_translated_primary(
             },
         )
 
+    def primary_chat_reply(request: httpx2.Request) -> httpx2.Response:
+        captured.append(decode_object(request.content))
+        return httpx2.Response(503, json={"error": {"message": "overloaded"}})
+
     def fallback_reply(request: httpx2.Request) -> httpx2.Response:
         captured.append(decode_object(request.content))
         return httpx2.Response(
@@ -362,7 +367,7 @@ def test_responses_fallback_reuses_original_extensions_after_translated_primary(
             headers={"content-type": "text/event-stream"},
         )
 
-    primary = definition(api_format="anthropic_messages")
+    primary = definition(api_format=primary_wire)
     backup = definition(
         provider_id="custom_" + "b" * 32,
         display_name="Backup",
@@ -380,6 +385,7 @@ def test_responses_fallback_reuses_original_extensions_after_translated_primary(
                 definition=primary,
                 admission=immediate_admission(max_attempts=1),
                 messages_transport=httpx.MockTransport(primary_reply),
+                openai_transport=httpx2.MockTransport(primary_chat_reply),
             ),
             backup.provider_id: provider(backup, openai_handler=fallback_reply),
         },
@@ -389,15 +395,36 @@ def test_responses_fallback_reuses_original_extensions_after_translated_primary(
         "vendor_option": {"value": None},
         "vendor_null": None,
     }
+    source_input: JsonValue = "hello"
+    if primary_wire == "openai_chat":
+        source_input = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_file",
+                        "file_data": "data:application/pdf;base64,JVBERi0xLjQK",
+                        "filename": "report.pdf",
+                    }
+                ],
+            }
+        ]
     with TestClient(app) as client:
         result = client.post(
             "/v1/responses",
-            json={"model": "public", "input": "hello", "stream": True, **extras},
+            json={"model": "public", "input": source_input, "stream": True, **extras},
         )
     assert result.status_code == 200 and "response.completed" in result.text, (
         result.text
     )
     translated, native = captured
-    assert translated["model"] == "first" and not (translated.keys() & extras.keys())
+    assert translated["model"] == "first"
+    if primary_wire == "openai_chat":
+        assert translated["prompt_cache_key"] == "group"
+        assert "report.pdf" in json.dumps(translated["messages"])
+        assert native["input"] == source_input
+    else:
+        assert not (translated.keys() & extras.keys())
+    assert "vendor_option" not in translated and "vendor_null" not in translated
     assert native["model"] == "second"
     assert {key: native[key] for key in extras} == extras

@@ -11,7 +11,7 @@ from typing import Any, Literal, TypeGuard, cast
 from free_claude_code.core.json_types import load_json_value
 
 from .json_types import DecimalJsonValue, JsonObject, JsonValue
-from .openai_chat import ChatToolResultImages
+from .openai_chat import ChatToolResultAttachments
 from .recovery_limits import RECOVERY_RETENTION_BYTES
 
 type HistoryProtocol = Literal["responses", "messages", "chat", "gemini"]
@@ -775,7 +775,7 @@ def _last_user(messages: Sequence[JsonValue]) -> int:
 
 
 def _tool_result_message(message: JsonObject) -> bool:
-    if isinstance(message, ChatToolResultImages):
+    if isinstance(message, ChatToolResultAttachments):
         return True
     content = message.get("content")
     return (

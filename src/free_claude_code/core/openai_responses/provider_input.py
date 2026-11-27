@@ -26,7 +26,6 @@ from free_claude_code.core.anthropic.tool_results import (
 )
 from free_claude_code.core.anthropic.web_history import web_history_text
 from free_claude_code.core.history_replay import (
-    HistoryReplayError,
     has_readable_replay,
     is_replay,
     readable_reasoning,
@@ -60,19 +59,21 @@ def build_responses_provider_request(
         tool_choice = resolve_anthropic_tool_choice(
             request.direct_client_tools, request.tool_choice
         )
+        for message in messages:
+            if message.role == "assistant":
+                input_items.extend(
+                    _assistant_items(
+                        message.content,
+                        reasoning_content=message.reasoning_content,
+                        tool_names=tool_names,
+                    )
+                )
+            else:
+                input_items.extend(_user_items(message.content))
+    except ResponsesConversionError:
+        raise
     except ValueError as error:
         raise ResponsesConversionError(str(error)) from error
-    for message in messages:
-        if message.role == "assistant":
-            input_items.extend(
-                _assistant_items(
-                    message.content,
-                    reasoning_content=message.reasoning_content,
-                    tool_names=tool_names,
-                )
-            )
-        else:
-            input_items.extend(_user_items(message.content))
 
     if not input_items:
         raise ResponsesConversionError(
@@ -172,19 +173,16 @@ def _assistant_items(
         raise ResponsesConversionError(
             "Assistant content must be text or content blocks."
         )
-    try:
-        validate_hosted_tool_history(
-            [
-                {
-                    "type": get_block_type(block),
-                    "id": get_block_attr(block, "id", None),
-                    "tool_use_id": get_block_attr(block, "tool_use_id", None),
-                }
-                for block in blocks
-            ]
-        )
-    except HistoryReplayError as error:
-        raise ResponsesConversionError(str(error)) from error
+    validate_hosted_tool_history(
+        [
+            {
+                "type": get_block_type(block),
+                "id": get_block_attr(block, "id"),
+                "tool_use_id": get_block_attr(block, "tool_use_id"),
+            }
+            for block in blocks
+        ]
+    )
     items: list[dict[str, Any]] = []
     text_parts: list[dict[str, Any]] = []
 

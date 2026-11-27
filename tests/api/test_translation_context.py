@@ -412,6 +412,58 @@ def test_completed_web_history_only_exposes_public_results(protocol: str) -> Non
     assert ("private-search-option" in sent) == (protocol == "messages")
 
 
+@pytest.mark.parametrize("protocol", ["chat", "responses", "messages", "gemini"])
+def test_completed_web_fetch_preserves_text_and_reports_native_only_documents(
+    protocol: str,
+) -> None:
+    document: JsonObject = {
+        "type": "document",
+        "source": {
+            "type": "text",
+            "media_type": "text/plain",
+            "data": "Previously fetched page",
+        },
+    }
+    path, body = ingress_request(
+        "messages",
+        True,
+        [
+            {"role": "user", "content": "Read the page"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "server_tool_use",
+                        "id": "fetch1",
+                        "name": "web_fetch",
+                        "input": {"url": "https://example.invalid/page"},
+                    },
+                    {
+                        "type": "web_fetch_tool_result",
+                        "tool_use_id": "fetch1",
+                        "content": {
+                            "type": "web_fetch_result",
+                            "url": "https://example.invalid/page",
+                            "content": document,
+                        },
+                    },
+                ],
+            },
+            {"role": "user", "content": "Which page was that?"},
+        ],
+    )
+    assert "Previously fetched page" in json.dumps(sent_request(protocol, path, body))
+    document["source"] = {
+        "type": "base64",
+        "media_type": "application/pdf",
+        "data": "JVBERi0xLjQK",
+    }
+    if protocol == "messages":
+        assert "JVBERi0xLjQK" in json.dumps(sent_request(protocol, path, body))
+    else:
+        assert "native Messages" in translation_error(protocol, path, body)
+
+
 @pytest.mark.parametrize(
     ("wire", "streaming"),
     [

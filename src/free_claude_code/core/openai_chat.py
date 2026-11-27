@@ -1,24 +1,57 @@
 """OpenAI Chat Completions wire-history helpers."""
 
 import json
+from collections.abc import Mapping
 
 from free_claude_code.core.json_types import JsonObject, JsonValue
 
-IMAGE_TOOL_RESULT_MARKER = "[Image-bearing tool output follows in user content.]"
+TOOL_RESULT_ATTACHMENT_MARKER = "[Tool output attachments follow in user content.]"
 
 
-class ChatToolResultImages(dict[str, JsonValue]):
+def inline_file_fields(
+    value: JsonValue, *, pdf_only: bool = False
+) -> JsonObject | None:
+    """Copy portable OpenAI file fields without fetching or re-encoding the data."""
+    if (
+        not isinstance(value, Mapping)
+        or value.get("file_id") is not None
+        or value.get("file_url") is not None
+    ):
+        return None
+    data, name = value.get("file_data"), value.get("filename")
+    if (
+        not isinstance(data, str)
+        or not data
+        or (name is not None and not isinstance(name, str))
+    ):
+        return None
+    if pdf_only:
+        if data[:5].lower() == "data:":
+            comma = data.find(",")
+            if comma < 0 or comma + 1 == len(data):
+                return None
+            header = data[:comma].lower()
+            if header.split(";", 1)[0] != "data:application/pdf" or not header.endswith(
+                ";base64"
+            ):
+                return None
+        elif not (isinstance(name, str) and name.lower().endswith(".pdf")):
+            return None
+    fields: JsonObject = {"file_data": data}
+    if name is not None:
+        fields["filename"] = name
+    return fields
+
+
+class ChatToolResultAttachments(dict[str, JsonValue]):
     """Relocated tool output, retaining turn ownership until serialization."""
 
     __slots__ = ()
 
 
-def image_tool_result_label(tool_call_id: str) -> str:
-    """Label relocated visual output with its source function-call identity."""
-    return (
-        "Image-bearing output for tool call "
-        f"{json.dumps(tool_call_id, ensure_ascii=False)}:"
-    )
+def tool_result_attachment_label(tool_call_id: str) -> str:
+    """Label relocated attachments with their source tool call."""
+    return f"Attachments from tool call {json.dumps(tool_call_id, ensure_ascii=False)}:"
 
 
 def computer_screenshot_label(call_id: str) -> str:

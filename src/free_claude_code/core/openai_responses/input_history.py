@@ -93,7 +93,7 @@ def _content(
             raise ResponsesConversionError(
                 f"Responses {kind}.file_id requires native Responses egress"
             )
-        elif kind == "input_image":
+        elif kind in ("input_image", "input_file"):
             parts.append(part)
     return parts
 

@@ -15,9 +15,9 @@ from ..history_replay import (
 )
 from ..json_types import JsonObject, JsonValue
 from ..openai_chat import (
-    ChatToolResultImages,
+    ChatToolResultAttachments,
     close_chat_tool_result_turns,
-    image_tool_result_label,
+    tool_result_attachment_label,
 )
 from ..openai_responses import responses_reasoning_config
 from ..openai_tool_names import OpenAIToolNameCodec
@@ -271,11 +271,14 @@ def _build(request: GeminiRequest, destination: Destination) -> GeminiPreparedRe
                     )
                     if media:
                         images: list[JsonValue] = [
-                            {"type": "text", "text": image_tool_result_label(result.id)}
+                            {
+                                "type": "text",
+                                "text": tool_result_attachment_label(result.id),
+                            }
                         ]
                         images.extend(media)
                         pending_images.append(
-                            ChatToolResultImages(role="user", content=images)
+                            ChatToolResultAttachments(role="user", content=images)
                         )
             elif part.inline_data is not None:
                 if role != "user":
